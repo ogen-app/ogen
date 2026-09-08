@@ -81,9 +81,15 @@ func MigrateAnalytics(ctx context.Context, db *bun.DB) error {
 		return fmt.Errorf("discover analytics migrations: %w", err)
 	}
 
+	// WithMarkAppliedOnSuccess: mark a migration applied only after its Up
+	// succeeds, so a failed migration retries on the next boot instead of being
+	// silently recorded as applied while its DDL rolled back. See the note in
+	// Migrate (migrate.go) — analytics migration failures are non-fatal, so a
+	// silent skip here is even easier to miss.
 	migrator := migrate.NewMigrator(db, migrations,
 		migrate.WithTableName("bun_migrations_analytics"),
 		migrate.WithLocksTableName("bun_migration_locks_analytics"),
+		migrate.WithMarkAppliedOnSuccess(true),
 	)
 
 	if err := migrator.Init(ctx); err != nil {

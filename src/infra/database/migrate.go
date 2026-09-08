@@ -23,7 +23,14 @@ func Migrate(ctx context.Context, db *bun.DB) error {
 		return fmt.Errorf("discover migrations: %w", err)
 	}
 
-	migrator := migrate.NewMigrator(db, migrations)
+	// WithMarkAppliedOnSuccess: bun's default marks a migration applied BEFORE
+	// running its Up. A migration whose Up then errors (e.g. a non-transactional
+	// multi-statement file that rolls back) is left recorded as applied but not
+	// actually applied — the deploy dies once, restarts skip the "applied"
+	// migration, and the schema silently drifts (this is exactly how CON-165's
+	// published_url column went missing in prod). Marking only on success makes a
+	// failing migration fail loud and retry instead of being lost.
+	migrator := migrate.NewMigrator(db, migrations, migrate.WithMarkAppliedOnSuccess(true))
 
 	if err := migrator.Init(ctx); err != nil {
 		return fmt.Errorf("init migrator: %w", err)
