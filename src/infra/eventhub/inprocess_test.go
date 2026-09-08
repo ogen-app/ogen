@@ -287,12 +287,24 @@ func TestMaxSubscribersPerUserEvictsOldest(t *testing.T) {
 		t.Errorf("surviving ch3 should receive events, got %+v", got)
 	}
 
-	// A different user is unaffected by alice's cap.
+	// A different user is unaffected by alice's cap: bob is admitted and the cap
+	// is per-user, so his subscribe evicts none of alice's — active goes to 3.
 	_, u4, err := h.Subscribe(ctx, SubscribeOpts{UserID: "bob", Topics: []string{"all"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer u4()
+	if got := h.(*inProcHub).ActiveCount(); got != 3 {
+		t.Errorf("active=%d, want 3 (alice's 2 survivors + bob); alice must not be evicted by bob", got)
+	}
+	// Alice's survivors are still live after bob joins.
+	_ = h.Publish(ctx, Event{Topic: "job:bar", UserID: "alice"})
+	if got, _ := drain(t, ch2, 1, time.Second); len(got) != 1 {
+		t.Errorf("ch2 should still receive after bob subscribed, got %+v", got)
+	}
+	if got, _ := drain(t, ch3, 1, time.Second); len(got) != 1 {
+		t.Errorf("ch3 should still receive after bob subscribed, got %+v", got)
+	}
 }
 
 // channelClosed reports whether ch is closed, draining any buffered events
