@@ -99,15 +99,52 @@ func (h *inProcHub) disconnect(ids []uint64, reason string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, id := range ids {
-		sub, ok := h.subs[id]
-		if !ok {
+		h.removeLocked(id, reason)
+	}
+}
+
+// removeLocked deletes one subscriber and closes its channel. The caller
+// must hold h.mu. Closing the channel is also what unblocks a subscriber's
+// reader: an SSE writer goroutine parked in `select { case <-eventCh }` wakes
+// with a closed channel, returns, and runs its deferred unsubscribe — so this
+// is how the Hub reclaims a slot whose writer would otherwise never exit
+// (CON-286). Idempotent: an already-removed id is skipped.
+func (h *inProcHub) removeLocked(id uint64, reason string) {
+	sub, ok := h.subs[id]
+	if !ok {
+		return
+	}
+	delete(h.subs, id)
+	close(sub.ch)
+	h.active.Add(-1)
+	slog.Info("subscriber disconnected", logging.AttrComponent, "eventhub", "id", sub.id, "user", sub.userID, "reason", reason, "topics", sub.topics)
+}
+
+// userCountLocked returns how many subscribers the user currently holds.
+// The caller must hold h.mu.
+func (h *inProcHub) userCountLocked(userID string) int {
+	count := 0
+	for _, s := range h.subs {
+		if s.userID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+// oldestForUserLocked returns the id of the user's longest-lived subscriber
+// (the smallest id — nextID is monotonic, so lower means earlier). ok is false
+// when the user has none. The caller must hold h.mu.
+func (h *inProcHub) oldestForUserLocked(userID string) (id uint64, ok bool) {
+	for sid, s := range h.subs {
+		if s.userID != userID {
 			continue
 		}
-		delete(h.subs, id)
-		close(sub.ch)
-		h.active.Add(-1)
-		slog.Info("subscriber disconnected", logging.AttrComponent, "eventhub", "id", sub.id, "user", sub.userID, "reason", reason, "topics", sub.topics)
+		if !ok || sid < id {
+			id, ok = sid, true
+		}
 	}
+	return id, ok
 }
 
 // Subscribe registers a new subscriber and returns its read channel plus
@@ -123,16 +160,23 @@ func (h *inProcHub) Subscribe(_ context.Context, opts SubscribeOpts) (<-chan Eve
 	}
 
 	h.mu.Lock()
-	// Per-user subscription cap.
-	count := 0
-	for _, s := range h.subs {
-		if s.userID == opts.UserID {
-			count++
+	// Per-user subscription cap. At the cap we evict the user's OLDEST
+	// subscriber (lowest id, since ids are monotonic) rather than reject the
+	// incoming one (CON-286). Rejecting the newest is the wrong failure mode:
+	// an SSE slot leaks whenever a writer goroutine can't observe its client
+	// going away (a vanished peer whose tiny heartbeat writes keep buffering
+	// never surfaces an error), and once the cap is full of such zombies every
+	// new connection — a page reload, a fresh tab — is refused *permanently*
+	// for that user until the process restarts. Evicting oldest-first makes the
+	// cap self-healing: a reload always succeeds, closing the evicted channel
+	// unblocks that zombie's parked goroutine so it finally unsubscribes, and a
+	// genuine leak degrades to bounded wasted memory instead of a total outage.
+	for h.userCountLocked(opts.UserID) >= h.cfg.MaxSubscribersPerUser {
+		oldest, ok := h.oldestForUserLocked(opts.UserID)
+		if !ok {
+			break // no evictable subscriber (cap effectively 0); admit anyway
 		}
-	}
-	if count >= h.cfg.MaxSubscribersPerUser {
-		h.mu.Unlock()
-		return nil, nil, ErrTooManySubscribers
+		h.removeLocked(oldest, "evicted: subscriber limit reached")
 	}
 	h.nextID++
 	id := h.nextID

@@ -25,12 +25,25 @@ import (
 // to detect dead clients via send failures.
 const defaultHeartbeatInterval = 20 * time.Second
 
+// defaultStreamLifetime is the hard ceiling on how long a single SSE
+// connection is held open before the writer closes it and reclaims its hub
+// subscription (CON-286). The heartbeat write is not a reliable liveness probe:
+// a client that vanishes without a clean close (laptop sleep, NAT/idle timeout,
+// a peer advertising a zero window) never surfaces a write error — the tiny
+// heartbeats keep buffering into the kernel — so the writer goroutine, and the
+// per-user slot it holds, would otherwise leak for the whole process lifetime.
+// Bounding the connection's *age* (independent of any write succeeding)
+// guarantees the slot is reclaimed; a healthy client simply reconnects, and for
+// the notification stream the Last-Event-ID replay covers the gap.
+const defaultStreamLifetime = 30 * time.Minute
+
 // EventsHandler streams Hub events to authenticated clients over SSE.
 type EventsHandler struct {
 	hub               eventhub.Hub
 	sessionRepo       repository.SessionRepository
 	auth              fiber.Handler
 	heartbeatInterval time.Duration
+	maxLifetime       time.Duration
 }
 
 // NewEventsHandler wires the SSE stream endpoint. heartbeatInterval = 0
@@ -49,6 +62,16 @@ func NewEventsHandler(
 		sessionRepo:       sessionRepo,
 		auth:              auth,
 		heartbeatInterval: heartbeatInterval,
+		maxLifetime:       defaultStreamLifetime,
+	}
+}
+
+// SetMaxLifetime overrides the per-connection lifetime ceiling (CON-286).
+// A non-positive value is ignored. Primarily for tests, which use a short
+// lifetime to drive the reclamation path deterministically.
+func (h *EventsHandler) SetMaxLifetime(d time.Duration) {
+	if d > 0 {
+		h.maxLifetime = d
 	}
 }
 
@@ -131,6 +154,7 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 	sessionID := session.ID
 	sessionRepo := h.sessionRepo
 	heartbeat := h.heartbeatInterval
+	maxLifetime := h.maxLifetime
 
 	// The stream writer runs on a fasthttp goroutine after this handler
 	// returns, at which point c.Context() (the *fasthttp.RequestCtx) has been
@@ -156,11 +180,17 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
 
+		// CON-286: hard lifetime ceiling. Guarantees this goroutine — and the
+		// hub slot it holds — is released even if the client vanished without a
+		// detectable close and no write ever fails. The client reconnects.
+		lifetime := time.NewTimer(maxLifetime)
+		defer lifetime.Stop()
+
 		for {
 			select {
 			case ev, ok := <-eventCh:
 				if !ok {
-					// Hub disconnected us (backpressure or shutdown).
+					// Hub disconnected us (backpressure, eviction, or shutdown).
 					return
 				}
 				if err := writeSSEEvent(w, ev); err != nil {
@@ -178,6 +208,9 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 					slog.InfoContext(logCtx, "session no longer valid; closing stream", logging.AttrComponent, "events")
 					return
 				}
+			case <-lifetime.C:
+				slog.InfoContext(logCtx, "stream lifetime reached; closing to reclaim slot", logging.AttrComponent, "events")
+				return
 			}
 		}
 	}))
