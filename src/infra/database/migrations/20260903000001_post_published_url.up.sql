@@ -11,30 +11,44 @@
 -- signals a publisher-confirmed post; a URL present with an empty
 -- publisher_post_id is a user-supplied (unverified) link.
 ALTER TABLE posts
-    ADD COLUMN published_url TEXT;
+    ADD COLUMN IF NOT EXISTS published_url TEXT;
+
+--bun:split
 
 -- Backfill the auto-publish tail from published_results — the first platform
 -- outcome's platformPostUrl (posts map to a single platform, so element 0 is the
--- one). Same-DB, so this is a plain UPDATE. The verify-external tail (URL only in
--- the separate analytics DB) is not reachable from here and is left to an
--- app-level backfill; those posts also self-heal on the next verify/refresh.
---
--- published_results is TEXT (DEFAULT ''), so a bare ::jsonb cast throws on the
--- empty-string default and on any malformed historical row. SQL doesn't promise
--- WHERE-clause short-circuit, so guarding the cast with `published_results <> ''`
--- alone isn't safe — the planner may evaluate the cast first and abort the whole
--- migration. Gate it with pg_input_is_valid (PG16+) in a CTE whose WHERE touches
--- no cast, so ::jsonb runs only on rows already proven to be valid JSON.
-WITH candidates AS (
-    SELECT id, published_results::jsonb AS results
-    FROM posts
-    WHERE published_url IS NULL
-      AND published_results <> ''
-      AND pg_input_is_valid(published_results, 'jsonb')
-)
-UPDATE posts p
-SET published_url = c.results -> 0 ->> 'platformPostUrl'
-FROM candidates c
-WHERE p.id = c.id
-  AND jsonb_typeof(c.results) = 'array'
-  AND NULLIF(c.results -> 0 ->> 'platformPostUrl', '') IS NOT NULL;
+-- one). Done row-by-row in a PL/pgSQL loop so this stays portable to PostgreSQL
+-- 15: the original guard used pg_input_is_valid, which is PG16+, so under a
+-- mark-applied-on-success migrator a clean PG15 install would otherwise wedge on
+-- a permanently-failing migration. Each row's ::jsonb cast runs in its own
+-- subtransaction (the inner BEGIN/EXCEPTION), so a malformed historical
+-- published_results value is skipped rather than aborting the migration. The
+-- `published_url IS NULL` guard on the UPDATE keeps a concurrent writer (rolling
+-- deploy) from being clobbered; the verify-external tail (URL only in the
+-- separate analytics DB) self-heals on the next verify/refresh.
+DO $$
+DECLARE
+    r   RECORD;
+    url TEXT;
+BEGIN
+    FOR r IN
+        SELECT id, published_results
+        FROM posts
+        WHERE published_url IS NULL
+          AND published_results <> ''
+          AND left(btrim(published_results), 1) = '['
+    LOOP
+        BEGIN
+            IF jsonb_typeof(r.published_results::jsonb) = 'array' THEN
+                url := NULLIF(r.published_results::jsonb -> 0 ->> 'platformPostUrl', '');
+                IF url IS NOT NULL THEN
+                    UPDATE posts SET published_url = url
+                    WHERE id = r.id AND published_url IS NULL;
+                END IF;
+            END IF;
+        EXCEPTION WHEN others THEN
+            -- malformed row: skip it (self-heals on next verify/refresh).
+            NULL;
+        END;
+    END LOOP;
+END $$;

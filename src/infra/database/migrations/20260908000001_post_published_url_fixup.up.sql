@@ -45,7 +45,11 @@ BEGIN
             IF jsonb_typeof(r.published_results::jsonb) = 'array' THEN
                 url := NULLIF(r.published_results::jsonb -> 0 ->> 'platformPostUrl', '');
                 IF url IS NOT NULL THEN
-                    UPDATE posts SET published_url = url WHERE id = r.id;
+                    -- Re-check published_url IS NULL: a concurrently-serving
+                    -- instance (rolling deploy) may have set it since the cursor
+                    -- snapshot — don't clobber a live value.
+                    UPDATE posts SET published_url = url
+                    WHERE id = r.id AND published_url IS NULL;
                 END IF;
             END IF;
         EXCEPTION WHEN others THEN
