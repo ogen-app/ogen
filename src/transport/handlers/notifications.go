@@ -37,6 +37,7 @@ type NotificationsHandler struct {
 	sessionRepo       repository.SessionRepository
 	auth              fiber.Handler
 	heartbeatInterval time.Duration
+	maxLifetime       time.Duration
 }
 
 // NewNotificationsHandler wires the inbox endpoints. heartbeatInterval = 0 uses
@@ -57,6 +58,15 @@ func NewNotificationsHandler(
 		sessionRepo:       sessionRepo,
 		auth:              auth,
 		heartbeatInterval: heartbeatInterval,
+		maxLifetime:       defaultStreamLifetime,
+	}
+}
+
+// SetMaxLifetime overrides the per-connection lifetime ceiling (CON-286).
+// A non-positive value is ignored. Primarily for tests.
+func (h *NotificationsHandler) SetMaxLifetime(d time.Duration) {
+	if d > 0 {
+		h.maxLifetime = d
 	}
 }
 
@@ -296,6 +306,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 	sessionID := session.ID
 	sessionRepo := h.sessionRepo
 	heartbeat := h.heartbeatInterval
+	maxLifetime := h.maxLifetime
 	repo := h.repo
 
 	reqID, _ := logging.RequestIDFrom(c.Context())
@@ -304,10 +315,13 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 	logCtx = tenantctx.With(logCtx, session.TenantID)
 	queryCtx := tenantctx.With(context.Background(), session.TenantID)
 
-	notify.StreamConnections.Add(1)
-
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		defer unsubscribe()
+		// Track *active* connections: increment and decrement in the same
+		// goroutine so the gauge can never grow without a matching release
+		// (CON-286 — previously it only ever counted up).
+		notify.StreamConnections.Add(1)
+		defer notify.StreamConnections.Add(-1)
 
 		// Confirm the connection before any real event arrives.
 		if err := writeHeartbeat(w); err != nil {
@@ -337,11 +351,18 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
 
+		// CON-286: hard lifetime ceiling. Guarantees this goroutine — and the
+		// hub slot it holds — is released even if the client vanished without a
+		// detectable close and no write ever fails. The client reconnects and
+		// replays anything missed via Last-Event-ID (the seq on the id: line).
+		lifetime := time.NewTimer(maxLifetime)
+		defer lifetime.Stop()
+
 		for {
 			select {
 			case ev, ok := <-eventCh:
 				if !ok {
-					// Hub disconnected us (backpressure or shutdown).
+					// Hub disconnected us (backpressure, eviction, or shutdown).
 					return
 				}
 				n, ok := ev.Payload.(*models.Notification)
@@ -368,6 +389,9 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 					slog.InfoContext(logCtx, "session no longer valid; closing notification stream", logging.AttrComponent, "notifications")
 					return
 				}
+			case <-lifetime.C:
+				slog.InfoContext(logCtx, "stream lifetime reached; closing to reclaim slot", logging.AttrComponent, "notifications")
+				return
 			}
 		}
 	}))

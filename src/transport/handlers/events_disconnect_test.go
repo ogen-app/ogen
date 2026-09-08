@@ -123,13 +123,22 @@ func waitFor(t *testing.T, timeout time.Duration, msg string, cond func() bool) 
 // injects the session + request id, then serves it on a real loopback socket.
 func serveEventsOnSocket(t *testing.T, hub eventhub.Hub, heartbeat time.Duration) (addr string) {
 	t.Helper()
+	return serveEventsOnSocketWithLifetime(t, hub, heartbeat, 0)
+}
+
+// serveEventsOnSocketWithLifetime is serveEventsOnSocket plus a per-connection
+// lifetime override (0 = handler default). Used by the CON-286 lifetime-cap test.
+func serveEventsOnSocketWithLifetime(t *testing.T, hub eventhub.Hub, heartbeat, lifetime time.Duration) (addr string) {
+	t.Helper()
 	fakeAuth := func(c *fiber.Ctx) error {
 		c.Locals("session", &models.Session{ID: "sess-1", UserID: "user-1", TenantID: "tenant-1"})
 		c.Locals(logging.RequestIDKey, "req-1")
 		return c.Next()
 	}
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	handlers.NewEventsHandler(hub, stubSessionRepo{}, fakeAuth, heartbeat).Register(app)
+	h := handlers.NewEventsHandler(hub, stubSessionRepo{}, fakeAuth, heartbeat)
+	h.SetMaxLifetime(lifetime)
+	h.Register(app)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -254,6 +263,48 @@ func TestStreamSessionRecheckUsesDetachedContext(t *testing.T) {
 		return hub.unsubbed.Load() == 1
 	})
 	rec, _ := findRecord(mu, records, "session no longer valid; closing stream")
+	assertCorrelated(t, rec)
+}
+
+// TestStreamClosesAtLifetimeCap is the CON-286 regression: a connection that
+// never errors on write (the leak's root cause — a vanished peer whose tiny
+// heartbeats keep buffering) must still be reclaimed. With a short lifetime cap
+// and a big heartbeat (so the write/session paths can't be what closes it), the
+// writer must hit the lifetime branch, log it, and release the subscription.
+func TestStreamClosesAtLifetimeCap(t *testing.T) {
+	mu, records := installCaptureLogger(t)
+
+	hub := newStubHub(1)
+	// Big heartbeat isolates the lifetime path; short lifetime drives it fast.
+	addr := serveEventsOnSocketWithLifetime(t, hub, time.Hour, 60*time.Millisecond)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if _, err := fmt.Fprint(conn, "GET /api/events?topics=all HTTP/1.1\r\nHost: test\r\nAccept: text/event-stream\r\n\r\n"); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	// Keep the client alive and reading so nothing but the lifetime cap can end
+	// the stream; the server closes it, which surfaces here as EOF.
+	go func() {
+		br := bufio.NewReader(conn)
+		for {
+			if _, err := br.ReadString('\n'); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() { _ = conn.Close() })
+
+	waitFor(t, 3*time.Second, `"stream lifetime reached" log record`, func() bool {
+		_, ok := findRecord(mu, records, "stream lifetime reached; closing to reclaim slot")
+		return ok
+	})
+	waitFor(t, 3*time.Second, "stream writer to unsubscribe after lifetime cap", func() bool {
+		return hub.unsubbed.Load() == 1
+	})
+	rec, _ := findRecord(mu, records, "stream lifetime reached; closing to reclaim slot")
 	assertCorrelated(t, rec)
 }
 

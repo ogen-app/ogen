@@ -242,42 +242,74 @@ func TestSubscribeRejectsEmptyTopics(t *testing.T) {
 	}
 }
 
-func TestMaxSubscribersPerUser(t *testing.T) {
+func TestMaxSubscribersPerUserEvictsOldest(t *testing.T) {
+	// CON-286: at the cap the Hub evicts the user's OLDEST subscriber and admits
+	// the newcomer, rather than rejecting the newcomer. This keeps a reload from
+	// being locked out when older connections have leaked.
 	h := New(Config{MaxSubscribersPerUser: 2})
 	ctx := context.Background()
 
-	// alice can have up to 2.
-	_, u1, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
+	ch1, u1, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer u1()
-	_, u2, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
+	ch2, u2, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer u2()
 
-	// Third attempt should fail.
-	_, _, err = h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
-	if !errors.Is(err, ErrTooManySubscribers) {
-		t.Errorf("expected ErrTooManySubscribers, got %v", err)
+	// Third subscribe succeeds (never 429) and evicts the oldest (ch1).
+	ch3, u3, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
+	if err != nil {
+		t.Fatalf("third subscribe should succeed via eviction, got %v", err)
+	}
+	defer u3()
+
+	// The evicted subscriber's channel is closed — which is exactly what
+	// unblocks a parked writer goroutine so it can release its slot.
+	if !channelClosed(t, ch1) {
+		t.Error("oldest subscriber (ch1) should have been evicted (channel closed)")
 	}
 
-	// A different user is unaffected.
+	// The user is still capped at 2 live subscribers, not 3.
+	if got := h.(*inProcHub).ActiveCount(); got != 2 {
+		t.Errorf("active=%d, want 2 (cap held after eviction)", got)
+	}
+
+	// The two survivors still receive events.
+	_ = h.Publish(ctx, Event{Topic: "job:foo", UserID: "alice"})
+	if got, _ := drain(t, ch2, 1, time.Second); len(got) != 1 {
+		t.Errorf("surviving ch2 should receive events, got %+v", got)
+	}
+	if got, _ := drain(t, ch3, 1, time.Second); len(got) != 1 {
+		t.Errorf("surviving ch3 should receive events, got %+v", got)
+	}
+
+	// A different user is unaffected by alice's cap.
 	_, u4, err := h.Subscribe(ctx, SubscribeOpts{UserID: "bob", Topics: []string{"all"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer u4()
+}
 
-	// Releasing one of alice's slots opens it back up.
-	u1()
-	_, u5, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
-	if err != nil {
-		t.Errorf("after unsubscribe, third should succeed: %v", err)
-	} else {
-		defer u5()
+// channelClosed reports whether ch is closed, draining any buffered events
+// first, within a short timeout.
+func channelClosed(t *testing.T, ch <-chan Event) bool {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return true
+			}
+			// drain a buffered event and keep looking for the close
+		case <-deadline:
+			return false
+		}
 	}
 }
 

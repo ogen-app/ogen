@@ -113,9 +113,12 @@ var (
 	// ErrNoTopics is returned when SubscribeOpts.Topics is empty.
 	ErrNoTopics = errors.New("eventhub: at least one topic is required")
 
-	// ErrTooManySubscribers is returned when a single user has reached
-	// Config.MaxSubscribersPerUser. The HTTP handler should map this to
-	// a 429 Too Many Requests response.
+	// ErrTooManySubscribers signals that a user is at Config.MaxSubscribersPerUser.
+	// The in-process Hub no longer returns it — at the cap it evicts the user's
+	// oldest subscriber and admits the newcomer (CON-286), so a reload can never
+	// be locked out. The sentinel and the HTTP handlers' 429 mapping are retained
+	// for a future out-of-process backend that may not be able to evict cheaply
+	// and would reject instead.
 	ErrTooManySubscribers = errors.New("eventhub: subscriber limit exceeded for user")
 )
 
