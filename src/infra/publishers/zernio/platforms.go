@@ -114,8 +114,7 @@ type CatalogSource interface {
 // the row source is mandatory for the whole app, a persistent DB outage is a
 // boot failure elsewhere, not here.
 func InitCatalog(ctx context.Context, src CatalogSource) {
-	catalogSource = src
-	if err := RefreshCatalog(ctx); err != nil {
+	if err := LoadCatalog(ctx, src); err != nil {
 		slog.ErrorContext(ctx, "initial platform catalog load failed; serving empty catalog until refresh",
 			logging.AttrComponent, "zernio.catalog", logging.AttrError, err)
 	}
@@ -134,6 +133,15 @@ func InitCatalog(ctx context.Context, src CatalogSource) {
 			}
 		}
 	}()
+}
+
+// LoadCatalog sets the row source and loads the snapshot synchronously, without
+// starting the background refresh goroutine. InitCatalog builds on it; tests
+// (and any caller managing its own refresh) use it to populate the catalog from
+// a DB without a lingering goroutine.
+func LoadCatalog(ctx context.Context, src CatalogSource) error {
+	catalogSource = src
+	return RefreshCatalog(ctx)
 }
 
 // RefreshCatalog reloads the snapshot now. PlatformAdminService (CON-292 §6)
