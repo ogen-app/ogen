@@ -20,12 +20,12 @@ type CurvePoint struct {
 
 // Lifespan is the "How long a post lives" section.
 type Lifespan struct {
-	InsufficientHistory bool         `json:"insufficient_history,omitempty"`
-	SettledPosts        int          `json:"settled_posts,omitempty"`
-	T50Hours            int          `json:"t50_hours,omitempty"`
-	T75Hours            int          `json:"t75_hours,omitempty"`
-	T95Hours            int          `json:"t95_hours,omitempty"`
-	HorizonHours        int          `json:"horizon_hours,omitempty"`
+	InsufficientHistory bool         `json:"insufficient_history,omitzero"`
+	SettledPosts        int          `json:"settled_posts,omitzero"`
+	T50Hours            int          `json:"t50_hours,omitzero"`
+	T75Hours            int          `json:"t75_hours,omitzero"`
+	T95Hours            int          `json:"t95_hours,omitzero"`
+	HorizonHours        int          `json:"horizon_hours,omitzero"`
 	Curve               []CurvePoint `json:"curve,omitempty"`
 }
 

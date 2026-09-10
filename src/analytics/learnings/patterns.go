@@ -23,15 +23,15 @@ type PatternCard struct {
 	Segment   string  `json:"segment"`
 	Headline  string  `json:"headline"`
 	Metric    string  `json:"metric"`
-	Lift      float64 `json:"lift,omitempty"`
-	Trend     float64 `json:"trend,omitempty"`
+	Lift      float64 `json:"lift,omitzero"`
+	Trend     float64 `json:"trend,omitzero"`
 	Support   int     `json:"support"`
 	Detail    string  `json:"detail"`
 }
 
 // Patterns is the "What works / What's fading" section.
 type Patterns struct {
-	InsufficientHistory bool          `json:"insufficient_history,omitempty"`
+	InsufficientHistory bool          `json:"insufficient_history,omitzero"`
 	Works               []PatternCard `json:"works,omitempty"`
 	Fading              []PatternCard `json:"fading,omitempty"`
 }

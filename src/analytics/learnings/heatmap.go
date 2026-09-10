@@ -26,11 +26,11 @@ type Slot struct {
 
 // Heatmap is the "When your posts land" section.
 type Heatmap struct {
-	InsufficientHistory bool       `json:"insufficient_history,omitempty"`
+	InsufficientHistory bool       `json:"insufficient_history,omitzero"`
 	Metric              string     `json:"metric,omitempty"`
 	Cells               []HeatCell `json:"cells,omitempty"`
 	Strongest           *Slot      `json:"strongest,omitempty"`
-	MeasuredPosts       int        `json:"measured_posts,omitempty"`
+	MeasuredPosts       int        `json:"measured_posts,omitzero"`
 }
 
 type slotKey struct{ dow, hour int }

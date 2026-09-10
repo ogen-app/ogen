@@ -111,10 +111,10 @@ func (o *PlatformOutcome) UnmarshalJSON(data []byte) error {
 type SubmitRequest struct {
 	Content      string            `json:"content"`
 	Platforms    []PlatformVariant `json:"platforms"`
-	ScheduledFor time.Time         `json:"scheduledFor,omitempty"`
+	ScheduledFor time.Time         `json:"scheduledFor,omitzero"`
 	Timezone     string            `json:"timezone,omitempty"`
-	PublishNow   bool              `json:"publishNow,omitempty"`
-	IsDraft      bool              `json:"isDraft,omitempty"`
+	PublishNow   bool              `json:"publishNow,omitzero"`
+	IsDraft      bool              `json:"isDraft,omitzero"`
 	// MediaItems carries opaque media descriptors (URLs to S3 objects,
 	// as Zernio expects). Populated by the queue handler from the Post's
 	// PostAttachment rows.

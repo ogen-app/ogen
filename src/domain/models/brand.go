@@ -68,7 +68,7 @@ type BrandOrigin struct {
 	Kind         string `json:"kind"`
 	TemplateName string `json:"templateName,omitempty"`
 	URL          string `json:"url,omitempty"`
-	Count        int    `json:"count,omitempty"`
+	Count        int    `json:"count,omitzero"`
 	FromPost     string `json:"fromPost,omitempty"`
 }
 

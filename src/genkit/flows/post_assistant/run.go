@@ -600,7 +600,7 @@ func runPostAssistant(
 		Explanation string `json:"explanation"`
 		SaveVersion bool   `json:"saveVersion"`
 		VersionNote string `json:"versionNote,omitempty"`
-		NoteCount   int    `json:"noteCount,omitempty"`
+		NoteCount   int    `json:"noteCount,omitzero"`
 	}{
 		Action:      result.Action,
 		Explanation: result.Explanation,
