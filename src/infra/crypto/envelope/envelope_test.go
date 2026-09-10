@@ -60,7 +60,7 @@ func TestEncryptUsesFreshNonces(t *testing.T) {
 	const N = 16
 	seen := make(map[string]struct{}, N)
 	dekSeen := make(map[string]struct{}, N)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		rec, err := cipher.Encrypt(pt)
 		if err != nil {
 			t.Fatalf("Encrypt: %v", err)

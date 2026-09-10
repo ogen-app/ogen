@@ -328,7 +328,7 @@ func TestReserveHeavyAction_Sequential(t *testing.T) {
 	if !st.reserveHeavyAction() {
 		t.Fatal("first reservation must succeed")
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if st.reserveHeavyAction() {
 			t.Fatalf("reservation %d must fail once the slot is taken", i+2)
 		}
@@ -350,7 +350,7 @@ func TestReserveHeavyAction_Concurrent(t *testing.T) {
 
 	var wins int64
 	var mu sync.Mutex
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer done.Done()
 			start.Wait() // release all goroutines at once to maximise contention

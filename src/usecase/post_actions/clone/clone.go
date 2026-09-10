@@ -17,7 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -469,7 +469,7 @@ func defaultPostType(types models.PostTypeMap) string {
 	for k := range types {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	if len(keys) > 0 {
 		return keys[0]
 	}

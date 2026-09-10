@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"text/template"
@@ -387,7 +387,7 @@ func toPlatformOptions(platforms []models.Platform) []platformOption {
 		for slug := range p.PostTypes {
 			types = append(types, slug)
 		}
-		sort.Strings(types)
+		slices.Sort(types)
 		opts = append(opts, platformOption{Name: p.Name, PostTypes: types})
 	}
 	return opts

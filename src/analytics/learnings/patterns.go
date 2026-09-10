@@ -1,9 +1,10 @@
 package learnings
 
 import (
+	"cmp"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -105,19 +106,19 @@ func buildPatterns(posts []PostFact, metric string, now time.Time, trendDays int
 
 	// works ranked by lift × log(support); fading by steepest decline. ID breaks
 	// ties so capCards picks the same cards deterministically across runs.
-	sort.Slice(works, func(i, j int) bool {
-		a := works[i].Lift * math.Log(float64(works[i].Support+1))
-		b := works[j].Lift * math.Log(float64(works[j].Support+1))
-		if a != b {
-			return a > b
+	slices.SortFunc(works, func(x, y PatternCard) int {
+		ka := x.Lift * math.Log(float64(x.Support+1))
+		kb := y.Lift * math.Log(float64(y.Support+1))
+		if c := cmp.Compare(kb, ka); c != 0 {
+			return c
 		}
-		return works[i].ID < works[j].ID
+		return cmp.Compare(x.ID, y.ID)
 	})
-	sort.Slice(fading, func(i, j int) bool {
-		if fading[i].Trend != fading[j].Trend {
-			return fading[i].Trend < fading[j].Trend
+	slices.SortFunc(fading, func(a, b PatternCard) int {
+		if c := cmp.Compare(a.Trend, b.Trend); c != 0 {
+			return c
 		}
-		return fading[i].ID < fading[j].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 
 	return &Patterns{Works: capCards(works), Fading: capCards(fading)}

@@ -190,7 +190,7 @@ func TestComposeScheduledAt_SpreadClampedToDay(t *testing.T) {
 
 	// Invariant across many ids at both boundary clocks: the instant never leaves
 	// the day and effectiveDate always agrees.
-	for i := 0; i < 300; i++ {
+	for i := range 300 {
 		id := "x-" + strconv.Itoa(i)
 		for _, clock := range []string{"00:00", "23:59"} {
 			at, eff, _ := ComposeScheduledAt(ds, id, loc, clock, nil, MaxSpreadMinutes, &start, &end)

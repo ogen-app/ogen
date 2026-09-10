@@ -99,7 +99,7 @@ func minimalPDFWithPages(n int) []byte {
 	// Pages tree — children are 3..(2+n)
 	offsets = append(offsets, buf.Len())
 	buf.WriteString("2 0 obj\n<< /Type /Pages /Kids [")
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			buf.WriteString(" ")
 		}
@@ -108,7 +108,7 @@ func minimalPDFWithPages(n int) []byte {
 	buf.WriteString(fmt.Sprintf("] /Count %d >>\nendobj\n", n))
 
 	// Pages
-	for i := 0; i < n; i++ {
+	for i := range n {
 		offsets = append(offsets, buf.Len())
 		buf.WriteString(fmt.Sprintf("%d 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n", 3+i))
 	}

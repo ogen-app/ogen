@@ -54,7 +54,7 @@ func TestCachedSettingsStorePassesThroughNonZernioKeys(t *testing.T) {
 	_ = inner.Set(context.Background(), "other.key", "v")
 	c := NewCachedSettingsStore(inner)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		v, ok, err := c.Get(context.Background(), "other.key")
 		if err != nil || !ok || v != "v" {
 			t.Fatalf("unexpected get: %v %v %v", v, ok, err)
@@ -70,7 +70,7 @@ func TestCachedSettingsStoreCachesZernioKeys(t *testing.T) {
 	_ = inner.Set(context.Background(), SettingProfileID, "abc")
 	c := NewCachedSettingsStoreTTL(inner, 50*time.Millisecond)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		v, ok, err := c.Get(context.Background(), SettingProfileID)
 		if err != nil || !ok || v != "abc" {
 			t.Fatalf("unexpected get: %v %v %v", v, ok, err)

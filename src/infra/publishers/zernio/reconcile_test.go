@@ -2,7 +2,7 @@ package zernio
 
 import (
 	"encoding/json"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -43,7 +43,7 @@ func changeIDs(plan ReconcilePlan, change ReconcileChange) []string {
 			out = append(out, c.Account.ID)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -134,7 +134,7 @@ func TestReconcile(t *testing.T) {
 			}
 
 			gotSoftDelete := append([]string{}, plan.SoftDeleteIDs...)
-			sort.Strings(gotSoftDelete)
+			slices.Sort(gotSoftDelete)
 			if !equalStrings(gotSoftDelete, tt.wantSoftDelete) {
 				t.Errorf("soft delete: got %v want %v", gotSoftDelete, tt.wantSoftDelete)
 			}

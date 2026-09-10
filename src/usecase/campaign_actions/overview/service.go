@@ -1,12 +1,13 @@
 package overview
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -281,10 +282,10 @@ func slugBuckets(counts map[string]int) []Bucket {
 
 // sortBuckets applies the deterministic count-desc, label-asc order.
 func sortBuckets(b []Bucket) {
-	sort.SliceStable(b, func(i, j int) bool {
-		if b[i].Count != b[j].Count {
-			return b[i].Count > b[j].Count
+	slices.SortStableFunc(b, func(x, y Bucket) int {
+		if c := cmp.Compare(y.Count, x.Count); c != 0 {
+			return c
 		}
-		return b[i].Label < b[j].Label
+		return cmp.Compare(x.Label, y.Label)
 	})
 }

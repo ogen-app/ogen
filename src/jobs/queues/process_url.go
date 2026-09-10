@@ -2,6 +2,7 @@ package queues
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -10,7 +11,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -419,11 +420,11 @@ func (p *ProcessURLProcessor) mirrorImages(ctx context.Context, assetID, markdow
 	for k := range replacements {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if len(keys[i]) != len(keys[j]) {
-			return len(keys[i]) > len(keys[j])
+	slices.SortFunc(keys, func(a, b string) int {
+		if c := cmp.Compare(len(b), len(a)); c != 0 {
+			return c
 		}
-		return keys[i] < keys[j]
+		return cmp.Compare(a, b)
 	})
 	out := markdown
 	for _, oldURL := range keys {

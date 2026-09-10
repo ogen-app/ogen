@@ -72,7 +72,7 @@ func TestCampaignAssistantMessagesLimit(t *testing.T) {
 	repo := repository.NewCampaignAssistantMessageRepository(db)
 
 	base := time.Now().UTC().Truncate(time.Second)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedCampaignMessage(t, repo, ctx, "camp-lim", "user", "m"+strconv.Itoa(i), base.Add(time.Duration(i)*time.Second))
 	}
 

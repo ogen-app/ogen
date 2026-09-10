@@ -1,7 +1,8 @@
 package content_plan
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"time"
 )
 
@@ -78,8 +79,8 @@ func planBatches(
 	// not order phases for us, and the front-loading rule depends on order.
 	sortedPhases := make([]resolvedPhase, len(phases))
 	copy(sortedPhases, phases)
-	sort.SliceStable(sortedPhases, func(i, j int) bool {
-		return sortedPhases[i].Sequence < sortedPhases[j].Sequence
+	slices.SortStableFunc(sortedPhases, func(a, b resolvedPhase) int {
+		return cmp.Compare(a.Sequence, b.Sequence)
 	})
 
 	phasePosts := evenSplit(totalPosts, len(sortedPhases))

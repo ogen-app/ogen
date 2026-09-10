@@ -252,7 +252,7 @@ func TestRefreshDedupSuppressesUnchangedHistory(t *testing.T) {
 	proc := newRefreshProcessor(stub, postRepo, analyticsRepo, settings)
 	proc.Decay = queues.AnalyticsDecay{FreshEvery: time.Nanosecond, WarmEvery: time.Nanosecond, ColdEvery: time.Nanosecond}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 			t.Fatalf("process tick %d: %v", i, err)
 		}
@@ -292,7 +292,7 @@ func TestRefreshDecaySkipsRecentlyChecked(t *testing.T) {
 	// Default decay (fresh bucket = hourly). Two back-to-back ticks: the second
 	// is within the hour, so the post is due-skipped.
 	proc := newRefreshProcessor(stub, postRepo, analyticsRepo, settings)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 			t.Fatalf("process tick %d: %v", i, err)
 		}

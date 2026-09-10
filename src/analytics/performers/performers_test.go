@@ -61,7 +61,7 @@ func TestAgeAdjustedRanking(t *testing.T) {
 func TestClampedPartition(t *testing.T) {
 	now := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 	var cands []Candidate
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		cands = append(cands, Candidate{
 			PostID:      itoa(i),
 			Platform:    "linkedin",

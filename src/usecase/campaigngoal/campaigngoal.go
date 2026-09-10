@@ -111,7 +111,7 @@ func Windows(cadence string, start, end *time.Time, loc *time.Location) []Window
 	case CadenceWeek:
 		n := ceilDiv(daysInclusive(s, e), 7)
 		out := make([]Window, 0, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			ws := s.AddDate(0, 0, 7*i)
 			we := s.AddDate(0, 0, 7*(i+1))
 			if we.After(endExclusive) {
@@ -124,7 +124,7 @@ func Windows(cadence string, start, end *time.Time, loc *time.Location) []Window
 		n := monthIndex(e) - monthIndex(s) + 1
 		firstOfStartMonth := time.Date(s.Year(), s.Month(), 1, 0, 0, 0, 0, loc)
 		out := make([]Window, 0, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			monthStart := firstOfStartMonth.AddDate(0, i, 0)
 			ws := monthStart
 			if ws.Before(s) {

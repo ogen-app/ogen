@@ -15,7 +15,7 @@ func TestKeyedRateLimiter_AllowBurstThenBlock(t *testing.T) {
 	l := newKeyedRateLimiter(3, time.Hour)
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if ok, _ := l.allow("k"); !ok {
 			t.Fatalf("attempt %d: want allowed, got blocked", i+1)
 		}
@@ -43,7 +43,7 @@ func TestKeyedRateLimiter_PenalizeOnlyCharges_RetryAfterPeeksFree(t *testing.T) 
 	}
 
 	// Three failures are allowed (peek stays 0), the fourth is throttled.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if d := l.retryAfter("k"); d != 0 {
 			t.Fatalf("failure %d: want allowed (0), got %v", i+1, d)
 		}
@@ -63,7 +63,7 @@ func TestKeyedRateLimiter_PenalizeClampsWaitAtWindowOverBurst(t *testing.T) {
 	// Far more penalties than the burst must not drive the wait past the time for
 	// a single token to refill — otherwise an attacker could lock a victim's key
 	// for an unbounded stretch.
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		l.penalize("k")
 	}
 	got := l.retryAfter("k")
@@ -78,7 +78,7 @@ func TestKeyedRateLimiter_ResetRefundsKey(t *testing.T) {
 	l := newKeyedRateLimiter(3, time.Hour)
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		l.penalize("k")
 	}
 	if l.retryAfter("k") <= 0 {
@@ -96,7 +96,7 @@ func TestKeyedRateLimiter_RefillsOverTime(t *testing.T) {
 	l := newKeyedRateLimiter(burst, window)
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		l.penalize("k")
 	}
 	if l.retryAfter("k") <= 0 {
@@ -116,7 +116,7 @@ func TestKeyedRateLimiter_CapIsHardEvenWhenAllBucketsActive(t *testing.T) {
 
 	// Fill the map to the cap with active buckets — each penalize creates one at
 	// lastSeen=now, so a sweep (ttl is 2×window) reclaims nothing.
-	for i := 0; i < maxRateLimiterBuckets; i++ {
+	for i := range maxRateLimiterBuckets {
 		l.penalize("k" + strconv.Itoa(i))
 	}
 	if len(l.buckets) != maxRateLimiterBuckets {

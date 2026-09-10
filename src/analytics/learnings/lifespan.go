@@ -1,6 +1,9 @@
 package learnings
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 const (
 	lifespanMinSettled = 8   // settled posts needed for a curve
@@ -109,7 +112,7 @@ func settledPosts(points []LifespanPoint) []settledPost {
 	}
 	var out []settledPost
 	for _, pts := range byPost {
-		sort.Slice(pts, func(i, j int) bool { return pts[i].AgeHours < pts[j].AgeHours })
+		slices.SortFunc(pts, func(a, b LifespanPoint) int { return cmp.Compare(a.AgeHours, b.AgeHours) })
 		maxAge := pts[len(pts)-1].AgeHours
 		final := float64(pts[len(pts)-1].Reach)
 		if maxAge < settledMinHours || final <= 0 {

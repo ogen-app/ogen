@@ -11,7 +11,7 @@ func TestHeatmapStrongestSlot(t *testing.T) {
 	hi := time.Date(2026, 8, 6, 18, 0, 0, 0, time.UTC) // some Thursday 18:00
 	lo := time.Date(2026, 8, 4, 9, 0, 0, 0, time.UTC)  // a Tuesday 09:00
 	var posts []PostFact
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		posts = append(posts, PostFact{PublishedAt: hi, Platform: "linkedin", Reach: 1000})
 		posts = append(posts, PostFact{PublishedAt: lo, Platform: "linkedin", Reach: 100})
 	}
@@ -40,7 +40,7 @@ func TestHeatmapInsufficient(t *testing.T) {
 func TestLifespanPercentiles(t *testing.T) {
 	// 8 identical settled posts: 50% of final by 20h, 75% by 40h, 95% by 90h.
 	var pts []LifespanPoint
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		id := itoa(i)
 		pts = append(pts,
 			LifespanPoint{PostID: id, AgeHours: 0, Reach: 0},
@@ -68,7 +68,7 @@ func TestLifespanPercentiles(t *testing.T) {
 func TestLifespanInsufficient(t *testing.T) {
 	// only 2 settled posts
 	var pts []LifespanPoint
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		id := itoa(i)
 		pts = append(pts, LifespanPoint{PostID: id, AgeHours: 0, Reach: 0}, LifespanPoint{PostID: id, AgeHours: 120, Reach: 1000})
 	}
@@ -80,7 +80,7 @@ func TestLifespanInsufficient(t *testing.T) {
 func TestPatternsWorks(t *testing.T) {
 	pub := now.AddDate(0, 0, -10) // recent (within trend window), all same weekday bucket
 	var posts []PostFact
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		posts = append(posts, PostFact{PublishedAt: pub, Platform: "linkedin", Reach: 3000, MediaCount: 2, ContentLength: 200, HashtagCount: 1}) // carousel
 		posts = append(posts, PostFact{PublishedAt: pub, Platform: "linkedin", Reach: 1000, MediaCount: 1, ContentLength: 200, HashtagCount: 1}) // single image
 	}
@@ -119,7 +119,7 @@ func TestPatternsDeterministicOrder(t *testing.T) {
 		}
 	}
 	var posts []PostFact
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		// media_format: carousel(strong) vs single_image(weak)
 		c := PostFact{PublishedAt: pub, Platform: "linkedin", MediaCount: 2, ContentLength: 50, HashtagCount: 0, HasLink: true}
 		s := PostFact{PublishedAt: pub, Platform: "instagram", MediaCount: 1, ContentLength: 500, HashtagCount: 5, HasLink: false}
@@ -128,7 +128,7 @@ func TestPatternsDeterministicOrder(t *testing.T) {
 		posts = append(posts, c, s)
 	}
 	var firstIDs []string
-	for run := 0; run < 5; run++ {
+	for run := range 5 {
 		p := buildPatterns(posts, MetricReach, now, 90)
 		if len(p.Works) == 0 || len(p.Works) > maxCards {
 			t.Fatalf("works len = %d, want 1..%d", len(p.Works), maxCards)

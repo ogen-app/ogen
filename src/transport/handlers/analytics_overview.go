@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"errors"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -140,7 +140,7 @@ func followerDailyTotals(pts []repository.FollowerSeriesPoint) []overview.Follow
 	for d, t := range byDay {
 		out = append(out, overview.FollowerDayTotal{Date: d, Total: t})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Date.Before(out[j].Date) })
+	slices.SortFunc(out, func(a, b overview.FollowerDayTotal) int { return a.Date.Compare(b.Date) })
 	return out
 }
 

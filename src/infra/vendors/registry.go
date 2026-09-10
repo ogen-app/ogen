@@ -1,8 +1,9 @@
 package vendors
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -100,7 +101,7 @@ func All() []Descriptor {
 	for _, d := range registry {
 		out = append(out, d)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b Descriptor) int { return cmp.Compare(a.Name, b.Name) })
 	return out
 }
 

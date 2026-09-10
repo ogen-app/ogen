@@ -1,7 +1,8 @@
 package performers
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 )
 
@@ -31,7 +32,7 @@ func buildCurve(samples []Sample) curve {
 	for _, posts := range c.byPlatform {
 		for id := range posts {
 			pts := posts[id]
-			sort.Slice(pts, func(i, j int) bool { return pts[i].age < pts[j].age })
+			slices.SortFunc(pts, func(a, b agePoint) int { return cmp.Compare(a.age, b.age) })
 			posts[id] = pts
 		}
 	}
@@ -128,7 +129,7 @@ func (c curve) expectedAtAge(posts map[string][]agePoint, ageTarget int, metric 
 
 func median(xs []float64) float64 {
 	s := append([]float64(nil), xs...)
-	sort.Float64s(s)
+	slices.Sort(s)
 	n := len(s)
 	if n == 0 {
 		return 0

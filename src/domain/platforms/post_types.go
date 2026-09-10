@@ -2,7 +2,7 @@ package platforms
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -287,7 +287,7 @@ func validateThreadAttachments(p *models.Platform, atts []models.PostAttachment,
 		}
 		bySegment[idx] = append(bySegment[idx], att)
 	}
-	for idx := 0; idx < segCount; idx++ {
+	for idx := range segCount {
 		segAtts := bySegment[idx]
 		if len(segAtts) == 0 {
 			continue
@@ -332,7 +332,7 @@ func sortedSlugs(m models.PostTypeMap) []string {
 	for k := range m {
 		out = append(out, k)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

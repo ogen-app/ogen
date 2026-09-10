@@ -1,8 +1,9 @@
 package poststat
 
 import (
+	"cmp"
 	"math"
-	"sort"
+	"slices"
 )
 
 // baselineMinPosts is the per-platform post floor below which a metric's typical
@@ -69,7 +70,7 @@ func buildBandCurve(samples []AgeSample) bandCurve {
 	for _, posts := range c.byPlatform {
 		for id := range posts {
 			pts := posts[id]
-			sort.Slice(pts, func(i, j int) bool { return pts[i].age < pts[j].age })
+			slices.SortFunc(pts, func(a, b bandPoint) int { return cmp.Compare(a.age, b.age) })
 			posts[id] = pts
 		}
 	}
@@ -183,7 +184,7 @@ func bandMetricOf(p bandPoint, metric string) float64 {
 // percentile is the linear-interpolation quantile of xs (q ∈ [0,1]).
 func percentile(xs []float64, q float64) float64 {
 	s := append([]float64(nil), xs...)
-	sort.Float64s(s)
+	slices.Sort(s)
 	n := len(s)
 	switch n {
 	case 0:

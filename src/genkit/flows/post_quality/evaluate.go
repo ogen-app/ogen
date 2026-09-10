@@ -115,7 +115,7 @@ func evaluateDimension(
 	userPrompt := prompts.user + dimensionInstruction(label, cfg.SuggestionCap)
 
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():

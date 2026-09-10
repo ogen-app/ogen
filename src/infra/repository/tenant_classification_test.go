@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -418,10 +418,10 @@ func TestTenantListPagingDeterministicOnTiedCreatedAt(t *testing.T) {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}
-	sort.Strings(ids) // expected page order: ascending by id
+	slices.Sort(ids) // expected page order: ascending by id
 
 	var got []string
-	for off := 0; off < 3; off++ {
+	for off := range 3 {
 		page, total, err := tenantRepo.ListWithClassification(ctx, repository.TenantListFilter{TierID: tie.ID, Limit: 1, Offset: off})
 		if err != nil {
 			t.Fatalf("page off=%d: %v", off, err)

@@ -1,6 +1,9 @@
 package learnings
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 // minHeatmapPosts is the floor below which the slot grid is too sparse to show.
 const minHeatmapPosts = 5
@@ -59,11 +62,11 @@ func buildHeatmap(posts []PostFact, metric string) *Heatmap {
 		}
 	}
 	// Stable order: day, then hour.
-	sort.Slice(cells, func(i, j int) bool {
-		if cells[i].DayOfWeek != cells[j].DayOfWeek {
-			return cells[i].DayOfWeek < cells[j].DayOfWeek
+	slices.SortFunc(cells, func(a, b HeatCell) int {
+		if c := cmp.Compare(a.DayOfWeek, b.DayOfWeek); c != 0 {
+			return c
 		}
-		return cells[i].Hour < cells[j].Hour
+		return cmp.Compare(a.Hour, b.Hour)
 	})
 
 	strongest := strongestSlot(cells)
@@ -97,7 +100,7 @@ func medianInts(xs []int) float64 {
 		return 0
 	}
 	s := append([]int(nil), xs...)
-	sort.Ints(s)
+	slices.Sort(s)
 	n := len(s)
 	if n%2 == 1 {
 		return float64(s[n/2])

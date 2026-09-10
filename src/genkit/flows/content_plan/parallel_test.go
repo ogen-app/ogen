@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -83,7 +83,7 @@ func TestRunBatchesParallelSuccessAggregatesInOrder(t *testing.T) {
 	for i, p := range emitted {
 		idxs[i] = p.Index
 	}
-	sort.Ints(idxs)
+	slices.Sort(idxs)
 	for i, v := range idxs {
 		if v != i {
 			t.Errorf("emitted index set has gap: idxs[%d] = %d", i, v)

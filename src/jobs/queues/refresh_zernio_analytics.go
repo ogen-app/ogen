@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -410,7 +410,7 @@ func sortedTenantIDs(byTenant map[string][]models.Post) []string {
 	for id := range byTenant {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	return ids
 }
 

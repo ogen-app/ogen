@@ -1,11 +1,12 @@
 package campaign_assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1105,7 +1106,7 @@ func resolvePhase(campaign *models.Campaign, phase string, today time.Time) (id,
 // to the first phase when the campaign has no dates.
 func currentPhase(campaign *models.Campaign, today time.Time) models.CampaignTypePhase {
 	phases := append([]models.CampaignTypePhase(nil), campaignPhases(campaign)...)
-	sort.SliceStable(phases, func(i, j int) bool { return phases[i].Sequence < phases[j].Sequence })
+	slices.SortStableFunc(phases, func(a, b models.CampaignTypePhase) int { return cmp.Compare(a.Sequence, b.Sequence) })
 	if campaign.StartDate == nil || campaign.EndDate == nil {
 		return phases[0]
 	}
@@ -1139,7 +1140,7 @@ func equalDayWindows(start, end time.Time, n int) [][2]time.Time {
 	base := totalDays / n
 	rem := totalDays % n
 	cursor := start
-	for i := 0; i < n; i++ {
+	for i := range n {
 		d := base
 		if i < rem {
 			d++

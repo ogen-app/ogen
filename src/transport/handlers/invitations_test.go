@@ -311,7 +311,7 @@ var _ = Describe("InvitationsHandler", Ordered, func() {
 			const n = 5
 			var wg sync.WaitGroup
 			codes := make([]int, n)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				wg.Add(1)
 				go func(i int) {
 					defer GinkgoRecover()

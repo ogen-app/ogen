@@ -1,10 +1,11 @@
 package content_plan
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/pgvector/pgvector-go"
@@ -292,8 +293,8 @@ func rankAndPackChunks(
 	for _, assetID := range order {
 		entry := selected[assetID]
 
-		sort.Slice(entry.chunks, func(i, j int) bool {
-			return entry.chunks[i].ChunkIndex < entry.chunks[j].ChunkIndex
+		slices.SortFunc(entry.chunks, func(a, b models.AssetChunk) int {
+			return cmp.Compare(a.ChunkIndex, b.ChunkIndex)
 		})
 
 		parts := make([]chunkPart, 0, len(entry.chunks))

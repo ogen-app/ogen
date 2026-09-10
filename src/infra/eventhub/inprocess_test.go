@@ -186,7 +186,7 @@ func TestBackpressureDisconnectsSlowSubscriber(t *testing.T) {
 	}()
 
 	// Publish more than the slow buffer can hold.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = h.Publish(ctx, Event{Topic: "job:foo", UserID: "alice"})
 	}
 	<-done
@@ -350,7 +350,7 @@ func TestActiveCountTracksLifecycle(t *testing.T) {
 
 func TestPublishWithoutSubscribersDoesNotPanic(t *testing.T) {
 	h := New(Config{})
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := h.Publish(context.Background(), Event{Topic: "job:foo"}); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
@@ -364,7 +364,7 @@ func TestNoGoroutineLeakOnSubscribeUnsubscribeCycle(t *testing.T) {
 	ctx := context.Background()
 
 	before := runtime.NumGoroutine()
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		_, unsub, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 		if err != nil {
 			t.Fatal(err)

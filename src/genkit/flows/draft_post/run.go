@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"text/template"
 	"time"
@@ -435,7 +435,7 @@ func resolvePlatform(ctx context.Context, campaign *models.Campaign, platformID,
 			for slug := range p.PostTypes {
 				slugs = append(slugs, slug)
 			}
-			sort.Strings(slugs)
+			slices.Sort(slugs)
 			resolvedType = slugs[0]
 		}
 	}
@@ -470,7 +470,7 @@ func spreadDates(start, end time.Time, n int) []string {
 	if totalDays < 0 {
 		totalDays = 0
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		off := 0
 		if totalDays > 0 {
 			off = int(int64(i) * int64(totalDays) / int64(n-1))

@@ -144,7 +144,7 @@ func TestRecorder_CloseIdempotent(t *testing.T) {
 	const callers = 5
 	errs := make(chan error, callers)
 	var wg sync.WaitGroup
-	for i := 0; i < callers; i++ {
+	for range callers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -178,7 +178,7 @@ func TestRecorder_DropsOnFullBuffer(t *testing.T) {
 	// Give the loop a moment to pull the first event and block in Insert.
 	r.Record(ctx, "post", "e0")
 	time.Sleep(20 * time.Millisecond)
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		r.Record(ctx, "post", "flood")
 	}
 

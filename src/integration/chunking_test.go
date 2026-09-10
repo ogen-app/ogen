@@ -293,7 +293,7 @@ func longBlocknoteDoc(targetChars int) string {
 
 	var sb strings.Builder
 	sb.WriteString("[")
-	for i := 0; i < numParas; i++ {
+	for i := range numParas {
 		if i > 0 {
 			sb.WriteString(",")
 		}

@@ -2,7 +2,7 @@ package repository_test
 
 import (
 	"context"
-	"sort"
+	"slices"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -36,7 +36,7 @@ func TestListTenantIDsByKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	want := []string{"ta", "tb"}
 	if len(ids) != len(want) || ids[0] != want[0] || ids[1] != want[1] {
 		t.Fatalf("got %v want %v", ids, want)

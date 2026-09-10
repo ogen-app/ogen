@@ -8,7 +8,8 @@
 package reschedule
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -94,28 +95,27 @@ func sortedPhases(campaign *models.Campaign) []models.CampaignTypePhase {
 		return nil
 	}
 	phases := append([]models.CampaignTypePhase(nil), campaign.CampaignType.Phases...)
-	sort.SliceStable(phases, func(i, j int) bool { return phases[i].Sequence < phases[j].Sequence })
+	slices.SortStableFunc(phases, func(a, b models.CampaignTypePhase) int { return cmp.Compare(a.Sequence, b.Sequence) })
 	return phases
 }
 
 // sortPosts orders a group deterministically: earliest current ScheduledAt
 // first (nulls last), then created-at, then id.
 func sortPosts(posts []models.Post) {
-	sort.SliceStable(posts, func(i, j int) bool {
-		a, b := posts[i], posts[j]
+	slices.SortStableFunc(posts, func(a, b models.Post) int {
 		ai, bi := a.ScheduledAt, b.ScheduledAt
 		switch {
 		case ai != nil && bi != nil && !ai.Equal(*bi):
-			return ai.Before(*bi)
+			return ai.Compare(*bi)
 		case ai != nil && bi == nil:
-			return true // scheduled ones before undated
+			return -1 // scheduled ones before undated
 		case ai == nil && bi != nil:
-			return false
+			return 1
 		}
 		if !a.CreatedAt.Equal(b.CreatedAt) {
-			return a.CreatedAt.Before(b.CreatedAt)
+			return a.CreatedAt.Compare(b.CreatedAt)
 		}
-		return a.ID < b.ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 }
 
@@ -136,7 +136,7 @@ func computeWindows(start, end time.Time, n int) [][2]time.Time {
 	}
 	base, rem := totalDays/n, totalDays%n
 	cursor := start
-	for i := 0; i < n; i++ {
+	for i := range n {
 		d := base
 		if i < rem {
 			d++
@@ -160,7 +160,7 @@ func spread(ws, we time.Time, n int) []time.Time {
 		return out
 	}
 	days := int(we.Sub(ws).Hours() / 24) // window span in days (0 for a 1-day window)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Evenly distribute i across [0, days].
 		offset := (i * days) / (n - 1)
 		out[i] = ws.AddDate(0, 0, offset)
