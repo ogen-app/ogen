@@ -39,18 +39,12 @@ func NewPlatformsHandler(
 func (h *PlatformsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/platforms")
 	g.Get("/", h.auth, h.List)
-	g.Post("/", h.auth, h.Create)
 	g.Get("/:id", h.auth, h.Get)
 	g.Get("/:id/post-type-rules", h.auth, h.PostTypeRules)
-	g.Put("/:id", h.auth, h.Update)
-	g.Delete("/:id", h.auth, h.Delete)
-}
-
-type platformRequest struct {
-	Name        string             `json:"name"        validate:"required"`
-	PostTypes   models.PostTypeMap `json:"post_types"`
-	Cadence     string             `json:"cadence"`
-	Constraints string             `json:"constraints"`
+	// CON-292: platform lifecycle (create/update/delete + limits) is operator-only
+	// via Harbor → PlatformAdminService gRPC. The tenant surface is read-only;
+	// the former POST/PUT/DELETE handlers were retired (nothing in the ui repo
+	// called them).
 }
 
 // publisherView is the per-publisher entry attached to each platform
@@ -120,42 +114,6 @@ func (h *PlatformsHandler) List(c *fiber.Ctx) error {
 	return c.JSON(out)
 }
 
-// Create godoc
-// @Summary      Create platform
-// @Description  Creates a new platform.
-// @Tags         platforms
-// @Accept       json
-// @Produce      json
-// @Security     CookieAuth
-// @Param        body  body      platformRequest  true  "Platform payload"
-// @Success      201   {object}  models.Platform
-// @Failure      400   {object}  map[string]string
-// @Failure      401   {object}  map[string]string
-// @Router       /api/platforms [post]
-func (h *PlatformsHandler) Create(c *fiber.Ctx) error {
-	var req platformRequest
-	if err := bindAndValidate(c, &req); err != nil {
-		return err
-	}
-
-	id, err := models.NewID()
-	if err != nil {
-		return err
-	}
-
-	platform := &models.Platform{
-		ID:          id,
-		Name:        req.Name,
-		PostTypes:   nullMap(req.PostTypes),
-		Cadence:     req.Cadence,
-		Constraints: req.Constraints,
-	}
-	if err := h.repo.Create(c.Context(), platform); err != nil {
-		return err
-	}
-	return c.Status(fiber.StatusCreated).JSON(platform)
-}
-
 // Get godoc
 // @Summary      Get platform (with publishers)
 // @Description  Returns a single platform with the same `publishers`
@@ -193,43 +151,6 @@ func ensurePublishersSlice(s []publisherView) []publisherView {
 	return s
 }
 
-// Update godoc
-// @Summary      Update platform
-// @Description  Replaces all mutable fields of an existing platform.
-// @Tags         platforms
-// @Accept       json
-// @Produce      json
-// @Security     CookieAuth
-// @Param        id    path      string          true  "Platform Sqid"
-// @Param        body  body      platformRequest true  "Platform payload"
-// @Success      200   {object}  models.Platform
-// @Failure      400   {object}  map[string]string
-// @Failure      401   {object}  map[string]string
-// @Failure      404   {object}  map[string]string
-// @Router       /api/platforms/{id} [put]
-func (h *PlatformsHandler) Update(c *fiber.Ctx) error {
-	var req platformRequest
-	if err := bindAndValidate(c, &req); err != nil {
-		return err
-	}
-
-	platform, err := h.repo.GetByID(c.Context(), c.Params("id"))
-	if err != nil {
-		return notFound(err, "platform not found")
-	}
-
-	platform.Name = req.Name
-	platform.PostTypes = nullMap(req.PostTypes)
-	platform.Cadence = req.Cadence
-	platform.Constraints = req.Constraints
-	platform.UpdatedAt = time.Now().UTC()
-
-	if err := h.repo.Update(c.Context(), platform); err != nil {
-		return err
-	}
-	return c.JSON(platform)
-}
-
 // PostTypeRules godoc
 // @Summary      List per-post-type rules for a platform
 // @Description  Returns each post-type slug supported by the platform
@@ -253,27 +174,6 @@ func (h *PlatformsHandler) PostTypeRules(c *fiber.Ctx) error {
 		return notFound(err, "platform not found")
 	}
 	return c.JSON(platforms.ResolvePostTypeRules(platform))
-}
-
-// Delete godoc
-// @Summary      Delete platform
-// @Description  Deletes a platform by Sqid.
-// @Tags         platforms
-// @Security     CookieAuth
-// @Param        id   path  string  true  "Platform Sqid"
-// @Success      204
-// @Failure      401  {object}  map[string]string
-// @Failure      404  {object}  map[string]string
-// @Router       /api/platforms/{id} [delete]
-func (h *PlatformsHandler) Delete(c *fiber.Ctx) error {
-	deleted, err := h.repo.Delete(c.Context(), c.Params("id"))
-	if err != nil {
-		return err
-	}
-	if !deleted {
-		return fiber.NewError(fiber.StatusNotFound, "platform not found")
-	}
-	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // collectPublisherViews queries each registered publisher exactly once
