@@ -88,7 +88,7 @@ func TestAudioReposRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("replace utterances 2: %v", err)
 	}
-	utts, err := uttRepo.ListByAsset(ctx, "aud-1")
+	utts, err := uttRepo.ListByExtraction(ctx, "e1")
 	if err != nil || len(utts) != 2 || utts[0].Text != "hello" || utts[1].Text != "world" {
 		t.Fatalf("list utterances wrong: %v %+v", err, utts)
 	}

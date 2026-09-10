@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/pgvector/pgvector-go"
@@ -57,4 +58,22 @@ type SourceAnchor struct {
 	StartMs    int64  `json:"start_ms,omitempty"`
 	EndMs      int64  `json:"end_ms,omitempty"`
 	Provenance string `json:"provenance,omitempty"`
+}
+
+// MarshalJSON keeps start_ms/end_ms present for time anchors even at 0 ms: the
+// first audio chunk legitimately starts at 0, and the struct's `omitempty` tag
+// would drop it, leaving consumers unable to tell "0" from "absent" (CON-282).
+// Non-time anchors keep their omitempty semantics, so page/slide/sheet chunks
+// never gain empty time fields. The embedded alias avoids infinite recursion;
+// the shallower explicit fields shadow its omitempty ones for time anchors.
+func (a SourceAnchor) MarshalJSON() ([]byte, error) {
+	type alias SourceAnchor
+	if a.Kind == "time" {
+		return json.Marshal(struct {
+			alias
+			StartMs int64 `json:"start_ms"`
+			EndMs   int64 `json:"end_ms"`
+		}{alias: alias(a), StartMs: a.StartMs, EndMs: a.EndMs})
+	}
+	return json.Marshal(alias(a))
 }

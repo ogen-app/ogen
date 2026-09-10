@@ -222,8 +222,10 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 
 	// CON-282: gRPC client for the audio transcription microservice over the
-	// Railway private network. nil when AUDIO_SERVICE_ADDR is unset; closed on
-	// shutdown.
+	// Railway private network. nil when AUDIO_SERVICE_ADDR is unset. Its Close
+	// hook is registered LATER — after riverClient.Stop — so draining audio jobs
+	// don't have their in-flight TranscribeSegment RPCs killed by an early
+	// connection close (unlike pdf/video which are request-time only).
 	audioClient, err := audioclient.New(audioclient.Config{
 		Addr:         cfg.AudioServiceAddr,
 		Timeout:      cfg.AudioServiceTimeout,
@@ -231,9 +233,6 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	})
 	if err != nil {
 		return nil, err
-	}
-	if audioClient != nil {
-		app.Hooks().OnShutdown(func() error { return audioClient.Close() })
 	}
 
 	// Embedding (Gemini) is initialised here — before the River registry —
@@ -526,6 +525,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		_ = riverClient.Stop(sctx)
 		return nil
 	})
+	// CON-282: close the audio-service gRPC connection AFTER River has drained
+	// (hook registered here, post-Stop, so it runs after it in Fiber's ordered
+	// shutdown). Closing earlier would abort a still-running process_audio job's
+	// in-flight TranscribeSegment RPC. Runs before the recorder drain below.
+	if audioClient != nil {
+		app.Hooks().OnShutdown(func() error { return audioClient.Close() })
+	}
 
 	// Drain the usage recorder LAST. Fiber runs OnShutdown hooks in registration
 	// order, so this must come after the river/zernio producer hooks above:

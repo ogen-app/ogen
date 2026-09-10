@@ -52,6 +52,10 @@ type AudioIngestEnqueuer interface {
 	EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error
 }
 
+// errNoFailedSegments aborts the Retry transaction when there is nothing to
+// re-drive, so the reset/update roll back and the handler answers 409.
+var errNoFailedSegments = errors.New("no failed segments to retry")
+
 // AudioAssetsHandler serves the audio asset lifecycle (CON-282): presigned
 // direct upload, ingestion trigger, and the extraction status/transcript/retry
 // surface. It is a focused sibling of AssetsHandler (CON-291 split), registered
@@ -219,33 +223,9 @@ func (h *AudioAssetsHandler) Finalize(c *fiber.Ctx) error {
 	if err != nil || asset.Type == nil || *asset.Type != models.AssetTypeAudio {
 		return fiber.NewError(fiber.StatusNotFound, "audio asset not found")
 	}
-	file, err := h.fileRepo.GetByAssetID(c.Context(), asset.ID)
-	if err != nil || file == nil {
-		return fiber.NewError(fiber.StatusBadRequest, "no pending upload for this asset — call presign first")
-	}
-
-	info, err := h.storage.Head(c.Context(), file.S3Key)
-	if err != nil || info == nil || info.Size == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "upload not found — PUT the file to upload_url before finalizing")
-	}
-	if info.Size > maxAudioUploadBytes {
-		_ = h.storage.Delete(c.Context(), file.S3Key)
-		return fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("audio exceeds the maximum size of %d GiB", maxAudioUploadBytes>>30))
-	}
-	file.SizeBytes = info.Size
-
-	session := c.Locals("session").(*models.Session)
-	storageKey := relativeAudioKey(asset.ID, file.OriginalName)
-	runKey := "run-1"
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewUpdate().Model(file).Column("size_bytes", "updated_at").WherePK().Exec(ctx); err != nil {
-			return err
-		}
-		return h.audioJobs.EnqueueProcessAudioTx(ctx, tx.Tx, asset.ID, session.TenantID, file.OriginalName, file.MimeType, storageKey, runKey, req.PinnedModel)
-	}); err != nil {
+	if err := h.prepareAndEnqueue(c, asset, "run-1", req.PinnedModel); err != nil {
 		return err
 	}
-
 	return c.JSON(asset)
 }
 
@@ -269,7 +249,10 @@ func (h *AudioAssetsHandler) Extract(c *fiber.Ctx) error {
 		PinnedModel string `json:"model"`
 	}
 	_ = c.BodyParser(&body)
-	return h.enqueueRun(c, asset, "run-1", body.PinnedModel, fiber.StatusAccepted)
+	if err := h.prepareAndEnqueue(c, asset, "run-1", body.PinnedModel); err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": "run-1", "status": "enqueued"})
 }
 
 // Reextract forces a fresh full run under a new run_key (optionally pinning a
@@ -290,7 +273,11 @@ func (h *AudioAssetsHandler) Reextract(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return h.enqueueRun(c, asset, "run-"+runID, body.PinnedModel, fiber.StatusAccepted)
+	runKey := "run-" + runID
+	if err := h.prepareAndEnqueue(c, asset, runKey, body.PinnedModel); err != nil {
+		return err
+	}
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": runKey, "status": "enqueued"})
 }
 
 // Retry re-drives only the failed segments of the latest run (same run_key): it
@@ -314,19 +301,60 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	if ext.Status == models.AudioExtractionStatusComplete {
 		return fiber.NewError(fiber.StatusConflict, "extraction already complete — nothing to retry")
 	}
-	reset, err := h.segments.ResetFailed(c.Context(), ext.ID)
+	file, err := h.fileRepo.GetByAssetID(c.Context(), asset.ID)
+	if err != nil || file == nil {
+		return fiber.NewError(fiber.StatusBadRequest, "asset has no uploaded audio")
+	}
+	// CR8: re-validate the object size even on retry, before re-enqueueing.
+	size, ferr := h.headWithinCap(c.Context(), file.S3Key)
+	if ferr != nil {
+		return ferr
+	}
+
+	// The segment reset, extraction status flip, and the River enqueue all commit
+	// together (CR9): if the enqueue fails, the reset/update roll back, so the
+	// extraction never lands in `transcribing` with no job behind it. A zero-reset
+	// aborts the tx and maps to 409.
+	session := c.Locals("session").(*models.Session)
+	now := time.Now().UTC()
+	err = h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+		res, err := tx.NewUpdate().Model((*models.AudioSegment)(nil)).
+			Set("status = ?", models.AudioSegmentStatusPending).
+			Set("failure_reason = ''").
+			Set("updated_at = ?", now).
+			Where("extraction_id = ?", ext.ID).
+			Where("status = ?", models.AudioSegmentStatusFailed).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return errNoFailedSegments
+		}
+		if _, err := tx.NewUpdate().Model((*models.AudioExtraction)(nil)).
+			Set("status = ?", models.AudioExtractionStatusTranscribing).
+			Set("failure_reason = ''").
+			Set("updated_at = ?", now).
+			Where("id = ?", ext.ID).
+			Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewUpdate().Model((*models.AssetFile)(nil)).
+			Set("size_bytes = ?", size).
+			Set("updated_at = ?", now).
+			Where("asset_id = ?", asset.ID).
+			Exec(ctx); err != nil {
+			return err
+		}
+		return h.audioJobs.EnqueueProcessAudioTx(ctx, tx.Tx, asset.ID, session.TenantID, file.OriginalName, file.MimeType, relativeAudioKey(asset.ID, file.OriginalName), ext.RunKey, ext.TranscribeModel)
+	})
+	if errors.Is(err, errNoFailedSegments) {
+		return fiber.NewError(fiber.StatusConflict, "no failed segments to retry")
+	}
 	if err != nil {
 		return err
 	}
-	if reset == 0 {
-		return fiber.NewError(fiber.StatusConflict, "no failed segments to retry")
-	}
-	ext.Status = models.AudioExtractionStatusTranscribing
-	ext.FailureReason = ""
-	if err := h.extractions.Update(c.Context(), ext); err != nil {
-		return err
-	}
-	return h.enqueueRun(c, asset, ext.RunKey, ext.TranscribeModel, fiber.StatusAccepted)
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": ext.RunKey, "status": "enqueued"})
 }
 
 type audioStatusResponse struct {
@@ -364,14 +392,23 @@ type transcriptEntry struct {
 	IsSpeech   bool    `json:"is_speech"`
 }
 
-// Transcript returns the assembled raw transcript in timeline order, each span
-// carrying its original-timeline offsets and a "12:03" label.
+// Transcript returns the latest extraction's raw transcript in timeline order,
+// each span carrying its original-timeline offsets and a "12:03" label. Scoped
+// to the latest run so a re-extraction doesn't concatenate an older run's spans.
 func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 	asset, err := h.loadAudioAsset(c)
 	if err != nil {
 		return err
 	}
-	utts, err := h.utterances.ListByAsset(c.Context(), asset.ID)
+	ext, err := h.extractions.GetLatestByAsset(c.Context(), asset.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Asset exists but hasn't been transcribed yet — empty transcript.
+			return c.JSON(fiber.Map{"asset_id": asset.ID, "transcript": []transcriptEntry{}})
+		}
+		return err
+	}
+	utts, err := h.utterances.ListByExtraction(c.Context(), ext.ID)
 	if err != nil {
 		return err
 	}
@@ -391,21 +428,44 @@ func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"asset_id": asset.ID, "transcript": entries})
 }
 
-// enqueueRun enqueues a process_audio run for an already-loaded audio asset,
-// deriving the storage key + mime from the asset's file row.
-func (h *AudioAssetsHandler) enqueueRun(c *fiber.Ctx, asset *models.Asset, runKey, pinnedModel string, okStatus int) error {
+// prepareAndEnqueue is the shared trigger path for finalize/extract/reextract:
+// it loads the asset's file row, enforces the upload-size cap via Head (CR8 —
+// so an oversized object can never be enqueued by skipping finalize), persists
+// the confirmed size, and enqueues the run — the size update and enqueue commit
+// together. Callers shape their own response on success.
+func (h *AudioAssetsHandler) prepareAndEnqueue(c *fiber.Ctx, asset *models.Asset, runKey, pinnedModel string) error {
 	file, err := h.fileRepo.GetByAssetID(c.Context(), asset.ID)
 	if err != nil || file == nil {
-		return fiber.NewError(fiber.StatusBadRequest, "asset has no uploaded audio")
+		return fiber.NewError(fiber.StatusBadRequest, "no pending upload for this asset — call presign first")
 	}
+	size, ferr := h.headWithinCap(c.Context(), file.S3Key)
+	if ferr != nil {
+		return ferr
+	}
+	file.SizeBytes = size
+	file.UpdatedAt = time.Now().UTC()
 	session := c.Locals("session").(*models.Session)
 	storageKey := relativeAudioKey(asset.ID, file.OriginalName)
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	return h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewUpdate().Model(file).Column("size_bytes", "updated_at").WherePK().Exec(ctx); err != nil {
+			return err
+		}
 		return h.audioJobs.EnqueueProcessAudioTx(ctx, tx.Tx, asset.ID, session.TenantID, file.OriginalName, file.MimeType, storageKey, runKey, pinnedModel)
-	}); err != nil {
-		return err
+	})
+}
+
+// headWithinCap confirms the uploaded object exists and is within the size cap,
+// returning its size or a caller-facing 400/413. Enforced before every enqueue
+// so the worker never probes an oversized object (CWE-400).
+func (h *AudioAssetsHandler) headWithinCap(ctx context.Context, s3Key string) (int64, error) {
+	info, err := h.storage.Head(ctx, s3Key)
+	if err != nil || info == nil || info.Size == 0 {
+		return 0, fiber.NewError(fiber.StatusBadRequest, "upload not found — PUT the file to upload_url before processing")
 	}
-	return c.Status(okStatus).JSON(fiber.Map{"asset_id": asset.ID, "run_key": runKey, "status": "enqueued"})
+	if info.Size > maxAudioUploadBytes {
+		return 0, fiber.NewError(fiber.StatusRequestEntityTooLarge, fmt.Sprintf("audio exceeds the maximum size of %d GiB", maxAudioUploadBytes>>30))
+	}
+	return info.Size, nil
 }
 
 // loadAudioAsset loads the path :id asset, 404ing when it is missing or not an

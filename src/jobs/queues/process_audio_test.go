@@ -129,14 +129,13 @@ func (f *fakeUtterances) ReplaceForSegment(_ context.Context, segID string, utts
 	f.bySeg[segID] = utts
 	return nil
 }
-func (f *fakeUtterances) ListByAsset(_ context.Context, assetID string) ([]models.Utterance, error) {
+
+// ListByExtraction returns every stored utterance (the job tests use a single
+// extraction), sorted into timeline order like the real repo.
+func (f *fakeUtterances) ListByExtraction(_ context.Context, _ string) ([]models.Utterance, error) {
 	var out []models.Utterance
 	for _, utts := range f.bySeg {
-		for _, u := range utts {
-			if u.AssetID == assetID {
-				out = append(out, u)
-			}
-		}
+		out = append(out, utts...)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].StartMs != out[j].StartMs {

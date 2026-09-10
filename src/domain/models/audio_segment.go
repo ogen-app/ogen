@@ -33,6 +33,12 @@ type AudioSegment struct {
 	RetryCount     int    `bun:"retry_count,notnull,default:0" json:"retry_count"`
 	FailureReason  string `bun:"failure_reason"      json:"failure_reason,omitempty"`
 	UtteranceCount int    `bun:"utterance_count,notnull,default:0" json:"utterance_count"`
+	// CostMicros is this segment's transcription cost (CON-282), snapshotted from
+	// the versioned gemini price table and persisted in the SAME write that marks
+	// the segment done — so cost and completion commit atomically and a resume
+	// that skips a done segment never loses its cost. The extraction total sums
+	// these.
+	CostMicros int64 `bun:"cost_micros,notnull,default:0" json:"cost_micros"`
 
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`

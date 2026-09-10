@@ -154,4 +154,27 @@ var _ = Describe("AudioAssetsHandler presign", Ordered, func() {
 		resp := presign("interview.mp3")
 		Expect(resp.StatusCode).To(Equal(fiber.StatusConflict))
 	})
+
+	It("rejects an oversized object on extract with 413 and no enqueue", func() {
+		// Create the pending asset, then simulate an upload larger than the cap.
+		// A caller who skips finalize and calls extract must still be size-gated
+		// before the worker can probe/process the object (CWE-400).
+		resp := presign("huge.mp3")
+		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+		var pr struct {
+			Asset struct {
+				ID string `json:"id"`
+			} `json:"asset"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&pr)).To(Succeed())
+
+		store.headSizeOverride = 6 << 30 // 6 GiB, over the 5 GiB cap
+
+		req := httptest.NewRequest("POST", "/api/content-bank/assets/"+pr.Asset.ID+"/audio/extract", nil)
+		req.AddCookie(authCookie)
+		r, err := app.Test(req, -1)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.StatusCode).To(Equal(fiber.StatusRequestEntityTooLarge))
+		Expect(enq.calls).To(Equal(0))
+	})
 })

@@ -51,6 +51,9 @@ CREATE TABLE audio_segments (
     retry_count     INT         NOT NULL DEFAULT 0,
     failure_reason  TEXT        NOT NULL DEFAULT '',
     utterance_count INT         NOT NULL DEFAULT 0,
+    -- Per-segment transcription cost (CON-282), snapshotted and persisted in the
+    -- same write that marks the segment done; the extraction total sums these.
+    cost_micros     BIGINT      NOT NULL DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -85,6 +88,13 @@ CREATE INDEX idx_utterances_segment ON utterances (segment_id, index);
 -- CON-280 introduced the DOC asset type but never widened this constraint (the
 -- last widening was 'IMG' in CON-246), so document uploads would fail the check
 -- too — backfilled here alongside AUDIO.
+--
+-- Added NOT VALID so the ADD takes only a brief metadata lock instead of an
+-- ACCESS EXCLUSIVE full-table scan that would block writes on a large assets
+-- table. The new set is a strict superset of the old one, so every existing row
+-- already satisfies it — validation would find nothing. The constraint still
+-- enforces on all new/updated rows; run `VALIDATE CONSTRAINT` as a later
+-- deployment step if a formally-validated constraint is required.
 ALTER TABLE assets DROP CONSTRAINT IF EXISTS assets_type_check;
 ALTER TABLE assets
-    ADD CONSTRAINT assets_type_check CHECK (type IS NULL OR type IN ('MD', 'PDF', 'URL', 'IMG', 'DOC', 'AUDIO'));
+    ADD CONSTRAINT assets_type_check CHECK (type IS NULL OR type IN ('MD', 'PDF', 'URL', 'IMG', 'DOC', 'AUDIO')) NOT VALID;

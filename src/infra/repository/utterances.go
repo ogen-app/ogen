@@ -15,9 +15,11 @@ type UtteranceRepository interface {
 	// ReplaceForSegment atomically replaces a segment's utterances, so a
 	// segment retry is idempotent (old spans dropped, fresh ones written).
 	ReplaceForSegment(ctx context.Context, segmentID string, utterances []models.Utterance) error
-	// ListByAsset returns all of an asset's utterances in timeline order
-	// (start_ms, then index) — the transcript read.
-	ListByAsset(ctx context.Context, assetID string) ([]models.Utterance, error)
+	// ListByExtraction returns a single extraction run's utterances in timeline
+	// order (start_ms, then index), scoped through that run's segments. Keying on
+	// the extraction (not the asset) keeps a re-extraction from reading a prior
+	// run's leftover spans — the transcript read and chunk-assembly source.
+	ListByExtraction(ctx context.Context, extractionID string) ([]models.Utterance, error)
 }
 
 type utteranceRepository struct {
@@ -50,10 +52,13 @@ func (r *utteranceRepository) ReplaceForSegment(ctx context.Context, segmentID s
 	})
 }
 
-func (r *utteranceRepository) ListByAsset(ctx context.Context, assetID string) ([]models.Utterance, error) {
+func (r *utteranceRepository) ListByExtraction(ctx context.Context, extractionID string) ([]models.Utterance, error) {
 	var utterances []models.Utterance
+	// Scope through the run's segments. extraction_id is tenant-specific and the
+	// outer query is tenant-scoped by the TenantScoped hook, so the subquery can't
+	// leak across tenants.
 	err := r.db.NewSelect().Model(&utterances).
-		Where("asset_id = ?", assetID).
+		Where("segment_id IN (SELECT id FROM audio_segments WHERE extraction_id = ?)", extractionID).
 		OrderExpr("start_ms ASC, index ASC").
 		Scan(ctx)
 	return utterances, err
