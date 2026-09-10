@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -214,24 +215,16 @@ func (h *PostsHandler) validateReadyForPublish(c *fiber.Ctx, post *models.Post, 
 			platform = fresh
 		}
 	}
-	// CON-74/CON-284: validate against the incoming request's content/post_type/
-	// thread_segments so the gate sees what's about to be persisted, not the
-	// prior draft. ValidatePublishReadiness runs the whole-post media + post-type
-	// rules, or the per-segment gate when the incoming post is a thread.
+	// CON-74/CON-284 R2: validate against the incoming request's content/post_type
+	// so the gate sees what's about to be persisted, not the prior draft. For a
+	// thread the segments are DERIVED from the single authored body (content is the
+	// canonical source; thread_segments is materialised by splitting it) using the
+	// freshly-resolved platform's per-segment limit, so the per-segment gate sees
+	// exactly what submit will publish.
 	incoming := *post
 	incoming.PlatformPostType = req.PlatformPostType
 	incoming.Content = req.Content
-	// Mirror apply's gating so the gate sees exactly what will be persisted:
-	// segments (and the root-restamped Content) only when the incoming type is a
-	// thread; otherwise segments are empty and the body stands (CON-284).
-	if incoming.PlatformPostType == models.PostTypeThread {
-		incoming.ThreadSegments = nullThreadSegments(req.ThreadSegments)
-		if len(incoming.ThreadSegments) > 0 {
-			incoming.Content = incoming.ThreadSegments.RootContent()
-		}
-	} else {
-		incoming.ThreadSegments = models.ThreadSegments{}
-	}
+	applyThreadSegments(&incoming, threadLimitOf(platform))
 	errsByPlatform := platforms.ValidatePublishReadiness(&incoming, platform, atts)
 	from := post.Status
 	if hasAnyErrors(errsByPlatform) {
@@ -797,6 +790,9 @@ func (h *PostsHandler) Register(app *fiber.App) {
 	// Static route registered before "/:id/..." so it isn't shadowed by
 	// the id-parametrised routes (CON-130).
 	g.Post("/convert-to-manual", h.auth, h.ConvertToManual)
+	// CON-284 R2: stateless split preview for the thread composer. Static route,
+	// registered before "/:id/..." so it isn't shadowed (same reason as above).
+	g.Post("/thread/preview", h.auth, h.PreviewThread)
 	g.Get("/:id", h.auth, h.Get)
 	g.Put("/:id", h.auth, h.Update)
 	// CON-245: targeted set of a post's own brand voice + audience.
@@ -828,13 +824,12 @@ type postRequest struct {
 	SocialAccountID string `json:"social_account_id"`
 	Title           string `json:"title"`
 	Content         string `json:"content"`
-	// ThreadSegments (CON-284) is the ordered message list for a thread post
-	// (platform_post_type == "thread"): index 0 is the root, 1..N-1 the ordered
-	// replies. A plain full-replace field — a present array replaces the stored
-	// segments, an omitted/empty [] means "not a thread". It needs no CON-233
-	// presence-aware carve-out: per-segment media rides the attachments endpoint
-	// (via segment_index), so a whole-record save has nothing to race. When
-	// non-empty, apply restamps Content from index 0 (the root mirror).
+	// ThreadSegments (CON-284) is DERIVED, not authored (R2): a thread is written
+	// as a single body in Content (with "---" delimiter lines, or auto-split by the
+	// per-segment char limit), and the server materialises the segment list from it.
+	// A client-sent value here is IGNORED — the field is retained only so existing
+	// callers that still send it don't error, and GET responses carry the derived
+	// list back on the Post model (not this request type).
 	ThreadSegments      models.ThreadSegments `json:"thread_segments"`
 	MediaURLs           models.StringSlice    `json:"media_urls"`
 	ScheduledAt         *time.Time            `json:"scheduled_at"`
@@ -888,21 +883,11 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType
 	post.SocialAccountID = r.SocialAccountID
 	post.Title = r.Title
 	post.Content = r.Content
-	// CON-284: thread_segments are meaningful only for a thread post. When the
-	// post is a thread, a present non-empty array replaces the stored segments and
-	// restamps Content from the root (index 0), so the many readers of post.content
-	// keep working. For any other type the segments are forced empty and the
-	// just-applied Content stands: a stray array on a non-thread post is ignored,
-	// not persisted, so it can't silently overwrite the body. This also covers
-	// demotion (thread → single-message type clears the segments, keeps the body).
-	if post.PlatformPostType == models.PostTypeThread {
-		post.ThreadSegments = nullThreadSegments(r.ThreadSegments)
-		if len(post.ThreadSegments) > 0 {
-			post.Content = post.ThreadSegments.RootContent()
-		}
-	} else {
-		post.ThreadSegments = models.ThreadSegments{}
-	}
+	// CON-284 R2: content is the canonical thread body — thread_segments is DERIVED
+	// from it, not authored as an array, so apply only carries the body. The
+	// Create/Update handlers call deriveThreadSegments right after this to
+	// materialise (or, for a non-thread, clear) the segments with the resolved
+	// per-segment limit. A client-sent thread_segments is ignored.
 	post.MediaURLs = nullSlice(r.MediaURLs)
 	post.ScheduledAt = r.ScheduledAt
 	post.PublishedAt = r.PublishedAt
@@ -938,13 +923,59 @@ func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 		r.PlatformID != post.PlatformID ||
 		r.PlatformPostType != post.PlatformPostType ||
 		!slices.Equal(nullSlice(r.MediaURLs), post.MediaURLs) ||
-		// CON-284: the thread's message list is locked content too — a full-
-		// replace field, so a present-and-different array is a mutation (an
-		// omitted key round-trips equal for a locked post's FE).
-		!slices.Equal(nullThreadSegments(r.ThreadSegments), post.ThreadSegments) ||
+		// CON-284 R2: a thread's message list is locked content too, but content is
+		// now the canonical thread body (thread_segments is derived from it), so the
+		// r.Content != post.Content check above already covers any thread edit — no
+		// separate segment comparison is needed.
 		// Sources are presence-aware (CON-233): an omitted key preserves the set,
 		// so only a present-and-different value is a mutation of the locked content.
 		(r.UsedAssetIDs.Present && !slices.Equal(nullSlice(r.UsedAssetIDs.orZero()), post.UsedAssetIDs))
+}
+
+// deriveThreadSegments materialises post.ThreadSegments from the canonical body
+// (CON-284 R2). For a non-thread post it clears the list (also covering demotion);
+// for a thread it resolves the platform's per-segment char limit first, so a
+// delimiter-free body auto-splits to the right size.
+func (h *PostsHandler) deriveThreadSegments(ctx context.Context, post *models.Post) {
+	limit := 0
+	if post.IsThread() {
+		limit = h.threadLimit(ctx, post.PlatformID)
+	}
+	applyThreadSegments(post, limit)
+}
+
+// threadLimit resolves a platform's per-segment thread char limit (X 280 /
+// Threads 500), or 0 ("unknown") when the platform can't be loaded — e.g. a draft
+// saved before a platform is picked. A 0 limit still honours manual "---" splits.
+func (h *PostsHandler) threadLimit(ctx context.Context, platformID string) int {
+	if platformID == "" || h.platformRepo == nil {
+		return 0
+	}
+	p, err := h.platformRepo.GetByID(ctx, platformID)
+	if err != nil {
+		return 0
+	}
+	return threadLimitOf(p)
+}
+
+// threadLimitOf is the pure per-segment limit lookup for an already-loaded
+// platform (nil ⇒ 0, "unknown").
+func threadLimitOf(p *models.Platform) int {
+	if p == nil {
+		return 0
+	}
+	return p.TextConstraints.ContentLimitFor(models.PostTypeThread)
+}
+
+// applyThreadSegments sets post.ThreadSegments to the segments split out of the
+// canonical body for a thread, or an empty list for any other type. Pure — the
+// caller supplies the per-segment limit (0 = unknown, manual "---" only).
+func applyThreadSegments(post *models.Post, segmentLimit int) {
+	if post.PlatformPostType == models.PostTypeThread {
+		post.ThreadSegments = platforms.SplitThread(post.Content, segmentLimit)
+		return
+	}
+	post.ThreadSegments = models.ThreadSegments{}
 }
 
 // requirePlatformIfNotDraft enforces that platform fields are populated
@@ -1037,6 +1068,90 @@ func (h *PostsHandler) ListByCampaign(c *fiber.Ctx) error {
 	return c.JSON(posts)
 }
 
+// previewThreadRequest is the body for POST /api/posts/thread/preview (CON-284
+// R2): the single authored body plus the target platform, whose per-segment char
+// limit drives the auto-split.
+type previewThreadRequest struct {
+	Content    string `json:"content"`
+	PlatformID string `json:"platform_id"`
+}
+
+type previewSegment struct {
+	Content   string `json:"content"`
+	CharCount int    `json:"char_count"`
+}
+
+// previewThreadResponse mirrors what a thread write would derive+validate, so the
+// composer can render the segment breakdown, per-segment counts, and any publish-
+// gate errors before saving. Nothing is persisted.
+type previewThreadResponse struct {
+	Segments []previewSegment            `json:"segments"`
+	Limit    int                         `json:"limit"`
+	Valid    bool                        `json:"valid"`
+	Errors   []platforms.ValidationError `json:"errors"`
+}
+
+// PreviewThread godoc
+// @Summary      Preview a thread split
+// @Description  Splits a single authored body into thread segments (manual "---"
+// @Description  delimiters, else auto-split by the platform's per-segment limit)
+// @Description  and validates them exactly as the publish gate will. Stateless.
+// @Tags         posts
+// @Security     CookieAuth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      previewThreadRequest  true  "Body + target platform"
+// @Success      200   {object}  previewThreadResponse
+// @Failure      400   {object}  map[string]string
+// @Failure      404   {object}  map[string]string
+// @Router       /api/posts/thread/preview [post]
+func (h *PostsHandler) PreviewThread(c *fiber.Ctx) error {
+	var req previewThreadRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	if req.PlatformID == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "platform_id is required")
+	}
+
+	var platform *models.Platform
+	if h.platformRepo != nil {
+		p, err := h.platformRepo.GetByID(c.Context(), req.PlatformID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fiber.NewError(fiber.StatusNotFound, "platform not found")
+			}
+			return err
+		}
+		platform = p
+	}
+
+	limit := threadLimitOf(platform)
+	segs := platforms.SplitThread(req.Content, limit)
+
+	out := make([]previewSegment, len(segs))
+	for i, s := range segs {
+		out[i] = previewSegment{Content: s.Content, CharCount: utf8.RuneCountInString(s.Content)}
+	}
+
+	// Validate the derived thread exactly as the publish gate will (per-segment
+	// count/limit/empty rules). No attachments are considered in a preview.
+	errs := []platforms.ValidationError{}
+	if platform != nil {
+		post := &models.Post{PlatformPostType: models.PostTypeThread, Content: req.Content, ThreadSegments: segs}
+		if byPlatform := platforms.ValidatePublishReadiness(post, platform, nil); byPlatform[platform.ID] != nil {
+			errs = byPlatform[platform.ID]
+		}
+	}
+
+	return c.JSON(previewThreadResponse{
+		Segments: out,
+		Limit:    limit,
+		Valid:    len(errs) == 0,
+		Errors:   errs,
+	})
+}
+
 // Create godoc
 // @Summary      Create post
 // @Description  Creates a new post. The created_by field is set from the authenticated session.
@@ -1086,7 +1201,6 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		PlatformPostType:    req.PlatformPostType,
 		Title:               req.Title,
 		Content:             req.Content,
-		ThreadSegments:      nullThreadSegments(req.ThreadSegments),
 		MediaURLs:           nullSlice(req.MediaURLs),
 		ScheduledAt:         req.ScheduledAt,
 		PublishedAt:         req.PublishedAt,
@@ -1099,17 +1213,10 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		CreatedBy:           session.UserID,
 		UsedAssets:          []models.Asset{},
 	}
-	// CON-284: segments are meaningful only for a thread. On a thread, mirror the
-	// root into Content so the post is consistent with the whole-record contract
-	// from the start; on any other type ignore a stray array (don't persist it or
-	// let it overwrite the body).
-	if post.PlatformPostType == models.PostTypeThread {
-		if len(post.ThreadSegments) > 0 {
-			post.Content = post.ThreadSegments.RootContent()
-		}
-	} else {
-		post.ThreadSegments = models.ThreadSegments{}
-	}
+	// CON-284 R2: derive the thread's segment list from the canonical body (a
+	// non-thread post gets an empty list). Runs before validateForCreate so the
+	// create-time publish gate sees the same segments submit will publish.
+	h.deriveThreadSegments(c.Context(), post)
 
 	if done, err := h.validateForCreate(c, post); err != nil {
 		return err
@@ -1235,6 +1342,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	// fixtures).
 	if prevStatus == models.PostStatusReadyForPublish && status == models.PostStatusScheduled && h.scheduleSvc != nil {
 		req.apply(post, status, ctaType)
+		h.deriveThreadSegments(c.Context(), post) // CON-284 R2: materialise segments from the body before persist
 		actor := models.ActorSystem
 		if sess, ok := c.Locals("session").(*models.Session); ok && sess != nil {
 			actor = sess.UserID
@@ -1252,6 +1360,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		}
 	} else {
 		req.apply(post, status, ctaType)
+		h.deriveThreadSegments(c.Context(), post) // CON-284 R2: materialise segments from the body before persist
 		// Presence-aware sources (CON-233): apply already left an omitted
 		// used_asset_ids at its hydrated value, but the whole-record UPDATE would
 		// still write that stale value back and clobber a concurrent membership

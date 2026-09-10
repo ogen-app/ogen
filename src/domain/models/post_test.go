@@ -1,7 +1,6 @@
 package models
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -142,42 +141,29 @@ func TestThreadSegmentsValueScan(t *testing.T) {
 	}
 }
 
-// CON-284: SnapshotContent joins the whole chain for a thread (so the "what
-// went out" version records every message), but is just Content otherwise.
+// CON-284 R2: SnapshotContent is just Content for every post type — a thread's
+// Content is now the canonical full body (with "---" delimiters), so it already
+// records the whole chain and is injective on its own.
 func TestSnapshotContent(t *testing.T) {
 	plain := &Post{PlatformPostType: "text-post", Content: "hello"}
 	if got := plain.SnapshotContent(); got != "hello" {
 		t.Errorf("ordinary post: SnapshotContent() = %q, want %q", got, "hello")
 	}
 
+	// A thread snapshots its full body verbatim — every message is captured.
+	body := "root\n\n---\n\nreply"
 	thread := &Post{
 		PlatformPostType: PostTypeThread,
-		Content:          "root",
+		Content:          body,
 		ThreadSegments:   ThreadSegments{{Content: "root"}, {Content: "reply"}},
 	}
-	got := thread.SnapshotContent()
-	// JSON-encoded chain: injective + decodable back to the segments.
-	var decoded ThreadSegments
-	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
-		t.Fatalf("thread SnapshotContent() not decodable JSON: %v (%q)", err, got)
-	}
-	if len(decoded) != 2 || decoded[0].Content != "root" || decoded[1].Content != "reply" {
-		t.Errorf("thread SnapshotContent() round-trip lost messages: %+v", decoded)
-	}
-	// Injectivity: a single message containing the old text delimiter must NOT
-	// collide with the two-message thread that a plain join would flatten to.
-	collide := &Post{
-		PlatformPostType: PostTypeThread,
-		Content:          "root\n\n———\n\nreply",
-		ThreadSegments:   ThreadSegments{{Content: "root\n\n———\n\nreply"}, {Content: "x"}},
-	}
-	if collide.SnapshotContent() == got {
-		t.Error("distinct threads produced identical SnapshotContent() — encoding is not injective")
+	if got := thread.SnapshotContent(); got != body {
+		t.Errorf("thread SnapshotContent() = %q, want the full body %q", got, body)
 	}
 
-	// A thread type with no segments falls back to Content (defensive).
-	empty := &Post{PlatformPostType: PostTypeThread, Content: "solo"}
-	if got := empty.SnapshotContent(); got != "solo" {
-		t.Errorf("thread w/o segments: SnapshotContent() = %q, want %q", got, "solo")
+	// Injectivity: distinct thread bodies yield distinct snapshots.
+	other := &Post{PlatformPostType: PostTypeThread, Content: "root\n\n---\n\ndifferent"}
+	if other.SnapshotContent() == thread.SnapshotContent() {
+		t.Error("distinct thread bodies produced identical SnapshotContent()")
 	}
 }

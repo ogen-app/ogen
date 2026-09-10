@@ -84,78 +84,69 @@ func TestMutatesLockedContent(t *testing.T) {
 	}
 }
 
-// CON-284: a thread's segment list is locked content too. A faithful mirror is
-// a no-op; editing or adding a segment trips the lock. Pure logic — no DB.
+// CON-284 R2: a thread's content lock rides on the canonical body — the whole
+// thread lives in Content, so editing it trips the lock while the derived (and
+// ignored) thread_segments field does not. Pure logic — no DB.
 func TestMutatesLockedContentThread(t *testing.T) {
 	post := &models.Post{
 		PlatformPostType: models.PostTypeThread,
-		Content:          "root",
-		ThreadSegments:   models.ThreadSegments{{Content: "root"}, {Content: "reply"}},
+		Content:          "root\n\n---\n\nreply",
 	}
 	mirror := postRequest{
 		PlatformPostType: post.PlatformPostType,
 		Content:          post.Content,
-		ThreadSegments:   post.ThreadSegments,
 	}
 	if mirror.mutatesLockedContent(post) {
-		t.Fatal("mirroring the thread exactly must not count as a mutation")
+		t.Fatal("mirroring the thread body exactly must not count as a mutation")
 	}
 
 	edited := mirror
-	edited.ThreadSegments = models.ThreadSegments{{Content: "root"}, {Content: "changed"}}
+	edited.Content = "root\n\n---\n\nchanged"
 	if !edited.mutatesLockedContent(post) {
-		t.Error("editing a thread segment must count as a locked-content mutation")
+		t.Error("editing the thread body must count as a locked-content mutation")
 	}
 
-	added := mirror
-	added.ThreadSegments = models.ThreadSegments{{Content: "root"}, {Content: "reply"}, {Content: "third"}}
-	if !added.mutatesLockedContent(post) {
-		t.Error("adding a thread segment must count as a locked-content mutation")
+	// thread_segments is server-derived: with the body unchanged, a stray client
+	// array must NOT count as a mutation (the lock ignores it entirely).
+	strayArray := mirror
+	strayArray.ThreadSegments = models.ThreadSegments{{Content: "root"}, {Content: "different"}}
+	if strayArray.mutatesLockedContent(post) {
+		t.Error("a client-sent thread_segments with an unchanged body must not count as a mutation")
 	}
 }
 
-// CON-284: apply restamps Content from the root segment on a thread write, and
-// demotion (empty segments) clears the segments while keeping the applied body.
+// CON-284 R2: applyThreadSegments derives the segment list from the canonical
+// body for a thread (WITHOUT restamping the body) and clears it for any other
+// type. Pure — the caller supplies the per-segment limit.
 func TestApplyThreadSegments(t *testing.T) {
-	post := &models.Post{}
-	// A thread write authors segments; Content is sent empty and derived.
-	req := postRequest{
-		PlatformPostType: models.PostTypeThread,
-		Content:          "",
-		ThreadSegments:   models.ThreadSegments{{Content: "root"}, {Content: "reply"}},
+	// Manual delimiter: two segments, body preserved verbatim.
+	post := &models.Post{PlatformPostType: models.PostTypeThread, Content: "root\n\n---\n\nreply"}
+	applyThreadSegments(post, 280)
+	if len(post.ThreadSegments) != 2 || post.ThreadSegments[0].Content != "root" || post.ThreadSegments[1].Content != "reply" {
+		t.Errorf("manual thread: segments = %+v, want [root reply]", post.ThreadSegments)
 	}
-	req.apply(post, models.PostStatusDraft, models.CTATypeNone)
-	if post.Content != "root" {
-		t.Errorf("thread apply: Content = %q, want root mirror %q", post.Content, "root")
-	}
-	if len(post.ThreadSegments) != 2 {
-		t.Fatalf("thread apply: segments = %d, want 2", len(post.ThreadSegments))
+	if post.Content != "root\n\n---\n\nreply" {
+		t.Errorf("manual thread: Content = %q, want the body unchanged (not restamped)", post.Content)
 	}
 
-	// Demotion to a single-message type: segments cleared, body kept.
-	demote := postRequest{PlatformPostType: "text-post", Content: "just this"}
-	demote.apply(post, models.PostStatusDraft, models.CTATypeNone)
-	if len(post.ThreadSegments) != 0 {
-		t.Errorf("demote: segments = %d, want 0", len(post.ThreadSegments))
-	}
-	if post.Content != "just this" {
-		t.Errorf("demote: Content = %q, want %q", post.Content, "just this")
+	// Auto-split: a delimiter-free body over the limit splits by the limit.
+	auto := &models.Post{PlatformPostType: models.PostTypeThread, Content: "aaaaa\n\nbbbbb"}
+	applyThreadSegments(auto, 5)
+	if len(auto.ThreadSegments) != 2 {
+		t.Errorf("auto thread: segments = %d, want 2", len(auto.ThreadSegments))
 	}
 
-	// A non-thread request that still carries thread_segments must ignore them:
-	// they are not persisted and must NOT overwrite the ordinary body with the
-	// root segment (CON-284 — segments are meaningful only for a thread).
-	stray := &models.Post{}
-	strayReq := postRequest{
+	// Demotion / non-thread: segments cleared, body kept.
+	demote := &models.Post{
 		PlatformPostType: "text-post",
-		Content:          "ordinary body",
-		ThreadSegments:   models.ThreadSegments{{Content: "root"}, {Content: "reply"}},
+		Content:          "just this",
+		ThreadSegments:   models.ThreadSegments{{Content: "old"}, {Content: "seg"}},
 	}
-	strayReq.apply(stray, models.PostStatusDraft, models.CTATypeNone)
-	if len(stray.ThreadSegments) != 0 {
-		t.Errorf("stray segments on non-thread: segments = %d, want 0", len(stray.ThreadSegments))
+	applyThreadSegments(demote, 280)
+	if len(demote.ThreadSegments) != 0 {
+		t.Errorf("demote: segments = %d, want 0", len(demote.ThreadSegments))
 	}
-	if stray.Content != "ordinary body" {
-		t.Errorf("stray segments on non-thread: Content = %q, want %q (must not restamp from root)", stray.Content, "ordinary body")
+	if demote.Content != "just this" {
+		t.Errorf("demote: Content = %q, want %q", demote.Content, "just this")
 	}
 }
