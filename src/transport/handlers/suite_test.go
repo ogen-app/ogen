@@ -9,8 +9,6 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
-	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
@@ -30,18 +28,6 @@ func TestHandlers(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Handlers Suite")
 }
-
-// CON-292: the Zernio resolver's platform catalog replaced the compile-time
-// registry, so it's empty until loaded from the DB. Production loads it in
-// server.New; these suites construct handlers directly, so populate it once here
-// from a migrated DB. The 6 seeded platforms are identical across every pgtest
-// DB, so a single synchronous load (no background ticker) covers every spec that
-// calls zernio.SupportedPlatforms / Lookup* (publisher enrichment, convert-to-
-// manual, verify-external, the connect allowlist, auto-publish).
-var _ = BeforeSuite(func() {
-	db := mustOpenTestDBWithMigrations()
-	Expect(zernio.LoadCatalog(context.Background(), repository.NewPlatformRepository(db))).To(Succeed())
-})
 
 // seedTenantUser inserts a user in the default tenant directly, bypassing the
 // (now auth-gated) POST /api/users route — since CON-97, signup is the only

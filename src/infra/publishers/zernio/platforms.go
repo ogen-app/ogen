@@ -47,12 +47,12 @@ type catalog struct {
 // are skipped for resolution (an operator created the catalog entry but has not
 // assigned a slug yet, so it can't publish or be connected).
 func newCatalog(rows []models.Platform) *catalog {
-	c := &catalog{}
+	sps := make([]SupportedPlatform, 0, len(rows))
 	for _, row := range rows {
 		if row.ZernioID == "" {
 			continue
 		}
-		c.all = append(c.all, SupportedPlatform{
+		sps = append(sps, SupportedPlatform{
 			ZernioID:           row.ZernioID,
 			Label:              row.Name,
 			OgenID:             row.ID,
@@ -60,8 +60,15 @@ func newCatalog(rows []models.Platform) *catalog {
 			Enabled:            row.Enabled,
 		})
 	}
-	// Build index maps only after c.all is final so the pointers stay valid
-	// (appending could otherwise reallocate the backing array).
+	return buildCatalog(sps)
+}
+
+// buildCatalog indexes a projected platform set into an immutable snapshot. It
+// takes ownership of sps (callers pass a fresh slice). Index maps are built only
+// after c.all is final so the pointers stay valid (appending could otherwise
+// reallocate the backing array).
+func buildCatalog(sps []SupportedPlatform) *catalog {
+	c := &catalog{all: sps}
 	c.bySqid = make(map[string]*SupportedPlatform, len(c.all))
 	c.byZernio = make(map[string]*SupportedPlatform, len(c.all))
 	for i := range c.all {
@@ -77,6 +84,28 @@ func newCatalog(rows []models.Platform) *catalog {
 		c.enabledByZernio[c.enabled[i].ZernioID] = &c.enabled[i]
 	}
 	return c
+}
+
+// builtinPlatforms is the fallback catalog: the 6 originally-seeded platforms
+// with their Sqid ids + Zernio slugs. It is NOT the source of truth — the DB is
+// (loaded by InitCatalog at boot). It serves two purposes (CON-292 §10.1):
+//   - boot / DB-outage resilience: the known platforms still resolve if the
+//     initial DB load fails, so the app starts;
+//   - tests: packages that exercise the publish/connect lookups without booting
+//     server.New (jobs, handlers, usecases) see the known platforms, exactly as
+//     they did when this was a compile-time registry.
+//
+// Keep it in sync with the seed migration's 6 backfilled rows. Operator-added
+// platforms and limit edits only ever live in the DB.
+func builtinPlatforms() []SupportedPlatform {
+	return []SupportedPlatform{
+		{ZernioID: "twitter", Label: "X (Twitter)", OgenID: "81mUCmc2xsKd", SupportedPostTypes: []string{"text-post", "image-post", "video", "thread"}, Enabled: true},
+		{ZernioID: "linkedin", Label: "LinkedIn", OgenID: "AXqWG7U2qnpt", SupportedPostTypes: []string{"text-post", "image-post", "carousel", "video", "article"}, Enabled: true},
+		{ZernioID: "facebook", Label: "Facebook", OgenID: "zBU1zqVICGfk", SupportedPostTypes: []string{"text-post", "image-post", "video", "reel", "link-post"}, Enabled: true},
+		{ZernioID: "instagram", Label: "Instagram", OgenID: "rzgpTkARLH0L", SupportedPostTypes: []string{"image-post", "carousel", "reel", "story"}, Enabled: true},
+		{ZernioID: "youtube", Label: "YouTube", OgenID: "8S8bWQTG6qD", SupportedPostTypes: []string{"video", "short"}, Enabled: true},
+		{ZernioID: "threads", Label: "Threads", OgenID: "pQ4yxT3SuE57", SupportedPostTypes: []string{"text-post", "image-post", "carousel", "video", "thread"}, Enabled: true},
+	}
 }
 
 // catalogRefreshInterval bounds the staleness window after an operator edit
@@ -98,7 +127,9 @@ var (
 )
 
 func init() {
-	activeCatalog.Store(newCatalog(nil)) // empty until InitCatalog runs
+	// Seed the built-in fallback so lookups work before InitCatalog loads from
+	// the DB (and if that load ever fails). Production overwrites this at boot.
+	activeCatalog.Store(buildCatalog(builtinPlatforms()))
 }
 
 // CatalogSource supplies platform rows to the resolver. Satisfied by

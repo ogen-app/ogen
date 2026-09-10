@@ -10,9 +10,9 @@ import (
 // lookups (publish path) see disabled rows so already-scheduled posts still go
 // out, while availability surfaces (connect / composer) hide them.
 func TestCatalogResolutionVsAvailability(t *testing.T) {
-	// Restore the empty snapshot so this white-box mutation can't leak into
+	// Restore the built-in default so this white-box mutation can't leak into
 	// other tests in the package.
-	defer activeCatalog.Store(newCatalog(nil))
+	defer activeCatalog.Store(buildCatalog(builtinPlatforms()))
 
 	rows := []models.Platform{
 		{ID: "sqidX", Name: "X", ZernioID: "twitter", Enabled: true, SupportedPostTypes: models.StringSlice{"text-post", "thread"}},
