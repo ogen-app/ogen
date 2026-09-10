@@ -171,6 +171,25 @@ services:
         expose:
             - "50051"
 
+    # Document parsing microservice (CON-280), mirrors pdf-service. Parses
+    # content-bank office/text documents (.docx/.pptx/.xlsx/.odt/... ) into
+    # embedding-ready, source-anchored chunks. Built and published from the
+    # separate ogen-app/document-service repo (pure Go, no CGO). The API reaches
+    # it over the private network ONLY — no host `ports:` — at
+    # document-service:50051 (DOCUMENTS_SERVICE_ADDR in .env).
+    #
+    # Gated behind the `documents` profile until that image is published, so the
+    # default `docker compose up` keeps working (document uploads fail fast with a
+    # clear message while disabled). Once the image exists, set
+    # DOCUMENTS_SERVICE_ADDR=document-service:50051 in .env and enable with:
+    #   docker compose --profile documents up
+    document-service:
+        image: alephbetai/document-service:latest
+        platform: linux/amd64
+        profiles: ["documents"]
+        expose:
+            - "50051"
+
     # Harbor (../harbor) — Ogen's operations dashboard. Brought up ALONGSIDE
     # this stack so the two link over gRPC:
     #   docker compose --profile harbor up
