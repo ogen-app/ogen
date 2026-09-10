@@ -1,5 +1,3 @@
-//go:build platformadmin
-
 package server
 
 import (
@@ -10,9 +8,7 @@ import (
 )
 
 // registerPlatformAdmin wires the CON-292 PlatformAdminService onto the internal
-// gRPC server. Active only under the `platformadmin` build tag (see platforms.go);
-// the default build uses the no-op stub in register_platformadmin_stub.go until
-// gen/platforms/v1 exists.
+// gRPC server, alongside Secrets + TenantAdmin.
 func registerPlatformAdmin(
 	srv *grpc.Server,
 	platformRepo repository.PlatformRepository,

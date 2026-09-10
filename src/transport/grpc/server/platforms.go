@@ -1,19 +1,7 @@
-//go:build platformadmin
-
-// CON-292: PlatformAdminService — operator-facing catalog management.
-//
-// This file is gated by the `platformadmin` build tag because it imports the
-// generated gen/platforms/v1 package, which does not exist until the contract
-// (platforms/v1/platforms.proto in github.com/ogen-app/proto) is published to
-// buf.build/ogen-app/proto and `make proto` is run here. ACTIVATION:
-//  1. merge the platforms/v1 proto in ogen-app/proto and tag it (e.g. v1.1.0);
-//     CI `buf push`es it to the BSR;
-//  2. bump PROTO_VERSION in this repo's Makefile to that tag and run `make proto`
-//     (generates gen/platforms/v1);
-//  3. delete the `//go:build platformadmin` tags on this file and
-//     register_platformadmin.go, and delete register_platformadmin_stub.go.
-// Until then the normal build uses the no-op registration stub and this service
-// is simply absent.
+// CON-292: PlatformAdminService — the operator-facing (Harbor) gRPC surface for
+// the data-driven platform catalog. Mirrors TenantAdminService and shares the
+// same bearer-token gate (see server.go). Generated stubs come from
+// gen/platforms/v1 (the buf.build/ogen-app/proto module; `make proto`).
 package server
 
 import (
