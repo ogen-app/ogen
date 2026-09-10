@@ -83,10 +83,11 @@ func TestValidateThread_SegmentIndexIntegrity(t *testing.T) {
 	p := threadPlatform()
 	post := threadPost("root", "reply")
 
-	// nil segment_index on a thread attachment is an integrity error.
+	// CON-284 R2: a nil segment_index is valid — the attachment defaults to the
+	// root message (segment 0), so it must NOT raise an integrity error.
 	nilIdx := []models.PostAttachment{{ID: "a", MimeType: "image/jpeg", SizeBytes: 100}}
-	if errs := ValidatePostType(post, p, nilIdx); !hasRule(errs, RuleThreadSegmentIndex) {
-		t.Errorf("nil segment_index: want thread_segment_index, got %+v", errs)
+	if errs := ValidatePostType(post, p, nilIdx); hasRule(errs, RuleThreadSegmentIndex) {
+		t.Errorf("nil segment_index (defaults to root): want no integrity error, got %+v", errs)
 	}
 
 	// Out-of-range (2 into a 2-message thread).
@@ -99,6 +100,25 @@ func TestValidateThread_SegmentIndexIntegrity(t *testing.T) {
 	ok := []models.PostAttachment{{ID: "a", MimeType: "image/jpeg", SizeBytes: 100, SegmentIndex: segIdx(0)}}
 	if errs := ValidatePostType(post, p, ok); hasRule(errs, RuleThreadSegmentIndex) {
 		t.Errorf("valid segment_index: want no integrity error, got %+v", errs)
+	}
+}
+
+// CON-284 R2: nil-index attachments count against the ROOT segment's media rules,
+// so five of them trip X's 4-image cap at segment 0 (proving NULL ⇒ root).
+func TestValidateThread_NilIndexMediaLandsOnRoot(t *testing.T) {
+	p := threadPlatform() // 4 images per post → per segment
+	post := threadPost("root", "reply")
+
+	five := make([]models.PostAttachment, 5)
+	for i := range five {
+		five[i] = models.PostAttachment{ID: "img", MimeType: "image/jpeg", SizeBytes: 100, Position: i}
+	}
+	errs := ValidatePostType(post, p, five)
+	if !hasRule(errs, RuleMaxAttachmentsCount) {
+		t.Fatalf("5 nil-index images: want max_attachments_per_post at root, got %+v", errs)
+	}
+	if !hasSegment(errs, RuleMaxAttachmentsCount, 0) {
+		t.Errorf("nil-index cap failure: want Segment=0 (root), got %+v", errs)
 	}
 }
 

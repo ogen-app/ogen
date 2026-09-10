@@ -198,15 +198,24 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 		mediaItems = items
 	}
 
+	// CON-284 R2: post.Content is the full thread body; Zernio's top-level content
+	// must be just the root message. Derive it from the segments, falling back to
+	// the body for a non-thread post (or the defensive empty-segment case).
+	topContent := post.Content
+	if post.IsThread() && len(post.ThreadSegments) > 0 {
+		topContent = post.ThreadSegments.RootContent()
+	}
+
 	req := zernio.SubmitRequest{
-		// For a thread, Content mirrors the root segment (post.Content already
-		// holds it): it's kept top-level for the ZernioSubmit log and CON-129
-		// dedupe recovery (which matches on req.Content = the root), while the
-		// chain rides in Platforms[0].PlatformSpecificData.ThreadItems and
-		// top-level MediaItems stays empty. Zernio publishes from threadItems
-		// when present; confirm against docs.zernio.com during rollout that it
-		// does NOT also post the top-level content (if it does, blank it here).
-		Content:      post.Content,
+		// For a thread, top-level Content must be the ROOT segment. As of CON-284
+		// R2 post.Content is the full delimited thread body (the canonical draft),
+		// so we take the root from the derived segments (topContent above) — keeping
+		// the CON-129 dedupe-recovery invariant intact (recovery matches on
+		// req.Content = the root). The chain rides in Platforms[0].PlatformSpecificData.
+		// ThreadItems and top-level MediaItems stays empty. Zernio publishes from
+		// threadItems when present; confirm against docs.zernio.com during rollout
+		// that it does NOT also post the top-level content (if it does, blank it here).
+		Content:      topContent,
 		Platforms:    []zernio.PlatformVariant{variant},
 		ScheduledFor: when,
 		Timezone:     tzName,
@@ -368,10 +377,12 @@ func (p *SubmitPostProcessor) buildMediaItems(ctx context.Context, post *models.
 // (CON-284): one ThreadItem per thread_segment (item 0 = root), each carrying
 // its own text and its own media. Attachments are grouped by segment_index and
 // uploaded to Zernio (presign → PUT) exactly like buildMediaItems, preserving
-// position order within a segment. Nil storage/repo ⇒ a text-only thread. An
-// attachment with a missing / out-of-range segment_index can't be placed, so it
-// is skipped with a warning (the publish gate rejects those before submit; this
-// is defence in depth).
+// position order within a segment. Nil storage/repo ⇒ a text-only thread.
+//
+// CON-284 R2: segment_index is optional — a NULL index means the attachment
+// belongs to the root message (segment 0), the whole-post default of the
+// delimited-body flow. Only a non-NULL, out-of-range index can't be placed, so it
+// is skipped with a warning (defence in depth; the gate range-checks it first).
 func (p *SubmitPostProcessor) buildThreadItems(ctx context.Context, post *models.Post) ([]zernio.ThreadItem, error) {
 	items := make([]zernio.ThreadItem, len(post.ThreadSegments))
 	for i := range post.ThreadSegments {
@@ -386,9 +397,12 @@ func (p *SubmitPostProcessor) buildThreadItems(ctx context.Context, post *models
 	}
 	for i := range atts {
 		att := atts[i]
-		seg := att.SegmentIndex
-		if seg == nil || *seg < 0 || *seg >= len(items) {
-			slog.WarnContext(ctx, "skipping thread attachment with missing/out-of-range segment_index",
+		seg := 0 // NULL segment_index → root message (segment 0)
+		if att.SegmentIndex != nil {
+			seg = *att.SegmentIndex
+		}
+		if seg < 0 || seg >= len(items) {
+			slog.WarnContext(ctx, "skipping thread attachment with out-of-range segment_index",
 				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID)
 			continue
 		}
@@ -402,7 +416,7 @@ func (p *SubmitPostProcessor) buildThreadItems(ctx context.Context, post *models
 		if err != nil {
 			return nil, err
 		}
-		items[*seg].MediaItems = append(items[*seg].MediaItems, item)
+		items[seg].MediaItems = append(items[seg].MediaItems, item)
 	}
 	return items, nil
 }

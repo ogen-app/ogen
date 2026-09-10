@@ -1227,18 +1227,15 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		})
 
 		Context("thread (X)", func() {
-			// CON-284: a thread post is validated per segment — 2..25 messages,
-			// each non-empty and within X's 280-char limit — not as one body.
+			// CON-284 R2: a thread is authored as ONE body in `content`, with "---"
+			// delimiter lines between messages; the server derives the segment list
+			// and validates it per segment (2..25 messages, each within X's 280).
 			threadReady := func(id string, segments ...string) *http.Response {
-				segs := make([]fiber.Map, len(segments))
-				for i, s := range segments {
-					segs[i] = fiber.Map{"content": s}
-				}
 				body, _ := json.Marshal(fiber.Map{
 					"campaign_id":        campaignID,
 					"platform_id":        xID,
 					"platform_post_type": "thread",
-					"thread_segments":    segs,
+					"content":            strings.Join(segments, "\n---\n"),
 					"status":             "ready_for_publish",
 				})
 				return putReady(id, body)
@@ -1251,11 +1248,12 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				Expect(decodeRules(resp)).To(ContainElement("thread_segment_count"))
 			})
 
-			It("rejects a thread with an empty message", func() {
+			It("drops an empty message between delimiters (no empty segment can exist)", func() {
+				// A blank chunk between two real messages collapses away, so the body
+				// yields a clean two-message thread rather than an empty segment.
 				p := createPost("Thread blank msg", nil)
-				resp := threadReady(p.ID, "root", "   ")
-				Expect(resp.StatusCode).To(Equal(422))
-				Expect(decodeRules(resp)).To(ContainElement("requires_content"))
+				resp := threadReady(p.ID, "root", "   ", "reply")
+				Expect(resp.StatusCode).To(Equal(200))
 			})
 
 			It("rejects a message over the per-segment character limit", func() {

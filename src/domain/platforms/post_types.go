@@ -193,8 +193,8 @@ const MaxThreadSegments = 25
 //   - each segment carries non-empty content within the platform's per-segment
 //     char limit (X 280 / Threads 500 — "thread" has no per-type override, so the
 //     platform default applies);
-//   - every attachment names a valid segment via segment_index, and the media
-//     within each segment obeys the platform's kind/count rules.
+//   - each attachment's segment_index (optional as of R2: NULL ⇒ root) is in
+//     range, and the media within each segment obeys the platform's kind/count rules.
 func validateThread(post *models.Post, p *models.Platform, atts []models.PostAttachment) []ValidationError {
 	var errs []ValidationError
 	segs := post.ThreadSegments
@@ -251,27 +251,23 @@ func validateThread(post *models.Post, p *models.Platform, atts []models.PostAtt
 	return errs
 }
 
-// validateThreadAttachments checks segment_index integrity on every attachment
-// of a thread post, then runs the platform's media rules within each segment
-// (reusing ValidatePostAttachments scoped to the segment's media). Iterates
+// validateThreadAttachments range-checks each attachment's segment_index (NULL ⇒
+// root, segment 0, as of R2), then runs the platform's media rules within each
+// segment (reusing ValidatePostAttachments scoped to the segment's media). Iterates
 // segments in order so the returned errors are stable.
 func validateThreadAttachments(p *models.Platform, atts []models.PostAttachment, segCount int) []ValidationError {
 	var errs []ValidationError
 	bySegment := map[int][]models.PostAttachment{}
 	for i := range atts {
 		att := atts[i]
-		if att.SegmentIndex == nil {
-			errs = append(errs, ValidationError{
-				Platform:     p.ID,
-				AttachmentID: att.ID,
-				Rule:         RuleThreadSegmentIndex,
-				Expected:     "a segment_index",
-				Actual:       "null",
-				Message:      "attachment on a thread post must name its segment (segment_index)",
-			})
-			continue
+		// CON-284 R2: segment_index is optional. The delimited-body authoring flow
+		// does not pin media per segment, so a NULL index means "attach to the root
+		// message" (segment 0) — the whole-post default. An explicit index is still
+		// range-checked (the advanced per-segment pinning path sets it).
+		idx := 0
+		if att.SegmentIndex != nil {
+			idx = *att.SegmentIndex
 		}
-		idx := *att.SegmentIndex
 		if idx < 0 || idx >= segCount {
 			seg := idx
 			errs = append(errs, ValidationError{

@@ -352,8 +352,8 @@ func (h *PostVerificationHandler) snapshotPublished(ctx context.Context, post *m
 	if err != nil {
 		return
 	}
-	// CON-284: capture the full thread (not just the mirrored root) for a thread
-	// post; SnapshotContent == post.Content for an ordinary post.
+	// CON-284 R2: content is the canonical full thread body, so SnapshotContent is
+	// simply post.Content for every post type.
 	content := post.SnapshotContent()
 	if latest != nil && latest.IsSystemSnapshot() &&
 		latest.Note == models.PostVersionNotePublished && latest.Content == content {
