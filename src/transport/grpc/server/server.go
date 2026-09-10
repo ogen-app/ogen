@@ -49,6 +49,8 @@ func New(
 	tierRepo repository.TenantTierRepository,
 	groupRepo repository.TenantGroupRepository,
 	tenantRepo repository.TenantRepository,
+	platformRepo repository.PlatformRepository,
+	platformLimitsRepo repository.PlatformGlobalLimitsRepository,
 ) (*grpc.Server, error) {
 	// Env-configured secrets frequently arrive with a trailing newline (a very
 	// common Railway / docker-compose paste mistake). Trim it here so the
@@ -63,6 +65,10 @@ func New(
 	)
 	secretsv1.RegisterSecretsServiceServer(srv, newSecretsService(store))
 	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo))
+	// CON-292: PlatformAdminService. Registered only under the `platformadmin`
+	// build tag (the generated platforms/v1 stubs don't exist until the proto is
+	// published + `make proto`); the default build's stub is a no-op.
+	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
 	return srv, nil
 }
 

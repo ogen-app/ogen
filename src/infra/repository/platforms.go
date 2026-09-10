@@ -27,6 +27,10 @@ type PlatformRepository interface {
 	Update(ctx context.Context, platform *models.Platform) error
 	// SetEnabled flips the soft on/off switch and returns the updated row.
 	SetEnabled(ctx context.Context, id string, enabled bool) (*models.Platform, error)
+	// InUseCounts reports how many connected accounts and scheduled (not-yet-
+	// published) posts reference the platform — the numbers the operator
+	// disable/delete guard reports (CON-292 §6 PlatformUsage / §11).
+	InUseCounts(ctx context.Context, p *models.Platform) (accounts, scheduledPosts int, err error)
 	Delete(ctx context.Context, id string) (bool, error)
 }
 
@@ -106,6 +110,33 @@ func (r *platformRepository) SetEnabled(ctx context.Context, id string, enabled 
 		return nil, sql.ErrNoRows
 	}
 	return r.GetByID(ctx, id)
+}
+
+func (r *platformRepository) InUseCounts(ctx context.Context, p *models.Platform) (accounts, scheduledPosts int, err error) {
+	// Connected accounts join on the Zernio slug (social_accounts.platform holds
+	// the wire slug, e.g. "twitter"); soft-deleted accounts don't count.
+	if p.ZernioID != "" {
+		accounts, err = r.db.NewSelect().Model((*models.SocialAccount)(nil)).
+			Where("platform = ?", p.ZernioID).
+			Where("deleted_at IS NULL").
+			Count(ctx)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	// Scheduled posts join on the Sqid (posts.platform_id) and are the ones that
+	// would still fire after a disable — the in-flight work §11 preserves.
+	scheduledPosts, err = r.db.NewSelect().Model((*models.Post)(nil)).
+		Where("platform_id = ?", p.ID).
+		Where("status IN (?)", bun.In([]string{
+			string(models.PostStatusScheduled),
+			string(models.PostStatusScheduledForManualPublish),
+		})).
+		Count(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return accounts, scheduledPosts, nil
 }
 
 func (r *platformRepository) Delete(ctx context.Context, id string) (bool, error) {
