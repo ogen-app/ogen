@@ -61,3 +61,51 @@ INSERT INTO platform_global_limits
     (id, max_image_upload_bytes, max_pdf_upload_bytes, max_video_upload_bytes, max_alt_text_chars, max_thread_segments)
 VALUES
     ('global', 52428800, 104857600, 5368709120, 2000, 25);
+
+-- 5. Seed the next wave of platforms — TikTok / Pinterest / Reddit — DISABLED
+--    (CON-292 §19.2). Day-one tenant behaviour is unchanged (they don't surface
+--    until an operator flips enabled=true); turning one on is a one-toggle launch
+--    once its account connect is verified. Media/text limits verified against
+--    docs.zernio.com (2026-09-10): per-platform pages for tiktok/pinterest/reddit.
+--    enabled is set explicitly here because bun would coerce a zero-value false
+--    back to the column DEFAULT true on insert — raw SQL is the seam for disabled
+--    seeds. All caps are below the global upload ceilings (§12).
+INSERT INTO platforms
+    (id, name, post_types, cadence, constraints, image_constraints, pdf_constraints, video_constraints, text_constraints, zernio_id, enabled, connect_supported, supported_post_types, sort_order)
+VALUES
+(
+    'Tk7nQ2xLpR9a', 'TikTok',
+    '{"video":"Video","image-post":"Photo","carousel":"Photo carousel (up to 35 images)"}',
+    '1 video per day',
+    'short vertical video (3s–10min); captions up to 2200 chars; photo carousels up to 35 images with a 4000-char description',
+    '{"max_file_size_bytes":20971520,"allowed_formats":["jpeg","png","webp"],"animated_gif_supported":false,"max_attachments_per_post":35}',
+    '{}',
+    '{"max_file_size_bytes":4294967296,"allowed_formats":["mp4","mov","webm"],"max_duration_seconds":600,"min_duration_seconds":3,"max_width":0,"max_height":0,"allowed_aspect_ratios":["9:16","1:1","16:9"],"max_attachments_per_post":1}',
+    '{"max_content_chars":2200,"per_post_type":{"carousel":4000}}',
+    'tiktok', false, true,
+    '["video","image-post","carousel"]', 70
+),
+(
+    'Pn4vK8mWz1Bc', 'Pinterest',
+    '{"image-post":"Image Pin","video":"Video Pin"}',
+    '3–5 pins per week',
+    'single image or video pins (no carousels); titles up to 100 chars; descriptions up to 800 chars; every pin requires a board',
+    '{"max_file_size_bytes":33554432,"allowed_formats":["jpeg","png","webp","gif"],"animated_gif_supported":true,"max_attachments_per_post":1}',
+    '{}',
+    '{"max_file_size_bytes":2147483648,"allowed_formats":["mp4","mov"],"max_duration_seconds":900,"min_duration_seconds":4,"max_width":0,"max_height":0,"allowed_aspect_ratios":["2:3","1:1","9:16"],"max_attachments_per_post":1}',
+    '{"max_content_chars":800,"max_title_chars":100}',
+    'pinterest', false, true,
+    '["image-post","video"]', 80
+),
+(
+    'Rd5hJ3yTq6Ne', 'Reddit',
+    '{"text-post":"Text post","link-post":"Link post","image-post":"Image post","carousel":"Gallery (2–20 images)","video":"Video"}',
+    '2–3 posts per week',
+    'title up to 300 chars (required, not editable); body up to 40000 chars; posts to a chosen subreddit',
+    '{"max_file_size_bytes":20971520,"allowed_formats":["jpeg","png","gif"],"animated_gif_supported":true,"max_attachments_per_post":20}',
+    '{}',
+    '{"max_file_size_bytes":1073741824,"allowed_formats":["mp4"],"max_duration_seconds":0,"min_duration_seconds":0,"max_width":0,"max_height":0,"allowed_aspect_ratios":[],"max_attachments_per_post":1}',
+    '{"max_content_chars":40000,"max_title_chars":300}',
+    'reddit', false, true,
+    '["text-post","link-post","image-post","carousel","video"]', 90
+);

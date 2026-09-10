@@ -1,4 +1,7 @@
--- CON-292 rollback: drop the operator-catalog config and columns.
+-- CON-292 rollback: drop the operator-catalog config, seeded rows, and columns.
+
+-- Remove the platforms seeded by this migration (§19.2).
+DELETE FROM platforms WHERE id IN ('Tk7nQ2xLpR9a', 'Pn4vK8mWz1Bc', 'Rd5hJ3yTq6Ne');
 
 DROP TABLE IF EXISTS platform_global_limits;
 

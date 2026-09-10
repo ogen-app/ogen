@@ -66,7 +66,7 @@ var _ = Describe("PlatformsHandler", Ordered, func() {
 	})
 
 	AfterEach(func() {
-		_, err := db.NewDelete().TableExpr("platforms").Where("id NOT IN ('AXqWG7U2qnpt','8S8bWQTG6qD','zBU1zqVICGfk','81mUCmc2xsKd','pQ4yxT3SuE57','rzgpTkARLH0L')").Exec(context.Background())
+		_, err := db.NewDelete().TableExpr("platforms").Where("id NOT IN ('AXqWG7U2qnpt','8S8bWQTG6qD','zBU1zqVICGfk','81mUCmc2xsKd','pQ4yxT3SuE57','rzgpTkARLH0L','Tk7nQ2xLpR9a','Pn4vK8mWz1Bc','Rd5hJ3yTq6Ne')").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("sessions").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
