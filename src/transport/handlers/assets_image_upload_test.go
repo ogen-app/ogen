@@ -79,7 +79,7 @@ var _ = Describe("AssetsHandler image upload (CON-246)", Ordered, Serial, func()
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
 		// No PDF/URL jobs wired: images need only storage + db.
-		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, auth, nil).Register(app)
+		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, nil, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "img@example.com", "pw-password")
 

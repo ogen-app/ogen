@@ -177,6 +177,19 @@ type Config struct {
 	VideoServiceTimeout      time.Duration `envconfig:"VIDEO_SERVICE_TIMEOUT"        default:"2m"`
 	VideoServiceMaxRecvBytes int           `envconfig:"VIDEO_SERVICE_MAX_RECV_BYTES" default:"67108864"`
 
+	// Document parsing microservice (CON-280), mirroring pdf-service. The API
+	// streams office/text document bytes (.docx/.pptx/.xlsx/.odt/... ) to
+	// document-service over gRPC — over the Railway private network — and gets
+	// back embedding-ready, source-anchored chunks. Empty DocumentsServiceAddr
+	// disables document ingestion (those uploads fail fast with a clear message),
+	// mirroring the empty-addr pattern above. Prod:
+	// document-service.railway.internal:50051; compose/tests: document-service:50051.
+	// A larger receive cap + longer timeout than PDF: a spreadsheet can explode
+	// into many labelled row chunks (128 MiB / 5m here).
+	DocumentsServiceAddr         string        `envconfig:"DOCUMENTS_SERVICE_ADDR"           default:""`
+	DocumentsServiceTimeout      time.Duration `envconfig:"DOCUMENTS_SERVICE_TIMEOUT"        default:"5m"`
+	DocumentsServiceMaxRecvBytes int           `envconfig:"DOCUMENTS_SERVICE_MAX_RECV_BYTES" default:"134217728"`
+
 	// Zernio integration. Empty ZernioAPIKey disables the
 	// integration entirely; everything else stays defaulted.
 	ZernioAPIKey           string        `envconfig:"ZERNIO_API_KEY"            default:""`

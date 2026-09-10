@@ -24,6 +24,11 @@ const (
 	// AssetTypeImage marks assets that are an uploaded image (CON-246). Its
 	// content is a plain-text description, not a document; empty is valid.
 	AssetTypeImage = "IMG"
+	// AssetTypeDocument marks assets imported from an office/text document upload
+	// parsed by document-service (CON-280): .docx/.pptx/.xlsx/.odt/.ods/.odp/
+	// .epub/.csv/.tsv/.html/.xhtml/.eml/.rtf/.txt/.log. The specific format is
+	// recorded in asset_files.mime_type; assets.type stays a coarse enum.
+	AssetTypeDocument = "DOC"
 )
 
 type Asset struct {

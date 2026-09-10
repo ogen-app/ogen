@@ -30,6 +30,10 @@ import (
 const (
 	maxMarkdownUploadSize = 10 << 20 // 10 MB
 	maxPDFUploadSize      = 50 << 20 // 50 MB
+	// maxDocumentUploadSize caps office/text document uploads (CON-280). Larger
+	// than markdown because a real .pptx/.xlsx carries embedded media we discard
+	// but still receive.
+	maxDocumentUploadSize = 50 << 20 // 50 MB
 	// maxImageUploadSize matches POST /api/images and the post-attachment path —
 	// one number across every image path (CON-246 R4).
 	maxImageUploadSize = 10 << 20 // 10 MB
@@ -38,6 +42,39 @@ const (
 	// against decompression-bomb dimensions.
 	maxImageDimension = 8192
 )
+
+// documentUploadMIMEs is the CON-280 accept list: the office/text document
+// extensions document-service parses, mapped to the MIME stored in
+// asset_files.mime_type and used as the upload content-type. Membership also
+// drives detectUploadKind. The extension is advisory routing only —
+// document-service sniffs the body's magic bytes authoritatively. `.md`/`.pdf`
+// are deliberately absent: they keep their own ingestion paths.
+var documentUploadMIMEs = map[string]string{
+	".docx":  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".docm":  "application/vnd.ms-word.document.macroenabled.12",
+	".dotx":  "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+	".xlsx":  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".xlsm":  "application/vnd.ms-excel.sheet.macroenabled.12",
+	".xltx":  "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+	".pptx":  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	".pptm":  "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+	".potx":  "application/vnd.openxmlformats-officedocument.presentationml.template",
+	".odt":   "application/vnd.oasis.opendocument.text",
+	".ods":   "application/vnd.oasis.opendocument.spreadsheet",
+	".odp":   "application/vnd.oasis.opendocument.presentation",
+	".fodt":  "application/vnd.oasis.opendocument.text",
+	".fods":  "application/vnd.oasis.opendocument.spreadsheet",
+	".fodp":  "application/vnd.oasis.opendocument.presentation",
+	".epub":  "application/epub+zip",
+	".csv":   "text/csv",
+	".tsv":   "text/tab-separated-values",
+	".html":  "text/html",
+	".xhtml": "application/xhtml+xml",
+	".eml":   "message/rfc822",
+	".rtf":   "application/rtf",
+	".txt":   "text/plain",
+	".log":   "text/plain",
+}
 
 // PDFIngestEnqueuer enqueues a PDF-ingestion job in the caller's transaction
 // (CON-103). Implemented by *queues.Enqueuer; a narrow interface here keeps the
@@ -50,6 +87,13 @@ type PDFIngestEnqueuer interface {
 // (CON-222). Implemented by *queues.Enqueuer.
 type URLIngestEnqueuer interface {
 	EnqueueProcessURLTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, sourceURL string, refresh bool) error
+}
+
+// DocumentIngestEnqueuer enqueues a document-ingestion job in the caller's
+// transaction (CON-280). Implemented by *queues.Enqueuer; a narrow interface
+// here keeps the handler off the jobs package.
+type DocumentIngestEnqueuer interface {
+	EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey string) error
 }
 
 // URLScrapeGate reports whether URL scraping is currently configured, so the
@@ -75,6 +119,9 @@ type AssetsHandler struct {
 	// Nil urlJobs / scrapeGate makes the URL endpoint return 409.
 	urlJobs    URLIngestEnqueuer
 	scrapeGate URLScrapeGate
+	// docJobs enqueues document ingestion (CON-280). Nil makes document uploads
+	// fail fast with a "not configured" message.
+	docJobs DocumentIngestEnqueuer
 }
 
 func NewAssetsHandler(
@@ -86,6 +133,7 @@ func NewAssetsHandler(
 	pdfJobs PDFIngestEnqueuer,
 	urlJobs URLIngestEnqueuer,
 	scrapeGate URLScrapeGate,
+	docJobs DocumentIngestEnqueuer,
 	auth fiber.Handler,
 	onSave func(assetID, title, content, tenantID string),
 ) *AssetsHandler {
@@ -100,6 +148,7 @@ func NewAssetsHandler(
 		pdfJobs:    pdfJobs,
 		urlJobs:    urlJobs,
 		scrapeGate: scrapeGate,
+		docJobs:    docJobs,
 	}
 }
 
@@ -323,9 +372,11 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 			res = h.processPDFUpload(c, fh, session)
 		case uploadKindImage:
 			res = h.processImageUpload(c, fh, session)
+		case uploadKindDocument:
+			res = h.processDocumentUpload(c, fh, session)
 		default:
 			res.Status = "failed"
-			res.Error = "only .md, .pdf and image files are accepted"
+			res.Error = "only .md, .pdf, image, and office/text document files are accepted"
 		}
 		results = append(results, res)
 	}
@@ -340,10 +391,12 @@ const (
 	uploadKindMarkdown
 	uploadKindPDF
 	uploadKindImage
+	uploadKindDocument
 )
 
 func detectUploadKind(filename string) uploadKind {
-	switch strings.ToLower(filepath.Ext(filename)) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
 	case ".md":
 		return uploadKindMarkdown
 	case ".pdf":
@@ -352,6 +405,11 @@ func detectUploadKind(filename string) uploadKind {
 		// Advisory only — imageprobe sniffs the body to decide the real MIME
 		// (CON-246 R3). The extension just routes to the image branch.
 		return uploadKindImage
+	}
+	// Office/text documents (CON-280) — advisory extension routing only;
+	// document-service sniffs the body authoritatively.
+	if _, ok := documentUploadMIMEs[ext]; ok {
+		return uploadKindDocument
 	}
 	return uploadKindUnknown
 }
@@ -497,6 +555,123 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 	res.Status = "created"
 	res.Asset = asset
 	return res
+}
+
+// processDocumentUpload ingests an office/text document (CON-280): store the
+// original in object storage, then insert the asset and enqueue the extraction
+// job atomically. Mirrors processPDFUpload. document-service does the
+// authoritative format detection, so the handler only does a light OLE2 reject
+// (the common legacy-.doc / encrypted-container case) for fast, clear feedback;
+// everything else is sniffed by the service. Bytes land at
+// assets/{id}/original.<ext>.
+func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
+	res := uploadResult{Filename: fh.Filename}
+
+	ext := strings.ToLower(filepath.Ext(fh.Filename))
+	mimeType, ok := documentUploadMIMEs[ext]
+	if !ok {
+		// detectUploadKind already gated this; stay defensive.
+		res.Status = "failed"
+		res.Error = "unsupported document type"
+		return res
+	}
+
+	if fh.Size > maxDocumentUploadSize {
+		res.Status = "failed"
+		res.Error = fmt.Sprintf("file exceeds maximum size of %d MB", maxDocumentUploadSize>>20)
+		return res
+	}
+
+	raw, err := readFormFile(fh, maxDocumentUploadSize)
+	if err != nil {
+		res.Status = "failed"
+		res.Error = "could not read file"
+		return res
+	}
+	if len(raw) == 0 {
+		res.Status = "failed"
+		res.Error = "file is empty"
+		return res
+	}
+	// Light early reject: OLE2 is both the legacy binary container (.doc/.xls/.ppt)
+	// and the wrapper for password-protected OOXML — neither is supported.
+	// document-service would reject it too, but catching it here is faster and
+	// clearer.
+	if isOLE2(raw) {
+		res.Status = "failed"
+		res.Error = "legacy binary or password-protected Office files are not supported — save as unprotected .docx/.xlsx/.pptx and re-upload"
+		return res
+	}
+
+	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
+	id, err := models.NewID()
+	if err != nil {
+		res.Status = "failed"
+		res.Error = "could not generate id"
+		return res
+	}
+	docType := models.AssetTypeDocument
+	asset := &models.Asset{
+		ID:        id,
+		Title:     title,
+		Content:   "[]",
+		Status:    models.AssetStatusPending,
+		Type:      &docType,
+		TagIDs:    models.StringSlice{},
+		Tags:      []models.Tag{},
+		CreatedBy: session.UserID,
+	}
+
+	ctx := c.Context()
+
+	// Document ingestion (CON-280) needs object storage (the worker re-reads the
+	// file on each attempt), the job enqueuer, and the DB. server.go leaves
+	// docJobs nil when DOCUMENTS_SERVICE_ADDR is empty, so a doc upload then fails
+	// fast with a clear message instead of stranding a pending asset (AC6).
+	if h.storage == nil || h.docJobs == nil || h.db == nil {
+		res.Status = "failed"
+		res.Error = "document ingestion is not configured"
+		return res
+	}
+
+	// 1. Store original.<ext> BEFORE enqueue so the worker can re-read it on each
+	//    attempt (the bytes can't ride in the River job args). storageKey is the
+	//    tenant-relative path the worker resolves via storage.TenantKey.
+	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, ext)
+	fullKey := storage.TenantKey(ctx, storageKey)
+	if _, err := h.storage.Upload(ctx, fullKey, bytes.NewReader(raw), int64(len(raw)), mimeType); err != nil {
+		res.Status = "failed"
+		res.Error = "could not store document"
+		return res
+	}
+
+	// 2. Insert the asset and enqueue ingestion atomically (transactional outbox):
+	//    a committed asset always has a job, a rolled-back one never does.
+	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
+			return err
+		}
+		return h.docJobs.EnqueueProcessDocumentTx(ctx, tx.Tx, asset.ID, session.TenantID, fh.Filename, mimeType, storageKey)
+	}); err != nil {
+		// Rolled back — delete the orphaned original uploaded above. Best-effort.
+		_ = h.storage.Delete(ctx, fullKey)
+		res.Status = "failed"
+		res.Error = "could not create asset"
+		return res
+	}
+
+	res.AssetID = asset.ID
+	res.Status = "created"
+	res.Asset = asset
+	return res
+}
+
+// isOLE2 reports whether b starts with the OLE2 compound-file magic
+// (D0 CF 11 E0 A1 B1 1A E1) used by legacy binary Office files (.doc/.xls/.ppt)
+// and by the encrypted-OOXML container — neither is supported (CON-280).
+func isOLE2(b []byte) bool {
+	const sig = "\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+	return len(b) >= len(sig) && string(b[:len(sig)]) == sig
 }
 
 // processImageUpload ingests an image asset (CON-246). Unlike PDF ingestion it

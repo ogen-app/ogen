@@ -82,7 +82,7 @@ var _ = Describe("AssetsHandler upload", Ordered, Serial, func() {
 		enq = &fakePDFEnqueuer{}
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), store, db, enq, nil, nil, auth, nil).Register(app)
+		handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), store, db, enq, nil, nil, nil, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "up@example.com", "pw-password")
 

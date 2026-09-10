@@ -89,7 +89,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
-		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, auth, nil).Register(app)
+		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil).Register(app)
 		postLogRepo := repository.NewPostLogRepository(db)
 		ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth)
 		// CON-69 §11: wire the audit log so transition tests can read it back.
