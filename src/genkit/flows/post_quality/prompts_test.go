@@ -8,7 +8,7 @@ import (
 
 func fieldIndex(t *testing.T, typ reflect.Type, name string) int {
 	t.Helper()
-	for i := 0; i < typ.NumField(); i++ {
+	for i := range typ.NumField() {
 		if typ.Field(i).Name == name {
 			return i
 		}

@@ -46,8 +46,8 @@ const linkedinPlatformID = "AXqWG7U2qnpt"
 // need a valid image, useless for size-sensitive ones (use makeNoisyPNG).
 func makePNG(side int) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, side, side))
-	for y := 0; y < side; y++ {
-		for x := 0; x < side; x++ {
+	for y := range side {
+		for x := range side {
 			img.Set(x, y, color.RGBA{R: byte(x), G: byte(y), B: 0, A: 255})
 		}
 	}
@@ -292,7 +292,7 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 		var wg sync.WaitGroup
 		results := make(chan map[string]any, N)
 		errs := make(chan error, N)
-		for i := 0; i < N; i++ {
+		for i := range N {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
@@ -581,7 +581,7 @@ func buildIntegrationPDF(n int) []byte {
 
 	offsets = append(offsets, buf.Len())
 	buf.WriteString("2 0 obj\n<< /Type /Pages /Kids [")
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			buf.WriteString(" ")
 		}
@@ -589,7 +589,7 @@ func buildIntegrationPDF(n int) []byte {
 	}
 	buf.WriteString(fmt.Sprintf("] /Count %d >>\nendobj\n", n))
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		offsets = append(offsets, buf.Len())
 		buf.WriteString(fmt.Sprintf("%d 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n", 3+i))
 	}

@@ -8,6 +8,7 @@ package post_quality
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"strings"
 
@@ -84,9 +85,7 @@ type Weights struct {
 // nil/empty map is fine — every lookup then resolves to def.
 func NewWeights(profiles map[string]Profile, def Profile) Weights {
 	cp := make(map[string]Profile, len(profiles))
-	for k, v := range profiles {
-		cp[k] = v
-	}
+	maps.Copy(cp, profiles)
 	return Weights{byType: cp, Default: def}
 }
 
@@ -134,12 +133,8 @@ func WeightsFromJSON(s string) (Weights, error) {
 	}
 
 	profiles := make(map[string]Profile, len(defaultProfiles)+len(wc.Profiles))
-	for k, v := range defaultProfiles {
-		profiles[k] = v
-	}
-	for k, v := range wc.Profiles {
-		profiles[k] = v
-	}
+	maps.Copy(profiles, defaultProfiles)
+	maps.Copy(profiles, wc.Profiles)
 
 	def := defaultTextProfile
 	if wc.Default != nil {

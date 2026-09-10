@@ -90,7 +90,7 @@ func tenantCtx(id string) context.Context {
 
 func closeRecorder(t *testing.T, r *usage.Recorder) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := r.Close(ctx); err != nil {
 		t.Fatalf("recorder Close: %v", err)
@@ -218,7 +218,7 @@ func TestRecorder_UntenantedSkipped(t *testing.T) {
 	m := testMetrics()
 	r := usage.NewRecorder(w, m, usage.Config{})
 
-	r.Record(context.Background(), "test-model", "content_plan", vendors.MeterEvent{Model: "m1", Usage: vendors.Usage{vendors.KindInput: 100}})
+	r.Record(t.Context(), "test-model", "content_plan", vendors.MeterEvent{Model: "m1", Usage: vendors.Usage{vendors.KindInput: 100}})
 	closeRecorder(t, r)
 
 	if len(w.all()) != 0 {
@@ -229,7 +229,7 @@ func TestRecorder_UntenantedSkipped(t *testing.T) {
 func TestRecorder_NilSafe(t *testing.T) {
 	var r *usage.Recorder
 	r.Record(tenantCtx("t"), "test-model", "content_plan", vendors.MeterEvent{Model: "m1"})
-	if err := r.Close(context.Background()); err != nil {
+	if err := r.Close(t.Context()); err != nil {
 		t.Errorf("nil Close = %v, want nil", err)
 	}
 }
@@ -242,7 +242,7 @@ func TestRecorder_DropsOnFullBuffer(t *testing.T) {
 	// and the rest overflow.
 	r := usage.NewRecorder(w, m, usage.Config{BufferSize: 1, BatchSize: 1, FlushEvery: time.Hour})
 
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		r.Record(tenantCtx("t"), "test-model", "content_plan", vendors.MeterEvent{Model: "m1", Usage: vendors.Usage{vendors.KindInput: 1}})
 	}
 	if m.EventsDropped.Value() == 0 {
@@ -261,7 +261,7 @@ func TestRecorder_BatchesAndRecordsAll(t *testing.T) {
 	r := usage.NewRecorder(w, m, usage.Config{BufferSize: 100, BatchSize: 10, FlushEvery: time.Hour})
 
 	const n = 25
-	for i := 0; i < n; i++ {
+	for range n {
 		r.Record(tenantCtx("t"), "test-model", "content_plan", vendors.MeterEvent{Model: "m1", Operation: "generate", Usage: vendors.Usage{vendors.KindInput: 1}})
 	}
 	closeRecorder(t, r)

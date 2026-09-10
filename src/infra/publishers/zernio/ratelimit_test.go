@@ -9,7 +9,7 @@ func TestRateLimiterAllowsBurstThenRefuses(t *testing.T) {
 	// Capacity 3 with no refill (rate=0) — once exhausted, every Allow
 	// returns false.
 	rl := NewRateLimiter(3, 0)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		ok, _ := rl.Allow()
 		if !ok {
 			t.Fatalf("burst attempt %d should have succeeded", i+1)
@@ -47,7 +47,7 @@ func TestRateLimiterRefillsOverTime(t *testing.T) {
 
 func TestConnectLinkRateLimiterBurstSize(t *testing.T) {
 	rl := NewConnectLinkRateLimiter()
-	for i := 0; i < connectLinkBurst; i++ {
+	for i := range connectLinkBurst {
 		if ok, _ := rl.Allow(); !ok {
 			t.Fatalf("connect-link burst slot %d/%d should succeed", i+1, connectLinkBurst)
 		}

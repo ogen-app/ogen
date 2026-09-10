@@ -1,6 +1,9 @@
 package learnings
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 // minHeatmapPosts is the floor below which the slot grid is too sparse to show.
 const minHeatmapPosts = 5
@@ -23,11 +26,11 @@ type Slot struct {
 
 // Heatmap is the "When your posts land" section.
 type Heatmap struct {
-	InsufficientHistory bool       `json:"insufficient_history,omitempty"`
+	InsufficientHistory bool       `json:"insufficient_history,omitzero"`
 	Metric              string     `json:"metric,omitempty"`
 	Cells               []HeatCell `json:"cells,omitempty"`
 	Strongest           *Slot      `json:"strongest,omitempty"`
-	MeasuredPosts       int        `json:"measured_posts,omitempty"`
+	MeasuredPosts       int        `json:"measured_posts,omitzero"`
 }
 
 type slotKey struct{ dow, hour int }
@@ -59,11 +62,11 @@ func buildHeatmap(posts []PostFact, metric string) *Heatmap {
 		}
 	}
 	// Stable order: day, then hour.
-	sort.Slice(cells, func(i, j int) bool {
-		if cells[i].DayOfWeek != cells[j].DayOfWeek {
-			return cells[i].DayOfWeek < cells[j].DayOfWeek
+	slices.SortFunc(cells, func(a, b HeatCell) int {
+		if c := cmp.Compare(a.DayOfWeek, b.DayOfWeek); c != 0 {
+			return c
 		}
-		return cells[i].Hour < cells[j].Hour
+		return cmp.Compare(a.Hour, b.Hour)
 	})
 
 	strongest := strongestSlot(cells)
@@ -96,8 +99,8 @@ func medianInts(xs []int) float64 {
 	if len(xs) == 0 {
 		return 0
 	}
-	s := append([]int(nil), xs...)
-	sort.Ints(s)
+	s := slices.Clone(xs)
+	slices.Sort(s)
 	n := len(s)
 	if n%2 == 1 {
 		return float64(s[n/2])

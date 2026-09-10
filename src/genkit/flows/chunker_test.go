@@ -29,7 +29,7 @@ func TestChunkText_ExactlyAtLimit(t *testing.T) {
 func TestChunkText_LongTextProducesMultipleChunks(t *testing.T) {
 	// Build a text clearly over MaxEmbedChars using distinct paragraphs.
 	var sb strings.Builder
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		sb.WriteString(strings.Repeat("word ", 100)) // ~500 chars per para
 		sb.WriteString("\n\n")
 	}

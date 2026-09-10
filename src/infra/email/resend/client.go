@@ -8,6 +8,7 @@ package resend
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,9 +47,7 @@ func New(resolver KeyResolver, baseURL string, timeout time.Duration) *Client {
 	if resolver == nil {
 		return nil
 	}
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
+	baseURL = cmp.Or(baseURL, defaultBaseURL)
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}

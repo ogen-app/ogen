@@ -50,7 +50,7 @@ func TestServerRoundTrip(t *testing.T) {
 		return secretsv1.NewSecretsServiceClient(conn)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cli := newClient(token)
 
 	// List starts with every allowlist slot present and unset.
@@ -136,7 +136,7 @@ func TestTokenWhitespaceTolerance(t *testing.T) {
 			t.Fatalf("dial: %v", err)
 		}
 		defer func() { _ = conn.Close() }()
-		_, err = secretsv1.NewSecretsServiceClient(conn).List(context.Background(), &secretsv1.ListRequest{})
+		_, err = secretsv1.NewSecretsServiceClient(conn).List(t.Context(), &secretsv1.ListRequest{})
 		return status.Code(err)
 	}
 

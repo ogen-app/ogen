@@ -27,7 +27,7 @@ func TestScrape_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := New(staticKey("secret-key"), srv.URL, 0)
-	res, err := c.Scrape(context.Background(), ScrapeRequest{URL: "https://ex.com/x"})
+	res, err := c.Scrape(t.Context(), ScrapeRequest{URL: "https://ex.com/x"})
 	if err != nil {
 		t.Fatalf("scrape: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestScrape_FlexStringTitleArray(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := New(staticKey("k"), srv.URL, 0).Scrape(context.Background(), ScrapeRequest{URL: "https://ex.com"})
+	res, err := New(staticKey("k"), srv.URL, 0).Scrape(t.Context(), ScrapeRequest{URL: "https://ex.com"})
 	if err != nil {
 		t.Fatalf("scrape: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestScrape_TerminalAndTransientClassification(t *testing.T) {
 			w.WriteHeader(tc.status)
 			_, _ = w.Write([]byte(`{"error":"boom"}`))
 		}))
-		_, err := New(staticKey("k"), srv.URL, 0).Scrape(context.Background(), ScrapeRequest{URL: "https://ex.com"})
+		_, err := New(staticKey("k"), srv.URL, 0).Scrape(t.Context(), ScrapeRequest{URL: "https://ex.com"})
 		srv.Close()
 		if err == nil {
 			t.Fatalf("status %d: expected an error", tc.status)
@@ -94,7 +94,7 @@ func TestScrape_SuccessFalseIsTerminal(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := New(staticKey("k"), srv.URL, 0).Scrape(context.Background(), ScrapeRequest{URL: "https://ex.com"})
+	_, err := New(staticKey("k"), srv.URL, 0).Scrape(t.Context(), ScrapeRequest{URL: "https://ex.com"})
 	if err == nil {
 		t.Fatal("success:false should be an error")
 	}
@@ -104,10 +104,10 @@ func TestScrape_SuccessFalseIsTerminal(t *testing.T) {
 }
 
 func TestHasKey(t *testing.T) {
-	if New(staticKey(""), "", 0).HasKey(context.Background()) {
+	if New(staticKey(""), "", 0).HasKey(t.Context()) {
 		t.Fatal("empty key should report HasKey=false")
 	}
-	if !New(staticKey("k"), "", 0).HasKey(context.Background()) {
+	if !New(staticKey("k"), "", 0).HasKey(t.Context()) {
 		t.Fatal("non-empty key should report HasKey=true")
 	}
 }

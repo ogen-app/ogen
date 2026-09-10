@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -14,7 +13,7 @@ import (
 func TestEmailTemplateRepoInsertIfAbsent(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewEmailTemplateRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tmpl := &models.EmailTemplate{Key: "welcome", Subject: "Hi", HTML: "<p>[[ .Name ]]</p>", Text: "hi", Kind: models.EmailKindTransactional, Version: 1}
 
@@ -45,7 +44,7 @@ func TestEmailTemplateRepoInsertIfAbsent(t *testing.T) {
 func TestEmailTemplateRepoVariables(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewEmailTemplateRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tmpl := &models.EmailTemplate{
 		Key: "welcome", Subject: "Hi", HTML: "<p>[[ .Name ]]</p>", Text: "hi",
@@ -86,7 +85,7 @@ func TestEmailTemplateRepoVariables(t *testing.T) {
 func TestEmailSuppressionRepoGate(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewEmailSuppressionRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Marketing unsubscribe for a mixed-case address.
 	if err := repo.Upsert(ctx, &models.EmailSuppression{ID: mustID(t), Email: "User@X.com", Scope: models.EmailSuppressionScopeMarketing, Reason: models.EmailSuppressionReasonUnsubscribe, Source: models.EmailSuppressionSourceUser}); err != nil {
@@ -133,7 +132,7 @@ func TestEmailSuppressionRepoGate(t *testing.T) {
 func TestEmailSuppressionRemoveMarketing(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewEmailSuppressionRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	up := func(scope models.EmailSuppressionScope, reason models.EmailSuppressionReason) {
 		t.Helper()
@@ -175,7 +174,7 @@ func TestEmailSuppressionRemoveMarketing(t *testing.T) {
 func TestEmailLogRepo(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewEmailLogRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insert := func(idem, msgID string, status models.EmailLogStatus) {
 		t.Helper()

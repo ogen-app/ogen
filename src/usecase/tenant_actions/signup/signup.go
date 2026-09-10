@@ -10,6 +10,7 @@
 package signup
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -213,15 +214,13 @@ func slugify(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = slugNonAlnum.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
-	if s == "" {
-		s = "tenant"
-	}
+	s = cmp.Or(s, "tenant")
 	return s
 }
 
 // isUniqueViolation reports whether err is a Postgres unique-constraint
 // violation (SQLSTATE 23505).
 func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "23505"
 }

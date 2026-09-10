@@ -2,11 +2,12 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -197,8 +198,8 @@ func sortAnthropicToolsByName(body []byte) (out []byte, n int, changed bool) {
 	if err := json.Unmarshal(raw, &tools); err != nil || len(tools) < 2 {
 		return body, len(tools), false
 	}
-	sort.SliceStable(tools, func(i, j int) bool {
-		return anthropicToolName(tools[i]) < anthropicToolName(tools[j])
+	slices.SortStableFunc(tools, func(a, b json.RawMessage) int {
+		return cmp.Compare(anthropicToolName(a), anthropicToolName(b))
 	})
 	newTools, err := json.Marshal(tools)
 	if err != nil {

@@ -68,7 +68,7 @@ func TestEmit_InsertsAndPublishesToStream(t *testing.T) {
 	repo := &fakeRepo{}
 	svc := New(repo, hub)
 
-	ch, unsub, err := hub.Subscribe(context.Background(), eventhub.SubscribeOpts{
+	ch, unsub, err := hub.Subscribe(t.Context(), eventhub.SubscribeOpts{
 		UserID:   "u1",
 		TenantID: "t1",
 		Topics:   []string{StreamTopic},
@@ -112,7 +112,7 @@ func TestEmit_DedupeCollisionDoesNotPublish(t *testing.T) {
 	repo := &fakeRepo{collide: true}
 	svc := New(repo, hub)
 
-	ch, unsub, err := hub.Subscribe(context.Background(), eventhub.SubscribeOpts{
+	ch, unsub, err := hub.Subscribe(t.Context(), eventhub.SubscribeOpts{
 		UserID: "u1", TenantID: "t1", Topics: []string{StreamTopic},
 	})
 	if err != nil {
@@ -148,7 +148,7 @@ func TestEmit_DefaultsInvalidLevelToInfo(t *testing.T) {
 
 func TestEmit_NilServiceAndEmptyUserAreNoOps(t *testing.T) {
 	var svc *Service // nil receiver
-	if err := svc.Emit(context.Background(), "u1", Spec{Type: "x"}); err != nil {
+	if err := svc.Emit(t.Context(), "u1", Spec{Type: "x"}); err != nil {
 		t.Fatalf("nil service Emit: %v", err)
 	}
 	repo := &fakeRepo{}

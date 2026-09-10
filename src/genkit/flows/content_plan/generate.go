@@ -324,12 +324,9 @@ func runBatchesParallel(
 	var wg sync.WaitGroup
 
 	for i := range batches {
-		i := i
 		spec := batches[i]
-		wg.Add(1)
 		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 
 			// Per CON-66 generatePostsStreaming returns whatever was
@@ -344,7 +341,7 @@ func runBatchesParallel(
 				slog.InfoContext(ctx, "batch done", logging.AttrComponent, "genkit.content_plan", "batch", i+1, "total", len(batches), "posts", len(posts))
 			}
 			results[i] = batchResult{posts: posts, err: err}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -519,8 +516,8 @@ func generatePostsStreaming(
 
 	text := strings.TrimSpace(resp.Text())
 	if strings.HasPrefix(text, "```") {
-		if i := strings.Index(text, "\n"); i >= 0 {
-			text = text[i+1:]
+		if _, after, found := strings.Cut(text, "\n"); found {
+			text = after
 		}
 		text = strings.TrimSuffix(strings.TrimSpace(text), "```")
 		text = strings.TrimSpace(text)

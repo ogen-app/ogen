@@ -313,7 +313,7 @@ func TestNotifications_DeleteExpiredAndRetention(t *testing.T) {
 	}
 
 	// retention=0 reaps ONLY expired rows. Runs cross-tenant → system context.
-	sys := tenantctx.WithSystem(context.Background())
+	sys := tenantctx.WithSystem(t.Context())
 	n, err := repo.DeleteExpired(sys, time.Now().UTC(), 0)
 	if err != nil {
 		t.Fatalf("delete expired: %v", err)

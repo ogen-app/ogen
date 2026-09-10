@@ -510,8 +510,8 @@ func persistTurn(ctx context.Context, repos CampaignAssistantRepos, req Campaign
 	historyJSON, err := json.Marshal(struct {
 		Action       string `json:"action"`
 		Explanation  string `json:"explanation"`
-		PostCount    int    `json:"postCount,omitempty"`
-		BriefApplied bool   `json:"briefApplied,omitempty"`
+		PostCount    int    `json:"postCount,omitzero"`
+		BriefApplied bool   `json:"briefApplied,omitzero"`
 	}{
 		Action:       result.Action,
 		Explanation:  result.Explanation,

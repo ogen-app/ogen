@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -71,7 +70,7 @@ func TestListAnalyticsHappyPath(t *testing.T) {
 	})
 
 	c := newClient(s)
-	items, page, err := c.ListAnalytics(context.Background(), AnalyticsQuery{
+	items, page, err := c.ListAnalytics(t.Context(), AnalyticsQuery{
 		Source:   AnalyticsSourceLate,
 		FromDate: "2026-03-01",
 		Limit:    100,
@@ -137,7 +136,7 @@ func TestListAnalyticsTolerantShapes(t *testing.T) {
 			})
 
 			c := newClient(s)
-			items, page, err := c.ListAnalytics(context.Background(), AnalyticsQuery{Source: AnalyticsSourceLate})
+			items, page, err := c.ListAnalytics(t.Context(), AnalyticsQuery{Source: AnalyticsSourceLate})
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}
@@ -194,7 +193,7 @@ func TestListAnalyticsTolerantTimestamps(t *testing.T) {
 			})
 
 			c := newClient(s)
-			items, _, err := c.ListAnalytics(context.Background(), AnalyticsQuery{Source: AnalyticsSourceLate})
+			items, _, err := c.ListAnalytics(t.Context(), AnalyticsQuery{Source: AnalyticsSourceLate})
 			if err != nil {
 				t.Fatalf("decode must tolerate lastUpdated %s, got error: %v", tc.lastUpdated, err)
 			}
@@ -228,7 +227,7 @@ func TestListAnalyticsUnknownEnvelopeIsEmptyNotError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"unexpected":{"nested":true},"pagination":{"pages":1}}`))
 	})
 	c := newClient(s)
-	items, _, err := c.ListAnalytics(context.Background(), AnalyticsQuery{Source: AnalyticsSourceLate})
+	items, _, err := c.ListAnalytics(t.Context(), AnalyticsQuery{Source: AnalyticsSourceLate})
 	if err != nil {
 		t.Fatalf("unknown envelope should not error: %v", err)
 	}
@@ -245,7 +244,7 @@ func TestListAnalyticsLegacy402MapsToSentinel(t *testing.T) {
 	})
 
 	c := newClient(s)
-	_, _, err := c.ListAnalytics(context.Background(), AnalyticsQuery{Source: AnalyticsSourceLate})
+	_, _, err := c.ListAnalytics(t.Context(), AnalyticsQuery{Source: AnalyticsSourceLate})
 	if !errors.Is(err, ErrAnalyticsUnavailable) {
 		t.Fatalf("err: got %v want ErrAnalyticsUnavailable", err)
 	}
@@ -259,7 +258,7 @@ func TestListAnalyticsPropagatesStatusErrors(t *testing.T) {
 	})
 
 	c := newClient(s)
-	_, _, err := c.ListAnalytics(context.Background(), AnalyticsQuery{Source: AnalyticsSourceLate})
+	_, _, err := c.ListAnalytics(t.Context(), AnalyticsQuery{Source: AnalyticsSourceLate})
 	if !IsStatus(err, http.StatusTooManyRequests) {
 		t.Fatalf("err: got %v want 429 APIError", err)
 	}
@@ -271,7 +270,7 @@ func TestListAnalyticsPropagatesStatusErrors(t *testing.T) {
 
 func TestListAnalyticsNilClientDisabled(t *testing.T) {
 	var c *Client
-	_, _, err := c.ListAnalytics(context.Background(), AnalyticsQuery{})
+	_, _, err := c.ListAnalytics(t.Context(), AnalyticsQuery{})
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("nil client should be disabled, got %v", err)
 	}

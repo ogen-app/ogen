@@ -20,8 +20,8 @@ type Profile struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Color       string          `json:"color,omitempty"`
-	CreatedAt   time.Time       `json:"createdAt,omitempty"`
-	UpdatedAt   time.Time       `json:"updatedAt,omitempty"`
+	CreatedAt   time.Time       `json:"createdAt,omitzero"`
+	UpdatedAt   time.Time       `json:"updatedAt,omitzero"`
 	Raw         json.RawMessage `json:"-"`
 }
 

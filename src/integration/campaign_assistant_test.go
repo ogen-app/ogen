@@ -420,7 +420,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			start, end := *full.StartDate, *full.EndDate
 
 			// Seed 3 draft posts bunched on a single (out-of-order) date.
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				id, _ := models.NewID()
 				at := start.AddDate(0, 0, 1)
 				Expect(postRepo.Create(ctx, &models.Post{

@@ -153,8 +153,8 @@ type Metrics struct {
 	Clicks                    int       `json:"clicks"`
 	Views                     int       `json:"views"`
 	Follows                   int       `json:"follows"`
-	IGReelsAvgWatchTime       float64   `json:"igReelsAvgWatchTime,omitempty"`
-	IGReelsVideoViewTotalTime float64   `json:"igReelsVideoViewTotalTime,omitempty"`
+	IGReelsAvgWatchTime       float64   `json:"igReelsAvgWatchTime,omitzero"`
+	IGReelsVideoViewTotalTime float64   `json:"igReelsVideoViewTotalTime,omitzero"`
 	EngagementRate            float64   `json:"engagementRate"`
 	LastUpdated               *flexTime `json:"lastUpdated,omitempty"`
 }

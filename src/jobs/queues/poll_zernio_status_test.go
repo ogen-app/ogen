@@ -1,7 +1,6 @@
 package queues_test
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"testing"
@@ -28,10 +27,10 @@ func TestPollTerminalPublishedTransitionsPost(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.PollZernioStatusProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.PollZernioStatusTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.PollZernioStatusTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusPublished {
 		t.Errorf("status: got %q want published", got.Status)
 	}
@@ -63,10 +62,10 @@ func TestPollTerminalFailedTransitionsPost(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.PollZernioStatusProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.PollZernioStatusTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.PollZernioStatusTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Errorf("status: got %q want failed", got.Status)
 	}
@@ -92,8 +91,8 @@ func TestPollPartialMapsToFailed(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.PollZernioStatusProcessor{Deps: deps}
-	_ = proc.Process(context.Background(), queues.PollZernioStatusTask{PostID: post.ID})
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	_ = proc.Process(t.Context(), queues.PollZernioStatusTask{PostID: post.ID})
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Errorf("status: got %q want failed (partial → Failed for MVP)", got.Status)
 	}
@@ -109,7 +108,7 @@ func TestPollExitsCleanlyWhenPostNotScheduled(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.PollZernioStatusProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.PollZernioStatusTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.PollZernioStatusTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should return nil for non-scheduled posts: %v", err)
 	}
 }
@@ -128,19 +127,19 @@ func TestPollNonTerminalSnoozes(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.PollZernioStatusProcessor{Deps: deps}
-	err := proc.Process(context.Background(), queues.PollZernioStatusTask{PostID: post.ID})
+	err := proc.Process(t.Context(), queues.PollZernioStatusTask{PostID: post.ID})
 
 	// Non-terminal → reschedule via river.JobSnooze (not a failure, not a
 	// completion). The job is rescheduled without consuming a retry attempt.
-	var snooze *river.JobSnoozeError
-	if !errors.As(err, &snooze) {
+	snooze, ok := errors.AsType[*river.JobSnoozeError](err)
+	if !ok {
 		t.Fatalf("expected a river JobSnooze, got %v", err)
 	}
 	if snooze.Duration <= 0 {
 		t.Errorf("snooze duration should be positive, got %s", snooze.Duration)
 	}
 	// The Post stays Scheduled; Zernio's status is persisted for visibility.
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusScheduled {
 		t.Errorf("status: got %q want scheduled (unchanged)", got.Status)
 	}

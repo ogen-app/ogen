@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"net/http"
 	"testing"
 )
@@ -16,7 +15,7 @@ func TestDeleteAccountHappyPath(t *testing.T) {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "Account disconnected successfully"})
 	})
 
-	if err := newClient(s).DeleteAccount(context.Background(), "acc-1"); err != nil {
+	if err := newClient(s).DeleteAccount(t.Context(), "acc-1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if seenPath != "/accounts/acc-1" {
@@ -34,7 +33,7 @@ func TestDeleteAccountNotFoundIsTypedStatus(t *testing.T) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Not found"})
 	})
 
-	err := newClient(s).DeleteAccount(context.Background(), "gone")
+	err := newClient(s).DeleteAccount(t.Context(), "gone")
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}
@@ -53,7 +52,7 @@ func TestDeleteAccountServerErrorIsNot404(t *testing.T) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "boom"})
 	})
 
-	err := newClient(s).DeleteAccount(context.Background(), "acc-1")
+	err := newClient(s).DeleteAccount(t.Context(), "acc-1")
 	if err == nil {
 		t.Fatal("expected error for 500")
 	}
@@ -67,7 +66,7 @@ func TestDeleteAccountServerErrorIsNot404(t *testing.T) {
 
 func TestDeleteAccountDisabledClient(t *testing.T) {
 	var c *Client // nil == integration disabled
-	if err := c.DeleteAccount(context.Background(), "acc-1"); err == nil {
+	if err := c.DeleteAccount(t.Context(), "acc-1"); err == nil {
 		t.Fatal("nil client should error")
 	}
 }

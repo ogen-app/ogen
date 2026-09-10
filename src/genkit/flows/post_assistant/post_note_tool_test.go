@@ -23,7 +23,7 @@ func (r *captureNoteRepo) Create(_ context.Context, n *models.PostNote) error {
 func TestToolCreateNote(t *testing.T) {
 	repo := &captureNoteRepo{}
 	st := &requestState{postID: "post1", actor: "user1", noteSvc: notes.New(repo)}
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 
 	out, err := toolCreateNote(ctx, CreateNoteInput{Type: "image_prompt", Title: "Prompt", Body: "a photorealistic banana"})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestToolCreateNote(t *testing.T) {
 
 func TestToolCreateNote_Unavailable(t *testing.T) {
 	st := &requestState{postID: "post1", actor: "user1"} // noteSvc nil
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 	if _, err := toolCreateNote(ctx, CreateNoteInput{Type: "note", Body: "x"}); err == nil {
 		t.Fatal("expected an error when the note service is unavailable")
 	}
@@ -89,7 +89,7 @@ func TestBuildNoteSummaries_LimitAndOrdering(t *testing.T) {
 	}
 	repos := PostAssistantRepos{Notes: &listNoteRepo{notes: list}}
 
-	out, err := buildNoteSummaries(context.Background(), &models.Post{ID: "p1"}, repos)
+	out, err := buildNoteSummaries(t.Context(), &models.Post{ID: "p1"}, repos)
 	if err != nil {
 		t.Fatalf("buildNoteSummaries: %v", err)
 	}

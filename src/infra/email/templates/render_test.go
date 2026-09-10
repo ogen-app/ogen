@@ -115,7 +115,7 @@ func TestSeedDefaultsIdempotent(t *testing.T) {
 	repo := newFakeTemplateRepo()
 	defs, _ := Defaults()
 
-	n1, err := SeedDefaults(context.Background(), repo)
+	n1, err := SeedDefaults(t.Context(), repo)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestSeedDefaultsIdempotent(t *testing.T) {
 	edited := repo.m[KeyWelcome]
 	edited.Subject = "Custom subject"
 
-	n2, err := SeedDefaults(context.Background(), repo)
+	n2, err := SeedDefaults(t.Context(), repo)
 	if err != nil {
 		t.Fatalf("re-seed: %v", err)
 	}

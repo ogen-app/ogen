@@ -1,6 +1,9 @@
 package learnings
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 const (
 	lifespanMinSettled = 8   // settled posts needed for a curve
@@ -17,12 +20,12 @@ type CurvePoint struct {
 
 // Lifespan is the "How long a post lives" section.
 type Lifespan struct {
-	InsufficientHistory bool         `json:"insufficient_history,omitempty"`
-	SettledPosts        int          `json:"settled_posts,omitempty"`
-	T50Hours            int          `json:"t50_hours,omitempty"`
-	T75Hours            int          `json:"t75_hours,omitempty"`
-	T95Hours            int          `json:"t95_hours,omitempty"`
-	HorizonHours        int          `json:"horizon_hours,omitempty"`
+	InsufficientHistory bool         `json:"insufficient_history,omitzero"`
+	SettledPosts        int          `json:"settled_posts,omitzero"`
+	T50Hours            int          `json:"t50_hours,omitzero"`
+	T75Hours            int          `json:"t75_hours,omitzero"`
+	T95Hours            int          `json:"t95_hours,omitzero"`
+	HorizonHours        int          `json:"horizon_hours,omitzero"`
 	Curve               []CurvePoint `json:"curve,omitempty"`
 }
 
@@ -109,7 +112,7 @@ func settledPosts(points []LifespanPoint) []settledPost {
 	}
 	var out []settledPost
 	for _, pts := range byPost {
-		sort.Slice(pts, func(i, j int) bool { return pts[i].AgeHours < pts[j].AgeHours })
+		slices.SortFunc(pts, func(a, b LifespanPoint) int { return cmp.Compare(a.AgeHours, b.AgeHours) })
 		maxAge := pts[len(pts)-1].AgeHours
 		final := float64(pts[len(pts)-1].Reach)
 		if maxAge < settledMinHours || final <= 0 {

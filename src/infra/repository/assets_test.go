@@ -109,8 +109,8 @@ func TestAssetDelete_SystemContext_ScopesScrubToOwningTenant(t *testing.T) {
 	const assetID, keepID = "asset-shared", "asset-keep"
 	const tenantA, tenantB = "tenant-a", "tenant-b"
 
-	ctxA := tenantctx.With(context.Background(), tenantA)
-	ctxB := tenantctx.With(context.Background(), tenantB)
+	ctxA := tenantctx.With(t.Context(), tenantA)
+	ctxB := tenantctx.With(t.Context(), tenantB)
 
 	seedCampaign := func(ctx context.Context, id string, assetIDs ...string) {
 		t.Helper()
@@ -172,7 +172,7 @@ func TestAssetDelete_SystemContext_ScopesScrubToOwningTenant(t *testing.T) {
 	seedPost(ctxB, "b", assetID, keepID)
 
 	repo := repository.NewAssetRepository(db, nil, nil)
-	sys := tenantctx.WithSystem(context.Background())
+	sys := tenantctx.WithSystem(t.Context())
 	deleted, err := repo.Delete(sys, assetID)
 	if err != nil {
 		t.Fatalf("delete: %v", err)

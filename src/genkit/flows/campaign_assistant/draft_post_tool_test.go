@@ -38,12 +38,12 @@ func TestResolveDraftSource(t *testing.T) {
 	}
 
 	// Override always wins, no history consulted.
-	if got, _ := resolveDraftSource(context.Background(), st(nil), "  pasted  "); got != "pasted" {
+	if got, _ := resolveDraftSource(t.Context(), st(nil), "  pasted  "); got != "pasted" {
 		t.Fatalf("override = %q, want pasted", got)
 	}
 
 	// Latest answered explanation is used.
-	got, err := resolveDraftSource(context.Background(), st([]models.CampaignAssistantMessage{
+	got, err := resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{
 		userMsg("what do the assets say?"),
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}), "")
@@ -52,7 +52,7 @@ func TestResolveDraftSource(t *testing.T) {
 	}
 
 	// A post_drafted confirmation is skipped in favour of the earlier answer.
-	got, _ = resolveDraftSource(context.Background(), st([]models.CampaignAssistantMessage{
+	got, _ = resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"research A"}`),
 		userMsg("draft it"),
 		modelMsg(`{"action":"post_drafted","explanation":"I drafted 1 post."}`),
@@ -62,12 +62,12 @@ func TestResolveDraftSource(t *testing.T) {
 	}
 
 	// No prior research → empty (the tool then declines).
-	if got, _ := resolveDraftSource(context.Background(), st([]models.CampaignAssistantMessage{userMsg("hi")}), ""); got != "" {
+	if got, _ := resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{userMsg("hi")}), ""); got != "" {
 		t.Fatalf("no-research = %q, want empty", got)
 	}
 
 	// Legacy plain-text model message (not JSON-wrapped) is used directly.
-	if got, _ := resolveDraftSource(context.Background(), st([]models.CampaignAssistantMessage{modelMsg("plain answer")}), ""); got != "plain answer" {
+	if got, _ := resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{modelMsg("plain answer")}), ""); got != "plain answer" {
 		t.Fatalf("legacy = %q, want plain answer", got)
 	}
 }
@@ -100,7 +100,7 @@ func newDraftState(msgs []models.CampaignAssistantMessage, calls *[]draft_post.D
 func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
 	st := newDraftState([]models.CampaignAssistantMessage{userMsg("hi")}, &calls)
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 
 	out, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1})
 	if err != nil {
@@ -129,7 +129,7 @@ func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	st := newDraftState([]models.CampaignAssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}, &calls)
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 
 	out, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 3})
 	if err != nil {
@@ -162,7 +162,7 @@ func TestToolDraftPost_SoftFailsUserInput(t *testing.T) {
 	// A past publish date.
 	var calls []draft_post.DraftPostRequest
 	st := newDraftState(research, &calls)
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 	out, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1, PublishDate: "2020-01-01"})
 	if err != nil {
 		t.Fatalf("past date must not error: %v", err)
@@ -180,7 +180,7 @@ func TestToolDraftPost_SoftFailsUserInput(t *testing.T) {
 	// A non-target platform.
 	calls = nil
 	st = newDraftState(research, &calls)
-	ctx = withRequestState(context.Background(), st)
+	ctx = withRequestState(t.Context(), st)
 	out, err = toolDraftPost(ctx, DraftPostInput{Platforms: []string{"TikTok"}, Count: 1})
 	if err != nil {
 		t.Fatalf("non-target platform must not error: %v", err)
@@ -194,7 +194,7 @@ func TestToolDraftPost_SoftFailsUserInput(t *testing.T) {
 func TestToolDraftPost_SourceOverride(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
 	st := newDraftState(nil, &calls) // no history at all
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 
 	if _, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1, SourceMaterial: "pasted material"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -214,7 +214,7 @@ func TestToolDraftPost_HeavyLatch(t *testing.T) {
 	if !st.reserveHeavyAction() {
 		t.Fatal("first reservation should win")
 	}
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 
 	out, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1})
 	if err != nil {

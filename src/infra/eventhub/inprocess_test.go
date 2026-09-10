@@ -1,7 +1,6 @@
 package eventhub
 
 import (
-	"context"
 	"errors"
 	"runtime"
 	"sync"
@@ -34,7 +33,7 @@ func drain(t *testing.T, ch <-chan Event, n int, timeout time.Duration) (got []E
 
 func TestPublishFanOutToMatchingSubscribers(t *testing.T) {
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 
 	chA, unsubA, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"job:*"}})
 	if err != nil {
@@ -68,7 +67,7 @@ func TestPublishFanOutToMatchingSubscribers(t *testing.T) {
 
 func TestAllTopicMatchesEverything(t *testing.T) {
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 	ch, unsub, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +85,7 @@ func TestAllTopicMatchesEverything(t *testing.T) {
 
 func TestAuthzFiltersByUserID(t *testing.T) {
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 	ch, unsub, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +111,7 @@ func TestAuthzFiltersByUserID(t *testing.T) {
 
 func TestTenantIsolation(t *testing.T) {
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 
 	chA, unsubA, err := h.Subscribe(ctx, SubscribeOpts{UserID: "ua", TenantID: "tenant-a", Topics: []string{"all"}})
 	if err != nil {
@@ -136,7 +135,7 @@ func TestTenantIsolation(t *testing.T) {
 	}
 
 	// Publish derives the tenant from a tenant context when not set explicitly.
-	_ = h.Publish(tenantctx.With(context.Background(), "tenant-b"), Event{Topic: "entity:post:y"})
+	_ = h.Publish(tenantctx.With(t.Context(), "tenant-b"), Event{Topic: "entity:post:y"})
 	if got, _ := drain(t, chB, 1, time.Second); len(got) != 1 || got[0].TenantID != "tenant-b" {
 		t.Fatalf("tenant B should have received the ctx-derived event, got %+v", got)
 	}
@@ -150,7 +149,7 @@ func TestBackpressureDisconnectsSlowSubscriber(t *testing.T) {
 	// triggers disconnect. We don't read the channel until after the
 	// disconnect, then assert it's closed.
 	h := New(Config{BufferSize: 1})
-	ctx := context.Background()
+	ctx := t.Context()
 
 	chSlow, unsubSlow, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}, BufferSize: 1})
 	if err != nil {
@@ -186,7 +185,7 @@ func TestBackpressureDisconnectsSlowSubscriber(t *testing.T) {
 	}()
 
 	// Publish more than the slow buffer can hold.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = h.Publish(ctx, Event{Topic: "job:foo", UserID: "alice"})
 	}
 	<-done
@@ -215,7 +214,7 @@ func TestBackpressureDisconnectsSlowSubscriber(t *testing.T) {
 
 func TestUnsubscribeIsIdempotent(t *testing.T) {
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 	ch, unsub, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +235,7 @@ func TestUnsubscribeIsIdempotent(t *testing.T) {
 
 func TestSubscribeRejectsEmptyTopics(t *testing.T) {
 	h := New(Config{})
-	_, _, err := h.Subscribe(context.Background(), SubscribeOpts{UserID: "alice"})
+	_, _, err := h.Subscribe(t.Context(), SubscribeOpts{UserID: "alice"})
 	if !errors.Is(err, ErrNoTopics) {
 		t.Errorf("expected ErrNoTopics, got %v", err)
 	}
@@ -247,7 +246,7 @@ func TestMaxSubscribersPerUserEvictsOldest(t *testing.T) {
 	// the newcomer, rather than rejecting the newcomer. This keeps a reload from
 	// being locked out when older connections have leaked.
 	h := New(Config{MaxSubscribersPerUser: 2})
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ch1, u1, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 	if err != nil {
@@ -327,7 +326,7 @@ func channelClosed(t *testing.T, ch <-chan Event) bool {
 
 func TestActiveCountTracksLifecycle(t *testing.T) {
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 	hub := h.(*inProcHub)
 	if got := hub.ActiveCount(); got != 0 {
 		t.Errorf("initial active=%d, want 0", got)
@@ -350,8 +349,8 @@ func TestActiveCountTracksLifecycle(t *testing.T) {
 
 func TestPublishWithoutSubscribersDoesNotPanic(t *testing.T) {
 	h := New(Config{})
-	for i := 0; i < 5; i++ {
-		if err := h.Publish(context.Background(), Event{Topic: "job:foo"}); err != nil {
+	for i := range 5 {
+		if err := h.Publish(t.Context(), Event{Topic: "job:foo"}); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
 	}
@@ -361,10 +360,10 @@ func TestNoGoroutineLeakOnSubscribeUnsubscribeCycle(t *testing.T) {
 	// Hub itself spawns no goroutines; this guards against accidental
 	// regressions if the implementation grows a per-subscriber watcher.
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 
 	before := runtime.NumGoroutine()
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		_, unsub, err := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 		if err != nil {
 			t.Fatal(err)
@@ -382,7 +381,7 @@ func TestNoGoroutineLeakOnSubscribeUnsubscribeCycle(t *testing.T) {
 func TestSubscriberReceivesTimestampedEvent(t *testing.T) {
 	// Publish auto-fills CreatedAt when zero.
 	h := New(Config{})
-	ctx := context.Background()
+	ctx := t.Context()
 	ch, unsub, _ := h.Subscribe(ctx, SubscribeOpts{UserID: "alice", Topics: []string{"all"}})
 	defer unsub()
 	before := time.Now().UTC()

@@ -200,7 +200,7 @@ var _ = Describe("PasswordResetHandler", Ordered, func() {
 		It("returns 429 with Retry-After once the per-address budget is spent", func() {
 			u := seedTenantUser(db, "Reset Me", "reset@example.com", "old-password-123")
 
-			for i := 0; i < 5; i++ {
+			for range 5 {
 				Expect(doRequest("reset@example.com").StatusCode).To(Equal(fiber.StatusAccepted))
 			}
 			resp := doRequest("reset@example.com")

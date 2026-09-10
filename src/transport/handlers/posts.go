@@ -701,8 +701,7 @@ func (h *PostsHandler) AddAssets(c *fiber.Ctx) error {
 		}
 		// The repo re-checks the lock atomically, so a submit that won the race
 		// against the pre-check above still surfaces as a 409 (CON-251).
-		var submitted *repository.PostSubmittedError
-		if errors.As(err, &submitted) {
+		if submitted, ok := errors.AsType[*repository.PostSubmittedError](err); ok {
 			return submittedLockError(submitted.Status)
 		}
 		return err
@@ -750,8 +749,7 @@ func (h *PostsHandler) RemoveAsset(c *fiber.Ctx) error {
 		}
 		// The repo re-checks the lock atomically, so a submit that won the race
 		// against the pre-check above still surfaces as a 409 (CON-251).
-		var submitted *repository.PostSubmittedError
-		if errors.As(err, &submitted) {
+		if submitted, ok := errors.AsType[*repository.PostSubmittedError](err); ok {
 			return submittedLockError(submitted.Status)
 		}
 		return err
@@ -1349,8 +1347,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		}
 		routed, err := h.scheduleSvc.RouteAndPersist(c.Context(), post, prevStatus, actor)
 		if err != nil {
-			var aerr *schedule.AccountSelectionError
-			if errors.As(err, &aerr) {
+			if aerr, ok := errors.AsType[*schedule.AccountSelectionError](err); ok {
 				return writeAccountSelectionError(c, aerr)
 			}
 			return err

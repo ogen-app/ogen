@@ -307,10 +307,10 @@ func TestSubmitHappyPathPersistsZernioID(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.PublisherPostID != "z-1" {
 		t.Errorf("zernio_post_id: got %q want z-1", got.PublisherPostID)
 	}
@@ -338,10 +338,10 @@ func TestSubmitTerminalRejectionMovesPostToFailed(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should swallow terminal err: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Errorf("status: got %q want failed", got.Status)
 	}
@@ -362,11 +362,11 @@ func TestSubmitTransientErrorBubblesForRetry(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID})
+	err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID})
 	if err == nil {
 		t.Fatal("expected non-nil error so backlite retries")
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusScheduled {
 		t.Errorf("status: got %q want scheduled (no transition on transient)", got.Status)
 	}
@@ -389,10 +389,10 @@ func TestSubmitDedupeRecoveryAdoptsExistingJob(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.PublisherPostID != "z-existing" {
 		t.Errorf("zernio_post_id: got %q want z-existing", got.PublisherPostID)
 	}
@@ -407,10 +407,10 @@ func TestSubmitNoAccountConnectedFails(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should swallow terminal: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Errorf("status: got %q want failed", got.Status)
 	}
@@ -430,10 +430,10 @@ func TestSubmitMultipleAccountsRequiresSelection(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should swallow terminal: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Fatalf("status: got %q want failed", got.Status)
 	}
@@ -467,13 +467,13 @@ func TestSubmitExplicitAccountSelectionIsUsed(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if gotAccountID != "acc-2" {
 		t.Errorf("submitted accountId: got %q want acc-2", gotAccountID)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.PublisherPostID != "z-1" {
 		t.Errorf("publisher_post_id: got %q want z-1", got.PublisherPostID)
 	}
@@ -494,10 +494,10 @@ func TestSubmitExplicitAccountPlatformMismatchFails(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should swallow terminal: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Fatalf("status: got %q want failed", got.Status)
 	}
@@ -519,10 +519,10 @@ func TestSubmitExplicitAccountUnavailableFails(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should swallow terminal: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Fatalf("status: got %q want failed", got.Status)
 	}

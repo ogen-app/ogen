@@ -88,7 +88,7 @@ func TestListSummaryProjections_TenantScoped(t *testing.T) {
 
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	ctxDefault := tenantCtx()
-	ctxOther := tenantctx.With(context.Background(), "tenant-other")
+	ctxOther := tenantctx.With(t.Context(), "tenant-other")
 
 	insertSummaryPost(t, db, ctxDefault, "mine-1", "camp-a", models.PostStatusDraft, t0)
 	insertSummaryPost(t, db, ctxOther, "theirs-1", "camp-z", models.PostStatusDraft, t0)
@@ -102,7 +102,7 @@ func TestListSummaryProjections_TenantScoped(t *testing.T) {
 	}
 
 	// Fail-closed: no tenant in context must refuse to run (CON-97).
-	if _, err := repo.ListSummaryProjections(context.Background()); err == nil {
+	if _, err := repo.ListSummaryProjections(t.Context()); err == nil {
 		t.Fatalf("expected fail-closed error for an unscoped read, got nil")
 	}
 }

@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -88,12 +87,12 @@ func TestBootstrapAdoptsByStoredID(t *testing.T) {
 	}))
 
 	store := newMemStore()
-	_ = store.Set(context.Background(), SettingProfileID, "p1")
+	_ = store.Set(t.Context(), SettingProfileID, "p1")
 
 	b := NewBootstrapper(makeIntegration(stub), store, "dev")
 	b.backoff = nil // skip retries to keep the test fast on failure paths
 
-	if err := b.Run(context.Background()); err != nil {
+	if err := b.Run(t.Context()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := store.data[SettingProfileID]; got != "p1" {
@@ -115,12 +114,12 @@ func TestBootstrapClearsStaleIDOn404ThenAdoptsByName(t *testing.T) {
 	}))
 
 	store := newMemStore()
-	_ = store.Set(context.Background(), SettingProfileID, "old")
+	_ = store.Set(t.Context(), SettingProfileID, "old")
 
 	b := NewBootstrapper(makeIntegration(stub), store, "dev")
 	b.backoff = nil
 
-	if err := b.Run(context.Background()); err != nil {
+	if err := b.Run(t.Context()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := store.data[SettingProfileID]; got != "p2" {
@@ -158,7 +157,7 @@ func TestBootstrapCreatesWhenNoMatchInList(t *testing.T) {
 	b := NewBootstrapper(makeIntegration(stub), store, "dev")
 	b.backoff = nil
 
-	if err := b.Run(context.Background()); err != nil {
+	if err := b.Run(t.Context()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := store.data[SettingProfileID]; got != "p3" {
@@ -176,7 +175,7 @@ func TestBootstrapReturnsAuthErrorOn401(t *testing.T) {
 	b := NewBootstrapper(integ, store, "dev")
 	b.backoff = nil
 
-	err := b.Run(context.Background())
+	err := b.Run(t.Context())
 	if err == nil {
 		t.Fatalf("expected error on 401")
 	}
@@ -193,11 +192,11 @@ func TestBootstrapAuthHeaderIsPresent(t *testing.T) {
 	}))
 
 	store := newMemStore()
-	_ = store.Set(context.Background(), SettingProfileID, "p1")
+	_ = store.Set(t.Context(), SettingProfileID, "p1")
 	b := NewBootstrapper(makeIntegration(stub), store, "dev")
 	b.backoff = nil
 
-	if err := b.Run(context.Background()); err != nil {
+	if err := b.Run(t.Context()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -228,7 +227,7 @@ func TestCreateConnectLinkForwardsRedirectURL(t *testing.T) {
 		RedirectURL: "https://app.example.com/oauth/done",
 	})
 	// Empty per-call redirect falls back to the Client's configured RedirectURL.
-	got, err := c.CreateConnectLink(context.Background(), "p_test", "linkedin", "")
+	got, err := c.CreateConnectLink(t.Context(), "p_test", "linkedin", "")
 	if err != nil {
 		t.Fatalf("CreateConnectLink: %v", err)
 	}
@@ -257,7 +256,7 @@ func TestCreateConnectLinkOmitsRedirectURLWhenUnset(t *testing.T) {
 	})
 
 	c := NewClient(StaticKey("test-key"), stub.URL, ClientOpts{Timeout: time.Second})
-	if _, err := c.CreateConnectLink(context.Background(), "p_test", "linkedin", ""); err != nil {
+	if _, err := c.CreateConnectLink(t.Context(), "p_test", "linkedin", ""); err != nil {
 		t.Fatalf("CreateConnectLink: %v", err)
 	}
 	for _, k := range redirectKeys {

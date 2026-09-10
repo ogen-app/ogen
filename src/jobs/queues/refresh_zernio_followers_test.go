@@ -87,7 +87,7 @@ func TestFollowerRefreshUpsertsPerTenant(t *testing.T) {
 	settings := newFakeSettings()
 
 	proc := newFollowerProcessor(stub, acct, fr, settings)
-	if err := proc.Process(context.Background(), queues.RefreshZernioFollowersTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioFollowersTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestFollowerRefreshIncrementalFromDate(t *testing.T) {
 	settings := newFakeSettings()
 
 	proc := newFollowerProcessor(stub, acct, fr, settings)
-	if err := proc.Process(context.Background(), queues.RefreshZernioFollowersTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioFollowersTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	mu.Lock()
@@ -167,7 +167,7 @@ func TestFollowerRefreshNoAccountsNoCall(t *testing.T) {
 	acct := &fakeAccountRepo{accounts: map[string][]models.SocialAccount{}}
 	fr := &fakeFollowerRepo{}
 	proc := newFollowerProcessor(stub, acct, fr, newFakeSettings())
-	if err := proc.Process(tenantctx.WithSystem(context.Background()), queues.RefreshZernioFollowersTask{}); err != nil {
+	if err := proc.Process(tenantctx.WithSystem(t.Context()), queues.RefreshZernioFollowersTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if called {
@@ -204,7 +204,7 @@ func TestFollowerRefreshSkipsUnmatchedAccounts(t *testing.T) {
 	}}
 	fr := &fakeFollowerRepo{}
 	proc := newFollowerProcessor(stub, acct, fr, newFakeSettings())
-	if err := proc.Process(context.Background(), queues.RefreshZernioFollowersTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioFollowersTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 

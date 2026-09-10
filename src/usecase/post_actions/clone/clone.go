@@ -11,13 +11,14 @@
 package clone
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -155,9 +156,7 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 
 	// Resolve target platform + post type.
 	targetPlatformID := opts.TargetPlatformID
-	if targetPlatformID == "" {
-		targetPlatformID = src.PlatformID
-	}
+	targetPlatformID = cmp.Or(targetPlatformID, src.PlatformID)
 	targetPostType := opts.TargetPostType
 	if targetPostType == "" {
 		targetPostType = src.PlatformPostType
@@ -469,7 +468,7 @@ func defaultPostType(types models.PostTypeMap) string {
 	for k := range types {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	if len(keys) > 0 {
 		return keys[0]
 	}

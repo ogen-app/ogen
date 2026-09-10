@@ -5,7 +5,7 @@ package integration_test
 import (
 	"context"
 	"os"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -246,7 +246,7 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 				idxs[i] = e.Index
 				Expect(e.Index).To(BeNumerically(">=", 0))
 			}
-			sort.Ints(idxs)
+			slices.Sort(idxs)
 			for i := 1; i < len(idxs); i++ {
 				Expect(idxs[i]).NotTo(Equal(idxs[i-1]),
 					"duplicate post index %d found in stream — slot allocator should produce unique global indices", idxs[i])

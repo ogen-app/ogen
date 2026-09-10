@@ -18,9 +18,10 @@
 package performers
 
 import (
+	"cmp"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/ogen-app/ogen/src/analytics/insights"
@@ -236,15 +237,14 @@ func partition(rows []Row, k int) (best, worst []Row) {
 }
 
 func sortRows(rows []Row, by string) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rankKey(rows[i], by), rankKey(rows[j], by)
-		if a != b {
-			return a > b // descending
+	slices.SortStableFunc(rows, func(x, y Row) int {
+		if c := cmp.Compare(rankKey(y, by), rankKey(x, by)); c != 0 { // descending
+			return c
 		}
-		if rows[i].Reach != rows[j].Reach {
-			return rows[i].Reach > rows[j].Reach
+		if c := cmp.Compare(y.Reach, x.Reach); c != 0 {
+			return c
 		}
-		return rows[i].PublishedAt.After(rows[j].PublishedAt)
+		return y.PublishedAt.Compare(x.PublishedAt)
 	})
 }
 
@@ -319,10 +319,10 @@ func buildInsights(sorted []Row, total int) []insights.Insight {
 	out := []insights.Insight{}
 
 	// 1. rank_divergence — best by engagement rate ≠ best by reach.
-	byReach := append([]Row(nil), sorted...)
-	sort.SliceStable(byReach, func(i, j int) bool { return byReach[i].Reach > byReach[j].Reach })
-	byEng := append([]Row(nil), sorted...)
-	sort.SliceStable(byEng, func(i, j int) bool { return byEng[i].Metrics.EngagementRate > byEng[j].Metrics.EngagementRate })
+	byReach := slices.Clone(sorted)
+	slices.SortStableFunc(byReach, func(a, b Row) int { return cmp.Compare(b.Reach, a.Reach) })
+	byEng := slices.Clone(sorted)
+	slices.SortStableFunc(byEng, func(a, b Row) int { return cmp.Compare(b.Metrics.EngagementRate, a.Metrics.EngagementRate) })
 	if len(byReach) > 1 && byEng[0].PostID != byReach[0].PostID {
 		rank := 1
 		for i, r := range byReach {

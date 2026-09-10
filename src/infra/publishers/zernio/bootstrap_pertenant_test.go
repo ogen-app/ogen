@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,8 +42,8 @@ func TestBootstrapPerTenantProfileNaming(t *testing.T) {
 	store := &tenantMemStore{data: map[string]string{}}
 	b := NewBootstrapper(integ, store, "dev")
 
-	ctxA := tenantctx.With(context.Background(), "acme")
-	ctxB := tenantctx.With(context.Background(), "beta")
+	ctxA := tenantctx.With(t.Context(), "acme")
+	ctxB := tenantctx.With(t.Context(), "beta")
 	if err := b.Run(ctxA); err != nil {
 		t.Fatalf("run A: %v", err)
 	}

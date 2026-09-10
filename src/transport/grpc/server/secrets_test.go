@@ -60,7 +60,7 @@ func TestList_MergesAllowlist(t *testing.T) {
 	f.rows[secrets.NameAnthropicAPIKey] = secrets.Metadata{Name: secrets.NameAnthropicAPIKey, UpdatedAt: time.Unix(10, 0)}
 	svc := newSecretsService(f)
 
-	resp, err := svc.List(context.Background(), &secretsv1.ListRequest{})
+	resp, err := svc.List(t.Context(), &secretsv1.ListRequest{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestSet_Created(t *testing.T) {
 	svc := newSecretsService(f)
 
 	// First Set of an absent name reports created=true.
-	resp, err := svc.Set(context.Background(), &secretsv1.SetRequest{Name: secrets.NameGeminiAPIKey, Value: "k"})
+	resp, err := svc.Set(t.Context(), &secretsv1.SetRequest{Name: secrets.NameGeminiAPIKey, Value: "k"})
 	if err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestSet_Created(t *testing.T) {
 		t.Errorf("created = false, want true")
 	}
 	// A second Set of the same name is a rotation, not a create.
-	resp2, _ := svc.Set(context.Background(), &secretsv1.SetRequest{Name: secrets.NameGeminiAPIKey, Value: "k2"})
+	resp2, _ := svc.Set(t.Context(), &secretsv1.SetRequest{Name: secrets.NameGeminiAPIKey, Value: "k2"})
 	if resp2.GetCreated() {
 		t.Errorf("created = true on rotation, want false")
 	}
@@ -117,7 +117,7 @@ func TestErrorMapping(t *testing.T) {
 			f := newFakeStore()
 			f.setErr = tc.storeErr
 			svc := newSecretsService(f)
-			_, err := svc.Set(context.Background(), &secretsv1.SetRequest{Name: "x"})
+			_, err := svc.Set(t.Context(), &secretsv1.SetRequest{Name: "x"})
 			if got := status.Code(err); got != tc.want {
 				t.Errorf("code = %v, want %v", got, tc.want)
 			}
@@ -129,7 +129,7 @@ func TestDelete_NotFound(t *testing.T) {
 	f := newFakeStore()
 	f.deleteErr = secrets.ErrNotFound
 	svc := newSecretsService(f)
-	_, err := svc.Delete(context.Background(), &secretsv1.DeleteRequest{Name: secrets.NameZernioAPIKey})
+	_, err := svc.Delete(t.Context(), &secretsv1.DeleteRequest{Name: secrets.NameZernioAPIKey})
 	if got := status.Code(err); got != codes.NotFound {
 		t.Errorf("code = %v, want NotFound", got)
 	}
@@ -145,10 +145,10 @@ func TestTokenAuthInterceptor(t *testing.T) {
 		ctx  context.Context
 		want codes.Code // OK == valid
 	}{
-		{"valid", metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token)), codes.OK},
-		{"wrong token", metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer nope")), codes.Unauthenticated},
-		{"no header", metadata.NewIncomingContext(context.Background(), metadata.MD{}), codes.Unauthenticated},
-		{"no metadata", context.Background(), codes.Unauthenticated},
+		{"valid", metadata.NewIncomingContext(t.Context(), metadata.Pairs("authorization", "Bearer "+token)), codes.OK},
+		{"wrong token", metadata.NewIncomingContext(t.Context(), metadata.Pairs("authorization", "Bearer nope")), codes.Unauthenticated},
+		{"no header", metadata.NewIncomingContext(t.Context(), metadata.MD{}), codes.Unauthenticated},
+		{"no metadata", t.Context(), codes.Unauthenticated},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

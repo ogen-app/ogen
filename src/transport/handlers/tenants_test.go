@@ -154,7 +154,7 @@ var _ = Describe("TenantsHandler", Ordered, func() {
 			codes := make([]int, n)
 			errs := make([]error, n)
 			var wg sync.WaitGroup
-			for i := 0; i < n; i++ {
+			for i := range n {
 				wg.Add(1)
 				// No Ginkgo assertions inside the goroutine — record results and
 				// assert on the spec goroutine after Wait().
@@ -231,7 +231,7 @@ var _ = Describe("TenantsHandler", Ordered, func() {
 				Expect(err).NotTo(HaveOccurred())
 				return resp
 			}
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				Expect(post().StatusCode).To(BeElementOf(fiber.StatusCreated, fiber.StatusConflict),
 					"attempt %d should reach the handler, not be throttled", i+1)
 			}

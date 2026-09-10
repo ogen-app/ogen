@@ -1,7 +1,6 @@
 package secrets
 
 import (
-	"context"
 	"crypto/rand"
 	"errors"
 	"strings"
@@ -38,7 +37,7 @@ func mustCipher(t *testing.T) *envelope.Cipher {
 }
 
 func TestStoreSetGet(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := NewStore(repository.NewSecretRepository(mustOpenDB(t)), mustCipher(t))
 
 	meta, created, err := store.Set(ctx, NameAnthropicAPIKey, "sk-ant-api03-xyz")
@@ -84,7 +83,7 @@ func TestAllowlist(t *testing.T) {
 }
 
 func TestStoreRejectsUnknownName(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := NewStore(repository.NewSecretRepository(mustOpenDB(t)), mustCipher(t))
 
 	if _, _, err := store.Set(ctx, "openai_api_key", "x"); !errors.Is(err, ErrUnknownName) {
@@ -99,7 +98,7 @@ func TestStoreRejectsUnknownName(t *testing.T) {
 }
 
 func TestStoreNotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := NewStore(repository.NewSecretRepository(mustOpenDB(t)), mustCipher(t))
 
 	if _, err := store.Get(ctx, NameAnthropicAPIKey); !errors.Is(err, ErrNotFound) {
@@ -111,7 +110,7 @@ func TestStoreNotFound(t *testing.T) {
 }
 
 func TestStoreValidationRejectsBadValues(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := NewStore(repository.NewSecretRepository(mustOpenDB(t)), mustCipher(t))
 
 	cases := []struct {
@@ -137,7 +136,7 @@ func TestStoreValidationRejectsBadValues(t *testing.T) {
 }
 
 func TestStoreSubscribeFiresOnSetAndDelete(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := NewStore(repository.NewSecretRepository(mustOpenDB(t)), mustCipher(t))
 
 	calls := 0
@@ -192,7 +191,7 @@ func TestStoreErrorsDoNotEchoPlaintext(t *testing.T) {
 
 	// Length-violation path — the most likely place a naive
 	// implementation would interpolate the value.
-	ctx := context.Background()
+	ctx := t.Context()
 	store := NewStore(repository.NewSecretRepository(mustOpenDB(t)), mustCipher(t))
 
 	tooLong := sentinel + strings.Repeat("x", MaxValueLen)
@@ -215,7 +214,7 @@ func TestStoreErrorsDoNotEchoPlaintext(t *testing.T) {
 }
 
 func TestStoreListReportsDecryptable(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := repository.NewSecretRepository(mustOpenDB(t))
 	store := NewStore(repo, mustCipher(t))
 

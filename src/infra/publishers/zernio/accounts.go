@@ -22,9 +22,9 @@ type Account struct {
 	Username    string          `json:"username,omitempty"`
 	DisplayName string          `json:"displayName,omitempty"`
 	AvatarURL   string          `json:"avatarUrl,omitempty"`
-	IsActive    bool            `json:"isActive,omitempty"`
-	CreatedAt   time.Time       `json:"createdAt,omitempty"`
-	UpdatedAt   time.Time       `json:"updatedAt,omitempty"`
+	IsActive    bool            `json:"isActive,omitzero"`
+	CreatedAt   time.Time       `json:"createdAt,omitzero"`
+	UpdatedAt   time.Time       `json:"updatedAt,omitzero"`
 	Raw         json.RawMessage `json:"-"`
 }
 

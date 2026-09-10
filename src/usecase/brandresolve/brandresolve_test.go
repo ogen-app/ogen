@@ -60,7 +60,7 @@ func data() *models.BrandData {
 
 func TestResolveVoicePrecedence(t *testing.T) {
 	repo := &fakeBrandRepo{data: data()}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cases := []struct {
 		name    string
@@ -88,7 +88,7 @@ func TestResolveVoicePrecedence(t *testing.T) {
 
 func TestResolveAudiencePrecedence(t *testing.T) {
 	repo := &fakeBrandRepo{data: data()}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	r, _ := Resolve(ctx, repo, &models.Campaign{BrandAudienceID: strptr("a-camp")}, &models.Post{BrandAudienceID: strptr("a-post")})
 	if r.Audience == nil || r.Audience.ID != "a-post" {
@@ -106,7 +106,7 @@ func TestResolveAudiencePrecedence(t *testing.T) {
 }
 
 func TestResolveNilRepoFailsOpen(t *testing.T) {
-	r, err := Resolve(context.Background(), nil, &models.Campaign{ToneGuidelines: "dry and factual", TargetPersona: "CTOs"}, nil)
+	r, err := Resolve(t.Context(), nil, &models.Campaign{ToneGuidelines: "dry and factual", TargetPersona: "CTOs"}, nil)
 	if err != nil {
 		t.Fatalf("nil repo should not error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestResolveNilRepoFailsOpen(t *testing.T) {
 
 func TestPromptBlockRendersVoiceAudienceGuardrails(t *testing.T) {
 	repo := &fakeBrandRepo{data: data()}
-	r, _ := Resolve(context.Background(), repo, &models.Campaign{BrandVoiceID: strptr("v-def"), BrandAudienceID: strptr("a-camp")}, nil)
+	r, _ := Resolve(t.Context(), repo, &models.Campaign{BrandVoiceID: strptr("v-def"), BrandAudienceID: strptr("a-camp")}, nil)
 	block := r.PromptBlock("")
 
 	for _, want := range []string{"deadpan one-liner", "Default", "sceptics", "NEVER claim", "guaranteed", "Capital at risk."} {
@@ -150,7 +150,7 @@ func TestChannelNotesBlock(t *testing.T) {
 func TestVoiceIDNilWhenLegacy(t *testing.T) {
 	// No brand material and nil repo → VoiceID nil (legacy path), so nothing is
 	// stamped on the post.
-	r, _ := Resolve(context.Background(), nil, &models.Campaign{}, nil)
+	r, _ := Resolve(t.Context(), nil, &models.Campaign{}, nil)
 	if r.VoiceID() != nil {
 		t.Fatalf("expected nil VoiceID on legacy path, got %v", *r.VoiceID())
 	}

@@ -3,6 +3,7 @@ package platforms
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -61,7 +62,7 @@ func validateImageAttachment(att *models.PostAttachment, p *models.Platform) []V
 		})
 	}
 	format := mimeToFormat(att.MimeType)
-	if !contains(c.AllowedFormats, format) {
+	if !slices.Contains(c.AllowedFormats, format) {
 		errs = append(errs, ValidationError{
 			Platform:     p.ID,
 			AttachmentID: att.ID,
@@ -111,7 +112,7 @@ func validatePDFAttachment(att *models.PostAttachment, p *models.Platform) []Val
 		})
 	}
 	format := mimeToFormat(att.MimeType)
-	if !contains(c.AllowedFormats, format) {
+	if !slices.Contains(c.AllowedFormats, format) {
 		errs = append(errs, ValidationError{
 			Platform:     p.ID,
 			AttachmentID: att.ID,
@@ -166,7 +167,7 @@ func validateVideoAttachment(att *models.PostAttachment, p *models.Platform) []V
 	}
 
 	format := mimeToFormat(att.MimeType)
-	if len(c.AllowedFormats) > 0 && !contains(c.AllowedFormats, format) {
+	if len(c.AllowedFormats) > 0 && !slices.Contains(c.AllowedFormats, format) {
 		errs = append(errs, ValidationError{
 			Platform:     p.ID,
 			AttachmentID: att.ID,
@@ -426,13 +427,4 @@ func dimLabel(v int) string {
 		return "∞"
 	}
 	return strconv.Itoa(v)
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }

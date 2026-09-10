@@ -2,7 +2,7 @@ package platforms
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -125,7 +125,7 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 	if len(rule.AllowedKinds) > 0 {
 		for i := range atts {
 			kind := AttachmentKind(atts[i].MimeType)
-			if !contains(rule.AllowedKinds, kind) {
+			if !slices.Contains(rule.AllowedKinds, kind) {
 				errs = append(errs, ValidationError{
 					Platform:     p.ID,
 					AttachmentID: atts[i].ID,
@@ -141,7 +141,7 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 	// CON-148: a video post type on a platform that requires a title (YouTube)
 	// can't publish untitled. Only fires for video post types so image/text
 	// posts are unaffected.
-	if contains(rule.AllowedKinds, KindVideo) && p.VideoConstraints.RequiresVideoTitle && strings.TrimSpace(post.Title) == "" {
+	if slices.Contains(rule.AllowedKinds, KindVideo) && p.VideoConstraints.RequiresVideoTitle && strings.TrimSpace(post.Title) == "" {
 		errs = append(errs, ValidationError{
 			Platform: p.ID,
 			Rule:     RuleRequiresVideoTitle,
@@ -287,7 +287,7 @@ func validateThreadAttachments(p *models.Platform, atts []models.PostAttachment,
 		}
 		bySegment[idx] = append(bySegment[idx], att)
 	}
-	for idx := 0; idx < segCount; idx++ {
+	for idx := range segCount {
 		segAtts := bySegment[idx]
 		if len(segAtts) == 0 {
 			continue
@@ -332,7 +332,7 @@ func sortedSlugs(m models.PostTypeMap) []string {
 	for k := range m {
 		out = append(out, k)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -414,11 +414,11 @@ func resolveMaxAttachments(r PostTypeRule, p *models.Platform) *int {
 		v := r.MaxAttachments
 		return &v
 	}
-	if contains(r.AllowedKinds, KindImage) && p.ImageConstraints.MaxAttachmentsPerPost > 0 {
+	if slices.Contains(r.AllowedKinds, KindImage) && p.ImageConstraints.MaxAttachmentsPerPost > 0 {
 		v := p.ImageConstraints.MaxAttachmentsPerPost
 		return &v
 	}
-	if contains(r.AllowedKinds, KindPDF) && p.PDFConstraints.MaxAttachmentsPerPost > 0 {
+	if slices.Contains(r.AllowedKinds, KindPDF) && p.PDFConstraints.MaxAttachmentsPerPost > 0 {
 		v := p.PDFConstraints.MaxAttachmentsPerPost
 		return &v
 	}

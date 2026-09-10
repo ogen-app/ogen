@@ -68,7 +68,7 @@ func TestTenantAdminRoundTrip(t *testing.T) {
 		return tenantsv1.NewTenantAdminServiceClient(conn)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cli := newClient(token)
 
 	// The seeded 'default' tier is present out of the box.
@@ -260,7 +260,7 @@ func seedRoundTripTenant(t *testing.T, db *bun.DB) string {
 	}
 	now := time.Now().UTC()
 	tn := &models.Tenant{ID: id, Name: "Acme", Slug: id, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now}
-	if _, err := db.NewInsert().Model(tn).Exec(context.Background()); err != nil {
+	if _, err := db.NewInsert().Model(tn).Exec(t.Context()); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
 	return id

@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,7 +38,7 @@ func TestGetFollowerStatsHappyPath(t *testing.T) {
 	})
 
 	c := newClient(s)
-	out, err := c.GetFollowerStats(context.Background(), FollowerQuery{
+	out, err := c.GetFollowerStats(t.Context(), FollowerQuery{
 		AccountIDs:  []string{"acc-1", "acc-2"},
 		ProfileID:   "prof-1",
 		Granularity: "daily",
@@ -73,7 +72,7 @@ func TestGetFollowerStatsAddonRequired(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"Analytics add-on required","requiresAddon":true}`))
 	})
 	c := newClient(s)
-	_, err := c.GetFollowerStats(context.Background(), FollowerQuery{ProfileID: "p"})
+	_, err := c.GetFollowerStats(t.Context(), FollowerQuery{ProfileID: "p"})
 	if !errors.Is(err, ErrAnalyticsUnavailable) {
 		t.Fatalf("want ErrAnalyticsUnavailable, got %v", err)
 	}
@@ -111,7 +110,7 @@ func TestSyncExternalPostHappyPath(t *testing.T) {
 	})
 
 	c := newClient(s)
-	out, err := c.SyncExternalPost(context.Background(), SyncExternalRequest{
+	out, err := c.SyncExternalPost(t.Context(), SyncExternalRequest{
 		AccountID: "acc-1",
 		URL:       "https://instagram.com/p/abc",
 	})
@@ -138,7 +137,7 @@ func TestSyncExternalPostHappyPath(t *testing.T) {
 
 func TestSyncExternalPostRequiresAccountID(t *testing.T) {
 	c := NewClient(StaticKey("key"), "http://unused", ClientOpts{})
-	_, err := c.SyncExternalPost(context.Background(), SyncExternalRequest{URL: "https://x/y"})
+	_, err := c.SyncExternalPost(t.Context(), SyncExternalRequest{URL: "https://x/y"})
 	if err == nil {
 		t.Fatalf("expected error when accountId is empty")
 	}
@@ -153,7 +152,7 @@ func TestSyncExternalPostNotFound(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"Post not found","type":"not_found"}`))
 	})
 	c := newClient(s)
-	_, err := c.SyncExternalPost(context.Background(), SyncExternalRequest{AccountID: "acc-1", URL: "https://x/y"})
+	_, err := c.SyncExternalPost(t.Context(), SyncExternalRequest{AccountID: "acc-1", URL: "https://x/y"})
 	if !IsStatus(err, http.StatusNotFound) {
 		t.Fatalf("want *APIError{404}, got %v", err)
 	}

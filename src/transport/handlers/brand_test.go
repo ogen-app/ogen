@@ -206,7 +206,7 @@ var _ = Describe("BrandHandler", Ordered, func() {
 			Expect(do("POST", "/api/brand/voices", big).StatusCode).To(Equal(422))
 
 			notes := fiber.Map{}
-			for i := 0; i < 51; i++ {
+			for i := range 51 {
 				notes[fmt.Sprintf("p%d", i)] = "note"
 			}
 			many := voiceBody("Many", false)

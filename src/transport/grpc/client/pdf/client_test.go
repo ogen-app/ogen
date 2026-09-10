@@ -2,7 +2,7 @@ package pdf_test
 
 import (
 	"bytes"
-	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -33,7 +33,7 @@ type stubServer struct {
 func (s *stubServer) Render(stream grpc.ClientStreamingServer[pdfv1.RenderRequest, pdfv1.RenderResponse]) error {
 	for {
 		req, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -53,7 +53,7 @@ func (s *stubServer) Parse(stream grpc.ClientStreamingServer[pdfv1.ParseRequest,
 	s.gotMD, _ = metadata.FromIncomingContext(stream.Context())
 	for {
 		req, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -99,7 +99,7 @@ func TestParseStreamsBytesAndReturnsResult(t *testing.T) {
 
 	// ~1.5 MiB forces multiple stream frames (frame size is 1 MiB).
 	pdfBytes := bytes.Repeat([]byte("%PDF-1.7 data "), 110_000)
-	res, err := client.Parse(context.Background(), bytes.NewReader(pdfBytes),
+	res, err := client.Parse(t.Context(), bytes.NewReader(pdfBytes),
 		pdf.Options{Filename: "doc.pdf", RenderThumbnail: true, ThumbnailDPI: 96})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -145,7 +145,7 @@ func TestParsePropagatesCorrelationMetadata(t *testing.T) {
 	}
 	defer client.Close()
 
-	ctx := logging.WithRequestID(context.Background(), "rid")
+	ctx := logging.WithRequestID(t.Context(), "rid")
 	ctx = tenantctx.With(ctx, "ten")
 	if _, err := client.Parse(ctx, bytes.NewReader([]byte("%PDF-1.7")), pdf.Options{}); err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -171,7 +171,7 @@ func TestParseWithoutCorrelationSendsNoHeaders(t *testing.T) {
 	}
 	defer client.Close()
 
-	if _, err := client.Parse(context.Background(), bytes.NewReader([]byte("%PDF-1.7")), pdf.Options{}); err != nil {
+	if _, err := client.Parse(t.Context(), bytes.NewReader([]byte("%PDF-1.7")), pdf.Options{}); err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 
@@ -197,7 +197,7 @@ func TestRenderStreamsBytesAndReturnsPageCountAndThumbnail(t *testing.T) {
 	defer client.Close()
 
 	pdfBytes := bytes.Repeat([]byte("%PDF-1.7 data "), 110_000) // multi-frame
-	res, err := client.Render(context.Background(), bytes.NewReader(pdfBytes),
+	res, err := client.Render(t.Context(), bytes.NewReader(pdfBytes),
 		pdf.RenderOptions{RenderThumbnail: true, ThumbnailDPI: 96})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -221,7 +221,7 @@ func TestDisabledClientReportsErrDisabled(t *testing.T) {
 	if c != nil {
 		t.Fatalf("expected a nil client when Addr is empty")
 	}
-	if _, err := c.Parse(context.Background(), bytes.NewReader(nil), pdf.Options{}); err != pdf.ErrDisabled {
+	if _, err := c.Parse(t.Context(), bytes.NewReader(nil), pdf.Options{}); !errors.Is(err, pdf.ErrDisabled) {
 		t.Fatalf("expected ErrDisabled, got %v", err)
 	}
 	if err := c.Close(); err != nil {

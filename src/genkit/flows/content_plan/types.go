@@ -177,7 +177,7 @@ type PostEventPayload struct {
 // emitted preview if the post was streamed before being rejected.
 type WarningPayload struct {
 	Message string `json:"message"`
-	Index   int    `json:"index,omitempty"`
+	Index   int    `json:"index,omitzero"`
 }
 
 // ErrorEventPayload is the data payload for an "error" SSE event.

@@ -195,7 +195,7 @@ var _ = Describe("SessionsHandler", Ordered, func() {
 			It("throttles repeated failed logins for one address with 429 + Retry-After", func() {
 				// loginPerEmailBurst is 10: ten failures are answered 401, the
 				// eleventh is throttled.
-				for i := 0; i < 10; i++ {
+				for range 10 {
 					Expect(attempt("victim@example.com", "wrong").StatusCode).To(Equal(fiber.StatusUnauthorized))
 				}
 				resp := attempt("victim@example.com", "wrong")
@@ -209,7 +209,7 @@ var _ = Describe("SessionsHandler", Ordered, func() {
 
 				exhaust := func(email string) *http.Response {
 					var last *http.Response
-					for i := 0; i < 11; i++ {
+					for range 11 {
 						last = attempt(email, "wrong")
 					}
 					return last
@@ -226,14 +226,14 @@ var _ = Describe("SessionsHandler", Ordered, func() {
 				seedUser("Fumbles", "fumbles@example.com", "correct-password")
 
 				// Five failures, then a success that refunds the address bucket.
-				for i := 0; i < 5; i++ {
+				for range 5 {
 					Expect(attempt("fumbles@example.com", "wrong").StatusCode).To(Equal(fiber.StatusUnauthorized))
 				}
 				Expect(attempt("fumbles@example.com", "correct-password").StatusCode).To(Equal(fiber.StatusCreated))
 
 				// With the counter reset, six more failures are all 401 — a non-reset
 				// bucket (5 left) would have thrown a 429 by the sixth.
-				for i := 0; i < 6; i++ {
+				for i := range 6 {
 					Expect(attempt("fumbles@example.com", "wrong").StatusCode).To(Equal(fiber.StatusUnauthorized),
 						"failure %d after reset should be 401, not throttled", i+1)
 				}
@@ -243,7 +243,7 @@ var _ = Describe("SessionsHandler", Ordered, func() {
 				// loginPerIPBurst is 30, well above the per-address burst, so 30
 				// single failures against distinct unknown addresses stay 401 and the
 				// 31st trips the per-IP budget.
-				for i := 0; i < 30; i++ {
+				for i := range 30 {
 					email := fmt.Sprintf("spray-%d@example.com", i)
 					Expect(attempt(email, "wrong").StatusCode).To(Equal(fiber.StatusUnauthorized))
 				}

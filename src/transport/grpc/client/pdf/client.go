@@ -155,7 +155,7 @@ func (c *Client) Parse(ctx context.Context, r io.Reader, opts Options) (*Result,
 				return nil, fmt.Errorf("pdf: send pdf bytes: %w", err)
 			}
 		}
-		if rerr == io.EOF {
+		if errors.Is(rerr, io.EOF) {
 			break
 		}
 		if rerr != nil {
@@ -223,7 +223,7 @@ func (c *Client) Render(ctx context.Context, r io.Reader, opts RenderOptions) (*
 				return nil, fmt.Errorf("pdf: send pdf bytes: %w", err)
 			}
 		}
-		if rerr == io.EOF {
+		if errors.Is(rerr, io.EOF) {
 			break
 		}
 		if rerr != nil {

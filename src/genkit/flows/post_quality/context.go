@@ -131,9 +131,8 @@ func buildAssetContexts(ctx context.Context, assetIDs []string, repos PostQualit
 	results := make([]result, len(assetIDs))
 	var wg sync.WaitGroup
 	for i, id := range assetIDs {
-		wg.Add(1)
-		go func(idx int, assetID string) {
-			defer wg.Done()
+		wg.Go(func() {
+			idx, assetID := i, id
 			asset, err := repos.Assets.GetByID(ctx, assetID)
 			if err != nil {
 				return
@@ -143,7 +142,7 @@ func buildAssetContexts(ctx context.Context, assetIDs []string, repos PostQualit
 				preview = truncateRunes(chunks[0].Content, previewChars)
 			}
 			results[idx] = result{summary: assetContext{Title: asset.Title, Preview: preview}, ok: true}
-		}(i, id)
+		})
 	}
 	wg.Wait()
 

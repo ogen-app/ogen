@@ -1,8 +1,7 @@
 package repository_test
 
 import (
-	"context"
-	"sort"
+	"slices"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -21,7 +20,7 @@ func TestListTenantIDsByKey(t *testing.T) {
 
 	upsert := func(tenant, key, value string) {
 		t.Helper()
-		ctx := tenantctx.With(context.Background(), tenant)
+		ctx := tenantctx.With(t.Context(), tenant)
 		if err := repo.Upsert(ctx, &models.Setting{Key: key, Value: value}); err != nil {
 			t.Fatalf("upsert %s/%s: %v", tenant, key, err)
 		}
@@ -31,12 +30,12 @@ func TestListTenantIDsByKey(t *testing.T) {
 	upsert("tc", "zernio.profile_id", "") // empty value → excluded
 	upsert("td", "other.key", "x")        // different key → excluded
 
-	sys := tenantctx.WithSystem(context.Background())
+	sys := tenantctx.WithSystem(t.Context())
 	ids, err := repo.ListTenantIDsByKey(sys, "zernio.profile_id")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	want := []string{"ta", "tb"}
 	if len(ids) != len(want) || ids[0] != want[0] || ids[1] != want[1] {
 		t.Fatalf("got %v want %v", ids, want)

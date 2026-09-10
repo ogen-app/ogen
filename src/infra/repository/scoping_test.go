@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -17,7 +16,7 @@ func TestScopedRepoFailsClosedWithoutTenant(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewTagRepository(db)
 
-	if _, err := repo.List(context.Background()); !errors.Is(err, tenantctx.ErrNoTenant) {
+	if _, err := repo.List(t.Context()); !errors.Is(err, tenantctx.ErrNoTenant) {
 		t.Fatalf("expected fail-closed ErrNoTenant for an unscoped read, got %v", err)
 	}
 

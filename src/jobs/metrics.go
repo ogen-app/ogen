@@ -125,7 +125,7 @@ func (l *latency) Avg() int64 {
 		return 0
 	}
 	var total time.Duration
-	for i := 0; i < n; i++ {
+	for i := range n {
 		total += l.buf[i]
 	}
 	return (total / time.Duration(n)).Milliseconds()

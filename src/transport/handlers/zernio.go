@@ -332,8 +332,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 
 	connectURL, err := h.integ.Client.CreateConnectLink(c.Context(), profileID, req.Platform, h.connectCallbackURL(sessionID))
 	if err != nil {
-		var apiErr *zernio.APIError
-		if errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
 			return fiber.NewError(http.StatusBadGateway, apiErr.Error())
 		}
 		return err

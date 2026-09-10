@@ -1,7 +1,6 @@
 package post_assistant
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 // the writer sub-call, and must not record an edit result.
 func TestToolEditPost_RequiresInstruction(t *testing.T) {
 	st := &requestState{postID: "p1"}
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 	if _, err := toolEditPost(ctx, EditPostInput{Instruction: "   "}); err == nil {
 		t.Fatal("expected an error for an empty instruction")
 	}
@@ -36,7 +35,7 @@ func TestToolEditPost_RefusesAfterScheduleThisTurn(t *testing.T) {
 		t.Fatalf("recordScheduled must advance postStatus to the routed status; got %q", st.postStatus)
 	}
 
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 	out, err := toolEditPost(ctx, EditPostInput{Instruction: "make it punchier"})
 	if err != nil {
 		// A start-of-turn status that was never refreshed would fall through to
@@ -58,7 +57,7 @@ func TestToolEditPost_ManualScheduleStaysEditable(t *testing.T) {
 	st := &requestState{postID: "p1", postStatus: models.PostStatusDraft}
 	st.recordScheduled(&schedule.Result{Status: models.PostStatusScheduledForManualPublish})
 
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 	// Writer is unavailable in this bare state, so a permitted edit reaches it
 	// and surfaces the write-content error — proving the lock did NOT engage.
 	_, err := toolEditPost(ctx, EditPostInput{Instruction: "make it punchier"})
@@ -72,7 +71,7 @@ func TestToolEditPost_ManualScheduleStaysEditable(t *testing.T) {
 // clearly reports the writer is unavailable.
 func TestRunWriter_Unavailable(t *testing.T) {
 	st := &requestState{postID: "p1"} // g / provider / writerSystem all zero
-	if _, err := runWriter(context.Background(), st, "shorten it", false); err == nil {
+	if _, err := runWriter(t.Context(), st, "shorten it", false); err == nil {
 		t.Fatal("expected an error when the writer is unavailable")
 	}
 }
@@ -82,7 +81,7 @@ func TestRunWriter_Unavailable(t *testing.T) {
 // finalises a bogus "edited" turn.
 func TestToolEditPost_WriterUnavailable(t *testing.T) {
 	st := &requestState{postID: "p1"} // writerSystem empty → runWriter errors
-	ctx := withRequestState(context.Background(), st)
+	ctx := withRequestState(t.Context(), st)
 	_, err := toolEditPost(ctx, EditPostInput{Instruction: "make it punchier"})
 	if err == nil {
 		t.Fatal("expected an error when content writing is unavailable")

@@ -7,6 +7,7 @@
 package notes
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strings"
@@ -76,9 +77,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*models.PostNote,
 	}
 
 	origin := in.Origin
-	if origin == "" {
-		origin = models.PostNoteOriginManual
-	}
+	origin = cmp.Or(origin, models.PostNoteOriginManual)
 
 	id, err := models.NewID()
 	if err != nil {

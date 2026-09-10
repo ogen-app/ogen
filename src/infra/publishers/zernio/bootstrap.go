@@ -142,8 +142,7 @@ func (b *Bootstrapper) runWithBackoff(ctx context.Context) (*Profile, error) {
 		}
 		lastErr = err
 
-		var apiErr *APIError
-		if errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[*APIError](err); ok {
 			// 4xx (other than 404, which is a recoverable signal that
 			// the stored profile_id is stale) won't be fixed by retries.
 			if apiErr.Status >= 400 && apiErr.Status < 500 && apiErr.Status != http.StatusNotFound {

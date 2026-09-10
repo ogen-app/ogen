@@ -13,8 +13,8 @@ var validate = validator.New()
 // validationError converts validator.ValidationErrors into a human-readable
 // string suitable for returning as a 400 response body.
 func validationError(err error) error {
-	var ve validator.ValidationErrors
-	if !errors.As(err, &ve) {
+	ve, ok := errors.AsType[validator.ValidationErrors](err)
+	if !ok {
 		return err
 	}
 
