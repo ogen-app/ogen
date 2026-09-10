@@ -361,9 +361,9 @@ func (s *Service) snapshotSubmitted(ctx context.Context, post *models.Post) {
 			logging.AttrComponent, "schedule", "post_id", post.ID, logging.AttrError, err)
 		return
 	}
-	// CON-284: for a thread the snapshot captures the whole chain, not just the
-	// mirrored root — so both the dedup compare and the stored content use
-	// SnapshotContent (== post.Content for an ordinary post).
+	// CON-284 R2: content is the canonical full thread body, so SnapshotContent is
+	// simply post.Content for every post type — the snapshot captures the whole
+	// chain by construction.
 	content := post.SnapshotContent()
 	if latest != nil && latest.IsSystemSnapshot() &&
 		latest.Note == models.PostVersionNoteSubmitted && latest.Content == content {

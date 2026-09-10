@@ -923,16 +923,6 @@ func nullSlice(s models.StringSlice) models.StringSlice {
 	return s
 }
 
-// nullThreadSegments returns an empty ThreadSegments instead of nil (CON-284),
-// so an omitted thread_segments persists as [] rather than the JSON literal
-// null and round-trips as an empty array.
-func nullThreadSegments(s models.ThreadSegments) models.ThreadSegments {
-	if s == nil {
-		return models.ThreadSegments{}
-	}
-	return s
-}
-
 // nullCampaignPlatforms returns an empty CampaignPlatforms instead of nil.
 func nullCampaignPlatforms(p models.CampaignPlatforms) models.CampaignPlatforms {
 	if p == nil {

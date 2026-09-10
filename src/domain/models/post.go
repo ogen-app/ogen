@@ -1,7 +1,6 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -201,21 +200,11 @@ func (p *Post) IsThread() bool {
 }
 
 // SnapshotContent renders the post's content for a CON-251 "what went out"
-// PostVersion. For an ordinary post it is just Content; for a thread (CON-284)
-// PostVersion.Content is a single TEXT field, so the whole ordered chain is
-// serialised into it as JSON. JSON is used rather than a text delimiter so the
-// encoding is injective and decodable: distinct segment sequences always
-// produce distinct Content (a plain join collides when a message contains the
-// delimiter, e.g. ["x","y","z"] vs ["x\n—\ny","z"]), which the snapshot dedup
-// and the audit record both rely on. Falls back to the root mirror if marshal
-// somehow fails, so the snapshot is never empty.
+// PostVersion. As of CON-284 R2, Content IS the canonical thread body — the whole
+// ordered chain (with "---" delimiters) lives there, and thread_segments is merely
+// derived from it — so the body is already self-contained and injective (distinct
+// threads have distinct bodies). There is nothing extra to serialise: the snapshot
+// is just Content for every post type, thread or not.
 func (p *Post) SnapshotContent() string {
-	if !p.IsThread() || len(p.ThreadSegments) == 0 {
-		return p.Content
-	}
-	b, err := json.Marshal(p.ThreadSegments)
-	if err != nil {
-		return p.Content
-	}
-	return string(b)
+	return p.Content
 }

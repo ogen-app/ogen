@@ -177,7 +177,7 @@ func TestSubmitThreadBuildsThreadItems(t *testing.T) {
 		ID:               "t-1",
 		PlatformID:       "81mUCmc2xsKd", // X (Twitter) Sqid → zernioID "twitter"
 		PlatformPostType: models.PostTypeThread,
-		Content:          "root msg", // mirrors segment 0
+		Content:          "root msg\n\n---\n\nreply msg", // R2: content is the full thread body
 		ThreadSegments:   models.ThreadSegments{{Content: "root msg"}, {Content: "reply msg"}},
 		Status:           models.PostStatusScheduled,
 		ScheduledAt:      &now,
@@ -214,5 +214,71 @@ func TestSubmitThreadBuildsThreadItems(t *testing.T) {
 	}
 	if len(items[1].MediaItems) != 1 || items[1].MediaItems[0]["url"] != "https://cdn.zernio.test/b.jpg" {
 		t.Errorf("segment 1 media wrong: %+v", items[1].MediaItems)
+	}
+}
+
+// TestSubmitThreadNilIndexMediaOnRoot proves CON-284 R2: an attachment with a
+// NULL segment_index (the delimited-body flow's default) is published on the root
+// message (threadItems[0]), not skipped.
+func TestSubmitThreadNilIndexMediaOnRoot(t *testing.T) {
+	stub := newStubZernio()
+	defer stub.Close()
+
+	stub.handle("POST", "/media/presign", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeJSON(w, http.StatusOK, zernio.MediaPresign{
+			UploadURL: stub.URL + "/up",
+			PublicURL: "https://cdn.zernio.test/" + body["filename"],
+			Key:       body["filename"],
+			ExpiresIn: 3600,
+		})
+	})
+	stub.handle("PUT", "/up", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	})
+	var submitBody zernio.SubmitRequest
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&submitBody)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{ID: "z-thr2", Status: zernio.JobStatusScheduled}})
+	})
+
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-x", Platform: "twitter"}},
+	})
+	deps.Storage = &fakeStorage{objects: map[string][]byte{"post-attachments/t-2/a.png": []byte("A")}}
+	// No SegmentIndex set → nil → must land on the root.
+	deps.PostAttachmentRepo = &fakeAttachmentRepo{atts: []models.PostAttachment{
+		{ID: "att-a", PostID: "t-2", Position: 0, MimeType: "image/png", SizeBytes: 1, S3Key: "post-attachments/t-2/a.png"},
+	}}
+
+	now := time.Now().Add(-time.Minute).UTC()
+	post := &models.Post{
+		ID:               "t-2",
+		PlatformID:       "81mUCmc2xsKd",
+		PlatformPostType: models.PostTypeThread,
+		Content:          "root msg\n\n---\n\nreply msg",
+		ThreadSegments:   models.ThreadSegments{{Content: "root msg"}, {Content: "reply msg"}},
+		Status:           models.PostStatusScheduled,
+		ScheduledAt:      &now,
+		Platform:         &models.Platform{ID: "81mUCmc2xsKd", Name: "X (Twitter)"},
+	}
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	items := submitBody.Platforms[0].PlatformSpecificData.ThreadItems
+	if len(items) != 2 {
+		t.Fatalf("threadItems = %d, want 2", len(items))
+	}
+	if len(items[0].MediaItems) != 1 || items[0].MediaItems[0]["url"] != "https://cdn.zernio.test/a.png" {
+		t.Errorf("nil-index media: want on root (segment 0), got root=%+v reply=%+v", items[0].MediaItems, items[1].MediaItems)
+	}
+	if len(items[1].MediaItems) != 0 {
+		t.Errorf("reply segment should have no media, got %+v", items[1].MediaItems)
 	}
 }
