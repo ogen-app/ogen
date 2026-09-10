@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -278,12 +279,7 @@ func (s *store) notify(name string) {
 
 // IsAllowed reports whether name is in the closed allowlist.
 func IsAllowed(name string) bool {
-	for _, n := range AllowedNames {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(AllowedNames, name)
 }
 
 func toRecord(row *models.Secret) envelope.Record {

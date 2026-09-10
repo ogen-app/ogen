@@ -128,7 +128,7 @@ func (c curve) expectedAtAge(posts map[string][]agePoint, ageTarget int, metric 
 }
 
 func median(xs []float64) float64 {
-	s := append([]float64(nil), xs...)
+	s := slices.Clone(xs)
 	slices.Sort(s)
 	n := len(s)
 	if n == 0 {

@@ -183,7 +183,7 @@ func bandMetricOf(p bandPoint, metric string) float64 {
 
 // percentile is the linear-interpolation quantile of xs (q ∈ [0,1]).
 func percentile(xs []float64, q float64) float64 {
-	s := append([]float64(nil), xs...)
+	s := slices.Clone(xs)
 	slices.Sort(s)
 	n := len(s)
 	switch n {

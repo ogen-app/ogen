@@ -94,7 +94,7 @@ func sortedPhases(campaign *models.Campaign) []models.CampaignTypePhase {
 	if campaign.CampaignType == nil {
 		return nil
 	}
-	phases := append([]models.CampaignTypePhase(nil), campaign.CampaignType.Phases...)
+	phases := slices.Clone(campaign.CampaignType.Phases)
 	slices.SortStableFunc(phases, func(a, b models.CampaignTypePhase) int { return cmp.Compare(a.Sequence, b.Sequence) })
 	return phases
 }

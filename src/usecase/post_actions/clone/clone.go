@@ -11,6 +11,7 @@
 package clone
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -155,9 +156,7 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 
 	// Resolve target platform + post type.
 	targetPlatformID := opts.TargetPlatformID
-	if targetPlatformID == "" {
-		targetPlatformID = src.PlatformID
-	}
+	targetPlatformID = cmp.Or(targetPlatformID, src.PlatformID)
 	targetPostType := opts.TargetPostType
 	if targetPostType == "" {
 		targetPostType = src.PlatformPostType

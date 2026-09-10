@@ -99,7 +99,7 @@ func medianInts(xs []int) float64 {
 	if len(xs) == 0 {
 		return 0
 	}
-	s := append([]int(nil), xs...)
+	s := slices.Clone(xs)
 	slices.Sort(s)
 	n := len(s)
 	if n%2 == 1 {

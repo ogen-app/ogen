@@ -319,9 +319,9 @@ func buildInsights(sorted []Row, total int) []insights.Insight {
 	out := []insights.Insight{}
 
 	// 1. rank_divergence — best by engagement rate ≠ best by reach.
-	byReach := append([]Row(nil), sorted...)
+	byReach := slices.Clone(sorted)
 	slices.SortStableFunc(byReach, func(a, b Row) int { return cmp.Compare(b.Reach, a.Reach) })
-	byEng := append([]Row(nil), sorted...)
+	byEng := slices.Clone(sorted)
 	slices.SortStableFunc(byEng, func(a, b Row) int { return cmp.Compare(b.Metrics.EngagementRate, a.Metrics.EngagementRate) })
 	if len(byReach) > 1 && byEng[0].PostID != byReach[0].PostID {
 		rank := 1

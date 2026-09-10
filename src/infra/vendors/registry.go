@@ -3,6 +3,7 @@ package vendors
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 )
@@ -148,12 +149,8 @@ func MergePrices(vendorName, version string, models map[string]Rates) bool {
 		return false
 	}
 	merged := make(map[string]Rates, len(d.Prices.Models)+len(models))
-	for k, v := range d.Prices.Models {
-		merged[k] = v
-	}
-	for k, v := range models {
-		merged[k] = v
-	}
+	maps.Copy(merged, d.Prices.Models)
+	maps.Copy(merged, models)
 	d.Prices = PriceTable{Version: version, Models: merged}
 	registry[vendorName] = d
 	return true
