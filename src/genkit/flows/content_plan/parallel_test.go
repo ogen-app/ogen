@@ -156,19 +156,19 @@ func TestRunBatchesParallelMaxParallelCapHonoured(t *testing.T) {
 	}
 
 	const cap = 3
-	var inFlight int32
-	var maxObserved int32
+	var inFlight atomic.Int32
+	var maxObserved atomic.Int32
 
 	gen := func(_ context.Context, spec batchSpec, _ OnEventFunc) ([]DraftPost, error) {
-		current := atomic.AddInt32(&inFlight, 1)
+		current := inFlight.Add(1)
 		for {
-			prev := atomic.LoadInt32(&maxObserved)
-			if current <= prev || atomic.CompareAndSwapInt32(&maxObserved, prev, current) {
+			prev := maxObserved.Load()
+			if current <= prev || maxObserved.CompareAndSwap(prev, current) {
 				break
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
-		atomic.AddInt32(&inFlight, -1)
+		inFlight.Add(-1)
 		out := make([]DraftPost, spec.PostCount)
 		return out, nil
 	}
@@ -177,7 +177,7 @@ func TestRunBatchesParallelMaxParallelCapHonoured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if got := atomic.LoadInt32(&maxObserved); got > cap {
+	if got := maxObserved.Load(); got > cap {
 		t.Errorf("max parallel observed = %d, want ≤ %d", got, cap)
 	}
 }
@@ -203,14 +203,14 @@ func TestRunBatchesParallelEmitIsSerialised(t *testing.T) {
 	// onEvent that asserts non-reentrancy via a counter — increment on entry,
 	// require seeing 1, decrement on exit. Any concurrent call would push
 	// the counter ≥ 2 and fail the test.
-	var inside int32
+	var inside atomic.Int32
 	emit := func(_ SSEEventKind, _ any) {
-		if got := atomic.AddInt32(&inside, 1); got != 1 {
+		if got := inside.Add(1); got != 1 {
 			t.Errorf("concurrent emit: inside = %d", got)
 		}
 		// Hold briefly to amplify any race.
 		time.Sleep(time.Microsecond)
-		atomic.AddInt32(&inside, -1)
+		inside.Add(-1)
 	}
 
 	if _, _, err := runBatchesParallel(context.Background(), batches, 8, gen, emit); err != nil {

@@ -15,15 +15,7 @@ import (
 // activityMetrics is registered once per process: expvar.NewInt panics on a
 // duplicate name, so repeated server.New calls (integration tests) must share
 // one Metrics instance rather than re-register the ogen_activity_* counters.
-var (
-	activityMetricsOnce sync.Once
-	activityMetricsInst *activity.Metrics
-)
-
-func sharedActivityMetrics() *activity.Metrics {
-	activityMetricsOnce.Do(func() { activityMetricsInst = activity.NewMetrics() })
-	return activityMetricsInst
-}
+var sharedActivityMetrics = sync.OnceValue(activity.NewMetrics)
 
 // activityDeps bundles the wired CON-125 activity-collection pieces. Both are
 // nil when analytics is disabled — the recorder is nil-safe, so call-sites stay

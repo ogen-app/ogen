@@ -15,15 +15,7 @@ import (
 // usageMetrics is registered once per process: expvar.NewInt panics on a
 // duplicate name, so repeated server.New calls (integration tests) must share
 // one Metrics instance rather than re-register the ogen_usage_* counters.
-var (
-	usageMetricsOnce sync.Once
-	usageMetricsInst *usage.Metrics
-)
-
-func sharedUsageMetrics() *usage.Metrics {
-	usageMetricsOnce.Do(func() { usageMetricsInst = usage.NewMetrics() })
-	return usageMetricsInst
-}
+var sharedUsageMetrics = sync.OnceValue(usage.NewMetrics)
 
 // usageDeps bundles the wired CON-86 metering pieces. limits + defaults are
 // always present (the tenant_usage_limits table lives in the control-plane

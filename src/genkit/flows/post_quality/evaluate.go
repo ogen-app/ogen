@@ -67,11 +67,9 @@ func evaluate(
 
 	var wg sync.WaitGroup
 	for i, t := range dimensionTargets {
-		wg.Add(1)
-		go func(i int, label string) {
-			defer wg.Done()
-			results[i], errs[i] = evaluateDimension(ctx, g, cfg, prompts, label)
-		}(i, t.label)
+		wg.Go(func() {
+			results[i], errs[i] = evaluateDimension(ctx, g, cfg, prompts, t.label)
+		})
 	}
 	wg.Wait()
 

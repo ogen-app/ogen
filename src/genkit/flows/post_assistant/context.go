@@ -407,9 +407,8 @@ func buildAssetSummaries(ctx context.Context, assetIDs []string, repos PostAssis
 	results := make([]result, len(assetIDs))
 	var wg sync.WaitGroup
 	for i, id := range assetIDs {
-		wg.Add(1)
-		go func(idx int, assetID string) {
-			defer wg.Done()
+		wg.Go(func() {
+			idx, assetID := i, id
 			asset, err := repos.Assets.GetByID(ctx, assetID)
 			if err != nil {
 				return
@@ -437,7 +436,7 @@ func buildAssetSummaries(ctx context.Context, assetIDs []string, repos PostAssis
 				},
 				ok: true,
 			}
-		}(i, id)
+		})
 	}
 	wg.Wait()
 

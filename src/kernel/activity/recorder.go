@@ -84,8 +84,7 @@ func NewRecorder(w Writer, m *Metrics, cfg Config) *Recorder {
 		writeTimeout: cfg.WriteTimeout,
 		now:          func() time.Time { return time.Now().UTC() },
 	}
-	r.wg.Add(1)
-	go r.loop()
+	r.wg.Go(r.loop)
 	return r
 }
 
@@ -160,8 +159,6 @@ func (r *Recorder) Close(ctx context.Context) error {
 }
 
 func (r *Recorder) loop() {
-	defer r.wg.Done()
-
 	ticker := time.NewTicker(r.flushEvery)
 	defer ticker.Stop()
 
