@@ -157,6 +157,10 @@ func main() {
 			repository.NewTenantTierRepository(db),
 			repository.NewTenantGroupRepository(db),
 			repository.NewTenantRepository(db),
+			// CON-292: PlatformAdminService operates on the global platform catalog
+			// + single-row global limits.
+			repository.NewPlatformRepository(db),
+			repository.NewPlatformGlobalLimitsRepository(db),
 		); err != nil {
 			slog.Error("grpc init failed; internal grpc disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
 			_ = lis.Close()

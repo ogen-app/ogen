@@ -21,6 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
+	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/firecrawl"
 	"github.com/ogen-app/ogen/src/infra/publishers"
@@ -56,6 +57,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 
 	// API routes: the full data-access layer is built once by wireRepositories.
 	r := wireRepositories(db, analyticsDB)
+	// CON-292: load the operator-controlled platform catalog into the Zernio
+	// resolver (it replaced the deleted hardcoded registry) and keep it fresh.
+	// Non-fatal if the initial load fails — a background tick retries.
+	pubzernio.InitCatalog(ctx, r.platformRepo)
+	// CON-292: load the operator-controlled global upload/thread ceilings into
+	// the cached config the attachment handlers and thread validator read.
+	platforms.InitGlobalLimits(ctx, r.platformGlobalLimitsRepo)
 	// CON-113: one overview service, shared by the REST endpoint and the
 	// Campaign Assistant's getCampaignOverview tool. Not gated by the Anthropic
 	// key — it's a plain tenant-scoped DB read.

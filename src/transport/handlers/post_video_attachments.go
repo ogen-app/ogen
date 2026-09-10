@@ -95,8 +95,8 @@ func (h *PostAttachmentsHandler) PresignVideo(c *fiber.Ctx) error {
 	if req.SizeBytes <= 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "size_bytes is required and must be positive")
 	}
-	if req.SizeBytes > maxVideoUploadBytes {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes>>30))
+	if req.SizeBytes > maxVideoUploadBytes() {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes()>>30))
 	}
 
 	// A random token, not the eventual row id, gives the key uniqueness — the
@@ -189,9 +189,9 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 		_ = h.storage.Delete(c.Context(), req.S3Key)
 		return fiber.NewError(fiber.StatusBadRequest, "uploaded object is empty")
 	}
-	if info.Size > maxVideoUploadBytes {
+	if info.Size > maxVideoUploadBytes() {
 		_ = h.storage.Delete(c.Context(), req.S3Key)
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes>>30))
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes()>>30))
 	}
 
 	session := c.Locals("session").(*models.Session)

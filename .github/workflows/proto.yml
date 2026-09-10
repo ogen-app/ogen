@@ -20,6 +20,11 @@ jobs:
           persist-credentials: false
 
       - uses: bufbuild/buf-setup-action@v1
+        with:
+          # Authenticate buf's download from the GitHub releases API so shared
+          # runners don't hit unauthenticated rate limits (intermittent setup
+          # failures otherwise). Mirrors the ogen-app/proto workflow.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-go@v5
         with:

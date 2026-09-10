@@ -31,6 +31,7 @@ type repos struct {
 	assetImageRepo           repository.AssetImageRepository
 	pieceRepo                repository.AssetRepository
 	platformRepo             repository.PlatformRepository
+	platformGlobalLimitsRepo repository.PlatformGlobalLimitsRepository
 	campaignTypeRepo         repository.CampaignTypeRepository
 	campaignRepo             repository.CampaignRepository
 	postRepo                 repository.PostRepository
@@ -78,6 +79,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		assetImageRepo:           repository.NewAssetImageRepository(db),
 		pieceRepo:                repository.NewAssetRepository(db, tagRepo, assetFileRepo),
 		platformRepo:             platformRepo,
+		platformGlobalLimitsRepo: repository.NewPlatformGlobalLimitsRepository(db),
 		campaignTypeRepo:         campaignTypeRepo,
 		campaignRepo:             repository.NewCampaignRepository(db, tagRepo, platformRepo, campaignTypeRepo),
 		postRepo:                 repository.NewPostRepository(db),

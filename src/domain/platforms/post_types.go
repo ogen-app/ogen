@@ -181,9 +181,11 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 	return errs
 }
 
-// MaxThreadSegments caps how many messages one thread post may carry (CON-284
-// §6.5). A generous default; promote it to a platform override if X and Threads
-// ever diverge on the limit.
+// MaxThreadSegments is the built-in default cap on how many messages one thread
+// post may carry (CON-284 §6.5). CON-292 made it operator-controllable via
+// platform_global_limits — validateThread reads the live GlobalLimits() value;
+// this const is the fallback default, mirrored by
+// models.DefaultPlatformGlobalLimits().MaxThreadSegments and the migration seed.
 const MaxThreadSegments = 25
 
 // validateThread runs the CON-284 per-segment publish rules for a thread post,
@@ -199,6 +201,8 @@ func validateThread(post *models.Post, p *models.Platform, atts []models.PostAtt
 	var errs []ValidationError
 	segs := post.ThreadSegments
 	n := len(segs)
+	// Operator-controlled ceiling (CON-292); defaults to MaxThreadSegments.
+	maxSeg := GlobalLimits().MaxThreadSegments
 
 	switch {
 	case n < 2:
@@ -209,13 +213,13 @@ func validateThread(post *models.Post, p *models.Platform, atts []models.PostAtt
 			Actual:   strconv.Itoa(n),
 			Message:  "a thread needs at least 2 messages",
 		})
-	case n > MaxThreadSegments:
+	case n > maxSeg:
 		errs = append(errs, ValidationError{
 			Platform: p.ID,
 			Rule:     RuleThreadSegmentCount,
-			Expected: fmt.Sprintf("<= %d messages", MaxThreadSegments),
+			Expected: fmt.Sprintf("<= %d messages", maxSeg),
 			Actual:   strconv.Itoa(n),
-			Message:  fmt.Sprintf("a thread allows at most %d messages; got %d", MaxThreadSegments, n),
+			Message:  fmt.Sprintf("a thread allows at most %d messages; got %d", maxSeg, n),
 		})
 	}
 

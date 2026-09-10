@@ -77,8 +77,9 @@ var _ = Describe("PlatformsHandler publishers enrichment", Ordered, func() {
 		// suite may delete seeded rows; INSERT...ON CONFLICT keeps this
 		// test resilient to ordering.
 		_, err := db.NewInsert().Model(&models.Platform{
-			ID:   "linkedin",
-			Name: "LinkedIn",
+			ID:      "linkedin",
+			Name:    "LinkedIn",
+			Enabled: true, // CON-292: enabled defaults to false; this row must be live to enrich.
 			PostTypes: models.PostTypeMap{
 				"text-post":  "Text post",
 				"image-post": "Image post",
@@ -183,8 +184,9 @@ var _ = Describe("PlatformsHandler publishers enrichment", Ordered, func() {
 			// should match it to the local row.
 			ctx := tenantCtx()
 			_, err := db.NewInsert().Model(&models.Platform{
-				ID:   "rzgpTkARLH0L",
-				Name: "Instagram",
+				ID:      "rzgpTkARLH0L",
+				Name:    "Instagram",
+				Enabled: true, // CON-292: explicit since enabled now defaults to false.
 				PostTypes: models.PostTypeMap{
 					"image-post": "Image post",
 					"reel":       "Reel",

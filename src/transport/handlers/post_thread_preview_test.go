@@ -28,6 +28,18 @@ func (f *fakePreviewPlatformRepo) GetByID(_ context.Context, id string) (*models
 }
 func (f *fakePreviewPlatformRepo) Update(context.Context, *models.Platform) error { return nil }
 func (f *fakePreviewPlatformRepo) Delete(context.Context, string) (bool, error)   { return false, nil }
+func (f *fakePreviewPlatformRepo) ListEnabled(context.Context) ([]models.Platform, error) {
+	return nil, nil
+}
+func (f *fakePreviewPlatformRepo) GetByZernioID(context.Context, string) (*models.Platform, error) {
+	return nil, sql.ErrNoRows
+}
+func (f *fakePreviewPlatformRepo) SetEnabled(context.Context, string, bool) (*models.Platform, error) {
+	return f.p, nil
+}
+func (f *fakePreviewPlatformRepo) InUseCounts(context.Context, *models.Platform) (int, int, error) {
+	return 0, 0, nil
+}
 
 func previewApp() *fiber.App {
 	app := fiber.New()
