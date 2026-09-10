@@ -52,8 +52,8 @@ type SendError struct {
 
 // IsDisabled reports whether err indicates the sender is unconfigured (no key).
 func IsDisabled(err error) bool {
-	var se *SendError
-	return errors.As(err, &se) && se.Disabled
+	se, ok := errors.AsType[*SendError](err)
+	return ok && se.Disabled
 }
 
 func (e *SendError) Error() string {
@@ -71,8 +71,7 @@ func IsTransient(err error) bool {
 	if err == nil {
 		return false
 	}
-	var se *SendError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*SendError](err); ok {
 		return se.Transient
 	}
 	return true

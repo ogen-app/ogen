@@ -173,8 +173,7 @@ func resolveZernioState(ctx context.Context, integ *zernio.Integration, secretSt
 				logging.AttrComponent, "zernio")
 			return zernio.StateDisabled
 		}
-		var apiErr *zernio.APIError
-		if errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
 			slog.WarnContext(ctx, "ping failed; staying degraded",
 				logging.AttrComponent, "zernio",
 				"status", apiErr.Status)

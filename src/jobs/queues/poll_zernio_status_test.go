@@ -132,8 +132,8 @@ func TestPollNonTerminalSnoozes(t *testing.T) {
 
 	// Non-terminal → reschedule via river.JobSnooze (not a failure, not a
 	// completion). The job is rescheduled without consuming a retry attempt.
-	var snooze *river.JobSnoozeError
-	if !errors.As(err, &snooze) {
+	snooze, ok := errors.AsType[*river.JobSnoozeError](err)
+	if !ok {
 		t.Fatalf("expected a river JobSnooze, got %v", err)
 	}
 	if snooze.Duration <= 0 {

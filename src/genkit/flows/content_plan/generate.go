@@ -519,8 +519,8 @@ func generatePostsStreaming(
 
 	text := strings.TrimSpace(resp.Text())
 	if strings.HasPrefix(text, "```") {
-		if i := strings.Index(text, "\n"); i >= 0 {
-			text = text[i+1:]
+		if _, after, found := strings.Cut(text, "\n"); found {
+			text = after
 		}
 		text = strings.TrimSuffix(strings.TrimSpace(text), "```")
 		text = strings.TrimSpace(text)

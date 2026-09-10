@@ -160,8 +160,7 @@ func (e *APIError) Error() string {
 
 // IsStatus reports whether err is an *APIError with the given status.
 func IsStatus(err error, status int) bool {
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*APIError](err); ok {
 		return apiErr.Status == status
 	}
 	return false

@@ -62,8 +62,8 @@ func mustOpenIntegrationStorage() (storage.Storage, *s3.Client, string) {
 	if _, err := raw.CreateBucket(tenantCtx(), &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),
 	}); err != nil {
-		var apiErr smithy.APIError
-		if !errors.As(err, &apiErr) || (apiErr.ErrorCode() != "BucketAlreadyOwnedByYou" && apiErr.ErrorCode() != "BucketAlreadyExists") {
+		apiErr, ok := errors.AsType[smithy.APIError](err)
+		if !ok || (apiErr.ErrorCode() != "BucketAlreadyOwnedByYou" && apiErr.ErrorCode() != "BucketAlreadyExists") {
 			panic(fmt.Sprintf("create bucket %s: %v", bucket, err))
 		}
 	}
@@ -95,8 +95,7 @@ func objectExists(ctx context.Context, raw *s3.Client, bucket, key string) bool 
 	if err == nil {
 		return true
 	}
-	var notFound *s3types.NotFound
-	if errors.As(err, &notFound) {
+	if _, ok := errors.AsType[*s3types.NotFound](err); ok {
 		return false
 	}
 	// Any other error is propagated as a panic so the test fails loudly

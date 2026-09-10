@@ -61,8 +61,8 @@ func gateService(accounts map[string][]models.SocialAccount) *Service {
 
 func reasonOf(t *testing.T, err error) string {
 	t.Helper()
-	var ae *AccountSelectionError
-	if !errors.As(err, &ae) {
+	ae, ok := errors.AsType[*AccountSelectionError](err)
+	if !ok {
 		t.Fatalf("want *AccountSelectionError, got %v", err)
 	}
 	return ae.Reason
@@ -80,8 +80,7 @@ func TestCheckAccountSelection(t *testing.T) {
 		if reasonOf(t, err) != "account_selection_required" {
 			t.Fatalf("reason: %v", err)
 		}
-		var ae *AccountSelectionError
-		errors.As(err, &ae)
+		ae, _ := errors.AsType[*AccountSelectionError](err)
 		if len(ae.Candidates) != 2 {
 			t.Fatalf("candidates: got %d want 2", len(ae.Candidates))
 		}

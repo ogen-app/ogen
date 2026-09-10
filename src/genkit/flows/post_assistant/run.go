@@ -28,8 +28,8 @@ import (
 // flow (post_assistant_messages, post_versions) points at posts(id) through a
 // *_post_id_fkey constraint, so a concurrent post deletion trips exactly these.
 func isPostRemovedFKViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) &&
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok &&
 		pgErr.Code == "23503" &&
 		strings.HasSuffix(pgErr.ConstraintName, "_post_id_fkey")
 }

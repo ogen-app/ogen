@@ -49,8 +49,7 @@ func seedTenant(t *testing.T, db *bun.DB, id, name, tierID string) {
 }
 
 func sqlState(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return pgErr.Code
 	}
 	return ""

@@ -138,8 +138,7 @@ func TestRunBatchesParallelAllFailedReturnsAIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when all batches fail")
 	}
-	var ai *AIError
-	if !errors.As(err, &ai) {
+	if _, ok := errors.AsType[*AIError](err); !ok {
 		t.Errorf("err = %T %v, want *AIError", err, err)
 	}
 	if posts != nil {

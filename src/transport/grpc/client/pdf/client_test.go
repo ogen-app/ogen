@@ -3,6 +3,7 @@ package pdf_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -33,7 +34,7 @@ type stubServer struct {
 func (s *stubServer) Render(stream grpc.ClientStreamingServer[pdfv1.RenderRequest, pdfv1.RenderResponse]) error {
 	for {
 		req, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -53,7 +54,7 @@ func (s *stubServer) Parse(stream grpc.ClientStreamingServer[pdfv1.ParseRequest,
 	s.gotMD, _ = metadata.FromIncomingContext(stream.Context())
 	for {
 		req, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -221,7 +222,7 @@ func TestDisabledClientReportsErrDisabled(t *testing.T) {
 	if c != nil {
 		t.Fatalf("expected a nil client when Addr is empty")
 	}
-	if _, err := c.Parse(context.Background(), bytes.NewReader(nil), pdf.Options{}); err != pdf.ErrDisabled {
+	if _, err := c.Parse(context.Background(), bytes.NewReader(nil), pdf.Options{}); !errors.Is(err, pdf.ErrDisabled) {
 		t.Fatalf("expected ErrDisabled, got %v", err)
 	}
 	if err := c.Close(); err != nil {

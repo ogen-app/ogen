@@ -119,7 +119,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 
 	targets, err := h.integ.Client.ListConnectTargets(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken)
 	if err != nil {
-		if apiErr := new(zernio.APIError); errors.As(err, &apiErr) {
+		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
 			slog.WarnContext(ctx, "connect list targets failed",
 				logging.AttrComponent, "zernio", "platform", sess.Platform, "status", apiErr.Status)
 			return h.redirectConnectError(c, sess.Platform, "upstream")
@@ -135,7 +135,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 	case len(targets) == 1:
 		if err := h.integ.Client.SelectConnectTarget(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken, targets[0].ID, userProfile); err != nil {
 			jobs.ZernioConnectSelectFailed.Add(1)
-			if apiErr := new(zernio.APIError); errors.As(err, &apiErr) {
+			if _, ok := errors.AsType[*zernio.APIError](err); ok {
 				return h.redirectConnectError(c, sess.Platform, "upstream")
 			}
 			return err
@@ -263,7 +263,7 @@ func (h *ZernioHandler) SelectPendingConnection(c *fiber.Ctx) error {
 	}
 	if err := h.integ.Client.SelectConnectTarget(c.Context(), sess.Platform, sess.ProfileID, secrets.TempToken, secrets.ConnectToken, req.TargetID, secrets.UserProfile); err != nil {
 		jobs.ZernioConnectSelectFailed.Add(1)
-		if apiErr := new(zernio.APIError); errors.As(err, &apiErr) {
+		if _, ok := errors.AsType[*zernio.APIError](err); ok {
 			return fiber.NewError(http.StatusBadGateway, "integration_degraded")
 		}
 		return err

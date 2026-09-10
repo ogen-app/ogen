@@ -196,8 +196,8 @@ func TestChecker_EnforceReturnsLimitError(t *testing.T) {
 	c, _ := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{1000, 0}}, usage.Defaults{})
 
 	err := c.Enforce(tenantCtx("tA"))
-	var lim *usage.LimitExceededError
-	if !errors.As(err, &lim) {
+	lim, ok := errors.AsType[*usage.LimitExceededError](err)
+	if !ok {
 		t.Fatalf("Enforce err = %v, want *LimitExceededError", err)
 	}
 	if lim.Period != "day" || lim.CapMicros != 1000 {

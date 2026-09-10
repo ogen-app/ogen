@@ -226,8 +226,7 @@ func (e *APIError) Error() string {
 // IsTransient reports whether err is a retryable Firecrawl error. Non-APIError
 // values are treated as terminal.
 func IsTransient(err error) bool {
-	var ae *APIError
-	if errors.As(err, &ae) {
+	if ae, ok := errors.AsType[*APIError](err); ok {
 		return ae.Transient
 	}
 	return false

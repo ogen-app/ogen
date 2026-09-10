@@ -94,8 +94,8 @@ func IsAddonRequired(err error) bool {
 	if IsStatus(err, http.StatusPaymentRequired) {
 		return true
 	}
-	var apiErr *APIError
-	return errors.As(err, &apiErr) && apiErr.Status == http.StatusForbidden && apiErr.RequiresAddon
+	apiErr, ok := errors.AsType[*APIError](err)
+	return ok && apiErr.Status == http.StatusForbidden && apiErr.RequiresAddon
 }
 
 // getAddonGated GETs an add-on-gated analytics endpoint, translating the

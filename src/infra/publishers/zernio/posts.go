@@ -174,8 +174,8 @@ var ErrDuplicateContent = errors.New("zernio: duplicate content within 24h dedup
 // the queue layer should NOT retry — 4xx (validation, auth, business
 // rejection) other than 429 (rate limit, transient).
 func IsTerminalAPIError(err error) bool {
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
+	apiErr, ok := errors.AsType[*APIError](err)
+	if !ok {
 		return false
 	}
 	if apiErr.Status == http.StatusTooManyRequests {
@@ -188,8 +188,8 @@ func IsTerminalAPIError(err error) bool {
 // layer should retry: 5xx, 429, or anything that isn't an APIError
 // (typically network/timeout).
 func IsTransientAPIError(err error) bool {
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
+	apiErr, ok := errors.AsType[*APIError](err)
+	if !ok {
 		return err != nil
 	}
 	return apiErr.Status >= 500 || apiErr.Status == http.StatusTooManyRequests
@@ -206,8 +206,7 @@ func (c *Client) Submit(ctx context.Context, req SubmitRequest) (*Job, error) {
 	var env PostEnvelope
 	err := c.do(ctx, http.MethodPost, "/posts", nil, req, &env)
 	if err != nil {
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
+		if apiErr, ok := errors.AsType[*APIError](err); ok && apiErr.Status == http.StatusConflict {
 			return nil, fmt.Errorf("%w: %s", ErrDuplicateContent, apiErr.Message)
 		}
 		return nil, err
@@ -246,8 +245,7 @@ func (c *Client) Cancel(ctx context.Context, jobID string) error {
 	if err == nil {
 		return nil
 	}
-	var apiErr *APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*APIError](err); ok {
 		switch apiErr.Status {
 		case http.StatusNotFound:
 			// Job is gone — either already published or never existed.
