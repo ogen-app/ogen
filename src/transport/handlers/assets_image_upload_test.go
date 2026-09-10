@@ -197,7 +197,8 @@ var _ = Describe("AssetsHandler image upload (CON-246)", Ordered, Serial, func()
 	})
 
 	It("mentions images in the unsupported-type message", func() {
-		results := postUpload([]struct{ Name, Body string }{{"notes.txt", "plain"}})
+		// .bin is genuinely unsupported (.txt now routes to document ingestion).
+		results := postUpload([]struct{ Name, Body string }{{"notes.bin", "plain"}})
 		Expect(results[0]["status"]).To(Equal("failed"))
 		Expect(results[0]["error"]).To(ContainSubstring("image"))
 	})
