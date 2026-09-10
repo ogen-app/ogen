@@ -164,6 +164,15 @@ var _ = Describe("PlatformsHandler", Ordered, func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(Equal(404))
 			})
+
+			It("returns 404 for a disabled platform (soft-disable hides it from tenants)", func() {
+				// Tk7nQ2xLpR9a (TikTok) is seeded enabled=false by the CON-292 migration.
+				req := httptest.NewRequest("GET", "/api/platforms/Tk7nQ2xLpR9a", nil)
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(404))
+			})
 		})
 	})
 
@@ -247,6 +256,15 @@ var _ = Describe("PlatformsHandler", Ordered, func() {
 
 			It("returns 404 for an unknown platform id", func() {
 				req := httptest.NewRequest("GET", "/api/platforms/nonexistent/post-type-rules", nil)
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(404))
+			})
+
+			It("returns 404 for a disabled platform", func() {
+				// Tk7nQ2xLpR9a (TikTok) is seeded enabled=false by the CON-292 migration.
+				req := httptest.NewRequest("GET", "/api/platforms/Tk7nQ2xLpR9a/post-type-rules", nil)
 				req.AddCookie(authCookie)
 				resp, err := app.Test(req)
 				Expect(err).NotTo(HaveOccurred())

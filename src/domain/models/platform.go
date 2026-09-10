@@ -246,7 +246,7 @@ type Platform struct {
 	// Enabled is the operator soft on/off switch (CON-292). A disabled platform
 	// drops from GET /api/platforms and blocks new connects, but already-scheduled
 	// posts still publish (the publish path resolves zernio_id regardless).
-	Enabled bool `bun:"enabled,notnull,default:true" json:"enabled"`
+	Enabled bool `bun:"enabled,notnull,default:false" json:"enabled"`
 	// ConnectSupported records whether Ogen can OAuth-redirect connect this
 	// platform. false documents the Bluesky-style app-password exclusion as data
 	// rather than code.

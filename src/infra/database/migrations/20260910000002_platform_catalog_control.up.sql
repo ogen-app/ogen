@@ -8,9 +8,13 @@
 -- and introduces platform_global_limits for the cross-platform safety ceilings
 -- that were Go constants. All additive; existing constraint jsonb is untouched.
 
--- 1. New catalog columns (additive; safe defaults keep existing rows valid).
+-- 1. New catalog columns (additive). enabled defaults to false so a platform is
+--    live only when explicitly enabled — the 6 seeded rows are flipped on in
+--    step 2; the net-new rows (step 5) stay disabled. A false default also
+--    sidesteps the bun "zero-value false coerces to the column DEFAULT on insert"
+--    gotcha, so an operator-created platform persists its requested enabled state.
 ALTER TABLE platforms ADD COLUMN zernio_id            TEXT    NOT NULL DEFAULT '';
-ALTER TABLE platforms ADD COLUMN enabled              BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE platforms ADD COLUMN enabled              BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE platforms ADD COLUMN connect_supported    BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE platforms ADD COLUMN supported_post_types JSONB   NOT NULL DEFAULT '[]';
 ALTER TABLE platforms ADD COLUMN sort_order           INT     NOT NULL DEFAULT 0;
@@ -19,22 +23,22 @@ ALTER TABLE platforms ADD COLUMN sort_order           INT     NOT NULL DEFAULT 0
 --    zernio_id replaces sqidToZernioID; supported_post_types replaces
 --    SupportedPlatform.SupportedPostTypes; sort_order follows the registry's
 --    display order so GET /api/platforms renders in the same order as today.
-UPDATE platforms SET zernio_id = 'twitter',   sort_order = 10,
+UPDATE platforms SET enabled = true, zernio_id = 'twitter',   sort_order = 10,
     supported_post_types = '["text-post","image-post","video","thread"]'
     WHERE id = '81mUCmc2xsKd';
-UPDATE platforms SET zernio_id = 'linkedin',  sort_order = 20,
+UPDATE platforms SET enabled = true, zernio_id = 'linkedin',  sort_order = 20,
     supported_post_types = '["text-post","image-post","carousel","video","article"]'
     WHERE id = 'AXqWG7U2qnpt';
-UPDATE platforms SET zernio_id = 'facebook',  sort_order = 30,
+UPDATE platforms SET enabled = true, zernio_id = 'facebook',  sort_order = 30,
     supported_post_types = '["text-post","image-post","video","reel","link-post"]'
     WHERE id = 'zBU1zqVICGfk';
-UPDATE platforms SET zernio_id = 'instagram', sort_order = 40,
+UPDATE platforms SET enabled = true, zernio_id = 'instagram', sort_order = 40,
     supported_post_types = '["image-post","carousel","reel","story"]'
     WHERE id = 'rzgpTkARLH0L';
-UPDATE platforms SET zernio_id = 'youtube',   sort_order = 50,
+UPDATE platforms SET enabled = true, zernio_id = 'youtube',   sort_order = 50,
     supported_post_types = '["video","short"]'
     WHERE id = '8S8bWQTG6qD';
-UPDATE platforms SET zernio_id = 'threads',   sort_order = 60,
+UPDATE platforms SET enabled = true, zernio_id = 'threads',   sort_order = 60,
     supported_post_types = '["text-post","image-post","carousel","video","thread"]'
     WHERE id = 'pQ4yxT3SuE57';
 

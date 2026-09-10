@@ -133,18 +133,14 @@ func (s *platformAdminService) CreatePlatform(ctx context.Context, req *platform
 	m.ID = id
 	m.CreatedAt = now
 	m.UpdatedAt = now
+	// enabled persists atomically in this single insert: the column defaults to
+	// false, so a zero-value (disabled) request lands disabled and a true request
+	// inserts true — no follow-up SetEnabled that could fail after a committed row.
 	if err := s.platformRepo.Create(ctx, &m); err != nil {
 		if pgCode(err) == pgUniqueViolation {
 			return nil, status.Error(codes.AlreadyExists, "a platform with that name or zernio_id already exists")
 		}
 		return nil, s.internal(ctx, "create platform", err)
-	}
-	// bun coerces a zero-value enabled=false back to the column DEFAULT true on
-	// INSERT, so an operator-requested disabled platform needs an explicit flip.
-	if !pb.GetEnabled() {
-		if _, err := s.platformRepo.SetEnabled(ctx, id, false); err != nil {
-			return nil, s.internal(ctx, "create platform", err)
-		}
 	}
 	if rerr := zernio.RefreshCatalog(ctx); rerr != nil {
 		slog.WarnContext(ctx, "platform catalog refresh after create failed", logging.AttrComponent, "grpcserver", logging.AttrError, rerr)
@@ -285,8 +281,12 @@ func (s *platformAdminService) UpdateGlobalLimits(ctx context.Context, req *plat
 	if err := s.limitsRepo.Update(ctx, m); err != nil {
 		return nil, s.internal(ctx, "update global limits", err)
 	}
+	// Unlike the catalog caches (whose values the publish gate re-reads), these
+	// ceilings are enforced straight off the in-process cache, so a failed
+	// refresh means the new limits aren't actually live — surface it rather than
+	// report success with a stale cache.
 	if rerr := domainplatforms.RefreshGlobalLimits(ctx); rerr != nil {
-		slog.WarnContext(ctx, "global limits refresh after update failed", logging.AttrComponent, "grpcserver", logging.AttrError, rerr)
+		return nil, s.internal(ctx, "update global limits", rerr)
 	}
 	platformAdminGlobalLimitsUpdated.Add(1)
 	slog.InfoContext(ctx, "platform global limits updated", logging.AttrComponent, "grpcserver")
@@ -362,8 +362,14 @@ func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGloba
 		}
 	}
 	if txt := pb.GetTextConstraints(); txt != nil {
+		if txt.GetMaxContentChars() < 0 || txt.GetMaxTitleChars() < 0 {
+			return status.Error(codes.InvalidArgument, "text char limits must be >= 0")
+		}
 		pts := pb.GetPostTypes()
-		for slug := range txt.GetPerPostType() {
+		for slug, limit := range txt.GetPerPostType() {
+			if limit < 0 {
+				return status.Errorf(codes.InvalidArgument, "text per_post_type override %q must be >= 0", slug)
+			}
 			if _, ok := pts[slug]; !ok {
 				return status.Errorf(codes.InvalidArgument, "text per_post_type override %q is not one of the platform's post_types", slug)
 			}

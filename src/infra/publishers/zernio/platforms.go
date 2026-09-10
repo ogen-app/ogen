@@ -200,6 +200,11 @@ func SupportedPlatforms() []SupportedPlatform {
 	c := activeCatalog.Load()
 	out := make([]SupportedPlatform, len(c.enabled))
 	copy(out, c.enabled)
+	// Give each returned entry its own slice so a caller mutating
+	// SupportedPostTypes can't corrupt the shared snapshot.
+	for i := range out {
+		out[i].SupportedPostTypes = append([]string(nil), out[i].SupportedPostTypes...)
+	}
 	return out
 }
 
@@ -211,6 +216,7 @@ func LookupSupportedPlatform(zernioID string) *SupportedPlatform {
 	c := activeCatalog.Load()
 	if sp, ok := c.enabledByZernio[zernioID]; ok {
 		cp := *sp
+		cp.SupportedPostTypes = append([]string(nil), sp.SupportedPostTypes...)
 		return &cp
 	}
 	return nil
@@ -224,6 +230,7 @@ func LookupSupportedBySqid(sqid string) *SupportedPlatform {
 	c := activeCatalog.Load()
 	if sp, ok := c.bySqid[sqid]; ok {
 		cp := *sp
+		cp.SupportedPostTypes = append([]string(nil), sp.SupportedPostTypes...)
 		return &cp
 	}
 	return nil

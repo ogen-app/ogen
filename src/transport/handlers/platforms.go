@@ -131,6 +131,12 @@ func (h *PlatformsHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return notFound(err, "platform not found")
 	}
+	// Soft-disable (CON-292): a disabled platform is invisible to tenants, the
+	// same as a missing one — the composer lists enabled platforms only, and the
+	// detail routes match so a disabled id can't be probed.
+	if !platform.Enabled {
+		return fiber.NewError(fiber.StatusNotFound, "platform not found")
+	}
 	views, err := h.collectPublisherViews(c.Context(), []models.Platform{*platform})
 	if err != nil {
 		return err
@@ -172,6 +178,10 @@ func (h *PlatformsHandler) PostTypeRules(c *fiber.Ctx) error {
 	platform, err := h.repo.GetByID(c.Context(), c.Params("id"))
 	if err != nil {
 		return notFound(err, "platform not found")
+	}
+	// Soft-disable (CON-292): hide disabled platforms from tenants, as Get does.
+	if !platform.Enabled {
+		return fiber.NewError(fiber.StatusNotFound, "platform not found")
 	}
 	return c.JSON(platforms.ResolvePostTypeRules(platform))
 }

@@ -278,13 +278,18 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "file is required")
 	}
-	// Reject anything larger than the largest per-kind cap before we
-	// even open the file. Per-kind caps are enforced again inside the
-	// probe.
-	if fh.Size > maxPDFUploadBytes() {
+	// Reject anything larger than the largest per-kind cap before we even open
+	// the file — this handler accepts both images and PDFs, and the image cap can
+	// exceed the PDF cap (both are operator-configurable), so gate on the larger
+	// of the two. The precise per-kind cap is enforced again inside the probe.
+	preSniffCap := maxPDFUploadBytes()
+	if img := maxImageUploadBytes(); img > preSniffCap {
+		preSniffCap = img
+	}
+	if fh.Size > preSniffCap {
 		return fiber.NewError(
 			fiber.StatusBadRequest,
-			fmt.Sprintf("file exceeds upload limit of %d MB", maxPDFUploadBytes()>>20),
+			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20),
 		)
 	}
 
