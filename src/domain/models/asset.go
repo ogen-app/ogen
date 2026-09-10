@@ -29,6 +29,11 @@ const (
 	// .epub/.csv/.tsv/.html/.xhtml/.eml/.rtf/.txt/.log. The specific format is
 	// recorded in asset_files.mime_type; assets.type stays a coarse enum.
 	AssetTypeDocument = "DOC"
+	// AssetTypeAudio marks assets imported from an audio upload transcribed by
+	// audio-service (CON-282): mp3/wav/aac-m4a/ogg-opus/flac/webm/aiff. The
+	// specific format is recorded in asset_files.mime_type; the searchable
+	// content is the assembled transcript, chunked with time-range anchors.
+	AssetTypeAudio = "AUDIO"
 )
 
 type Asset struct {

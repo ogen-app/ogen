@@ -190,6 +190,30 @@ services:
         expose:
             - "50051"
 
+    # Audio transcription microservice (CON-282), mirrors video-service. Transcodes
+    # + transcribes content-bank audio (mp3/wav/m4a/aac/ogg/opus/flac/webm/aiff)
+    # into time-anchored transcript chunks. Stateless compute (ffmpeg + Gemini
+    # multimodal); ogen owns the resumable state machine on a dedicated `audio`
+    # queue. Built and published from the separate ogen-app/audio-service repo. The
+    # API reaches it over the private network ONLY — no host `ports:` — at
+    # audio-service:50051 (AUDIO_SERVICE_ADDR in .env). Shares GEMINI_API_KEY with
+    # the embedder (no separate STT credential).
+    #
+    # Gated behind the `audio` profile until that image is published, so the
+    # default `docker compose up` keeps working (audio uploads fail fast with a
+    # clear message while disabled). Once the image exists, set
+    # AUDIO_SERVICE_ADDR=audio-service:50051 in .env and enable with:
+    #   docker compose --profile audio up
+    audio-service:
+        image: alephbetai/audio-service:latest
+        platform: linux/amd64
+        profiles: ["audio"]
+        environment:
+            GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+            TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-gemini-2.5-flash}
+        expose:
+            - "50051"
+
     # Harbor (../harbor) — Ogen's operations dashboard. Brought up ALONGSIDE
     # this stack so the two link over gRPC:
     #   docker compose --profile harbor up

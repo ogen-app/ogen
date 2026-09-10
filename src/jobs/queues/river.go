@@ -58,6 +58,12 @@ type Deps struct {
 	// DOCUMENTS_SERVICE_ADDR) makes the job a no-op.
 	Document DocumentDeps
 
+	// CON-282: the process_audio worker's dependencies (audio-service client,
+	// embedder, storage, extraction/segment/utterance repos, cost gate). A nil
+	// Client (no AUDIO_SERVICE_ADDR) makes the job a no-op. Runs on the dedicated
+	// `audio` queue.
+	Audio AudioDeps
+
 	// CON-222: the process_url worker's dependencies (Firecrawl scrape client,
 	// embedder, storage, asset/image repos, eventhub). A nil Scraper (no
 	// firecrawl_api_key) makes the job a no-op.
@@ -437,6 +443,30 @@ func (e *Enqueuer) EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, ass
 		OriginalName: originalName,
 		MimeType:     mimeType,
 		StorageKey:   storageKey,
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueProcessAudioTx enqueues an audio-ingestion task inside the given
+// transaction, so it commits atomically with the asset insert/reset (CON-282):
+// a committed upload always has a job, a rolled-back one never does. The worker
+// hands audio-service presigned URLs (storageKey is the tenant-relative object
+// path), so the bytes are not in the args. runKey makes the run idempotent; an
+// empty pinnedModel uses the configured TRANSCRIBE_MODEL. The task's InsertOpts
+// routes it onto the dedicated `audio` queue. Takes primitives so the handler
+// depends on a narrow interface, not this package.
+func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, ProcessAudioTask{
+		AssetID:      assetID,
+		TenantID:     tenantID,
+		OriginalName: originalName,
+		MimeType:     mimeType,
+		StorageKey:   storageKey,
+		RunKey:       runKey,
+		PinnedModel:  pinnedModel,
 	}, insertOptsWithRequestID(ctx, nil))
 	return err
 }

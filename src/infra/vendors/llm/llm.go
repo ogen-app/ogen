@@ -23,10 +23,11 @@ const (
 
 // priceVersion tags the rate set below so historical cost is never recomputed
 // from edited prices (CON-86 FR3). Bump on any rate change. Rates verified
-// 2026-06-30 against platform.claude.com (Sonnet 4.5 $3/$15, Haiku 4.5 $1/$5;
+// 2026-09-11 against platform.claude.com (Sonnet 4.5 $3/$15, Haiku 4.5 $1/$5;
 // cache-read 0.1×, cache-write-5m 1.25×) and ai.google.dev (Gemini Embedding
-// $0.15/1M input).
-const priceVersion = "2026-06-30"
+// $0.15/1M input; Gemini 2.5 Flash: audio input $1.00/1M, output $2.50/1M —
+// transcription input is audio, so KindInput carries the audio rate, CON-282).
+const priceVersion = "2026-09-11"
 
 func init() {
 	vendors.Register(vendors.Descriptor{
@@ -59,11 +60,21 @@ func init() {
 		Family:    vendors.FamilyModel,
 		SecretKey: "gemini_api_key", // must match secrets.NameGeminiAPIKey (CON-104)
 		Metered:   true,
-		Meter:     embedMeter{},
+		Meter:     geminiMeter{},
 		Prices: vendors.PriceTable{
 			Version: priceVersion,
 			Models: map[string]vendors.Rates{
 				"gemini-embedding-2": {vendors.KindEmbedInput: 150_000},
+				// CON-282: audio transcription reuses the gemini vendor with a new
+				// model id + input/output token rates (no new vendor). The model id
+				// is config (TRANSCRIBE_MODEL); keep this key in sync so runs are
+				// priced rather than counted as unknown-model (cost stays 0). Input
+				// is billed at the AUDIO rate ($1.00/1M) — a transcription request's
+				// prompt tokens are almost entirely the segment audio.
+				"gemini-2.5-flash": {
+					vendors.KindInput:  1_000_000,
+					vendors.KindOutput: 2_500_000,
+				},
 			},
 		},
 	})
@@ -102,14 +113,43 @@ type EmbedUsage struct {
 	Tokens int64
 }
 
-type embedMeter struct{}
+// TranscribeUsage is what an audio-transcription call site hands to the Gemini
+// meter (CON-282): audio-service returns Gemini's own input/output token counts
+// per segment, which ogen sums and prices via the gemini vendor's input/output
+// rates — the same vendor the embedder uses, no new vendor.
+type TranscribeUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+}
 
-func (embedMeter) Extract(resp any) (string, vendors.Usage, bool) {
-	e, ok := resp.(EmbedUsage)
-	if !ok || e.Tokens <= 0 {
+// geminiMeter is the single meter registered for the gemini vendor. It handles
+// both operations the vendor bills: embeddings (EmbedUsage) and audio
+// transcription (TranscribeUsage). RecordResp dispatches on the response type,
+// so a call site only chooses which usage struct to hand in.
+type geminiMeter struct{}
+
+func (geminiMeter) Extract(resp any) (string, vendors.Usage, bool) {
+	switch v := resp.(type) {
+	case EmbedUsage:
+		if v.Tokens <= 0 {
+			return "", nil, false
+		}
+		return "embed", vendors.Usage{vendors.KindEmbedInput: v.Tokens}, true
+	case TranscribeUsage:
+		u := vendors.Usage{}
+		if v.InputTokens > 0 {
+			u[vendors.KindInput] = v.InputTokens
+		}
+		if v.OutputTokens > 0 {
+			u[vendors.KindOutput] = v.OutputTokens
+		}
+		if len(u) == 0 {
+			return "", nil, false
+		}
+		return "transcribe", u, true
+	default:
 		return "", nil, false
 	}
-	return "embed", vendors.Usage{vendors.KindEmbedInput: e.Tokens}, true
 }
 
 func addToken(u vendors.Usage, k vendors.Kind, n int) {
