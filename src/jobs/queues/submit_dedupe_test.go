@@ -1,7 +1,6 @@
 package queues_test
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -42,10 +41,10 @@ func TestSubmitDedupeAdoptsPendingJob(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.PublisherPostID != "z-adopt" {
 		t.Errorf("pending match should be adopted: publisher_post_id = %q want z-adopt", got.PublisherPostID)
 	}
@@ -74,10 +73,10 @@ func TestSubmitDedupeTerminalMatchFailsWithCause(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should swallow terminal err: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Fatalf("status: got %q want failed", got.Status)
 	}
@@ -110,10 +109,10 @@ func TestSubmitDedupeNoMatchFailsWithCause(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process should swallow terminal err: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusFailed {
 		t.Fatalf("status: got %q want failed", got.Status)
 	}

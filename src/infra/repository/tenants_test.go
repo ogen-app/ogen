@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -13,7 +12,7 @@ import (
 func TestTenantRepositoryCRUD(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewTenantRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tn := &models.Tenant{ID: "tn-1", Name: "Acme", Slug: "acme", TierID: models.DefaultTierID}
 	if err := repo.Create(ctx, tn); err != nil {

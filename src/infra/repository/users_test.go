@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -24,7 +23,7 @@ func seedUser(t *testing.T, db *bun.DB, id, tenantID, email string) {
 		ID: id, AccountID: id, TenantID: tenantID, Name: "User " + id, Email: email,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
-	if _, err := db.NewInsert().Model(u).Exec(context.Background()); err != nil {
+	if _, err := db.NewInsert().Model(u).Exec(t.Context()); err != nil {
 		t.Fatalf("seed user %s: %v", id, err)
 	}
 }
@@ -37,7 +36,7 @@ func TestUserRepositoryTenantIsolation(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewUserRepository(db)
 
-	ctxA := tenantctx.With(context.Background(), "ta")
+	ctxA := tenantctx.With(t.Context(), "ta")
 
 	seedUser(t, db, "u-a", "ta", "a@example.com")
 	seedUser(t, db, "u-b", "tb", "b@example.com")
@@ -61,7 +60,7 @@ func TestUserRepositoryTenantIsolation(t *testing.T) {
 
 	// A non-system context with no tenant must fail closed rather than return
 	// every tenant's users.
-	if _, err := repo.List(context.Background()); !errors.Is(err, tenantctx.ErrNoTenant) {
+	if _, err := repo.List(t.Context()); !errors.Is(err, tenantctx.ErrNoTenant) {
 		t.Fatalf("List without a tenant must fail closed, got %v", err)
 	}
 }
@@ -73,7 +72,7 @@ func TestUserRepositoryTenantIsolation(t *testing.T) {
 func TestUserRepositoryGetByAccountIDTieBreak(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewUserRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// GetByAccountID joins tenants and filters deleted_at, so the memberships need
 	// real, live tenants rows to resolve to.
@@ -112,7 +111,7 @@ func TestUserRepositoryGetByAccountIDTieBreak(t *testing.T) {
 func TestUserRepositoryMembershipStatusGate(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewUserRepository(db)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	seedTenant := func(id, status string) {

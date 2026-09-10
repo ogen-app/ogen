@@ -33,7 +33,7 @@ func postsPublishedURLColumnCount(ctx context.Context, t *testing.T) int {
 // backfill while bun recorded the migration as applied — leaving the column
 // permanently missing. The chain must always end with the column present.
 func TestPublishedURLColumnPresentAfterMigrate(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	if got := postsPublishedURLColumnCount(ctx, t); got != 1 {
 		t.Fatalf("posts.published_url column count after migrate = %d, want 1", got)
 	}
@@ -45,7 +45,7 @@ func TestPublishedURLColumnPresentAfterMigrate(t *testing.T) {
 // bun's real runner. Running with no posts rows also proves the DO-block
 // backfill is a safe no-op on an empty table.
 func TestPublishedURLFixupRepairsMissingColumn(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	db := pgtest.MustDB()
 
 	if _, err := db.ExecContext(ctx, "ALTER TABLE posts DROP COLUMN published_url"); err != nil {

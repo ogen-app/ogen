@@ -207,7 +207,7 @@ func TestSendEmailHappyPathTransactional(t *testing.T) {
 	logs := &fakeEmailLogRepo{}
 	p := newProcessor(sender, newFakeSuppRepo(), logs, "<p>Hi [[ .Name ]] at [[ .WorkspaceName ]]</p>")
 
-	if err := p.Process(context.Background(), task("welcome", models.EmailKindTransactional)); err != nil {
+	if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(sender.sent) != 1 {
@@ -225,7 +225,7 @@ func TestSendEmailDisabledWhenNoSender(t *testing.T) {
 	logs := &fakeEmailLogRepo{}
 	p := newProcessor(nil, newFakeSuppRepo(), logs, "<p>x</p>")
 
-	if err := p.Process(context.Background(), task("welcome", models.EmailKindTransactional)); err != nil {
+	if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(logs.rows) != 1 || logs.rows[0].Status != models.EmailLogSkippedDisabled {
@@ -240,7 +240,7 @@ func TestSendEmailMarketingSuppressed(t *testing.T) {
 	logs := &fakeEmailLogRepo{}
 	p := newProcessor(sender, supp, logs, "<p>x [[ .UnsubscribeURL ]]</p>")
 
-	if err := p.Process(context.Background(), task("drip_day2", models.EmailKindMarketing)); err != nil {
+	if err := p.Process(t.Context(), task("drip_day2", models.EmailKindMarketing)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(sender.sent) != 0 {
@@ -257,7 +257,7 @@ func TestSendEmailTransactionalNotBlockedByMarketingSuppression(t *testing.T) {
 	supp.add("ann@example.com", models.EmailSuppressionScopeMarketing)
 	p := newProcessor(sender, supp, &fakeEmailLogRepo{}, "<p>x</p>")
 
-	if err := p.Process(context.Background(), task("welcome", models.EmailKindTransactional)); err != nil {
+	if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(sender.sent) != 1 {
@@ -272,7 +272,7 @@ func TestSendEmailAllScopeBlocksTransactional(t *testing.T) {
 	logs := &fakeEmailLogRepo{}
 	p := newProcessor(sender, supp, logs, "<p>x</p>")
 
-	if err := p.Process(context.Background(), task("welcome", models.EmailKindTransactional)); err != nil {
+	if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(sender.sent) != 0 {
@@ -287,7 +287,7 @@ func TestSendEmailTransactionalNoUnsubscribeHeader(t *testing.T) {
 	sender := &fakeSender{id: "t"}
 	p := newProcessor(sender, newFakeSuppRepo(), &fakeEmailLogRepo{}, "<p>hi [[ .Name ]]</p>")
 
-	if err := p.Process(context.Background(), task("welcome", models.EmailKindTransactional)); err != nil {
+	if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(sender.sent) != 1 {
@@ -305,10 +305,10 @@ func recordedFor(t *testing.T, p *SendEmailProcessor, tk SendEmailTask) []*model
 	w := &fakeActivityWriter{}
 	rec := activity.NewRecorder(w, testActivityMetrics(), activity.Config{FlushEvery: time.Millisecond})
 	p.Deps.ActivityRecorder = rec
-	if err := p.Process(context.Background(), tk); err != nil {
+	if err := p.Process(t.Context(), tk); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := rec.Close(ctx); err != nil { // drain
 		t.Fatalf("close recorder: %v", err)
@@ -387,7 +387,7 @@ func TestSendEmailMarketingBuildsUnsubscribe(t *testing.T) {
 	sender := &fakeSender{id: "m"}
 	p := newProcessor(sender, newFakeSuppRepo(), &fakeEmailLogRepo{}, "<p>hi [[ .UnsubscribeURL ]]</p>")
 
-	if err := p.Process(context.Background(), task("drip_day2", models.EmailKindMarketing)); err != nil {
+	if err := p.Process(t.Context(), task("drip_day2", models.EmailKindMarketing)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(sender.sent) != 1 {

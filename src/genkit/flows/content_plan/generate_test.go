@@ -63,7 +63,7 @@ func TestPersistOne_DraftThesisNote(t *testing.T) {
 	campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
 	dp := DraftPost{Title: "T", Body: "- point 1\n- point 2", PlatformID: "linkedin", ContentType: "article"}
 
-	id, err := persistOne(context.Background(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, noteRepo, nil)
+	id, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, noteRepo, nil)
 	if err != nil {
 		t.Fatalf("persistOne: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestPersistOne_EmptyThesisNoNote(t *testing.T) {
 	campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
 	dp := DraftPost{Title: "T", Body: "   ", PlatformID: "linkedin", ContentType: "article"}
 
-	if _, err := persistOne(context.Background(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, noteRepo, nil); err != nil {
+	if _, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, noteRepo, nil); err != nil {
 		t.Fatalf("persistOne: %v", err)
 	}
 	if postRepo.created == nil {
@@ -133,7 +133,7 @@ func TestPersistOne_ComposesScheduledAt(t *testing.T) {
 	}
 	dp := DraftPost{Title: "T", Body: "x", PlatformID: "linkedin", ContentType: "article", PublishDate: "2026-08-12"}
 
-	if _, err := persistOne(context.Background(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, nil, nil); err != nil {
+	if _, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, nil, nil); err != nil {
 		t.Fatalf("persistOne: %v", err)
 	}
 	want := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
@@ -151,7 +151,7 @@ func TestPersistOne_NilNoteRepo(t *testing.T) {
 	campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
 	dp := DraftPost{Title: "T", Body: "- point 1", PlatformID: "linkedin", ContentType: "article"}
 
-	if _, err := persistOne(context.Background(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, nil, nil); err != nil {
+	if _, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, nil, nil); err != nil {
 		t.Fatalf("persistOne: %v", err)
 	}
 	if postRepo.created == nil {
@@ -188,7 +188,7 @@ func TestPersistOne_SnapsWithinWindow(t *testing.T) {
 	// the date is kept rather than snapped forward to date+1. With the full
 	// campaign window it would snap to 2026-08-13.
 	win := date
-	if _, err := persistOne(context.Background(), &dp, campaign, &win, &win, postRepo, nil, nil); err != nil {
+	if _, err := persistOne(t.Context(), &dp, campaign, &win, &win, postRepo, nil, nil); err != nil {
 		t.Fatalf("persistOne: %v", err)
 	}
 	want := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)

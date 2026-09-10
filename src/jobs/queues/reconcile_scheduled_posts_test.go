@@ -49,7 +49,7 @@ func TestReconcileForcesStuckPostsToFailedWithDistinctReason(t *testing.T) {
 		LogRepo: logRepo,
 		Grace:   time.Hour,
 	}
-	if err := proc.Process(context.Background(), queues.ReconcileScheduledPostsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.ReconcileScheduledPostsTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	for _, id := range []string{"p1", "p2"} {
@@ -82,7 +82,7 @@ func TestReconcileLeavesNonStuckPostsAlone(t *testing.T) {
 		LogRepo: logRepo,
 		Grace:   time.Hour,
 	}
-	if err := proc.Process(context.Background(), queues.ReconcileScheduledPostsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.ReconcileScheduledPostsTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(repo.calls) != 0 {
@@ -107,7 +107,7 @@ func TestReconciliationReasonContainsSentinelAndElapsed(t *testing.T) {
 		LogRepo: newFakeLogRepo(),
 		Grace:   time.Hour,
 	}
-	if err := proc.Process(context.Background(), queues.ReconcileScheduledPostsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.ReconcileScheduledPostsTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	reason := repo.reasons["x"]

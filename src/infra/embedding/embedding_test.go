@@ -41,7 +41,7 @@ func TestReloadableEmbedderUnavailable(t *testing.T) {
 	if got := e.Name(); got != "gemini-embedding-2" {
 		t.Errorf("Name() = %q; want model fallback", got)
 	}
-	if _, err := e.Embed(context.Background(), &ai.EmbedRequest{}); !errors.Is(err, ErrEmbeddingUnavailable) {
+	if _, err := e.Embed(t.Context(), &ai.EmbedRequest{}); !errors.Is(err, ErrEmbeddingUnavailable) {
 		t.Errorf("Embed err = %v; want ErrEmbeddingUnavailable", err)
 	}
 }
@@ -61,7 +61,7 @@ func TestReloadableEmbedderSwap(t *testing.T) {
 	if got := e.Name(); got != fake.name {
 		t.Errorf("Name() = %q; want delegated %q", got, fake.name)
 	}
-	if _, err := e.Embed(context.Background(), &ai.EmbedRequest{}); err != nil {
+	if _, err := e.Embed(t.Context(), &ai.EmbedRequest{}); err != nil {
 		t.Errorf("Embed after swap: %v", err)
 	}
 	if fake.calls != 1 {
@@ -73,7 +73,7 @@ func TestReloadableEmbedderSwap(t *testing.T) {
 	if e.Available() {
 		t.Error("Available() = true after swap(nil); want false")
 	}
-	if _, err := e.Embed(context.Background(), &ai.EmbedRequest{}); !errors.Is(err, ErrEmbeddingUnavailable) {
+	if _, err := e.Embed(t.Context(), &ai.EmbedRequest{}); !errors.Is(err, ErrEmbeddingUnavailable) {
 		t.Errorf("Embed after swap(nil) err = %v; want ErrEmbeddingUnavailable", err)
 	}
 }

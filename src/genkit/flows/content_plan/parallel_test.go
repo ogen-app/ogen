@@ -55,7 +55,7 @@ func TestRunBatchesParallelSuccessAggregatesInOrder(t *testing.T) {
 		emitMu.Unlock()
 	}
 
-	posts, warnings, err := runBatchesParallel(context.Background(), batches, 5, gen, emit)
+	posts, warnings, err := runBatchesParallel(t.Context(), batches, 5, gen, emit)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestRunBatchesParallelPartialSuccess(t *testing.T) {
 		return out, nil
 	}
 
-	posts, warnings, err := runBatchesParallel(context.Background(), batches, 5, gen, nil)
+	posts, warnings, err := runBatchesParallel(t.Context(), batches, 5, gen, nil)
 	if err != nil {
 		t.Fatalf("partial-success run should not error: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestRunBatchesParallelAllFailedReturnsAIError(t *testing.T) {
 		return nil, errors.New("model unavailable")
 	}
 
-	posts, warnings, err := runBatchesParallel(context.Background(), batches, 5, gen, nil)
+	posts, warnings, err := runBatchesParallel(t.Context(), batches, 5, gen, nil)
 	if err == nil {
 		t.Fatal("expected error when all batches fail")
 	}
@@ -173,7 +173,7 @@ func TestRunBatchesParallelMaxParallelCapHonoured(t *testing.T) {
 		return out, nil
 	}
 
-	_, _, err := runBatchesParallel(context.Background(), batches, cap, gen, nil)
+	_, _, err := runBatchesParallel(t.Context(), batches, cap, gen, nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRunBatchesParallelEmitIsSerialised(t *testing.T) {
 		inside.Add(-1)
 	}
 
-	if _, _, err := runBatchesParallel(context.Background(), batches, 8, gen, emit); err != nil {
+	if _, _, err := runBatchesParallel(t.Context(), batches, 8, gen, emit); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 }

@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -38,7 +37,7 @@ func openMigratedDB(t *testing.T) *bun.DB {
 	// triggers that session_replication_role=replica would skip — which corrupts
 	// the drop (a stale hypertable catalog row survives). So migrate before
 	// flipping to replica for the FK-free seeding below.
-	if err := database.MigrateAnalytics(context.Background(), db); err != nil {
+	if err := database.MigrateAnalytics(t.Context(), db); err != nil {
 		t.Fatalf("migrate analytics: %v", err)
 	}
 	db.DB.SetMaxOpenConns(1)
@@ -278,7 +277,7 @@ func TestListWithPublisherPostID(t *testing.T) {
 		MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
 		Status: models.PostStatusPublished, Publisher: models.PublisherZernio,
 		PublisherPostID: "z-5", CTAType: models.CTATypeNone, CreatedBy: "user-1",
-	}).Exec(tenantctx.With(context.Background(), "t-sus")); err != nil {
+	}).Exec(tenantctx.With(t.Context(), "t-sus")); err != nil {
 		t.Fatalf("seed suspended-tenant post: %v", err)
 	}
 

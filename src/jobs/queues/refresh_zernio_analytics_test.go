@@ -194,7 +194,7 @@ func TestRefreshMatchesAndUpsertsOnlyKnownPosts(t *testing.T) {
 	seedProfile(settings, "t1", "prof-1")
 
 	proc := newRefreshProcessor(stub, postRepo, analyticsRepo, settings)
-	if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestRefreshDedupSuppressesUnchangedHistory(t *testing.T) {
 	proc.Decay = queues.AnalyticsDecay{FreshEvery: time.Nanosecond, WarmEvery: time.Nanosecond, ColdEvery: time.Nanosecond}
 
 	for i := range 2 {
-		if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+		if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 			t.Fatalf("process tick %d: %v", i, err)
 		}
 	}
@@ -293,7 +293,7 @@ func TestRefreshDecaySkipsRecentlyChecked(t *testing.T) {
 	// is within the hour, so the post is due-skipped.
 	proc := newRefreshProcessor(stub, postRepo, analyticsRepo, settings)
 	for i := range 2 {
-		if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+		if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 			t.Fatalf("process tick %d: %v", i, err)
 		}
 	}
@@ -335,7 +335,7 @@ func TestRefreshPagesThroughAllPages(t *testing.T) {
 	seedProfile(settings, "t1", "prof-1")
 
 	proc := newRefreshProcessor(stub, postRepo, analyticsRepo, settings)
-	if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(analyticsRepo.upserted) != 2 {
@@ -384,7 +384,7 @@ func TestRefreshSweepsPerProfile(t *testing.T) {
 	seedProfile(settings, "tenant-B", "prof-B")
 
 	proc := newRefreshProcessor(stub, postRepo, analyticsRepo, settings)
-	if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
@@ -427,7 +427,7 @@ func TestRefreshSkipsTenantWithoutProfile(t *testing.T) {
 	settings := newFakeSettings() // no profile seeded for t1
 
 	proc := newRefreshProcessor(stub, postRepo, analyticsRepo, settings)
-	if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if called.Load() {
@@ -460,7 +460,7 @@ func TestRefreshRateLimitRecordedChainContinues(t *testing.T) {
 	// and self-reschedules so the recurring chain can't die or fan out (the
 	// reschedule itself is a no-op here: no River client in ctx). The
 	// failure is still recorded for operators, per tenant.
-	err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{})
+	err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{})
 	if err != nil {
 		t.Fatalf("Process should return nil so the chain self-reschedules, got %v", err)
 	}
@@ -483,7 +483,7 @@ func TestRefreshLegacy402IsTerminalNoRetry(t *testing.T) {
 	proc := newRefreshProcessor(stub, postRepo, newFakeAnalyticsRepo(), settings)
 
 	// Legacy 402 is handled (logged + recorded), not retried → Process nil.
-	if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 		t.Fatalf("legacy 402 should be handled terminally, got %v", err)
 	}
 }
@@ -501,7 +501,7 @@ func TestRefresh401IsTerminalNoRetry(t *testing.T) {
 	seedProfile(settings, "t1", "prof-1")
 	proc := newRefreshProcessor(stub, postRepo, newFakeAnalyticsRepo(), settings)
 
-	if err := proc.Process(context.Background(), queues.RefreshZernioAnalyticsTask{}); err != nil {
+	if err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{}); err != nil {
 		t.Fatalf("401 should be handled terminally (account worker owns auth), got %v", err)
 	}
 }

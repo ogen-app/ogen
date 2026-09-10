@@ -107,7 +107,7 @@ func TestSubmitUploadsMediaWithAltText(t *testing.T) {
 	post := seedScheduledPost(postRepo)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
@@ -186,7 +186,7 @@ func TestSubmitThreadBuildsThreadItems(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
@@ -267,7 +267,7 @@ func TestSubmitThreadNilIndexMediaOnRoot(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 

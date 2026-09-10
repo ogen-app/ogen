@@ -25,7 +25,7 @@ func TestCreate_ValidDefaultsOriginAndTrims(t *testing.T) {
 	repo := &stubRepo{}
 	svc := New(repo)
 
-	note, err := svc.Create(context.Background(), CreateInput{
+	note, err := svc.Create(t.Context(), CreateInput{
 		PostID:    "post1",
 		Type:      models.PostNoteTypeNote,
 		Title:     "  Title  ",
@@ -56,10 +56,10 @@ func TestCreate_ValidDefaultsOriginAndTrims(t *testing.T) {
 func TestCreate_Validation(t *testing.T) {
 	svc := New(&stubRepo{})
 
-	if _, err := svc.Create(context.Background(), CreateInput{PostID: "p", Type: "bogus", Body: "x"}); !errors.Is(err, ErrInvalidType) {
+	if _, err := svc.Create(t.Context(), CreateInput{PostID: "p", Type: "bogus", Body: "x"}); !errors.Is(err, ErrInvalidType) {
 		t.Errorf("invalid type: got %v, want ErrInvalidType", err)
 	}
-	if _, err := svc.Create(context.Background(), CreateInput{PostID: "p", Type: models.PostNoteTypeNote, Body: "   "}); !errors.Is(err, ErrEmptyBody) {
+	if _, err := svc.Create(t.Context(), CreateInput{PostID: "p", Type: models.PostNoteTypeNote, Body: "   "}); !errors.Is(err, ErrEmptyBody) {
 		t.Errorf("empty body: got %v, want ErrEmptyBody", err)
 	}
 
@@ -79,7 +79,7 @@ func TestUpdate_AppliesPatchAndValidates(t *testing.T) {
 	existing := &models.PostNote{ID: "n1", PostID: "p1", Type: models.PostNoteTypeNote, Body: "old"}
 	newBody := "new body"
 	newType := models.PostNoteTypeImagePrompt
-	updated, err := svc.Update(context.Background(), existing, UpdateInput{Body: &newBody, Type: &newType})
+	updated, err := svc.Update(t.Context(), existing, UpdateInput{Body: &newBody, Type: &newType})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestUpdate_AppliesPatchAndValidates(t *testing.T) {
 
 	// Patching to an empty body is rejected.
 	empty := "   "
-	if _, err := svc.Update(context.Background(), existing, UpdateInput{Body: &empty}); !errors.Is(err, ErrEmptyBody) {
+	if _, err := svc.Update(t.Context(), existing, UpdateInput{Body: &empty}); !errors.Is(err, ErrEmptyBody) {
 		t.Errorf("empty body patch: got %v, want ErrEmptyBody", err)
 	}
 }

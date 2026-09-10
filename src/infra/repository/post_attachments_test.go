@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -46,7 +45,7 @@ func TestCreateAtNextPositionRequiresParentPost(t *testing.T) {
 	// fails closed (CON-97) rather than inserting a cross-tenant attachment.
 	// This is the case the orphan probe above can't reach — it proves the
 	// tenant_id half of the lock predicate, not just post_id existence.
-	otherCtx := tenantctx.With(context.Background(), "tenant-2")
+	otherCtx := tenantctx.With(t.Context(), "tenant-2")
 	crossTenant := &models.PostAttachment{
 		ID: "att-3", PostID: "post-x", MimeType: "image/png",
 		SizeBytes: 1, ChecksumSHA256: "c", S3Key: "k3", CreatedBy: "user-1",

@@ -64,15 +64,15 @@ func TestZernioPerTenantSyncIsolation(t *testing.T) {
 	// Two tenants, each with its own profile. 'default' exists from the
 	// migration; create the second (tenants is not auto-scoped).
 	if _, err := db.NewInsert().Model(&models.Tenant{ID: "tb", Name: "Beta", Slug: "beta", TierID: models.DefaultTierID}).
-		Exec(context.Background()); err != nil {
+		Exec(t.Context()); err != nil {
 		t.Fatalf("create tenant tb: %v", err)
 	}
-	ctxA := tenantctx.With(context.Background(), models.DefaultTenantID)
-	ctxB := tenantctx.With(context.Background(), "tb")
+	ctxA := tenantctx.With(t.Context(), models.DefaultTenantID)
+	ctxB := tenantctx.With(t.Context(), "tb")
 	mustUpsertSetting(t, settingRepo, ctxA, zernio.SettingProfileID, "p-a")
 	mustUpsertSetting(t, settingRepo, ctxB, zernio.SettingProfileID, "p-b")
 
-	if err := worker.SyncOnce(tenantctx.WithSystem(context.Background())); err != nil {
+	if err := worker.SyncOnce(tenantctx.WithSystem(t.Context())); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 
@@ -137,10 +137,10 @@ func TestZernioSyncSelfHealsDegraded(t *testing.T) {
 			return settingRepo.ListTenantIDsByKey(ctx, zernio.SettingProfileID)
 		})
 
-	ctxA := tenantctx.With(context.Background(), models.DefaultTenantID)
+	ctxA := tenantctx.With(t.Context(), models.DefaultTenantID)
 	mustUpsertSetting(t, settingRepo, ctxA, zernio.SettingProfileID, "p-a")
 
-	if err := worker.SyncOnce(tenantctx.WithSystem(context.Background())); err != nil {
+	if err := worker.SyncOnce(tenantctx.WithSystem(t.Context())); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if got := integ.State(); got != zernio.StateOK {

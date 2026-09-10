@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"testing"
@@ -34,7 +33,7 @@ func TestGetBestTimesHappyPath(t *testing.T) {
 	})
 
 	c := newClient(s)
-	out, err := c.GetBestTimes(context.Background(), InsightQuery{
+	out, err := c.GetBestTimes(t.Context(), InsightQuery{
 		ProfileID: "prof-1",
 		Platform:  "instagram",
 		Source:    AnalyticsSourceAll,
@@ -66,7 +65,7 @@ func TestGetContentDecayHappyPath(t *testing.T) {
 	})
 
 	c := newClient(s)
-	out, err := c.GetContentDecay(context.Background(), InsightQuery{ProfileID: "prof-1"})
+	out, err := c.GetContentDecay(t.Context(), InsightQuery{ProfileID: "prof-1"})
 	if err != nil {
 		t.Fatalf("content-decay: %v", err)
 	}
@@ -90,7 +89,7 @@ func TestGetPostingFrequencyHappyPath(t *testing.T) {
 	})
 
 	c := newClient(s)
-	out, err := c.GetPostingFrequency(context.Background(), InsightQuery{ProfileID: "prof-1"})
+	out, err := c.GetPostingFrequency(t.Context(), InsightQuery{ProfileID: "prof-1"})
 	if err != nil {
 		t.Fatalf("posting-frequency: %v", err)
 	}
@@ -128,7 +127,7 @@ func TestInsightsAddonGating(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			})
 			c := newClient(s)
-			_, err := c.GetBestTimes(context.Background(), InsightQuery{ProfileID: "p"})
+			_, err := c.GetBestTimes(t.Context(), InsightQuery{ProfileID: "p"})
 			if err == nil {
 				t.Fatalf("expected error")
 			}
@@ -152,7 +151,7 @@ func TestInsightsEmptyBodyTolerant(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	})
 	c := newClient(s)
-	out, err := c.GetBestTimes(context.Background(), InsightQuery{ProfileID: "p"})
+	out, err := c.GetBestTimes(t.Context(), InsightQuery{ProfileID: "p"})
 	if err != nil {
 		t.Fatalf("empty body should not error: %v", err)
 	}

@@ -130,7 +130,7 @@ func TestProcessPDF_Success(t *testing.T) {
 	files := &fakeFiles{}
 	p := newProc(PDFDeps{Client: parser, Embedder: &fakeEmbedder{}, Storage: blob, Assets: status, Chunks: chunks, Files: files})
 
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a1", OriginalName: "x.pdf", MimeType: "application/pdf"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a1", OriginalName: "x.pdf", MimeType: "application/pdf"}, false); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestProcessPDF_FinalStatusWriteFailurePropagates(t *testing.T) {
 
 	// The job must fail (so River retries) rather than report success with the
 	// asset stranded in "processing".
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a8"}, false); err == nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a8"}, false); err == nil {
 		t.Fatal("expected non-nil error when the final status write fails")
 	}
 }
@@ -191,7 +191,7 @@ func TestProcessPDF_FileUpsertFailurePropagates(t *testing.T) {
 
 	// A failed asset_file upsert must fail the job (so River retries) and must
 	// not let the asset be marked ready without its file row.
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a9"}, false); err == nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a9"}, false); err == nil {
 		t.Fatal("expected non-nil error when the asset_file upsert fails")
 	}
 	if status.last() == models.AssetStatusReady {
@@ -209,7 +209,7 @@ func TestProcessPDF_PartialOnSomeEmbedFailures(t *testing.T) {
 	p := newProc(PDFDeps{Client: parser, Embedder: &fakeEmbedder{failCalls: map[int]bool{2: true}},
 		Storage: &fakeBlob{data: []byte("pdf")}, Assets: status, Chunks: chunks, Files: &fakeFiles{}})
 
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a2"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a2"}, false); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if status.last() != models.AssetStatusPartial {
@@ -239,7 +239,7 @@ func TestProcessPDF_AllEmbedsFail_RetriesThenFailsOnLastAttempt(t *testing.T) {
 
 	// Not the last attempt: surface a retryable error, do NOT mark failed.
 	p, st := mk()
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a3"}, false); err == nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a3"}, false); err == nil {
 		t.Fatal("expected a retryable error when every chunk fails to embed")
 	}
 	for _, s := range st.all {
@@ -250,7 +250,7 @@ func TestProcessPDF_AllEmbedsFail_RetriesThenFailsOnLastAttempt(t *testing.T) {
 
 	// Last attempt: give up cleanly (failed, nil error) so the asset isn't stuck.
 	p2, st2 := mk()
-	if err := p2.process(context.Background(), ProcessPDFTask{AssetID: "a3"}, true); err != nil {
+	if err := p2.process(t.Context(), ProcessPDFTask{AssetID: "a3"}, true); err != nil {
 		t.Fatalf("last attempt should not return an error: %v", err)
 	}
 	if st2.last() != models.AssetStatusFailed {
@@ -265,7 +265,7 @@ func TestProcessPDF_TerminalParseErrorFailsNoRetry(t *testing.T) {
 		Embedder: &fakeEmbedder{}, Storage: &fakeBlob{data: []byte("pdf")},
 		Assets: status, Chunks: &fakeChunks{}, Files: &fakeFiles{},
 	})
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a4"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a4"}, false); err != nil {
 		t.Fatalf("terminal parse error must not be retried (want nil err): %v", err)
 	}
 	if status.last() != models.AssetStatusFailed {
@@ -279,7 +279,7 @@ func TestProcessPDF_TransientParseErrorRetries(t *testing.T) {
 		Embedder: &fakeEmbedder{}, Storage: &fakeBlob{data: []byte("pdf")},
 		Assets: &fakeStatus{}, Chunks: &fakeChunks{}, Files: &fakeFiles{},
 	})
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a5"}, false); err == nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a5"}, false); err == nil {
 		t.Fatal("transient parse error should be retried (want non-nil err)")
 	}
 }
@@ -292,7 +292,7 @@ func TestProcessPDF_EmptyPDFReadyNoChunks(t *testing.T) {
 		Embedder: &fakeEmbedder{}, Storage: &fakeBlob{data: []byte("pdf")},
 		Assets: status, Chunks: chunks, Files: &fakeFiles{},
 	})
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a6"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a6"}, false); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if status.last() != models.AssetStatusReady {
@@ -306,7 +306,7 @@ func TestProcessPDF_EmptyPDFReadyNoChunks(t *testing.T) {
 func TestProcessPDF_DisabledClientNoOp(t *testing.T) {
 	status := &fakeStatus{}
 	p := newProc(PDFDeps{Client: nil, Assets: status})
-	if err := p.process(context.Background(), ProcessPDFTask{AssetID: "a7"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a7"}, false); err != nil {
 		t.Fatalf("disabled client should no-op: %v", err)
 	}
 	if len(status.all) != 0 {

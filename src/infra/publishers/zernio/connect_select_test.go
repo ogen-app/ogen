@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -23,7 +22,7 @@ func TestCreateConnectLinkIsHeadless(t *testing.T) {
 
 	c := NewClient(StaticKey("test-key"), stub.URL, ClientOpts{Timeout: time.Second})
 	cb := "https://app.example.com/api/integrations/zernio/connect/callback?ogen_cn=abc"
-	if _, err := c.CreateConnectLink(context.Background(), "p_test", "linkedin", cb); err != nil {
+	if _, err := c.CreateConnectLink(t.Context(), "p_test", "linkedin", cb); err != nil {
 		t.Fatalf("CreateConnectLink: %v", err)
 	}
 	if sawHeadless != "true" {
@@ -53,7 +52,7 @@ func TestListConnectTargets(t *testing.T) {
 	})
 
 	c := NewClient(StaticKey("test-key"), stub.URL, ClientOpts{Timeout: time.Second})
-	targets, err := c.ListConnectTargets(context.Background(), "facebook", "p_test", "temp-xyz", "ct-secret")
+	targets, err := c.ListConnectTargets(t.Context(), "facebook", "p_test", "temp-xyz", "ct-secret")
 	if err != nil {
 		t.Fatalf("ListConnectTargets: %v", err)
 	}
@@ -87,7 +86,7 @@ func TestSelectConnectTarget(t *testing.T) {
 
 	c := NewClient(StaticKey("test-key"), stub.URL, ClientOpts{Timeout: time.Second})
 	up := json.RawMessage(`{"id":"u1"}`)
-	if err := c.SelectConnectTarget(context.Background(), "facebook", "p_test", "temp-xyz", "ct-secret", "111", up); err != nil {
+	if err := c.SelectConnectTarget(t.Context(), "facebook", "p_test", "temp-xyz", "ct-secret", "111", up); err != nil {
 		t.Fatalf("SelectConnectTarget: %v", err)
 	}
 	if sawToken != "ct-secret" {

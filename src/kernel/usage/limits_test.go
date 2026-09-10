@@ -234,7 +234,7 @@ func TestChecker_UntenantedNotGated(t *testing.T) {
 	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1), Mode: models.LimitModeEnforce, Enabled: true}
 	c, _ := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{100, 100}}, usage.Defaults{})
 
-	if d := c.Check(context.Background()); d.Blocked {
+	if d := c.Check(t.Context()); d.Blocked {
 		t.Fatalf("untenanted call must not be gated, got %+v", d)
 	}
 }

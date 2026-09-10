@@ -1,7 +1,6 @@
 package netguard
 
 import (
-	"context"
 	"errors"
 	"net"
 	"testing"
@@ -41,14 +40,14 @@ func TestNormalizeHost(t *testing.T) {
 
 func TestResolveAllowed_LiteralIPs(t *testing.T) {
 	// A literal private IP must be rejected without any DNS lookup.
-	if err := ResolveAllowed(context.Background(), "169.254.169.254"); !errors.Is(err, ErrBlocked) {
+	if err := ResolveAllowed(t.Context(), "169.254.169.254"); !errors.Is(err, ErrBlocked) {
 		t.Errorf("ResolveAllowed(metadata IP) = %v, want ErrBlocked", err)
 	}
-	if err := ResolveAllowed(context.Background(), "10.0.0.1"); !errors.Is(err, ErrBlocked) {
+	if err := ResolveAllowed(t.Context(), "10.0.0.1"); !errors.Is(err, ErrBlocked) {
 		t.Errorf("ResolveAllowed(private IP) = %v, want ErrBlocked", err)
 	}
 	// A literal public IP is allowed (no lookup needed).
-	if err := ResolveAllowed(context.Background(), "8.8.8.8"); err != nil {
+	if err := ResolveAllowed(t.Context(), "8.8.8.8"); err != nil {
 		t.Errorf("ResolveAllowed(public IP) = %v, want nil", err)
 	}
 }

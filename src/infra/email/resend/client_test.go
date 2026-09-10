@@ -25,7 +25,7 @@ func TestSendSuccess(t *testing.T) {
 	defer srv.Close()
 
 	c := New(staticKey("key"), srv.URL, time.Second)
-	id, err := c.Send(context.Background(), email.Message{To: "a@b.com", Subject: "hi", HTML: "<p>hi</p>", IdempotencyKey: "welcome:u1"})
+	id, err := c.Send(t.Context(), email.Message{To: "a@b.com", Subject: "hi", HTML: "<p>hi</p>", IdempotencyKey: "welcome:u1"})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestSendTerminal4xx(t *testing.T) {
 	defer srv.Close()
 
 	c := New(staticKey("key"), srv.URL, time.Second)
-	_, err := c.Send(context.Background(), email.Message{To: "bad", Subject: "s"})
+	_, err := c.Send(t.Context(), email.Message{To: "bad", Subject: "s"})
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -67,7 +67,7 @@ func TestSendTransient5xx(t *testing.T) {
 	defer srv.Close()
 
 	c := New(staticKey("key"), srv.URL, time.Second)
-	_, err := c.Send(context.Background(), email.Message{To: "a@b.com", Subject: "s"})
+	_, err := c.Send(t.Context(), email.Message{To: "a@b.com", Subject: "s"})
 	if !email.IsTransient(err) {
 		t.Fatalf("500 should be transient; got %v", err)
 	}
@@ -75,7 +75,7 @@ func TestSendTransient5xx(t *testing.T) {
 
 func TestSendDisabledNoKey(t *testing.T) {
 	c := New(staticKey(""), "http://unused", time.Second)
-	_, err := c.Send(context.Background(), email.Message{To: "a@b.com", Subject: "s"})
+	_, err := c.Send(t.Context(), email.Message{To: "a@b.com", Subject: "s"})
 	if !email.IsDisabled(err) {
 		t.Fatalf("empty key should be disabled; got %v", err)
 	}

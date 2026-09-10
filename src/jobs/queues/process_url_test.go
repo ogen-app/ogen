@@ -119,7 +119,7 @@ func TestProcessURL_Success_MirrorsImageAndEmbeds(t *testing.T) {
 		Assets: assets, Chunks: chunks, Images: images, Hub: hub,
 	})
 
-	if err := p.process(context.Background(), ProcessURLTask{AssetID: "u1", TenantID: "t1", SourceURL: "https://example.com/x"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessURLTask{AssetID: "u1", TenantID: "t1", SourceURL: "https://example.com/x"}, false); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
@@ -159,7 +159,7 @@ func TestProcessURL_RefreshBypassesCache(t *testing.T) {
 	scraper := &fakeScraper{res: &firecrawl.ScrapeResult{Markdown: "hello world words", Title: "T"}}
 	p := newURLProc(URLDeps{Scraper: scraper, Embedder: &fakeEmbedder{}, Assets: &fakeURLAssets{}, Chunks: &fakeChunks{}})
 
-	if err := p.process(context.Background(), ProcessURLTask{AssetID: "u2", SourceURL: "https://example.com/", Refresh: true}, false); err != nil {
+	if err := p.process(t.Context(), ProcessURLTask{AssetID: "u2", SourceURL: "https://example.com/", Refresh: true}, false); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if scraper.gotReq.MaxAge == nil || *scraper.gotReq.MaxAge != 0 {
@@ -173,7 +173,7 @@ func TestProcessURL_TerminalScrapeErrorFailsNoRetry(t *testing.T) {
 		Scraper:  &fakeScraper{err: &firecrawl.APIError{Status: 404, Message: "not found"}},
 		Embedder: &fakeEmbedder{}, Assets: assets, Chunks: &fakeChunks{},
 	})
-	if err := p.process(context.Background(), ProcessURLTask{AssetID: "u3", SourceURL: "https://example.com/x"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessURLTask{AssetID: "u3", SourceURL: "https://example.com/x"}, false); err != nil {
 		t.Fatalf("terminal scrape error must not be retried (want nil err): %v", err)
 	}
 	if assets.last() != models.AssetStatusFailed {
@@ -186,7 +186,7 @@ func TestProcessURL_TransientScrapeErrorRetries(t *testing.T) {
 		Scraper:  &fakeScraper{err: &firecrawl.APIError{Status: 503, Message: "down", Transient: true}},
 		Embedder: &fakeEmbedder{}, Assets: &fakeURLAssets{}, Chunks: &fakeChunks{},
 	})
-	if err := p.process(context.Background(), ProcessURLTask{AssetID: "u4", SourceURL: "https://example.com/x"}, false); err == nil {
+	if err := p.process(t.Context(), ProcessURLTask{AssetID: "u4", SourceURL: "https://example.com/x"}, false); err == nil {
 		t.Fatal("transient scrape error should be retried (want non-nil err)")
 	}
 }
@@ -199,7 +199,7 @@ func TestProcessURL_ImageFetchFailureIsPartial(t *testing.T) {
 		Embedder: &fakeEmbedder{}, Storage: &fakeBlob{}, Fetcher: &fakeFetcher{err: errors.New("404")},
 		Assets: assets, Chunks: &fakeChunks{}, Images: &fakeImages{},
 	})
-	if err := p.process(context.Background(), ProcessURLTask{AssetID: "u5", SourceURL: "https://example.com/x"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessURLTask{AssetID: "u5", SourceURL: "https://example.com/x"}, false); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if assets.last() != models.AssetStatusPartial {
@@ -224,7 +224,7 @@ func TestProcessURL_SVGIsNotMirrored(t *testing.T) {
 		}},
 		Assets: assets, Chunks: &fakeChunks{},
 	})
-	if err := p.process(context.Background(), ProcessURLTask{AssetID: "u7", SourceURL: "https://example.com/x"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessURLTask{AssetID: "u7", SourceURL: "https://example.com/x"}, false); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	// SVG is never mirrored: no image row, nothing uploaded, external link kept,
@@ -243,7 +243,7 @@ func TestProcessURL_SVGIsNotMirrored(t *testing.T) {
 func TestProcessURL_DisabledScraperNoOp(t *testing.T) {
 	assets := &fakeURLAssets{}
 	p := newURLProc(URLDeps{Scraper: nil, Assets: assets})
-	if err := p.process(context.Background(), ProcessURLTask{AssetID: "u6"}, false); err != nil {
+	if err := p.process(t.Context(), ProcessURLTask{AssetID: "u6"}, false); err != nil {
 		t.Fatalf("disabled scraper should no-op: %v", err)
 	}
 	if len(assets.statuses) != 0 {

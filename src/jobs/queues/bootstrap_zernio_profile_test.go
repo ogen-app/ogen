@@ -1,7 +1,6 @@
 package queues_test
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -100,7 +99,7 @@ func TestBootstrapJobProvisionsNamedProfile(t *testing.T) {
 	store := newFakeSettings()
 	p := newBootstrapProcessor(srv.URL, zernio.StateDegraded, store)
 
-	if err := p.Work(context.Background(), bootstrapJob("acme")); err != nil {
+	if err := p.Work(t.Context(), bootstrapJob("acme")); err != nil {
 		t.Fatalf("Work: %v", err)
 	}
 
@@ -124,7 +123,7 @@ func TestBootstrapJobSkipsWhenDisabled(t *testing.T) {
 	// StateDisabled models "no API key" → Integration.Enabled() is false.
 	p := newBootstrapProcessor(srv.URL, zernio.StateDisabled, store)
 
-	if err := p.Work(context.Background(), bootstrapJob("acme")); err != nil {
+	if err := p.Work(t.Context(), bootstrapJob("acme")); err != nil {
 		t.Fatalf("Work returned error; disabled integration must be a clean no-op: %v", err)
 	}
 	if n := stub.reqCount(); n != 0 {
@@ -146,7 +145,7 @@ func TestBootstrapJobReturnsErrorOnNonAuthFailure(t *testing.T) {
 
 	p := newBootstrapProcessor(srv.URL, zernio.StateDegraded, newFakeSettings())
 
-	if err := p.Work(context.Background(), bootstrapJob("acme")); err == nil {
+	if err := p.Work(t.Context(), bootstrapJob("acme")); err == nil {
 		t.Fatalf("expected an error on a degraded (non-auth) failure so River retries")
 	}
 }
@@ -160,7 +159,7 @@ func TestBootstrapJobGivesUpOn401(t *testing.T) {
 
 	// A rejected key flips the integration to disabled; the lazy on-connect path
 	// remains the fallback, so the job gives up cleanly (no error → no retry).
-	if err := p.Work(context.Background(), bootstrapJob("acme")); err != nil {
+	if err := p.Work(t.Context(), bootstrapJob("acme")); err != nil {
 		t.Fatalf("expected a clean give-up (nil) on 401, got: %v", err)
 	}
 }

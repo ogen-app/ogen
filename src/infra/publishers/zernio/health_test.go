@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -47,7 +46,7 @@ func TestGetAccountsHealth(t *testing.T) {
 	})
 
 	c := NewClient(StaticKey("test-key"), stub.URL, ClientOpts{Timeout: time.Second})
-	got, err := c.GetAccountsHealth(context.Background(), "p_test")
+	got, err := c.GetAccountsHealth(t.Context(), "p_test")
 	if err != nil {
 		t.Fatalf("GetAccountsHealth: %v", err)
 	}
@@ -93,7 +92,7 @@ func TestGetAccountsHealthFiltersForeignProfile(t *testing.T) {
 	})
 
 	c := NewClient(StaticKey("test-key"), stub.URL, ClientOpts{Timeout: time.Second})
-	got, err := c.GetAccountsHealth(context.Background(), "p_test")
+	got, err := c.GetAccountsHealth(t.Context(), "p_test")
 	if err != nil {
 		t.Fatalf("GetAccountsHealth: %v", err)
 	}

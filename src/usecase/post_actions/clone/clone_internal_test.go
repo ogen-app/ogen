@@ -28,7 +28,7 @@ func (s stubAttRepo) ReorderPositions(context.Context, string, []string) error  
 func (s stubAttRepo) Delete(context.Context, string) (bool, error)                       { return false, nil }
 
 func TestCopyAttachments_NoStorage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("attachments with keys but no storage → error", func(t *testing.T) {
 		s := &Service{

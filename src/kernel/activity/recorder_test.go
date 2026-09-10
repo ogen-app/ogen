@@ -45,7 +45,7 @@ func testMetrics() *activity.Metrics {
 
 func closeRecorder(t *testing.T, r *activity.Recorder) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if err := r.Close(ctx); err != nil {
 		t.Fatalf("recorder Close: %v", err)
@@ -57,7 +57,7 @@ func TestRecorder_RecordsEvent(t *testing.T) {
 	m := testMetrics()
 	r := activity.NewRecorder(w, m, activity.Config{FlushEvery: 5 * time.Millisecond})
 
-	ctx := logging.WithUserID(tenantctx.With(context.Background(), "tenant-1"), "user-9")
+	ctx := logging.WithUserID(tenantctx.With(t.Context(), "tenant-1"), "user-9")
 	r.Record(ctx, "post", "post_created",
 		activity.WithEntity("post", "p123"),
 		activity.WithStatus("success"),
@@ -103,7 +103,7 @@ func TestRecorder_SkipsUntenanted(t *testing.T) {
 	m := testMetrics()
 	r := activity.NewRecorder(w, m, activity.Config{FlushEvery: 5 * time.Millisecond})
 
-	r.Record(context.Background(), "post", "post_created") // no tenant in ctx
+	r.Record(t.Context(), "post", "post_created") // no tenant in ctx
 	closeRecorder(t, r)
 
 	if n := len(w.all()); n != 0 {
@@ -118,7 +118,7 @@ func TestRecorder_WithUserOverridesContext(t *testing.T) {
 	w := &fakeWriter{}
 	r := activity.NewRecorder(w, testMetrics(), activity.Config{FlushEvery: 5 * time.Millisecond})
 
-	ctx := logging.WithUserID(tenantctx.With(context.Background(), "t"), "ctx-user")
+	ctx := logging.WithUserID(tenantctx.With(t.Context(), "t"), "ctx-user")
 	r.Record(ctx, "authentication", "signup", activity.WithUser("new-user"))
 	closeRecorder(t, r)
 
@@ -130,8 +130,8 @@ func TestRecorder_WithUserOverridesContext(t *testing.T) {
 
 func TestRecorder_NilSafe(t *testing.T) {
 	var r *activity.Recorder
-	r.Record(context.Background(), "post", "post_created") // must not panic
-	if err := r.Close(context.Background()); err != nil {
+	r.Record(t.Context(), "post", "post_created") // must not panic
+	if err := r.Close(t.Context()); err != nil {
 		t.Errorf("nil Close = %v, want nil", err)
 	}
 }
@@ -148,7 +148,7 @@ func TestRecorder_CloseIdempotent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			errs <- r.Close(ctx)
 		}()
@@ -162,7 +162,7 @@ func TestRecorder_CloseIdempotent(t *testing.T) {
 	}
 
 	// A further sequential Close after shutdown still returns nil, no panic.
-	if err := r.Close(context.Background()); err != nil {
+	if err := r.Close(t.Context()); err != nil {
 		t.Fatalf("post-shutdown Close = %v, want nil", err)
 	}
 }
@@ -174,7 +174,7 @@ func TestRecorder_DropsOnFullBuffer(t *testing.T) {
 	// Insert; the buffer then holds 1 more, and everything beyond is dropped.
 	r := activity.NewRecorder(w, m, activity.Config{BufferSize: 1, BatchSize: 1, FlushEvery: time.Hour})
 
-	ctx := tenantctx.With(context.Background(), "t")
+	ctx := tenantctx.With(t.Context(), "t")
 	// Give the loop a moment to pull the first event and block in Insert.
 	r.Record(ctx, "post", "e0")
 	time.Sleep(20 * time.Millisecond)

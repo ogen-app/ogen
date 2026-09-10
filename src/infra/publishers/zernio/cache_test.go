@@ -51,11 +51,11 @@ func (m *memStore) gets(key string) int {
 
 func TestCachedSettingsStorePassesThroughNonZernioKeys(t *testing.T) {
 	inner := newMemStore()
-	_ = inner.Set(context.Background(), "other.key", "v")
+	_ = inner.Set(t.Context(), "other.key", "v")
 	c := NewCachedSettingsStore(inner)
 
 	for range 5 {
-		v, ok, err := c.Get(context.Background(), "other.key")
+		v, ok, err := c.Get(t.Context(), "other.key")
 		if err != nil || !ok || v != "v" {
 			t.Fatalf("unexpected get: %v %v %v", v, ok, err)
 		}
@@ -67,11 +67,11 @@ func TestCachedSettingsStorePassesThroughNonZernioKeys(t *testing.T) {
 
 func TestCachedSettingsStoreCachesZernioKeys(t *testing.T) {
 	inner := newMemStore()
-	_ = inner.Set(context.Background(), SettingProfileID, "abc")
+	_ = inner.Set(t.Context(), SettingProfileID, "abc")
 	c := NewCachedSettingsStoreTTL(inner, 50*time.Millisecond)
 
 	for range 5 {
-		v, ok, err := c.Get(context.Background(), SettingProfileID)
+		v, ok, err := c.Get(t.Context(), SettingProfileID)
 		if err != nil || !ok || v != "abc" {
 			t.Fatalf("unexpected get: %v %v %v", v, ok, err)
 		}
@@ -81,7 +81,7 @@ func TestCachedSettingsStoreCachesZernioKeys(t *testing.T) {
 	}
 
 	time.Sleep(60 * time.Millisecond)
-	_, _, _ = c.Get(context.Background(), SettingProfileID)
+	_, _, _ = c.Get(t.Context(), SettingProfileID)
 	if got := inner.gets(SettingProfileID); got != 2 {
 		t.Errorf("inner gets after TTL: got %d want 2", got)
 	}
@@ -89,18 +89,18 @@ func TestCachedSettingsStoreCachesZernioKeys(t *testing.T) {
 
 func TestCachedSettingsStoreInvalidatesOnSet(t *testing.T) {
 	inner := newMemStore()
-	_ = inner.Set(context.Background(), SettingProfileID, "abc")
+	_ = inner.Set(t.Context(), SettingProfileID, "abc")
 	c := NewCachedSettingsStore(inner)
 
-	_, _, _ = c.Get(context.Background(), SettingProfileID) // primes cache
+	_, _, _ = c.Get(t.Context(), SettingProfileID) // primes cache
 
 	// External-looking write through the cached store should drop the
 	// cache entry; the next Get goes to the inner store.
-	if err := c.Set(context.Background(), SettingProfileID, "xyz"); err != nil {
+	if err := c.Set(t.Context(), SettingProfileID, "xyz"); err != nil {
 		t.Fatal(err)
 	}
 
-	v, _, _ := c.Get(context.Background(), SettingProfileID)
+	v, _, _ := c.Get(t.Context(), SettingProfileID)
 	if v != "xyz" {
 		t.Errorf("after Set: got %q want xyz", v)
 	}
@@ -111,15 +111,15 @@ func TestCachedSettingsStoreInvalidatesOnSet(t *testing.T) {
 
 func TestCachedSettingsStoreInvalidatesOnDelete(t *testing.T) {
 	inner := newMemStore()
-	_ = inner.Set(context.Background(), SettingProfileID, "abc")
+	_ = inner.Set(t.Context(), SettingProfileID, "abc")
 	c := NewCachedSettingsStore(inner)
 
-	_, _, _ = c.Get(context.Background(), SettingProfileID)
-	if err := c.Delete(context.Background(), SettingProfileID); err != nil {
+	_, _, _ = c.Get(t.Context(), SettingProfileID)
+	if err := c.Delete(t.Context(), SettingProfileID); err != nil {
 		t.Fatal(err)
 	}
 
-	_, ok, _ := c.Get(context.Background(), SettingProfileID)
+	_, ok, _ := c.Get(t.Context(), SettingProfileID)
 	if ok {
 		t.Errorf("after Delete: should report missing")
 	}
@@ -166,8 +166,8 @@ func TestCachedSettingsStoreTenantIsolation(t *testing.T) {
 		"tenant-b\x00" + SettingProfileID: "prof-b",
 	}}
 	c := NewCachedSettingsStore(inner)
-	ctxA := tenantctx.With(context.Background(), "tenant-a")
-	ctxB := tenantctx.With(context.Background(), "tenant-b")
+	ctxA := tenantctx.With(t.Context(), "tenant-a")
+	ctxB := tenantctx.With(t.Context(), "tenant-b")
 
 	if v, _, _ := c.Get(ctxA, SettingProfileID); v != "prof-a" {
 		t.Fatalf("tenant A: got %q want prof-a", v)

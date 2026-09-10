@@ -69,7 +69,7 @@ func reasonOf(t *testing.T, err error) string {
 }
 
 func TestCheckAccountSelection(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	two := map[string][]models.SocialAccount{"p_test": {
 		{ID: "acc-1", Platform: "linkedin", Username: "acme-corp", DisplayName: "Acme Corp"},
 		{ID: "acc-2", Platform: "linkedin", Username: "acme-labs", DisplayName: "Acme Labs"},

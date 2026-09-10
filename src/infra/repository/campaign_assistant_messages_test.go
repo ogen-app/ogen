@@ -131,8 +131,8 @@ func TestCampaignAssistantMessagesTenantIsolation(t *testing.T) {
 	db := openMigratedDB(t)
 	repo := repository.NewCampaignAssistantMessageRepository(db)
 
-	ctxA := tenantctx.With(context.Background(), "tenant-a")
-	ctxB := tenantctx.With(context.Background(), "tenant-b")
+	ctxA := tenantctx.With(t.Context(), "tenant-a")
+	ctxB := tenantctx.With(t.Context(), "tenant-b")
 
 	base := time.Now().UTC().Truncate(time.Second)
 	seedCampaignMessage(t, repo, ctxA, "camp-shared", "user", "a-msg", base)

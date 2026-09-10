@@ -144,7 +144,7 @@ func TestGeneratePosts_SoftFailsUserInput(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newState()
-			ctx := withRequestState(context.Background(), st)
+			ctx := withRequestState(t.Context(), st)
 			out, err := toolGeneratePosts(ctx, tc.in)
 			if err != nil {
 				t.Fatalf("want soft failure (nil error), got %v", err)
@@ -179,7 +179,7 @@ func TestGeneratePosts_HeavySlotOnlyBurnedOnSuccess(t *testing.T) {
 				return nil, nil
 			},
 		}
-		ctx := withRequestState(context.Background(), st)
+		ctx := withRequestState(t.Context(), st)
 		// 2020 is unambiguously before any real "today", so this is clock-safe.
 		if _, err := toolGeneratePosts(ctx, GeneratePostsInput{Platforms: []string{"Threads"}, WindowStart: "2020-01-01", WindowEnd: "2020-01-01"}); err != nil {
 			t.Fatalf("want soft failure (nil error), got %v", err)
@@ -201,7 +201,7 @@ func TestGeneratePosts_HeavySlotOnlyBurnedOnSuccess(t *testing.T) {
 				return &content_plan.ContentPlanResponse{Posts: []content_plan.DraftPost{{Title: "t", PublishDate: "2026-01-15"}}}, nil
 			},
 		}
-		ctx := withRequestState(context.Background(), st)
+		ctx := withRequestState(t.Context(), st)
 		// Omit the window → defaults to the next 14 days from today (clock-safe).
 		out, err := toolGeneratePosts(ctx, GeneratePostsInput{Platforms: []string{"Threads"}})
 		if err != nil {

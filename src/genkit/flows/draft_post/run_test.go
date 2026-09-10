@@ -103,7 +103,7 @@ func TestResolvePlatform(t *testing.T) {
 	}
 
 	// Explicit post type wins.
-	got, err := resolvePlatform(context.Background(), campaign, "li", "article", repo)
+	got, err := resolvePlatform(t.Context(), campaign, "li", "article", repo)
 	if err != nil {
 		t.Fatalf("explicit: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestResolvePlatform(t *testing.T) {
 	}
 
 	// No explicit type → the campaign's first selected slug for this platform.
-	got, err = resolvePlatform(context.Background(), campaign, "li", "", repo)
+	got, err = resolvePlatform(t.Context(), campaign, "li", "", repo)
 	if err != nil {
 		t.Fatalf("default: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestResolvePlatform(t *testing.T) {
 	multi := &fakePlatformRepo{platforms: []models.Platform{
 		{ID: "x", Name: "X", PostTypes: models.PostTypeMap{"zeta": "Z", "alpha": "A", "mid": "M"}},
 	}}
-	got, err = resolvePlatform(context.Background(), &models.Campaign{}, "x", "", multi)
+	got, err = resolvePlatform(t.Context(), &models.Campaign{}, "x", "", multi)
 	if err != nil {
 		t.Fatalf("map fallback: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestResolvePlatform(t *testing.T) {
 	}
 
 	// Unknown platform id → error.
-	if _, err := resolvePlatform(context.Background(), campaign, "nope", "", repo); err == nil {
+	if _, err := resolvePlatform(t.Context(), campaign, "nope", "", repo); err == nil {
 		t.Fatal("expected error for unknown platform id")
 	}
 }

@@ -1,7 +1,6 @@
 package video
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -21,7 +20,7 @@ func TestNew_DisabledWhenAddrEmpty(t *testing.T) {
 
 func TestProbe_NilClientReportsDisabled(t *testing.T) {
 	var c *Client // disabled sentinel
-	_, err := c.Probe(context.Background(), ProbeOptions{SourceURL: "https://example/v.mp4"})
+	_, err := c.Probe(t.Context(), ProbeOptions{SourceURL: "https://example/v.mp4"})
 	if !errors.Is(err, ErrDisabled) {
 		t.Fatalf("want ErrDisabled, got %v", err)
 	}

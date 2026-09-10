@@ -41,7 +41,7 @@ func TestResolveAssessedContent(t *testing.T) {
 		post := &models.Post{ID: "post-1", Content: head}
 		repo := &fakeVersionRepo{latest: &models.PostVersion{VersionNumber: 3, Content: "committed v3"}}
 
-		if err := resolveAssessedContent(context.Background(), PostQualityRepos{Versions: repo}, post); err != nil {
+		if err := resolveAssessedContent(t.Context(), PostQualityRepos{Versions: repo}, post); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if post.Content != "committed v3" {
@@ -58,7 +58,7 @@ func TestResolveAssessedContent(t *testing.T) {
 		post := &models.Post{ID: "post-2", Content: head}
 		repo := &fakeVersionRepo{latest: nil}
 
-		if err := resolveAssessedContent(context.Background(), PostQualityRepos{Versions: repo}, post); err != nil {
+		if err := resolveAssessedContent(t.Context(), PostQualityRepos{Versions: repo}, post); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if post.Content != head {
@@ -71,7 +71,7 @@ func TestResolveAssessedContent(t *testing.T) {
 		// posts.content directly.
 		post := &models.Post{ID: "post-3", Content: head}
 
-		if err := resolveAssessedContent(context.Background(), PostQualityRepos{Versions: nil}, post); err != nil {
+		if err := resolveAssessedContent(t.Context(), PostQualityRepos{Versions: nil}, post); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if post.Content != head {
@@ -84,7 +84,7 @@ func TestResolveAssessedContent(t *testing.T) {
 		wantErr := errors.New("db down")
 		repo := &fakeVersionRepo{err: wantErr}
 
-		err := resolveAssessedContent(context.Background(), PostQualityRepos{Versions: repo}, post)
+		err := resolveAssessedContent(t.Context(), PostQualityRepos{Versions: repo}, post)
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("err = %v, want it to wrap %v", err, wantErr)
 		}

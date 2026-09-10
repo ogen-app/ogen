@@ -2,7 +2,6 @@ package logging
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -31,7 +30,7 @@ func TestContextHandlerEnrichesFromContext(t *testing.T) {
 	var buf bytes.Buffer
 	logger := newTestLogger(&buf)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ctx = WithRequestID(ctx, "req-123")
 	ctx = tenantctx.With(ctx, "tenant-abc")
 	ctx = WithUserID(ctx, "user-xyz")
@@ -57,7 +56,7 @@ func TestContextHandlerOmitsAbsentIDs(t *testing.T) {
 	var buf bytes.Buffer
 	logger := newTestLogger(&buf)
 
-	logger.InfoContext(context.Background(), "plain")
+	logger.InfoContext(t.Context(), "plain")
 
 	m := decode(t, &buf)
 	for _, k := range []string{AttrRequestID, AttrTenantID, AttrUserID} {
@@ -71,7 +70,7 @@ func TestContextHandlerSurvivesWithAttrs(t *testing.T) {
 	var buf bytes.Buffer
 	logger := newTestLogger(&buf).With(AttrComponent, "test")
 
-	ctx := WithRequestID(context.Background(), "req-9")
+	ctx := WithRequestID(t.Context(), "req-9")
 	logger.InfoContext(ctx, "msg")
 
 	m := decode(t, &buf)

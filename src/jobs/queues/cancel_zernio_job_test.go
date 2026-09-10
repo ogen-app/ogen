@@ -1,7 +1,6 @@
 package queues_test
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -21,13 +20,13 @@ func TestCancelHappyPathTransitionsToReadyForPublish(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.CancelZernioJobProcessor{Deps: deps}
-	err := proc.Process(context.Background(), queues.CancelZernioJobTask{
+	err := proc.Process(t.Context(), queues.CancelZernioJobTask{
 		PostID: post.ID, Target: queues.CancelTargetReadyForPublish, Actor: "user-1",
 	})
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusReadyForPublish {
 		t.Errorf("status: got %q want ready_for_publish", got.Status)
 	}
@@ -45,10 +44,10 @@ func TestCancelHappyPathTransitionsToDraft(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.CancelZernioJobProcessor{Deps: deps}
-	_ = proc.Process(context.Background(), queues.CancelZernioJobTask{
+	_ = proc.Process(t.Context(), queues.CancelZernioJobTask{
 		PostID: post.ID, Target: queues.CancelTargetDraft, Actor: "user-1",
 	})
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusDraft {
 		t.Errorf("status: got %q want draft", got.Status)
 	}
@@ -70,12 +69,12 @@ func TestCancelConvertsToManualPublishing(t *testing.T) {
 	wantSchedAt := post.ScheduledAt
 
 	proc := &queues.CancelZernioJobProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.CancelZernioJobTask{
+	if err := proc.Process(t.Context(), queues.CancelZernioJobTask{
 		PostID: post.ID, Target: queues.CancelTargetManualPublish, Actor: "user-1",
 	}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusScheduledForManualPublish {
 		t.Errorf("status: got %q want scheduled_for_manual_publishing", got.Status)
 	}
@@ -106,12 +105,12 @@ func TestCancelRaceWithPublishKeepsPostScheduled(t *testing.T) {
 	postRepo.put(post)
 
 	proc := &queues.CancelZernioJobProcessor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.CancelZernioJobTask{
+	if err := proc.Process(t.Context(), queues.CancelZernioJobTask{
 		PostID: post.ID, Target: queues.CancelTargetReadyForPublish, Actor: "user-1",
 	}); err != nil {
 		t.Fatalf("process should swallow race: %v", err)
 	}
-	got, _ := postRepo.GetByID(context.Background(), post.ID)
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.Status != models.PostStatusScheduled {
 		t.Errorf("status: got %q want scheduled (race resolves via poll)", got.Status)
 	}

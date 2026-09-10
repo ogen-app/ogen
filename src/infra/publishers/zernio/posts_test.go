@@ -1,7 +1,6 @@
 package zernio
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -69,7 +68,7 @@ func TestSubmitHappyPath(t *testing.T) {
 	})
 
 	c := newClient(s)
-	job, err := c.Submit(context.Background(), SubmitRequest{Content: "hello", Platforms: []PlatformVariant{{Platform: "linkedin", AccountID: "acc1"}}})
+	job, err := c.Submit(t.Context(), SubmitRequest{Content: "hello", Platforms: []PlatformVariant{{Platform: "linkedin", AccountID: "acc1"}}})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -88,7 +87,7 @@ func TestSubmit409ReturnsErrDuplicate(t *testing.T) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate content within 24h"})
 	})
 	c := newClient(s)
-	_, err := c.Submit(context.Background(), SubmitRequest{Content: "x"})
+	_, err := c.Submit(t.Context(), SubmitRequest{Content: "x"})
 	if !errors.Is(err, ErrDuplicateContent) {
 		t.Fatalf("expected ErrDuplicateContent, got %v", err)
 	}
@@ -104,7 +103,7 @@ func TestStatusReturnsTerminalEnum(t *testing.T) {
 		}})
 	})
 	c := newClient(s)
-	job, err := c.Status(context.Background(), "abc")
+	job, err := c.Status(t.Context(), "abc")
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -123,7 +122,7 @@ func TestCancelHappyPath(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	c := newClient(s)
-	if err := c.Cancel(context.Background(), "abc"); err != nil {
+	if err := c.Cancel(t.Context(), "abc"); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 }
@@ -135,7 +134,7 @@ func TestCancel404TreatedAsAlreadyPublished(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	c := newClient(s)
-	err := c.Cancel(context.Background(), "gone")
+	err := c.Cancel(t.Context(), "gone")
 	if !errors.Is(err, ErrAlreadyPublished) {
 		t.Fatalf("expected ErrAlreadyPublished, got %v", err)
 	}
@@ -148,7 +147,7 @@ func TestCancel409TreatedAsAlreadyPublished(t *testing.T) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "already published"})
 	})
 	c := newClient(s)
-	err := c.Cancel(context.Background(), "raced")
+	err := c.Cancel(t.Context(), "raced")
 	if !errors.Is(err, ErrAlreadyPublished) {
 		t.Fatalf("expected ErrAlreadyPublished, got %v", err)
 	}
@@ -161,7 +160,7 @@ func TestRetryHappyPath(t *testing.T) {
 		writeJSON(w, http.StatusOK, PostEnvelope{Post: Job{ID: "abc", Status: JobStatusScheduled}})
 	})
 	c := newClient(s)
-	job, err := c.Retry(context.Background(), "abc")
+	job, err := c.Retry(t.Context(), "abc")
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -189,7 +188,7 @@ func TestFindByContentRecoversAfterDedupe(t *testing.T) {
 		}})
 	})
 	c := newClient(s)
-	job, err := c.FindByContent(context.Background(), "hello", time.Hour)
+	job, err := c.FindByContent(t.Context(), "hello", time.Hour)
 	if err != nil {
 		t.Fatalf("find: %v", err)
 	}
@@ -218,7 +217,7 @@ func TestFindByContentPaginatesPastFirstPage(t *testing.T) {
 		writeJSON(w, http.StatusOK, env)
 	})
 	c := newClient(s)
-	job, err := c.FindByContent(context.Background(), "hello", time.Hour)
+	job, err := c.FindByContent(t.Context(), "hello", time.Hour)
 	if err != nil {
 		t.Fatalf("find: %v", err)
 	}
@@ -272,7 +271,7 @@ func TestFindByContentDecodesPopulatedAccount(t *testing.T) {
 		]}`))
 	})
 	c := newClient(s)
-	job, err := c.FindByContent(context.Background(), "hello", time.Hour)
+	job, err := c.FindByContent(t.Context(), "hello", time.Hour)
 	if err != nil {
 		t.Fatalf("find: %v", err)
 	}
@@ -330,7 +329,7 @@ func TestSubmit400IsTerminal(t *testing.T) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "platforms required"})
 	})
 	c := newClient(s)
-	_, err := c.Submit(context.Background(), SubmitRequest{Content: "x"})
+	_, err := c.Submit(t.Context(), SubmitRequest{Content: "x"})
 	if err == nil {
 		t.Fatal("expected error")
 	}

@@ -1,7 +1,6 @@
 package repository_test
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"slices"
@@ -43,7 +42,7 @@ func seedTenant(t *testing.T, db *bun.DB, id, name, tierID string) {
 	t.Helper()
 	now := time.Now().UTC()
 	tn := &models.Tenant{ID: id, Name: name, Slug: id, TierID: tierID, CreatedAt: now, UpdatedAt: now}
-	if _, err := db.NewInsert().Model(tn).Exec(context.Background()); err != nil {
+	if _, err := db.NewInsert().Model(tn).Exec(t.Context()); err != nil {
 		t.Fatalf("seed tenant %s: %v", id, err)
 	}
 }
@@ -60,7 +59,7 @@ func sqlState(err error) string {
 // protects an in-use tier.
 func TestTenantTierRepositoryCRUD(t *testing.T) {
 	db := openClassificationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := repository.NewTenantTierRepository(db)
 
 	// The migration seeds the 'default' tier.
@@ -129,7 +128,7 @@ func TestTenantTierRepositoryCRUD(t *testing.T) {
 // the FK violation for an unknown tenant/group.
 func TestTenantGroupRepositoryAndMembership(t *testing.T) {
 	db := openClassificationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := repository.NewTenantGroupRepository(db)
 
 	beta := &models.TenantGroup{ID: mintID(t), Name: "Beta", Color: "#5e6ad2", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
@@ -196,7 +195,7 @@ func TestTenantGroupRepositoryAndMembership(t *testing.T) {
 // reassignment, and (CON-190) all-status reads with an optional status filter.
 func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 	db := openClassificationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantRepo := repository.NewTenantRepository(db)
 	tierRepo := repository.NewTenantTierRepository(db)
 	groupRepo := repository.NewTenantGroupRepository(db)
@@ -341,7 +340,7 @@ func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 // distinct not-found (false), not a silent success.
 func TestTenantSetStatusIdempotent(t *testing.T) {
 	db := openClassificationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	repo := repository.NewTenantRepository(db)
 
 	id := mintID(t)
@@ -401,7 +400,7 @@ func TestTenantSetStatusIdempotent(t *testing.T) {
 // repeat rows across pages).
 func TestTenantListPagingDeterministicOnTiedCreatedAt(t *testing.T) {
 	db := openClassificationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantRepo := repository.NewTenantRepository(db)
 	tierRepo := repository.NewTenantTierRepository(db)
 
