@@ -171,34 +171,48 @@ func (c *Client) Parse(ctx context.Context, r io.Reader, opts Options) (*Result,
 		return nil, fmt.Errorf("documents: open stream: %w", err)
 	}
 
-	// First frame carries the options.
-	if err := stream.Send(&documentsv1.ParseRequest{Payload: &documentsv1.ParseRequest_Options{Options: &documentsv1.ParseOptions{
+	// First frame carries the options. Per the gRPC client-streaming contract, a
+	// Send that returns io.EOF means the server already closed the stream (e.g. a
+	// terminal InvalidArgument): stop sending and let CloseAndRecv surface the real
+	// status. Any other Send error is a genuine transport failure.
+	optErr := stream.Send(&documentsv1.ParseRequest{Payload: &documentsv1.ParseRequest_Options{Options: &documentsv1.ParseOptions{
 		Filename:          opts.Filename,
 		ContentType:       opts.ContentType,
 		ChunkTargetChars:  int32(opts.ChunkTargetChars),
 		ChunkOverlapChars: int32(opts.ChunkOverlapChars),
 		ChunkMaxChars:     int32(opts.ChunkMaxChars),
-	}}}); err != nil {
-		return nil, fmt.Errorf("documents: send options: %w", err)
+	}}})
+	if optErr != nil && !errors.Is(optErr, io.EOF) {
+		return nil, fmt.Errorf("documents: send options: %w", optErr)
 	}
 
-	// Subsequent frames carry the document bytes.
-	buf := make([]byte, streamFrameSize)
-	for {
-		n, rerr := r.Read(buf)
-		if n > 0 {
-			if err := stream.Send(&documentsv1.ParseRequest{Payload: &documentsv1.ParseRequest_Chunk{Chunk: buf[:n]}}); err != nil {
-				return nil, fmt.Errorf("documents: send document bytes: %w", err)
+	// Subsequent frames carry the document bytes — skipped if the options frame
+	// was already aborted by the server (optErr == io.EOF).
+	if optErr == nil {
+		buf := make([]byte, streamFrameSize)
+	send:
+		for {
+			n, rerr := r.Read(buf)
+			if n > 0 {
+				if serr := stream.Send(&documentsv1.ParseRequest{Payload: &documentsv1.ParseRequest_Chunk{Chunk: buf[:n]}}); serr != nil {
+					if errors.Is(serr, io.EOF) {
+						break send // server aborted; real status comes from CloseAndRecv
+					}
+					return nil, fmt.Errorf("documents: send document bytes: %w", serr)
+				}
+			}
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			if rerr != nil {
+				return nil, fmt.Errorf("documents: read document: %w", rerr)
 			}
 		}
-		if errors.Is(rerr, io.EOF) {
-			break
-		}
-		if rerr != nil {
-			return nil, fmt.Errorf("documents: read document: %w", rerr)
-		}
 	}
 
+	// CloseAndRecv returns the terminal status: on an aborted send it carries the
+	// real gRPC code (so isTerminalParseErr classifies it correctly), wrapped with
+	// %w so status.FromError can still unwrap it.
 	resp, err := stream.CloseAndRecv()
 	if err != nil {
 		return nil, fmt.Errorf("documents: parse: %w", err)

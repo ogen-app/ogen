@@ -204,10 +204,6 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 		}
 	}
 
-	// CON-86: one usage event per document ingest (sum of embedded-chunk token
-	// estimates; the Gemini embed response carries no usage). Nil recorder = no-op.
-	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "document_extract", llm.EmbedUsage{Tokens: totalEmbedTokens})
-
 	// 4. File metadata — retried on failure so the asset never lands "ready"
 	//    without its file row.
 	if err := p.persistFile(ctx, in, key, len(data)); err != nil {
@@ -216,24 +212,38 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 
 	// 5. Final status. Propagate a write failure so the worker retries rather
 	//    than reporting success with the asset stuck in "processing".
+	var finalStatus string
 	switch {
 	case embedAttempts == 0:
 		// No embeddable text (e.g. image-only or empty document) — ready with 0
 		// chunks (searchable-but-empty; not an error).
-		return p.setStatus(ctx, in.AssetID, models.AssetStatusReady)
+		finalStatus = models.AssetStatusReady
 	case len(chunks) == 0:
 		// Every chunk failed to embed — almost always a transient embedder
 		// outage. Retry; give up (failed) only once attempts are exhausted, so
 		// the asset never stays stuck in "processing".
-		if lastAttempt {
-			return p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
+		if !lastAttempt {
+			return fmt.Errorf("process_document %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
 		}
-		return fmt.Errorf("process_document %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
+		finalStatus = models.AssetStatusFailed
 	case embedFailures > 0:
-		return p.setStatus(ctx, in.AssetID, models.AssetStatusPartial)
+		finalStatus = models.AssetStatusPartial
 	default:
-		return p.setStatus(ctx, in.AssetID, models.AssetStatusReady)
+		finalStatus = models.AssetStatusReady
 	}
+	if err := p.setStatus(ctx, in.AssetID, finalStatus); err != nil {
+		return err
+	}
+
+	// CON-86: one usage event per document ingest (sum of embedded-chunk token
+	// estimates; the Gemini embed response carries no usage). Recorded only AFTER
+	// the durable writes (chunks + file + status) succeed, so a River retry from a
+	// late failure can't double-count. Nil recorder = no-op; skip when nothing
+	// embedded.
+	if totalEmbedTokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "document_extract", llm.EmbedUsage{Tokens: totalEmbedTokens})
+	}
+	return nil
 }
 
 // setStatus persists the asset status, returning the error so callers can fail

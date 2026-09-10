@@ -582,6 +582,17 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 		return res
 	}
 
+	// Document ingestion (CON-280) needs object storage (the worker re-reads the
+	// file on each attempt), the job enqueuer, and the DB. server.go leaves
+	// docJobs nil when DOCUMENTS_SERVICE_ADDR is empty, so a doc upload then fails
+	// fast with a clear message — before reading the body into memory — instead of
+	// stranding a pending asset (AC6).
+	if h.storage == nil || h.docJobs == nil || h.db == nil {
+		res.Status = "failed"
+		res.Error = "document ingestion is not configured"
+		return res
+	}
+
 	raw, err := readFormFile(fh, maxDocumentUploadSize)
 	if err != nil {
 		res.Status = "failed"
@@ -623,16 +634,6 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 	}
 
 	ctx := c.Context()
-
-	// Document ingestion (CON-280) needs object storage (the worker re-reads the
-	// file on each attempt), the job enqueuer, and the DB. server.go leaves
-	// docJobs nil when DOCUMENTS_SERVICE_ADDR is empty, so a doc upload then fails
-	// fast with a clear message instead of stranding a pending asset (AC6).
-	if h.storage == nil || h.docJobs == nil || h.db == nil {
-		res.Status = "failed"
-		res.Error = "document ingestion is not configured"
-		return res
-	}
 
 	// 1. Store original.<ext> BEFORE enqueue so the worker can re-read it on each
 	//    attempt (the bytes can't ride in the River job args). storageKey is the
