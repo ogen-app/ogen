@@ -1,132 +1,201 @@
 package zernio
 
-// SupportedPlatform describes one entry in the Phase 1 allowlist. The
-// Zernio API uses its own platform identifier on the wire (e.g.
-// "twitter") which doesn't always match Ogen's local platforms table
-// (which uses "x-twitter"). OgenID is the join key into the existing
-// platforms row so the GET /platforms endpoint can attach the
-// authoritative supportedPostTypes list.
+import (
+	"context"
+	"expvar"
+	"log/slog"
+	"sync/atomic"
+	"time"
+
+	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/kernel/logging"
+)
+
+// SupportedPlatform describes one publishable platform as the publish/connect
+// code sees it. It is projected from a `platforms` row (CON-292): the hardcoded
+// Phase-1 allowlist (supportedPlatforms) and Sqid→slug map (sqidToZernioID)
+// that used to live here were deleted — the DB row is now the single source of
+// truth, loaded into a process-wide snapshot by InitCatalog.
 type SupportedPlatform struct {
 	ZernioID string // identifier sent to Zernio (POST body, list filter)
-	Label    string // human label for picker UI
-	OgenID   string // primary key in Ogen's platforms table
+	Label    string // human label for picker UI (platform.name)
+	OgenID   string // platform.id (Sqid) — join key for PlatformViews / REST
 
-	// SupportedPostTypes is the subset of Ogen post-type slugs (as
-	// keys of models.Platform.PostTypes) that Zernio can publish to
-	// for this platform. Curated by hand from Zernio's per-platform
-	// docs because Zernio's API does not expose a programmatic
-	// capability matrix; refresh whenever Zernio adds support for a
-	// new format.
+	// SupportedPostTypes is the subset of Ogen post-type slugs (keys of
+	// models.Platform.PostTypes) that Zernio can publish to for this platform.
 	SupportedPostTypes []string
+
+	// Enabled is the operator soft on/off switch. Availability surfaces
+	// (SupportedPlatforms, LookupSupportedPlatform) hide disabled platforms;
+	// resolution lookups (by Sqid / Zernio id) still see them so a post already
+	// scheduled to a now-disabled platform resolves its slug and publishes.
+	Enabled bool
 }
 
-// supportedPlatforms is the Phase 1 allowlist from the ticket.
-//
-// Adding a platform here requires (1) confirming Zernio supports it,
-// (2) confirming its connect flow is redirect-based — Bluesky is
-// excluded because it requires app-password credentials, breaking the
-// "open URL in browser" UX, (3) ensuring the Ogen platforms table has
-// a corresponding row.
-//
-// The SupportedPostTypes lists are best-effort starting points based
-// on each platform's standard OAuth posting capabilities. Verify
-// against Zernio's platform docs before relying on a slug — adding a
-// post type Zernio doesn't actually support will fail at publish time.
-var supportedPlatforms = []SupportedPlatform{
-	{
-		ZernioID: "twitter", Label: "X (Twitter)", OgenID: "x-twitter",
-		SupportedPostTypes: []string{"text-post", "image-post", "video", "thread"},
-	},
-	{
-		ZernioID: "linkedin", Label: "LinkedIn", OgenID: "linkedin",
-		SupportedPostTypes: []string{"text-post", "image-post", "carousel", "video", "article"},
-	},
-	{
-		ZernioID: "facebook", Label: "Facebook", OgenID: "facebook",
-		SupportedPostTypes: []string{"text-post", "image-post", "video", "reel", "link-post"},
-	},
-	{
-		ZernioID: "instagram", Label: "Instagram", OgenID: "instagram",
-		SupportedPostTypes: []string{"image-post", "carousel", "reel", "story"},
-	},
-	{
-		ZernioID: "youtube", Label: "YouTube", OgenID: "youtube",
-		SupportedPostTypes: []string{"video", "short"},
-	},
-	{
-		ZernioID: "threads", Label: "Threads", OgenID: "threads",
-		// "thread" (CON-284): Threads publishes native reply chains via the same
-		// platformSpecificData.threadItems payload as X.
-		SupportedPostTypes: []string{"text-post", "image-post", "carousel", "video", "thread"},
-	},
+// catalog is an immutable snapshot of the platforms table, swapped atomically
+// on refresh. Resolution maps (bySqid / byZernio) index every slugged row;
+// `enabled` / enabledByZernio index only enabled rows (CON-292 §11).
+type catalog struct {
+	all             []SupportedPlatform
+	enabled         []SupportedPlatform
+	bySqid          map[string]*SupportedPlatform
+	byZernio        map[string]*SupportedPlatform
+	enabledByZernio map[string]*SupportedPlatform
 }
 
-// SupportedPlatforms returns a defensive copy of the allowlist.
+// newCatalog projects platform rows into a snapshot. Rows without a zernio_id
+// are skipped for resolution (an operator created the catalog entry but has not
+// assigned a slug yet, so it can't publish or be connected).
+func newCatalog(rows []models.Platform) *catalog {
+	c := &catalog{}
+	for _, row := range rows {
+		if row.ZernioID == "" {
+			continue
+		}
+		c.all = append(c.all, SupportedPlatform{
+			ZernioID:           row.ZernioID,
+			Label:              row.Name,
+			OgenID:             row.ID,
+			SupportedPostTypes: append([]string(nil), row.SupportedPostTypes...),
+			Enabled:            row.Enabled,
+		})
+	}
+	// Build index maps only after c.all is final so the pointers stay valid
+	// (appending could otherwise reallocate the backing array).
+	c.bySqid = make(map[string]*SupportedPlatform, len(c.all))
+	c.byZernio = make(map[string]*SupportedPlatform, len(c.all))
+	for i := range c.all {
+		sp := &c.all[i]
+		c.bySqid[sp.OgenID] = sp
+		c.byZernio[sp.ZernioID] = sp
+		if sp.Enabled {
+			c.enabled = append(c.enabled, *sp)
+		}
+	}
+	c.enabledByZernio = make(map[string]*SupportedPlatform, len(c.enabled))
+	for i := range c.enabled {
+		c.enabledByZernio[c.enabled[i].ZernioID] = &c.enabled[i]
+	}
+	return c
+}
+
+// catalogRefreshInterval bounds the staleness window after an operator edit
+// when PlatformAdminService's explicit RefreshCatalog is not wired (or misses).
+const catalogRefreshInterval = 60 * time.Second
+
+var (
+	// activeCatalog holds the current snapshot. Reads are lock-free. Starts
+	// empty; InitCatalog replaces it from the DB at boot.
+	activeCatalog atomic.Pointer[catalog]
+
+	// catalogSource is the row source, set once by InitCatalog at boot (before
+	// the refresh goroutine and any gRPC-driven refresh), so plain access is
+	// race-free.
+	catalogSource CatalogSource
+
+	catalogRefreshOK   = expvar.NewInt("ogen_zernio_catalog_refresh_ok")
+	catalogRefreshFail = expvar.NewInt("ogen_zernio_catalog_refresh_fail")
+)
+
+func init() {
+	activeCatalog.Store(newCatalog(nil)) // empty until InitCatalog runs
+}
+
+// CatalogSource supplies platform rows to the resolver. Satisfied by
+// repository.PlatformRepository (List returns enabled + disabled rows).
+type CatalogSource interface {
+	List(ctx context.Context) ([]models.Platform, error)
+}
+
+// InitCatalog loads the platform catalog from src at boot and starts a periodic
+// refresh goroutine bound to ctx. Non-fatal: a failed initial load logs and
+// leaves the catalog empty (the ticker retries) so the app still starts —
+// consistent with the gRPC server's non-fatal posture (CON-292 §10.1). Because
+// the row source is mandatory for the whole app, a persistent DB outage is a
+// boot failure elsewhere, not here.
+func InitCatalog(ctx context.Context, src CatalogSource) {
+	catalogSource = src
+	if err := RefreshCatalog(ctx); err != nil {
+		slog.ErrorContext(ctx, "initial platform catalog load failed; serving empty catalog until refresh",
+			logging.AttrComponent, "zernio.catalog", logging.AttrError, err)
+	}
+	go func() {
+		t := time.NewTicker(catalogRefreshInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := RefreshCatalog(ctx); err != nil {
+					slog.WarnContext(ctx, "platform catalog refresh failed; keeping previous snapshot",
+						logging.AttrComponent, "zernio.catalog", logging.AttrError, err)
+				}
+			}
+		}
+	}()
+}
+
+// RefreshCatalog reloads the snapshot now. PlatformAdminService (CON-292 §6)
+// calls it after every write so operator edits take effect without waiting for
+// the periodic tick. A failed reload keeps the previous snapshot.
+func RefreshCatalog(ctx context.Context) error {
+	src := catalogSource
+	if src == nil {
+		return nil
+	}
+	rows, err := src.List(ctx)
+	if err != nil {
+		catalogRefreshFail.Add(1)
+		return err
+	}
+	activeCatalog.Store(newCatalog(rows))
+	catalogRefreshOK.Add(1)
+	return nil
+}
+
+// SupportedPlatforms returns a copy of the ENABLED catalog entries. Its callers
+// are the connect allowlist listing and the /api/platforms publisher
+// enrichment, both of which must hide disabled platforms (CON-292 §11).
 func SupportedPlatforms() []SupportedPlatform {
-	out := make([]SupportedPlatform, len(supportedPlatforms))
-	copy(out, supportedPlatforms)
+	c := activeCatalog.Load()
+	out := make([]SupportedPlatform, len(c.enabled))
+	copy(out, c.enabled)
 	return out
 }
 
-// LookupSupportedPlatform returns the allowlist entry for zernioID, or
-// nil when the platform is not in the Phase 1 allowlist.
+// LookupSupportedPlatform returns the ENABLED catalog entry for a Zernio slug,
+// or nil. This is the connect/availability gate: a disabled or unknown platform
+// returns nil so new connects (zernio.go) and the auto-publish allowlist guard
+// reject it.
 func LookupSupportedPlatform(zernioID string) *SupportedPlatform {
-	for i := range supportedPlatforms {
-		if supportedPlatforms[i].ZernioID == zernioID {
-			return &supportedPlatforms[i]
-		}
+	c := activeCatalog.Load()
+	if sp, ok := c.enabledByZernio[zernioID]; ok {
+		cp := *sp
+		return &cp
 	}
 	return nil
 }
 
-// LookupSupportedByOgenID returns the allowlist entry whose OgenID
-// matches, or nil. Used by the publishers adapter to enrich the
-// /api/platforms response.
-func LookupSupportedByOgenID(ogenID string) *SupportedPlatform {
-	for i := range supportedPlatforms {
-		if supportedPlatforms[i].OgenID == ogenID {
-			return &supportedPlatforms[i]
-		}
-	}
-	return nil
-}
-
-// sqidToZernioID maps the post-Sqid-migration platform.id (the
-// 12-character Sqid) to its ZernioID. Migration
-// 20240115000001_fix_platform_ids_to_sqids.up.sql is the source of
-// truth for this mapping; CON-69 needs it because the post row
-// carries a Sqid but Zernio's API + the auto-publish allowlist key
-// off the Zernio platform name.
-var sqidToZernioID = map[string]string{
-	"AXqWG7U2qnpt": "linkedin",
-	"8S8bWQTG6qD":  "youtube",
-	"zBU1zqVICGfk": "facebook",
-	"81mUCmc2xsKd": "twitter",
-	"pQ4yxT3SuE57": "threads",
-	"rzgpTkARLH0L": "instagram",
-}
-
-// LookupSupportedBySqid returns the allowlist entry that corresponds
-// to a platform.id (Sqid form, post-CON-65 migration), or nil when
-// the Sqid is unknown.
+// LookupSupportedBySqid resolves a platform by its Sqid (platforms.id) across
+// ALL rows — enabled and disabled. The publish path relies on this so a post
+// already scheduled to a now-disabled platform still resolves its slug and goes
+// out (CON-292 §11). Returns nil for an unknown Sqid or a row with no slug.
 func LookupSupportedBySqid(sqid string) *SupportedPlatform {
-	zernioID, ok := sqidToZernioID[sqid]
-	if !ok {
-		return nil
+	c := activeCatalog.Load()
+	if sp, ok := c.bySqid[sqid]; ok {
+		cp := *sp
+		return &cp
 	}
-	return LookupSupportedPlatform(zernioID)
+	return nil
 }
 
-// LookupSqidByZernioID returns the platform.id Sqid for a Zernio
-// platform identifier (the inverse of the sqidToZernioID map), or ""
-// when the Zernio id has no mapped Sqid. CON-130 uses it to resolve
-// the {platform:"linkedin"} convert-to-manual request — which speaks
-// Zernio ids like the allowlist does — to the Sqid stored on posts.
+// LookupSqidByZernioID resolves a Zernio slug back to the platform Sqid across
+// ALL rows (CON-130 convert-to-manual). Returns "" when the slug is unknown.
 func LookupSqidByZernioID(zernioID string) string {
-	for sqid, zid := range sqidToZernioID {
-		if zid == zernioID {
-			return sqid
-		}
+	c := activeCatalog.Load()
+	if sp, ok := c.byZernio[zernioID]; ok {
+		return sp.OgenID
 	}
 	return ""
 }

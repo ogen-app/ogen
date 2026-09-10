@@ -26,21 +26,10 @@ import (
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 )
 
+// The upload ceilings (image/pdf/video bytes, alt-text length) are no longer
+// constants: CON-292 moved them into operator-controlled global config. They
+// are read through the accessors in global_limits.go.
 const (
-	// maxImageUploadBytes is the hard upper bound for image uploads,
-	// regardless of any platform's smaller per-image cap. 50 MB matches
-	// the spec default in CON-73 §2.2.
-	maxImageUploadBytes int64 = 50 << 20
-
-	// maxPDFUploadBytes is the hard cap for PDF uploads (CON-75). 100 MB
-	// matches LinkedIn's documented carousel/document upper bound.
-	maxPDFUploadBytes int64 = 100 << 20
-
-	// maxAltTextLen bounds the accessibility alt text (CON-122). Generous
-	// relative to any single platform's limit; it only guards against abuse of
-	// the unbounded TEXT column, not per-platform correctness.
-	maxAltTextLen = 2000
-
 	// postAttachmentsPositionConstraint is the name Postgres gives the inline
 	// UNIQUE (post_id, position) on post_attachments (baseline schema). Used to
 	// scope the reorder 409 to that specific collision (CON-124).
@@ -54,12 +43,6 @@ const (
 	// slow or unreachable service never blocks the upload request for long — on
 	// failure the attachment is created without page count / thumbnail.
 	pdfRenderTimeout = 30 * time.Second
-
-	// maxVideoUploadBytes is the hard system cap for a single video upload
-	// (CON-148). 5 GiB is also S3's single-PUT ceiling — larger files would
-	// need multipart, which is a follow-up. Per-platform caps (usually far
-	// smaller) live in VideoConstraints and are enforced at validation time.
-	maxVideoUploadBytes int64 = 5 << 30
 
 	// videoProbeTimeout caps the video-service Probe call at finalize. Header
 	// probing is fast, but the service range-reads a remote URL, so a
@@ -298,10 +281,10 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// Reject anything larger than the largest per-kind cap before we
 	// even open the file. Per-kind caps are enforced again inside the
 	// probe.
-	if fh.Size > maxPDFUploadBytes {
+	if fh.Size > maxPDFUploadBytes() {
 		return fiber.NewError(
 			fiber.StatusBadRequest,
-			fmt.Sprintf("file exceeds upload limit of %d MB", maxPDFUploadBytes>>20),
+			fmt.Sprintf("file exceeds upload limit of %d MB", maxPDFUploadBytes()>>20),
 		)
 	}
 
@@ -360,13 +343,13 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	var pendingThumbnail []byte
 
 	if kind == pdfprobe.MIME {
-		if fh.Size > maxPDFUploadBytes {
+		if fh.Size > maxPDFUploadBytes() {
 			return fiber.NewError(
 				fiber.StatusBadRequest,
-				fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes>>20),
+				fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes()>>20),
 			)
 		}
-		probe, raw, err := pdfprobe.Probe(f, maxPDFUploadBytes)
+		probe, raw, err := pdfprobe.Probe(f, maxPDFUploadBytes())
 		if err != nil {
 			if errors.Is(err, pdfprobe.ErrUnsupportedMIME) {
 				return fiber.NewError(fiber.StatusUnsupportedMediaType, err.Error())
@@ -407,13 +390,13 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			}
 		}
 	} else {
-		if fh.Size > maxImageUploadBytes {
+		if fh.Size > maxImageUploadBytes() {
 			return fiber.NewError(
 				fiber.StatusBadRequest,
-				fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes>>20),
+				fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes()>>20),
 			)
 		}
-		probe, raw, err := imageprobe.Probe(f, maxImageUploadBytes)
+		probe, raw, err := imageprobe.Probe(f, maxImageUploadBytes())
 		if err != nil {
 			if errors.Is(err, imageprobe.ErrUnsupportedMIME) {
 				return fiber.NewError(fiber.StatusUnsupportedMediaType, err.Error())
@@ -486,9 +469,9 @@ func parseSegmentIndex(s string) (*int, error) {
 // The cap is in characters (runes), so multibyte alt text isn't rejected early.
 func normalizeAltText(s string) (string, error) {
 	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) > maxAltTextLen {
+	if utf8.RuneCountInString(s) > maxAltTextLen() {
 		return "", fiber.NewError(fiber.StatusBadRequest,
-			fmt.Sprintf("alt_text exceeds %d characters", maxAltTextLen))
+			fmt.Sprintf("alt_text exceeds %d characters", maxAltTextLen()))
 	}
 	return s, nil
 }

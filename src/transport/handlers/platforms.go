@@ -99,7 +99,10 @@ type platformResponse struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/platforms [get]
 func (h *PlatformsHandler) List(c *fiber.Ctx) error {
-	platforms, err := h.repo.List(c.Context())
+	// CON-292: the composer-facing list shows only enabled platforms, ordered by
+	// sort_order. Disabled platforms drop out of the catalog (soft-disable) while
+	// their already-scheduled posts still publish via the resolver.
+	platforms, err := h.repo.ListEnabled(c.Context())
 	if err != nil {
 		return err
 	}

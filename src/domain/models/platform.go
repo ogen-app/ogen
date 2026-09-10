@@ -236,15 +236,34 @@ func (c TextConstraints) ContentLimitFor(slug string) int {
 type Platform struct {
 	bun.BaseModel `bun:"table:platforms,alias:pl" swaggerignore:"true"`
 
-	ID               string           `bun:"id,pk"                                        json:"id"`
-	Name             string           `bun:"name,notnull"                                 json:"name"`
-	PostTypes        PostTypeMap      `bun:"post_types,notnull,type:jsonb"                json:"post_types"`
-	Cadence          string           `bun:"cadence,notnull"                              json:"cadence"`
-	Constraints      string           `bun:"constraints,notnull"                          json:"constraints"`
-	ImageConstraints ImageConstraints `bun:"image_constraints,notnull,type:jsonb"         json:"image_constraints"`
-	PDFConstraints   PDFConstraints   `bun:"pdf_constraints,notnull,type:jsonb"           json:"pdf_constraints"`
-	VideoConstraints VideoConstraints `bun:"video_constraints,notnull,type:jsonb"         json:"video_constraints"`
-	TextConstraints  TextConstraints  `bun:"text_constraints,notnull,type:jsonb"          json:"text_constraints"`
-	CreatedAt        time.Time        `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt        time.Time        `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	ID   string `bun:"id,pk"        json:"id"`
+	Name string `bun:"name,notnull" json:"name"`
+	// ZernioID is the Zernio wire slug ("twitter", "linkedin", …). It replaces
+	// the retired Go registry's sqidToZernioID map (CON-292): the publish path
+	// and connect flow resolve this off the row. "" means the operator has not
+	// yet assigned a slug (the row is not publishable until they do).
+	ZernioID string `bun:"zernio_id,notnull,default:''" json:"zernio_id"`
+	// Enabled is the operator soft on/off switch (CON-292). A disabled platform
+	// drops from GET /api/platforms and blocks new connects, but already-scheduled
+	// posts still publish (the publish path resolves zernio_id regardless).
+	Enabled bool `bun:"enabled,notnull,default:true" json:"enabled"`
+	// ConnectSupported records whether Ogen can OAuth-redirect connect this
+	// platform. false documents the Bluesky-style app-password exclusion as data
+	// rather than code.
+	ConnectSupported bool        `bun:"connect_supported,notnull,default:true" json:"connect_supported"`
+	PostTypes        PostTypeMap `bun:"post_types,notnull,type:jsonb"          json:"post_types"`
+	// SupportedPostTypes is the Zernio-publishable subset of PostTypes' slugs
+	// (CON-292) — replaces SupportedPlatform.SupportedPostTypes. PostTypes carries
+	// every slug for display; this array marks which ones actually publish.
+	SupportedPostTypes StringSlice      `bun:"supported_post_types,notnull,type:jsonb"      json:"supported_post_types"`
+	Cadence            string           `bun:"cadence,notnull"                              json:"cadence"`
+	Constraints        string           `bun:"constraints,notnull"                          json:"constraints"`
+	ImageConstraints   ImageConstraints `bun:"image_constraints,notnull,type:jsonb"         json:"image_constraints"`
+	PDFConstraints     PDFConstraints   `bun:"pdf_constraints,notnull,type:jsonb"           json:"pdf_constraints"`
+	VideoConstraints   VideoConstraints `bun:"video_constraints,notnull,type:jsonb"         json:"video_constraints"`
+	TextConstraints    TextConstraints  `bun:"text_constraints,notnull,type:jsonb"          json:"text_constraints"`
+	// SortOrder drives composer/picker ordering (CON-292).
+	SortOrder int       `bun:"sort_order,notnull,default:0"                 json:"sort_order"`
+	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 }
