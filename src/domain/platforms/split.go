@@ -21,7 +21,8 @@ import (
 //     author is in explicit control of every break; perSegmentLimit is ignored.
 //   - Auto — with no delimiter present, greedily pack the body into segments each
 //     at most perSegmentLimit runes long, breaking on the best available boundary
-//     in priority order: paragraph (blank line) > sentence > word > hard cut.
+//     in priority order: paragraph (blank line) > line (single newline) > sentence
+//     > word > hard cut.
 //
 // perSegmentLimit is the platform's per-segment ceiling
 // (TextConstraints.ContentLimitFor("thread") — X 280 / Threads 500). A limit <= 0
@@ -96,9 +97,11 @@ func anyRuleLine(lines []string) bool {
 }
 
 // autoSplit packs a delimiter-free body into <=limit-rune segments, preferring
-// coarse boundaries and only descending to finer ones (sentence, word, hard cut)
-// for a unit that is itself too large. Greedy combination keeps each segment as
-// full as the next unit allows.
+// coarse boundaries and only descending to finer ones (line, sentence, word, hard
+// cut) for a unit that is itself too large. Greedy combination keeps each segment
+// as full as the next unit allows. Lines sit between paragraphs and sentences so
+// an over-limit paragraph is first broken on its own single newlines — preserving
+// that structure — before falling back to sentence and word boundaries.
 func autoSplit(content string, limit int) []string {
 	text := strings.TrimSpace(content)
 	if text == "" {
@@ -108,9 +111,11 @@ func autoSplit(content string, limit int) []string {
 		return []string{text}
 	}
 	return packUnits(splitParagraphs(text), limit, "\n\n", func(para string) []string {
-		return packUnits(splitSentences(para), limit, " ", func(sentence string) []string {
-			return packUnits(splitWords(sentence), limit, " ", func(word string) []string {
-				return hardCut(word, limit)
+		return packUnits(splitLines(para), limit, "\n", func(line string) []string {
+			return packUnits(splitSentences(line), limit, " ", func(sentence string) []string {
+				return packUnits(splitWords(sentence), limit, " ", func(word string) []string {
+					return hardCut(word, limit)
+				})
 			})
 		})
 	})
@@ -158,6 +163,11 @@ func packUnits(units []string, limit int, joiner string, overflow func(string) [
 	flush()
 	return out
 }
+
+// splitLines breaks a paragraph into its individual lines (single-newline
+// separated) — the boundary between paragraph and sentence granularity, so an
+// over-limit paragraph keeps its line structure where the lines still fit.
+func splitLines(text string) []string { return strings.Split(text, "\n") }
 
 // splitParagraphs groups the body into paragraphs separated by blank (whitespace-
 // only) lines, preserving single newlines inside a paragraph.

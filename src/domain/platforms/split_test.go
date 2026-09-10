@@ -104,6 +104,17 @@ func TestSplitThread_AutoParagraphPacking(t *testing.T) {
 	}
 }
 
+func TestSplitThread_AutoLinePreservesNewlines(t *testing.T) {
+	// An over-limit, delimiter-free paragraph is broken on its own single
+	// newlines first (line level), so surviving lines keep their newline rather
+	// than being flattened to spaces by the sentence/word fallback.
+	got := segContents(SplitThread("aaa\nbbb\nccc", 7))
+	want := []string{"aaa\nbbb", "ccc"}
+	if !equalStrings(got, want) {
+		t.Errorf("line packing: want %q, got %q", want, got)
+	}
+}
+
 func TestSplitThread_AutoSentenceSplit(t *testing.T) {
 	got := segContents(SplitThread("This is one. This is two. This is three.", 20))
 	want := []string{"This is one.", "This is two.", "This is three."}

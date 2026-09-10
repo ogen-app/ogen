@@ -64,6 +64,7 @@ func doPreview(t *testing.T, app *fiber.App, content, platformID string) (*http.
 func TestPreviewThread_ManualSplitValid(t *testing.T) {
 	app := previewApp()
 	resp, out := doPreview(t, app, "root\n---\nreply", "xplat")
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -84,6 +85,7 @@ func TestPreviewThread_ManualSplitValid(t *testing.T) {
 func TestPreviewThread_TooFewSegments(t *testing.T) {
 	app := previewApp()
 	resp, out := doPreview(t, app, "only one", "xplat")
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -107,6 +109,7 @@ func TestPreviewThread_TooFewSegments(t *testing.T) {
 func TestPreviewThread_OverLimitSegment(t *testing.T) {
 	app := previewApp()
 	resp, out := doPreview(t, app, "root\n---\n"+strings.Repeat("a", 281), "xplat")
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -127,6 +130,7 @@ func TestPreviewThread_OverLimitSegment(t *testing.T) {
 func TestPreviewThread_MissingPlatform(t *testing.T) {
 	app := previewApp()
 	resp, _ := doPreview(t, app, "root\n---\nreply", "")
+	defer resp.Body.Close()
 	if resp.StatusCode != 400 {
 		t.Errorf("missing platform_id: status = %d, want 400", resp.StatusCode)
 	}
@@ -135,6 +139,7 @@ func TestPreviewThread_MissingPlatform(t *testing.T) {
 func TestPreviewThread_UnknownPlatform(t *testing.T) {
 	app := previewApp()
 	resp, _ := doPreview(t, app, "root\n---\nreply", "nope")
+	defer resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("unknown platform: status = %d, want 404", resp.StatusCode)
 	}
