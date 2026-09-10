@@ -82,7 +82,7 @@ var _ = Describe("AssetsHandler upload", Ordered, Serial, func() {
 		enq = &fakePDFEnqueuer{}
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), store, db, enq, nil, nil, auth, nil).Register(app)
+		handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), store, db, enq, nil, nil, nil, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "up@example.com", "pw-password")
 
@@ -158,9 +158,10 @@ var _ = Describe("AssetsHandler upload", Ordered, Serial, func() {
 		Expect(results[1]["asset"].(map[string]any)["title"]).To(Equal("second"))
 	})
 
-	It("rejects non-.md files per file but still processes good ones", func() {
+	It("rejects unsupported files per file but still processes good ones", func() {
 		body, ct := buildMultipart([]struct{ Name, Body string }{
-			{"bad.txt", "not markdown"},
+			// .bin is not in any accepted set (.txt now routes to document ingestion).
+			{"bad.bin", "not markdown"},
 			{"good.md", "hello"},
 		})
 		resp := post(body, ct)
@@ -284,7 +285,8 @@ var _ = Describe("AssetsHandler upload", Ordered, Serial, func() {
 	})
 
 	It("rejects unknown extensions with a clear message", func() {
-		body, ct := buildMultipart([]struct{ Name, Body string }{{"notes.txt", "plain text"}})
+		// .bin is genuinely unknown (.txt now routes to document ingestion).
+		body, ct := buildMultipart([]struct{ Name, Body string }{{"notes.bin", "plain text"}})
 		resp := post(body, ct)
 		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
 		results := decode(resp)

@@ -79,7 +79,7 @@ var _ = Describe("AssetsHandler image upload (CON-246)", Ordered, Serial, func()
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
 		// No PDF/URL jobs wired: images need only storage + db.
-		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, auth, nil).Register(app)
+		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, nil, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "img@example.com", "pw-password")
 
@@ -197,7 +197,8 @@ var _ = Describe("AssetsHandler image upload (CON-246)", Ordered, Serial, func()
 	})
 
 	It("mentions images in the unsupported-type message", func() {
-		results := postUpload([]struct{ Name, Body string }{{"notes.txt", "plain"}})
+		// .bin is genuinely unsupported (.txt now routes to document ingestion).
+		results := postUpload([]struct{ Name, Body string }{{"notes.bin", "plain"}})
 		Expect(results[0]["status"]).To(Equal("failed"))
 		Expect(results[0]["error"]).To(ContainSubstring("image"))
 	})

@@ -39,6 +39,29 @@ func TestPublishedURLColumnPresentAfterMigrate(t *testing.T) {
 	}
 }
 
+// TestSourceAnchorColumnsPresentAfterMigrate guards CON-280's additive migration
+// (20260910000003): document-service chunks are persisted with a human citation
+// (source_label) and structured location (source_anchor jsonb) on assets_chunks.
+// Both are nullable and CON-281/282 build on them, so the chain must always end
+// with the columns present.
+func TestSourceAnchorColumnsPresentAfterMigrate(t *testing.T) {
+	ctx := t.Context()
+	db := pgtest.MustDB() // has already run the full migration chain
+	for _, col := range []string{"source_label", "source_anchor"} {
+		var n int
+		if err := db.NewSelect().
+			ColumnExpr("count(*)").
+			TableExpr("information_schema.columns").
+			Where("table_name = 'assets_chunks' AND column_name = ?", col).
+			Scan(ctx, &n); err != nil {
+			t.Fatalf("query information_schema for %s: %v", col, err)
+		}
+		if n != 1 {
+			t.Fatalf("assets_chunks.%s column count after migrate = %d, want 1", col, n)
+		}
+	}
+}
+
 // TestPublishedURLFixupRepairsMissingColumn simulates the broken-prod state
 // (column dropped, fixup migration un-recorded) and re-runs the migrator,
 // asserting the 20260908000001 fixup idempotently re-adds the column through

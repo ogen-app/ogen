@@ -15,13 +15,13 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
-	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/firecrawl"
 	"github.com/ogen-app/ogen/src/infra/publishers"
@@ -33,6 +33,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	"github.com/ogen-app/ogen/src/transport/grpc/client/documents"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/video"
 	"github.com/ogen-app/ogen/src/transport/handlers"
@@ -205,6 +206,20 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		app.Hooks().OnShutdown(func() error { return videoClient.Close() })
 	}
 
+	// CON-280: gRPC client for the document parsing microservice over the Railway
+	// private network. nil when DOCUMENTS_SERVICE_ADDR is unset; closed on shutdown.
+	documentsClient, err := documents.New(documents.Config{
+		Addr:         cfg.DocumentsServiceAddr,
+		Timeout:      cfg.DocumentsServiceTimeout,
+		MaxRecvBytes: cfg.DocumentsServiceMaxRecvBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if documentsClient != nil {
+		app.Hooks().OnShutdown(func() error { return documentsClient.Close() })
+	}
+
 	// Embedding (Gemini) is initialised here — before the River registry —
 	// because the process_pdf worker (CON-103) needs the embedder in its deps.
 	// The returned embedder is a stable reloadable wrapper (always non-nil): when
@@ -234,6 +249,24 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	if pdfIngestEnabled {
 		pdfDeps.Client = pdfClient
+	}
+
+	// CON-280: document ingestion mirrors PDF — live when the parser and storage
+	// are present; embedder availability is checked per-run by the worker. Client
+	// left nil otherwise so the worker no-ops.
+	documentIngestEnabled := documentsClient != nil && store != nil
+	documentDeps := queues.DocumentDeps{
+		Embedder:   embedder,
+		Storage:    store,
+		Assets:     r.pieceRepo,
+		Chunks:     r.chunksRepo,
+		Files:      r.assetFileRepo,
+		Recorder:   usageWiring.recorder,
+		EmbedModel: cfg.EmbedModel,
+		Notifier:   notifier, // CON-242: asset-ingest-done producer
+	}
+	if documentIngestEnabled {
+		documentDeps.Client = documentsClient
 	}
 
 	// CON-222: URL assets. The Firecrawl scrape client resolves firecrawl_api_key
@@ -327,6 +360,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Integration:         zernioRT.Integration,
 		// CON-103: PDF ingestion worker deps.
 		PDF: pdfDeps,
+		// CON-280: document ingestion worker deps.
+		Document: documentDeps,
 		// CON-222: URL scrape ingestion worker deps.
 		URL: urlDeps,
 		// CON-154: email send + cleanup worker deps.
@@ -474,7 +509,15 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// CON-222: URL ingestion enqueues through the same River client; the /url
 	// endpoint gates on firecrawlClient.HasKey (409 when no key configured).
 	var urlJobs handlers.URLIngestEnqueuer = enqueuer
-	handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, auth, embedCallbacks.OnMarkdownSave).Register(app)
+	// CON-280: document ingestion enqueues through the same River client, gated on
+	// document-service being configured. Left nil otherwise so a doc upload fails
+	// fast ("document ingestion is not configured") instead of stranding a pending
+	// asset.
+	var docJobs handlers.DocumentIngestEnqueuer
+	if documentIngestEnabled {
+		docJobs = enqueuer
+	}
+	handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, auth, embedCallbacks.OnMarkdownSave).Register(app)
 
 	// Anthropic-backed flows live in a hot-reloadable runtime. boot
 	// is allowed to start without an Anthropic key (callbacks return

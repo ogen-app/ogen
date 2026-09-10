@@ -53,6 +53,11 @@ type Deps struct {
 	// the job a no-op.
 	PDF PDFDeps
 
+	// CON-280: the process_document worker's dependencies (document-service
+	// client, embedder, storage, asset repos). A nil Client (no
+	// DOCUMENTS_SERVICE_ADDR) makes the job a no-op.
+	Document DocumentDeps
+
 	// CON-222: the process_url worker's dependencies (Firecrawl scrape client,
 	// embedder, storage, asset/image repos, eventhub). A nil Scraper (no
 	// firecrawl_api_key) makes the job a no-op.
@@ -412,6 +417,26 @@ func (e *Enqueuer) EnqueueProcessPDFTx(ctx context.Context, tx *sql.Tx, assetID,
 		TenantID:     tenantID,
 		OriginalName: originalName,
 		MimeType:     mimeType,
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueProcessDocumentTx enqueues a document-ingestion task inside the given
+// transaction, so it commits atomically with the asset insert (CON-280): a
+// committed upload always has a job, a rolled-back one never does. The worker
+// re-reads the original from storage (storageKey is the tenant-relative object
+// path), so the bytes are not in the args. Takes primitives so the handler can
+// depend on a narrow interface, not this package.
+func (e *Enqueuer) EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, ProcessDocumentTask{
+		AssetID:      assetID,
+		TenantID:     tenantID,
+		OriginalName: originalName,
+		MimeType:     mimeType,
+		StorageKey:   storageKey,
 	}, insertOptsWithRequestID(ctx, nil))
 	return err
 }
