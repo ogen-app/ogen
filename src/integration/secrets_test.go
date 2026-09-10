@@ -66,6 +66,8 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 		repository.NewTenantTierRepository(db),
 		repository.NewTenantGroupRepository(db),
 		repository.NewTenantRepository(db),
+		repository.NewPlatformRepository(db),
+		repository.NewPlatformGlobalLimitsRepository(db),
 	)
 	Expect(err).NotTo(HaveOccurred())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
