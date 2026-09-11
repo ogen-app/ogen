@@ -92,8 +92,9 @@ C4Context
 Inside the Ogen boundary, the **API** monolith is the hub: it serves the SPA over
 REST + SSE, owns the control-plane and analytics databases, drains its own
 in-process River worker pool, runs the Genkit AI flows, and exposes an
-internal-only gRPC surface that Harbor uses to manage secrets and tenants. PDF
-and video processing are split out into private-network sidecar services.
+internal-only gRPC surface that Harbor uses to manage secrets and tenants. PDF,
+video, document, and audio processing are split out into private-network sidecar
+services.
 
 ```mermaid
 C4Container
@@ -107,15 +108,17 @@ C4Container
         Container(api, "API", "Go 1.26 · Fiber · Bun · Genkit · River", "REST + SSE, background workers, AI flows, operator gRPC surface")
         ContainerDb(pg, "Control-plane DB", "PostgreSQL 17 + pgvector", "Domain data, sessions, encrypted secrets, embeddings, River job tables")
         ContainerDb(ts, "Analytics DB", "TimescaleDB (PG17)", "Usage/cost, activity, follower snapshots — hypertables + continuous aggregates")
-        ContainerDb(obj, "Object Storage", "S3-compatible (R2 / MinIO)", "Images, PDFs, video, thumbnails, posters")
+        ContainerDb(obj, "Object Storage", "S3-compatible (R2 / MinIO)", "Images, PDFs, audio, video, thumbnails, posters")
         Container(pdf, "pdf-service", "Go + pdfium", "PDF text, page-aware chunks, thumbnail — private network")
         Container(video, "video-service", "Go + ffmpeg", "Video probe + poster frame — private network")
+        Container(doc, "document-service", "Go (pure)", "Office/text docs → source-anchored chunks — private network")
+        Container(audio, "audio-service", "Go + ffmpeg + Gemini", "Audio transcode + transcribe → time-anchored transcript — private network")
         Container(harbor, "Harbor", "Go + Next.js (ogen-app/harbor)", "Ops dashboard: tenants, secrets, usage")
         Container(riverui, "River UI", "riverui image", "Background-job dashboard")
     }
 
     System_Ext(anthropic, "Anthropic Claude API", "LLM")
-    System_Ext(gemini, "Gemini Embedding API", "Embeddings")
+    System_Ext(gemini, "Gemini API", "Embeddings + audio transcription")
     System_Ext(zernio, "Zernio", "Publishing broker")
     System_Ext(firecrawl, "Firecrawl", "Scraping")
     System_Ext(resend, "Resend", "Email")
@@ -129,9 +132,12 @@ C4Container
     Rel(api, obj, "Stores & serves media", "S3")
     Rel(api, pdf, "Parses PDFs", "gRPC")
     Rel(api, video, "Probes video", "gRPC")
+    Rel(api, doc, "Parses documents", "gRPC")
+    Rel(api, audio, "Transcribes audio", "gRPC")
 
     Rel(api, anthropic, "Generation / planning / quality", "HTTPS")
     Rel(api, gemini, "Embeddings", "HTTPS")
+    Rel(audio, gemini, "Transcribes audio (multimodal)", "HTTPS")
     Rel(api, zernio, "Submit / poll / cancel / reconcile", "HTTPS")
     Rel(api, firecrawl, "Scrape URL", "HTTPS")
     Rel(api, resend, "Send email", "HTTPS")
@@ -150,6 +156,8 @@ C4Container
     UpdateElementStyle(obj, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(pdf, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(video, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
+    UpdateElementStyle(doc, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
+    UpdateElementStyle(audio, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(harbor, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(riverui, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(anthropic, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
@@ -175,7 +183,7 @@ src/
   transport/                       # inbound surface (CON-291 role grouping)
     handlers/                      # Fiber HTTP handlers (REST + SSE) with swag annotations
     grpc/server/                   # internal operator gRPC surface (Secrets + TenantAdmin services)
-    grpc/client/{pdf,video}/       # gRPC clients we consume (pdf-service, video-service)
+    grpc/client/{pdf,video,documents,audio}/ # gRPC clients we consume (pdf/video/document/audio sidecars)
     server/                        # server.New: wires repos → handlers → workers → routes; Genkit runtime
   usecase/                         # application orchestration / services — the one home for "where orchestration lives"
     post_actions/ campaign_actions/ scheduling/ campaigngoal/ notes/ settings/
@@ -210,8 +218,10 @@ boot disables it rather than taking down the API.
 **Background jobs.** [River](https://riverqueue.com) is Postgres-native — no
 external broker — and owns leasing, retry/backoff, periodic scheduling, and
 completed-job retention. Workers process `submit_post_to_zernio`,
-`poll_zernio_status`, `cancel_zernio_job`, `process_pdf`, `process_url`,
-`send_email`, plus periodic `reconcile_scheduled_posts`,
+`poll_zernio_status`, `cancel_zernio_job`, `process_pdf`, `process_document`,
+`process_url`, `process_audio` (on a dedicated `audio` queue so long
+transcriptions can't starve short ingestion), `send_email`, plus periodic
+`reconcile_scheduled_posts`,
 `refresh_zernio_analytics`, `refresh_zernio_followers`,
 `detect_expiring_connections`, and the `cleanup_*` sweepers. The
 [River UI](https://riverqueue.com/ui) dashboard (a standalone container) reads
@@ -225,7 +235,7 @@ those tables directly.
 |------|--------------|
 | **Multi-tenancy** | Public SaaS signup mints a tenant; all domain rows are tenant-scoped and resolved per request. Users, sessions, invitations, and password reset are first-class. |
 | **Campaigns & posts** | Campaign types, campaigns, posts, post versions, notes, per-platform validation, quality scoring, and streaming AI assistants. |
-| **Content bank** | Markdown notes, PDF assets, and URL assets (scraped via Firecrawl) with paragraph-aware chunking, Gemini embeddings, and pgvector similarity search used to ground the assistants. |
+| **Content bank** | Markdown notes, PDF, office/text document, audio (transcribed to time-anchored chunks), and URL assets (scraped via Firecrawl), with paragraph-/source-aware chunking, Gemini embeddings, and pgvector similarity search used to ground the assistants. Document and audio ingestion run in the `document-service` / `audio-service` sidecars. |
 | **Attachments** | Image, PDF, and video uploads on S3-compatible storage. PDFs and video are processed by the `pdf-service` / `video-service` sidecars (thumbnails, page counts, duration/codec/poster). Per-platform constraints surface as soft validation warnings. |
 | **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are River jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. |
 | **Post Log** | Auditable per-post history — state transitions, validation outcomes, background-task lifecycle, Zernio interactions, reconciliation timeouts, user actions. Sanitized of secrets, size-capped, configurable retention. |
@@ -254,13 +264,16 @@ hardcode a model id:
 | `generation` | Claude Sonnet 4.5 (`MODEL_ID`) | content plan, post/campaign assistant writing, brief enrichment, draft post |
 | `planning` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) | campaign/post assistant orchestration & intent routing (cheap/fast loop) |
 | `quality` | Claude Sonnet 4.5 (`QUALITY_MODEL_ID`) | post quality scoring |
-| embeddings | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) | asset & PDF chunk embedding for vector search |
+| embeddings | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) | asset / PDF / document / audio-transcript chunk embedding for vector search |
+| transcription | Gemini 2.5 Flash (`TRANSCRIBE_MODEL`, multimodal) | `audio-service` segment transcription (priced via the `gemini` vendor) |
 
 | Flow | Purpose | Triggered by |
 |------|---------|--------------|
 | `embed_asset` | Chunks an asset's Markdown (paragraph-aware, with overlap) and writes embeddings into `asset_chunks`. | Asset save callback. |
 | `process_pdf` (River) | Calls `pdf-service` for text + page-aware chunks + thumbnail, uploads to S3, then chunks + embeds. | PDF upload. |
 | `process_url` (River) | Scrapes a URL to Markdown via Firecrawl, mirrors images to S3, stores it as a URL asset, then chunks + embeds. | URL asset creation. |
+| `process_document` (River) | Calls `document-service` for office/text docs (docx/pptx/xlsx/odt/epub/csv/html/eml/…) → source-anchored chunks, then embeds. | Document upload. |
+| `process_audio` (River, dedicated `audio` queue) | Probes + tier-gates, normalizes once, segments, transcribes each segment via `audio-service` (Gemini multimodal), assembles time-anchored transcript chunks, then embeds. Checkpointed + resumable. | Audio upload / finalize. |
 | `content_plan` | Per-phase, per-platform post drafts for a campaign; parallel K-sized batches against Anthropic with SSE progress. | `POST /api/campaigns/:id/generate-draft` (SSE). |
 | `post_assistant` | Interactive post editor. Haiku planner loop + Sonnet `editPost` write-tool; streams `explanation_delta` / `content_delta`; tool use over the asset library. | `POST /api/posts/:id/assistant` (SSE). |
 | `campaign_assistant` | Campaign-level planning assistant; flows-as-tools (content plan, enrich brief, draft post, consistency check) under a Haiku orchestration loop. | Campaign assistant endpoint (SSE). |
@@ -283,7 +296,9 @@ Railway's private network (`*.railway.internal`), never a public port.
 | [`ogen-app/harbor`](https://github.com/ogen-app/harbor) | Operator dashboard (Go backend + Next.js UI). |
 | [`ogen-app/pdf-service`](https://github.com/ogen-app/pdf-service) | PDF parsing sidecar (CGO + pdfium). |
 | [`ogen-app/video-service`](https://github.com/ogen-app/video-service) | Video probing sidecar (ffmpeg/ffprobe). |
-| `buf.build/ogen-app/proto` | Shared gRPC contracts (tenants, secrets, pdf, video), published as a [BSR](https://buf.build) module and pinned via `make proto`. |
+| [`ogen-app/document-service`](https://github.com/ogen-app/document-service) | Office/text document parsing sidecar (pure Go). |
+| [`ogen-app/audio-service`](https://github.com/ogen-app/audio-service) | Audio transcode + transcribe sidecar (ffmpeg + Gemini multimodal). |
+| `buf.build/ogen-app/proto` | Shared gRPC contracts (tenants, secrets, pdf, video, documents, audio), published as a [BSR](https://buf.build) module and pinned via `make proto`. |
 
 **Runtime topology**
 
@@ -291,7 +306,7 @@ Railway's private network (`*.railway.internal`), never a public port.
 - **Control-plane database** — PostgreSQL 17 + the `vector` extension (`pgvector/pgvector:pg17`).
 - **Analytics database** — `timescale/timescaledb:latest-pg17`, separate instance (`ANALYTICS_DSN`).
 - **Object storage** — Cloudflare R2 in production, MinIO locally (any S3-compatible endpoint via `STORAGE_*`).
-- **pdf-service / video-service** — gRPC on `:50051`, private network only.
+- **pdf-service / video-service / document-service / audio-service** — gRPC on `:50051`, private network only. audio-service additionally calls the Gemini Developer API for transcription (shares `gemini_api_key`).
 - **Harbor** — reads both databases and calls the API's operator gRPC surface; shares the control-plane Postgres server via its own `harbor` database.
 - **River UI** — job dashboard reading the control-plane database.
 
@@ -333,9 +348,11 @@ locally-running API is picked up automatically.
 | `make` | any | Build / test / openapi / proto targets. |
 | `buf` | any | Only needed to regenerate gRPC stubs (`make proto`); generated code is committed. |
 
-There is **no** local PDF/video toolchain to install — parsing moved to the
-`pdf-service` / `video-service` sidecars (gRPC). The API degrades gracefully when
-they are absent (uploads accepted, parsing/probing skipped).
+There is **no** local PDF/video/audio toolchain to install — parsing and
+transcription moved to the `pdf-service` / `video-service` / `document-service` /
+`audio-service` sidecars (gRPC). When a sidecar is absent the API degrades
+gracefully: PDF/video uploads are accepted but unprobed, while document/audio
+uploads fail fast with a clear "not configured" message.
 
 ### 1. Clone and pull deps
 
@@ -473,6 +490,8 @@ docker compose up                      # API + Postgres + TimescaleDB (+ River U
 docker compose --profile ui up         # + the ogen-app/ui Vite dev server on :9002
 docker compose --profile pdf up        # + pdf-service
 docker compose --profile video up      # + video-service
+docker compose --profile documents up  # + document-service
+docker compose --profile audio up      # + audio-service
 docker compose --profile harbor up     # + Harbor backend (:9003) & UI (:9005)
 ```
 
