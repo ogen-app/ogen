@@ -53,12 +53,14 @@ type imageExtractor interface {
 }
 
 // imageAssetWriter is the asset persistence the worker needs: status + creator
-// (for notifications) plus the guarded description/alt-text write. The asset repo
-// satisfies it.
+// (for notifications), the guarded description/alt-text write, and GetByID to
+// reload the persisted description when resuming a checkpointed run. The asset
+// repo satisfies it.
 type imageAssetWriter interface {
 	UpdateStatus(ctx context.Context, id, status string) error
 	CreatorOf(ctx context.Context, id string) (string, error)
 	SetImageResult(ctx context.Context, id, content, altText string, setAlt bool) error
+	GetByID(ctx context.Context, id string) (*models.Asset, error)
 }
 
 // imageFileStore lets the worker stamp the service-reported dimensions/animation
@@ -77,6 +79,7 @@ type imageExtractionStore interface {
 
 type imageBlockStore interface {
 	ReplaceForExtraction(ctx context.Context, extractionID string, blocks []models.ImageBlock) error
+	ListByExtraction(ctx context.Context, extractionID string) ([]models.ImageBlock, error)
 }
 
 // ImageDeps bundles the process_image worker's dependencies (built in
@@ -194,6 +197,15 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		return err
 	}
 
+	// Resume: if a PRIOR attempt already ran the (paid) vision pass and checkpointed
+	// its results, skip the cost gate + Extract entirely and resume at embedding
+	// from the persisted description + blocks. This is what stops a transient
+	// downstream (embed) failure from re-invoking — and re-charging — the vision
+	// model on every River retry.
+	if ext.Status == models.ImageExtractionStatusDescribing {
+		return p.resumeFromCheckpoint(ctx, in, ext)
+	}
+
 	// Cost-cap gate (CON-86 usage.Checker) BEFORE the vision spend. Nil checker =
 	// no gate. Over-cap is terminal (reject before spend).
 	if p.Deps.Checker != nil {
@@ -229,7 +241,13 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		if imageclient.IsInvalidImage(err) || imageclient.IsUnsupportedImage(err) {
 			return p.terminalReject(ctx, in, ext, "the image could not be processed (unsupported, corrupt, or too large)")
 		}
-		return fmt.Errorf("process_image %s: extract: %w", in.AssetID, err) // transient → retry
+		// Transient (service down / deadline / 5xx). Retry — but on the FINAL attempt
+		// settle to failed so the asset never strands in "processing" once River
+		// gives up (mirrors process_audio/process_document lastAttempt handling).
+		if lastAttempt {
+			return p.terminalReject(ctx, in, ext, "image processing is temporarily unavailable — please try again")
+		}
+		return fmt.Errorf("process_image %s: extract: %w", in.AssetID, err)
 	}
 	if res.RejectedReason != "" {
 		return p.terminalReject(ctx, in, ext, res.RejectedReason)
@@ -267,17 +285,100 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		return fmt.Errorf("process_image %s: set description/alt: %w", in.AssetID, err)
 	}
 
-	// Embed the description + extracted-text blocks so the image is searchable.
-	embedFailures, err := p.embed(ctx, in, res)
-	if err != nil {
-		return err // transient embedder outage → retry
+	// CHECKPOINT the successful vision pass BEFORE the retryable embed. The
+	// extraction now durably holds the shape, quality flags, cost, blocks, and
+	// description; marking it `describing` (== "vision done, embedding pending")
+	// means a retry after an embed failure resumes here via resumeFromCheckpoint,
+	// never re-calling the paid Extract.
+	ext.Status = models.ImageExtractionStatusDescribing
+	ext.FailureReason = ""
+	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
+		return fmt.Errorf("process_image %s: checkpoint extraction: %w", in.AssetID, err)
 	}
 
-	// Settle status: description-ok/extraction-failed → partial (searchable, blocks
-	// absent, retriable); a partial embed → partial; else ready.
+	return p.embedAndSettle(ctx, in, ext, embedInputsFromResult(res))
+}
+
+// resumeFromCheckpoint re-drives ONLY the embedding + settle steps of a run whose
+// vision pass already completed and was checkpointed (status `describing`). It
+// reloads the persisted description (asset.Content) + blocks and embeds them, so a
+// transient embedder outage retries without a second (paid) Extract.
+func (p *ProcessImageProcessor) resumeFromCheckpoint(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction) error {
+	asset, err := p.Deps.Assets.GetByID(ctx, in.AssetID)
+	if err != nil {
+		return fmt.Errorf("process_image %s: reload asset for resume: %w", in.AssetID, err)
+	}
+	blocks, err := p.Deps.Blocks.ListByExtraction(ctx, ext.ID)
+	if err != nil {
+		return fmt.Errorf("process_image %s: reload blocks for resume: %w", in.AssetID, err)
+	}
+	return p.embedAndSettle(ctx, in, ext, embedInputsFromPersisted(asset.Content, blocks))
+}
+
+// embedInput is one text to embed with its anchor + citation label.
+type embedInput struct {
+	text   string
+	anchor *models.SourceAnchor
+	label  string
+}
+
+// embedInputsFromResult builds the embed set from a fresh Extract response.
+func embedInputsFromResult(res *imageclient.ExtractResult) []embedInput {
+	inputs := make([]embedInput, 0, len(res.Blocks)+1)
+	if hasWords(res.Description) {
+		inputs = append(inputs, embedInput{
+			text:   res.Description,
+			anchor: &models.SourceAnchor{Kind: "image", Provenance: "image_extraction"},
+			label:  "Image description",
+		})
+	}
+	for i, b := range res.Blocks {
+		if !hasWords(b.Text) {
+			continue
+		}
+		inputs = append(inputs, embedInput{text: b.Text, anchor: blockAnchor(b), label: fmt.Sprintf("Region %d", i+1)})
+	}
+	return inputs
+}
+
+// embedInputsFromPersisted rebuilds the embed set from checkpointed state on a
+// resume: the description (asset.Content) + the stored image_blocks (which already
+// carry their persisted SourceAnchor).
+func embedInputsFromPersisted(description string, blocks []models.ImageBlock) []embedInput {
+	inputs := make([]embedInput, 0, len(blocks)+1)
+	if hasWords(description) {
+		inputs = append(inputs, embedInput{
+			text:   description,
+			anchor: &models.SourceAnchor{Kind: "image", Provenance: "image_extraction"},
+			label:  "Image description",
+		})
+	}
+	for i := range blocks {
+		if !hasWords(blocks[i].Text) {
+			continue
+		}
+		inputs = append(inputs, embedInput{text: blocks[i].Text, anchor: blocks[i].Anchor, label: fmt.Sprintf("Region %d", i+1)})
+	}
+	return inputs
+}
+
+// embedAndSettle embeds the given inputs into assets_chunks and settles the asset
+// + extraction to their terminal status. A total embed failure returns an error
+// so the job retries (resuming from the checkpoint, no re-Extract). The
+// partial-vs-ready decision reads the quality flags persisted on the extraction,
+// so it is identical on the fresh and resume paths.
+func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, inputs []embedInput) error {
+	embedFailures, err := p.embed(ctx, in, inputs)
+	if err != nil {
+		return err // transient embedder outage → retry (resumes from checkpoint)
+	}
+
+	// description-ok/extraction-failed → partial (searchable, blocks absent,
+	// retriable); a partial embed → partial; else ready. The extraction-quality
+	// signals come from the persisted extraction, so resume settles identically.
 	status := models.AssetStatusReady
 	extStatus := models.ImageExtractionStatusComplete
-	if (res.DescriptionOK && !res.ExtractionOK && res.Shape != models.ImageShapeCreative) || embedFailures > 0 {
+	if (ext.DescriptionOK && !ext.ExtractionOK && ext.Shape != models.ImageShapeCreative) || embedFailures > 0 {
 		status = models.AssetStatusPartial
 		extStatus = models.ImageExtractionStatusPartial
 	}
@@ -364,11 +465,17 @@ func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTa
 		return nil
 	}
 	file, err := p.Deps.Files.GetByAssetID(ctx, in.AssetID)
-	if err != nil || file == nil {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && file == nil) {
 		// No file row (shouldn't happen — upload creates it). Non-fatal: metadata
 		// stamping is best-effort; the extraction/description are the point.
 		slog.WarnContext(ctx, "no asset_file to stamp", logging.AttrComponent, "jobs.process_image", "asset_id", in.AssetID)
 		return nil
+	}
+	if err != nil {
+		// A real read failure (not "no rows") must NOT be swallowed as "skip" — that
+		// would silently drop the dimension stamping on a transient DB blip. Propagate
+		// so the job retries.
+		return fmt.Errorf("process_image %s: load asset_file: %w", in.AssetID, err)
 	}
 	file.Width = res.Normalized.Width
 	file.Height = res.Normalized.Height
@@ -379,35 +486,10 @@ func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTa
 	return nil
 }
 
-// embed builds embed-ready chunks from the description + extracted-text blocks
-// and upserts them into assets_chunks (anchored). Returns the count of chunks
-// that failed to embed; a total embed failure (nothing landed though something
-// was embeddable) is returned as an error so the job retries.
-func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, res *imageclient.ExtractResult) (int, error) {
-	type embedText struct {
-		text   string
-		anchor *models.SourceAnchor
-		label  string
-	}
-	var inputs []embedText
-	if hasWords(res.Description) {
-		inputs = append(inputs, embedText{
-			text:   res.Description,
-			anchor: &models.SourceAnchor{Kind: "image", Provenance: "image_extraction"},
-			label:  "Image description",
-		})
-	}
-	for i, b := range res.Blocks {
-		if !hasWords(b.Text) {
-			continue
-		}
-		inputs = append(inputs, embedText{
-			text:   b.Text,
-			anchor: blockAnchor(b),
-			label:  fmt.Sprintf("Region %d", i+1),
-		})
-	}
-
+// embed embeds the given inputs into assets_chunks (anchored). Returns the count
+// of chunks that failed to embed; a total embed failure (nothing landed though
+// something was embeddable) is returned as an error so the job retries.
+func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, inputs []embedInput) (int, error) {
 	chunks := make([]models.AssetChunk, 0, len(inputs))
 	var embedAttempts, embedFailures int
 	for idx, e := range inputs {

@@ -231,10 +231,12 @@ type Config struct {
 	ImageServiceAddr         string        `envconfig:"IMAGE_SERVICE_ADDR"           default:""`
 	ImageServiceTimeout      time.Duration `envconfig:"IMAGE_SERVICE_TIMEOUT"        default:"3m"`
 	ImageServiceMaxRecvBytes int           `envconfig:"IMAGE_SERVICE_MAX_RECV_BYTES" default:"33554432"`
-	// ImageMaxPixels is the decompression-bomb ceiling enforced header-first in the
-	// service (~100 MP). The upload byte cap + alt-text storage length are NOT here:
-	// they are operator-controlled global config (CON-292), read via GlobalLimits().
-	ImageMaxPixels int64 `envconfig:"IMAGE_MAX_PIXELS" default:"100000000"`
+	// Note: the decompression-bomb pixel ceiling is enforced INSIDE image-service
+	// (its own IMAGE_MAX_PIXELS env), not here — the current contract has no field to
+	// pass it over, so it is deliberately NOT duplicated as dead ogen config. The
+	// upload byte cap + alt-text storage length live in operator-controlled global
+	// config (CON-292), read via GlobalLimits().
+	//
 	// ImageJobWorkers sizes the dedicated `image` queue's worker pool (kept small so
 	// heavy vision runs can't starve the default queue); ImageJobTimeout bounds a
 	// single content-bank Extract job attempt.

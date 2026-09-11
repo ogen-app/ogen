@@ -485,7 +485,10 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			Filename:      fh.Filename,
 		})
 		if err != nil {
+			// Drop BOTH the staged original and any partial cleaned object the service
+			// may have written to cleanKey before failing — never leave orphaned bytes.
 			_ = h.storage.Delete(c.Context(), origKey)
+			_ = h.storage.Delete(c.Context(), cleanKey)
 			switch {
 			case imageclient.IsUnsupportedImage(err):
 				return fiber.NewError(fiber.StatusUnsupportedMediaType, "unsupported image format")
@@ -498,6 +501,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		}
 		if prep.RejectedReason != "" {
 			_ = h.storage.Delete(c.Context(), origKey)
+			_ = h.storage.Delete(c.Context(), cleanKey)
 			return fiber.NewError(fiber.StatusBadRequest, prep.RejectedReason)
 		}
 		att.MimeType = prep.Mime

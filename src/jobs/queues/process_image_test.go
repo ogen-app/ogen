@@ -38,6 +38,9 @@ func (f *fakeImageAssets) UpdateStatus(_ context.Context, _, status string) erro
 	return nil
 }
 func (f *fakeImageAssets) CreatorOf(context.Context, string) (string, error) { return "", nil }
+func (f *fakeImageAssets) GetByID(_ context.Context, id string) (*models.Asset, error) {
+	return &models.Asset{ID: id, Content: f.content}, nil
+}
 func (f *fakeImageAssets) SetImageResult(_ context.Context, _, content, altText string, setAlt bool) error {
 	f.wrote = true
 	f.content = content
@@ -97,6 +100,9 @@ func (f *fakeImageBlocks) ReplaceForExtraction(_ context.Context, _ string, bloc
 	f.calls++
 	f.got = blocks
 	return nil
+}
+func (f *fakeImageBlocks) ListByExtraction(_ context.Context, _ string) ([]models.ImageBlock, error) {
+	return f.got, nil
 }
 
 func newImageProc(d ImageDeps) *ProcessImageProcessor { return &ProcessImageProcessor{Deps: d} }

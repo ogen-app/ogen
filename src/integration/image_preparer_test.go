@@ -58,7 +58,11 @@ func (httpImagePreparer) PrepareAttachment(ctx context.Context, opts imageclient
 	if err != nil {
 		return nil, grpcstatus.Error(codes.Unavailable, err.Error())
 	}
+	_, _ = io.Copy(io.Discard, putResp.Body)
 	_ = putResp.Body.Close()
+	if putResp.StatusCode < 200 || putResp.StatusCode >= 300 {
+		return nil, grpcstatus.Errorf(codes.Unavailable, "PUT derivative: unexpected status %s", putResp.Status)
+	}
 
 	sum := sha256.Sum256(raw)
 	return &imageclient.PrepareAttachmentResult{
