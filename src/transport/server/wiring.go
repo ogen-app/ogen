@@ -30,6 +30,9 @@ type repos struct {
 	assetFileRepo            repository.AssetFileRepository
 	assetImageRepo           repository.AssetImageRepository
 	pieceRepo                repository.AssetRepository
+	audioExtractionRepo      repository.AudioExtractionRepository
+	audioSegmentRepo         repository.AudioSegmentRepository
+	utteranceRepo            repository.UtteranceRepository
 	platformRepo             repository.PlatformRepository
 	platformGlobalLimitsRepo repository.PlatformGlobalLimitsRepository
 	campaignTypeRepo         repository.CampaignTypeRepository
@@ -78,6 +81,9 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		assetFileRepo:            assetFileRepo,
 		assetImageRepo:           repository.NewAssetImageRepository(db),
 		pieceRepo:                repository.NewAssetRepository(db, tagRepo, assetFileRepo),
+		audioExtractionRepo:      repository.NewAudioExtractionRepository(db),
+		audioSegmentRepo:         repository.NewAudioSegmentRepository(db),
+		utteranceRepo:            repository.NewUtteranceRepository(db),
 		platformRepo:             platformRepo,
 		platformGlobalLimitsRepo: repository.NewPlatformGlobalLimitsRepository(db),
 		campaignTypeRepo:         campaignTypeRepo,

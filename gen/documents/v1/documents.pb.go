@@ -30,6 +30,7 @@ const (
 	AnchorKind_ANCHOR_KIND_SHEET       AnchorKind = 3 // xlsx/ods/csv
 	AnchorKind_ANCHOR_KIND_SECTION     AnchorKind = 4 // heading-path prose
 	AnchorKind_ANCHOR_KIND_EMAIL       AnchorKind = 5 // eml
+	AnchorKind_ANCHOR_KIND_TIME        AnchorKind = 6 // audio transcript time-range (CON-282)
 )
 
 // Enum value maps for AnchorKind.
@@ -41,6 +42,7 @@ var (
 		3: "ANCHOR_KIND_SHEET",
 		4: "ANCHOR_KIND_SECTION",
 		5: "ANCHOR_KIND_EMAIL",
+		6: "ANCHOR_KIND_TIME",
 	}
 	AnchorKind_value = map[string]int32{
 		"ANCHOR_KIND_UNSPECIFIED": 0,
@@ -49,6 +51,7 @@ var (
 		"ANCHOR_KIND_SHEET":       3,
 		"ANCHOR_KIND_SECTION":     4,
 		"ANCHOR_KIND_EMAIL":       5,
+		"ANCHOR_KIND_TIME":        6,
 	}
 )
 
@@ -368,14 +371,21 @@ func (x *Chunk) GetTokenCount() int32 {
 }
 
 type Anchor struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          AnchorKind             `protobuf:"varint,1,opt,name=kind,proto3,enum=documents.v1.AnchorKind" json:"kind,omitempty"`
-	PageStart     int32                  `protobuf:"varint,2,opt,name=page_start,json=pageStart,proto3" json:"page_start,omitempty"` // page-based formats; 0 = n/a
-	PageEnd       int32                  `protobuf:"varint,3,opt,name=page_end,json=pageEnd,proto3" json:"page_end,omitempty"`
-	Slide         int32                  `protobuf:"varint,4,opt,name=slide,proto3" json:"slide,omitempty"`                               // pptx/odp slide number; 0 = n/a
-	Sheet         string                 `protobuf:"bytes,5,opt,name=sheet,proto3" json:"sheet,omitempty"`                                // xlsx/ods sheet name; empty = n/a
-	CellRange     string                 `protobuf:"bytes,6,opt,name=cell_range,json=cellRange,proto3" json:"cell_range,omitempty"`       // e.g. "A10:F24"; empty = n/a
-	HeadingPath   []string               `protobuf:"bytes,7,rep,name=heading_path,json=headingPath,proto3" json:"heading_path,omitempty"` // prose breadcrumb, root->leaf
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Kind        AnchorKind             `protobuf:"varint,1,opt,name=kind,proto3,enum=documents.v1.AnchorKind" json:"kind,omitempty"`
+	PageStart   int32                  `protobuf:"varint,2,opt,name=page_start,json=pageStart,proto3" json:"page_start,omitempty"` // page-based formats; 0 = n/a
+	PageEnd     int32                  `protobuf:"varint,3,opt,name=page_end,json=pageEnd,proto3" json:"page_end,omitempty"`
+	Slide       int32                  `protobuf:"varint,4,opt,name=slide,proto3" json:"slide,omitempty"`                               // pptx/odp slide number; 0 = n/a
+	Sheet       string                 `protobuf:"bytes,5,opt,name=sheet,proto3" json:"sheet,omitempty"`                                // xlsx/ods sheet name; empty = n/a
+	CellRange   string                 `protobuf:"bytes,6,opt,name=cell_range,json=cellRange,proto3" json:"cell_range,omitempty"`       // e.g. "A10:F24"; empty = n/a
+	HeadingPath []string               `protobuf:"bytes,7,rep,name=heading_path,json=headingPath,proto3" json:"heading_path,omitempty"` // prose breadcrumb, root->leaf
+	// Time-range anchors for audio transcripts (CON-282): the shared Anchor is
+	// the one citation shape across every asset kind. ogen assembles
+	// audio-service utterances into chunks and stamps kind = ANCHOR_KIND_TIME
+	// with [start_ms, end_ms) on the ORIGINAL timeline (source_label e.g.
+	// "12:03–12:47"). n/a (0) for every page/slide/sheet/section/email anchor.
+	StartMs       int64 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs         int64 `protobuf:"varint,9,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -459,6 +469,20 @@ func (x *Anchor) GetHeadingPath() []string {
 	return nil
 }
 
+func (x *Anchor) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *Anchor) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
 var File_documents_v1_documents_proto protoreflect.FileDescriptor
 
 const file_documents_v1_documents_proto_rawDesc = "" +
@@ -483,7 +507,7 @@ const file_documents_v1_documents_proto_rawDesc = "" +
 	"\fsource_label\x18\x03 \x01(\tR\vsourceLabel\x12,\n" +
 	"\x06anchor\x18\x04 \x01(\v2\x14.documents.v1.AnchorR\x06anchor\x12\x1f\n" +
 	"\vtoken_count\x18\x05 \x01(\x05R\n" +
-	"tokenCount\"\xde\x01\n" +
+	"tokenCount\"\x90\x02\n" +
 	"\x06Anchor\x12,\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x18.documents.v1.AnchorKindR\x04kind\x12\x1d\n" +
 	"\n" +
@@ -493,7 +517,9 @@ const file_documents_v1_documents_proto_rawDesc = "" +
 	"\x05sheet\x18\x05 \x01(\tR\x05sheet\x12\x1d\n" +
 	"\n" +
 	"cell_range\x18\x06 \x01(\tR\tcellRange\x12!\n" +
-	"\fheading_path\x18\a \x03(\tR\vheadingPath*\x9d\x01\n" +
+	"\fheading_path\x18\a \x03(\tR\vheadingPath\x12\x19\n" +
+	"\bstart_ms\x18\b \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\t \x01(\x03R\x05endMs*\xb3\x01\n" +
 	"\n" +
 	"AnchorKind\x12\x1b\n" +
 	"\x17ANCHOR_KIND_UNSPECIFIED\x10\x00\x12\x14\n" +
@@ -501,7 +527,8 @@ const file_documents_v1_documents_proto_rawDesc = "" +
 	"\x11ANCHOR_KIND_SLIDE\x10\x02\x12\x15\n" +
 	"\x11ANCHOR_KIND_SHEET\x10\x03\x12\x17\n" +
 	"\x13ANCHOR_KIND_SECTION\x10\x04\x12\x15\n" +
-	"\x11ANCHOR_KIND_EMAIL\x10\x052V\n" +
+	"\x11ANCHOR_KIND_EMAIL\x10\x05\x12\x14\n" +
+	"\x10ANCHOR_KIND_TIME\x10\x062V\n" +
 	"\x10DocumentsService\x12B\n" +
 	"\x05Parse\x12\x1a.documents.v1.ParseRequest\x1a\x1b.documents.v1.ParseResponse(\x01B\xaa\x01\n" +
 	"\x10com.documents.v1B\x0eDocumentsProtoP\x01Z5github.com/ogen-app/ogen/gen/documents/v1;documentsv1\xa2\x02\x03DXX\xaa\x02\fDocuments.V1\xca\x02\fDocuments\\V1\xe2\x02\x18Documents\\V1\\GPBMetadata\xea\x02\rDocuments::V1b\x06proto3"

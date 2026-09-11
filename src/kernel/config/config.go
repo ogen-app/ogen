@@ -190,6 +190,33 @@ type Config struct {
 	DocumentsServiceTimeout      time.Duration `envconfig:"DOCUMENTS_SERVICE_TIMEOUT"        default:"5m"`
 	DocumentsServiceMaxRecvBytes int           `envconfig:"DOCUMENTS_SERVICE_MAX_RECV_BYTES" default:"134217728"`
 
+	// Audio transcription microservice (CON-282), mirroring video-service. The
+	// API hands audio-service short-lived presigned GET/PUT URLs over gRPC — over
+	// the Railway private network — for three stateless compute calls (Probe /
+	// Normalize / TranscribeSegment); ogen owns the resumable state machine on a
+	// dedicated `audio` River queue. Empty AudioServiceAddr disables audio
+	// ingestion (those uploads fail fast with a clear message), mirroring the
+	// empty-addr pattern above. Prod: audio-service.railway.internal:50051;
+	// compose/tests: audio-service:50051. Timeout covers a whole-segment
+	// transcription; MaxRecvBytes (32 MiB) bounds a segment's utterance payload.
+	AudioServiceAddr         string        `envconfig:"AUDIO_SERVICE_ADDR"           default:""`
+	AudioServiceTimeout      time.Duration `envconfig:"AUDIO_SERVICE_TIMEOUT"        default:"10m"`
+	AudioServiceMaxRecvBytes int           `envconfig:"AUDIO_SERVICE_MAX_RECV_BYTES" default:"33554432"`
+	// AudioJobWorkers sizes the dedicated `audio` queue's worker pool (kept small
+	// so long audio can't starve the default queue); AudioJobTimeout bounds a
+	// single job attempt (checkpointed, so a longer run resumes). Segmentation:
+	// AudioSegmentMaxMs windows + AudioSegmentOverlapMs overlap. AudioMaxDurationMs
+	// is the pre-spend max-duration tier gate (0 = no cap; a CON-208 tier lowers
+	// it). TranscribeModel is the Gemini multimodal model id (config, never
+	// compiled in). AudioRawEmbedding stubs the deferred raw-audio-embedding flag.
+	AudioJobWorkers       int           `envconfig:"AUDIO_JOB_WORKERS"        default:"2"`
+	AudioJobTimeout       time.Duration `envconfig:"AUDIO_JOB_TIMEOUT"        default:"3h"`
+	AudioSegmentMaxMs     int64         `envconfig:"AUDIO_SEGMENT_MAX_MS"     default:"300000"`
+	AudioSegmentOverlapMs int64         `envconfig:"AUDIO_SEGMENT_OVERLAP_MS" default:"5000"`
+	AudioMaxDurationMs    int64         `envconfig:"AUDIO_MAX_DURATION_MS"    default:"14400000"`
+	TranscribeModel       string        `envconfig:"TRANSCRIBE_MODEL"         default:"gemini-2.5-flash"`
+	AudioRawEmbedding     bool          `envconfig:"AUDIO_RAW_EMBEDDING"      default:"false"`
+
 	// Zernio integration. Empty ZernioAPIKey disables the
 	// integration entirely; everything else stays defaulted.
 	ZernioAPIKey           string        `envconfig:"ZERNIO_API_KEY"            default:""`

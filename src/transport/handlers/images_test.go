@@ -31,6 +31,9 @@ type stubStorage struct {
 	returnErr error
 	lastKey   string
 	objects   map[string][]byte
+	// headSizeOverride, when > 0, makes Head report this size for any key —
+	// lets a test simulate an oversized object without materialising the bytes.
+	headSizeOverride int64
 }
 
 func (s *stubStorage) Upload(_ context.Context, key string, r io.Reader, _ int64, _ string) (string, error) {
@@ -70,6 +73,9 @@ func (s *stubStorage) PresignedPutURL(_ context.Context, key, _ string, _ time.D
 }
 
 func (s *stubStorage) Head(_ context.Context, key string) (*storage.ObjectInfo, error) {
+	if s.headSizeOverride > 0 {
+		return &storage.ObjectInfo{Size: s.headSizeOverride, ContentType: "audio/mpeg"}, nil
+	}
 	if s.objects == nil {
 		return nil, s.returnErr
 	}

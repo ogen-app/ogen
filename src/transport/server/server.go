@@ -33,6 +33,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	audioclient "github.com/ogen-app/ogen/src/transport/grpc/client/audio"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/documents"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/video"
@@ -220,6 +221,20 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		app.Hooks().OnShutdown(func() error { return documentsClient.Close() })
 	}
 
+	// CON-282: gRPC client for the audio transcription microservice over the
+	// Railway private network. nil when AUDIO_SERVICE_ADDR is unset. Its Close
+	// hook is registered LATER — after riverClient.Stop — so draining audio jobs
+	// don't have their in-flight TranscribeSegment RPCs killed by an early
+	// connection close (unlike pdf/video which are request-time only).
+	audioClient, err := audioclient.New(audioclient.Config{
+		Addr:         cfg.AudioServiceAddr,
+		Timeout:      cfg.AudioServiceTimeout,
+		MaxRecvBytes: cfg.AudioServiceMaxRecvBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	// Embedding (Gemini) is initialised here — before the River registry —
 	// because the process_pdf worker (CON-103) needs the embedder in its deps.
 	// The returned embedder is a stable reloadable wrapper (always non-nil): when
@@ -267,6 +282,33 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	if documentIngestEnabled {
 		documentDeps.Client = documentsClient
+	}
+
+	// CON-282: audio ingestion mirrors document/PDF — live when the audio-service
+	// client and storage are present; embedder availability is checked per-run by
+	// the worker. Client left nil otherwise so the worker no-ops. Runs on the
+	// dedicated `audio` River queue; the cost gate reuses the usage Checker.
+	audioIngestEnabled := audioClient != nil && store != nil
+	audioDeps := queues.AudioDeps{
+		Embedder:         embedder,
+		Storage:          store,
+		Assets:           r.pieceRepo,
+		Chunks:           r.chunksRepo,
+		Extractions:      r.audioExtractionRepo,
+		Segments:         r.audioSegmentRepo,
+		Utterances:       r.utteranceRepo,
+		Recorder:         usageWiring.recorder,
+		Checker:          usageWiring.checker,
+		EmbedModel:       cfg.EmbedModel,
+		TranscribeModel:  cfg.TranscribeModel,
+		SegmentMaxMs:     cfg.AudioSegmentMaxMs,
+		SegmentOverlapMs: cfg.AudioSegmentOverlapMs,
+		MaxDurationMs:    cfg.AudioMaxDurationMs,
+		JobTimeout:       cfg.AudioJobTimeout,
+		Notifier:         notifier, // CON-242: asset-ingest-done producer
+	}
+	if audioIngestEnabled {
+		audioDeps.Client = audioClient
 	}
 
 	// CON-222: URL assets. The Firecrawl scrape client resolves firecrawl_api_key
@@ -362,6 +404,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		PDF: pdfDeps,
 		// CON-280: document ingestion worker deps.
 		Document: documentDeps,
+		// CON-282: audio ingestion worker deps (runs on the dedicated audio queue).
+		Audio: audioDeps,
 		// CON-222: URL scrape ingestion worker deps.
 		URL: urlDeps,
 		// CON-154: email send + cleanup worker deps.
@@ -388,8 +432,15 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	riverClient, err := river.NewClient[*sql.Tx](riverdatabasesql.New(db.DB), &river.Config{
 		// Route River's internal logging through the shared structured logger
 		// (CON-107) so job-queue lines join the same stream and format.
-		Logger:  slog.Default(),
-		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: cfg.JobWorkers}},
+		Logger: slog.Default(),
+		// CON-282: a dedicated `audio` queue isolates long-running transcription
+		// from short ingestion on the default queue (its worker pool is sized
+		// separately, kept small). The worker is queue-agnostic; jobs are routed
+		// here by ProcessAudioTask.InsertOpts().
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.JobWorkers},
+			queues.AudioQueue:  {MaxWorkers: cfg.AudioJobWorkers},
+		},
 		Workers: workers,
 		PeriodicJobs: queues.PeriodicConfig{
 			CleanupEvery:      cleanupEvery,
@@ -474,6 +525,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		_ = riverClient.Stop(sctx)
 		return nil
 	})
+	// CON-282: close the audio-service gRPC connection AFTER River has drained
+	// (hook registered here, post-Stop, so it runs after it in Fiber's ordered
+	// shutdown). Closing earlier would abort a still-running process_audio job's
+	// in-flight TranscribeSegment RPC. Runs before the recorder drain below.
+	if audioClient != nil {
+		app.Hooks().OnShutdown(func() error { return audioClient.Close() })
+	}
 
 	// Drain the usage recorder LAST. Fiber runs OnShutdown hooks in registration
 	// order, so this must come after the river/zernio producer hooks above:
@@ -518,6 +576,15 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		docJobs = enqueuer
 	}
 	handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, auth, embedCallbacks.OnMarkdownSave).Register(app)
+
+	// CON-282: audio asset lifecycle (presigned upload + extraction status/
+	// transcript/retry). audioJobs is wired only when audio ingestion is live;
+	// otherwise the write endpoints return 409 ("audio ingestion not configured").
+	var audioJobs handlers.AudioIngestEnqueuer
+	if audioIngestEnabled {
+		audioJobs = enqueuer
+	}
+	handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, store, db, audioJobs, auth).Register(app)
 
 	// Anthropic-backed flows live in a hot-reloadable runtime. boot
 	// is allowed to start without an Anthropic key (callbacks return

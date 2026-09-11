@@ -62,6 +62,29 @@ func TestSourceAnchorColumnsPresentAfterMigrate(t *testing.T) {
 	}
 }
 
+// TestAudioIngestionTablesPresentAfterMigrate guards CON-282's migration
+// (20260911000001): audio ingestion persists per-run processing state in
+// audio_extractions / audio_segments / utterances (the searchable transcript
+// chunks land in assets_chunks). All three cascade with the asset, so the chain
+// must always end with the tables present.
+func TestAudioIngestionTablesPresentAfterMigrate(t *testing.T) {
+	ctx := t.Context()
+	db := pgtest.MustDB() // has already run the full migration chain
+	for _, table := range []string{"audio_extractions", "audio_segments", "utterances"} {
+		var n int
+		if err := db.NewSelect().
+			ColumnExpr("count(*)").
+			TableExpr("information_schema.tables").
+			Where("table_name = ?", table).
+			Scan(ctx, &n); err != nil {
+			t.Fatalf("query information_schema for %s: %v", table, err)
+		}
+		if n != 1 {
+			t.Fatalf("%s table count after migrate = %d, want 1", table, n)
+		}
+	}
+}
+
 // TestPublishedURLFixupRepairsMissingColumn simulates the broken-prod state
 // (column dropped, fixup migration un-recorded) and re-runs the migrator,
 // asserting the 20260908000001 fixup idempotently re-adds the column through

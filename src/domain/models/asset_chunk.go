@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/pgvector/pgvector-go"
@@ -41,13 +42,38 @@ type AssetChunk struct {
 // SourceAnchor is the structured source location of a document chunk (CON-280),
 // persisted as jsonb in assets_chunks.source_anchor. Which fields are populated
 // depends on Kind: page for prose flow, slide for decks, sheet+CellRange for
-// spreadsheets, HeadingPath for structured prose, and headers-as-metadata for
-// email. Zero-valued fields are omitted from the stored JSON.
+// spreadsheets, HeadingPath for structured prose, headers-as-metadata for
+// email, and StartMs/EndMs for audio transcript time-ranges (CON-282).
+// Zero-valued fields are omitted from the stored JSON.
 type SourceAnchor struct {
-	Kind        string   `json:"kind"` // page|slide|sheet|section|email
+	Kind        string   `json:"kind"` // page|slide|sheet|section|email|time
 	Page        int      `json:"page,omitempty"`
 	Slide       int      `json:"slide,omitempty"`
 	Sheet       string   `json:"sheet,omitempty"`
 	CellRange   string   `json:"cell_range,omitempty"`
 	HeadingPath []string `json:"heading_path,omitempty"`
+	// StartMs/EndMs bound an audio transcript chunk on the ORIGINAL asset
+	// timeline (CON-282), Kind == "time". Provenance marks how the anchor was
+	// derived (e.g. "transcript"). All three are empty for non-audio anchors.
+	StartMs    int64  `json:"start_ms,omitempty"`
+	EndMs      int64  `json:"end_ms,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
+}
+
+// MarshalJSON keeps start_ms/end_ms present for time anchors even at 0 ms: the
+// first audio chunk legitimately starts at 0, and the struct's `omitempty` tag
+// would drop it, leaving consumers unable to tell "0" from "absent" (CON-282).
+// Non-time anchors keep their omitempty semantics, so page/slide/sheet chunks
+// never gain empty time fields. The embedded alias avoids infinite recursion;
+// the shallower explicit fields shadow its omitempty ones for time anchors.
+func (a SourceAnchor) MarshalJSON() ([]byte, error) {
+	type alias SourceAnchor
+	if a.Kind == "time" {
+		return json.Marshal(struct {
+			alias
+			StartMs int64 `json:"start_ms"`
+			EndMs   int64 `json:"end_ms"`
+		}{alias: alias(a), StartMs: a.StartMs, EndMs: a.EndMs})
+	}
+	return json.Marshal(alias(a))
 }

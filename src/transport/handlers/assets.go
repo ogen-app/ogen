@@ -1171,6 +1171,11 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 			}
 		}
 	}
+	// CON-282: the audio normalized derivative lives at a deterministic key
+	// alongside the original (evicted with the asset, D5). It has no DB row of
+	// its own, so add it unconditionally — the best-effort Delete below is a
+	// no-op when the object doesn't exist (non-audio assets).
+	keysToDelete = append(keysToDelete, storage.TenantKey(c.Context(), fmt.Sprintf("assets/%s/normalized.opus", id)))
 
 	deleted, err := h.repo.Delete(c.Context(), id)
 	if err != nil {
