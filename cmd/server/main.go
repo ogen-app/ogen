@@ -178,6 +178,10 @@ func main() {
 			// + single-row global limits.
 			repository.NewPlatformRepository(db),
 			repository.NewPlatformGlobalLimitsRepository(db),
+			// CON-294: PlanAdminService (tier-version authoring/assignment) + the
+			// SetTenantTier assignment stamp use the tier-version + assignment repos.
+			repository.NewTenantTierVersionRepository(db),
+			repository.NewTenantTierAssignmentRepository(db),
 		); err != nil {
 			slog.Error("grpc init failed; internal grpc disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
 			_ = lis.Close()
