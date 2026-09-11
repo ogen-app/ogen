@@ -24,6 +24,9 @@ const (
 	AssignmentReasonGrandfathered     = "grandfathered"
 	AssignmentReasonUpgrade           = "upgrade"
 	AssignmentReasonDowngrade         = "downgrade"
+	// AssignmentReasonOperatorSet marks an assignment stamped by an operator
+	// setting a tenant's tier directly via Harbor (CON-294 SetTenantTier).
+	AssignmentReasonOperatorSet = "operator_set"
 )
 
 // TenantTierVersion is an immutable, versioned snapshot of one tier's pricing +

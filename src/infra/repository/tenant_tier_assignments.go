@@ -30,6 +30,13 @@ type TenantTierAssignmentRepository interface {
 	// LatestClosedUpper returns the greatest upper bound among the tenant's
 	// closed assignment ranges, or nil if it has none.
 	LatestClosedUpper(ctx context.Context, tenantID string) (*time.Time, error)
+	// Reassign points a tenant at a tier and, when tierVersionID is non-nil, opens
+	// a new assignment to that version — in ONE transaction: update
+	// tenants.tier_id (FK-validated), close the tenant's current open assignment,
+	// then open [at, infinity) on the new version. Returns false if the tenant
+	// does not exist or is soft-deleted. Used by SetTenantTierVersion (an explicit
+	// version) and SetTenantTier (the tier's latest active version, or nil).
+	Reassign(ctx context.Context, tenantID, tierID string, tierVersionID *string, reason string, at time.Time) (bool, error)
 }
 
 type tenantTierAssignmentRepository struct {
@@ -88,6 +95,57 @@ func (r *tenantTierAssignmentRepository) LatestClosedUpper(ctx context.Context, 
 		return nil, err
 	}
 	return upper, nil
+}
+
+func (r *tenantTierAssignmentRepository) Reassign(ctx context.Context, tenantID, tierID string, tierVersionID *string, reason string, at time.Time) (bool, error) {
+	var noUpper *time.Time
+	var found bool
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		// Point the tenant at the tier; the FK validates the tier exists (a bad
+		// tier surfaces as 23503, which the caller maps to FailedPrecondition).
+		res, err := tx.NewUpdate().Model((*models.Tenant)(nil)).
+			Set("tier_id = ?", tierID).
+			Set("updated_at = ?", at).
+			Where("id = ?", tenantID).
+			Where("deleted_at IS NULL").
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil // tenant not found / soft-deleted; found stays false
+		}
+		found = true
+		// Swap the assignment ONLY when the tier has a version to assign: close
+		// the tenant's current open range (the append-only trigger's one permitted
+		// update) and open the new one. When there is no version to assign (a tier
+		// with no active version), update tier_id but leave the existing assignment
+		// untouched — never strip a tenant's entitlements or rewrite history.
+		if tierVersionID != nil {
+			if _, err := tx.NewUpdate().Model((*models.TenantTierAssignment)(nil)).
+				Set("valid = tstzrange(lower(valid), ?, '[)')", at).
+				Where("tenant_id = ?", tenantID).
+				Where("upper_inf(valid)").
+				Exec(ctx); err != nil {
+				return err
+			}
+			id, err := models.NewID()
+			if err != nil {
+				return err
+			}
+			a := &models.TenantTierAssignment{ID: id, TenantID: tenantID, TierVersionID: *tierVersionID, Reason: reason, CreatedAt: at}
+			if _, err := tx.NewInsert().Model(a).
+				Value("valid", "tstzrange(?, ?, '[)')", at, noUpper).
+				Exec(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return found, nil
 }
 
 // TierAssignmentBackfillReport summarises a BackfillTenantTierAssignments run.
