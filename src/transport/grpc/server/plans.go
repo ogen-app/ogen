@@ -176,10 +176,17 @@ func (s *planAdminService) CreateTierVersion(ctx context.Context, req *plansv1.C
 		CreatedAt:    time.Now().UTC(),
 	}
 	if err := s.versions.Create(ctx, v, prices); err != nil {
-		if pgCode(err) == pgFKViolation {
+		switch pgCode(err) {
+		case pgFKViolation:
 			return nil, status.Errorf(codes.FailedPrecondition, "no such tier %q", tierID)
+		case pgUniqueViolation:
+			// NextVersion + Create is not atomic; a concurrent create can grab the
+			// same (tier_id, version). Surface the unique violation as a retryable
+			// Aborted rather than an opaque Internal.
+			return nil, status.Error(codes.Aborted, "a version was concurrently allocated for this tier; retry")
+		default:
+			return nil, s.internal(ctx, "create tier version", err)
 		}
-		return nil, s.internal(ctx, "create tier version", err)
 	}
 	slog.InfoContext(ctx, "tier version created", logging.AttrComponent, "grpcserver", "version_id", id, "tier_id", tierID, "version", next)
 	tv, err := s.versionProto(ctx, id)
@@ -295,8 +302,11 @@ func (s *planAdminService) SetTenantTierVersion(ctx context.Context, req *plansv
 		}
 		return nil, s.internal(ctx, "set tenant tier version", err)
 	}
-	if v.Status == models.TierVersionStatusDraft {
-		return nil, status.Error(codes.FailedPrecondition, "cannot assign a tenant to a draft version")
+	// Only an active version is assignable — a draft is not yet published and a
+	// retired version must not gain new live assignments (the lifecycle is
+	// draft -> active -> retired).
+	if v.Status != models.TierVersionStatusActive {
+		return nil, status.Errorf(codes.FailedPrecondition, "cannot assign a tenant to a %s version; only active versions are assignable", v.Status)
 	}
 	ok, err := s.assignments.Reassign(ctx, tenantID, v.TierID, &versionID, reason, time.Now().UTC())
 	if err != nil {

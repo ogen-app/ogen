@@ -116,17 +116,19 @@ func (r *tenantTierAssignmentRepository) Reassign(ctx context.Context, tenantID,
 			return nil // tenant not found / soft-deleted; found stays false
 		}
 		found = true
-		// Close the tenant's current open assignment (the append-only trigger's
-		// one permitted update: open upper -> a finite bound).
-		if _, err := tx.NewUpdate().Model((*models.TenantTierAssignment)(nil)).
-			Set("valid = tstzrange(lower(valid), ?, '[)')", at).
-			Where("tenant_id = ?", tenantID).
-			Where("upper_inf(valid)").
-			Exec(ctx); err != nil {
-			return err
-		}
-		// Open the new assignment only when the tier has a version to assign.
+		// Swap the assignment ONLY when the tier has a version to assign: close
+		// the tenant's current open range (the append-only trigger's one permitted
+		// update) and open the new one. When there is no version to assign (a tier
+		// with no active version), update tier_id but leave the existing assignment
+		// untouched — never strip a tenant's entitlements or rewrite history.
 		if tierVersionID != nil {
+			if _, err := tx.NewUpdate().Model((*models.TenantTierAssignment)(nil)).
+				Set("valid = tstzrange(lower(valid), ?, '[)')", at).
+				Where("tenant_id = ?", tenantID).
+				Where("upper_inf(valid)").
+				Exec(ctx); err != nil {
+				return err
+			}
 			id, err := models.NewID()
 			if err != nil {
 				return err

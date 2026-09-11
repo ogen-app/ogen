@@ -104,6 +104,11 @@ func TestPlanAdminRoundTrip(t *testing.T) {
 		t.Fatal("clone did not copy entitlements")
 	}
 
+	// A draft version is not assignable.
+	if _, err := cli.SetTenantTierVersion(ctx, &plansv1.SetTenantTierVersionRequest{TenantId: models.DefaultTenantID, TierVersionId: draftID, Reason: models.AssignmentReasonUpgrade}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("assign to draft version: code = %v, want FailedPrecondition", status.Code(err))
+	}
+
 	// Publishing requires a change_reason.
 	if _, err := cli.PublishTierVersion(ctx, &plansv1.PublishTierVersionRequest{Id: draftID}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("publish w/o reason: code = %v, want InvalidArgument", status.Code(err))
@@ -143,11 +148,17 @@ func TestPlanAdminRoundTrip(t *testing.T) {
 		t.Fatalf("retire force: %v", err)
 	}
 
-	// Unknown ids → NotFound.
+	// A retired version is no longer assignable.
+	if _, err := cli.SetTenantTierVersion(ctx, &plansv1.SetTenantTierVersionRequest{TenantId: models.DefaultTenantID, TierVersionId: draftID, Reason: models.AssignmentReasonUpgrade}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("assign to retired version: code = %v, want FailedPrecondition", status.Code(err))
+	}
+
+	// Unknown ids → NotFound. Uses the seeded active default-v1 so the version
+	// check passes and the tenant lookup is what fails.
 	if _, err := cli.GetTierVersion(ctx, &plansv1.GetTierVersionRequest{Id: "nope"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("get unknown version: code = %v, want NotFound", status.Code(err))
 	}
-	if _, err := cli.SetTenantTierVersion(ctx, &plansv1.SetTenantTierVersionRequest{TenantId: "ghost", TierVersionId: draftID, Reason: models.AssignmentReasonUpgrade}); status.Code(err) != codes.NotFound {
+	if _, err := cli.SetTenantTierVersion(ctx, &plansv1.SetTenantTierVersionRequest{TenantId: "ghost", TierVersionId: "ttv-default-v1", Reason: models.AssignmentReasonUpgrade}); status.Code(err) != codes.NotFound {
 		t.Fatalf("assign unknown tenant: code = %v, want NotFound", status.Code(err))
 	}
 }
