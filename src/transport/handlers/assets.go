@@ -3,7 +3,9 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +23,6 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
-	"github.com/ogen-app/ogen/src/infra/storage/imageprobe"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -34,14 +35,27 @@ const (
 	// than markdown because a real .pptx/.xlsx carries embedded media we discard
 	// but still receive.
 	maxDocumentUploadSize = 50 << 20 // 50 MB
-	// maxImageUploadSize matches POST /api/images and the post-attachment path —
-	// one number across every image path (CON-246 R4).
-	maxImageUploadSize = 10 << 20 // 10 MB
-	// maxImageDimension caps each side of an uploaded image (CON-246 R5). Bounds
-	// total area to ~67 MP, guarding the future thumbnail job and platform layout
-	// against decompression-bomb dimensions.
-	maxImageDimension = 8192
 )
+
+// imageUploadMIMEs is the CON-281 accept list for content-bank image uploads:
+// the raster formats image-service decodes (libvips), mapped to the MIME stored
+// in asset_files.mime_type and bound on the stored original. It replaces the old
+// imageprobe allowlist and adds heic/heif/avif/tiff/bmp. The extension is
+// advisory routing only — image-service sniffs the body's magic bytes
+// authoritatively. SVG/vector is deliberately absent (terminal reject).
+var imageUploadMIMEs = map[string]string{
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png":  "image/png",
+	".webp": "image/webp",
+	".gif":  "image/gif",
+	".heic": "image/heic",
+	".heif": "image/heif",
+	".avif": "image/avif",
+	".tif":  "image/tiff",
+	".tiff": "image/tiff",
+	".bmp":  "image/bmp",
+}
 
 // documentUploadMIMEs is the CON-280 accept list: the office/text document
 // extensions document-service parses, mapped to the MIME stored in
@@ -96,6 +110,14 @@ type DocumentIngestEnqueuer interface {
 	EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey string) error
 }
 
+// ImageIngestEnqueuer enqueues an image-ingestion job in the caller's
+// transaction (CON-281). Implemented by *queues.Enqueuer; a narrow interface
+// here keeps the handler off the jobs package. Nil (no IMAGE_SERVICE_ADDR) makes
+// image uploads fail fast — image-service is a hard dependency (D6).
+type ImageIngestEnqueuer interface {
+	EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error
+}
+
 // URLScrapeGate reports whether URL scraping is currently configured, so the
 // endpoint can fail fast with 409. Implemented by *firecrawl.Client.
 type URLScrapeGate interface {
@@ -122,6 +144,9 @@ type AssetsHandler struct {
 	// docJobs enqueues document ingestion (CON-280). Nil makes document uploads
 	// fail fast with a "not configured" message.
 	docJobs DocumentIngestEnqueuer
+	// imgJobs enqueues image ingestion (CON-281). Nil makes image uploads fail
+	// fast — image-service is a hard dependency (imageprobe was deleted, D6).
+	imgJobs ImageIngestEnqueuer
 }
 
 func NewAssetsHandler(
@@ -134,6 +159,7 @@ func NewAssetsHandler(
 	urlJobs URLIngestEnqueuer,
 	scrapeGate URLScrapeGate,
 	docJobs DocumentIngestEnqueuer,
+	imgJobs ImageIngestEnqueuer,
 	auth fiber.Handler,
 	onSave func(assetID, title, content, tenantID string),
 ) *AssetsHandler {
@@ -149,6 +175,7 @@ func NewAssetsHandler(
 		urlJobs:    urlJobs,
 		scrapeGate: scrapeGate,
 		docJobs:    docJobs,
+		imgJobs:    imgJobs,
 	}
 }
 
@@ -401,9 +428,14 @@ func detectUploadKind(filename string) uploadKind {
 		return uploadKindMarkdown
 	case ".pdf":
 		return uploadKindPDF
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-		// Advisory only — imageprobe sniffs the body to decide the real MIME
-		// (CON-246 R3). The extension just routes to the image branch.
+	case ".svg":
+		// Route SVG to the image branch so processImageUpload emits the specific
+		// "vector not supported" reject (CON-281) rather than a generic message.
+		return uploadKindImage
+	}
+	// Raster images (CON-281) — advisory extension routing only; image-service
+	// sniffs the body's magic bytes authoritatively.
+	if _, ok := imageUploadMIMEs[ext]; ok {
 		return uploadKindImage
 	}
 	// Office/text documents (CON-280) — advisory extension routing only;
@@ -675,65 +707,69 @@ func isOLE2(b []byte) bool {
 	return len(b) >= len(sig) && string(b[:len(sig)]) == sig
 }
 
-// processImageUpload ingests an image asset (CON-246). Unlike PDF ingestion it
-// is fully synchronous: the probe (MIME sniff, dimensions, animation, checksum)
-// is cheap and its failures are the ones the user needs worded immediately, so
-// the asset is created `ready` with no background job. Bytes land at
-// assets/{id}/original.<ext>, mirroring the PDF `original.pdf` convention, and an
-// asset_files row carries the image metadata. Identical bytes (same tenant,
-// same checksum) return the existing asset rather than duplicating it.
+// processImageUpload ingests a content-bank image asset (CON-281). image-service
+// is the single image authority, so ingestion is now ASYNC (mirroring PDF/audio/
+// document): the handler stores the original, creates a `pending` IMG asset +
+// file row, and enqueues a `process_image` job that normalizes, classifies,
+// extracts, describes, alt-texts, and embeds it. The old synchronous imageprobe
+// path is gone (D6) — with imageprobe deleted there is no pure-Go fallback, so an
+// unwired service (imgJobs nil) fails the upload with a clear message rather than
+// degrading. ogen still computes the SHA-256 itself (a plain hash of bytes, not
+// image logic) so upload-time dedupe survives the move to async. Bytes land at
+// assets/{id}/original.<ext>.
 func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
-	// Images require object storage and the DB (asset + file row written
-	// atomically). Without them, fail the file rather than create an asset that
-	// points at bytes that were never stored.
-	if h.storage == nil || h.db == nil {
+	ext := strings.ToLower(filepath.Ext(fh.Filename))
+	// SVG / vector is a terminal reject with a specific message (CON-281 §18).
+	if ext == ".svg" {
 		res.Status = "failed"
-		res.Error = "image uploads are not configured"
+		res.Error = "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)"
 		return res
 	}
-	if fh.Size > maxImageUploadSize {
+	mimeType, ok := imageUploadMIMEs[ext]
+	if !ok {
+		// detectUploadKind already gated this; stay defensive.
 		res.Status = "failed"
-		res.Error = fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadSize>>20)
+		res.Error = "unsupported image type"
 		return res
 	}
 
-	f, err := fh.Open()
+	// Image ingestion needs object storage, the DB, and the job enqueuer. D6: with
+	// imageprobe deleted, an empty IMAGE_SERVICE_ADDR (imgJobs nil) means uploads
+	// are rejected — there is no local validation fallback.
+	if h.storage == nil || h.db == nil || h.imgJobs == nil {
+		res.Status = "failed"
+		res.Error = "image processing is not configured"
+		return res
+	}
+	if fh.Size > maxImageUploadBytes() {
+		res.Status = "failed"
+		res.Error = fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadBytes()>>20)
+		return res
+	}
+
+	raw, err := readFormFile(fh, maxImageUploadBytes())
 	if err != nil {
 		res.Status = "failed"
 		res.Error = "could not read file"
 		return res
 	}
-	defer f.Close()
-
-	// Probe sniffs the real MIME from the body (never the client Content-Type),
-	// decodes dimensions, detects animated GIFs and computes the SHA-256, while
-	// enforcing the byte cap. The returned bytes are what we store.
-	probe, data, err := imageprobe.Probe(f, maxImageUploadSize)
-	if err != nil {
+	if len(raw) == 0 {
 		res.Status = "failed"
-		switch {
-		case errors.Is(err, imageprobe.ErrUnsupportedMIME):
-			res.Error = err.Error()
-		default:
-			// Oversized/empty/undecodable — imageprobe's message is caller-facing.
-			res.Error = err.Error()
-		}
-		return res
-	}
-	if probe.Width > maxImageDimension || probe.Height > maxImageDimension {
-		res.Status = "failed"
-		res.Error = fmt.Sprintf("image dimensions exceed %d×%d px", maxImageDimension, maxImageDimension)
+		res.Error = "file is empty"
 		return res
 	}
 
 	ctx := c.Context()
 
-	// Dedupe within the tenant by checksum (R-Dedup): the same logo uploaded
-	// twice returns the first asset instead of a near-duplicate.
+	// Dedupe within the tenant by original-bytes checksum (R-Dedup): the same image
+	// uploaded twice returns the first asset instead of a near-duplicate. The hash
+	// is over the ORIGINAL bytes so it is stable regardless of later normalization.
+	sum := sha256.Sum256(raw)
+	checksum := hex.EncodeToString(sum[:])
 	if h.fileRepo != nil {
-		if existing, derr := h.fileRepo.GetByChecksum(ctx, probe.SHA256); derr == nil && existing != nil {
+		if existing, derr := h.fileRepo.GetByChecksum(ctx, checksum); derr == nil && existing != nil {
 			if a, aerr := h.repo.GetByID(ctx, existing.AssetID); aerr == nil && a != nil {
 				h.decorateFile(a)
 				res.AssetID = a.ID
@@ -762,53 +798,54 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 	asset := &models.Asset{
 		ID:        id,
 		Title:     title,
-		Content:   "", // the image's description; empty is valid (R9)
-		Status:    models.AssetStatusReady,
+		Content:   "", // the image's description; filled by the job (empty is valid)
+		Status:    models.AssetStatusPending,
 		Type:      &imgType,
 		TagIDs:    models.StringSlice{},
 		Tags:      []models.Tag{},
 		CreatedBy: session.UserID,
 	}
-	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original%s", asset.ID, probe.Extension))
+	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, ext)
+	fullKey := storage.TenantKey(ctx, storageKey)
+	// Width/Height/IsAnimated are stamped by the job from image-service; the
+	// checksum (computed here) backs dedupe and is stable across normalization.
 	file := &models.AssetFile{
 		ID:             fileID,
 		AssetID:        asset.ID,
 		OriginalName:   fh.Filename,
-		MimeType:       probe.MIME,
-		SizeBytes:      probe.Size,
-		S3Key:          key,
-		Width:          probe.Width,
-		Height:         probe.Height,
-		IsAnimated:     probe.IsAnimated,
-		ChecksumSHA256: probe.SHA256,
+		MimeType:       mimeType,
+		SizeBytes:      int64(len(raw)),
+		S3Key:          fullKey,
+		ChecksumSHA256: checksum,
 	}
 
-	// Store the original before the row exists so a failed upload never leaves a
+	// Store the original before the rows exist so a failed upload never leaves a
 	// row pointing at missing bytes.
-	if _, err := h.storage.Upload(ctx, key, bytes.NewReader(data), probe.Size, probe.MIME); err != nil {
+	if _, err := h.storage.Upload(ctx, fullKey, bytes.NewReader(raw), int64(len(raw)), mimeType); err != nil {
 		res.Status = "failed"
 		res.Error = "could not store image"
 		return res
 	}
 
-	// Insert the asset and its file row atomically: a committed asset always has
-	// its file, a rolled-back one leaves neither. On rollback, delete the blob
-	// stored above so it isn't orphaned.
+	// Insert the asset + file row and enqueue the ingestion job atomically
+	// (transactional outbox): a committed asset always has its file and a job, a
+	// rolled-back one leaves neither. On rollback, delete the blob so it isn't
+	// orphaned.
 	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
 			return err
 		}
-		_, err := tx.NewInsert().Model(file).Exec(ctx)
-		return err
+		if _, err := tx.NewInsert().Model(file).Exec(ctx); err != nil {
+			return err
+		}
+		return h.imgJobs.EnqueueProcessImageTx(ctx, tx.Tx, asset.ID, session.TenantID, fh.Filename, mimeType, storageKey, "run-1", "")
 	}); err != nil {
-		// The blob was uploaded before the tx, so any rollback orphans it.
-		_ = h.storage.Delete(ctx, key)
-		// Concurrent identical upload: the pre-check missed but the unique
-		// checksum index (tenant_id, checksum_sha256) rejected this second insert.
-		// Treat it as dedupe — the winner already exists — so the upload stays
+		_ = h.storage.Delete(ctx, fullKey)
+		// Concurrent identical upload: the pre-check missed but the unique checksum
+		// index rejected this second insert. Treat it as dedupe so the upload stays
 		// idempotent instead of returning a spurious failure.
 		if isUniqueViolationOn(err, "idx_asset_files_tenant_checksum") && h.fileRepo != nil {
-			if existing, derr := h.fileRepo.GetByChecksum(ctx, probe.SHA256); derr == nil && existing != nil {
+			if existing, derr := h.fileRepo.GetByChecksum(ctx, checksum); derr == nil && existing != nil {
 				if a, aerr := h.repo.GetByID(ctx, existing.AssetID); aerr == nil && a != nil {
 					h.decorateFile(a)
 					res.AssetID = a.ID
@@ -821,12 +858,6 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 		res.Status = "failed"
 		res.Error = "could not create asset"
 		return res
-	}
-
-	// Embed the (possibly empty) description so the image is retrievable.
-	if h.onSave != nil {
-		tid, _ := tenantctx.From(ctx)
-		go h.onSave(asset.ID, asset.Title, asset.Content, tid)
 	}
 
 	asset.File = file
@@ -1059,6 +1090,11 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	asset.Title = req.Title
 	asset.Content = req.Content
 	asset.AltText = altText
+	// CON-281 D5: an explicit alt_text in the PUT is a manual edit — mark it so a
+	// later image re-extraction never overwrites the user's wording.
+	if req.AltText != nil {
+		asset.AltTextEditedByUser = true
+	}
 	if req.TagIDs != nil {
 		asset.TagIDs = nullSlice(*req.TagIDs)
 	}
@@ -1176,6 +1212,10 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 	// its own, so add it unconditionally — the best-effort Delete below is a
 	// no-op when the object doesn't exist (non-audio assets).
 	keysToDelete = append(keysToDelete, storage.TenantKey(c.Context(), fmt.Sprintf("assets/%s/normalized.opus", id)))
+	// CON-281: the image normalized.png derivative also lives at a deterministic
+	// key alongside the original with no DB row of its own; evict it with the
+	// asset. The best-effort Delete below is a no-op for non-image assets.
+	keysToDelete = append(keysToDelete, storage.TenantKey(c.Context(), fmt.Sprintf("assets/%s/normalized.png", id)))
 
 	deleted, err := h.repo.Delete(c.Context(), id)
 	if err != nil {

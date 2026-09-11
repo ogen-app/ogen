@@ -43,10 +43,11 @@ type AssetChunk struct {
 // persisted as jsonb in assets_chunks.source_anchor. Which fields are populated
 // depends on Kind: page for prose flow, slide for decks, sheet+CellRange for
 // spreadsheets, HeadingPath for structured prose, headers-as-metadata for
-// email, and StartMs/EndMs for audio transcript time-ranges (CON-282).
-// Zero-valued fields are omitted from the stored JSON.
+// email, StartMs/EndMs for audio transcript time-ranges (CON-282), and Bbox for
+// image-region extractions (CON-281, Kind == "image"). Zero-valued fields are
+// omitted from the stored JSON.
 type SourceAnchor struct {
-	Kind        string   `json:"kind"` // page|slide|sheet|section|email|time
+	Kind        string   `json:"kind"` // page|slide|sheet|section|email|time|image
 	Page        int      `json:"page,omitempty"`
 	Slide       int      `json:"slide,omitempty"`
 	Sheet       string   `json:"sheet,omitempty"`
@@ -54,10 +55,24 @@ type SourceAnchor struct {
 	HeadingPath []string `json:"heading_path,omitempty"`
 	// StartMs/EndMs bound an audio transcript chunk on the ORIGINAL asset
 	// timeline (CON-282), Kind == "time". Provenance marks how the anchor was
-	// derived (e.g. "transcript"). All three are empty for non-audio anchors.
-	StartMs    int64  `json:"start_ms,omitempty"`
-	EndMs      int64  `json:"end_ms,omitempty"`
+	// derived (e.g. "transcript", "image_extraction"). Empty for non-audio,
+	// non-image anchors.
+	StartMs int64 `json:"start_ms,omitempty"`
+	EndMs   int64 `json:"end_ms,omitempty"`
+	// Bbox is the normalized image region a block was extracted from (CON-281),
+	// Kind == "image". A pointer so a nil bbox is omitted while a present one is
+	// always serialized in full (all four coords, incl. legitimate 0 origins).
+	Bbox       *Bbox  `json:"bbox,omitempty"`
 	Provenance string `json:"provenance,omitempty"`
+}
+
+// Bbox is a normalized rectangle [0,1] on a source image (CON-281): the portion
+// of the image an extracted block came from.
+type Bbox struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
 }
 
 // MarshalJSON keeps start_ms/end_ms present for time anchors even at 0 ms: the

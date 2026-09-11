@@ -70,14 +70,15 @@ tidy:
 	go mod tidy
 
 # ── Protobuf / gRPC ──────────────────────────────────────────────────────────
-# All six contracts (tenants, secrets, pdf, video, documents, audio) live in the
-# shared buf.build/ogen-app/proto module (CON-220). Regenerate the Go stubs under
-# gen/ from a pinned version; bump PROTO_VERSION to adopt a new contract, then
-# `make proto` and commit gen/. documents.v1 was added in v1.1.0 (CON-280);
-# audio.v1 + the shared Anchor's ANCHOR_KIND_TIME in v1.2.0 (CON-282) — publish
-# the proto repo tag before `make proto` can resolve it.
+# All seven contracts (tenants, secrets, pdf, video, documents, audio, image)
+# live in the shared buf.build/ogen-app/proto module (CON-220). Regenerate the Go
+# stubs under gen/ from a pinned version; bump PROTO_VERSION to adopt a new
+# contract, then `make proto` and commit gen/. documents.v1 was added in v1.1.0
+# (CON-280); audio.v1 + the shared Anchor's ANCHOR_KIND_TIME in v1.2.0 (CON-282);
+# image.v1 + the shared Anchor's ANCHOR_KIND_IMAGE_REGION + bbox in v1.3.0
+# (CON-281) — publish the proto repo tag before `make proto` can resolve it.
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.2.0
+PROTO_VERSION := v1.3.0
 
 proto:
 	buf generate $(PROTO_MODULE):$(PROTO_VERSION)

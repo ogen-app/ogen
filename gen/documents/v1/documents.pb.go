@@ -24,13 +24,14 @@ const (
 type AnchorKind int32
 
 const (
-	AnchorKind_ANCHOR_KIND_UNSPECIFIED AnchorKind = 0
-	AnchorKind_ANCHOR_KIND_PAGE        AnchorKind = 1 // docx/odt/rtf/html/txt flow
-	AnchorKind_ANCHOR_KIND_SLIDE       AnchorKind = 2 // pptx/odp
-	AnchorKind_ANCHOR_KIND_SHEET       AnchorKind = 3 // xlsx/ods/csv
-	AnchorKind_ANCHOR_KIND_SECTION     AnchorKind = 4 // heading-path prose
-	AnchorKind_ANCHOR_KIND_EMAIL       AnchorKind = 5 // eml
-	AnchorKind_ANCHOR_KIND_TIME        AnchorKind = 6 // audio transcript time-range (CON-282)
+	AnchorKind_ANCHOR_KIND_UNSPECIFIED  AnchorKind = 0
+	AnchorKind_ANCHOR_KIND_PAGE         AnchorKind = 1 // docx/odt/rtf/html/txt flow
+	AnchorKind_ANCHOR_KIND_SLIDE        AnchorKind = 2 // pptx/odp
+	AnchorKind_ANCHOR_KIND_SHEET        AnchorKind = 3 // xlsx/ods/csv
+	AnchorKind_ANCHOR_KIND_SECTION      AnchorKind = 4 // heading-path prose
+	AnchorKind_ANCHOR_KIND_EMAIL        AnchorKind = 5 // eml
+	AnchorKind_ANCHOR_KIND_TIME         AnchorKind = 6 // audio transcript time-range (CON-282)
+	AnchorKind_ANCHOR_KIND_IMAGE_REGION AnchorKind = 7 // image extraction bbox (CON-281)
 )
 
 // Enum value maps for AnchorKind.
@@ -43,15 +44,17 @@ var (
 		4: "ANCHOR_KIND_SECTION",
 		5: "ANCHOR_KIND_EMAIL",
 		6: "ANCHOR_KIND_TIME",
+		7: "ANCHOR_KIND_IMAGE_REGION",
 	}
 	AnchorKind_value = map[string]int32{
-		"ANCHOR_KIND_UNSPECIFIED": 0,
-		"ANCHOR_KIND_PAGE":        1,
-		"ANCHOR_KIND_SLIDE":       2,
-		"ANCHOR_KIND_SHEET":       3,
-		"ANCHOR_KIND_SECTION":     4,
-		"ANCHOR_KIND_EMAIL":       5,
-		"ANCHOR_KIND_TIME":        6,
+		"ANCHOR_KIND_UNSPECIFIED":  0,
+		"ANCHOR_KIND_PAGE":         1,
+		"ANCHOR_KIND_SLIDE":        2,
+		"ANCHOR_KIND_SHEET":        3,
+		"ANCHOR_KIND_SECTION":      4,
+		"ANCHOR_KIND_EMAIL":        5,
+		"ANCHOR_KIND_TIME":         6,
+		"ANCHOR_KIND_IMAGE_REGION": 7,
 	}
 )
 
@@ -384,8 +387,14 @@ type Anchor struct {
 	// audio-service utterances into chunks and stamps kind = ANCHOR_KIND_TIME
 	// with [start_ms, end_ms) on the ORIGINAL timeline (source_label e.g.
 	// "12:03–12:47"). n/a (0) for every page/slide/sheet/section/email anchor.
-	StartMs       int64 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
-	EndMs         int64 `protobuf:"varint,9,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	StartMs int64 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs   int64 `protobuf:"varint,9,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	// Normalized image-region rectangle for image extractions (CON-281): the shared
+	// Anchor extends to a fifth locus. ogen stamps kind = ANCHOR_KIND_IMAGE_REGION
+	// with bbox = the [0,1] rectangle on the source image a block was extracted
+	// from (source_label e.g. "Region 3"). Unset for every page/slide/sheet/
+	// section/email/time anchor. image.v1 (image-service) reuses this same Anchor.
+	Bbox          *Bbox `protobuf:"bytes,10,opt,name=bbox,proto3" json:"bbox,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -483,6 +492,83 @@ func (x *Anchor) GetEndMs() int64 {
 	return 0
 }
 
+func (x *Anchor) GetBbox() *Bbox {
+	if x != nil {
+		return x.Bbox
+	}
+	return nil
+}
+
+// Bbox is a normalized rectangle on a source image, each coordinate in [0,1]
+// (CON-281). Only meaningful for kind = ANCHOR_KIND_IMAGE_REGION.
+type Bbox struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             float32                `protobuf:"fixed32,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float32                `protobuf:"fixed32,2,opt,name=y,proto3" json:"y,omitempty"`
+	W             float32                `protobuf:"fixed32,3,opt,name=w,proto3" json:"w,omitempty"`
+	H             float32                `protobuf:"fixed32,4,opt,name=h,proto3" json:"h,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Bbox) Reset() {
+	*x = Bbox{}
+	mi := &file_documents_v1_documents_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Bbox) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Bbox) ProtoMessage() {}
+
+func (x *Bbox) ProtoReflect() protoreflect.Message {
+	mi := &file_documents_v1_documents_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Bbox.ProtoReflect.Descriptor instead.
+func (*Bbox) Descriptor() ([]byte, []int) {
+	return file_documents_v1_documents_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Bbox) GetX() float32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *Bbox) GetY() float32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *Bbox) GetW() float32 {
+	if x != nil {
+		return x.W
+	}
+	return 0
+}
+
+func (x *Bbox) GetH() float32 {
+	if x != nil {
+		return x.H
+	}
+	return 0
+}
+
 var File_documents_v1_documents_proto protoreflect.FileDescriptor
 
 const file_documents_v1_documents_proto_rawDesc = "" +
@@ -507,7 +593,7 @@ const file_documents_v1_documents_proto_rawDesc = "" +
 	"\fsource_label\x18\x03 \x01(\tR\vsourceLabel\x12,\n" +
 	"\x06anchor\x18\x04 \x01(\v2\x14.documents.v1.AnchorR\x06anchor\x12\x1f\n" +
 	"\vtoken_count\x18\x05 \x01(\x05R\n" +
-	"tokenCount\"\x90\x02\n" +
+	"tokenCount\"\xb8\x02\n" +
 	"\x06Anchor\x12,\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x18.documents.v1.AnchorKindR\x04kind\x12\x1d\n" +
 	"\n" +
@@ -519,7 +605,14 @@ const file_documents_v1_documents_proto_rawDesc = "" +
 	"cell_range\x18\x06 \x01(\tR\tcellRange\x12!\n" +
 	"\fheading_path\x18\a \x03(\tR\vheadingPath\x12\x19\n" +
 	"\bstart_ms\x18\b \x01(\x03R\astartMs\x12\x15\n" +
-	"\x06end_ms\x18\t \x01(\x03R\x05endMs*\xb3\x01\n" +
+	"\x06end_ms\x18\t \x01(\x03R\x05endMs\x12&\n" +
+	"\x04bbox\x18\n" +
+	" \x01(\v2\x12.documents.v1.BboxR\x04bbox\">\n" +
+	"\x04Bbox\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x02R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x02R\x01y\x12\f\n" +
+	"\x01w\x18\x03 \x01(\x02R\x01w\x12\f\n" +
+	"\x01h\x18\x04 \x01(\x02R\x01h*\xd1\x01\n" +
 	"\n" +
 	"AnchorKind\x12\x1b\n" +
 	"\x17ANCHOR_KIND_UNSPECIFIED\x10\x00\x12\x14\n" +
@@ -528,7 +621,8 @@ const file_documents_v1_documents_proto_rawDesc = "" +
 	"\x11ANCHOR_KIND_SHEET\x10\x03\x12\x17\n" +
 	"\x13ANCHOR_KIND_SECTION\x10\x04\x12\x15\n" +
 	"\x11ANCHOR_KIND_EMAIL\x10\x05\x12\x14\n" +
-	"\x10ANCHOR_KIND_TIME\x10\x062V\n" +
+	"\x10ANCHOR_KIND_TIME\x10\x06\x12\x1c\n" +
+	"\x18ANCHOR_KIND_IMAGE_REGION\x10\a2V\n" +
 	"\x10DocumentsService\x12B\n" +
 	"\x05Parse\x12\x1a.documents.v1.ParseRequest\x1a\x1b.documents.v1.ParseResponse(\x01B\xaa\x01\n" +
 	"\x10com.documents.v1B\x0eDocumentsProtoP\x01Z5github.com/ogen-app/ogen/gen/documents/v1;documentsv1\xa2\x02\x03DXX\xaa\x02\fDocuments.V1\xca\x02\fDocuments\\V1\xe2\x02\x18Documents\\V1\\GPBMetadata\xea\x02\rDocuments::V1b\x06proto3"
@@ -546,7 +640,7 @@ func file_documents_v1_documents_proto_rawDescGZIP() []byte {
 }
 
 var file_documents_v1_documents_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_documents_v1_documents_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_documents_v1_documents_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_documents_v1_documents_proto_goTypes = []any{
 	(AnchorKind)(0),       // 0: documents.v1.AnchorKind
 	(*ParseRequest)(nil),  // 1: documents.v1.ParseRequest
@@ -554,19 +648,21 @@ var file_documents_v1_documents_proto_goTypes = []any{
 	(*ParseResponse)(nil), // 3: documents.v1.ParseResponse
 	(*Chunk)(nil),         // 4: documents.v1.Chunk
 	(*Anchor)(nil),        // 5: documents.v1.Anchor
+	(*Bbox)(nil),          // 6: documents.v1.Bbox
 }
 var file_documents_v1_documents_proto_depIdxs = []int32{
 	2, // 0: documents.v1.ParseRequest.options:type_name -> documents.v1.ParseOptions
 	4, // 1: documents.v1.ParseResponse.chunks:type_name -> documents.v1.Chunk
 	5, // 2: documents.v1.Chunk.anchor:type_name -> documents.v1.Anchor
 	0, // 3: documents.v1.Anchor.kind:type_name -> documents.v1.AnchorKind
-	1, // 4: documents.v1.DocumentsService.Parse:input_type -> documents.v1.ParseRequest
-	3, // 5: documents.v1.DocumentsService.Parse:output_type -> documents.v1.ParseResponse
-	5, // [5:6] is the sub-list for method output_type
-	4, // [4:5] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	6, // 4: documents.v1.Anchor.bbox:type_name -> documents.v1.Bbox
+	1, // 5: documents.v1.DocumentsService.Parse:input_type -> documents.v1.ParseRequest
+	3, // 6: documents.v1.DocumentsService.Parse:output_type -> documents.v1.ParseResponse
+	6, // [6:7] is the sub-list for method output_type
+	5, // [5:6] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_documents_v1_documents_proto_init() }
@@ -584,7 +680,7 @@ func file_documents_v1_documents_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_documents_v1_documents_proto_rawDesc), len(file_documents_v1_documents_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -30,8 +30,11 @@ func (r *fakeAttachmentRepo) GetByID(context.Context, string) (*models.PostAttac
 func (r *fakeAttachmentRepo) CreateAtNextPosition(context.Context, *models.PostAttachment) error {
 	return nil
 }
-func (r *fakeAttachmentRepo) UpdatePosition(context.Context, string, int) error        { return nil }
-func (r *fakeAttachmentRepo) UpdateAltText(context.Context, string, string) error      { return nil }
+func (r *fakeAttachmentRepo) UpdatePosition(context.Context, string, int) error   { return nil }
+func (r *fakeAttachmentRepo) UpdateAltText(context.Context, string, string) error { return nil }
+func (r *fakeAttachmentRepo) SetGeneratedAltText(context.Context, string, string) error {
+	return nil
+}
 func (r *fakeAttachmentRepo) UpdateSegmentIndex(context.Context, string, *int) error   { return nil }
 func (r *fakeAttachmentRepo) ReorderPositions(context.Context, string, []string) error { return nil }
 func (r *fakeAttachmentRepo) Delete(context.Context, string) (bool, error)             { return false, nil }
