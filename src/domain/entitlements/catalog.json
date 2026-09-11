@@ -1,0 +1,167 @@
+[
+  {
+    "key": "workspaces",
+    "name": "Workspaces",
+    "category": "workspace_team",
+    "linear_issue": "CON-147",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "Create, switch, delete; per-tab scoping."
+  },
+  {
+    "key": "team_seats",
+    "name": "Team seats & invitations",
+    "category": "workspace_team",
+    "linear_issue": "CON-26",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "Owner / member roles, email invites."
+  },
+  {
+    "key": "connected_accounts",
+    "name": "Connected social accounts",
+    "category": "workspace_team",
+    "linear_issue": "CON-217",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "Connect picker + disconnect across supported platforms."
+  },
+  {
+    "key": "active_campaigns",
+    "name": "Active campaigns",
+    "category": "campaigns_planning",
+    "linear_issue": "CON-35",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "Brief, persona, key messages, tone, phases."
+  },
+  {
+    "key": "all_campaign_types",
+    "name": "All campaign types",
+    "category": "campaigns_planning",
+    "linear_issue": "CON-35",
+    "status": "live",
+    "value_type": "boolean",
+    "is_material": true,
+    "reset": "",
+    "description": "Awareness / Engagement / Conversion / Retention beyond Evergreen-only."
+  },
+  {
+    "key": "custom_campaign_types",
+    "name": "Custom campaign types",
+    "category": "campaigns_planning",
+    "linear_issue": "CON-35",
+    "status": "live",
+    "value_type": "boolean",
+    "is_material": true,
+    "reset": "",
+    "description": "Author bespoke campaign types."
+  },
+  {
+    "key": "plan_runs_per_month",
+    "name": "Content-plan runs",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-28",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "monthly",
+    "description": "Time-distributed draft posts across phases and platforms."
+  },
+  {
+    "key": "assistant_multiplier",
+    "name": "Post Assistant allowance",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-42",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "Hidden token-budget multiplier (×1 / ×5 / ×20), priced off current LLM rates — never a published number."
+  },
+  {
+    "key": "quality_reviews_per_post",
+    "name": "Post quality reviews",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-85",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "per_post",
+    "description": "AI scoring passes available per post."
+  },
+  {
+    "key": "posts_total",
+    "name": "Posts",
+    "category": "posts_publishing",
+    "linear_issue": "CON-170",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "total",
+    "description": "Rich-text editor, autosave, per-platform post types. Trial cap is a lifetime total."
+  },
+  {
+    "key": "media_storage_bytes",
+    "name": "Media library storage",
+    "category": "posts_publishing",
+    "linear_issue": "CON-46",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "All uploaded media, per workspace."
+  },
+  {
+    "key": "content_bank_assets",
+    "name": "Content-bank assets",
+    "category": "content_bank",
+    "linear_issue": "CON-46",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "Markdown text, PDF upload, multi-file upload."
+  },
+  {
+    "key": "web_page_imports",
+    "name": "Web-page import",
+    "category": "content_bank",
+    "linear_issue": "CON-222",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "standing",
+    "description": "A URL as a campaign document (Firecrawl)."
+  },
+  {
+    "key": "multiple_accounts_per_platform",
+    "name": "Multiple accounts per platform",
+    "category": "images_brand",
+    "linear_issue": "CON-150",
+    "status": "flag_off",
+    "value_type": "boolean",
+    "is_material": true,
+    "reset": "",
+    "description": "Connect several accounts on one platform and target a campaign at a specific one."
+  },
+  {
+    "key": "semantic_grounding",
+    "name": "Semantic grounding",
+    "category": "content_bank",
+    "linear_issue": "CON-87",
+    "status": "live",
+    "value_type": "boolean",
+    "is_material": false,
+    "reset": "",
+    "description": "Embedded chunks ground every generation — the product's core promise, never gated."
+  }
+]

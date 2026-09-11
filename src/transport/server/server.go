@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -75,6 +76,17 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	campaignSummariesSvc := summaries.New(r.postRepo)
 
 	auth := handlers.RequireAuth(r.sessionRepo, r.userRepo, cfg.SessionCookieName)
+
+	// CON-243: versioned tier entitlements. Load the engineering-owned feature
+	// catalog (boot fails if the embedded JSON is malformed), build the
+	// point-in-time resolver, and serve the public pricing catalog + the in-app
+	// entitlement view.
+	entitlementCatalog, err := entitlements.LoadCatalog()
+	if err != nil {
+		return nil, err
+	}
+	entitlementResolver := entitlements.NewResolver(r.tierVersionRepo, r.tierAssignmentRepo, r.tenantRepo, entitlementCatalog)
+	handlers.NewPricingHandler(entitlementResolver, r.tierVersionRepo, entitlementCatalog, auth).Register(app)
 
 	// CON-86: apply any operator price-map override (USAGE_MODEL_PRICES) before
 	// metering starts; a malformed payload or unknown vendor fails boot.

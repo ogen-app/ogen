@@ -99,6 +99,23 @@ func main() {
 		}
 	}
 
+	// CON-243: assign every tenant lacking an open tier-version assignment to its
+	// tier's latest active version. Idempotent + best-effort, never fatal to boot;
+	// the entitlement resolver has a tier_id fallback, so a skipped run only
+	// delays the explicit history rows.
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if rep, berr := repository.BackfillTenantTierAssignments(ctx, db, false); berr != nil {
+			slog.Warn("tenant tier-assignment backfill failed (non-fatal)",
+				logging.AttrComponent, "boot", logging.AttrError, berr)
+		} else if rep.Assigned > 0 || rep.SkippedNoVersion > 0 {
+			slog.Info("tenant tier-assignment backfill",
+				logging.AttrComponent, "boot",
+				"assigned", rep.Assigned, "skipped_no_version", rep.SkippedNoVersion, "candidates", rep.Candidates)
+		}
+	}()
+
 	// Envelope encryption: load (or generate) the KEK, build a
 	// Cipher, then expose Get/Set through SecretStore. Boot fails on
 	// any KEK file error — running without an unwrapper is worse than
