@@ -23,6 +23,7 @@ func (s stubAttRepo) GetByID(context.Context, string) (*models.PostAttachment, e
 func (s stubAttRepo) CreateAtNextPosition(context.Context, *models.PostAttachment) error { return nil }
 func (s stubAttRepo) UpdatePosition(context.Context, string, int) error                  { return nil }
 func (s stubAttRepo) UpdateAltText(context.Context, string, string) error                { return nil }
+func (s stubAttRepo) SetGeneratedAltText(context.Context, string, string) error          { return nil }
 func (s stubAttRepo) UpdateSegmentIndex(context.Context, string, *int) error             { return nil }
 func (s stubAttRepo) ReorderPositions(context.Context, string, []string) error           { return nil }
 func (s stubAttRepo) Delete(context.Context, string) (bool, error)                       { return false, nil }

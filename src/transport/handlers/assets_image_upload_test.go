@@ -3,10 +3,10 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"image"
 	"image/color"
-	"image/gif"
 	"image/png"
 	"io"
 	"mime/multipart"
@@ -34,30 +34,35 @@ func pngBytes(w, h int) string {
 	return buf.String()
 }
 
-// animatedGIFBytes encodes a 2-frame GIF so imageprobe reports is_animated.
-func animatedGIFBytes() string {
-	pal := color.Palette{color.Black, color.White}
-	f1 := image.NewPaletted(image.Rect(0, 0, 2, 2), pal)
-	f2 := image.NewPaletted(image.Rect(0, 0, 2, 2), pal)
-	g := &gif.GIF{Image: []*image.Paletted{f1, f2}, Delay: []int{0, 0}}
-	var buf bytes.Buffer
-	_ = gif.EncodeAll(&buf, g)
-	return buf.String()
+// fakeImageEnqueuer records process_image enqueues so the async upload path can
+// be asserted without a running River worker (CON-281). It ignores the tx — the
+// upload's RunInTx is a real transaction against the test DB; only the enqueue is
+// faked.
+type fakeImageEnqueuer struct{ calls []string }
+
+func (f *fakeImageEnqueuer) EnqueueProcessImageTx(_ context.Context, _ *sql.Tx, assetID, _, _, mimeType, storageKey, runKey, _ string) error {
+	f.calls = append(f.calls, strings.Join([]string{assetID, runKey, mimeType, storageKey}, "|"))
+	return nil
 }
 
-var _ = Describe("AssetsHandler image upload (CON-246)", Ordered, Serial, func() {
+var _ = Describe("AssetsHandler image upload (CON-281 async)", Ordered, Serial, func() {
 	var (
 		app        *fiber.App
 		db         *bun.DB
 		authCookie *http.Cookie
 		store      *stubStorage
+		imgEnq     *fakeImageEnqueuer
 	)
 
 	BeforeAll(func() {
 		db = mustOpenTestDBWithMigrations()
 	})
 
-	BeforeEach(func() {
+	// buildApp (re)constructs the app + handlers against the shared DB. It does NOT
+	// seed/login — that happens once per spec in BeforeEach — so a test can rebuild
+	// with the image service unwired (withImageService=false) without re-seeding the
+	// tenant (which would trip the unique-email constraint).
+	buildApp := func(withImageService bool) {
 		app = fiber.New(fiber.Config{
 			BodyLimit: 100 << 20,
 			ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -76,13 +81,21 @@ var _ = Describe("AssetsHandler image upload (CON-246)", Ordered, Serial, func()
 		assetRepo := repository.NewAssetRepository(db, tagRepo, fileRepo)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		store = &stubStorage{returnURL: "https://pub.example.com/x", objects: map[string][]byte{}}
+		imgEnq = &fakeImageEnqueuer{}
+		// image-service is the single image authority (D6): a nil enqueuer models an
+		// unwired service, which must reject image uploads.
+		var imgJobs handlers.ImageIngestEnqueuer
+		if withImageService {
+			imgJobs = imgEnq
+		}
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		// No PDF/URL jobs wired: images need only storage + db.
-		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, nil, auth, nil).Register(app)
+		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, nil, imgJobs, auth, nil).Register(app)
+	}
 
+	BeforeEach(func() {
+		buildApp(true)
 		seedTenantUser(db, "Admin", "img@example.com", "pw-password")
-
 		loginBody, _ := json.Marshal(fiber.Map{"email": "img@example.com", "password": "pw-password"})
 		loginReq := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(loginBody))
 		loginReq.Header.Set("Content-Type", "application/json")
@@ -129,78 +142,83 @@ var _ = Describe("AssetsHandler image upload (CON-246)", Ordered, Serial, func()
 		return out.Results
 	}
 
-	It("creates an IMG asset from a PNG: ready, with dimensions and an original URL", func() {
+	It("creates a PENDING IMG asset and enqueues a process_image job", func() {
 		results := postUpload([]struct{ Name, Body string }{{"logo.png", pngBytes(4, 3)}})
 		Expect(results).To(HaveLen(1))
 		Expect(results[0]["status"]).To(Equal("created"))
 
 		asset := results[0]["asset"].(map[string]any)
 		Expect(asset["type"]).To(Equal(models.AssetTypeImage))
-		Expect(asset["status"]).To(Equal(models.AssetStatusReady))
+		// Ingestion is async now (CON-281): the asset lands `pending`, and the job
+		// fills description/dimensions/alt text later.
+		Expect(asset["status"]).To(Equal(models.AssetStatusPending))
 		Expect(asset["title"]).To(Equal("logo"))
-		Expect(asset["content"]).To(Equal("")) // empty description is valid
-		Expect(asset["alt_text"]).To(Equal(""))
+		Expect(asset["content"]).To(Equal(""))
 
 		file := asset["file"].(map[string]any)
 		Expect(file["mime_type"]).To(Equal("image/png"))
-		Expect(file["width"]).To(BeNumerically("==", 4))
-		Expect(file["height"]).To(BeNumerically("==", 3))
-		Expect(file["is_animated"]).To(BeFalse())
-		// The original's URL — the field the image viewer renders — is present and
-		// points at assets/{id}/original.png.
+		// The original's URL is present; dimensions are 0 until the job stamps them.
 		Expect(file["url"]).To(ContainSubstring("assets/"))
 		Expect(file["url"]).To(ContainSubstring("/original.png"))
 
 		// The exact bytes were stored under the tenant-scoped original key.
 		assetID := results[0]["asset_id"].(string)
-		var storedKey string
+		var stored bool
 		for k := range store.objects {
 			if strings.HasSuffix(k, "assets/"+assetID+"/original.png") {
-				storedKey = k
+				stored = true
 			}
 		}
-		Expect(storedKey).NotTo(BeEmpty(), "original.png should be stored")
+		Expect(stored).To(BeTrue(), "original.png should be stored")
+
+		// Exactly one job was enqueued, for run-1, atomically with the insert.
+		Expect(imgEnq.calls).To(HaveLen(1))
+		Expect(imgEnq.calls[0]).To(ContainSubstring(assetID + "|run-1|image/png|assets/" + assetID + "/original.png"))
 	})
 
-	It("records is_animated for a multi-frame GIF", func() {
-		results := postUpload([]struct{ Name, Body string }{{"spin.gif", animatedGIFBytes()}})
+	It("accepts HEIC by extension (routed to the service, sniffed there)", func() {
+		// The body isn't a real HEIC — the handler no longer validates pixels (the
+		// service does); it only routes by extension and enqueues.
+		results := postUpload([]struct{ Name, Body string }{{"photo.heic", "not-really-heic-but-routed"}})
 		Expect(results[0]["status"]).To(Equal("created"))
-		file := results[0]["asset"].(map[string]any)["file"].(map[string]any)
-		Expect(file["mime_type"]).To(Equal("image/gif"))
-		Expect(file["is_animated"]).To(BeTrue())
+		asset := results[0]["asset"].(map[string]any)
+		Expect(asset["file"].(map[string]any)["mime_type"]).To(Equal("image/heic"))
+		Expect(imgEnq.calls).To(HaveLen(1))
 	})
 
-	It("deduplicates identical bytes within a tenant", func() {
-		png := pngBytes(8, 8)
-		first := postUpload([]struct{ Name, Body string }{{"a.png", png}})
-		second := postUpload([]struct{ Name, Body string }{{"b-copy.png", png}})
+	It("deduplicates identical bytes within a tenant (no second enqueue)", func() {
+		pngA := pngBytes(8, 8)
+		first := postUpload([]struct{ Name, Body string }{{"a.png", pngA}})
+		second := postUpload([]struct{ Name, Body string }{{"b-copy.png", pngA}})
 		Expect(first[0]["status"]).To(Equal("created"))
 		Expect(second[0]["status"]).To(Equal("created"))
-		// Same checksum → the second upload returns the first asset, not a new one.
 		Expect(second[0]["asset_id"]).To(Equal(first[0]["asset_id"]))
 
 		count, err := db.NewSelect().Table("assets").Count(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count).To(Equal(1))
+		// The dedupe short-circuits before enqueue, so only the first upload queued.
+		Expect(imgEnq.calls).To(HaveLen(1))
 	})
 
-	It("rejects images whose dimensions exceed the cap", func() {
-		results := postUpload([]struct{ Name, Body string }{{"wide.png", pngBytes(8193, 1)}})
+	It("rejects SVG / vector images with a specific message", func() {
+		results := postUpload([]struct{ Name, Body string }{{"icon.svg", "<svg/>"}})
 		Expect(results[0]["status"]).To(Equal("failed"))
-		Expect(results[0]["error"]).To(ContainSubstring("dimensions"))
-	})
-
-	It("rejects a file whose bytes aren't a real image despite the extension", func() {
-		results := postUpload([]struct{ Name, Body string }{{"fake.png", "this is definitely not a PNG"}})
-		Expect(results[0]["status"]).To(Equal("failed"))
-		Expect(results[0]["error"]).To(ContainSubstring("unsupported media type"))
+		Expect(results[0]["error"]).To(ContainSubstring("vector"))
+		Expect(imgEnq.calls).To(BeEmpty())
 	})
 
 	It("mentions images in the unsupported-type message", func() {
-		// .bin is genuinely unsupported (.txt now routes to document ingestion).
 		results := postUpload([]struct{ Name, Body string }{{"notes.bin", "plain"}})
 		Expect(results[0]["status"]).To(Equal("failed"))
 		Expect(results[0]["error"]).To(ContainSubstring("image"))
+	})
+
+	It("rejects image uploads when image-service is not configured (D6)", func() {
+		buildApp(false) // rebuild with no image enqueuer wired (reuses the seeded session)
+		results := postUpload([]struct{ Name, Body string }{{"logo.png", pngBytes(2, 2)}})
+		Expect(results[0]["status"]).To(Equal("failed"))
+		Expect(results[0]["error"]).To(ContainSubstring("not configured"))
 	})
 
 	It("processes a mixed batch of markdown and image independently", func() {

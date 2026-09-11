@@ -75,7 +75,7 @@ var _ = Describe("AssetsHandler POST /url", Ordered, func() {
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
 		handlers.NewAssetsHandler(
 			pieceRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db),
-			nil, db, nil, enq, gate, nil, auth, nil,
+			nil, db, nil, enq, gate, nil, nil, auth, nil,
 		).Register(app)
 
 		seedTenantUser(db, "Admin", "url@example.com", "admin-password")

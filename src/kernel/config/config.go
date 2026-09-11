@@ -217,6 +217,40 @@ type Config struct {
 	TranscribeModel       string        `envconfig:"TRANSCRIBE_MODEL"         default:"gemini-2.5-flash"`
 	AudioRawEmbedding     bool          `envconfig:"AUDIO_RAW_EMBEDDING"      default:"false"`
 
+	// Image microservice (CON-281), mirroring audio/document-service. image-service
+	// is the SINGLE image ingress: both content-bank IMG assets and post-attachment
+	// images route through it over gRPC on the Railway private network, handed
+	// short-lived presigned GET/PUT URLs (bytes never traverse gRPC). It owns all
+	// image compute (sniff/validate/dims/animated/checksum/EXIF-strip/normalize/
+	// alt-text/vision extraction); ogen persists what it returns. D6 makes it a
+	// HARD dependency: empty ImageServiceAddr → image uploads (both paths) are
+	// rejected with a clear message (imageprobe was deleted, so there is no pure-Go
+	// fallback). Prod: image-service.railway.internal:50051; compose/tests:
+	// image-service:50051. MaxRecvBytes (32 MiB) bounds an Extract response (blocks
+	// + description).
+	ImageServiceAddr         string        `envconfig:"IMAGE_SERVICE_ADDR"           default:""`
+	ImageServiceTimeout      time.Duration `envconfig:"IMAGE_SERVICE_TIMEOUT"        default:"3m"`
+	ImageServiceMaxRecvBytes int           `envconfig:"IMAGE_SERVICE_MAX_RECV_BYTES" default:"33554432"`
+	// ImageMaxPixels is the decompression-bomb ceiling enforced header-first in the
+	// service (~100 MP). The upload byte cap + alt-text storage length are NOT here:
+	// they are operator-controlled global config (CON-292), read via GlobalLimits().
+	ImageMaxPixels int64 `envconfig:"IMAGE_MAX_PIXELS" default:"100000000"`
+	// ImageJobWorkers sizes the dedicated `image` queue's worker pool (kept small so
+	// heavy vision runs can't starve the default queue); ImageJobTimeout bounds a
+	// single content-bank Extract job attempt.
+	ImageJobWorkers int           `envconfig:"IMAGE_JOB_WORKERS" default:"2"`
+	ImageJobTimeout time.Duration `envconfig:"IMAGE_JOB_TIMEOUT" default:"10m"`
+	// Vision model ids (config, never compiled in). classify runs at low
+	// media_resolution on a cheaper model; extract/escalate at high resolution on a
+	// stronger one. VisionConfidenceThreshold gates the one-shot escalation.
+	// AltTextGenMaxChars is the generation TARGET length (short, social-friendly);
+	// the stored value is still bounded by the CON-292 alt-text cap as a guard.
+	VisionClassifyModel       string  `envconfig:"VISION_CLASSIFY_MODEL"       default:"gemini-2.5-flash"`
+	VisionExtractModel        string  `envconfig:"VISION_EXTRACT_MODEL"        default:"gemini-2.5-pro"`
+	VisionEscalateModel       string  `envconfig:"VISION_ESCALATE_MODEL"       default:"gemini-2.5-pro"`
+	VisionConfidenceThreshold float64 `envconfig:"VISION_CONFIDENCE_THRESHOLD" default:"0.6"`
+	AltTextGenMaxChars        int     `envconfig:"ALT_TEXT_GEN_MAX_CHARS"      default:"280"`
+
 	// Zernio integration. Empty ZernioAPIKey disables the
 	// integration entirely; everything else stays defaulted.
 	ZernioAPIKey           string        `envconfig:"ZERNIO_API_KEY"            default:""`

@@ -35,6 +35,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	audioclient "github.com/ogen-app/ogen/src/transport/grpc/client/audio"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/documents"
+	imageclient "github.com/ogen-app/ogen/src/transport/grpc/client/image"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/video"
 	"github.com/ogen-app/ogen/src/transport/handlers"
@@ -235,6 +236,19 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		return nil, err
 	}
 
+	// CON-281: gRPC client for the image microservice over the Railway private
+	// network. nil when IMAGE_SERVICE_ADDR is unset. Like audio, its Close hook is
+	// registered LATER — after riverClient.Stop — so a draining process_image job's
+	// in-flight Extract RPC isn't killed by an early connection close.
+	imageClient, err := imageclient.New(imageclient.Config{
+		Addr:         cfg.ImageServiceAddr,
+		Timeout:      cfg.ImageServiceTimeout,
+		MaxRecvBytes: cfg.ImageServiceMaxRecvBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	// Embedding (Gemini) is initialised here — before the River registry —
 	// because the process_pdf worker (CON-103) needs the embedder in its deps.
 	// The returned embedder is a stable reloadable wrapper (always non-nil): when
@@ -309,6 +323,34 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	if audioIngestEnabled {
 		audioDeps.Client = audioClient
+	}
+
+	// CON-281: image ingestion mirrors audio — live when the image-service client
+	// and storage are present; embedder availability is checked per-run by the
+	// worker. Client left nil otherwise so the worker no-ops. Runs on the dedicated
+	// `image` River queue; the cost gate reuses the usage Checker.
+	imageIngestEnabled := imageClient != nil && store != nil
+	imageDeps := queues.ImageDeps{
+		Embedder:            embedder,
+		Storage:             store,
+		Assets:              r.pieceRepo,
+		Chunks:              r.chunksRepo,
+		Files:               r.assetFileRepo,
+		Extractions:         r.imageExtractionRepo,
+		Blocks:              r.imageBlockRepo,
+		Recorder:            usageWiring.recorder,
+		Checker:             usageWiring.checker,
+		EmbedModel:          cfg.EmbedModel,
+		ClassifyModel:       cfg.VisionClassifyModel,
+		ExtractModel:        cfg.VisionExtractModel,
+		EscalateModel:       cfg.VisionEscalateModel,
+		ConfidenceThreshold: cfg.VisionConfidenceThreshold,
+		AltTextMaxChars:     cfg.AltTextGenMaxChars,
+		JobTimeout:          cfg.ImageJobTimeout,
+		Notifier:            notifier, // CON-242: asset-ingest-done producer
+	}
+	if imageIngestEnabled {
+		imageDeps.Client = imageClient
 	}
 
 	// CON-222: URL assets. The Firecrawl scrape client resolves firecrawl_api_key
@@ -406,6 +448,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Document: documentDeps,
 		// CON-282: audio ingestion worker deps (runs on the dedicated audio queue).
 		Audio: audioDeps,
+		// CON-281: image ingestion worker deps (runs on the dedicated image queue).
+		Image: imageDeps,
 		// CON-222: URL scrape ingestion worker deps.
 		URL: urlDeps,
 		// CON-154: email send + cleanup worker deps.
@@ -440,6 +484,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: cfg.JobWorkers},
 			queues.AudioQueue:  {MaxWorkers: cfg.AudioJobWorkers},
+			queues.ImageQueue:  {MaxWorkers: cfg.ImageJobWorkers},
 		},
 		Workers: workers,
 		PeriodicJobs: queues.PeriodicConfig{
@@ -532,6 +577,11 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if audioClient != nil {
 		app.Hooks().OnShutdown(func() error { return audioClient.Close() })
 	}
+	// CON-281: same ordering for the image-service connection — close it after
+	// River drains so a running process_image job's Extract RPC isn't aborted.
+	if imageClient != nil {
+		app.Hooks().OnShutdown(func() error { return imageClient.Close() })
+	}
 
 	// Drain the usage recorder LAST. Fiber runs OnShutdown hooks in registration
 	// order, so this must come after the river/zernio producer hooks above:
@@ -575,7 +625,22 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if documentIngestEnabled {
 		docJobs = enqueuer
 	}
-	handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, auth, embedCallbacks.OnMarkdownSave).Register(app)
+	// CON-281: image ingestion enqueues through the same River client, gated on
+	// image-service being configured. Left nil otherwise so an image upload fails
+	// fast ("image processing is not configured") — imageprobe was deleted, so
+	// there is no local fallback (D6).
+	var imgJobs handlers.ImageIngestEnqueuer
+	if imageIngestEnabled {
+		imgJobs = enqueuer
+	}
+	// imagePreparer is a TRUE nil interface when the service is unwired (assigning a
+	// typed-nil *Client would make the interface non-nil and defeat the handlers'
+	// `== nil` guards), so image attachments/alt-text fail fast with a clear reason.
+	var imagePreparer handlers.ImagePreparer
+	if imageClient != nil {
+		imagePreparer = imageClient
+	}
+	handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, imgJobs, auth, embedCallbacks.OnMarkdownSave).Register(app)
 
 	// CON-282: audio asset lifecycle (presigned upload + extraction status/
 	// transcript/retry). audioJobs is wired only when audio ingestion is live;
@@ -585,6 +650,11 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		audioJobs = enqueuer
 	}
 	handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, store, db, audioJobs, auth).Register(app)
+
+	// CON-281: content-bank image extraction surface (status/blocks + extract/
+	// reextract/regenerate-alt-text). imgJobs is wired only when image ingestion is
+	// live; imageClient (nil-safe) backs alt-text regeneration.
+	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, store, db, imgJobs, imagePreparer, usageWiring.recorder, cfg.VisionClassifyModel, cfg.AltTextGenMaxChars, auth).Register(app)
 
 	// Anthropic-backed flows live in a hot-reloadable runtime. boot
 	// is allowed to start without an Anthropic key (callbacks return
@@ -783,7 +853,11 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if videoClient != nil {
 		attachmentProber = videoClient
 	}
-	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, store, attachmentRenderer, attachmentProber, auth).Register(app)
+	// CON-281: image attachments route through image-service (EXIF-strip + metadata
+	// + async alt text). imagePreparer is nil when the service is unwired, so image
+	// attachment uploads fail fast (503) — imageprobe was deleted (D6). Alt-text
+	// generation is metered on the gemini vendor and targets AltTextGenMaxChars.
+	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, store, attachmentRenderer, attachmentProber, imagePreparer, usageWiring.recorder, cfg.VisionClassifyModel, cfg.AltTextGenMaxChars, auth).Register(app)
 
 	// CON-188: per-post notes CRUD, nested under a post.
 	postNotesHandler := handlers.NewPostNotesHandler(noteSvc, r.postRepo, auth)
