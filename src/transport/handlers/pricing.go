@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"math"
 	"slices"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -99,7 +98,7 @@ func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
 	if tenantID == "" {
 		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 	}
-	res, err := h.resolver.Resolve(c.Context(), tenantID, time.Now().UTC())
+	res, err := h.resolver.ResolveCurrent(c.Context(), tenantID)
 	if err != nil {
 		return notFound(err, "no entitlements resolved for this workspace")
 	}

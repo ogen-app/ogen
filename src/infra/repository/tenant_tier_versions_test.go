@@ -107,8 +107,8 @@ func TestResolverAndBackfill(t *testing.T) {
 	resolver := entitlements.NewResolver(vr, ar, tr, cat)
 
 	// The seeded 'default' tenant is on the default tier with no assignment yet
-	// → the resolver falls back to the tier's latest active version.
-	r, err := resolver.Resolve(ctx, models.DefaultTenantID, time.Now().UTC())
+	// → ResolveCurrent falls back to the tier's latest active version.
+	r, err := resolver.ResolveCurrent(ctx, models.DefaultTenantID)
 	if err != nil {
 		t.Fatalf("resolve (fallback): %v", err)
 	}
@@ -151,12 +151,84 @@ func TestResolverAndBackfill(t *testing.T) {
 	}
 
 	// And resolution still lands on default-v1, now via the explicit assignment.
-	r2, err := resolver.Resolve(ctx, models.DefaultTenantID, time.Now().UTC())
+	r2, err := resolver.ResolveCurrent(ctx, models.DefaultTenantID)
 	if err != nil {
 		t.Fatalf("resolve (assigned): %v", err)
 	}
 	if r2.VersionID != "ttv-default-v1" {
 		t.Fatalf("expected default-v1 after backfill, got %s", r2.VersionID)
+	}
+}
+
+func TestAssignmentAppendOnlyTrigger(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	ar := repository.NewTenantTierAssignmentRepository(db)
+
+	// Give the seeded default tenant an open assignment.
+	id, err := models.NewID()
+	if err != nil {
+		t.Fatalf("new id: %v", err)
+	}
+	a := &models.TenantTierAssignment{ID: id, TenantID: models.DefaultTenantID, TierVersionID: "ttv-default-v1", Reason: models.AssignmentReasonSignup, CreatedAt: time.Now().UTC()}
+	if err := ar.Create(ctx, a, time.Now().UTC().Add(-time.Hour), nil); err != nil {
+		t.Fatalf("seed open assignment: %v", err)
+	}
+
+	// A direct DELETE of live history is rejected (append-only).
+	if _, err := db.NewDelete().Model((*models.TenantTierAssignment)(nil)).Where("id = ?", id).Exec(ctx); err == nil {
+		t.Fatal("expected append-only rejection deleting an assignment")
+	}
+	// Rewriting a recorded field is rejected.
+	if _, err := db.NewUpdate().Model((*models.TenantTierAssignment)(nil)).
+		Set("tier_version_id = ?", "ttv-trial-v1").Where("id = ?", id).Exec(ctx); err == nil {
+		t.Fatal("expected append-only rejection rewriting an assignment")
+	}
+	// Closing the open range (upper infinity -> finite) is the one permitted update.
+	if _, err := db.NewUpdate().Model((*models.TenantTierAssignment)(nil)).
+		Set("valid = tstzrange(lower(valid), ?, '[)')", time.Now().UTC()).Where("id = ?", id).Exec(ctx); err != nil {
+		t.Fatalf("closing an open range should be allowed: %v", err)
+	}
+}
+
+func TestBackfillClosedHistoryNoOpen(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	tenantRepo := repository.NewTenantRepository(db)
+	ar := repository.NewTenantTierAssignmentRepository(db)
+
+	// A tenant whose only assignment is CLOSED (no open one) — e.g. a future
+	// reassignment closed its range but the open successor is missing.
+	created := time.Now().UTC().Add(-72 * time.Hour)
+	tn := &models.Tenant{ID: "tn-closed", Name: "Closed", Slug: "closed-history", TierID: models.DefaultTierID, CreatedAt: created, UpdatedAt: created}
+	if err := tenantRepo.Create(ctx, tn); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	closedEnd := created.Add(24 * time.Hour)
+	id, err := models.NewID()
+	if err != nil {
+		t.Fatalf("new id: %v", err)
+	}
+	closed := &models.TenantTierAssignment{ID: id, TenantID: tn.ID, TierVersionID: "ttv-default-v1", Reason: models.AssignmentReasonUpgrade, CreatedAt: time.Now().UTC()}
+	if err := ar.Create(ctx, closed, created, &closedEnd); err != nil {
+		t.Fatalf("seed closed assignment: %v", err)
+	}
+
+	// The naive [created_at, infinity) insert overlaps the closed range; the
+	// backfill must NOT silently skip on the exclusion violation — it resumes the
+	// open range at the end of the closed one, leaving exactly one open assignment.
+	if _, err := repository.BackfillTenantTierAssignments(ctx, db, false); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	open, err := ar.CoveringAt(ctx, tn.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("expected an open assignment covering now: %v", err)
+	}
+	if open.ValidTo != nil {
+		t.Fatalf("expected an open-ended assignment, got %+v", open)
+	}
+	if open.ValidFrom == nil || !open.ValidFrom.Equal(closedEnd) {
+		t.Fatalf("expected open range to start at the closed range's end %v, got %+v", closedEnd, open.ValidFrom)
 	}
 }
 
@@ -175,7 +247,7 @@ func BenchmarkResolverColdPath(b *testing.B) {
 		// A fresh resolver each iteration = a cold cache (the PRD's cold-path
 		// benchmark), so every call hits the entitlement tables.
 		resolver := entitlements.NewResolver(vr, ar, tr, cat)
-		if _, err := resolver.Resolve(ctx, models.DefaultTenantID, time.Now().UTC()); err != nil {
+		if _, err := resolver.ResolveCurrent(ctx, models.DefaultTenantID); err != nil {
 			b.Fatal(err)
 		}
 	}

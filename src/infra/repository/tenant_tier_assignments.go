@@ -24,6 +24,12 @@ type TenantTierAssignmentRepository interface {
 	// Create appends an assignment with valid = [validFrom, validTo); a nil
 	// validTo is open-ended (the tenant's current assignment).
 	Create(ctx context.Context, a *models.TenantTierAssignment, validFrom time.Time, validTo *time.Time) error
+	// HasOpen reports whether the tenant currently has an open-ended (upper
+	// infinity) assignment.
+	HasOpen(ctx context.Context, tenantID string) (bool, error)
+	// LatestClosedUpper returns the greatest upper bound among the tenant's
+	// closed assignment ranges, or nil if it has none.
+	LatestClosedUpper(ctx context.Context, tenantID string) (*time.Time, error)
 }
 
 type tenantTierAssignmentRepository struct {
@@ -59,6 +65,29 @@ func (r *tenantTierAssignmentRepository) Create(ctx context.Context, a *models.T
 		Value("valid", "tstzrange(?, ?, '[)')", validFrom, validTo).
 		Exec(ctx)
 	return err
+}
+
+func (r *tenantTierAssignmentRepository) HasOpen(ctx context.Context, tenantID string) (bool, error) {
+	return r.db.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+		Where("tta.tenant_id = ?", tenantID).
+		Where("upper_inf(tta.valid)").
+		Exists(ctx)
+}
+
+func (r *tenantTierAssignmentRepository) LatestClosedUpper(ctx context.Context, tenantID string) (*time.Time, error) {
+	var upper *time.Time
+	err := r.db.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+		ColumnExpr("max(upper(tta.valid))").
+		Where("tta.tenant_id = ?", tenantID).
+		Where("NOT upper_inf(tta.valid)").
+		Scan(ctx, &upper)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return upper, nil
 }
 
 // TierAssignmentBackfillReport summarises a BackfillTenantTierAssignments run.
@@ -134,13 +163,33 @@ func BackfillTenantTierAssignments(ctx context.Context, db *bun.DB, dryRun bool)
 			CreatedAt:     time.Now().UTC(),
 		}
 		if cerr := assignmentRepo.Create(ctx, a, t.CreatedAt, nil); cerr != nil {
-			// A concurrent backfill (rolling deploy) may have inserted the open
-			// assignment first; the gist exclusion (23P01) rejects the overlap.
-			// Treat that as already-done and stay idempotent.
-			if isExclusionViolation(cerr) {
+			if !isExclusionViolation(cerr) {
+				return report, cerr
+			}
+			// The [created_at, infinity) range overlapped existing history. If an
+			// open assignment now exists (a concurrent backfill won the race),
+			// we're done and stay idempotent. Otherwise the overlap is with CLOSED
+			// history — resume the open range at the end of the latest closed
+			// assignment so the tenant is left with exactly one open assignment.
+			open, oerr := assignmentRepo.HasOpen(ctx, t.ID)
+			if oerr != nil {
+				return report, oerr
+			}
+			if open {
 				continue
 			}
-			return report, cerr
+			end, eerr := assignmentRepo.LatestClosedUpper(ctx, t.ID)
+			if eerr != nil {
+				return report, eerr
+			}
+			if end == nil {
+				return report, cerr // overlap with no closed range to resume from
+			}
+			if cerr2 := assignmentRepo.Create(ctx, a, *end, nil); cerr2 != nil {
+				return report, cerr2
+			}
+			report.Assigned++
+			continue
 		}
 		report.Assigned++
 	}

@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/uptrace/bun"
@@ -37,7 +37,12 @@ func TestTierVersionsMigrationRollback(t *testing.T) {
 	}
 	defer admin.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+name)
 
-	db, err := New(strings.Replace(adminDSN, "/postgres?", "/"+name+"?", 1), false)
+	dsn, err := url.Parse(adminDSN)
+	if err != nil {
+		t.Fatalf("parse admin DSN: %v", err)
+	}
+	dsn.Path = "/" + name
+	db, err := New(dsn.String(), false)
 	if err != nil {
 		t.Fatalf("connect to throwaway db: %v", err)
 	}

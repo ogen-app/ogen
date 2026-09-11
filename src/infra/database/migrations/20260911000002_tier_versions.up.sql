@@ -83,6 +83,7 @@ BEGIN
        AND NEW.id = OLD.id AND NEW.tier_id = OLD.tier_id AND NEW.version = OLD.version
        AND NEW.purchasable = OLD.purchasable AND NEW.change_reason = OLD.change_reason
        AND NEW.entitlements = OLD.entitlements
+       AND NEW.created_at = OLD.created_at
        AND NEW.published_at IS NOT DISTINCT FROM OLD.published_at THEN
         RETURN NEW;
     END IF;
@@ -98,21 +99,66 @@ CREATE TRIGGER trg_tenant_tier_versions_immutable
 
 --bun:split
 
--- Price rows inherit their version's immutability: UPDATE/DELETE of a price
--- whose version is published is rejected. (INSERT is left to the seed/authoring
--- path, which adds prices while the version is still a draft.)
+-- Price rows inherit their version's immutability: a price may only be inserted,
+-- changed, or removed while its version is a draft. Fires on INSERT too (so a
+-- price cannot be added to a published version) and, on UPDATE, validates BOTH
+-- the old and new parent (so a price cannot be moved onto — or off of — a
+-- published version). Prices are therefore seeded while the version is a draft,
+-- then the version is activated.
 CREATE OR REPLACE FUNCTION tenant_tier_version_prices_immutable() RETURNS trigger AS $$
 DECLARE
-    parent_status TEXT;
+    old_status TEXT;
+    new_status TEXT;
 BEGIN
-    SELECT status INTO parent_status FROM tenant_tier_versions
-        WHERE id = COALESCE(OLD.tier_version_id, NEW.tier_version_id);
-    IF parent_status IS DISTINCT FROM 'draft' THEN
-        RAISE EXCEPTION 'tenant_tier_version_prices: price rows of a published version are immutable (version=%)',
-            COALESCE(OLD.tier_version_id, NEW.tier_version_id);
+    IF TG_OP <> 'INSERT' THEN
+        SELECT status INTO old_status FROM tenant_tier_versions WHERE id = OLD.tier_version_id;
+        IF old_status IS DISTINCT FROM 'draft' THEN
+            RAISE EXCEPTION 'tenant_tier_version_prices: price rows of a published version are immutable (version=%)', OLD.tier_version_id;
+        END IF;
     END IF;
+    IF TG_OP <> 'DELETE' THEN
+        SELECT status INTO new_status FROM tenant_tier_versions WHERE id = NEW.tier_version_id;
+        IF new_status IS DISTINCT FROM 'draft' THEN
+            RAISE EXCEPTION 'tenant_tier_version_prices: cannot add or move a price to a published version (version=%)', NEW.tier_version_id;
+        END IF;
+        RETURN NEW;
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+--bun:split
+
+CREATE TRIGGER trg_tenant_tier_version_prices_immutable
+    BEFORE INSERT OR UPDATE OR DELETE ON tenant_tier_version_prices
+    FOR EACH ROW EXECUTE FUNCTION tenant_tier_version_prices_immutable();
+
+--bun:split
+
+-- Assignment history is append-only: a direct DELETE or a rewrite of a recorded
+-- assignment is rejected, so point-in-time resolution can never be altered after
+-- the fact. Two carve-outs: (1) a cascade from the owning tenant's own deletion
+-- is allowed (the parent row is already gone when this fires, so its history may
+-- go too); (2) the one-way closure of an open range (upper infinity -> a finite
+-- timestamp) is permitted, which is how a future reassignment ends the current
+-- assignment before opening the next.
+CREATE OR REPLACE FUNCTION tenant_tier_assignments_append_only() RETURNS trigger AS $$
+BEGIN
     IF TG_OP = 'DELETE' THEN
+        IF EXISTS (SELECT 1 FROM tenants WHERE id = OLD.tenant_id) THEN
+            RAISE EXCEPTION 'tenant_tier_assignments: history is append-only, cannot delete (id=%)', OLD.id;
+        END IF;
         RETURN OLD;
+    END IF;
+    IF NEW.id <> OLD.id OR NEW.tenant_id <> OLD.tenant_id
+       OR NEW.tier_version_id <> OLD.tier_version_id OR NEW.reason <> OLD.reason
+       OR NEW.notice_id IS DISTINCT FROM OLD.notice_id
+       OR NEW.created_at <> OLD.created_at
+       OR lower(NEW.valid) IS DISTINCT FROM lower(OLD.valid) THEN
+        RAISE EXCEPTION 'tenant_tier_assignments: recorded assignment is immutable (id=%)', OLD.id;
+    END IF;
+    IF NOT (upper_inf(OLD.valid) AND NOT upper_inf(NEW.valid)) THEN
+        RAISE EXCEPTION 'tenant_tier_assignments: only closing an open assignment range is allowed (id=%)', OLD.id;
     END IF;
     RETURN NEW;
 END;
@@ -120,9 +166,9 @@ $$ LANGUAGE plpgsql;
 
 --bun:split
 
-CREATE TRIGGER trg_tenant_tier_version_prices_immutable
-    BEFORE UPDATE OR DELETE ON tenant_tier_version_prices
-    FOR EACH ROW EXECUTE FUNCTION tenant_tier_version_prices_immutable();
+CREATE TRIGGER trg_tenant_tier_assignments_append_only
+    BEFORE UPDATE OR DELETE ON tenant_tier_assignments
+    FOR EACH ROW EXECUTE FUNCTION tenant_tier_assignments_append_only();
 
 --bun:split
 
@@ -146,9 +192,9 @@ INSERT INTO tenant_tier_versions (id, tier_id, version, status, purchasable, cha
     ('ttv-default-v1', 'default', 1, 'active', false, 'Initial internal version (grandfathers existing workspaces at no limits).',
         '{"workspaces":null,"team_seats":null,"connected_accounts":null,"active_campaigns":null,"all_campaign_types":true,"custom_campaign_types":true,"plan_runs_per_month":null,"assistant_multiplier":1,"quality_reviews_per_post":null,"posts_total":null,"media_storage_bytes":null,"content_bank_assets":null,"web_page_imports":null,"multiple_accounts_per_platform":true,"semantic_grounding":true}'::jsonb,
         now()),
-    ('ttv-trial-v1', 'trial', 1, 'active', true, 'Initial published version.',
+    ('ttv-trial-v1', 'trial', 1, 'draft', true, 'Initial published version.',
         '{"workspaces":1,"team_seats":1,"connected_accounts":2,"active_campaigns":1,"all_campaign_types":false,"custom_campaign_types":false,"plan_runs_per_month":3,"assistant_multiplier":1,"quality_reviews_per_post":1,"posts_total":15,"media_storage_bytes":104857600,"content_bank_assets":10,"web_page_imports":3,"multiple_accounts_per_platform":false,"semantic_grounding":true}'::jsonb,
-        now()),
+        NULL),
     ('ttv-pro-v1', 'pro', 1, 'draft', true, '',
         '{"workspaces":1,"team_seats":3,"connected_accounts":6,"active_campaigns":null,"all_campaign_types":true,"custom_campaign_types":false,"plan_runs_per_month":null,"assistant_multiplier":5,"quality_reviews_per_post":5,"posts_total":null,"media_storage_bytes":1073741824,"content_bank_assets":null,"web_page_imports":null,"multiple_accounts_per_platform":false,"semantic_grounding":true}'::jsonb,
         NULL),
@@ -156,6 +202,11 @@ INSERT INTO tenant_tier_versions (id, tier_id, version, status, purchasable, cha
         '{"workspaces":5,"team_seats":null,"connected_accounts":30,"active_campaigns":null,"all_campaign_types":true,"custom_campaign_types":true,"plan_runs_per_month":null,"assistant_multiplier":20,"quality_reviews_per_post":10,"posts_total":null,"media_storage_bytes":10737418240,"content_bank_assets":null,"web_page_imports":null,"multiple_accounts_per_platform":true,"semantic_grounding":true}'::jsonb,
         NULL);
 
--- Trial is free (the doc's only decided price).
+-- Trial is free (the doc's only decided price). Seeded while trial-v1 is still a
+-- draft so the price-immutability trigger permits the INSERT.
 INSERT INTO tenant_tier_version_prices (id, tier_version_id, currency, billing_interval, net_minor, country_code) VALUES
     ('ttvp-trial-v1-eur-m', 'ttv-trial-v1', 'EUR', 'month', 0, NULL);
+
+-- Activate Trial now that its price row exists. default-v1 was seeded active
+-- directly (it has no price row to guard).
+UPDATE tenant_tier_versions SET status = 'active', published_at = now() WHERE id = 'ttv-trial-v1';

@@ -1,11 +1,13 @@
 -- CON-243 rollback. Drop triggers + functions first, then the tables in reverse
 -- FK order, then the seeded commercial tiers. btree_gist is left installed
 -- (harmless, and other features may adopt it).
+DROP TRIGGER IF EXISTS trg_tenant_tier_assignments_append_only ON tenant_tier_assignments;
 DROP TRIGGER IF EXISTS trg_tenant_tier_version_prices_immutable ON tenant_tier_version_prices;
 DROP TRIGGER IF EXISTS trg_tenant_tier_versions_immutable ON tenant_tier_versions;
 
 --bun:split
 
+DROP FUNCTION IF EXISTS tenant_tier_assignments_append_only();
 DROP FUNCTION IF EXISTS tenant_tier_version_prices_immutable();
 DROP FUNCTION IF EXISTS tenant_tier_versions_immutable();
 

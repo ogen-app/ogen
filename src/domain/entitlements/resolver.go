@@ -97,16 +97,30 @@ func NewResolver(versions VersionStore, assignments AssignmentStore, tenants Ten
 	return &Resolver{versions: versions, assignments: assignments, tenants: tenants, catalog: catalog}
 }
 
-// Resolve returns the entitlement picture in force for tenantID at time at. It
-// uses the assignment covering at; failing that (a tenant not yet backfilled, or
-// a brand-new signup), it falls back to the tenant's current tier's latest active
-// version.
+// Resolve returns the entitlement picture in force for tenantID at the instant
+// at, from the assignment covering that instant. It does NOT fall back to the
+// tier's current version: for a historical at with no recorded assignment there
+// is genuinely no version in force then, so sql.ErrNoRows is returned rather than
+// fabricating the present. For "what is this tenant on right now", use
+// ResolveCurrent.
 func (r *Resolver) Resolve(ctx context.Context, tenantID string, at time.Time) (*Resolution, error) {
-	var versionID string
 	asg, err := r.assignments.CoveringAt(ctx, tenantID, at)
+	if err != nil {
+		return nil, err
+	}
+	return r.resolveVersion(ctx, asg.TierVersionID)
+}
+
+// ResolveCurrent returns the entitlement picture in force right now. When the
+// tenant has no explicit assignment yet — not backfilled, or a brand-new signup
+// — it falls back to the tenant's current tier's latest active version. That
+// fallback is sound only for the present (it is the tier's *current* version),
+// which is why Resolve does not apply it to historical queries.
+func (r *Resolver) ResolveCurrent(ctx context.Context, tenantID string) (*Resolution, error) {
+	asg, err := r.assignments.CoveringAt(ctx, tenantID, time.Now().UTC())
 	switch {
 	case err == nil:
-		versionID = asg.TierVersionID
+		return r.resolveVersion(ctx, asg.TierVersionID)
 	case errors.Is(err, sql.ErrNoRows):
 		t, terr := r.tenants.GetByID(ctx, tenantID)
 		if terr != nil {
@@ -116,11 +130,13 @@ func (r *Resolver) Resolve(ctx context.Context, tenantID string, at time.Time) (
 		if verr != nil {
 			return nil, verr
 		}
-		versionID = v.ID
+		return r.resolveVersion(ctx, v.ID)
 	default:
 		return nil, err
 	}
+}
 
+func (r *Resolver) resolveVersion(ctx context.Context, versionID string) (*Resolution, error) {
 	b, err := r.loadVersion(ctx, versionID)
 	if err != nil {
 		return nil, err
