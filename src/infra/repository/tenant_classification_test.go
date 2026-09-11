@@ -200,7 +200,9 @@ func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 	tierRepo := repository.NewTenantTierRepository(db)
 	groupRepo := repository.NewTenantGroupRepository(db)
 
-	pro := &models.TenantTier{ID: mintID(t), Name: "Pro", Color: "#00b3a4", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	// "Growth" (not "Pro"/"Max"/"Trial") — those names are now seeded product
+	// tiers (CON-243) and tenant_tiers.name is UNIQUE.
+	pro := &models.TenantTier{ID: mintID(t), Name: "Growth", Color: "#00b3a4", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := tierRepo.Create(ctx, pro); err != nil {
 		t.Fatalf("create pro tier: %v", err)
 	}
@@ -257,7 +259,7 @@ func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 		t.Fatalf("pro tenants = %v total=%d, want {t1,t3} total 2", got, total)
 	}
 	// Each is hydrated.
-	if proTenants[0].Tier == nil || proTenants[0].Tier.Name != "Pro" {
+	if proTenants[0].Tier == nil || proTenants[0].Tier.Name != "Growth" {
 		t.Fatalf("listed tenant not hydrated: %+v", proTenants[0].Tier)
 	}
 

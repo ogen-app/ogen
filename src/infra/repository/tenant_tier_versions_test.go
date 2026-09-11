@@ -204,7 +204,9 @@ func TestBackfillClosedHistoryNoOpen(t *testing.T) {
 	if err := tenantRepo.Create(ctx, tn); err != nil {
 		t.Fatalf("create tenant: %v", err)
 	}
-	closedEnd := created.Add(24 * time.Hour)
+	// Truncate to microseconds: Postgres timestamptz has microsecond precision,
+	// so the value read back through the range's upper bound is truncated.
+	closedEnd := created.Add(24 * time.Hour).Truncate(time.Microsecond)
 	id, err := models.NewID()
 	if err != nil {
 		t.Fatalf("new id: %v", err)
