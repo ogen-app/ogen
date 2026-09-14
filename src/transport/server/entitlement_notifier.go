@@ -10,6 +10,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
@@ -28,11 +29,27 @@ type limitNotifier struct {
 	users  repository.UserRepository
 }
 
-// NotifyLimit implements entitlements.Notifier.
-func (n *limitNotifier) NotifyLimit(ctx context.Context, tenantID string, ev entitlements.LimitEvent) {
-	if n == nil || n.notify == nil || n.users == nil {
+// NotifyLimit implements entitlements.Notifier. Delivery (owner lookup + one
+// insert per owner) runs in a goroutine so it never delays the create path, as
+// the Notifier contract requires. The request context cannot be reused after the
+// handler returns (fasthttp recycles it), so we start a fresh tenant-scoped
+// context from the passed tenantID rather than detaching the caller's ctx.
+func (n *limitNotifier) NotifyLimit(_ context.Context, tenantID string, ev entitlements.LimitEvent) {
+	if n == nil || n.notify == nil || n.users == nil || tenantID == "" {
 		return
 	}
+	go n.deliver(tenantctx.With(context.Background(), tenantID), tenantID, ev)
+}
+
+// deliver performs the owner lookup + fan-out off the request path. A panic here
+// must not take down the process, so it is recovered and logged.
+func (n *limitNotifier) deliver(ctx context.Context, tenantID string, ev entitlements.LimitEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "entitlement near-limit notify: panic recovered",
+				logging.AttrComponent, "entitlements", "feature", ev.Feature, "panic", r)
+		}
+	}()
 	owners, err := n.users.ListOwnersByTenant(ctx, tenantID)
 	if err != nil {
 		slog.WarnContext(ctx, "entitlement near-limit notify: list owners failed",
@@ -46,8 +63,6 @@ func (n *limitNotifier) NotifyLimit(ctx context.Context, tenantID string, ev ent
 	for _, o := range owners {
 		ids = append(ids, o.ID)
 	}
-	// ctx already carries the acting tenant (the same tenant we notify), so the
-	// notification rows are stamped with the correct tenant_id.
 	if err := n.notify.EmitToUsers(ctx, ids, limitSpec(ev)); err != nil {
 		slog.WarnContext(ctx, "entitlement near-limit notify: emit failed",
 			logging.AttrComponent, "entitlements", "feature", ev.Feature, logging.AttrError, err)

@@ -307,10 +307,14 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
 	// CON-295: the active_campaigns quota gates a new campaign.
-	if tenantID, ok := tenantctx.From(c.Context()); ok {
-		if err := h.limiter.Require(c.Context(), tenantID, "active_campaigns"); err != nil {
-			return err
+	var campaignQuota entitlements.Decision
+	tenantID, hasTenant := tenantctx.From(c.Context())
+	if hasTenant {
+		dec, qErr := h.limiter.Require(c.Context(), tenantID, "active_campaigns")
+		if qErr != nil {
+			return qErr
 		}
+		campaignQuota = dec
 	}
 	campaignType, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID)
 	if err != nil {
@@ -371,6 +375,10 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	}
 	if err := h.repo.Create(c.Context(), campaign); err != nil {
 		return err
+	}
+	// CON-295: the campaign now exists — fire any near-limit crossing.
+	if hasTenant {
+		h.limiter.DispatchCrossing(c.Context(), tenantID, campaignQuota)
 	}
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_created",
 		activity.WithEntity("campaign", campaign.ID),

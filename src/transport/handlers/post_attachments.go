@@ -301,10 +301,14 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// CON-295: this upload adds fh.Size bytes to the tenant's media_storage_bytes
 	// budget. Check before touching storage so a denied upload never leaves an
 	// orphaned object behind.
-	if tenantID, ok := tenantctx.From(c.Context()); ok {
-		if err := h.limiter.RequireAmount(c.Context(), tenantID, "media_storage_bytes", fh.Size); err != nil {
-			return err
+	var mediaQuota entitlements.Decision
+	tenantID, hasTenant := tenantctx.From(c.Context())
+	if hasTenant {
+		dec, qErr := h.limiter.RequireAmount(c.Context(), tenantID, "media_storage_bytes", fh.Size)
+		if qErr != nil {
+			return qErr
 		}
+		mediaQuota = dec
 	}
 
 	f, err := fh.Open()
@@ -459,6 +463,10 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			_ = h.storage.Delete(c.Context(), att.ThumbnailS3Key)
 		}
 		return err
+	}
+	// CON-295: the attachment (and its bytes) now exist — fire any near-limit crossing.
+	if hasTenant {
+		h.limiter.DispatchCrossing(c.Context(), tenantID, mediaQuota)
 	}
 
 	h.hydratePresigned(c, att)

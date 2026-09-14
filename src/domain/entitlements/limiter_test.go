@@ -64,7 +64,7 @@ func TestLimiterAllow(t *testing.T) {
 			if dec.Allowed != tc.want {
 				t.Fatalf("Allowed = %v, want %v (%+v)", dec.Allowed, tc.want, dec)
 			}
-			if reqErr := l.Require(ctx, "tn-1", "team_seats"); (reqErr != nil) == tc.want {
+			if _, reqErr := l.Require(ctx, "tn-1", "team_seats"); (reqErr != nil) == tc.want {
 				t.Fatalf("Require returned err=%v but Allowed=%v", reqErr, tc.want)
 			}
 		})
@@ -103,7 +103,7 @@ func TestLimiterAllowAmount(t *testing.T) {
 	// A genuinely unlimited (nil) cap always allows, whatever the amount.
 	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"media_storage_bytes": nil})}, nil, ModeEnforce)
 	l.Register("media_storage_bytes", fixedCount(1<<40))
-	if err := l.RequireAmount(ctx, "tn", "media_storage_bytes", 1<<40); err != nil {
+	if _, err := l.RequireAmount(ctx, "tn", "media_storage_bytes", 1<<40); err != nil {
 		t.Fatalf("unlimited RequireAmount should allow: %v", err)
 	}
 }
@@ -137,7 +137,7 @@ func TestLimiterGate(t *testing.T) {
 	}
 	// A nil limiter is a permissive no-op.
 	var nilL *Limiter
-	if err := nilL.Require(ctx, "tn", "team_seats"); err != nil {
+	if _, err := nilL.Require(ctx, "tn", "team_seats"); err != nil {
 		t.Fatalf("nil limiter Require: %v", err)
 	}
 	if err := nilL.RequireGate(ctx, "tn", "x"); err != nil {
@@ -189,9 +189,13 @@ func TestLimiterNearLimitNotify(t *testing.T) {
 			l := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": tc.limit})}, nil, tc.mode).
 				WithNotifier(spy, 90)
 			l.Register("team_seats", fixedCount(tc.current))
-			if _, err := l.Allow(ctx, "tn-1", "team_seats"); err != nil {
+			dec, err := l.Allow(ctx, "tn-1", "team_seats")
+			if err != nil {
 				t.Fatalf("Allow: %v", err)
 			}
+			// Dispatch is decoupled from the check (fired after the resource
+			// commits); the check only records the pending event.
+			l.DispatchCrossing(ctx, "tn-1", dec)
 			got := make([]LimitState, len(spy.events))
 			for i, e := range spy.events {
 				got[i] = e.State
@@ -208,9 +212,11 @@ func TestLimiterNearLimitEventShape(t *testing.T) {
 	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": float64(10)})}, nil, ModeEnforce).
 		WithNotifier(spy, 90)
 	l.Register("team_seats", fixedCount(8)) // next = 9 = ceil(10*90%) → approaching
-	if _, err := l.Allow(context.Background(), "tn-1", "team_seats"); err != nil {
+	dec, err := l.Allow(context.Background(), "tn-1", "team_seats")
+	if err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
+	l.DispatchCrossing(context.Background(), "tn-1", dec)
 	if len(spy.events) != 1 {
 		t.Fatalf("want 1 event, got %d", len(spy.events))
 	}
@@ -227,15 +233,16 @@ func TestLimiterWithNotifierClampsThreshold(t *testing.T) {
 			t.Fatalf("WithNotifier(%d) → warnPct %d, want %d", in, l.warnPct, want)
 		}
 	}
-	// A nil notifier disables near-limit notifications without firing.
-	spy := &spyNotifier{}
+	// Without a notifier the check records no crossing event, so there is nothing
+	// for DispatchCrossing to fire.
 	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": float64(2)})}, nil, ModeEnforce)
 	l.Register("team_seats", fixedCount(1)) // would be "reached" if a notifier were set
-	if _, err := l.Allow(context.Background(), "tn", "team_seats"); err != nil {
+	dec, err := l.Allow(context.Background(), "tn", "team_seats")
+	if err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
-	if len(spy.events) != 0 {
-		t.Fatalf("no-notifier limiter should not fire, got %d", len(spy.events))
+	if dec.event != nil {
+		t.Fatalf("no-notifier limiter should record no event, got %+v", dec.event)
 	}
 }
 

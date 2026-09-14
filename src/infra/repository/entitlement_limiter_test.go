@@ -41,12 +41,12 @@ func TestLimiterEnforcesTrialCap(t *testing.T) {
 		Register("active_campaigns", entitlements.CounterFunc(func(context.Context, string) (int64, error) { return current, nil }))
 
 	// Under the cap → allowed.
-	if err := lim.Require(ctx, tn.ID, "active_campaigns"); err != nil {
+	if _, err := lim.Require(ctx, tn.ID, "active_campaigns"); err != nil {
 		t.Fatalf("under cap should allow: %v", err)
 	}
 	// At the cap (1) → denied with a typed quota error carrying limit + current.
 	current = 1
-	err = lim.Require(ctx, tn.ID, "active_campaigns")
+	_, err = lim.Require(ctx, tn.ID, "active_campaigns")
 	var qe *entitlements.QuotaExceededError
 	if !errors.As(err, &qe) {
 		t.Fatalf("at cap should deny with *QuotaExceededError, got %v", err)
@@ -58,7 +58,7 @@ func TestLimiterEnforcesTrialCap(t *testing.T) {
 	// warn mode never blocks, even over cap.
 	warn := entitlements.NewLimiter(resolver, cat, entitlements.ModeWarn).
 		Register("active_campaigns", entitlements.CounterFunc(func(context.Context, string) (int64, error) { return 9, nil }))
-	if err := warn.Require(ctx, tn.ID, "active_campaigns"); err != nil {
+	if _, err := warn.Require(ctx, tn.ID, "active_campaigns"); err != nil {
 		t.Fatalf("warn mode should allow: %v", err)
 	}
 }

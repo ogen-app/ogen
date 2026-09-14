@@ -55,6 +55,11 @@ type Decision struct {
 	Allowed bool
 	Limit   *int64 // nil = unlimited
 	Current int64
+	// event is the near-limit crossing this (allowed) create would trigger, or
+	// nil. It is NOT dispatched during the check — the caller passes the Decision
+	// to DispatchCrossing after the resource commits, so a create that fails
+	// post-check raises no notification (CON-295 §12).
+	event *LimitEvent
 }
 
 // Err returns a *QuotaExceededError when the decision denied the action, else nil.
@@ -160,24 +165,39 @@ func (l *Limiter) WithNotifier(n Notifier, pct int) *Limiter {
 	return l
 }
 
-// Require checks a numeric cap and returns a *QuotaExceededError when the tenant
-// is at/over the cap in enforce mode (nil otherwise). The one-liner handlers use.
-func (l *Limiter) Require(ctx context.Context, tenantID, featureKey string) error {
+// Require checks a numeric cap: err is a *QuotaExceededError when the tenant is
+// at/over the cap in enforce mode (nil otherwise). On success the returned
+// Decision may carry a pending near-limit crossing — the caller passes it to
+// DispatchCrossing after the resource commits.
+func (l *Limiter) Require(ctx context.Context, tenantID, featureKey string) (Decision, error) {
 	return l.RequireAmount(ctx, tenantID, featureKey, 1)
 }
 
 // RequireAmount is Require for a create that consumes amount units of the feature
 // at once (e.g. the byte size of an upload against a storage-bytes cap) rather
 // than a single row.
-func (l *Limiter) RequireAmount(ctx context.Context, tenantID, featureKey string, amount int64) error {
+func (l *Limiter) RequireAmount(ctx context.Context, tenantID, featureKey string, amount int64) (Decision, error) {
 	if l == nil {
-		return nil
+		return Decision{Allowed: true}, nil
 	}
 	dec, err := l.AllowAmount(ctx, tenantID, featureKey, amount)
 	if err != nil {
-		return err
+		return dec, err
 	}
-	return dec.Err()
+	return dec, dec.Err()
+}
+
+// DispatchCrossing delivers the near-limit notification a Require/Allow decision
+// computed, and MUST be called only after the caller has committed the resource
+// — so a create that fails after the check raises no false notification, and its
+// dedupe key never suppresses a later genuine crossing (CON-295 §12). Nil-safe;
+// a no-op when there was no crossing or no notifier. The Notifier is responsible
+// for keeping delivery off the request path.
+func (l *Limiter) DispatchCrossing(ctx context.Context, tenantID string, dec Decision) {
+	if l == nil || l.notifier == nil || dec.event == nil {
+		return
+	}
+	l.notifier.NotifyLimit(ctx, tenantID, *dec.event)
 }
 
 // RequireGate checks a boolean capability and returns a *FeatureNotAvailableError
@@ -209,6 +229,11 @@ func (l *Limiter) Allow(ctx context.Context, tenantID, featureKey string) (Decis
 // byte size of an upload against a storage-bytes cap). Allowed = current + amount
 // <= limit; amount is clamped to a minimum of 1. Same fail-open + warn/off
 // semantics as Allow.
+//
+// The check is advisory: Count reads committed usage, so two concurrent creates
+// at the boundary can both pass (check-then-create is not atomic). This is the
+// accepted guardrail semantics — a soft ceiling, not a hard DB-level reservation
+// (CON-295 §10, matching CON-86's multi-instance stance).
 func (l *Limiter) AllowAmount(ctx context.Context, tenantID, featureKey string, amount int64) (Decision, error) {
 	dec := Decision{Key: featureKey, Allowed: true}
 	if l == nil || l.mode == ModeOff {
@@ -238,9 +263,10 @@ func (l *Limiter) AllowAmount(ctx context.Context, tenantID, featureKey string, 
 	}
 	dec.Current = current
 	if current+amount <= *limit {
-		// This create is allowed and adds amount units; warn if it crosses the
-		// near-limit band or fills the cap (crossing-only, low-noise — CON-295 §12).
-		l.maybeNotify(ctx, tenantID, featureKey, *limit, current, current+amount)
+		// This create is allowed and adds amount units; record (do not dispatch)
+		// any near-limit crossing so the caller can fire it after the resource
+		// commits (crossing-only, low-noise — CON-295 §12).
+		dec.event = l.crossingEvent(featureKey, *limit, current, current+amount)
 		return dec, nil
 	}
 	if l.mode == ModeEnforce {
@@ -331,16 +357,16 @@ func (l *Limiter) boolValue(ctx context.Context, tenantID, key string) (bool, bo
 	return false, false, nil
 }
 
-// maybeNotify raises a near-limit notification when an allowed create crosses the
-// warn band. Given the pre-create value (prev), the post-create value (next), and
-// the (non-nil) cap, it fires exactly once per boundary: reached when the create
+// crossingEvent returns the near-limit crossing an allowed create triggers, or
+// nil. Given the pre-create value (prev), the post-create value (next), and the
+// (non-nil) cap, it fires exactly once per boundary: reached when the create
 // lands on the cap, approaching when it steps over T = ceil(limit * pct/100)
 // while still below the cap. A denied create never reaches here (next <= limit on
-// the allowed path), so an already-full tenant does not re-notify. No-op without
-// a notifier.
-func (l *Limiter) maybeNotify(ctx context.Context, tenantID, featureKey string, limit, prev, next int64) {
+// the allowed path), so an already-full tenant does not re-notify. nil without a
+// notifier — nothing to dispatch.
+func (l *Limiter) crossingEvent(featureKey string, limit, prev, next int64) *LimitEvent {
 	if l.notifier == nil || l.warnPct <= 0 || limit <= 0 {
-		return
+		return nil
 	}
 	threshold := (limit*int64(l.warnPct) + 99) / 100 // ceil(limit * pct / 100)
 	var state LimitState
@@ -350,16 +376,16 @@ func (l *Limiter) maybeNotify(ctx context.Context, tenantID, featureKey string, 
 	case prev < threshold && threshold <= next:
 		state = LimitApproaching
 	default:
-		return // no boundary crossed by this create
+		return nil // no boundary crossed by this create
 	}
-	l.notifier.NotifyLimit(ctx, tenantID, LimitEvent{
+	return &LimitEvent{
 		Feature: featureKey,
 		Name:    l.featureName(featureKey),
 		State:   state,
 		Limit:   limit,
 		Current: next,
 		Percent: l.warnPct,
-	})
+	}
 }
 
 // featureName returns the catalog display name for a feature key, falling back to

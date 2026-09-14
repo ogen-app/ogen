@@ -165,7 +165,8 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 	}
 
 	// CON-295: the team_seats quota gates adding a member.
-	if err := h.limiter.Require(c.Context(), caller.TenantID, "team_seats"); err != nil {
+	seatDec, err := h.limiter.Require(c.Context(), caller.TenantID, "team_seats")
+	if err != nil {
 		return err
 	}
 
@@ -223,6 +224,8 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 
 	h.activity.Record(c.Context(), activity.CategoryAuthentication, "user_created",
 		activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI))
+	// CON-295: the member now exists — fire any near-limit crossing.
+	h.limiter.DispatchCrossing(c.Context(), caller.TenantID, seatDec)
 	return c.Status(fiber.StatusCreated).JSON(user)
 }
 
