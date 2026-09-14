@@ -84,10 +84,28 @@ func (r *tenantTierRepository) Update(ctx context.Context, tier *models.TenantTi
 }
 
 func (r *tenantTierRepository) Delete(ctx context.Context, id string) (bool, error) {
-	res, err := r.db.NewDelete().Model((*models.TenantTier)(nil)).Where("id = ?", id).Exec(ctx)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	// A tier accrues immutable versions (CON-243), each a tenant_tier_versions row
+	// with an ON DELETE RESTRICT FK back to the tier. Leftover DRAFT versions (e.g.
+	// authored then abandoned) must not wedge deletion of a tier that has no
+	// tenants, so drop them first in the same transaction — their price rows
+	// cascade, and the immutability trigger still protects published versions (so
+	// a tier with active/retired versions, or tenants, still fails the FK).
+	var deleted bool
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewDelete().
+			Model((*models.TenantTierVersion)(nil)).
+			Where("tier_id = ?", id).
+			Where("status = ?", "draft").
+			Exec(ctx); err != nil {
+			return err
+		}
+		res, err := tx.NewDelete().Model((*models.TenantTier)(nil)).Where("id = ?", id).Exec(ctx)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		deleted = n > 0
+		return nil
+	})
+	return deleted, err
 }
