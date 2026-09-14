@@ -87,6 +87,34 @@ type FeatureNotAvailableError struct{ Key string }
 
 func (e *FeatureNotAvailableError) Error() string { return "feature_not_available: " + e.Key }
 
+// LimitState marks which near-limit threshold an allowed create just crossed.
+type LimitState string
+
+const (
+	LimitApproaching LimitState = "approaching" // crossed the warn band, still below the cap
+	LimitReached     LimitState = "reached"     // this create fills the cap exactly
+)
+
+// LimitEvent describes a numeric entitlement that an allowed create just pushed
+// across the near-limit band (or filled). It is handed to a Notifier so the
+// wiring layer can raise a durable warning (CON-295 §12); the domain never
+// touches the notification center directly.
+type LimitEvent struct {
+	Feature string     // feature key
+	Name    string     // human display name (from the catalog), for the message
+	State   LimitState // approaching | reached
+	Limit   int64      // the cap
+	Current int64      // post-create count (the value this create lands on)
+	Percent int        // the warn threshold percent that fired
+}
+
+// Notifier receives near-limit crossings. It is optional and best-effort: a nil
+// Notifier disables near-limit notifications, and an implementation must never
+// block or fail the create path (CON-295 §12).
+type Notifier interface {
+	NotifyLimit(ctx context.Context, tenantID string, ev LimitEvent)
+}
+
 // currentResolver is the slice of the resolver the Limiter needs (so tests can
 // fake it). *Resolver satisfies it.
 type currentResolver interface {
@@ -102,6 +130,8 @@ type Limiter struct {
 	catalog  *Catalog
 	counters map[string]Counter
 	mode     Mode
+	notifier Notifier // optional; nil disables near-limit notifications
+	warnPct  int      // near-limit threshold percent (1..100), 0 when no notifier
 }
 
 // NewLimiter builds a Limiter over the resolver + catalog in the given mode.
@@ -112,6 +142,21 @@ func NewLimiter(resolver currentResolver, catalog *Catalog, mode Mode) *Limiter 
 // Register attaches a Counter to a numeric feature key (wiring time).
 func (l *Limiter) Register(featureKey string, c Counter) *Limiter {
 	l.counters[featureKey] = c
+	return l
+}
+
+// WithNotifier attaches a near-limit Notifier and the warn-band threshold
+// percent (CON-295 §12), clamped to 1..100 (out-of-range ⇒ 90). Chainable; a nil
+// receiver or notifier leaves near-limit notifications disabled.
+func (l *Limiter) WithNotifier(n Notifier, pct int) *Limiter {
+	if l == nil {
+		return l
+	}
+	if pct < 1 || pct > 100 {
+		pct = 90
+	}
+	l.notifier = n
+	l.warnPct = pct
 	return l
 }
 
@@ -175,6 +220,9 @@ func (l *Limiter) Allow(ctx context.Context, tenantID, featureKey string) (Decis
 	}
 	dec.Current = current
 	if current < *limit {
+		// This create is allowed and adds one; warn if it crosses the near-limit
+		// band or fills the cap exactly (crossing-only, low-noise — CON-295 §12).
+		l.maybeNotify(ctx, tenantID, featureKey, *limit, current)
 		return dec, nil
 	}
 	if l.mode == ModeEnforce {
@@ -263,6 +311,48 @@ func (l *Limiter) boolValue(ctx context.Context, tenantID, key string) (bool, bo
 		return false, false, nil
 	}
 	return false, false, nil
+}
+
+// maybeNotify raises a near-limit notification when an allowed create crosses the
+// warn band. Given the pre-create count and the (non-nil) cap, it fires exactly
+// once per boundary: reached when the create fills the cap, approaching when it
+// steps over T = ceil(limit * pct/100) while still below the cap. A denied create
+// never reaches here, so an already-full tenant does not re-notify. No-op without
+// a notifier.
+func (l *Limiter) maybeNotify(ctx context.Context, tenantID, featureKey string, limit, current int64) {
+	if l.notifier == nil || l.warnPct <= 0 || limit <= 0 {
+		return
+	}
+	next := current + 1 // the count this create lands on
+	threshold := (limit*int64(l.warnPct) + 99) / 100 // ceil(limit * pct / 100)
+	var state LimitState
+	switch {
+	case next == limit:
+		state = LimitReached
+	case current < threshold && threshold <= next && next < limit:
+		state = LimitApproaching
+	default:
+		return // no boundary crossed by this create
+	}
+	l.notifier.NotifyLimit(ctx, tenantID, LimitEvent{
+		Feature: featureKey,
+		Name:    l.featureName(featureKey),
+		State:   state,
+		Limit:   limit,
+		Current: next,
+		Percent: l.warnPct,
+	})
+}
+
+// featureName returns the catalog display name for a feature key, falling back to
+// the key itself when the catalog is absent or does not list it.
+func (l *Limiter) featureName(featureKey string) string {
+	if l.catalog != nil {
+		if f, ok := l.catalog.Get(featureKey); ok && f.Name != "" {
+			return f.Name
+		}
+	}
+	return featureKey
 }
 
 func (l *Limiter) failOpen(ctx context.Context, featureKey, op string, err error) {

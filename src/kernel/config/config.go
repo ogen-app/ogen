@@ -80,6 +80,11 @@ type Config struct {
 	// are on the unlimited default tier, so enforce never bites them.
 	EntitlementEnforcementMode string `envconfig:"ENTITLEMENT_ENFORCEMENT_MODE" default:"warn"`
 
+	// CON-295 near-limit notification threshold: raise a durable "approaching"
+	// notification once a tenant crosses this percent of a numeric cap ("MAX_VALUE
+	// − 10%" ⇒ 90). Clamped to 1..100; 0 / out-of-range falls back to 90.
+	EntitlementWarnThresholdPct int `envconfig:"ENTITLEMENT_WARN_THRESHOLD_PCT" default:"90"`
+
 	// Anthropic config.
 	// todo: remove from config entirely
 	AnthropicAPIKey  string `envconfig:"ANTHROPIC_API_KEY"     default:""`

@@ -126,6 +126,11 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	notifier := notify.New(r.notificationRepo, hub)
 	handlers.NewNotificationsHandler(r.notificationRepo, hub, r.sessionRepo, auth, 0).Register(app)
 
+	// CON-295 §12: warn workspace owners via the durable inbox as a tenant nears a
+	// numeric cap. The Limiter fires crossing-only LimitEvents; this adapter turns
+	// them into notifications. Best-effort — it never affects the create path.
+	entitlementLimiter.WithNotifier(&limitNotifier{notify: notifier, users: r.userRepo}, cfg.EntitlementWarnThresholdPct)
+
 	handlers.NewHealthHandler(db, secretStore).Register(app)
 	usersHandler := handlers.NewUsersHandler(db, r.userRepo, r.accountRepo, r.settingRepo, auth)
 	usersHandler.SetActivityRecorder(activityWiring.recorder)

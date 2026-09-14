@@ -3,6 +3,7 @@ package entitlements
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -117,6 +118,87 @@ func TestLimiterMultiplier(t *testing.T) {
 	l2 := NewLimiter(fakeResolver{res: resWith(map[string]any{})}, nil, ModeEnforce)
 	if got := l2.Multiplier(ctx, "tn", "assistant_multiplier"); got != 1 {
 		t.Fatalf("absent multiplier = %v, want 1", got)
+	}
+}
+
+// spyNotifier records the crossings the Limiter reports.
+type spyNotifier struct{ events []LimitEvent }
+
+func (s *spyNotifier) NotifyLimit(_ context.Context, _ string, ev LimitEvent) {
+	s.events = append(s.events, ev)
+}
+
+func TestLimiterNearLimitNotify(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name    string
+		mode    Mode
+		limit   float64
+		current int64
+		want    []LimitState
+	}{
+		{"below band is silent", ModeEnforce, 10, 7, nil},
+		{"crossing the band warns once", ModeEnforce, 10, 8, []LimitState{LimitApproaching}},
+		{"filling the cap reports reached", ModeEnforce, 10, 9, []LimitState{LimitReached}},
+		{"a denied create is silent", ModeEnforce, 10, 10, nil},
+		{"warn mode still notifies", ModeWarn, 10, 8, []LimitState{LimitApproaching}},
+		{"warn mode over cap is silent", ModeWarn, 10, 12, nil},
+		{"off mode is silent", ModeOff, 10, 8, nil},
+		{"tiny cap only reports reached", ModeEnforce, 1, 0, []LimitState{LimitReached}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &spyNotifier{}
+			l := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": tc.limit})}, nil, tc.mode).
+				WithNotifier(spy, 90)
+			l.Register("team_seats", fixedCount(tc.current))
+			if _, err := l.Allow(ctx, "tn-1", "team_seats"); err != nil {
+				t.Fatalf("Allow: %v", err)
+			}
+			got := make([]LimitState, len(spy.events))
+			for i, e := range spy.events {
+				got[i] = e.State
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("states = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLimiterNearLimitEventShape(t *testing.T) {
+	spy := &spyNotifier{}
+	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": float64(10)})}, nil, ModeEnforce).
+		WithNotifier(spy, 90)
+	l.Register("team_seats", fixedCount(8)) // next = 9 = ceil(10*90%) → approaching
+	if _, err := l.Allow(context.Background(), "tn-1", "team_seats"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if len(spy.events) != 1 {
+		t.Fatalf("want 1 event, got %d", len(spy.events))
+	}
+	ev := spy.events[0]
+	if ev.Feature != "team_seats" || ev.State != LimitApproaching || ev.Limit != 10 || ev.Current != 9 || ev.Percent != 90 {
+		t.Fatalf("unexpected event: %+v", ev)
+	}
+}
+
+func TestLimiterWithNotifierClampsThreshold(t *testing.T) {
+	for in, want := range map[int]int{0: 90, -5: 90, 101: 90, 1: 1, 50: 50, 100: 100} {
+		l := NewLimiter(fakeResolver{res: resWith(nil)}, nil, ModeEnforce).WithNotifier(&spyNotifier{}, in)
+		if l.warnPct != want {
+			t.Fatalf("WithNotifier(%d) → warnPct %d, want %d", in, l.warnPct, want)
+		}
+	}
+	// A nil notifier disables near-limit notifications without firing.
+	spy := &spyNotifier{}
+	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": float64(2)})}, nil, ModeEnforce)
+	l.Register("team_seats", fixedCount(1)) // would be "reached" if a notifier were set
+	if _, err := l.Allow(context.Background(), "tn", "team_seats"); err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
+	if len(spy.events) != 0 {
+		t.Fatalf("no-notifier limiter should not fire, got %d", len(spy.events))
 	}
 }
 
