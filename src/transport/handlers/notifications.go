@@ -391,6 +391,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 				}
 			case <-lifetime.C:
 				slog.InfoContext(logCtx, "stream lifetime reached; closing to reclaim slot", logging.AttrComponent, "notifications")
+				_ = writeRecycleFrame(w) // best-effort; closing regardless, client reconnects & replays via Last-Event-ID
 				return
 			}
 		}
