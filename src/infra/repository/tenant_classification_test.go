@@ -121,6 +121,29 @@ func TestTenantTierRepositoryCRUD(t *testing.T) {
 	if deleted, _ := repo.Delete(ctx, "nope"); deleted {
 		t.Fatalf("delete missing tier reported true")
 	}
+
+	// A tier with only leftover DRAFT versions (no tenants) still deletes: the
+	// draft versions are removed with the tier (CON-243).
+	drafty := &models.TenantTier{ID: mintID(t), Name: "Drafty", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := repo.Create(ctx, drafty); err != nil {
+		t.Fatalf("create drafty: %v", err)
+	}
+	if _, err := db.NewRaw(
+		"INSERT INTO tenant_tier_versions (id, tier_id, version, status) VALUES (?, ?, 1, 'draft')",
+		mintID(t), drafty.ID,
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed draft version: %v", err)
+	}
+	if deleted, err := repo.Delete(ctx, drafty.ID); err != nil || !deleted {
+		t.Fatalf("delete tier with draft version: deleted=%v err=%v", deleted, err)
+	}
+	var remaining int
+	if err := db.NewRaw("SELECT count(*) FROM tenant_tier_versions WHERE tier_id = ?", drafty.ID).Scan(ctx, &remaining); err != nil {
+		t.Fatalf("count versions: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("draft versions remain after tier delete: %d", remaining)
+	}
 }
 
 // TestTenantGroupRepositoryAndMembership covers the group catalog plus the

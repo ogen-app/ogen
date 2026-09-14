@@ -191,7 +191,9 @@ func (s *tenantAdminService) DeleteTier(ctx context.Context, req *tenantsv1.Dele
 	deleted, err := s.tierRepo.Delete(ctx, id)
 	if err != nil {
 		if pgCode(err) == pgFKViolation {
-			return nil, status.Error(codes.FailedPrecondition, "tier is still assigned to one or more tenants; reassign them first")
+			// Draft versions are removed with the tier (see the repository), so a
+			// remaining FK is either an assigned tenant or a published version.
+			return nil, status.Error(codes.FailedPrecondition, "tier is still referenced by one or more tenants or published versions; reassign tenants first")
 		}
 		return nil, s.internal(ctx, "delete tier", err)
 	}
