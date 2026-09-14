@@ -16,6 +16,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -23,6 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/storage/imageprobe"
 	"github.com/ogen-app/ogen/src/infra/storage/pdfprobe"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 )
 
@@ -76,7 +78,11 @@ type PostAttachmentsHandler struct {
 	pdf      PDFRenderer
 	video    VideoProber
 	auth     fiber.Handler
+	limiter  *entitlements.Limiter // CON-295 media_storage_bytes quota (nil-safe)
 }
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
+func (h *PostAttachmentsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func NewPostAttachmentsHandler(
 	repo repository.PostAttachmentRepository,
@@ -292,6 +298,18 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20),
 		)
 	}
+	// CON-295: this upload adds fh.Size bytes to the tenant's media_storage_bytes
+	// budget. Check before touching storage so a denied upload never leaves an
+	// orphaned object behind.
+	var mediaQuota entitlements.Decision
+	tenantID, hasTenant := tenantctx.From(c.Context())
+	if hasTenant {
+		dec, qErr := h.limiter.RequireAmount(c.Context(), tenantID, "media_storage_bytes", fh.Size)
+		if qErr != nil {
+			return qErr
+		}
+		mediaQuota = dec
+	}
 
 	f, err := fh.Open()
 	if err != nil {
@@ -445,6 +463,10 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			_ = h.storage.Delete(c.Context(), att.ThumbnailS3Key)
 		}
 		return err
+	}
+	// CON-295: the attachment (and its bytes) now exist — fire any near-limit crossing.
+	if hasTenant {
+		h.limiter.DispatchCrossing(c.Context(), tenantID, mediaQuota)
 	}
 
 	h.hydratePresigned(c, att)
