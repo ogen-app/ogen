@@ -193,7 +193,11 @@ func (s *tenantAdminService) DeleteTier(ctx context.Context, req *tenantsv1.Dele
 		if pgCode(err) == pgFKViolation {
 			// Draft versions are removed with the tier (see the repository), so a
 			// remaining FK is either an assigned tenant or a published version.
-			return nil, status.Error(codes.FailedPrecondition, "tier is still referenced by one or more tenants or published versions; reassign tenants first")
+			// Name the actual blocker so the remediation is actionable.
+			if fkReferencesVersions(err) {
+				return nil, status.Error(codes.FailedPrecondition, "tier still has published versions and cannot be deleted")
+			}
+			return nil, status.Error(codes.FailedPrecondition, "tier is still assigned to one or more tenants; reassign them first")
 		}
 		return nil, s.internal(ctx, "delete tier", err)
 	}
@@ -420,6 +424,18 @@ func pgCode(err error) string {
 		return pgErr.Code
 	}
 	return ""
+}
+
+// fkReferencesVersions reports whether an FK-violation error came from the
+// tenant_tier_versions -> tenant_tiers constraint (a published version) rather
+// than tenants -> tenant_tiers (an assigned tenant). Falls back to false (the
+// tenant message) when the constraint/table can't be identified.
+func fkReferencesVersions(err error) bool {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
+		return strings.Contains(pgErr.ConstraintName, "tenant_tier_versions") ||
+			pgErr.TableName == "tenant_tier_versions"
+	}
+	return false
 }
 
 func toTierProto(t *models.TenantTier) *tenantsv1.Tier {

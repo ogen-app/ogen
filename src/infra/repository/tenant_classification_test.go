@@ -144,6 +144,22 @@ func TestTenantTierRepositoryCRUD(t *testing.T) {
 	if remaining != 0 {
 		t.Fatalf("draft versions remain after tier delete: %d", remaining)
 	}
+
+	// A tier with a PUBLISHED version can't be deleted: the immutability trigger
+	// keeps the version, so the tier_id FK still restricts (23503).
+	pub := &models.TenantTier{ID: mintID(t), Name: "Published", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := repo.Create(ctx, pub); err != nil {
+		t.Fatalf("create pub: %v", err)
+	}
+	if _, err := db.NewRaw(
+		"INSERT INTO tenant_tier_versions (id, tier_id, version, status, published_at) VALUES (?, ?, 1, 'active', now())",
+		mintID(t), pub.ID,
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed active version: %v", err)
+	}
+	if _, err := repo.Delete(ctx, pub.ID); sqlState(err) != "23503" {
+		t.Fatalf("delete tier with published version: err = %v (state %q), want 23503", err, sqlState(err))
+	}
 }
 
 // TestTenantGroupRepositoryAndMembership covers the group catalog plus the
