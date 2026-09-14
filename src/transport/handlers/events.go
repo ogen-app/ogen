@@ -210,6 +210,7 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 				}
 			case <-lifetime.C:
 				slog.InfoContext(logCtx, "stream lifetime reached; closing to reclaim slot", logging.AttrComponent, "events")
+				_ = writeRecycleFrame(w) // best-effort; closing regardless, client reconnects
 				return
 			}
 		}
@@ -261,6 +262,20 @@ func writeSSEEvent(w *bufio.Writer, ev eventhub.Event) error {
 // the idle connection.
 func writeHeartbeat(w *bufio.Writer) error {
 	if _, err := w.WriteString(": ping\n\n"); err != nil {
+		return err
+	}
+	return w.Flush()
+}
+
+// writeRecycleFrame announces a deliberate server-side connection recycle (the
+// CON-286 lifetime ceiling) just before the stream is closed. A clean close is
+// otherwise indistinguishable from a dropped connection, so the client runs its
+// full reconnect recovery (cache reconcile / "catching up" UI) on every 30-min
+// recycle even though nothing was down. This lets a client that opts in
+// (addEventListener('recycle', …)) skip that catch-up honestly. No `id:` line —
+// this is not a replayable event and must not advance the Last-Event-ID cursor.
+func writeRecycleFrame(w *bufio.Writer) error {
+	if _, err := w.WriteString("event: recycle\ndata: {\"reason\":\"lifetime\"}\n\n"); err != nil {
 		return err
 	}
 	return w.Flush()
