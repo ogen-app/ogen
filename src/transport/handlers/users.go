@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
@@ -33,6 +34,7 @@ type UsersHandler struct {
 	// activity records CON-125 authentication-category events (user_created,
 	// user_updated, user_deleted). nil is a no-op. Wired via SetActivityRecorder.
 	activity *activity.Recorder
+	limiter  *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 }
 
 func NewUsersHandler(db *bun.DB, repo repository.UserRepository, accountRepo repository.AccountRepository, settingRepo repository.SettingRepository, auth fiber.Handler) *UsersHandler {
@@ -41,6 +43,9 @@ func NewUsersHandler(db *bun.DB, repo repository.UserRepository, accountRepo rep
 
 // SetActivityRecorder wires the CON-125 activity recorder (nil-safe no-op).
 func (h *UsersHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
+func (h *UsersHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func (h *UsersHandler) Register(app *fiber.App) {
 	app.Get("/api/current_user", h.auth, h.CurrentUser) // always protected
@@ -156,6 +161,11 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 	// a tenant_id in the request body is never trusted (CON-97 §7.2, §12.2).
 	caller, err := requireOwner(c, h.repo)
 	if err != nil {
+		return err
+	}
+
+	// CON-295: the team_seats quota gates adding a member.
+	if err := h.limiter.Require(c.Context(), caller.TenantID, "team_seats"); err != nil {
 		return err
 	}
 

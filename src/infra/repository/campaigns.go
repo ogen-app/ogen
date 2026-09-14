@@ -38,6 +38,9 @@ type CampaignRepository interface {
 	// exist (in this tenant).
 	AddAssetIDs(ctx context.Context, id string, assetIDs []string) (*models.Campaign, error)
 	RemoveAssetID(ctx context.Context, id, assetID string) (*models.Campaign, error)
+	// CountActive counts the tenant's live campaigns — neither soft-deleted nor
+	// archived (mirrors List) — the active_campaigns quota (CON-295).
+	CountActive(ctx context.Context) (int64, error)
 }
 
 type campaignRepository struct {
@@ -68,6 +71,14 @@ func (r *campaignRepository) List(ctx context.Context) ([]models.Campaign, error
 	return r.listFiltered(ctx, func(q *bun.SelectQuery) *bun.SelectQuery {
 		return q.Where("c.archived_at IS NULL")
 	})
+}
+
+func (r *campaignRepository) CountActive(ctx context.Context) (int64, error) {
+	n, err := r.db.NewSelect().Model((*models.Campaign)(nil)).
+		Where("c.deleted_at IS NULL").
+		Where("c.archived_at IS NULL").
+		Count(ctx)
+	return int64(n), err
 }
 
 // ListArchived returns archived (but not soft-deleted) campaigns, oldest first.

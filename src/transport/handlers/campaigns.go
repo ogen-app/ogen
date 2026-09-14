@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -36,6 +37,7 @@ var validStatuses = map[models.CampaignStatus]bool{
 type CampaignsHandler struct {
 	repo             repository.CampaignRepository
 	campaignTypeRepo repository.CampaignTypeRepository
+	limiter          *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 	// brandRepo validates campaign brand_voice_id/brand_audience_id belong to
 	// the tenant (CON-245). Optional (SetBrandRepo); nil skips validation.
 	brandRepo     repository.BrandRepository
@@ -70,6 +72,9 @@ type CampaignsHandler struct {
 func (h *CampaignsHandler) SetBrandRepo(r repository.BrandRepository) {
 	h.brandRepo = r
 }
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
+func (h *CampaignsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 // SetActivityRecorder wires the CON-125 activity recorder. nil (analytics
 // disabled) makes every activity emission a no-op.
@@ -278,6 +283,12 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	status := req.toStatus()
 	if !validStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
+	}
+	// CON-295: the active_campaigns quota gates a new campaign.
+	if tenantID, ok := tenantctx.From(c.Context()); ok {
+		if err := h.limiter.Require(c.Context(), tenantID, "active_campaigns"); err != nil {
+			return err
+		}
 	}
 	if _, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")

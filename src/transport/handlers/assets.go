@@ -18,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
@@ -109,6 +110,7 @@ type AssetsHandler struct {
 	storage   storage.Storage
 	db        *bun.DB
 	auth      fiber.Handler
+	limiter   *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 
 	// onSave triggers async embedding for text-based Asset saves (JSON create/update + MD upload).
 	onSave func(assetID, title, content, tenantID string)
@@ -151,6 +153,9 @@ func NewAssetsHandler(
 		docJobs:    docJobs,
 	}
 }
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
+func (h *AssetsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func (h *AssetsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/content-bank/assets")
@@ -292,6 +297,13 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 	var req createAssetRequest
 	if err := bindAndValidate(c, &req); err != nil {
 		return err
+	}
+
+	// CON-295: the content_bank_assets quota gates a new asset.
+	if tenantID, ok := tenantctx.From(c.Context()); ok {
+		if err := h.limiter.Require(c.Context(), tenantID, "content_bank_assets"); err != nil {
+			return err
+		}
 	}
 
 	altText, err := normalizeAltText(req.AltText)
