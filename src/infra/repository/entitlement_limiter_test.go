@@ -78,4 +78,7 @@ func TestEntitlementCountersValidSQL(t *testing.T) {
 	if _, err := repository.NewUserRepository(db).CountInTenant(ctx); err != nil {
 		t.Fatalf("CountInTenant: %v", err)
 	}
+	if _, err := repository.NewPostAttachmentRepository(db).SumSizeBytesInTenant(ctx); err != nil {
+		t.Fatalf("SumSizeBytesInTenant: %v", err)
+	}
 }

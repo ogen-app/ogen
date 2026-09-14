@@ -163,10 +163,17 @@ func (l *Limiter) WithNotifier(n Notifier, pct int) *Limiter {
 // Require checks a numeric cap and returns a *QuotaExceededError when the tenant
 // is at/over the cap in enforce mode (nil otherwise). The one-liner handlers use.
 func (l *Limiter) Require(ctx context.Context, tenantID, featureKey string) error {
+	return l.RequireAmount(ctx, tenantID, featureKey, 1)
+}
+
+// RequireAmount is Require for a create that consumes amount units of the feature
+// at once (e.g. the byte size of an upload against a storage-bytes cap) rather
+// than a single row.
+func (l *Limiter) RequireAmount(ctx context.Context, tenantID, featureKey string, amount int64) error {
 	if l == nil {
 		return nil
 	}
-	dec, err := l.Allow(ctx, tenantID, featureKey)
+	dec, err := l.AllowAmount(ctx, tenantID, featureKey, amount)
 	if err != nil {
 		return err
 	}
@@ -195,9 +202,20 @@ func (l *Limiter) RequireGate(ctx context.Context, tenantID, featureKey string) 
 // < limit. warn/off never block (warn logs + counts the would-block). Failures
 // to resolve or count fail OPEN so a hiccup never wedges creates.
 func (l *Limiter) Allow(ctx context.Context, tenantID, featureKey string) (Decision, error) {
+	return l.AllowAmount(ctx, tenantID, featureKey, 1)
+}
+
+// AllowAmount is Allow for a create that consumes amount units at once (e.g. the
+// byte size of an upload against a storage-bytes cap). Allowed = current + amount
+// <= limit; amount is clamped to a minimum of 1. Same fail-open + warn/off
+// semantics as Allow.
+func (l *Limiter) AllowAmount(ctx context.Context, tenantID, featureKey string, amount int64) (Decision, error) {
 	dec := Decision{Key: featureKey, Allowed: true}
 	if l == nil || l.mode == ModeOff {
 		return dec, nil
+	}
+	if amount < 1 {
+		amount = 1
 	}
 	limit, present, err := l.numericValue(ctx, tenantID, featureKey)
 	if err != nil {
@@ -219,10 +237,10 @@ func (l *Limiter) Allow(ctx context.Context, tenantID, featureKey string) (Decis
 		return dec, nil
 	}
 	dec.Current = current
-	if current < *limit {
-		// This create is allowed and adds one; warn if it crosses the near-limit
-		// band or fills the cap exactly (crossing-only, low-noise — CON-295 §12).
-		l.maybeNotify(ctx, tenantID, featureKey, *limit, current)
+	if current+amount <= *limit {
+		// This create is allowed and adds amount units; warn if it crosses the
+		// near-limit band or fills the cap (crossing-only, low-noise — CON-295 §12).
+		l.maybeNotify(ctx, tenantID, featureKey, *limit, current, current+amount)
 		return dec, nil
 	}
 	if l.mode == ModeEnforce {
@@ -314,22 +332,22 @@ func (l *Limiter) boolValue(ctx context.Context, tenantID, key string) (bool, bo
 }
 
 // maybeNotify raises a near-limit notification when an allowed create crosses the
-// warn band. Given the pre-create count and the (non-nil) cap, it fires exactly
-// once per boundary: reached when the create fills the cap, approaching when it
-// steps over T = ceil(limit * pct/100) while still below the cap. A denied create
-// never reaches here, so an already-full tenant does not re-notify. No-op without
+// warn band. Given the pre-create value (prev), the post-create value (next), and
+// the (non-nil) cap, it fires exactly once per boundary: reached when the create
+// lands on the cap, approaching when it steps over T = ceil(limit * pct/100)
+// while still below the cap. A denied create never reaches here (next <= limit on
+// the allowed path), so an already-full tenant does not re-notify. No-op without
 // a notifier.
-func (l *Limiter) maybeNotify(ctx context.Context, tenantID, featureKey string, limit, current int64) {
+func (l *Limiter) maybeNotify(ctx context.Context, tenantID, featureKey string, limit, prev, next int64) {
 	if l.notifier == nil || l.warnPct <= 0 || limit <= 0 {
 		return
 	}
-	next := current + 1 // the count this create lands on
 	threshold := (limit*int64(l.warnPct) + 99) / 100 // ceil(limit * pct / 100)
 	var state LimitState
 	switch {
-	case next == limit:
+	case next >= limit:
 		state = LimitReached
-	case current < threshold && threshold <= next && next < limit:
+	case prev < threshold && threshold <= next:
 		state = LimitApproaching
 	default:
 		return // no boundary crossed by this create

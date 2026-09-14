@@ -94,7 +94,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	entitlementLimiter := entitlements.NewLimiter(entitlementResolver, entitlementCatalog, entitlements.ParseMode(cfg.EntitlementEnforcementMode)).
 		Register("team_seats", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.userRepo.CountInTenant(ctx) })).
 		Register("active_campaigns", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.campaignRepo.CountActive(ctx) })).
-		Register("content_bank_assets", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.pieceRepo.Count(ctx) }))
+		Register("content_bank_assets", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.pieceRepo.Count(ctx) })).
+		Register("media_storage_bytes", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.postAttachmentRepo.SumSizeBytesInTenant(ctx) }))
 
 	// CON-86: apply any operator price-map override (USAGE_MODEL_PRICES) before
 	// metering starts; a malformed payload or unknown vendor fails boot.
@@ -812,7 +813,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if videoClient != nil {
 		attachmentProber = videoClient
 	}
-	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, store, attachmentRenderer, attachmentProber, auth).Register(app)
+	postAttachmentsHandler := handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, store, attachmentRenderer, attachmentProber, auth)
+	postAttachmentsHandler.SetLimiter(entitlementLimiter)
+	postAttachmentsHandler.Register(app)
 
 	// CON-188: per-post notes CRUD, nested under a post.
 	postNotesHandler := handlers.NewPostNotesHandler(noteSvc, r.postRepo, auth)

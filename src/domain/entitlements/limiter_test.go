@@ -71,6 +71,43 @@ func TestLimiterAllow(t *testing.T) {
 	}
 }
 
+func TestLimiterAllowAmount(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name    string
+		limit   float64
+		current int64
+		amount  int64
+		want    bool
+	}{
+		{"fits exactly", 1000, 900, 100, true},
+		{"one unit over", 1000, 900, 101, false},
+		{"well under", 1000, 100, 300, true},
+		{"already full", 1000, 1000, 1, false},
+		{"zero amount clamps to one", 1000, 999, 0, true},
+		{"zero cap denies any amount", 0, 0, 1 << 40, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := NewLimiter(fakeResolver{res: resWith(map[string]any{"media_storage_bytes": tc.limit})}, nil, ModeEnforce)
+			l.Register("media_storage_bytes", fixedCount(tc.current))
+			dec, err := l.AllowAmount(ctx, "tn", "media_storage_bytes", tc.amount)
+			if err != nil {
+				t.Fatalf("AllowAmount: %v", err)
+			}
+			if dec.Allowed != tc.want {
+				t.Fatalf("Allowed = %v, want %v (%+v)", dec.Allowed, tc.want, dec)
+			}
+		})
+	}
+	// A genuinely unlimited (nil) cap always allows, whatever the amount.
+	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"media_storage_bytes": nil})}, nil, ModeEnforce)
+	l.Register("media_storage_bytes", fixedCount(1<<40))
+	if err := l.RequireAmount(ctx, "tn", "media_storage_bytes", 1<<40); err != nil {
+		t.Fatalf("unlimited RequireAmount should allow: %v", err)
+	}
+}
+
 func TestLimiterAllowFailsOpen(t *testing.T) {
 	l := NewLimiter(fakeResolver{err: errors.New("db down")}, nil, ModeEnforce)
 	l.Register("team_seats", fixedCount(999))

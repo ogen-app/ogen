@@ -16,6 +16,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -23,6 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/storage/imageprobe"
 	"github.com/ogen-app/ogen/src/infra/storage/pdfprobe"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 )
 
@@ -76,7 +78,11 @@ type PostAttachmentsHandler struct {
 	pdf      PDFRenderer
 	video    VideoProber
 	auth     fiber.Handler
+	limiter  *entitlements.Limiter // CON-295 media_storage_bytes quota (nil-safe)
 }
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
+func (h *PostAttachmentsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func NewPostAttachmentsHandler(
 	repo repository.PostAttachmentRepository,
@@ -291,6 +297,14 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			fiber.StatusBadRequest,
 			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20),
 		)
+	}
+	// CON-295: this upload adds fh.Size bytes to the tenant's media_storage_bytes
+	// budget. Check before touching storage so a denied upload never leaves an
+	// orphaned object behind.
+	if tenantID, ok := tenantctx.From(c.Context()); ok {
+		if err := h.limiter.RequireAmount(c.Context(), tenantID, "media_storage_bytes", fh.Size); err != nil {
+			return err
+		}
 	}
 
 	f, err := fh.Open()
