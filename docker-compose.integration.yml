@@ -22,8 +22,12 @@ services:
   # tests (CON-73). The bucket itself is created on demand by the test
   # helper — keeping that out of the compose file means each test run
   # starts from a clean state without docker volume juggling.
+  #
+  # Pulled from quay.io (MinIO's official registry) and pinned to a release:
+  # the minio/minio image was removed from Docker Hub in Sept 2026, so
+  # `minio/minio:latest` now fails to pull with "repository does not exist".
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
     ports:
       - "9100:9000"
     environment:
