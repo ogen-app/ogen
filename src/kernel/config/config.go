@@ -74,6 +74,12 @@ type Config struct {
 	// UI requires AllowCredentials, which browsers reject alongside a wildcard.
 	CORSAllowedOrigins string `envconfig:"CORS_ALLOWED_ORIGINS" default:""`
 
+	// CON-295 tier-entitlement quota enforcement mode: enforce | warn | off.
+	// warn-first by default — over-cap creates are logged + counted but allowed;
+	// flip to enforce once the would-block signal looks clean. Existing tenants
+	// are on the unlimited default tier, so enforce never bites them.
+	EntitlementEnforcementMode string `envconfig:"ENTITLEMENT_ENFORCEMENT_MODE" default:"warn"`
+
 	// Anthropic config.
 	// todo: remove from config entirely
 	AnthropicAPIKey  string `envconfig:"ANTHROPIC_API_KEY"     default:""`
