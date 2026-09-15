@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -252,6 +253,7 @@ func (s *planAdminService) PublishTierVersion(ctx context.Context, req *plansv1.
 	if err != nil {
 		return nil, s.internal(ctx, "publish tier version", err)
 	}
+	s.warnIfManyActiveVersions(ctx, tv.GetTierId())
 	return &plansv1.PublishTierVersionResponse{Version: tv}, nil
 }
 
@@ -260,24 +262,158 @@ func (s *planAdminService) RetireTierVersion(ctx context.Context, req *plansv1.R
 	if id == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
-	if err := s.versions.Retire(ctx, id, req.GetForce(), time.Now().UTC()); err != nil {
+	force := req.GetForce()
+	reassignTo := strings.TrimSpace(req.GetReassignToVersionId())
+	if force && reassignTo != "" {
+		return nil, status.Error(codes.InvalidArgument, "force and reassign_to_version_id are mutually exclusive")
+	}
+	if reassignTo != "" && reassignTo == id {
+		return nil, status.Error(codes.InvalidArgument, "reassign_to_version_id must differ from the version being retired")
+	}
+	// Validate the reassignment target up front for clean error mapping; the repo
+	// re-checks it under lock inside the transaction.
+	if reassignTo != "" {
+		target, err := s.versions.GetByID(ctx, reassignTo)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, status.Error(codes.NotFound, "reassign_to_version_id not found")
+			}
+			return nil, s.internal(ctx, "retire tier version", err)
+		}
+		if target.Status != models.TierVersionStatusActive {
+			return nil, status.Error(codes.FailedPrecondition, "reassign_to_version_id must be an active version")
+		}
+	}
+
+	reassigned, err := s.versions.Retire(ctx, id, repository.RetireOptions{Force: force, ReassignToVersionID: reassignTo}, time.Now().UTC())
+	if err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, status.Error(codes.NotFound, "tier version not found")
 		case errors.Is(err, repository.ErrVersionNotActive):
 			return nil, status.Error(codes.FailedPrecondition, "only an active version can be retired")
+		case errors.Is(err, repository.ErrReassignTargetNotFound):
+			return nil, status.Error(codes.NotFound, "reassign_to_version_id not found")
+		case errors.Is(err, repository.ErrReassignTargetNotActive):
+			return nil, status.Error(codes.FailedPrecondition, "reassign_to_version_id must be an active version")
+		case errors.Is(err, repository.ErrReassignTargetIsSelf):
+			return nil, status.Error(codes.InvalidArgument, "reassign_to_version_id must differ from the version being retired")
 		case errors.Is(err, repository.ErrVersionHasLiveAssignments):
-			return nil, status.Error(codes.FailedPrecondition, "tier version still has live assignments; reassign those tenants or retire with force")
+			return nil, s.liveAssignmentError(ctx, id)
 		default:
 			return nil, s.internal(ctx, "retire tier version", err)
 		}
 	}
-	slog.InfoContext(ctx, "tier version retired", logging.AttrComponent, "grpcserver", "version_id", id, "force", req.GetForce())
+	metricTierVersionsRetired.Add(1)
+	if reassigned > 0 {
+		metricTierVersionReassignments.Add(int64(reassigned))
+	}
+	slog.InfoContext(ctx, "tier version retired", logging.AttrComponent, "grpcserver",
+		"version_id", id, "force", force, "reassign_to_version_id", reassignTo, "reassigned", reassigned)
 	tv, err := s.versionProto(ctx, id)
 	if err != nil {
 		return nil, s.internal(ctx, "retire tier version", err)
 	}
-	return &plansv1.RetireTierVersionResponse{Version: tv}, nil
+	s.warnIfManyActiveVersions(ctx, tv.GetTierId())
+	return &plansv1.RetireTierVersionResponse{Version: tv, ReassignedCount: int32(reassigned)}, nil
+}
+
+func (s *planAdminService) DeleteTierVersion(ctx context.Context, req *plansv1.DeleteTierVersionRequest) (*plansv1.DeleteTierVersionResponse, error) {
+	id := strings.TrimSpace(req.GetId())
+	if id == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	if err := s.versions.DeleteDraft(ctx, id); err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, status.Error(codes.NotFound, "tier version not found")
+		case errors.Is(err, repository.ErrVersionNotDraft):
+			return nil, status.Error(codes.FailedPrecondition, "only a draft version can be deleted")
+		default:
+			return nil, s.internal(ctx, "delete tier version", err)
+		}
+	}
+	metricTierVersionsDeleted.Add(1)
+	slog.InfoContext(ctx, "tier version deleted", logging.AttrComponent, "grpcserver", "version_id", id)
+	return &plansv1.DeleteTierVersionResponse{}, nil
+}
+
+// --- assignment inspection ---
+
+func (s *planAdminService) ListTierVersionAssignments(ctx context.Context, req *plansv1.ListTierVersionAssignmentsRequest) (*plansv1.ListTierVersionAssignmentsResponse, error) {
+	versionID := strings.TrimSpace(req.GetTierVersionId())
+	if versionID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tier_version_id is required")
+	}
+	limit := int(req.GetLimit())
+	switch {
+	case limit <= 0:
+		limit = defaultAssignmentPageSize
+	case limit > maxAssignmentPageSize:
+		limit = maxAssignmentPageSize
+	}
+	offset := int(req.GetOffset())
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.versions.TenantsOnVersion(ctx, versionID, limit, offset)
+	if err != nil {
+		return nil, s.internal(ctx, "list tier version assignments", err)
+	}
+	total, err := s.versions.OpenAssignmentCount(ctx, versionID)
+	if err != nil {
+		return nil, s.internal(ctx, "list tier version assignments", err)
+	}
+	out := make([]*plansv1.VersionAssignment, 0, len(rows))
+	for i := range rows {
+		out = append(out, &plansv1.VersionAssignment{
+			TenantId:   rows[i].TenantID,
+			TenantName: rows[i].TenantName,
+			ValidFrom:  timestamppb.New(rows[i].ValidFrom),
+		})
+	}
+	return &plansv1.ListTierVersionAssignmentsResponse{Assignments: out, Total: int32(total)}, nil
+}
+
+// liveAssignmentError builds the FailedPrecondition returned when a retire is
+// refused, naming a bounded sample of the blocking tenants so the operator can
+// act without a second call.
+func (s *planAdminService) liveAssignmentError(ctx context.Context, versionID string) error {
+	const sampleSize = 10
+	sample, err := s.versions.TenantsOnVersion(ctx, versionID, sampleSize, 0)
+	if err != nil || len(sample) == 0 {
+		return status.Error(codes.FailedPrecondition, "tier version still has live assignments; pass reassign_to_version_id to migrate them, or force to grandfather")
+	}
+	ids := make([]string, 0, len(sample))
+	for i := range sample {
+		ids = append(ids, sample[i].TenantID)
+	}
+	return status.Error(codes.FailedPrecondition, fmt.Sprintf(
+		"tier version still has live assignments (%s); pass reassign_to_version_id to migrate them, or force to grandfather",
+		strings.Join(ids, ", ")))
+}
+
+// warnIfManyActiveVersions logs when a tier carries more than a few concurrent
+// active versions — grandfathering each carries a maintenance cost (CON-243 §10).
+// Best-effort; a read error is swallowed.
+func (s *planAdminService) warnIfManyActiveVersions(ctx context.Context, tierID string) {
+	if tierID == "" {
+		return
+	}
+	vers, err := s.versions.ListByTier(ctx, tierID)
+	if err != nil {
+		return
+	}
+	active := 0
+	for i := range vers {
+		if vers[i].Status == models.TierVersionStatusActive {
+			active++
+		}
+	}
+	if active > maxHealthyActiveVersions {
+		slog.WarnContext(ctx, "tier has many concurrent active versions", logging.AttrComponent, "grpcserver",
+			"tier_id", tierID, "active_versions", active)
+	}
 }
 
 // --- tenant assignment ---

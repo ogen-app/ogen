@@ -19,15 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PlanAdminService_ListTierVersions_FullMethodName       = "/plans.v1.PlanAdminService/ListTierVersions"
-	PlanAdminService_GetTierVersion_FullMethodName         = "/plans.v1.PlanAdminService/GetTierVersion"
-	PlanAdminService_ListFeatures_FullMethodName           = "/plans.v1.PlanAdminService/ListFeatures"
-	PlanAdminService_GetTenantEntitlements_FullMethodName  = "/plans.v1.PlanAdminService/GetTenantEntitlements"
-	PlanAdminService_CreateTierVersion_FullMethodName      = "/plans.v1.PlanAdminService/CreateTierVersion"
-	PlanAdminService_UpdateTierVersionDraft_FullMethodName = "/plans.v1.PlanAdminService/UpdateTierVersionDraft"
-	PlanAdminService_PublishTierVersion_FullMethodName     = "/plans.v1.PlanAdminService/PublishTierVersion"
-	PlanAdminService_RetireTierVersion_FullMethodName      = "/plans.v1.PlanAdminService/RetireTierVersion"
-	PlanAdminService_SetTenantTierVersion_FullMethodName   = "/plans.v1.PlanAdminService/SetTenantTierVersion"
+	PlanAdminService_ListTierVersions_FullMethodName           = "/plans.v1.PlanAdminService/ListTierVersions"
+	PlanAdminService_GetTierVersion_FullMethodName             = "/plans.v1.PlanAdminService/GetTierVersion"
+	PlanAdminService_ListFeatures_FullMethodName               = "/plans.v1.PlanAdminService/ListFeatures"
+	PlanAdminService_GetTenantEntitlements_FullMethodName      = "/plans.v1.PlanAdminService/GetTenantEntitlements"
+	PlanAdminService_CreateTierVersion_FullMethodName          = "/plans.v1.PlanAdminService/CreateTierVersion"
+	PlanAdminService_UpdateTierVersionDraft_FullMethodName     = "/plans.v1.PlanAdminService/UpdateTierVersionDraft"
+	PlanAdminService_PublishTierVersion_FullMethodName         = "/plans.v1.PlanAdminService/PublishTierVersion"
+	PlanAdminService_RetireTierVersion_FullMethodName          = "/plans.v1.PlanAdminService/RetireTierVersion"
+	PlanAdminService_DeleteTierVersion_FullMethodName          = "/plans.v1.PlanAdminService/DeleteTierVersion"
+	PlanAdminService_ListTierVersionAssignments_FullMethodName = "/plans.v1.PlanAdminService/ListTierVersionAssignments"
+	PlanAdminService_SetTenantTierVersion_FullMethodName       = "/plans.v1.PlanAdminService/SetTenantTierVersion"
 )
 
 // PlanAdminServiceClient is the client API for PlanAdminService service.
@@ -70,9 +72,22 @@ type PlanAdminServiceClient interface {
 	// PublishTierVersion transitions a draft to active. InvalidArgument if
 	// change_reason is empty.
 	PublishTierVersion(ctx context.Context, in *PublishTierVersionRequest, opts ...grpc.CallOption) (*PublishTierVersionResponse, error)
-	// RetireTierVersion transitions an active version to retired. FailedPrecondition
-	// if any tenant still has a live assignment on it, unless force is set.
+	// RetireTierVersion transitions an active version to retired (CON-297). When
+	// live assignments remain the default is to REFUSE and name the blocking
+	// tenants (see ListTierVersionAssignments); the operator then either supplies
+	// reassign_to_version_id to migrate them onto another active version (atomic
+	// with the retire) or sets force to deliberately grandfather them onto the
+	// now-retired version. force and reassign_to_version_id are mutually exclusive.
 	RetireTierVersion(ctx context.Context, in *RetireTierVersionRequest, opts ...grpc.CallOption) (*RetireTierVersionResponse, error)
+	// DeleteTierVersion hard-deletes a DRAFT version and its price rows (CON-297).
+	// FailedPrecondition for a published (active/retired) version — those are
+	// immutable audit artifacts and are never deleted.
+	DeleteTierVersion(ctx context.Context, in *DeleteTierVersionRequest, opts ...grpc.CallOption) (*DeleteTierVersionResponse, error)
+	// ListTierVersionAssignments enumerates the tenants currently holding a live
+	// (open-ended) assignment on a version (CON-297) — the enumerated form of
+	// TierVersion.live_assignment_count. It drives the operator's reassignment
+	// decision before retiring, and the Harbor reassignment picker (CON-296).
+	ListTierVersionAssignments(ctx context.Context, in *ListTierVersionAssignmentsRequest, opts ...grpc.CallOption) (*ListTierVersionAssignmentsResponse, error)
 	// SetTenantTierVersion binds a tenant to a specific version: it closes the
 	// tenant's current open assignment and opens a new one, updating the
 	// denormalised tenants.tier_id in the same transaction.
@@ -167,6 +182,26 @@ func (c *planAdminServiceClient) RetireTierVersion(ctx context.Context, in *Reti
 	return out, nil
 }
 
+func (c *planAdminServiceClient) DeleteTierVersion(ctx context.Context, in *DeleteTierVersionRequest, opts ...grpc.CallOption) (*DeleteTierVersionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteTierVersionResponse)
+	err := c.cc.Invoke(ctx, PlanAdminService_DeleteTierVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *planAdminServiceClient) ListTierVersionAssignments(ctx context.Context, in *ListTierVersionAssignmentsRequest, opts ...grpc.CallOption) (*ListTierVersionAssignmentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTierVersionAssignmentsResponse)
+	err := c.cc.Invoke(ctx, PlanAdminService_ListTierVersionAssignments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *planAdminServiceClient) SetTenantTierVersion(ctx context.Context, in *SetTenantTierVersionRequest, opts ...grpc.CallOption) (*SetTenantTierVersionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetTenantTierVersionResponse)
@@ -217,9 +252,22 @@ type PlanAdminServiceServer interface {
 	// PublishTierVersion transitions a draft to active. InvalidArgument if
 	// change_reason is empty.
 	PublishTierVersion(context.Context, *PublishTierVersionRequest) (*PublishTierVersionResponse, error)
-	// RetireTierVersion transitions an active version to retired. FailedPrecondition
-	// if any tenant still has a live assignment on it, unless force is set.
+	// RetireTierVersion transitions an active version to retired (CON-297). When
+	// live assignments remain the default is to REFUSE and name the blocking
+	// tenants (see ListTierVersionAssignments); the operator then either supplies
+	// reassign_to_version_id to migrate them onto another active version (atomic
+	// with the retire) or sets force to deliberately grandfather them onto the
+	// now-retired version. force and reassign_to_version_id are mutually exclusive.
 	RetireTierVersion(context.Context, *RetireTierVersionRequest) (*RetireTierVersionResponse, error)
+	// DeleteTierVersion hard-deletes a DRAFT version and its price rows (CON-297).
+	// FailedPrecondition for a published (active/retired) version — those are
+	// immutable audit artifacts and are never deleted.
+	DeleteTierVersion(context.Context, *DeleteTierVersionRequest) (*DeleteTierVersionResponse, error)
+	// ListTierVersionAssignments enumerates the tenants currently holding a live
+	// (open-ended) assignment on a version (CON-297) — the enumerated form of
+	// TierVersion.live_assignment_count. It drives the operator's reassignment
+	// decision before retiring, and the Harbor reassignment picker (CON-296).
+	ListTierVersionAssignments(context.Context, *ListTierVersionAssignmentsRequest) (*ListTierVersionAssignmentsResponse, error)
 	// SetTenantTierVersion binds a tenant to a specific version: it closes the
 	// tenant's current open assignment and opens a new one, updating the
 	// denormalised tenants.tier_id in the same transaction.
@@ -257,6 +305,12 @@ func (UnimplementedPlanAdminServiceServer) PublishTierVersion(context.Context, *
 }
 func (UnimplementedPlanAdminServiceServer) RetireTierVersion(context.Context, *RetireTierVersionRequest) (*RetireTierVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RetireTierVersion not implemented")
+}
+func (UnimplementedPlanAdminServiceServer) DeleteTierVersion(context.Context, *DeleteTierVersionRequest) (*DeleteTierVersionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteTierVersion not implemented")
+}
+func (UnimplementedPlanAdminServiceServer) ListTierVersionAssignments(context.Context, *ListTierVersionAssignmentsRequest) (*ListTierVersionAssignmentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTierVersionAssignments not implemented")
 }
 func (UnimplementedPlanAdminServiceServer) SetTenantTierVersion(context.Context, *SetTenantTierVersionRequest) (*SetTenantTierVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetTenantTierVersion not implemented")
@@ -426,6 +480,42 @@ func _PlanAdminService_RetireTierVersion_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PlanAdminService_DeleteTierVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTierVersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanAdminServiceServer).DeleteTierVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanAdminService_DeleteTierVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanAdminServiceServer).DeleteTierVersion(ctx, req.(*DeleteTierVersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlanAdminService_ListTierVersionAssignments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTierVersionAssignmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanAdminServiceServer).ListTierVersionAssignments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanAdminService_ListTierVersionAssignments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanAdminServiceServer).ListTierVersionAssignments(ctx, req.(*ListTierVersionAssignmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PlanAdminService_SetTenantTierVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetTenantTierVersionRequest)
 	if err := dec(in); err != nil {
@@ -482,6 +572,14 @@ var PlanAdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RetireTierVersion",
 			Handler:    _PlanAdminService_RetireTierVersion_Handler,
+		},
+		{
+			MethodName: "DeleteTierVersion",
+			Handler:    _PlanAdminService_DeleteTierVersion_Handler,
+		},
+		{
+			MethodName: "ListTierVersionAssignments",
+			Handler:    _PlanAdminService_ListTierVersionAssignments_Handler,
 		},
 		{
 			MethodName: "SetTenantTierVersion",
