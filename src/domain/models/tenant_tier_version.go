@@ -88,3 +88,12 @@ type TenantTierAssignment struct {
 	ValidFrom     *time.Time `bun:"valid_from,scanonly"                          json:"valid_from,omitempty"`
 	ValidTo       *time.Time `bun:"valid_to,scanonly"                            json:"valid_to,omitempty"`
 }
+
+// VersionAssignment is a scan-only projection of one tenant's live (open-ended)
+// assignment on a tier version, joined to the tenant's display name (CON-297).
+// It backs the operator's "who is on this version" read used before retiring.
+type VersionAssignment struct {
+	TenantID   string    `bun:"tenant_id"   json:"tenant_id"`
+	TenantName string    `bun:"tenant_name" json:"tenant_name"`
+	ValidFrom  time.Time `bun:"valid_from"  json:"valid_from"`
+}

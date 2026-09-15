@@ -1,6 +1,8 @@
 package repository_test
 
 import (
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -231,6 +233,149 @@ func TestBackfillClosedHistoryNoOpen(t *testing.T) {
 	}
 	if open.ValidFrom == nil || !open.ValidFrom.Equal(closedEnd) {
 		t.Fatalf("expected open range to start at the closed range's end %v, got %+v", closedEnd, open.ValidFrom)
+	}
+}
+
+func TestTierVersionDeleteDraft(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	vr := repository.NewTenantTierVersionRepository(db)
+
+	// A seeded DRAFT (ttv-pro-v1) deletes cleanly; its price rows (none here) cascade.
+	if err := vr.DeleteDraft(ctx, "ttv-pro-v1"); err != nil {
+		t.Fatalf("delete draft: %v", err)
+	}
+	if _, err := vr.GetByID(ctx, "ttv-pro-v1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("draft still present after delete: err = %v", err)
+	}
+
+	// A published (active) version cannot be deleted.
+	if err := vr.DeleteDraft(ctx, "ttv-trial-v1"); !errors.Is(err, repository.ErrVersionNotDraft) {
+		t.Fatalf("delete active version: err = %v, want ErrVersionNotDraft", err)
+	}
+	// A missing version is NotFound.
+	if err := vr.DeleteDraft(ctx, "ttv-nope"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("delete missing version: err = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestTierVersionGuardedRetire(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	vr := repository.NewTenantTierVersionRepository(db)
+	ar := repository.NewTenantTierAssignmentRepository(db)
+	now := time.Now().UTC()
+
+	// Stand up a second ACTIVE version of the default tier (v2) by
+	// creating a draft then publishing it — the reassignment target.
+	next, err := vr.NextVersion(ctx, "default")
+	if err != nil {
+		t.Fatalf("next version: %v", err)
+	}
+	v2ID, err := models.NewID()
+	if err != nil {
+		t.Fatalf("new id: %v", err)
+	}
+	v2 := &models.TenantTierVersion{ID: v2ID, TierID: "default", Version: next, Status: models.TierVersionStatusDraft, Entitlements: map[string]any{}, CreatedAt: now}
+	if err := vr.Create(ctx, v2, nil); err != nil {
+		t.Fatalf("create v2 draft: %v", err)
+	}
+	if err := vr.Publish(ctx, v2ID, "second active version", now); err != nil {
+		t.Fatalf("publish v2: %v", err)
+	}
+
+	// Put the default tenant on default-v1 (open assignment an hour ago).
+	aID, err := models.NewID()
+	if err != nil {
+		t.Fatalf("new id: %v", err)
+	}
+	open := &models.TenantTierAssignment{ID: aID, TenantID: models.DefaultTenantID, TierVersionID: "ttv-default-v1", Reason: models.AssignmentReasonSignup, CreatedAt: now}
+	if err := ar.Create(ctx, open, now.Add(-time.Hour), nil); err != nil {
+		t.Fatalf("seed open assignment: %v", err)
+	}
+
+	// Retiring default-v1 with a live assignment and neither flag is refused.
+	if _, err := vr.Retire(ctx, "ttv-default-v1", repository.RetireOptions{}, now); !errors.Is(err, repository.ErrVersionHasLiveAssignments) {
+		t.Fatalf("retire blocked: err = %v, want ErrVersionHasLiveAssignments", err)
+	}
+	// Reassigning to itself / a draft / a missing version is rejected.
+	if _, err := vr.Retire(ctx, "ttv-default-v1", repository.RetireOptions{ReassignToVersionID: "ttv-default-v1"}, now); !errors.Is(err, repository.ErrReassignTargetIsSelf) {
+		t.Fatalf("reassign to self: err = %v, want ErrReassignTargetIsSelf", err)
+	}
+	if _, err := vr.Retire(ctx, "ttv-default-v1", repository.RetireOptions{ReassignToVersionID: "ttv-max-v1"}, now); !errors.Is(err, repository.ErrReassignTargetNotActive) {
+		t.Fatalf("reassign to draft: err = %v, want ErrReassignTargetNotActive", err)
+	}
+	if _, err := vr.Retire(ctx, "ttv-default-v1", repository.RetireOptions{ReassignToVersionID: "ttv-nope"}, now); !errors.Is(err, repository.ErrReassignTargetNotFound) {
+		t.Fatalf("reassign to missing: err = %v, want ErrReassignTargetNotFound", err)
+	}
+
+	// TenantsOnVersion lists the blocking tenant before we act.
+	on, err := vr.TenantsOnVersion(ctx, "ttv-default-v1", 10, 0)
+	if err != nil {
+		t.Fatalf("tenants on version: %v", err)
+	}
+	if len(on) != 1 || on[0].TenantID != models.DefaultTenantID {
+		t.Fatalf("unexpected tenants on default-v1: %+v", on)
+	}
+
+	// Reassign-then-retire: migrate the tenant onto v2 and retire v1 atomically.
+	reassigned, err := vr.Retire(ctx, "ttv-default-v1", repository.RetireOptions{ReassignToVersionID: v2ID}, now)
+	if err != nil {
+		t.Fatalf("retire w/ reassign: %v", err)
+	}
+	if reassigned != 1 {
+		t.Fatalf("reassigned = %d, want 1", reassigned)
+	}
+	// v1 is retired and holds no more live assignments.
+	v1, err := vr.GetByID(ctx, "ttv-default-v1")
+	if err != nil {
+		t.Fatalf("get v1: %v", err)
+	}
+	if v1.Status != models.TierVersionStatusRetired || v1.RetiredAt == nil {
+		t.Fatalf("v1 not retired: %+v", v1)
+	}
+	if n, _ := vr.OpenAssignmentCount(ctx, "ttv-default-v1"); n != 0 {
+		t.Fatalf("v1 still has %d live assignments after reassign-retire", n)
+	}
+	// The tenant now sits open on v2.
+	cover, err := ar.CoveringAt(ctx, models.DefaultTenantID, now)
+	if err != nil {
+		t.Fatalf("covering after reassign: %v", err)
+	}
+	if cover.TierVersionID != v2ID || cover.ValidTo != nil || cover.Reason != models.AssignmentReasonOperatorSet {
+		t.Fatalf("unexpected assignment after reassign: %+v", cover)
+	}
+	if n, _ := vr.OpenAssignmentCount(ctx, v2ID); n != 1 {
+		t.Fatalf("v2 open assignments = %d, want 1", n)
+	}
+}
+
+func TestTierVersionForceRetireGrandfathers(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	vr := repository.NewTenantTierVersionRepository(db)
+	ar := repository.NewTenantTierAssignmentRepository(db)
+	now := time.Now().UTC()
+
+	aID, err := models.NewID()
+	if err != nil {
+		t.Fatalf("new id: %v", err)
+	}
+	open := &models.TenantTierAssignment{ID: aID, TenantID: models.DefaultTenantID, TierVersionID: "ttv-default-v1", Reason: models.AssignmentReasonSignup, CreatedAt: now}
+	if err := ar.Create(ctx, open, now.Add(-time.Hour), nil); err != nil {
+		t.Fatalf("seed open assignment: %v", err)
+	}
+
+	// Force retire leaves the tenant grandfathered on the now-retired version.
+	reassigned, err := vr.Retire(ctx, "ttv-default-v1", repository.RetireOptions{Force: true}, now)
+	if err != nil {
+		t.Fatalf("force retire: %v", err)
+	}
+	if reassigned != 0 {
+		t.Fatalf("reassigned = %d, want 0 on force", reassigned)
+	}
+	if n, _ := vr.OpenAssignmentCount(ctx, "ttv-default-v1"); n != 1 {
+		t.Fatalf("force retire should keep the live assignment, got %d", n)
 	}
 }
 
