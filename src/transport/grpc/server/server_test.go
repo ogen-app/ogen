@@ -23,7 +23,7 @@ func TestServerRoundTrip(t *testing.T) {
 	const token = "round-trip-token"
 	store := newFakeStore()
 
-	srv, err := New(token, store, nil, nil, nil, nil, nil)
+	srv, err := New(token, store, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestTokenWhitespaceTolerance(t *testing.T) {
 
 	// Server configured as if GRPC_AUTH_TOKEN carried surrounding whitespace,
 	// including a trailing newline — New trims it.
-	srv, err := New("  "+clean+"\n", newFakeStore(), nil, nil, nil, nil, nil)
+	srv, err := New("  "+clean+"\n", newFakeStore(), nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -38,6 +38,7 @@ func (r *fakeAttachmentRepo) SetGeneratedAltText(context.Context, string, string
 func (r *fakeAttachmentRepo) UpdateSegmentIndex(context.Context, string, *int) error   { return nil }
 func (r *fakeAttachmentRepo) ReorderPositions(context.Context, string, []string) error { return nil }
 func (r *fakeAttachmentRepo) Delete(context.Context, string) (bool, error)             { return false, nil }
+func (r *fakeAttachmentRepo) SumSizeBytesInTenant(context.Context) (int64, error)      { return 0, nil }
 
 // fakeStorage serves attachment bytes by key; other methods are no-ops.
 type fakeStorage struct{ objects map[string][]byte }

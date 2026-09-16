@@ -27,17 +27,27 @@ import (
 // by design and gated only by the shared bearer token (see server.go).
 type tenantAdminService struct {
 	tenantsv1.UnimplementedTenantAdminServiceServer
-	tierRepo   repository.TenantTierRepository
-	groupRepo  repository.TenantGroupRepository
-	tenantRepo repository.TenantRepository
+	tierRepo       repository.TenantTierRepository
+	groupRepo      repository.TenantGroupRepository
+	tenantRepo     repository.TenantRepository
+	versionRepo    repository.TenantTierVersionRepository
+	assignmentRepo repository.TenantTierAssignmentRepository
 }
 
 func newTenantAdminService(
 	tierRepo repository.TenantTierRepository,
 	groupRepo repository.TenantGroupRepository,
 	tenantRepo repository.TenantRepository,
+	versionRepo repository.TenantTierVersionRepository,
+	assignmentRepo repository.TenantTierAssignmentRepository,
 ) *tenantAdminService {
-	return &tenantAdminService{tierRepo: tierRepo, groupRepo: groupRepo, tenantRepo: tenantRepo}
+	return &tenantAdminService{
+		tierRepo:       tierRepo,
+		groupRepo:      groupRepo,
+		tenantRepo:     tenantRepo,
+		versionRepo:    versionRepo,
+		assignmentRepo: assignmentRepo,
+	}
 }
 
 // Postgres SQLSTATEs surfaced by the repositories and mapped to status codes.
@@ -181,6 +191,12 @@ func (s *tenantAdminService) DeleteTier(ctx context.Context, req *tenantsv1.Dele
 	deleted, err := s.tierRepo.Delete(ctx, id)
 	if err != nil {
 		if pgCode(err) == pgFKViolation {
+			// Draft versions are removed with the tier (see the repository), so a
+			// remaining FK is either an assigned tenant or a published version.
+			// Name the actual blocker so the remediation is actionable.
+			if fkReferencesVersions(err) {
+				return nil, status.Error(codes.FailedPrecondition, "tier still has published versions and cannot be deleted")
+			}
 			return nil, status.Error(codes.FailedPrecondition, "tier is still assigned to one or more tenants; reassign them first")
 		}
 		return nil, s.internal(ctx, "delete tier", err)
@@ -305,7 +321,21 @@ func (s *tenantAdminService) SetTenantTier(ctx context.Context, req *tenantsv1.S
 	if tenantID == "" || tierID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and tier_id are required")
 	}
-	ok, err := s.tenantRepo.SetTier(ctx, tenantID, tierID)
+	// CON-294: stamp an assignment to the tier's latest active version (nil when
+	// the tier has none yet, e.g. a freshly created unpublished tier) so
+	// tenants.tier_id and the tenant's open assignment stay consistent. Reassign
+	// updates tier_id, closes the old open assignment, and opens the new one in
+	// one transaction.
+	var versionID *string
+	switch v, verr := s.versionRepo.LatestActiveByTier(ctx, tierID); {
+	case verr == nil:
+		versionID = &v.ID
+	case errors.Is(verr, sql.ErrNoRows):
+		// tier has no active version — set tier_id only, no assignment stamped.
+	default:
+		return nil, s.internal(ctx, "set tenant tier", verr)
+	}
+	ok, err := s.assignmentRepo.Reassign(ctx, tenantID, tierID, versionID, models.AssignmentReasonOperatorSet, time.Now().UTC())
 	if err != nil {
 		if pgCode(err) == pgFKViolation {
 			return nil, status.Error(codes.FailedPrecondition, "no such tier")
@@ -394,6 +424,18 @@ func pgCode(err error) string {
 		return pgErr.Code
 	}
 	return ""
+}
+
+// fkReferencesVersions reports whether an FK-violation error came from the
+// tenant_tier_versions -> tenant_tiers constraint (a published version) rather
+// than tenants -> tenant_tiers (an assigned tenant). Falls back to false (the
+// tenant message) when the constraint/table can't be identified.
+func fkReferencesVersions(err error) bool {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
+		return strings.Contains(pgErr.ConstraintName, "tenant_tier_versions") ||
+			pgErr.TableName == "tenant_tier_versions"
+	}
+	return false
 }
 
 func toTierProto(t *models.TenantTier) *tenantsv1.Tier {

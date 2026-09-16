@@ -16,6 +16,9 @@ import (
 // AssetRepository defines all persistence operations for the Asset domain.
 type AssetRepository interface {
 	List(ctx context.Context) ([]models.Asset, error)
+	// Count counts the tenant's content-bank assets — the content_bank_assets
+	// quota (CON-295).
+	Count(ctx context.Context) (int64, error)
 	Create(ctx context.Context, asset *models.Asset) error
 	GetByID(ctx context.Context, id string) (*models.Asset, error)
 	// GetBySourceURL returns the caller-tenant's URL asset with this source_url,
@@ -64,6 +67,11 @@ type assetRepository struct {
 // nil, in which case asset.File hydration is skipped.
 func NewAssetRepository(db *bun.DB, tagRepo TagRepository, fileRepo AssetFileRepository) AssetRepository {
 	return &assetRepository{db: db, tagRepo: tagRepo, fileRepo: fileRepo}
+}
+
+func (r *assetRepository) Count(ctx context.Context) (int64, error) {
+	n, err := r.db.NewSelect().Model((*models.Asset)(nil)).Count(ctx)
+	return int64(n), err
 }
 
 func (r *assetRepository) List(ctx context.Context) ([]models.Asset, error) {

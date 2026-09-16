@@ -58,6 +58,8 @@ type repos struct {
 	emailLogRepo             repository.EmailLogRepository
 	notificationRepo         repository.NotificationRepository
 	invitationRepo           repository.InvitationRepository
+	tierVersionRepo          repository.TenantTierVersionRepository
+	tierAssignmentRepo       repository.TenantTierAssignmentRepository
 }
 
 // wireRepositories constructs every repository the API server needs. db is the
@@ -109,6 +111,8 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		emailLogRepo:             repository.NewEmailLogRepository(db),
 		notificationRepo:         repository.NewNotificationRepository(db),
 		invitationRepo:           repository.NewInvitationRepository(db),
+		tierVersionRepo:          repository.NewTenantTierVersionRepository(db),
+		tierAssignmentRepo:       repository.NewTenantTierAssignmentRepository(db),
 	}
 
 	// CON-125/CON-153: analytics snapshots + follower stats live on the isolated

@@ -19,6 +19,8 @@ var ErrLastOwner = errors.New("cannot remove or demote the last owner")
 // UserRepository defines all persistence operations for the User domain.
 type UserRepository interface {
 	List(ctx context.Context) ([]models.User, error)
+	// CountInTenant counts the tenant's members — the team_seats quota (CON-295).
+	CountInTenant(ctx context.Context) (int64, error)
 	Create(ctx context.Context, user *models.User) error
 	// CreateTx inserts a user on the provided bun.IDB so it can join an outer
 	// transaction (e.g. invitation accept creates the user + session atomically).
@@ -89,6 +91,19 @@ func (r *userRepository) List(ctx context.Context) ([]models.User, error) {
 		return nil, err
 	}
 	return users, nil
+}
+
+func (r *userRepository) CountInTenant(ctx context.Context) (int64, error) {
+	tid, scoped, err := scopeTenantRead(ctx)
+	if err != nil {
+		return 0, err
+	}
+	q := r.db.NewSelect().Model((*models.User)(nil))
+	if scoped {
+		q = q.Where("u.tenant_id = ?", tid)
+	}
+	n, err := q.Count(ctx)
+	return int64(n), err
 }
 
 func (r *userRepository) Create(ctx context.Context, user *models.User) error {

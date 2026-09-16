@@ -39,6 +39,9 @@ type PostAttachmentRepository interface {
 	// once.
 	ReorderPositions(ctx context.Context, postID string, orderedIDs []string) error
 	Delete(ctx context.Context, id string) (bool, error)
+	// SumSizeBytesInTenant totals size_bytes across every attachment in the ctx
+	// tenant — the live usage behind the media_storage_bytes quota (CON-295).
+	SumSizeBytesInTenant(ctx context.Context) (int64, error)
 }
 
 type postAttachmentRepository struct {
@@ -60,6 +63,15 @@ func (r *postAttachmentRepository) ListByPostID(ctx context.Context, postID stri
 		return nil, err
 	}
 	return atts, nil
+}
+
+func (r *postAttachmentRepository) SumSizeBytesInTenant(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.db.NewSelect().
+		Model((*models.PostAttachment)(nil)).
+		ColumnExpr("COALESCE(SUM(pa.size_bytes), 0)").
+		Scan(ctx, &total)
+	return total, err
 }
 
 func (r *postAttachmentRepository) GetByID(ctx context.Context, id string) (*models.PostAttachment, error) {

@@ -15,6 +15,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -77,6 +78,28 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 
 	auth := handlers.RequireAuth(r.sessionRepo, r.userRepo, cfg.SessionCookieName)
 
+	// CON-243: versioned tier entitlements. Load the engineering-owned feature
+	// catalog (boot fails if the embedded JSON is malformed), build the
+	// point-in-time resolver, and serve the public pricing catalog + the in-app
+	// entitlement view.
+	entitlementCatalog, err := entitlements.LoadCatalog()
+	if err != nil {
+		return nil, err
+	}
+	entitlementResolver := entitlements.NewResolver(r.tierVersionRepo, r.tierAssignmentRepo, r.tenantRepo, entitlementCatalog)
+	handlers.NewPricingHandler(entitlementResolver, r.tierVersionRepo, entitlementCatalog, auth).Register(app)
+	// CON-295: entitlement quota limiter over the resolver, wired to the
+	// control-plane counters for each capped feature. warn-first via config; the
+	// counters ignore the explicit tenant arg because the request ctx already
+	// carries it (tenant-scoped reads).
+	entitlementLimiter := entitlements.NewLimiter(entitlementResolver, entitlementCatalog, entitlements.ParseMode(cfg.EntitlementEnforcementMode)).
+		Register("team_seats", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.userRepo.CountInTenant(ctx) })).
+		Register("active_campaigns", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.campaignRepo.CountActive(ctx) })).
+		Register("content_bank_assets", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.pieceRepo.Count(ctx) })).
+		Register("media_storage_bytes", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
+			return r.postAttachmentRepo.SumSizeBytesInTenant(ctx)
+		}))
+
 	// CON-86: apply any operator price-map override (USAGE_MODEL_PRICES) before
 	// metering starts; a malformed payload or unknown vendor fails boot.
 	if err := usage.ApplyModelPrices(cfg.UsageModelPrices); err != nil {
@@ -95,7 +118,16 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 
 	// In-process event hub: backend code publishes; the SSE endpoint
 	// fans events out to authenticated clients.
-	hub := eventhub.New(eventhub.Config{})
+	//
+	// CON-286: the per-user cap is counted across BOTH SSE streams
+	// (/api/events and /api/notifications/stream) and every device/tab. The
+	// library default of 10 is too tight once the `activity` feature opens a
+	// second stream per tab (2 streams/tab → only ~5 tabs before the cap):
+	// past the cap, evict-oldest doesn't settle, it rotates — each tab's
+	// reconnect evicts another's, and every eviction triggers a full cache
+	// reconcile in the victim. 30 (≥ 2× the tabs a normal person opens) keeps
+	// eviction off the normal path while staying a bound on runaway clients.
+	hub := eventhub.New(eventhub.Config{MaxSubscribersPerUser: 30})
 	handlers.NewEventsHandler(hub, r.sessionRepo, auth, 0).Register(app)
 
 	// CON-242: notification center. A persistent per-user inbox (REST + durable
@@ -107,9 +139,15 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	notifier := notify.New(r.notificationRepo, hub)
 	handlers.NewNotificationsHandler(r.notificationRepo, hub, r.sessionRepo, auth, 0).Register(app)
 
+	// CON-295 §12: warn workspace owners via the durable inbox as a tenant nears a
+	// numeric cap. The Limiter fires crossing-only LimitEvents; this adapter turns
+	// them into notifications. Best-effort — it never affects the create path.
+	entitlementLimiter.WithNotifier(&limitNotifier{notify: notifier, users: r.userRepo}, cfg.EntitlementWarnThresholdPct)
+
 	handlers.NewHealthHandler(db, secretStore).Register(app)
 	usersHandler := handlers.NewUsersHandler(db, r.userRepo, r.accountRepo, r.settingRepo, auth)
 	usersHandler.SetActivityRecorder(activityWiring.recorder)
+	usersHandler.SetLimiter(entitlementLimiter)
 	usersHandler.Register(app)
 	// CON-97 signup + CON-102 eager Zernio profile provisioning are registered
 	// below, after the River enqueuer is built (signup enqueues a bootstrap job
@@ -640,7 +678,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if imageClient != nil {
 		imagePreparer = imageClient
 	}
-	handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, imgJobs, auth, embedCallbacks.OnMarkdownSave).Register(app)
+	assetsHandler := handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, imgJobs, auth, embedCallbacks.OnMarkdownSave)
+	assetsHandler.SetLimiter(entitlementLimiter)
+	assetsHandler.Register(app)
 
 	// CON-282: audio asset lifecycle (presigned upload + extraction status/
 	// transcript/retry). audioJobs is wired only when audio ingestion is live;
@@ -762,6 +802,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// registered BEFORE it so the static /summaries route wins over /:id.
 	handlers.NewCampaignReadHandler(campaignOverviewSvc, campaignSummariesSvc, auth).Register(app)
 	campaignsHandler := handlers.NewCampaignsHandler(r.campaignRepo, r.campaignTypeRepo, auth, gkRuntime.GenerateDraft, gkRuntime.IsAnthropicAvailable, gkRuntime.EnrichBrief, r.campaignMessageRepo, gkRuntime.RunCampaignAssistant)
+	campaignsHandler.SetLimiter(entitlementLimiter)
 	// CON-114/CON-116: targeted generation + consistency reviews are a focused
 	// handler (CON-291 split out of CampaignsHandler), sharing the Anthropic-key
 	// readiness gate and the same flow callbacks the assistant uses.
@@ -857,7 +898,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// + async alt text). imagePreparer is nil when the service is unwired, so image
 	// attachment uploads fail fast (503) — imageprobe was deleted (D6). Alt-text
 	// generation is metered on the gemini vendor and targets AltTextGenMaxChars.
-	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, store, attachmentRenderer, attachmentProber, imagePreparer, usageWiring.recorder, cfg.VisionClassifyModel, cfg.AltTextGenMaxChars, auth).Register(app)
+	postAttachmentsHandler := handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, store, attachmentRenderer, attachmentProber, imagePreparer, usageWiring.recorder, cfg.VisionClassifyModel, cfg.AltTextGenMaxChars, auth)
+	postAttachmentsHandler.SetLimiter(entitlementLimiter)
+	postAttachmentsHandler.Register(app)
 
 	// CON-188: per-post notes CRUD, nested under a post.
 	postNotesHandler := handlers.NewPostNotesHandler(noteSvc, r.postRepo, auth)
@@ -870,6 +913,15 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 }
 
 func defaultErrorHandler(c *fiber.Ctx, err error) error {
+	// CON-295: render entitlement denials as structured bodies.
+	if qe, ok := errors.AsType[*entitlements.QuotaExceededError](err); ok {
+		return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
+			"error": "entitlement_exceeded", "feature": qe.Key, "limit": qe.Limit, "current": qe.Current,
+		})
+	}
+	if fe, ok := errors.AsType[*entitlements.FeatureNotAvailableError](err); ok {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "feature_not_available", "feature": fe.Key})
+	}
 	code := fiber.StatusInternalServerError
 	if e, ok := errors.AsType[*fiber.Error](err); ok {
 		code = e.Code

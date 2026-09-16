@@ -27,6 +27,7 @@ func (s stubAttRepo) SetGeneratedAltText(context.Context, string, string) error 
 func (s stubAttRepo) UpdateSegmentIndex(context.Context, string, *int) error             { return nil }
 func (s stubAttRepo) ReorderPositions(context.Context, string, []string) error           { return nil }
 func (s stubAttRepo) Delete(context.Context, string) (bool, error)                       { return false, nil }
+func (s stubAttRepo) SumSizeBytesInTenant(context.Context) (int64, error)                { return 0, nil }
 
 func TestCopyAttachments_NoStorage(t *testing.T) {
 	ctx := t.Context()

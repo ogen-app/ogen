@@ -29,6 +29,7 @@ import (
 
 	secretsv1 "github.com/ogen-app/ogen/gen/secrets/v1"
 	tenantsv1 "github.com/ogen-app/ogen/gen/tenants/v1"
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 )
@@ -51,6 +52,8 @@ func New(
 	tenantRepo repository.TenantRepository,
 	platformRepo repository.PlatformRepository,
 	platformLimitsRepo repository.PlatformGlobalLimitsRepository,
+	versionRepo repository.TenantTierVersionRepository,
+	assignmentRepo repository.TenantTierAssignmentRepository,
 ) (*grpc.Server, error) {
 	// Env-configured secrets frequently arrive with a trailing newline (a very
 	// common Railway / docker-compose paste mistake). Trim it here so the
@@ -63,12 +66,22 @@ func New(
 	srv := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(tokenAuthInterceptor(token)),
 	)
+	// CON-294: the versioned-tier-entitlement layer. Load the engineering-owned
+	// feature catalog (fails fast on a malformed embed) and build the point-in-time
+	// resolver both PlanAdminService and the CON-294 SetTenantTier stamp use.
+	catalog, err := entitlements.LoadCatalog()
+	if err != nil {
+		return nil, err
+	}
+	resolver := entitlements.NewResolver(versionRepo, assignmentRepo, tenantRepo, catalog)
+
 	secretsv1.RegisterSecretsServiceServer(srv, newSecretsService(store))
-	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo))
-	// CON-292: PlatformAdminService. Registered only under the `platformadmin`
-	// build tag (the generated platforms/v1 stubs don't exist until the proto is
-	// published + `make proto`); the default build's stub is a no-op.
+	// TenantAdminService also gets the version + assignment repos: SetTenantTier
+	// now stamps a tenant_tier_assignment so tenants.tier_id and the open
+	// assignment never drift (CON-294).
+	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo))
 	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
+	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver)
 	return srv, nil
 }
 

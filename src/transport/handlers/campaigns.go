@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -36,6 +37,7 @@ var validStatuses = map[models.CampaignStatus]bool{
 type CampaignsHandler struct {
 	repo             repository.CampaignRepository
 	campaignTypeRepo repository.CampaignTypeRepository
+	limiter          *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 	// brandRepo validates campaign brand_voice_id/brand_audience_id belong to
 	// the tenant (CON-245). Optional (SetBrandRepo); nil skips validation.
 	brandRepo     repository.BrandRepository
@@ -69,6 +71,31 @@ type CampaignsHandler struct {
 // tenant-validated. Optional; nil skips validation.
 func (h *CampaignsHandler) SetBrandRepo(r repository.BrandRepository) {
 	h.brandRepo = r
+}
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
+func (h *CampaignsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
+
+// baselineCampaignTypeSlug is the one system campaign type every tier can use;
+// the other system types are gated by all_campaign_types (CON-295).
+const baselineCampaignTypeSlug = "evergreen"
+
+// gateCampaignType enforces the campaign-type entitlement gates for the selected
+// type: a custom (non-system) type requires custom_campaign_types, a non-baseline
+// system type requires all_campaign_types. The Evergreen baseline is always
+// allowed. Returns a *FeatureNotAvailableError (rendered 403) when gated off.
+func (h *CampaignsHandler) gateCampaignType(c *fiber.Ctx, ct *models.CampaignType) error {
+	tenantID, ok := tenantctx.From(c.Context())
+	if !ok {
+		return nil
+	}
+	switch {
+	case !ct.IsSystem:
+		return h.limiter.RequireGate(c.Context(), tenantID, "custom_campaign_types")
+	case ct.Name != baselineCampaignTypeSlug:
+		return h.limiter.RequireGate(c.Context(), tenantID, "all_campaign_types")
+	}
+	return nil
 }
 
 // SetActivityRecorder wires the CON-125 activity recorder. nil (analytics
@@ -279,8 +306,23 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	if !validStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
-	if _, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID); err != nil {
+	// CON-295: the active_campaigns quota gates a new campaign.
+	var campaignQuota entitlements.Decision
+	tenantID, hasTenant := tenantctx.From(c.Context())
+	if hasTenant {
+		dec, qErr := h.limiter.Require(c.Context(), tenantID, "active_campaigns")
+		if qErr != nil {
+			return qErr
+		}
+		campaignQuota = dec
+	}
+	campaignType, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID)
+	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
+	}
+	// CON-295: custom / non-baseline campaign types are entitlement-gated.
+	if err := h.gateCampaignType(c, campaignType); err != nil {
+		return err
 	}
 	publishingTime, timezone, publishingDays, spread, err := req.normalizeScheduling()
 	if err != nil {
@@ -334,6 +376,10 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	if err := h.repo.Create(c.Context(), campaign); err != nil {
 		return err
 	}
+	// CON-295: the campaign now exists — fire any near-limit crossing.
+	if hasTenant {
+		h.limiter.DispatchCrossing(c.Context(), tenantID, campaignQuota)
+	}
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_created",
 		activity.WithEntity("campaign", campaign.ID),
 		activity.WithPayload(map[string]any{"status": string(campaign.Status), "campaign_type_id": campaign.CampaignTypeID}),
@@ -383,7 +429,8 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	if !validStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
-	if _, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID); err != nil {
+	campaignType, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID)
+	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
 	}
 	publishingTime, timezone, publishingDays, spread, err := req.normalizeScheduling()
@@ -402,6 +449,14 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	campaign, err := h.repo.GetByID(c.Context(), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign not found")
+	}
+
+	// CON-295: only gate when the caller is switching to a gated campaign type,
+	// so an unrelated edit of a campaign that already uses one is never blocked.
+	if req.CampaignTypeID != campaign.CampaignTypeID {
+		if err := h.gateCampaignType(c, campaignType); err != nil {
+			return err
+		}
 	}
 
 	// Snapshot the fields we emit change-events for before overwriting them.

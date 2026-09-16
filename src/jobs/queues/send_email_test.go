@@ -41,8 +41,9 @@ func (f *fakeUserRepo) GetByIDWithTenant(_ context.Context, id string) (*models.
 	}
 	return nil, sql.ErrNoRows
 }
-func (f *fakeUserRepo) List(context.Context) ([]models.User, error) { return nil, nil }
-func (f *fakeUserRepo) Create(context.Context, *models.User) error  { return nil }
+func (f *fakeUserRepo) List(context.Context) ([]models.User, error)  { return nil, nil }
+func (f *fakeUserRepo) CountInTenant(context.Context) (int64, error) { return 0, nil }
+func (f *fakeUserRepo) Create(context.Context, *models.User) error   { return nil }
 func (f *fakeUserRepo) GetByID(context.Context, string) (*models.User, error) {
 	return nil, sql.ErrNoRows
 }

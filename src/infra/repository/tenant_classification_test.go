@@ -121,6 +121,45 @@ func TestTenantTierRepositoryCRUD(t *testing.T) {
 	if deleted, _ := repo.Delete(ctx, "nope"); deleted {
 		t.Fatalf("delete missing tier reported true")
 	}
+
+	// A tier with only leftover DRAFT versions (no tenants) still deletes: the
+	// draft versions are removed with the tier (CON-243).
+	drafty := &models.TenantTier{ID: mintID(t), Name: "Drafty", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := repo.Create(ctx, drafty); err != nil {
+		t.Fatalf("create drafty: %v", err)
+	}
+	if _, err := db.NewRaw(
+		"INSERT INTO tenant_tier_versions (id, tier_id, version, status) VALUES (?, ?, 1, 'draft')",
+		mintID(t), drafty.ID,
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed draft version: %v", err)
+	}
+	if deleted, err := repo.Delete(ctx, drafty.ID); err != nil || !deleted {
+		t.Fatalf("delete tier with draft version: deleted=%v err=%v", deleted, err)
+	}
+	var remaining int
+	if err := db.NewRaw("SELECT count(*) FROM tenant_tier_versions WHERE tier_id = ?", drafty.ID).Scan(ctx, &remaining); err != nil {
+		t.Fatalf("count versions: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("draft versions remain after tier delete: %d", remaining)
+	}
+
+	// A tier with a PUBLISHED version can't be deleted: the immutability trigger
+	// keeps the version, so the tier_id FK still restricts (23503).
+	pub := &models.TenantTier{ID: mintID(t), Name: "Published", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := repo.Create(ctx, pub); err != nil {
+		t.Fatalf("create pub: %v", err)
+	}
+	if _, err := db.NewRaw(
+		"INSERT INTO tenant_tier_versions (id, tier_id, version, status, published_at) VALUES (?, ?, 1, 'active', now())",
+		mintID(t), pub.ID,
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed active version: %v", err)
+	}
+	if _, err := repo.Delete(ctx, pub.ID); sqlState(err) != "23503" {
+		t.Fatalf("delete tier with published version: err = %v (state %q), want 23503", err, sqlState(err))
+	}
 }
 
 // TestTenantGroupRepositoryAndMembership covers the group catalog plus the
@@ -200,7 +239,9 @@ func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 	tierRepo := repository.NewTenantTierRepository(db)
 	groupRepo := repository.NewTenantGroupRepository(db)
 
-	pro := &models.TenantTier{ID: mintID(t), Name: "Pro", Color: "#00b3a4", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	// "Growth" (not "Pro"/"Max"/"Trial") — those names are now seeded product
+	// tiers (CON-243) and tenant_tiers.name is UNIQUE.
+	pro := &models.TenantTier{ID: mintID(t), Name: "Growth", Color: "#00b3a4", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := tierRepo.Create(ctx, pro); err != nil {
 		t.Fatalf("create pro tier: %v", err)
 	}
@@ -257,7 +298,7 @@ func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 		t.Fatalf("pro tenants = %v total=%d, want {t1,t3} total 2", got, total)
 	}
 	// Each is hydrated.
-	if proTenants[0].Tier == nil || proTenants[0].Tier.Name != "Pro" {
+	if proTenants[0].Tier == nil || proTenants[0].Tier.Name != "Growth" {
 		t.Fatalf("listed tenant not hydrated: %+v", proTenants[0].Tier)
 	}
 
