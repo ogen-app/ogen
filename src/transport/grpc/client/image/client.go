@@ -31,6 +31,7 @@ import (
 
 	documentsv1 "github.com/ogen-app/ogen/gen/documents/v1"
 	imagev1 "github.com/ogen-app/ogen/gen/image/v1"
+	"github.com/ogen-app/ogen/src/domain/models"
 )
 
 // rejectInfoDomain is the google.rpc.ErrorInfo Domain image-service stamps on a
@@ -71,25 +72,52 @@ func IsUnsupportedImage(err error) bool {
 	return ok && st.Code() == codes.Unimplemented
 }
 
-// RejectedReason extracts the machine-readable reject reason image-service
-// attaches to a terminal reject as a google.rpc.ErrorInfo detail (CON-281): the
-// image.v1.RejectedCode enum NAME, e.g. "REJECTED_CODE_VECTOR". It returns "" when
-// err carries no such detail — an older service, or a non-reject error — so the
-// caller keeps its coarse IsInvalid/IsUnsupported fallback. The full human
-// sentence remains available as the status message.
-func RejectedReason(err error) string {
+// RejectedCode extracts the image.v1.RejectedCode that image-service attaches to a
+// terminal reject as a google.rpc.ErrorInfo detail (CON-281). The Reason on the
+// detail is the enum value's NAME (e.g. "REJECTED_CODE_VECTOR"), which this maps
+// back to the generated enum via imagev1.RejectedCode_value. Returns
+// REJECTED_CODE_UNSPECIFIED when err carries no such detail — an older service, a
+// non-reject error, or nil — so the caller keeps its coarse
+// IsInvalid/IsUnsupported fallback. The full human sentence remains available as
+// the status message.
+func RejectedCode(err error) imagev1.RejectedCode {
 	st, ok := grpcstatus.FromError(err)
 	// FromError(nil) returns (nil, true), so guard st explicitly: a nil error (and
-	// a non-status error) carries no reject reason.
+	// a non-status error) carries no reject code.
 	if !ok || st == nil {
-		return ""
+		return imagev1.RejectedCode_REJECTED_CODE_UNSPECIFIED
 	}
 	for _, d := range st.Details() {
 		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == rejectInfoDomain {
-			return info.GetReason()
+			if v, found := imagev1.RejectedCode_value[info.GetReason()]; found {
+				return imagev1.RejectedCode(v)
+			}
+			return imagev1.RejectedCode_REJECTED_CODE_UNSPECIFIED
 		}
 	}
-	return ""
+	return imagev1.RejectedCode_REJECTED_CODE_UNSPECIFIED
+}
+
+// UploadCode maps a terminal image reject to the stable upload code the client
+// keys on (CON-281), refining the coarse gRPC-code bucket ogen assigns from the
+// status code alone. It returns "" when err carries no recognised RejectedCode,
+// so the caller keeps that coarse fallback. Keyed off the generated
+// imagev1.RejectedCode enum, so a proto rename is a compile error here.
+func UploadCode(err error) string {
+	switch RejectedCode(err) {
+	case imagev1.RejectedCode_REJECTED_CODE_VECTOR:
+		return models.UploadCodeVectorRejected
+	case imagev1.RejectedCode_REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE:
+		return models.UploadCodeUnsupportedMediaType
+	case imagev1.RejectedCode_REJECTED_CODE_TOO_LARGE:
+		return models.UploadCodeTooLarge
+	case imagev1.RejectedCode_REJECTED_CODE_DIMENSIONS_EXCEEDED:
+		return models.UploadCodeDimensionsExceeded
+	case imagev1.RejectedCode_REJECTED_CODE_CORRUPT:
+		return models.UploadCodeInvalidFile
+	default:
+		return ""
+	}
 }
 
 // TokenUsage is one Gemini vision call's token count, priced by ogen via the

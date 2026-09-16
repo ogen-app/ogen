@@ -242,7 +242,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		// (vector / too-large / dimensions / corrupt / unsupported) over the coarse
 		// gRPC-code buckets, which stay as the fallback for an older service that
 		// carries no ErrorInfo (CON-281 Phase 2).
-		if code := models.UploadCodeFromImageReject(imageclient.RejectedReason(err)); code != "" {
+		if code := imageclient.UploadCode(err); code != "" {
 			return p.terminalReject(ctx, in, ext, code, models.UploadRejectMessage(code))
 		}
 		switch {

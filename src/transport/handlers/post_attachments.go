@@ -530,7 +530,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			// Prefer the fine-grained reason image-service attaches to a terminal
 			// reject over the coarse gRPC-code buckets (CON-281 Phase 2); the buckets
 			// stay as the fallback for an older service that carries no ErrorInfo.
-			if code := models.UploadCodeFromImageReject(imageclient.RejectedReason(err)); code != "" {
+			if code := imageclient.UploadCode(err); code != "" {
 				return rejectAttachment(c, imageRejectStatus(code), code, models.UploadRejectMessage(code))
 			}
 			switch {

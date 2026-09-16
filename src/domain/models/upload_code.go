@@ -62,29 +62,9 @@ const (
 	UploadCodeInternalError = "internal_error"
 )
 
-// UploadCodeFromImageReject maps an image.v1.RejectedCode enum name — which
-// image-service attaches to a terminal reject as a google.rpc.ErrorInfo Reason
-// (CON-281 Phase 2) — to the upload code the client keys on. It refines the
-// coarse invalid_file/unsupported_media_type bucket ogen assigns from the gRPC
-// status code alone. An unknown or empty reason returns "" so the caller keeps
-// that coarse fallback (a newer service code costs the client nothing until it
-// is mapped here).
-func UploadCodeFromImageReject(reason string) string {
-	switch reason {
-	case "REJECTED_CODE_VECTOR":
-		return UploadCodeVectorRejected
-	case "REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE":
-		return UploadCodeUnsupportedMediaType
-	case "REJECTED_CODE_TOO_LARGE":
-		return UploadCodeTooLarge
-	case "REJECTED_CODE_DIMENSIONS_EXCEEDED":
-		return UploadCodeDimensionsExceeded
-	case "REJECTED_CODE_CORRUPT":
-		return UploadCodeInvalidFile
-	default:
-		return ""
-	}
-}
+// The image.v1.RejectedCode enum name → upload code mapping lives in the image
+// gRPC client (src/transport/grpc/client/image), keyed off the generated enum so
+// a proto rename is a compile error — the domain layer stays free of proto types.
 
 // UploadRejectMessage is the default tenant-visible sentence for a reject code,
 // used where the reject is surfaced without a more specific message of its own
