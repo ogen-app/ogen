@@ -22,6 +22,8 @@ func TestFlattenSocialText(t *testing.T) {
 		{"collapses block spacing", "a\n\n\n\nb", "a\n\nb"},
 		{"unescapes escaped punctuation", "50\\% off \\*not italic\\*", "50% off *not italic*"},
 		{"fenced code passes through", "```\nconst a = **b**\n```", "const a = **b**"},
+		{"different-marker fence inside stays literal", "```\n~~~\ncode\n```", "~~~\ncode"},
+		{"fence with trailing text is not a close", "```\n**x**\n```go\n**y**\n```", "**x**\n```go\n**y**"},
 		{"drops horizontal rules", "a\n\n---\n\nb", "a\n\nb"},
 		{"drops asterisk rules too", "a\n\n***\n\nb", "a\n\nb"},
 		{"empty input", "", ""},

@@ -28,16 +28,27 @@ func FlattenSocialText(markdown string) string {
 
 	lines := strings.Split(strings.ReplaceAll(markdown, "\r\n", "\n"), "\n")
 	out := make([]string, 0, len(lines))
-	inFence := false
+	var fenceMarker byte // 0 when not inside a fenced code block
+	var fenceLen int
 
 	for _, line := range lines {
 		// Fenced code: keep the contents, drop the fences. Nothing inside is
-		// Markdown, so it passes through untouched.
-		if reFence.MatchString(line) {
-			inFence = !inFence
-			continue
+		// Markdown, so it passes through untouched. A block opened with one marker
+		// closes only on a line of the SAME marker, at least as long, with nothing
+		// but whitespace after it (CommonMark §4.5) — so a `~~~` inside a ``` block,
+		// or a ```-with-trailing-text line, stays literal content instead of ending
+		// the block early and letting the rest be misread as Markdown.
+		if marker, runLen, onlyWSAfter, ok := fenceRun(line); ok {
+			if fenceMarker == 0 {
+				fenceMarker, fenceLen = marker, runLen // open (info string allowed)
+				continue
+			}
+			if marker == fenceMarker && runLen >= fenceLen && onlyWSAfter {
+				fenceMarker, fenceLen = 0, 0 // close
+				continue
+			}
 		}
-		if inFence {
+		if fenceMarker != 0 {
 			out = append(out, line)
 			continue
 		}
@@ -71,8 +82,28 @@ func VisibleLen(s string) int { return utf8.RuneCountInString(FlattenSocialText(
 // NUL never appears in real post copy, so it can't collide with authored text.
 const maskChar = "\x00"
 
+// fenceRun inspects a line as a possible code-fence delimiter: it reports the
+// marker byte ('`' or '~'), the length of the leading marker run, and whether
+// only whitespace follows it. ok is false when the line does not begin (after
+// optional leading whitespace) with a run of at least three identical markers.
+// An opener may carry an info string after the run; a closer may not, which is
+// why onlyWSAfter is returned rather than assumed.
+func fenceRun(line string) (marker byte, runLen int, onlyWSAfter bool, ok bool) {
+	t := strings.TrimLeft(line, " \t")
+	if t == "" || (t[0] != '`' && t[0] != '~') {
+		return 0, 0, false, false
+	}
+	marker = t[0]
+	for runLen < len(t) && t[runLen] == marker {
+		runLen++
+	}
+	if runLen < 3 {
+		return 0, 0, false, false
+	}
+	return marker, runLen, strings.TrimRight(t[runLen:], " \t") == "", true
+}
+
 var (
-	reFence      = regexp.MustCompile("^\\s*(```|~~~)")
 	reHeading    = regexp.MustCompile(`^\s{0,3}#{1,6}\s+`)
 	reBlockquote = regexp.MustCompile(`^\s*>\s?`)
 	reBullet     = regexp.MustCompile(`^(\s*)[-*+]\s+`)
@@ -194,6 +225,8 @@ func findCloseEmphasis(runes []rune, open int, marker rune) int {
 	return -1
 }
 
+// runeAt returns the rune at i and whether i is in range — a bounds-safe peek so
+// the emphasis scanner can test neighbours at the string edges.
 func runeAt(runes []rune, i int) (rune, bool) {
 	if i < 0 || i >= len(runes) {
 		return 0, false
@@ -201,6 +234,8 @@ func runeAt(runes []rune, i int) (rune, bool) {
 	return runes[i], true
 }
 
+// isSpaceRune reports whether r is ASCII whitespace (the boundary emphasis
+// markers must not sit against).
 func isSpaceRune(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }
 
 // isWordRune matches JavaScript's ASCII-only \w.

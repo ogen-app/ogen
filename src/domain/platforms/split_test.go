@@ -223,6 +223,23 @@ func TestSplitThread_AutoPacksByVisibleLength(t *testing.T) {
 	}
 }
 
+func TestSplitThread_HardCutFlattensMarkup(t *testing.T) {
+	// A single word longer than the visible limit is hard-cut. It must be
+	// flattened first, or the cut lands mid-marker and each piece (its own thread
+	// message) publishes an unmatched "**" literally. "**aaaaaaaaaa**" (visible 10)
+	// at limit 5 → two clean 5-rune pieces, no stray markers.
+	got := segContents(SplitThread("**"+strings.Repeat("a", 10)+"**", 5))
+	want := []string{"aaaaa", "aaaaa"}
+	if !equalStrings(got, want) {
+		t.Fatalf("hard-cut through markup: want %q, got %q", want, got)
+	}
+	for _, s := range got {
+		if strings.ContainsAny(s, "*_") {
+			t.Errorf("segment carries an unmatched Markdown marker: %q", s)
+		}
+	}
+}
+
 func TestSplitThread_AutoNeverExceedsLimit(t *testing.T) {
 	limit := 40
 	body := strings.Repeat("Lorem ipsum dolor sit amet. ", 30) +

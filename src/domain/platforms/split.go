@@ -131,7 +131,13 @@ func autoSplit(content string, limit int) []string {
 		return packUnits(splitLines(para), limit, "\n", func(line string) []string {
 			return packUnits(splitSentences(line), limit, " ", func(sentence string) []string {
 				return packUnits(splitWords(sentence), limit, " ", func(word string) []string {
-					return hardCut(word, limit)
+					// Flatten before the last-resort hard cut: slicing a raw
+					// Markdown word (e.g. **abcdef**) mid-marker would leave
+					// unmatched delimiters (**abc, def**) that publish literally,
+					// since each piece becomes its own thread message. thread_segments
+					// is derived data, so flattening here is fine — posts.content
+					// keeps the authored Markdown.
+					return hardCut(FlattenSocialText(word), limit)
 				})
 			})
 		})
