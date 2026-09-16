@@ -1,7 +1,7 @@
 # Ogen
 
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/d5caed68fdc94fb49a1e52ea198d51b7)](https://app.codacy.com/gh/ogen-app/ogen/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
-[![Semgrep](https://github.com/ogen-app/ogen/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ogen-app/ogen/actions/workflows/docker-publish.yml)
+[![CI](https://github.com/ogen-app/ogen/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ogen-app/ogen/actions/workflows/docker-publish.yml)
 
 Ogen is a multi-tenant content operations platform that helps a creator plan,
 draft, and publish social content end-to-end:
@@ -57,7 +57,7 @@ C4Context
     System(ogen, "Ogen", "Plans, drafts, and auto-publishes social content grounded in each tenant's content bank")
 
     System_Ext(anthropic, "Anthropic Claude API", "Planning, assistants, quality scoring")
-    System_Ext(gemini, "Gemini Embedding API", "Vector embeddings for RAG")
+    System_Ext(gemini, "Gemini API", "Embeddings, audio transcription, image vision")
     System_Ext(zernio, "Zernio", "Social publishing broker")
     System_Ext(social, "Social platforms", "LinkedIn · X · Facebook · Instagram · Threads · YouTube")
     System_Ext(firecrawl, "Firecrawl", "URL → Markdown scraping")
@@ -66,7 +66,7 @@ C4Context
     Rel(creator, ogen, "Plans, drafts, schedules", "HTTPS")
     Rel(admin, ogen, "Administers", "HTTPS / gRPC")
     Rel(ogen, anthropic, "Generates content", "HTTPS")
-    Rel(ogen, gemini, "Embeds assets", "HTTPS")
+    Rel(ogen, gemini, "Embeds & analyzes assets", "HTTPS")
     Rel(ogen, zernio, "Submits & reconciles posts", "HTTPS")
     Rel(zernio, social, "Publishes to", "HTTPS")
     Rel(ogen, firecrawl, "Scrapes URLs", "HTTPS")
@@ -92,9 +92,9 @@ C4Context
 Inside the Ogen boundary, the **API** monolith is the hub: it serves the SPA over
 REST + SSE, owns the control-plane and analytics databases, drains its own
 in-process River worker pool, runs the Genkit AI flows, and exposes an
-internal-only gRPC surface that Harbor uses to manage secrets and tenants. PDF,
-video, document, and audio processing are split out into private-network sidecar
-services.
+internal-only gRPC surface that Harbor uses to manage secrets, tenants, plans,
+and the platform catalog. PDF, video, document, audio, and image processing are
+split out into private-network sidecar services.
 
 ```mermaid
 C4Container
@@ -113,12 +113,13 @@ C4Container
         Container(video, "video-service", "Go + ffmpeg", "Video probe + poster frame — private network")
         Container(doc, "document-service", "Go (pure)", "Office/text docs → source-anchored chunks — private network")
         Container(audio, "audio-service", "Go + ffmpeg + Gemini", "Audio transcode + transcribe → time-anchored transcript — private network")
+        Container(image, "image-service", "Go + libvips + Gemini", "Image normalize + EXIF-strip + vision extraction (classify/describe/alt) → anchored chunks — private network")
         Container(harbor, "Harbor", "Go + Next.js (ogen-app/harbor)", "Ops dashboard: tenants, secrets, usage")
         Container(riverui, "River UI", "riverui image", "Background-job dashboard")
     }
 
     System_Ext(anthropic, "Anthropic Claude API", "LLM")
-    System_Ext(gemini, "Gemini API", "Embeddings + audio transcription")
+    System_Ext(gemini, "Gemini API", "Embeddings, audio transcription, image vision")
     System_Ext(zernio, "Zernio", "Publishing broker")
     System_Ext(firecrawl, "Firecrawl", "Scraping")
     System_Ext(resend, "Resend", "Email")
@@ -134,10 +135,12 @@ C4Container
     Rel(api, video, "Probes video", "gRPC")
     Rel(api, doc, "Parses documents", "gRPC")
     Rel(api, audio, "Transcribes audio", "gRPC")
+    Rel(api, image, "Ingests images", "gRPC")
 
     Rel(api, anthropic, "Generation / planning / quality", "HTTPS")
     Rel(api, gemini, "Embeddings", "HTTPS")
     Rel(audio, gemini, "Transcribes audio (multimodal)", "HTTPS")
+    Rel(image, gemini, "Vision: classify / extract / alt", "HTTPS")
     Rel(api, zernio, "Submit / poll / cancel / reconcile", "HTTPS")
     Rel(api, firecrawl, "Scrape URL", "HTTPS")
     Rel(api, resend, "Send email", "HTTPS")
@@ -158,6 +161,7 @@ C4Container
     UpdateElementStyle(video, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(doc, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(audio, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
+    UpdateElementStyle(image, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(harbor, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(riverui, $bgColor="#438dd5", $fontColor="#ffffff", $borderColor="#2e6295")
     UpdateElementStyle(anthropic, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
@@ -182,8 +186,8 @@ cmd/server/        # main entrypoint: config → DB + migrations → secrets →
 src/
   transport/                       # inbound surface (CON-291 role grouping)
     handlers/                      # Fiber HTTP handlers (REST + SSE) with swag annotations
-    grpc/server/                   # internal operator gRPC surface (Secrets + TenantAdmin services)
-    grpc/client/{pdf,video,documents,audio}/ # gRPC clients we consume (pdf/video/document/audio sidecars)
+    grpc/server/                   # internal operator gRPC surface (Secrets + TenantAdmin + PlanAdmin + PlatformAdmin services)
+    grpc/client/{pdf,video,documents,audio,image}/ # gRPC clients we consume (pdf/video/document/audio/image sidecars)
     server/                        # server.New: wires repos → handlers → workers → routes; Genkit runtime
   usecase/                         # application orchestration / services — the one home for "where orchestration lives"
     post_actions/ campaign_actions/ scheduling/ campaigngoal/ notes/ settings/
@@ -204,7 +208,7 @@ src/
 ```
 
 **Persistence.** Domain data, sessions, the encrypted `secret` table, vector
-embeddings (`asset_chunks.embedding` as a pgvector `halfvec(3072)`), and River's
+embeddings (`assets_chunks.embedding` as a pgvector `halfvec(3072)`), and River's
 own job tables all live in the **control-plane PostgreSQL 17 + pgvector**
 database. Bun is the ORM; migrations under `src/infra/database/migrations/` run on
 every boot. Because River shares the same pool, background-job state, Post Log
@@ -220,7 +224,9 @@ external broker — and owns leasing, retry/backoff, periodic scheduling, and
 completed-job retention. Workers process `submit_post_to_zernio`,
 `poll_zernio_status`, `cancel_zernio_job`, `process_pdf`, `process_document`,
 `process_url`, `process_audio` (on a dedicated `audio` queue so long
-transcriptions can't starve short ingestion), `send_email`, plus periodic
+transcriptions can't starve short ingestion), `process_image` (likewise on a
+dedicated `image` queue so heavy vision runs can't starve short ingestion),
+`send_email`, plus periodic
 `reconcile_scheduled_posts`,
 `refresh_zernio_analytics`, `refresh_zernio_followers`,
 `detect_expiring_connections`, and the `cleanup_*` sweepers. The
@@ -235,8 +241,8 @@ those tables directly.
 |------|--------------|
 | **Multi-tenancy** | Public SaaS signup mints a tenant; all domain rows are tenant-scoped and resolved per request. Users, sessions, invitations, and password reset are first-class. |
 | **Campaigns & posts** | Campaign types, campaigns, posts, post versions, notes, per-platform validation, quality scoring, and streaming AI assistants. |
-| **Content bank** | Markdown notes, PDF, office/text document, audio (transcribed to time-anchored chunks), and URL assets (scraped via Firecrawl), with paragraph-/source-aware chunking, Gemini embeddings, and pgvector similarity search used to ground the assistants. Document and audio ingestion run in the `document-service` / `audio-service` sidecars. |
-| **Attachments** | Image, PDF, and video uploads on S3-compatible storage. PDFs and video are processed by the `pdf-service` / `video-service` sidecars (thumbnails, page counts, duration/codec/poster). Per-platform constraints surface as soft validation warnings. |
+| **Content bank** | Markdown notes, PDF, office/text document, audio (transcribed to time-anchored chunks), image (vision-extracted to source-anchored blocks + alt text), and URL assets (scraped via Firecrawl), with paragraph-/source-aware chunking, Gemini embeddings, and pgvector similarity search used to ground the assistants. Document, audio, and image ingestion run in the `document-service` / `audio-service` / `image-service` sidecars. |
+| **Attachments** | Image, PDF, and video uploads on S3-compatible storage, processed by the `image-service` / `pdf-service` / `video-service` sidecars (EXIF/geo-strip + alt text, thumbnails, page counts, duration/codec/poster). Per-platform constraints surface as soft validation warnings. |
 | **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are River jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. |
 | **Post Log** | Auditable per-post history — state transitions, validation outcomes, background-task lifecycle, Zernio interactions, reconciliation timeouts, user actions. Sanitized of secrets, size-capped, configurable retention. |
 | **Analytics** | Cumulative overview KPIs, best/worst performers with age-adjusted "against typical", all-time lessons (heatmap + lifespan curve), and per-post drill-down — backed by TimescaleDB continuous aggregates. |
@@ -244,7 +250,7 @@ those tables directly.
 | **Brand materials** | Voices, audiences, and guardrails bound to campaigns/posts and injected into the writing flows (precedence: post → campaign → default). |
 | **Email** | Transactional + drip email via Resend, with embedded templates, one-click unsubscribe, and delivery webhooks. |
 | **Secrets** | Envelope-encrypted at rest (per-secret DEK wrapped by an on-disk KEK). Rotatable via the operator gRPC surface without restart. |
-| **Operator surface** | Internal gRPC `SecretsService` + `TenantAdminService`, consumed by the Harbor ops dashboard over the private network. |
+| **Operator surface** | Internal gRPC `SecretsService`, `TenantAdminService`, `PlanAdminService`, and `PlatformAdminService`, consumed by the Harbor ops dashboard over the private network. |
 
 ---
 
@@ -264,16 +270,18 @@ hardcode a model id:
 | `generation` | Claude Sonnet 4.5 (`MODEL_ID`) | content plan, post/campaign assistant writing, brief enrichment, draft post |
 | `planning` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) | campaign/post assistant orchestration & intent routing (cheap/fast loop) |
 | `quality` | Claude Sonnet 4.5 (`QUALITY_MODEL_ID`) | post quality scoring |
-| embeddings | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) | asset / PDF / document / audio-transcript chunk embedding for vector search |
+| embeddings | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) | asset / PDF / document / audio-transcript / image-extraction chunk embedding for vector search |
 | transcription | Gemini 2.5 Flash (`TRANSCRIBE_MODEL`, multimodal) | `audio-service` segment transcription (priced via the `gemini` vendor) |
+| vision | Gemini 2.5 Flash / 2.5 Pro (`VISION_CLASSIFY_MODEL` / `VISION_EXTRACT_MODEL`) | `image-service` classify → extract → describe → alt text (priced via the `gemini` vendor) |
 
 | Flow | Purpose | Triggered by |
 |------|---------|--------------|
-| `embed_asset` | Chunks an asset's Markdown (paragraph-aware, with overlap) and writes embeddings into `asset_chunks`. | Asset save callback. |
+| `embed_asset` | Chunks an asset's Markdown (paragraph-aware, with overlap) and writes embeddings into `assets_chunks`. | Asset save callback. |
 | `process_pdf` (River) | Calls `pdf-service` for text + page-aware chunks + thumbnail, uploads to S3, then chunks + embeds. | PDF upload. |
 | `process_url` (River) | Scrapes a URL to Markdown via Firecrawl, mirrors images to S3, stores it as a URL asset, then chunks + embeds. | URL asset creation. |
 | `process_document` (River) | Calls `document-service` for office/text docs (docx/pptx/xlsx/odt/epub/csv/html/eml/…) → source-anchored chunks, then embeds. | Document upload. |
 | `process_audio` (River, dedicated `audio` queue) | Probes + tier-gates, normalizes once, segments, transcribes each segment via `audio-service` (Gemini multimodal), assembles time-anchored transcript chunks, then embeds. Checkpointed + resumable. | Audio upload / finalize. |
+| `process_image` (River, dedicated `image` queue) | Presigns the original + a normalized slot, runs the full `image-service` pipeline (normalize + EXIF-strip + classify + per-shape extraction + description + alt text), persists the extraction/blocks, embeds the searchable text, and snapshots cost. | Image asset upload. |
 | `content_plan` | Per-phase, per-platform post drafts for a campaign; parallel K-sized batches against Anthropic with SSE progress. | `POST /api/campaigns/:id/generate-draft` (SSE). |
 | `post_assistant` | Interactive post editor. Haiku planner loop + Sonnet `editPost` write-tool; streams `explanation_delta` / `content_delta`; tool use over the asset library. | `POST /api/posts/:id/assistant` (SSE). |
 | `campaign_assistant` | Campaign-level planning assistant; flows-as-tools (content plan, enrich brief, draft post, consistency check) under a Haiku orchestration loop. | Campaign assistant endpoint (SSE). |
@@ -298,7 +306,8 @@ Railway's private network (`*.railway.internal`), never a public port.
 | [`ogen-app/video-service`](https://github.com/ogen-app/video-service) | Video probing sidecar (ffmpeg/ffprobe). |
 | [`ogen-app/document-service`](https://github.com/ogen-app/document-service) | Office/text document parsing sidecar (pure Go). |
 | [`ogen-app/audio-service`](https://github.com/ogen-app/audio-service) | Audio transcode + transcribe sidecar (ffmpeg + Gemini multimodal). |
-| `buf.build/ogen-app/proto` | Shared gRPC contracts (tenants, secrets, pdf, video, documents, audio), published as a [BSR](https://buf.build) module and pinned via `make proto`. |
+| [`ogen-app/image-service`](https://github.com/ogen-app/image-service) | Image normalize + vision-extraction sidecar (libvips/CGO + Gemini vision). |
+| `buf.build/ogen-app/proto` | Shared gRPC contracts (tenants, secrets, plans, platforms, pdf, video, documents, audio, image), published as a [BSR](https://buf.build) module and pinned via `make proto`. |
 
 **Runtime topology**
 
@@ -306,7 +315,7 @@ Railway's private network (`*.railway.internal`), never a public port.
 - **Control-plane database** — PostgreSQL 17 + the `vector` extension (`pgvector/pgvector:pg17`).
 - **Analytics database** — `timescale/timescaledb:latest-pg17`, separate instance (`ANALYTICS_DSN`).
 - **Object storage** — Cloudflare R2 in production, MinIO locally (any S3-compatible endpoint via `STORAGE_*`).
-- **pdf-service / video-service / document-service / audio-service** — gRPC on `:50051`, private network only. audio-service additionally calls the Gemini Developer API for transcription (shares `gemini_api_key`).
+- **pdf-service / video-service / document-service / audio-service / image-service** — gRPC on `:50051`, private network only. audio-service and image-service additionally call the Gemini Developer API — for transcription and vision extraction, respectively (both share `gemini_api_key`).
 - **Harbor** — reads both databases and calls the API's operator gRPC surface; shares the control-plane Postgres server via its own `harbor` database.
 - **River UI** — job dashboard reading the control-plane database.
 
@@ -348,11 +357,12 @@ locally-running API is picked up automatically.
 | `make` | any | Build / test / openapi / proto targets. |
 | `buf` | any | Only needed to regenerate gRPC stubs (`make proto`); generated code is committed. |
 
-There is **no** local PDF/video/audio toolchain to install — parsing and
-transcription moved to the `pdf-service` / `video-service` / `document-service` /
-`audio-service` sidecars (gRPC). When a sidecar is absent the API degrades
-gracefully: PDF/video uploads are accepted but unprobed, while document/audio
-uploads fail fast with a clear "not configured" message.
+There is **no** local PDF/video/audio/image toolchain to install — parsing,
+transcription, and vision extraction moved to the `pdf-service` /
+`video-service` / `document-service` / `audio-service` / `image-service`
+sidecars (gRPC). When a sidecar is absent the API degrades gracefully: PDF/video
+uploads are accepted but unprobed, while document, audio, and image uploads fail
+fast with a clear "not configured" message.
 
 ### 1. Clone and pull deps
 
@@ -437,11 +447,11 @@ All runtime knobs are env vars, loaded by
 | `ANALYTICS_DSN` | empty | Isolated analytics TimescaleDB. Empty disables usage metering + analytics (fail-open). |
 | `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 5 | Shared pool sizing for HTTP + River workers. |
 | `GEMINI_API_KEY` | empty | Gemini Embedding 2 key — first-boot seed; rotate via the operator surface. Empty disables embedding/RAG. |
-| `EMBED_MODEL` / `EMBED_DIMENSIONS` | `gemini-embedding-2` / `3072` | Embedding model + vector width (must match `asset_chunks.embedding`). |
+| `EMBED_MODEL` / `EMBED_DIMENSIONS` | `gemini-embedding-2` / `3072` | Embedding model + vector width (must match `assets_chunks.embedding`). |
 | `ANTHROPIC_API_KEY` / `MODEL_ID` | empty / `claude-sonnet-4-5-20250929` | Claude key (first-boot seed) + generation model. |
 | `PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` | Haiku 4.5 / Sonnet 4.5 | Cheap routing model + quality-scoring model. |
 | `STORAGE_*` | empty | S3-compatible storage (R2/MinIO/AWS); empty disables uploads. |
-| `PDF_SERVICE_ADDR` / `VIDEO_SERVICE_ADDR` | empty | gRPC sidecar addresses (`*.railway.internal:50051` in prod). Empty disables that pipeline. |
+| `PDF_SERVICE_ADDR` / `VIDEO_SERVICE_ADDR` / `DOCUMENTS_SERVICE_ADDR` / `AUDIO_SERVICE_ADDR` / `IMAGE_SERVICE_ADDR` | empty | gRPC sidecar addresses (`*.railway.internal:50051` in prod). Empty disables that pipeline. |
 | `ZERNIO_API_KEY` / `ZERNIO_BASE_URL` | empty / `https://zernio.com/api/v1` | Zernio integration; key resolved per call, so rotations land without restart. |
 | `FIRECRAWL_API_KEY` | empty | URL-asset scraping; empty disables URL ingestion. |
 | `RESEND_API_KEY` / `EMAIL_FROM` | empty / `Ogen <hello@getogen.com>` | Email delivery; empty disables sending. |
@@ -486,12 +496,12 @@ gated behind [profiles](https://docs.docker.com/compose/profiles/) so the defaul
 `docker compose up` stays backend-only.
 
 ```bash
-docker compose up                      # API + Postgres + TimescaleDB (+ River UI on :9004)
+docker compose up                      # API + Postgres + TimescaleDB + pdf-service (+ River UI on :9004)
 docker compose --profile ui up         # + the ogen-app/ui Vite dev server on :9002
-docker compose --profile pdf up        # + pdf-service
 docker compose --profile video up      # + video-service
 docker compose --profile documents up  # + document-service
 docker compose --profile audio up      # + audio-service
+docker compose --profile image up      # + image-service
 docker compose --profile harbor up     # + Harbor backend (:9003) & UI (:9005)
 ```
 
