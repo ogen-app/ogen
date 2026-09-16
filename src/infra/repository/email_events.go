@@ -34,6 +34,19 @@ func NewEmailEventRepository(db *bun.DB) EmailEventRepository {
 
 func (r *emailEventRepository) Record(ctx context.Context, ev *models.EmailEvent) error {
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		// Lock the parent log row FOR UPDATE first so concurrent Records for the
+		// same email serialize here. Without it, two READ COMMITTED transactions
+		// each see only their own not-yet-committed event when recomputing, and
+		// the later UPDATE persists stale counts / last_event.
+		var cur models.EmailLog
+		if err := tx.NewSelect().
+			Model(&cur).
+			Column("status").
+			Where("id = ?", ev.EmailLogID).
+			For("UPDATE").
+			Scan(ctx); err != nil {
+			return err
+		}
 		// Dedupe redeliveries by the globally-unique Svix message id.
 		if _, err := tx.NewInsert().
 			Model(ev).
@@ -41,7 +54,7 @@ func (r *emailEventRepository) Record(ctx context.Context, ev *models.EmailEvent
 			Exec(ctx); err != nil {
 			return err
 		}
-		return recomputeEmailRollup(ctx, tx, ev.EmailLogID)
+		return recomputeEmailRollup(ctx, tx, ev.EmailLogID, cur.Status)
 	})
 }
 
@@ -53,7 +66,7 @@ func (r *emailEventRepository) ListByEmailLogID(ctx context.Context, emailLogID 
 	err := r.db.NewSelect().
 		Model(&events).
 		Where("email_log_id = ?", emailLogID).
-		Order("occurred_at ASC", "created_at ASC").
+		Order("occurred_at ASC", "created_at ASC", "id ASC").
 		Scan(ctx)
 	return events, err
 }
@@ -64,12 +77,12 @@ func (r *emailEventRepository) ListByEmailLogID(ctx context.Context, emailLogID 
 // "bounced"; a complaint that lands after an open still wins). Recomputing from
 // source — rather than incrementing — is what makes redelivery and out-of-order
 // ingestion safe.
-func recomputeEmailRollup(ctx context.Context, tx bun.Tx, emailLogID string) error {
+func recomputeEmailRollup(ctx context.Context, tx bun.Tx, emailLogID string, currentStatus models.EmailLogStatus) error {
 	var events []models.EmailEvent
 	if err := tx.NewSelect().
 		Model(&events).
 		Where("email_log_id = ?", emailLogID).
-		Order("occurred_at ASC").
+		Order("occurred_at ASC", "created_at ASC", "id ASC").
 		Scan(ctx); err != nil {
 		return err
 	}
@@ -99,28 +112,21 @@ func recomputeEmailRollup(ctx context.Context, tx bun.Tx, emailLogID string) err
 				deliveredAt = e.OccurredAt
 			}
 		}
-		// last_event tracks the most recent event of ANY type (incl.
-		// delivery_delayed), so operators see the true latest activity.
-		if e.OccurredAt.After(lastEventAt) {
-			lastEventAt = e.OccurredAt
-			lastEvent = e.Type
-		}
+		// Events are scanned in ascending (occurred_at, created_at, id) order, so
+		// the final iteration is deterministically the most recent event of ANY
+		// type (incl. delivery_delayed) — operators see the true latest activity.
+		lastEventAt = e.OccurredAt
+		lastEvent = e.Type
 		if st := models.StatusForEvent(e.Type); st.Rank() > implied.Rank() {
 			implied = st
 		}
 	}
 
 	// Advance status only when the event-implied state out-ranks the current one.
-	var cur models.EmailLog
-	if err := tx.NewSelect().
-		Model(&cur).
-		Column("status").
-		Where("id = ?", emailLogID).
-		Scan(ctx); err != nil {
-		return err
-	}
-	newStatus := cur.Status
-	if implied != "" && implied.Rank() > cur.Status.Rank() {
+	// currentStatus was read under the FOR UPDATE lock in Record, so no other
+	// concurrent Record for this log can have moved it since.
+	newStatus := currentStatus
+	if implied != "" && implied.Rank() > currentStatus.Rank() {
 		newStatus = implied
 	}
 
