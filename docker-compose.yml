@@ -144,10 +144,10 @@ services:
     # libpdfium). The API reaches it over the private network ONLY — no host
     # `ports:` — at pdf-service:50051 (PDF_SERVICE_ADDR in .env).
     #
-    # Gated behind the `pdf` profile until that image is published, so the default
-    # `docker compose up` keeps working (the API degrades gracefully: PDF features
-    # off). Once the image exists, drop the profile to enable PDF by default:
-    #   docker compose --profile pdf up
+    # The pdf-service image is published, so it runs in the default `docker compose
+    # up` (no profile — unlike the still-gated video/documents/audio/image
+    # sidecars). Comment this block out to disable it; the API degrades gracefully
+    # (PDF features off).
     pdf-service:
         image: alephbetai/pdf-service:latest
         platform: linux/amd64
@@ -211,6 +211,30 @@ services:
         environment:
             GEMINI_API_KEY: ${GEMINI_API_KEY:-}
             TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-gemini-2.5-flash}
+        expose:
+            - "50051"
+
+    # Image ingestion microservice (CON-281), the single authority for every image.
+    # Normalizes + EXIF-strips and runs Gemini vision (classify + structured
+    # extraction + description + alt text) → source-anchored chunks. Stateless
+    # compute (libvips + Gemini); ogen owns the resumable state machine on a
+    # dedicated `image` queue. Built and published from the separate
+    # ogen-app/image-service repo. The API reaches it over the private network
+    # ONLY — no host `ports:` — at image-service:50051 (IMAGE_SERVICE_ADDR in .env).
+    # Shares GEMINI_API_KEY with the embedder (no separate vision credential).
+    #
+    # Gated behind the `image` profile until that image is published, so the default
+    # `docker compose up` keeps working (image uploads fail fast with a clear
+    # message while disabled — imageprobe was removed, so there is no fallback).
+    # Once the image exists, set IMAGE_SERVICE_ADDR=image-service:50051 in .env and
+    # enable with:
+    #   docker compose --profile image up
+    image-service:
+        image: alephbetai/image-service:latest
+        platform: linux/amd64
+        profiles: ["image"]
+        environment:
+            GEMINI_API_KEY: ${GEMINI_API_KEY:-}
         expose:
             - "50051"
 
