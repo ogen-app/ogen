@@ -307,6 +307,21 @@ func (e *Enqueuer) EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, te
 	return err
 }
 
+// EnqueueTeardownProfileTx enqueues a Zernio profile-teardown task inside the
+// given transaction, so it commits atomically with the workspace soft-delete
+// (CON-203, follow-up to CON-147 PR4): a rolled-back delete queues no job, a
+// committed one durably queues exactly one. The enqueue is a local DB insert —
+// the Zernio deletes happen later in the worker — so the delete request never
+// blocks on Zernio reachability. A nil enqueuer (Zernio queue unwired) is a
+// no-op; the profile is simply left orphaned, as it was before CON-203.
+func (e *Enqueuer) EnqueueTeardownProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, TeardownZernioProfileTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
 // dripSchedule is the marketing onboarding drip cadence (CON-154 FR5): one
 // in-code table, so rescheduling the whole sequence is a single edit. Offsets
 // are relative to signup.

@@ -19,12 +19,16 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
-// ProfileBootstrapEnqueuer enqueues an eager Zernio profile-provisioning job in
-// the caller's transaction, so the job commits atomically with the new tenant
-// (CON-102 §6 FR2). Implemented by *queues.Enqueuer; kept as a narrow interface
-// here so the handler doesn't import the jobs package and stays unit-testable.
-type ProfileBootstrapEnqueuer interface {
+// ProfileLifecycleEnqueuer enqueues the Zernio profile lifecycle jobs in the
+// caller's transaction, so each commits atomically with the workspace it tracks:
+// provisioning at create (CON-102 §6 FR2) and teardown at delete (CON-203). Both
+// are local DB inserts — the Zernio calls happen later in the workers — so the
+// request never blocks on Zernio reachability. Implemented by *queues.Enqueuer;
+// kept as a narrow interface here so the handler doesn't import the jobs package
+// and stays unit-testable.
+type ProfileLifecycleEnqueuer interface {
 	EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error
+	EnqueueTeardownProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error
 }
 
 // EmailEnqueuer enqueues the CON-154 lifecycle emails (welcome + onboarding

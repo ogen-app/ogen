@@ -30,9 +30,10 @@ type WorkspacesHandler struct {
 	accountRepo   repository.AccountRepository
 	tenantRepo    repository.TenantRepository
 	sessionRepo   repository.SessionRepository
-	// profileJobs provisions a per-workspace Zernio profile on create, reusing the
-	// signup bootstrap (CON-102). nil disables it (creation still succeeds).
-	profileJobs ProfileBootstrapEnqueuer
+	// profileJobs provisions a per-workspace Zernio profile on create (reusing the
+	// signup bootstrap, CON-102) and tears it down on delete (CON-203). nil
+	// disables both (create/delete still succeed; the profile is left orphaned).
+	profileJobs ProfileLifecycleEnqueuer
 	auth        fiber.Handler
 	activity    *activity.Recorder
 }
@@ -45,7 +46,7 @@ func NewWorkspacesHandler(
 	accountRepo repository.AccountRepository,
 	tenantRepo repository.TenantRepository,
 	sessionRepo repository.SessionRepository,
-	profileJobs ProfileBootstrapEnqueuer,
+	profileJobs ProfileLifecycleEnqueuer,
 	auth fiber.Handler,
 ) *WorkspacesHandler {
 	return &WorkspacesHandler{
@@ -269,12 +270,17 @@ func (h *WorkspacesHandler) Delete(c *fiber.Ctx) error {
 		if len(remaining) == 0 {
 			return errLastWorkspace
 		}
-		// TODO(CON-147 follow-up): enqueue the Zernio profile teardown here, in this
-		// same tx, once a DeleteProfile job exists — the Zernio client has no
-		// profile-delete method yet and the external contract is unverified.
-		// Deferring is safe: the workspace is already unreachable, published posts
-		// stay live, and the orphaned profile is a background-cleanup concern
-		// (docs/CON-147-workspace-ui.md §9).
+		// Tear down the workspace's per-tenant Zernio profile (CON-203). Enqueued
+		// INSIDE this tx (transactional outbox): the job exists iff the soft-delete
+		// commits, so a rolled-back delete — e.g. the last-workspace guard above —
+		// queues nothing. The Zernio deletes happen in the worker, so the delete
+		// response never blocks on Zernio; the worker is idempotent and retries on
+		// Zernio errors. nil enqueuer leaves the profile orphaned (pre-CON-203).
+		if h.profileJobs != nil {
+			if err := h.profileJobs.EnqueueTeardownProfileTx(ctx, tx.Tx, targetID); err != nil {
+				return err
+			}
+		}
 		return nil
 	}); err != nil {
 		if errors.Is(err, errLastWorkspace) {
