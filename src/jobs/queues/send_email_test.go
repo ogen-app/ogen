@@ -134,6 +134,20 @@ func (f *fakeEmailLogRepo) Insert(_ context.Context, l *models.EmailLog) error {
 func (f *fakeEmailLogRepo) UpdateStatusByProviderMessageID(context.Context, string, models.EmailLogStatus) (bool, error) {
 	return false, nil
 }
+func (f *fakeEmailLogRepo) GetByProviderMessageID(_ context.Context, pmid string) (*models.EmailLog, error) {
+	for _, r := range f.rows {
+		if r.ProviderMessageID != "" && r.ProviderMessageID == pmid {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+func (f *fakeEmailLogRepo) ListByTenant(context.Context, repository.EmailListFilter) ([]models.EmailLog, error) {
+	return nil, nil
+}
+func (f *fakeEmailLogRepo) GetByIDForTenant(context.Context, string, string) (*models.EmailLog, error) {
+	return nil, nil
+}
 func (f *fakeEmailLogRepo) DeleteOlderThan(context.Context, time.Time) (int64, error) { return 0, nil }
 func (f *fakeEmailLogRepo) ExistsByIdempotencyKey(_ context.Context, key string) (bool, error) {
 	for _, r := range f.rows {

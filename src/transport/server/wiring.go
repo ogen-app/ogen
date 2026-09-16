@@ -56,6 +56,7 @@ type repos struct {
 	emailTemplateRepo        repository.EmailTemplateRepository
 	emailSuppressionRepo     repository.EmailSuppressionRepository
 	emailLogRepo             repository.EmailLogRepository
+	emailEventRepo           repository.EmailEventRepository
 	notificationRepo         repository.NotificationRepository
 	invitationRepo           repository.InvitationRepository
 	tierVersionRepo          repository.TenantTierVersionRepository
@@ -109,6 +110,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		emailTemplateRepo:        repository.NewEmailTemplateRepository(db),
 		emailSuppressionRepo:     repository.NewEmailSuppressionRepository(db),
 		emailLogRepo:             repository.NewEmailLogRepository(db),
+		emailEventRepo:           repository.NewEmailEventRepository(db),
 		notificationRepo:         repository.NewNotificationRepository(db),
 		invitationRepo:           repository.NewInvitationRepository(db),
 		tierVersionRepo:          repository.NewTenantTierVersionRepository(db),

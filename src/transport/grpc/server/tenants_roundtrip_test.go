@@ -42,7 +42,8 @@ func TestTenantAdminRoundTrip(t *testing.T) {
 	// the reference. The tenant service gets real repositories.
 	srv, err := New(token, nil, tierRepo, groupRepo, tenantRepo,
 		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
-		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db))
+		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
+		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

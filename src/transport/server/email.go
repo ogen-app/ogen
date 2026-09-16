@@ -39,6 +39,7 @@ func initEmail(
 	templateRepo repository.EmailTemplateRepository,
 	suppressionRepo repository.EmailSuppressionRepository,
 	logRepo repository.EmailLogRepository,
+	eventRepo repository.EmailEventRepository,
 	userRepo repository.UserRepository,
 	activityRecorder *activity.Recorder,
 ) (emailRuntime, error) {
@@ -75,6 +76,6 @@ func initEmail(
 	return emailRuntime{
 		Deps:    deps,
 		Handler: handlers.NewEmailHandler(suppressionRepo, linkSecret),
-		Webhook: handlers.NewResendWebhookHandler(suppressionRepo, logRepo, webhookSecret),
+		Webhook: handlers.NewResendWebhookHandler(suppressionRepo, logRepo, eventRepo, webhookSecret),
 	}, nil
 }

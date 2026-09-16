@@ -23,6 +23,7 @@ import (
 
 	_ "github.com/ogen-app/ogen/docs"
 	"github.com/ogen-app/ogen/src/infra/database"
+	"github.com/ogen-app/ogen/src/infra/email/resend"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/kernel/config"
@@ -182,6 +183,13 @@ func main() {
 			// SetTenantTier assignment stamp use the tier-version + assignment repos.
 			repository.NewTenantTierVersionRepository(db),
 			repository.NewTenantTierAssignmentRepository(db),
+			// CON-298: EmailAdminService reads a tenant's email history + events and
+			// fetches the rendered body live from Resend (per-call key resolution, so
+			// a key set/rotated via the secrets API takes effect with no reboot; an
+			// unset key = body unavailable, summary + timeline still served).
+			repository.NewEmailLogRepository(db),
+			repository.NewEmailEventRepository(db),
+			resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
 		); err != nil {
 			slog.Error("grpc init failed; internal grpc disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
 			_ = lis.Close()

@@ -11,9 +11,11 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -146,6 +148,120 @@ func (c *Client) Send(ctx context.Context, msg email.Message) (string, error) {
 		return "", nil
 	}
 	return out.ID, nil
+}
+
+// ErrDisabled is returned by Get when no Resend key is configured (a nil client
+// or an empty key). The caller degrades to "body unavailable" — returning the
+// summary + persisted timeline — rather than failing the request (CON-298).
+var ErrDisabled = errors.New("resend: client disabled")
+
+// EmailDetail is the subset of Resend's GET /emails/{id} response the operator
+// console needs (CON-298): the rendered body + envelope. Fetched live so the
+// large HTML never has to be duplicated into the control-plane DB.
+type EmailDetail struct {
+	ID        string
+	Subject   string
+	HTML      string
+	Text      string
+	From      string
+	ReplyTo   string
+	To        []string
+	CC        []string
+	BCC       []string
+	LastEvent string
+}
+
+// Get retrieves one email's rendered body + envelope from Resend
+// (GET /emails/{id}). It returns ErrDisabled when the client is nil or no key is
+// configured, so the caller can serve metadata with the body marked unavailable.
+func (c *Client) Get(ctx context.Context, id string) (*EmailDetail, error) {
+	if c == nil {
+		return nil, ErrDisabled
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, fmt.Errorf("resend: empty email id")
+	}
+	key, err := c.keyResolver(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resend: resolve api key: %w", err)
+	}
+	if key == "" {
+		return nil, ErrDisabled
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/emails/"+url.PathEscape(id), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
+		return nil, fmt.Errorf("resend: get email: status %d: %s", resp.StatusCode, shortErrorMessage(raw))
+	}
+
+	var out struct {
+		ID        string      `json:"id"`
+		Subject   string      `json:"subject"`
+		HTML      string      `json:"html"`
+		Text      string      `json:"text"`
+		From      string      `json:"from"`
+		To        flexStrings `json:"to"`
+		ReplyTo   flexStrings `json:"reply_to"`
+		CC        flexStrings `json:"cc"`
+		BCC       flexStrings `json:"bcc"`
+		LastEvent string      `json:"last_event"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("resend: decode email: %w", err)
+	}
+	return &EmailDetail{
+		ID:        out.ID,
+		Subject:   out.Subject,
+		HTML:      out.HTML,
+		Text:      out.Text,
+		From:      out.From,
+		ReplyTo:   strings.Join(out.ReplyTo, ", "),
+		To:        out.To,
+		CC:        out.CC,
+		BCC:       out.BCC,
+		LastEvent: out.LastEvent,
+	}, nil
+}
+
+// flexStrings decodes a JSON field Resend may send as a single string, an array
+// of strings, or null (reply_to/cc/bcc/to vary by endpoint and whether set).
+type flexStrings []string
+
+func (f *flexStrings) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return err
+		}
+		*f = arr
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if s != "" {
+		*f = []string{s}
+	}
+	return nil
 }
 
 // shortErrorMessage extracts a brief message from a Resend error body, falling

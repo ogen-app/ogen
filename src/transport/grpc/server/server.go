@@ -54,6 +54,9 @@ func New(
 	platformLimitsRepo repository.PlatformGlobalLimitsRepository,
 	versionRepo repository.TenantTierVersionRepository,
 	assignmentRepo repository.TenantTierAssignmentRepository,
+	emailLogRepo repository.EmailLogRepository,
+	emailEventRepo repository.EmailEventRepository,
+	emailBodies EmailBodyGetter,
 ) (*grpc.Server, error) {
 	// Env-configured secrets frequently arrive with a trailing newline (a very
 	// common Railway / docker-compose paste mistake). Trim it here so the
@@ -82,6 +85,9 @@ func New(
 	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo))
 	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
 	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver)
+	// CON-298: EmailAdminService serves a tenant's email history + per-email
+	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
+	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodies)
 	return srv, nil
 }
 
