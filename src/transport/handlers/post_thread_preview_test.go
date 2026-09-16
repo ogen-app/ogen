@@ -94,6 +94,29 @@ func TestPreviewThread_ManualSplitValid(t *testing.T) {
 	}
 }
 
+func TestPreviewThread_CharCountIsVisibleLength(t *testing.T) {
+	// CON-284 defect 2: char_count is the flattened, visible length — the number
+	// the publish gate enforces — not the raw Markdown length. "**bold**" is 8 raw
+	// characters but publishes 4, and a "***" divider still splits the thread even
+	// though the editor emits it in place of "---" (defect 1).
+	app := previewApp()
+	resp, out := doPreview(t, app, "**bold**\n***\n[Ogen](https://getogen.com)", "xplat")
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(out.Segments) != 2 {
+		t.Fatalf("segments = %d, want 2 (star delimiter must split)", len(out.Segments))
+	}
+	if out.Segments[0].CharCount != 4 {
+		t.Errorf("bold segment char_count = %d, want 4 (visible)", out.Segments[0].CharCount)
+	}
+	// "Ogen (https://getogen.com)" = 26 visible chars.
+	if out.Segments[1].CharCount != 26 {
+		t.Errorf("link segment char_count = %d, want 26 (visible)", out.Segments[1].CharCount)
+	}
+}
+
 func TestPreviewThread_TooFewSegments(t *testing.T) {
 	app := previewApp()
 	resp, out := doPreview(t, app, "only one", "xplat")

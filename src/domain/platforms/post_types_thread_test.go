@@ -77,6 +77,19 @@ func TestValidateThread_SegmentText(t *testing.T) {
 	if errs := ValidatePostType(threadPost(strings.Repeat("a", 280), "reply"), p, nil); hasRule(errs, RuleMaxContentChars) {
 		t.Errorf("at-limit segment: want no error, got %+v", errs)
 	}
+
+	// CON-284 defect 2: the per-segment limit governs the flattened caption, not
+	// the Markdown syntax. 280 visible chars wrapped in bold markers is raw-length
+	// 284 but publishes 280 — it must pass, matching the composer's counter.
+	bold := "**" + strings.Repeat("a", 280) + "**"
+	if errs := ValidatePostType(threadPost("ok", bold), p, nil); hasRule(errs, RuleMaxContentChars) {
+		t.Errorf("bold at visible limit: want no error, got %+v", errs)
+	}
+	// 281 visible chars is over regardless of the markers.
+	tooLong := "**" + strings.Repeat("a", 281) + "**"
+	if errs := ValidatePostType(threadPost("ok", tooLong), p, nil); !hasRule(errs, RuleMaxContentChars) {
+		t.Errorf("bold over visible limit: want max_content_chars, got %+v", errs)
+	}
 }
 
 func TestValidateThread_SegmentIndexIntegrity(t *testing.T) {

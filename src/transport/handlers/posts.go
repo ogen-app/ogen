@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"slices"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -1129,7 +1128,11 @@ func (h *PostsHandler) PreviewThread(c *fiber.Ctx) error {
 
 	out := make([]previewSegment, len(segs))
 	for i, s := range segs {
-		out[i] = previewSegment{Content: s.Content, CharCount: utf8.RuneCountInString(s.Content)}
+		// char_count is the flattened, visible length — the same number the
+		// publish gate enforces (VisibleLen), so the composer's per-message counter
+		// matches what actually gets validated. Counting raw Markdown here would
+		// overstate a segment with bold/links/headings (CON-284 R2).
+		out[i] = previewSegment{Content: s.Content, CharCount: platforms.VisibleLen(s.Content)}
 	}
 
 	// Validate the derived thread exactly as the publish gate will (per-segment

@@ -238,7 +238,11 @@ func validateThread(post *models.Post, p *models.Platform, atts []models.PostAtt
 			continue
 		}
 		if limit > 0 {
-			if c := utf8.RuneCountInString(segs[i].Content); c > limit {
+			// Count what publishes, not the Markdown syntax around it: the
+			// per-message ceiling governs the flattened caption (CON-284 R2), and
+			// this must match the composer's counter, which reads the preview
+			// endpoint's char_count — both go through VisibleLen.
+			if c := VisibleLen(segs[i].Content); c > limit {
 				errs = append(errs, ValidationError{
 					Platform: p.ID,
 					Rule:     RuleMaxContentChars,
