@@ -92,7 +92,10 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 
 	var errs []ValidationError
 
-	if rule.RequiresContent && strings.TrimSpace(post.Content) == "" {
+	// Measure the flattened body: a post whose content is only Markdown syntax
+	// (e.g. a lone "---") publishes as empty once we flatten at egress (CON-126),
+	// so it must fail requires_content rather than slip through as "non-empty".
+	if rule.RequiresContent && strings.TrimSpace(FlattenSocialText(post.Content)) == "" {
 		errs = append(errs, ValidationError{
 			Platform: p.ID,
 			Rule:     RuleRequiresContent,
@@ -151,12 +154,14 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 		})
 	}
 
-	// CON-91: enforce the same char limits the composer surfaces client-side,
-	// so a client bug can't slip an over-length post past the publish gate.
-	// Counts are runes (code points), matching what the character counter
-	// shows. A zero limit means unbounded → skip.
+	// CON-91: enforce the same char limits the composer surfaces client-side, so a
+	// client bug can't slip an over-length post past the publish gate. Count the
+	// flattened, visible length (VisibleLen) — the text that actually publishes now
+	// that we flatten Markdown at egress (CON-126) — so **bold** and [text](url)
+	// don't spend budget on syntax the reader never sees. A zero limit means
+	// unbounded → skip.
 	if limit := p.TextConstraints.ContentLimitFor(post.PlatformPostType); limit > 0 {
-		if n := utf8.RuneCountInString(post.Content); n > limit {
+		if n := VisibleLen(post.Content); n > limit {
 			errs = append(errs, ValidationError{
 				Platform: p.ID,
 				Rule:     RuleMaxContentChars,

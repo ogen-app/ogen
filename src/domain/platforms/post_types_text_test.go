@@ -102,6 +102,43 @@ func TestValidatePostType_CharsAreRunesNotBytes(t *testing.T) {
 	}
 }
 
+func TestValidatePostType_ContentLimitCountsVisibleLength(t *testing.T) {
+	// CON-126: the char limit governs the flattened caption, not the Markdown
+	// source, since we flatten before publishing. Platform capped at 4 chars.
+	p := &models.Platform{
+		ID:              "vis",
+		Name:            "Vis",
+		PostTypes:       models.PostTypeMap{"text-post": "Text post"},
+		TextConstraints: models.TextConstraints{MaxContentChars: 4},
+	}
+	// "**bold**" is 8 raw runes but publishes "bold" (4) → must pass.
+	if errs := ValidatePostType(&models.Post{PlatformPostType: "text-post", Content: "**bold**"}, p, nil); hasRule(errs, RuleMaxContentChars) {
+		t.Errorf("bold within visible limit: want no error, got %+v", errs)
+	}
+	// "**boldx**" publishes "boldx" (5) → over.
+	if errs := ValidatePostType(&models.Post{PlatformPostType: "text-post", Content: "**boldx**"}, p, nil); !hasRule(errs, RuleMaxContentChars) {
+		t.Errorf("over visible limit: want max_content_chars, got %+v", errs)
+	}
+}
+
+func TestValidatePostType_RequiresContentFlattens(t *testing.T) {
+	// A body that is only Markdown syntax flattens to empty, so requires_content
+	// must fire — it would otherwise publish as an empty post. "poll" requires
+	// content; a lone "---" flattens to "".
+	p := &models.Platform{
+		ID:        "req",
+		Name:      "Req",
+		PostTypes: models.PostTypeMap{"poll": "Poll"},
+	}
+	if errs := ValidatePostType(&models.Post{PlatformPostType: "poll", Content: "---"}, p, nil); !hasRule(errs, RuleRequiresContent) {
+		t.Errorf("markdown-only body: want requires_content, got %+v", errs)
+	}
+	// A real body with incidental markdown still satisfies requires_content.
+	if errs := ValidatePostType(&models.Post{PlatformPostType: "poll", Content: "**vote**"}, p, nil); hasRule(errs, RuleRequiresContent) {
+		t.Errorf("bold body: want no requires_content error, got %+v", errs)
+	}
+}
+
 func TestValidatePostType_MaxTitleChars(t *testing.T) {
 	p := textPlatform() // title cap 100
 
