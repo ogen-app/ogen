@@ -286,3 +286,82 @@ func TestSubmitThreadNilIndexMediaOnRoot(t *testing.T) {
 		t.Errorf("reply segment should have no media, got %+v", items[1].MediaItems)
 	}
 }
+
+// TestSubmitFlattensSinglePostMarkdown proves CON-126 at the egress boundary: a
+// single post's Markdown body is flattened to the plain text a caption shows
+// before it reaches Zernio (which publishes the content verbatim), so **bold**
+// and [links](url) never land literally on-platform. posts.content is untouched.
+func TestSubmitFlattensSinglePostMarkdown(t *testing.T) {
+	stub := newStubZernio()
+	defer stub.Close()
+	var submitBody zernio.SubmitRequest
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&submitBody)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{ID: "z-md", Status: zernio.JobStatusScheduled}})
+	})
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-1", Platform: "linkedin"}},
+	})
+	now := time.Now().Add(-time.Minute).UTC()
+	const raw = "**bold** and [Ogen](https://getogen.com)"
+	post := &models.Post{
+		ID:          "post-md",
+		PlatformID:  "AXqWG7U2qnpt", // LinkedIn Sqid
+		Content:     raw,
+		Status:      models.PostStatusScheduled,
+		ScheduledAt: &now,
+		Platform:    &models.Platform{ID: "AXqWG7U2qnpt", Name: "LinkedIn"},
+	}
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "bold and Ogen (https://getogen.com)"; submitBody.Content != want {
+		t.Errorf("submitted content = %q, want flattened %q", submitBody.Content, want)
+	}
+	if got, _ := postRepo.GetByID(t.Context(), post.ID); got.Content != raw {
+		t.Errorf("stored content was rewritten by publish: %q, want %q", got.Content, raw)
+	}
+}
+
+// TestSubmitFlattensThreadSegments proves the same egress flatten per thread
+// message: each threadItem's content and the top-level root are the flattened
+// plain-text form, matching the VisibleLen the per-message gate enforced.
+func TestSubmitFlattensThreadSegments(t *testing.T) {
+	stub := newStubZernio()
+	defer stub.Close()
+	var submitBody zernio.SubmitRequest
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&submitBody)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{ID: "z-thr-md", Status: zernio.JobStatusScheduled}})
+	})
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-x", Platform: "twitter"}},
+	})
+	now := time.Now().Add(-time.Minute).UTC()
+	post := &models.Post{
+		ID:               "t-md",
+		PlatformID:       "81mUCmc2xsKd",
+		PlatformPostType: models.PostTypeThread,
+		Content:          "**Root** message\n\n---\n\nReply with [link](https://x.com)",
+		ThreadSegments:   models.ThreadSegments{{Content: "**Root** message"}, {Content: "Reply with [link](https://x.com)"}},
+		Status:           models.PostStatusScheduled,
+		ScheduledAt:      &now,
+		Platform:         &models.Platform{ID: "81mUCmc2xsKd", Name: "X (Twitter)"},
+	}
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "Root message"; submitBody.Content != want {
+		t.Errorf("top-level content = %q, want flattened root %q", submitBody.Content, want)
+	}
+	items := submitBody.Platforms[0].PlatformSpecificData.ThreadItems
+	if len(items) != 2 || items[0].Content != "Root message" || items[1].Content != "Reply with link (https://x.com)" {
+		t.Errorf("thread items not flattened: %+v", items)
+	}
+}

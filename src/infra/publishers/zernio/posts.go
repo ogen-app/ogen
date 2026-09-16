@@ -288,8 +288,9 @@ func (c *Client) Retry(ctx context.Context, jobID string) (*Job, error) {
 // so a busy workspace's older match isn't missed past the first page.
 //
 // Returns (nil, nil) if no match is found within the lookback window. Callers
-// should pass the exact content they submitted so the match still holds once
-// the API flattens Markdown before submit (CON-126).
+// should pass the exact content they submitted — which is the Markdown-flattened
+// body (CON-126); this function matches it verbatim, so both sides compare the
+// same string.
 func (c *Client) FindByContent(ctx context.Context, content string, lookback time.Duration) (*Job, error) {
 	if c == nil {
 		return nil, errors.New("zernio: client is disabled")

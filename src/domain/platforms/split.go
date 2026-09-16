@@ -3,7 +3,6 @@ package platforms
 import (
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -16,13 +15,16 @@ import (
 //
 // Two modes, chosen by the content itself:
 //
-//   - Manual — if the body contains any horizontal-rule delimiter line ("---",
-//     i.e. three or more hyphens alone on a line), split on those lines. The
-//     author is in explicit control of every break; perSegmentLimit is ignored.
+//   - Manual — if the body contains any thematic-break delimiter line (three or
+//     more of "-", "*" or "_" alone on a line — see isRuleLine), split on those
+//     lines. The author is in explicit control of every break; perSegmentLimit is
+//     ignored.
 //   - Auto — with no delimiter present, greedily pack the body into segments each
-//     at most perSegmentLimit runes long, breaking on the best available boundary
-//     in priority order: paragraph (blank line) > line (single newline) > sentence
-//     > word > hard cut.
+//     at most perSegmentLimit characters long, breaking on the best available
+//     boundary in priority order: paragraph (blank line) > line (single newline) >
+//     sentence > word > hard cut. Length is measured after flattening Markdown
+//     (VisibleLen), since the per-message limit governs what publishes, not the
+//     syntax around it.
 //
 // perSegmentLimit is the platform's per-segment ceiling
 // (TextConstraints.ContentLimitFor("thread") — X 280 / Threads 500). A limit <= 0
@@ -51,18 +53,33 @@ func SplitThread(content string, perSegmentLimit int) models.ThreadSegments {
 }
 
 // isRuleLine reports whether a line (already trimmed of surrounding whitespace) is
-// a thread delimiter: three or more hyphens and nothing else — the Markdown
-// horizontal rule the composer inserts between messages.
+// a thread delimiter: a Markdown thematic break — three or more of the SAME marker
+// character ('-', '*' or '_'), alone on the line, with optional spaces between
+// them (CommonMark §4.1). This is the horizontal rule the BlockNote composer
+// inserts between messages; its serialiser emits "***" by default (mdast-util-to-
+// markdown's rule:'*', ×3), so matching only hyphens — as R2 first shipped — split
+// on a delimiter the editor never actually writes, and every authored break fell
+// through into one long message (CON-284). Mixed markers ("-*-") and any line with
+// other characters ("**bold**") are not rules.
 func isRuleLine(trimmed string) bool {
-	if len(trimmed) < 3 {
-		return false
-	}
+	var marker rune
+	count := 0
 	for _, r := range trimmed {
-		if r != '-' {
+		switch r {
+		case '-', '*', '_':
+			if count == 0 {
+				marker = r
+			} else if r != marker {
+				return false
+			}
+			count++
+		case ' ', '\t':
+			// interior spaces are allowed between markers ("- - -")
+		default:
 			return false
 		}
 	}
-	return true
+	return count >= 3
 }
 
 // splitManual splits on delimiter lines, or returns nil when the body has none
@@ -107,14 +124,20 @@ func autoSplit(content string, limit int) []string {
 	if text == "" {
 		return nil
 	}
-	if limit <= 0 || runeLen(text) <= limit {
+	if limit <= 0 || VisibleLen(text) <= limit {
 		return []string{text}
 	}
 	return packUnits(splitParagraphs(text), limit, "\n\n", func(para string) []string {
 		return packUnits(splitLines(para), limit, "\n", func(line string) []string {
 			return packUnits(splitSentences(line), limit, " ", func(sentence string) []string {
 				return packUnits(splitWords(sentence), limit, " ", func(word string) []string {
-					return hardCut(word, limit)
+					// Flatten before the last-resort hard cut: slicing a raw
+					// Markdown word (e.g. **abcdef**) mid-marker would leave
+					// unmatched delimiters (**abc, def**) that publish literally,
+					// since each piece becomes its own thread message. thread_segments
+					// is derived data, so flattening here is fine — posts.content
+					// keeps the authored Markdown.
+					return hardCut(FlattenSocialText(word), limit)
 				})
 			})
 		})
@@ -142,12 +165,12 @@ func packUnits(units []string, limit int, joiner string, overflow func(string) [
 		if cur != "" {
 			candidate = cur + joiner + u
 		}
-		if runeLen(candidate) <= limit {
+		if VisibleLen(candidate) <= limit {
 			cur = candidate
 			continue
 		}
 		flush()
-		if runeLen(u) <= limit {
+		if VisibleLen(u) <= limit {
 			cur = u
 			continue
 		}
@@ -241,5 +264,3 @@ func hardCut(text string, limit int) []string {
 	}
 	return out
 }
-
-func runeLen(s string) int { return utf8.RuneCountInString(s) }

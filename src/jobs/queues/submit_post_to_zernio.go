@@ -13,6 +13,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/jobs"
@@ -205,16 +206,25 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	if post.IsThread() && len(post.ThreadSegments) > 0 {
 		topContent = post.ThreadSegments.RootContent()
 	}
+	// CON-126: none of the networks render Markdown — Zernio publishes the content
+	// string verbatim — so flatten it to the plain text a caption actually shows
+	// before it leaves Ogen, otherwise `**bold**` and `[text](url)` land literally
+	// on X/Threads. The editor's Markdown source (posts.content) is untouched; only
+	// this outbound copy is flattened. Thread segments are flattened the same way in
+	// buildThreadItems, so every message that ships is plain text.
+	topContent = platforms.FlattenSocialText(topContent)
 
 	req := zernio.SubmitRequest{
 		// For a thread, top-level Content must be the ROOT segment. As of CON-284
 		// R2 post.Content is the full delimited thread body (the canonical draft),
-		// so we take the root from the derived segments (topContent above) — keeping
-		// the CON-129 dedupe-recovery invariant intact (recovery matches on
-		// req.Content = the root). The chain rides in Platforms[0].PlatformSpecificData.
-		// ThreadItems and top-level MediaItems stays empty. Zernio publishes from
-		// threadItems when present; confirm against docs.zernio.com during rollout
-		// that it does NOT also post the top-level content (if it does, blank it here).
+		// so we take the root from the derived segments (topContent above), then
+		// flatten it — keeping the CON-129 dedupe-recovery invariant intact
+		// (recovery matches on req.Content, the flattened root; FindByContent
+		// flattens nothing itself, so both sides agree). The chain rides in
+		// Platforms[0].PlatformSpecificData.ThreadItems and top-level MediaItems
+		// stays empty. Zernio publishes from threadItems when present; confirm
+		// against docs.zernio.com during rollout that it does NOT also post the
+		// top-level content (if it does, blank it here).
 		Content:      topContent,
 		Platforms:    []zernio.PlatformVariant{variant},
 		ScheduledFor: when,
@@ -233,8 +243,9 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	jobs.ObserveZernioCall(time.Since(apiStart))
 	if submitErr != nil {
 		// 24h dedupe recovery (CON-129). Search the whole dedupe window across all
-		// statuses, matching on the content we actually submitted (so it still
-		// holds once the API flattens Markdown, CON-126).
+		// statuses, matching on the content we actually submitted — req.Content is
+		// the flattened body (CON-126), and FindByContent matches it verbatim, so
+		// both sides compare the same string.
 		if errors.Is(submitErr, zernio.ErrDuplicateContent) {
 			recovered, ferr := p.Deps.Client.FindByContent(ctx, req.Content, 24*time.Hour)
 			switch {
@@ -386,7 +397,10 @@ func (p *SubmitPostProcessor) buildMediaItems(ctx context.Context, post *models.
 func (p *SubmitPostProcessor) buildThreadItems(ctx context.Context, post *models.Post) ([]zernio.ThreadItem, error) {
 	items := make([]zernio.ThreadItem, len(post.ThreadSegments))
 	for i := range post.ThreadSegments {
-		items[i] = zernio.ThreadItem{Content: post.ThreadSegments[i].Content}
+		// CON-126: flatten Markdown per segment so each message publishes as plain
+		// text (Zernio ships the content verbatim). VisibleLen counts this same
+		// flattened form, so a segment that passed the per-message gate fits here.
+		items[i] = zernio.ThreadItem{Content: platforms.FlattenSocialText(post.ThreadSegments[i].Content)}
 	}
 	if p.Deps.Storage == nil || p.Deps.PostAttachmentRepo == nil {
 		return items, nil

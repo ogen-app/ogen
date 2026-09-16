@@ -165,6 +165,81 @@ func TestSplitThread_Empty(t *testing.T) {
 	}
 }
 
+func TestSplitThread_StarAndUnderscoreDelimiters(t *testing.T) {
+	// CON-284 defect 1: the BlockNote composer serialises a divider as "***"
+	// (and "___"), never "---", so the delimiter detection has to accept every
+	// Markdown thematic break — not just hyphens — or an authored break silently
+	// collapses into one long message.
+	cases := map[string]struct {
+		in   string
+		want []string
+	}{
+		"triple star":       {"One\n\n***\n\nTwo", []string{"One", "Two"}},
+		"triple underscore": {"One\n\n___\n\nTwo", []string{"One", "Two"}},
+		"spaced stars":      {"A\n* * *\nB", []string{"A", "B"}},
+		"five stars":        {"A\n*****\nB", []string{"A", "B"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := segContents(SplitThread(tc.in, 280)); !equalStrings(got, tc.want) {
+				t.Errorf("want %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestSplitThread_NonRuleMarkersDontSplit(t *testing.T) {
+	// A line with mixed markers or other characters is content, not a delimiter,
+	// so a short body containing one stays a single (auto-mode) segment.
+	for _, in := range []string{"A\n-*-\nB", "**bold** line\nmore text"} {
+		if got := segContents(SplitThread(in, 280)); len(got) != 1 {
+			t.Errorf("%q: want single segment (no rule match), got %q", in, got)
+		}
+	}
+}
+
+func TestSplitThread_AutoDoesNotCutThroughMarkup(t *testing.T) {
+	// CON-284 defect 2: a bold run whose VISIBLE length fits the limit must not be
+	// cut. Under the old raw-rune count "**" + 280×a + "**" was 284 > 280 and got
+	// hard-cut, leaving an unclosed "**" in one segment and an orphan "**" in the
+	// next. Measured by flattened length it is 280 <= 280, so it stays one intact
+	// segment (which validateThread then rejects as a one-message thread — correct).
+	body := "**" + strings.Repeat("a", 280) + "**"
+	got := segContents(SplitThread(body, 280))
+	if len(got) != 1 || got[0] != body {
+		t.Fatalf("bold run was split/cut: got %q", got)
+	}
+}
+
+func TestSplitThread_AutoPacksByVisibleLength(t *testing.T) {
+	// Two bold words, each visible length 3. Their raw forms are 7 chars, but
+	// packing counts the flattened length, so each is a legal single-word segment
+	// with its markup intact — never hard-cut mid-marker. Joined they'd be "one
+	// two" (7 visible) > 6, so they land in separate segments.
+	got := segContents(SplitThread("**one** **two**", 6))
+	want := []string{"**one**", "**two**"}
+	if !equalStrings(got, want) {
+		t.Errorf("visible-length packing: want %q, got %q", want, got)
+	}
+}
+
+func TestSplitThread_HardCutFlattensMarkup(t *testing.T) {
+	// A single word longer than the visible limit is hard-cut. It must be
+	// flattened first, or the cut lands mid-marker and each piece (its own thread
+	// message) publishes an unmatched "**" literally. "**aaaaaaaaaa**" (visible 10)
+	// at limit 5 → two clean 5-rune pieces, no stray markers.
+	got := segContents(SplitThread("**"+strings.Repeat("a", 10)+"**", 5))
+	want := []string{"aaaaa", "aaaaa"}
+	if !equalStrings(got, want) {
+		t.Fatalf("hard-cut through markup: want %q, got %q", want, got)
+	}
+	for _, s := range got {
+		if strings.ContainsAny(s, "*_") {
+			t.Errorf("segment carries an unmatched Markdown marker: %q", s)
+		}
+	}
+}
+
 func TestSplitThread_AutoNeverExceedsLimit(t *testing.T) {
 	limit := 40
 	body := strings.Repeat("Lorem ipsum dolor sit amet. ", 30) +
