@@ -132,24 +132,37 @@ func (p *TeardownZernioProfileProcessor) teardown(ctx context.Context, profileID
 	// leftover accounts (and WhatsApp numbers) onto another profile rather than
 	// dropping them — which would spawn a fresh orphan (docs.zernio.com/profiles).
 	// DeleteAccount is idempotent (404 = already gone).
+	//
+	// A 404 from ListAccounts means the profile itself is already gone upstream
+	// (a prior attempt deleted it but failed to clear local settings, so the job
+	// retried). That is not an error: fall through to local cleanup so the retry
+	// converges instead of erroring on every attempt until it dies.
 	accounts, err := client.ListAccounts(ctx, profileID)
-	if err != nil {
-		return fmt.Errorf("list accounts: %w", err)
-	}
-	for _, a := range accounts {
-		if derr := client.DeleteAccount(ctx, a.ID); derr != nil && !zernio.IsStatus(derr, http.StatusNotFound) {
-			return fmt.Errorf("disconnect account %s: %w", a.ID, derr)
+	switch {
+	case err == nil:
+		for _, a := range accounts {
+			if derr := client.DeleteAccount(ctx, a.ID); derr != nil && !zernio.IsStatus(derr, http.StatusNotFound) {
+				return fmt.Errorf("disconnect account %s: %w", a.ID, derr)
+			}
 		}
-	}
-
-	// Delete the profile. 404 = already gone → idempotent success.
-	if derr := client.DeleteProfile(ctx, profileID); derr != nil && !zernio.IsStatus(derr, http.StatusNotFound) {
-		return fmt.Errorf("delete profile: %w", derr)
+		// Delete the profile. 404 = already gone → idempotent success.
+		if derr := client.DeleteProfile(ctx, profileID); derr != nil && !zernio.IsStatus(derr, http.StatusNotFound) {
+			return fmt.Errorf("delete profile: %w", derr)
+		}
+	case zernio.IsStatus(err, http.StatusNotFound):
+		// Profile already deleted upstream — nothing to disconnect/delete.
+	default:
+		return fmt.Errorf("list accounts: %w", err)
 	}
 
 	// Clear the local profile keys so a re-run is a clean no-op and no stale id
-	// lingers. Best-effort — the upstream delete already succeeded, so a failed
-	// clear must not fail (and re-run) the job.
+	// lingers. Unlike the remote deletes, a failure here MUST fail the job so
+	// River retries — otherwise a dangling profile_id survives a "successful"
+	// teardown. Attempt every key first (so a mid-list failure still clears the
+	// rest), then surface the first error. On retry, ListAccounts 404s (profile
+	// already gone) and we return straight here, so the retry converges once the
+	// clear finally lands.
+	var clearErr error
 	for _, k := range []string{
 		zernio.SettingProfileID,
 		zernio.SettingProfileName,
@@ -158,7 +171,13 @@ func (p *TeardownZernioProfileProcessor) teardown(ctx context.Context, profileID
 	} {
 		if derr := p.Settings.Delete(ctx, k); derr != nil {
 			slog.WarnContext(ctx, "teardown: clear setting failed", logging.AttrComponent, "jobs.teardown_zernio_profile", "setting", k, logging.AttrError, derr)
+			if clearErr == nil {
+				clearErr = derr
+			}
 		}
+	}
+	if clearErr != nil {
+		return fmt.Errorf("clear profile settings: %w", clearErr)
 	}
 	return nil
 }

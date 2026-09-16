@@ -2,6 +2,7 @@ package queues_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,15 @@ import (
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 )
+
+// deleteFailSettings is a zernio.SettingsStore that reads/writes normally but
+// fails every Delete, modelling a transient settings-store outage during the
+// post-delete local cleanup.
+type deleteFailSettings struct{ *fakeSettings }
+
+func (deleteFailSettings) Delete(context.Context, string) error {
+	return errors.New("settings store unavailable")
+}
 
 // teardownStub is a minimal Zernio server for the teardown job tests. It serves
 // GET /accounts (the accounts to disconnect), DELETE /accounts/{id}, and
@@ -184,6 +194,53 @@ func TestTeardownProfileAlreadyGoneIsIdempotent(t *testing.T) {
 	// The pointer is still cleared so we don't re-attempt a doomed delete forever.
 	if _, ok, _ := store.Get(tctx("acme"), zernio.SettingProfileID); ok {
 		t.Fatalf("expected profile_id cleared even on 404")
+	}
+}
+
+func TestTeardownProfileGoneOnListIsCleanedUp(t *testing.T) {
+	// A retry after a prior attempt already deleted the profile upstream but
+	// failed to clear settings: GET /accounts 404s (profile gone). The job must
+	// treat that as already-deleted and still clear the local profile keys,
+	// rather than erroring on every attempt until it dies.
+	stub := &teardownStub{listAccountsStatus: http.StatusNotFound}
+	srv := stub.server()
+	defer srv.Close()
+
+	store := newFakeSettings()
+	seedTeardownProfile(store, "acme", "prof-acme")
+	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusDeleted})
+
+	if err := p.Work(t.Context(), teardownJob("acme")); err != nil {
+		t.Fatalf("expected a 404 on ListAccounts to converge to cleanup, got: %v", err)
+	}
+	if got := stub.profileDeletes(); len(got) != 0 {
+		t.Fatalf("expected no profile delete when it is already gone, got %v", got)
+	}
+	if _, ok, _ := store.Get(tctx("acme"), zernio.SettingProfileID); ok {
+		t.Fatalf("expected profile_id cleared even when the profile was already gone")
+	}
+}
+
+func TestTeardownRetriesWhenLocalCleanupFails(t *testing.T) {
+	// The remote deletes succeed but clearing the local profile keys fails. Work
+	// must surface the error so River retries — otherwise a dangling profile_id
+	// survives a "successful" teardown.
+	stub := &teardownStub{accounts: []string{"acc-1"}}
+	srv := stub.server()
+	defer srv.Close()
+
+	inner := newFakeSettings()
+	seedTeardownProfile(inner, "acme", "prof-acme")
+	store := deleteFailSettings{fakeSettings: inner}
+	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusDeleted})
+
+	if err := p.Work(t.Context(), teardownJob("acme")); err == nil {
+		t.Fatalf("expected an error when local cleanup fails so River retries")
+	}
+	// The remote profile was still deleted (cleanup runs after) — a retry will
+	// 404 on ListAccounts and re-attempt only the local clear.
+	if got := stub.profileDeletes(); len(got) != 1 {
+		t.Fatalf("expected the profile delete to have happened, got %v", got)
 	}
 }
 
