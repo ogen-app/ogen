@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,10 +22,12 @@ import (
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
-	"github.com/ogen-app/ogen/src/infra/storage/imageprobe"
 	"github.com/ogen-app/ogen/src/infra/storage/pdfprobe"
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/kernel/usage"
+	imageclient "github.com/ogen-app/ogen/src/transport/grpc/client/image"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 )
 
@@ -60,6 +63,15 @@ type PDFRenderer interface {
 	Render(ctx context.Context, r io.Reader, opts pdf.RenderOptions) (*pdf.RenderResult, error)
 }
 
+// ImagePreparer runs the image-service light path (CON-281): validate + metadata
+// + EXIF-strip with pixels preserved (PrepareAttachment), and async alt-text
+// (GenerateAltText). Implemented by *imageclient.Client; a nil preparer disables
+// image attachments — image-service is a hard dependency (imageprobe deleted, D6).
+type ImagePreparer interface {
+	PrepareAttachment(ctx context.Context, opts imageclient.PrepareAttachmentOptions) (*imageclient.PrepareAttachmentResult, error)
+	GenerateAltText(ctx context.Context, opts imageclient.GenerateAltTextOptions) (*imageclient.GenerateAltTextResult, error)
+}
+
 // PresignedURLTTL controls how long pre-signed GET URLs returned in
 // API responses stay valid. Short window keeps stale URLs out of
 // caches; long enough that the editor UI has plenty of time to load
@@ -77,8 +89,16 @@ type PostAttachmentsHandler struct {
 	storage  storage.Storage
 	pdf      PDFRenderer
 	video    VideoProber
-	auth     fiber.Handler
-	limiter  *entitlements.Limiter // CON-295 media_storage_bytes quota (nil-safe)
+	// image runs the CON-281 light path (EXIF-strip + metadata + async alt text).
+	// Nil disables image attachments (image-service unwired, D6). recorder meters
+	// the alt-text vision call (CON-86, nil-safe); altTextModel/altTextMaxChars are
+	// the generation model + target length.
+	image           ImagePreparer
+	recorder        *usage.Recorder
+	altTextModel    string
+	altTextMaxChars int
+	auth            fiber.Handler
+	limiter         *entitlements.Limiter // CON-295 media_storage_bytes quota (nil-safe)
 }
 
 // SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
@@ -90,9 +110,24 @@ func NewPostAttachmentsHandler(
 	store storage.Storage,
 	renderer PDFRenderer,
 	prober VideoProber,
+	preparer ImagePreparer,
+	recorder *usage.Recorder,
+	altTextModel string,
+	altTextMaxChars int,
 	auth fiber.Handler,
 ) *PostAttachmentsHandler {
-	return &PostAttachmentsHandler{repo: repo, postRepo: postRepo, storage: store, pdf: renderer, video: prober, auth: auth}
+	return &PostAttachmentsHandler{
+		repo:            repo,
+		postRepo:        postRepo,
+		storage:         store,
+		pdf:             renderer,
+		video:           prober,
+		image:           preparer,
+		recorder:        recorder,
+		altTextModel:    altTextModel,
+		altTextMaxChars: altTextMaxChars,
+		auth:            auth,
+	}
 }
 
 func (h *PostAttachmentsHandler) Register(app *fiber.App) {
@@ -242,6 +277,29 @@ func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
 	})
 }
 
+// rejectAttachment writes a terminal per-request attachment rejection carrying a
+// stable, machine-readable code beside the human message (CON-281). It mirrors
+// the batch content-bank upload's {code,error} shape so the front-end can match
+// on the code across both surfaces and fall back to the prose when it is
+// unknown. It returns nil because the response is already written — the central
+// error handler has no slot for a code, so it is intentionally bypassed (4xx
+// client rejections are not error-logged there anyway).
+func rejectAttachment(c *fiber.Ctx, status int, code, msg string) error {
+	return c.Status(status).JSON(fiber.Map{"code": code, "error": msg})
+}
+
+// imageRejectStatus is the HTTP status for a fine-grained image reject code
+// (CON-281 Phase 2): a media type we don't accept (unsupported / vector) is 415;
+// a typed-but-unusable image (too large / dimensions / corrupt) is 400.
+func imageRejectStatus(code string) int {
+	switch code {
+	case models.UploadCodeUnsupportedMediaType, models.UploadCodeVectorRejected:
+		return fiber.StatusUnsupportedMediaType
+	default:
+		return fiber.StatusBadRequest
+	}
+}
+
 // Upload godoc
 // @Summary      Upload a post attachment
 // @Description  Accepts a single image (CON-73) or PDF (CON-75) file via
@@ -269,7 +327,7 @@ func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
 // @Router       /api/posts/{post_id}/attachments [post]
 func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	if h.storage == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
+		return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "storage not configured")
 	}
 
 	post, err := h.loadPostOrErr(c)
@@ -293,10 +351,8 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		preSniffCap = img
 	}
 	if fh.Size > preSniffCap {
-		return fiber.NewError(
-			fiber.StatusBadRequest,
-			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20),
-		)
+		return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
+			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20))
 	}
 	// CON-295: this upload adds fh.Size bytes to the tenant's media_storage_bytes
 	// budget. Check before touching storage so a denied upload never leaves an
@@ -322,7 +378,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	sniff := make([]byte, 512)
 	n, _ := io.ReadFull(f, sniff)
 	if n == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "file is empty")
+		return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeEmptyFile, "file is empty")
 	}
 	kind := http.DetectContentType(sniff[:n])
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -360,24 +416,28 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		AltText:      altText,
 		SegmentIndex: segIdx,
 		CreatedBy:    session.UserID,
+		// A user-supplied alt text on upload is a manual edit (CON-281 D5): mark it
+		// so the async auto-generator never overwrites it.
+		AltTextEditedByUser: altText != "",
 	}
 	var data []byte
 	var keyExt string
 	var pendingThumbnail []byte
+	// imagePrepared marks that the image branch already wrote the (EXIF-stripped)
+	// object to att.S3Key via image-service, so the shared upload tail is skipped.
+	var imagePrepared bool
 
 	if kind == pdfprobe.MIME {
 		if fh.Size > maxPDFUploadBytes() {
-			return fiber.NewError(
-				fiber.StatusBadRequest,
-				fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes()>>20),
-			)
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
+				fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes()>>20))
 		}
 		probe, raw, err := pdfprobe.Probe(f, maxPDFUploadBytes())
 		if err != nil {
 			if errors.Is(err, pdfprobe.ErrUnsupportedMIME) {
-				return fiber.NewError(fiber.StatusUnsupportedMediaType, err.Error())
+				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, err.Error())
 			}
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, err.Error())
 		}
 		att.MimeType = probe.MIME
 		att.SizeBytes = probe.Size
@@ -404,7 +464,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 				// failures degrade gracefully: keep the attachment, no page count
 				// or thumbnail.
 				if pdf.IsInvalidPDF(rerr) {
-					return fiber.NewError(fiber.StatusBadRequest, "uploaded file is not a readable PDF")
+					return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable PDF")
 				}
 				slog.WarnContext(c.Context(), "pdf render failed", logging.AttrComponent, "post_attachments", "name", fh.Filename, logging.AttrError, rerr)
 			} else {
@@ -414,32 +474,101 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		}
 	} else {
 		if fh.Size > maxImageUploadBytes() {
-			return fiber.NewError(
-				fiber.StatusBadRequest,
-				fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes()>>20),
-			)
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
+				fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes()>>20))
 		}
-		probe, raw, err := imageprobe.Probe(f, maxImageUploadBytes())
-		if err != nil {
-			if errors.Is(err, imageprobe.ErrUnsupportedMIME) {
-				return fiber.NewError(fiber.StatusUnsupportedMediaType, err.Error())
+		// image-service is the sole image authority (D6): validate + metadata +
+		// EXIF-strip (pixels preserved) all happen there. Nil client → reject
+		// (no imageprobe fallback).
+		if h.image == nil {
+			return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
+		}
+		// The extension routes the object key + presign content-type (the service
+		// preserves the format, pixels intact); the body is still sniffed
+		// authoritatively by image-service. SVG/unknown → 415.
+		ext := strings.ToLower(filepath.Ext(fh.Filename))
+		mime, ok := imageUploadMIMEs[ext]
+		if !ok {
+			// An SVG lands here (it's in no raster allowlist); name it specifically.
+			if ext == ".svg" {
+				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)")
 			}
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image type — accepted: JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, BMP")
 		}
-		att.MimeType = probe.MIME
-		att.SizeBytes = probe.Size
-		att.Width = probe.Width
-		att.Height = probe.Height
-		att.IsAnimated = probe.IsAnimated
-		att.ChecksumSHA256 = probe.SHA256
-		data = raw
-		keyExt = probe.Extension
+		raw, rerr := io.ReadAll(f)
+		if rerr != nil {
+			return fmt.Errorf("post_attachments: read image: %w", rerr)
+		}
+
+		// Stage the EXIF-bearing original at a temp key, hand image-service presigned
+		// GET/PUT, and let it write the cleaned (metadata-stripped, pixel-identical)
+		// copy to the final key. The original is discarded after — its EXIF /
+		// geolocation must never persist or publish (CON-281 §7, §17).
+		cleanKey := storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+ext)
+		origKey := storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+".orig"+ext)
+		if _, err := h.storage.Upload(c.Context(), origKey, bytes.NewReader(raw), int64(len(raw)), mime); err != nil {
+			return fmt.Errorf("post_attachments: stage original: %w", err)
+		}
+		getURL, gerr := h.storage.PresignedGetURL(c.Context(), origKey, PresignedURLTTL)
+		putURL, perr := h.storage.PresignedPutURL(c.Context(), cleanKey, mime, PresignedURLTTL)
+		if gerr != nil || perr != nil {
+			_ = h.storage.Delete(c.Context(), origKey)
+			return fmt.Errorf("post_attachments: presign image transfer: get=%v put=%v", gerr, perr)
+		}
+		prep, err := h.image.PrepareAttachment(c.Context(), imageclient.PrepareAttachmentOptions{
+			SourceURL:     getURL,
+			DestPutURL:    putURL,
+			StripMetadata: true,
+			WantAltText:   false, // alt text is generated asynchronously below
+			Filename:      fh.Filename,
+		})
+		if err != nil {
+			// Drop BOTH the staged original and any partial cleaned object the service
+			// may have written to cleanKey before failing — never leave orphaned bytes.
+			_ = h.storage.Delete(c.Context(), origKey)
+			_ = h.storage.Delete(c.Context(), cleanKey)
+			// Prefer the fine-grained reason image-service attaches to a terminal
+			// reject over the coarse gRPC-code buckets (CON-281 Phase 2); the buckets
+			// stay as the fallback for an older service that carries no ErrorInfo.
+			if code := imageclient.UploadCode(err); code != "" {
+				return rejectAttachment(c, imageRejectStatus(code), code, models.UploadRejectMessage(code))
+			}
+			switch {
+			case imageclient.IsUnsupportedImage(err):
+				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image format")
+			case imageclient.IsInvalidImage(err):
+				return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable image")
+			default:
+				// Transient / unreachable — no imageprobe fallback (D6).
+				return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable; please retry")
+			}
+		}
+		if prep.RejectedReason != "" {
+			_ = h.storage.Delete(c.Context(), origKey)
+			_ = h.storage.Delete(c.Context(), cleanKey)
+			// A structured verdict from the service, carried through with its own
+			// message. Phase 1 maps it to the coarse "not a usable image" bucket; the
+			// image.v1 RejectedCode enum (CON-281 Phase 2) refines it to the exact
+			// reason (vector / oversize / corrupt) without a client change.
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, prep.RejectedReason)
+		}
+		att.MimeType = prep.Mime
+		att.SizeBytes = prep.SizeBytes
+		att.Width = prep.Width
+		att.Height = prep.Height
+		att.IsAnimated = prep.IsAnimated
+		att.ChecksumSHA256 = prep.ChecksumSHA256
+		att.S3Key = cleanKey
+		imagePrepared = true
+		// The EXIF-bearing original has served its purpose — drop it (best-effort).
+		_ = h.storage.Delete(c.Context(), origKey)
 	}
 
-	att.S3Key = storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+keyExt)
-
-	if _, err := h.storage.Upload(c.Context(), att.S3Key, bytes.NewReader(data), att.SizeBytes, att.MimeType); err != nil {
-		return fmt.Errorf("post_attachments: storage upload: %w", err)
+	if !imagePrepared {
+		att.S3Key = storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+keyExt)
+		if _, err := h.storage.Upload(c.Context(), att.S3Key, bytes.NewReader(data), att.SizeBytes, att.MimeType); err != nil {
+			return fmt.Errorf("post_attachments: storage upload: %w", err)
+		}
 	}
 
 	// Upload the first-page thumbnail rendered by pdf-service (if any). Storing
@@ -469,11 +598,64 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		h.limiter.DispatchCrossing(c.Context(), tenantID, mediaQuota)
 	}
 
+	// Auto-generate alt text asynchronously for an image with no user-supplied one
+	// (CON-281 §10): the synchronous upload stays fast, and the generator writes
+	// only where alt text is still un-edited.
+	if imagePrepared && att.AltText == "" && h.image != nil {
+		go h.generateAttachmentAltText(context.WithoutCancel(c.Context()), session.TenantID, att.ID, att.S3Key)
+	}
+
 	h.hydratePresigned(c, att)
 	return c.Status(fiber.StatusCreated).JSON(attachmentResponse{
 		PostAttachment:     att,
 		PlatformValidation: platforms.ValidateAttachment(att, post.Platform),
 	})
+}
+
+// generateAttachmentAltText runs image-service's GenerateAltText for a freshly
+// uploaded image attachment and stores the result (CON-281 §10). Fire-and-forget:
+// it runs in its own goroutine off a detached context, meters the vision call
+// (CON-86), and persists only where the user hasn't edited the alt text (D5).
+// Best-effort throughout — a failure just leaves the attachment without alt text
+// (regeneration is a separate, explicit action).
+func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, tenantID, attID, s3Key string) {
+	if h.image == nil || h.storage == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	// Rebuild the tenant context the request carried, so the presign + repo write
+	// run against the right tenant (CON-97).
+	ctx = tenantctx.With(ctx, tenantID)
+
+	getURL, err := h.storage.PresignedGetURL(ctx, s3Key, PresignedURLTTL)
+	if err != nil {
+		return
+	}
+	res, err := h.image.GenerateAltText(ctx, imageclient.GenerateAltTextOptions{
+		SourceURL: getURL,
+		MaxChars:  h.altTextMaxChars,
+		Model:     h.altTextModel,
+	})
+	if err != nil || res == nil {
+		slog.WarnContext(ctx, "attachment alt-text generation failed", logging.AttrComponent, "post_attachments", "attachment_id", attID, logging.AttrError, err)
+		return
+	}
+	// Meter the vision call on the gemini vendor (CON-86); RecordResp is nil-safe.
+	for _, u := range res.Usage {
+		h.recorder.RecordResp(ctx, llm.VendorGemini, u.Model, "alt_text", llm.VisionUsage{Step: u.Step, InputTokens: u.Input, OutputTokens: u.Output})
+	}
+	alt := strings.TrimSpace(res.AltText)
+	if alt == "" {
+		return
+	}
+	// Guard the storage cap (runes) — the generation target is short, but stay safe.
+	if utf8.RuneCountInString(alt) > maxAltTextLen() {
+		alt = string([]rune(alt)[:maxAltTextLen()])
+	}
+	if err := h.repo.SetGeneratedAltText(ctx, attID, alt); err != nil {
+		slog.WarnContext(ctx, "attachment alt-text persist failed", logging.AttrComponent, "post_attachments", "attachment_id", attID, logging.AttrError, err)
+	}
 }
 
 // parseSegmentIndex parses the optional segment_index form/JSON value for a

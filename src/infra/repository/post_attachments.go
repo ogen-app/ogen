@@ -22,7 +22,13 @@ type PostAttachmentRepository interface {
 	// value on success.
 	CreateAtNextPosition(ctx context.Context, att *models.PostAttachment) error
 	UpdatePosition(ctx context.Context, id string, position int) error
+	// UpdateAltText sets a user-supplied alt text (the PATCH path) and marks it
+	// user-edited (CON-281 D5), so async auto-generation never overwrites it.
 	UpdateAltText(ctx context.Context, id string, altText string) error
+	// SetGeneratedAltText sets auto-generated alt text but ONLY where the user has
+	// not edited it (alt_text_edited_by_user = false), and does not flip the flag
+	// (CON-281). The async attachment alt-text generator uses it.
+	SetGeneratedAltText(ctx context.Context, id string, altText string) error
 	// UpdateSegmentIndex reassigns which thread segment an attachment belongs
 	// to (CON-284). A nil segmentIndex clears it (detach from any segment,
 	// i.e. back to a non-thread attachment).
@@ -164,7 +170,18 @@ func (r *postAttachmentRepository) UpdateAltText(ctx context.Context, id string,
 	_, err := r.db.NewUpdate().
 		Model((*models.PostAttachment)(nil)).
 		Set("alt_text = ?", altText).
+		Set("alt_text_edited_by_user = true").
 		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+func (r *postAttachmentRepository) SetGeneratedAltText(ctx context.Context, id string, altText string) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.PostAttachment)(nil)).
+		Set("alt_text = ?", altText).
+		Where("id = ?", id).
+		Where("alt_text_edited_by_user = false").
 		Exec(ctx)
 	return err
 }

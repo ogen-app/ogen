@@ -64,6 +64,12 @@ type Deps struct {
 	// `audio` queue.
 	Audio AudioDeps
 
+	// CON-281: the process_image worker's dependencies (image-service client,
+	// embedder, storage, extraction/block/asset/file repos, cost gate). A nil
+	// Client (no IMAGE_SERVICE_ADDR) makes the job a no-op. Runs on the dedicated
+	// `image` queue.
+	Image ImageDeps
+
 	// CON-222: the process_url worker's dependencies (Firecrawl scrape client,
 	// embedder, storage, asset/image repos, eventhub). A nil Scraper (no
 	// firecrawl_api_key) makes the job a no-op.
@@ -460,6 +466,30 @@ func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetI
 		return nil
 	}
 	_, err := e.Client.InsertTx(ctx, tx, ProcessAudioTask{
+		AssetID:      assetID,
+		TenantID:     tenantID,
+		OriginalName: originalName,
+		MimeType:     mimeType,
+		StorageKey:   storageKey,
+		RunKey:       runKey,
+		PinnedModel:  pinnedModel,
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueProcessImageTx enqueues an image-ingestion task inside the given
+// transaction, so it commits atomically with the asset insert/reset (CON-281): a
+// committed upload always has a job, a rolled-back one never does. The worker
+// hands image-service presigned URLs (storageKey is the tenant-relative object
+// path), so the bytes are not in the args. runKey makes the run idempotent; an
+// empty pinnedModel uses the configured VISION_EXTRACT_MODEL. The task's
+// InsertOpts routes it onto the dedicated `image` queue. Takes primitives so the
+// handler depends on a narrow interface, not this package.
+func (e *Enqueuer) EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, ProcessImageTask{
 		AssetID:      assetID,
 		TenantID:     tenantID,
 		OriginalName: originalName,

@@ -28,8 +28,8 @@ require (
 	github.com/uptrace/bun/extra/bundebug v1.2.18
 	github.com/valyala/fasthttp v1.69.0
 	golang.org/x/crypto v0.50.0
-	golang.org/x/image v0.39.0
 	google.golang.org/genai v1.51.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.10
 )
@@ -125,6 +125,5 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

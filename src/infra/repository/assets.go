@@ -34,6 +34,17 @@ type AssetRepository interface {
 	// UpdateContent sets title + content (and bumps updated_at) without touching
 	// status/source_url — the process_url worker's write after a scrape (CON-222).
 	UpdateContent(ctx context.Context, id, title, content string) error
+	// SetImageResult writes the vision description (content) of an IMG asset and,
+	// when setAlt is true, its generated alt text — but the alt write is guarded in
+	// SQL so it NEVER overwrites a user's edit (CON-281 D5): alt_text is set only
+	// where alt_text_edited_by_user is false. content is always written. Title is
+	// left untouched (the upload filename stays the title).
+	SetImageResult(ctx context.Context, id, content, altText string, setAlt bool) error
+	// SetAltText sets an image asset's alt text unconditionally (CON-281) — the
+	// explicit "regenerate alt text" action, which overwrites even a prior
+	// generated value. It does NOT flip alt_text_edited_by_user (a regeneration is
+	// not a manual edit); only a user PUT marks the text hand-edited.
+	SetAltText(ctx context.Context, id, altText string) error
 	// ApplyTags adds and removes tag IDs across many assets in one transaction —
 	// the Content Bank's bulk-filing operation (CON-279). Each asset keeps its
 	// existing tags minus `remove` plus `add`, deduped and order-preserving. The
@@ -156,6 +167,34 @@ func (r *assetRepository) UpdateContent(ctx context.Context, id, title, content 
 		Model((*models.Asset)(nil)).
 		Set("title = ?", title).
 		Set("content = ?", content).
+		Set("updated_at = ?", time.Now().UTC()).
+		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+// SetImageResult writes an IMG asset's vision description and (optionally) its
+// generated alt text (CON-281). The alt write uses a CASE guard so a user's
+// edited alt text (alt_text_edited_by_user = true) is preserved even across a
+// re-extraction; content is always overwritten with the latest description.
+func (r *assetRepository) SetImageResult(ctx context.Context, id, content, altText string, setAlt bool) error {
+	q := r.db.NewUpdate().
+		Model((*models.Asset)(nil)).
+		Set("content = ?", content).
+		Set("updated_at = ?", time.Now().UTC()).
+		Where("id = ?", id)
+	if setAlt {
+		q = q.Set("alt_text = CASE WHEN alt_text_edited_by_user THEN alt_text ELSE ? END", altText)
+	}
+	_, err := q.Exec(ctx)
+	return err
+}
+
+// SetAltText sets an image asset's alt text unconditionally (CON-281).
+func (r *assetRepository) SetAltText(ctx context.Context, id, altText string) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.Asset)(nil)).
+		Set("alt_text = ?", altText).
 		Set("updated_at = ?", time.Now().UTC()).
 		Where("id = ?", id).
 		Exec(ctx)

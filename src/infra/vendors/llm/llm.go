@@ -75,6 +75,18 @@ func init() {
 					vendors.KindInput:  1_000_000,
 					vendors.KindOutput: 2_500_000,
 				},
+				// CON-281: image-service vision runs on the same gemini vendor. The
+				// service returns per-call token usage; ogen prices it here. classify
+				// uses 2.5-flash (already priced above; its input rate is the audio
+				// rate, a small over-estimate for image input — acceptable v1, cost is
+				// a snapshot). extract/escalate use 2.5-pro, priced at its own
+				// input/output rates ($1.25/1M in, $10/1M out; ai.google.dev). Keep
+				// these keys in sync with VISION_*_MODEL so runs are priced, not
+				// counted as unknown-model (cost 0).
+				"gemini-2.5-pro": {
+					vendors.KindInput:  1_250_000,
+					vendors.KindOutput: 10_000_000,
+				},
 			},
 		},
 	})
@@ -122,10 +134,22 @@ type TranscribeUsage struct {
 	OutputTokens int64
 }
 
+// VisionUsage is what an image-vision call site hands to the Gemini meter
+// (CON-281): image-service returns Gemini's own input/output token counts per
+// vision call, tagged with the pipeline Step (vision_classify / vision_extract /
+// alt_text / describe) which becomes the usage event's Operation. Priced via the
+// gemini vendor's input/output rates — the same vendor the embedder + transcriber
+// use, no new vendor.
+type VisionUsage struct {
+	Step         string
+	InputTokens  int64
+	OutputTokens int64
+}
+
 // geminiMeter is the single meter registered for the gemini vendor. It handles
-// both operations the vendor bills: embeddings (EmbedUsage) and audio
-// transcription (TranscribeUsage). RecordResp dispatches on the response type,
-// so a call site only chooses which usage struct to hand in.
+// every operation the vendor bills: embeddings (EmbedUsage), audio transcription
+// (TranscribeUsage), and image vision (VisionUsage). RecordResp dispatches on the
+// response type, so a call site only chooses which usage struct to hand in.
 type geminiMeter struct{}
 
 func (geminiMeter) Extract(resp any) (string, vendors.Usage, bool) {
@@ -147,6 +171,22 @@ func (geminiMeter) Extract(resp any) (string, vendors.Usage, bool) {
 			return "", nil, false
 		}
 		return "transcribe", u, true
+	case VisionUsage:
+		u := vendors.Usage{}
+		if v.InputTokens > 0 {
+			u[vendors.KindInput] = v.InputTokens
+		}
+		if v.OutputTokens > 0 {
+			u[vendors.KindOutput] = v.OutputTokens
+		}
+		if len(u) == 0 {
+			return "", nil, false
+		}
+		step := v.Step
+		if step == "" {
+			step = "vision"
+		}
+		return step, u, true
 	default:
 		return "", nil, false
 	}
