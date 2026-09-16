@@ -25,19 +25,21 @@ const resendWebhookTolerance = 5 * time.Minute
 
 var errInvalidSignature = errors.New("resend webhook: invalid signature")
 
-// ResendWebhookHandler ingests Resend delivery events (CON-154 FR8). Resend
-// signs webhooks with Svix, so every request is signature-verified before any
-// side effect. Hard bounces and complaints auto-suppress the address (scope
-// all); delivery events update the matching email_logs row.
+// ResendWebhookHandler ingests Resend delivery events (CON-154 FR8, CON-298).
+// Resend signs webhooks with Svix, so every request is signature-verified before
+// any side effect. Hard bounces and complaints auto-suppress the address (scope
+// all); every delivery/open/click/delay/bounce/complaint event is also persisted
+// to the email_events timeline and folded into the email_logs rollup.
 type ResendWebhookHandler struct {
 	suppressions  repository.EmailSuppressionRepository
 	logs          repository.EmailLogRepository
+	events        repository.EmailEventRepository
 	webhookSecret SecretResolver
 }
 
 // NewResendWebhookHandler constructs the webhook handler.
-func NewResendWebhookHandler(suppressions repository.EmailSuppressionRepository, logs repository.EmailLogRepository, webhookSecret SecretResolver) *ResendWebhookHandler {
-	return &ResendWebhookHandler{suppressions: suppressions, logs: logs, webhookSecret: webhookSecret}
+func NewResendWebhookHandler(suppressions repository.EmailSuppressionRepository, logs repository.EmailLogRepository, events repository.EmailEventRepository, webhookSecret SecretResolver) *ResendWebhookHandler {
+	return &ResendWebhookHandler{suppressions: suppressions, logs: logs, events: events, webhookSecret: webhookSecret}
 }
 
 // Register mounts the public (signature-gated) webhook route.
@@ -45,10 +47,13 @@ func (h *ResendWebhookHandler) Register(app *fiber.App) {
 	app.Post("/api/webhooks/resend", h.Handle)
 }
 
-// resendEvent is the subset of the Resend/Svix event envelope we act on.
+// resendEvent is the subset of the Resend/Svix event envelope we act on. The
+// top-level created_at is the event time (RFC3339); we record it as the event's
+// occurred_at, falling back to now if absent.
 type resendEvent struct {
-	Type string `json:"type"`
-	Data struct {
+	Type      string    `json:"type"`
+	CreatedAt time.Time `json:"created_at"`
+	Data      struct {
 		EmailID string   `json:"email_id"`
 		To      []string `json:"to"`
 	} `json:"data"`
@@ -89,6 +94,15 @@ func (h *ResendWebhookHandler) Handle(c *fiber.Ctx) error {
 	}
 
 	ctx := c.Context()
+	// The event's occurred_at; fall back to now when the envelope omits it.
+	occurredAt := evt.CreatedAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	// The svix-id header is the idempotency key for a redelivered event; the
+	// signature check above guarantees it is non-empty.
+	svixID := c.Get("svix-id")
+
 	// errors.Join evaluates both calls (Go evaluates args before the call), so
 	// every address + both side effects are attempted even if one fails; a
 	// non-nil result means at least one did.
@@ -97,17 +111,23 @@ func (h *ResendWebhookHandler) Handle(c *fiber.Ctx) error {
 	case "email.bounced":
 		sideErr = errors.Join(
 			h.suppressAll(ctx, evt.Data.To, models.EmailSuppressionReasonBounce),
-			h.markStatus(ctx, evt.Data.EmailID, models.EmailLogBounced),
+			h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventBounced, occurredAt),
 		)
 	case "email.complained":
 		sideErr = errors.Join(
 			h.suppressAll(ctx, evt.Data.To, models.EmailSuppressionReasonComplaint),
-			h.markStatus(ctx, evt.Data.EmailID, models.EmailLogComplained),
+			h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventComplained, occurredAt),
 		)
+	case "email.delivered":
+		sideErr = h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventDelivered, occurredAt)
+	case "email.opened":
+		sideErr = h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventOpened, occurredAt)
+	case "email.clicked":
+		sideErr = h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventClicked, occurredAt)
+	case "email.delivery_delayed":
+		sideErr = h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventDelayed, occurredAt)
 	default:
-		// delivered / opened / clicked / delivery_delayed etc.: acknowledged as
-		// a no-op so Resend stops retrying. (Fine-grained delivery status is a
-		// future enhancement.)
+		// Any other event type: acknowledged as a no-op so Resend stops retrying.
 		slog.InfoContext(ctx, "resend webhook ignored", logging.AttrComponent, "handlers.resend_webhook", "type", evt.Type)
 	}
 
@@ -154,15 +174,36 @@ func (h *ResendWebhookHandler) suppressAll(ctx context.Context, addrs []string, 
 	return firstErr
 }
 
-// markStatus updates the audit row for a delivery event. A no-match is not an
-// error (returns nil, so an unknown message id can't cause a retry storm); only
-// a real persistence failure is returned, blocking the ack.
-func (h *ResendWebhookHandler) markStatus(ctx context.Context, providerMessageID string, status models.EmailLogStatus) error {
-	if providerMessageID == "" || h.logs == nil {
+// recordEvent persists one delivery event and refreshes the parent log's rollup
+// (CON-298). It resolves the log by the Resend message id first: an unknown id is
+// not an error (returns nil, so a webhook for a pruned/foreign message can't
+// cause a retry storm); only a real persistence failure is returned, blocking
+// the ack so Resend retries. Ingestion is idempotent on svix_id.
+func (h *ResendWebhookHandler) recordEvent(ctx context.Context, providerMessageID, svixID string, typ models.EmailEventType, occurredAt time.Time) error {
+	if providerMessageID == "" || h.logs == nil || h.events == nil {
 		return nil
 	}
-	if _, err := h.logs.UpdateStatusByProviderMessageID(ctx, providerMessageID, status); err != nil {
-		slog.WarnContext(ctx, "email_log status update failed", logging.AttrComponent, "handlers.resend_webhook", logging.AttrError, err)
+	log, err := h.logs.GetByProviderMessageID(ctx, providerMessageID)
+	if err != nil {
+		slog.WarnContext(ctx, "email_log lookup failed", logging.AttrComponent, "handlers.resend_webhook", logging.AttrError, err)
+		return err
+	}
+	if log == nil {
+		return nil // unknown message id: ack, don't retry
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	if err := h.events.Record(ctx, &models.EmailEvent{
+		ID:                id,
+		EmailLogID:        log.ID,
+		ProviderMessageID: providerMessageID,
+		Type:              typ,
+		OccurredAt:        occurredAt,
+		SvixID:            svixID,
+	}); err != nil {
+		slog.WarnContext(ctx, "email_event record failed", logging.AttrComponent, "handlers.resend_webhook", logging.AttrError, err)
 		return err
 	}
 	return nil

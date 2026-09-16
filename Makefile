@@ -78,10 +78,11 @@ tidy:
 # image.v1 + the shared Anchor's ANCHOR_KIND_IMAGE_REGION + bbox in v1.3.0
 # (CON-281); plans.v1 (PlanAdminService) in v1.4.0 (CON-294); plans.v1
 # DeleteTierVersion + ListTierVersionAssignments + retire reassignment in v1.5.0
-# (CON-297); image.v1 RejectedCode enum + rejected_code fields in v1.6.0 (CON-281)
+# (CON-297); image.v1 RejectedCode enum + rejected_code fields in v1.6.0 (CON-281);
+# email.v1 (EmailAdminService) in v1.7.0 (CON-298)
 # — publish the proto repo tag before `make proto` can resolve it.
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.6.0
+PROTO_VERSION := v1.7.0
 
 proto:
 	buf generate $(PROTO_MODULE):$(PROTO_VERSION)

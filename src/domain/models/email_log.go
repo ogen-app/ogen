@@ -17,11 +17,47 @@ const (
 	EmailLogFailed            EmailLogStatus = "failed"
 	EmailLogSkippedSuppressed EmailLogStatus = "skipped_suppressed"
 	EmailLogSkippedDisabled   EmailLogStatus = "skipped_disabled"
+	// EmailLogDelivered / EmailLogOpened / EmailLogClicked are the positive
+	// delivery-lifecycle states written by the Resend webhook (CON-298) as
+	// email.delivered / email.opened / email.clicked events arrive.
+	EmailLogDelivered EmailLogStatus = "delivered"
+	EmailLogOpened    EmailLogStatus = "opened"
+	EmailLogClicked   EmailLogStatus = "clicked"
 	// EmailLogBounced / EmailLogComplained are written by the webhook when
 	// Resend reports a hard bounce or a spam complaint against a prior send.
 	EmailLogBounced    EmailLogStatus = "bounced"
 	EmailLogComplained EmailLogStatus = "complained"
 )
+
+// Rank orders the send lifecycle so an out-of-order or redelivered webhook can
+// never regress a row to a less-advanced state (CON-298). The positive
+// progression is queued < sent < delivered < opened < clicked. The skipped_*
+// and terminal-negative states (failed/bounced/complained) rank ABOVE the
+// positive progression so they stick — e.g. a spam complaint that arrives after
+// an open still wins, and a late "delivered" can't overwrite a "bounced". A row
+// only advances to a status whose Rank exceeds its current one.
+func (s EmailLogStatus) Rank() int {
+	switch s {
+	case EmailLogQueued:
+		return 1
+	case EmailLogSent:
+		return 2
+	case EmailLogDelivered:
+		return 3
+	case EmailLogOpened:
+		return 4
+	case EmailLogClicked:
+		return 5
+	case EmailLogSkippedDisabled, EmailLogSkippedSuppressed:
+		return 6
+	case EmailLogFailed:
+		return 7
+	case EmailLogBounced, EmailLogComplained:
+		return 8
+	default:
+		return 0
+	}
+}
 
 // ProviderResend is the only mail provider today (CON-154). Recorded on every
 // row so a future second provider stays distinguishable in the audit trail.
@@ -45,6 +81,18 @@ type EmailLog struct {
 	ProviderMessageID string         `bun:"provider_message_id,nullzero"                 json:"provider_message_id,omitempty"`
 	IdempotencyKey    string         `bun:"idempotency_key,nullzero"                     json:"idempotency_key,omitempty"`
 	Error             string         `bun:"error,nullzero"                               json:"error,omitempty"`
-	CreatedAt         time.Time      `bun:"created_at,nullzero,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt         time.Time      `bun:"updated_at,nullzero,notnull,default:current_timestamp" json:"updated_at"`
+
+	// CON-298 engagement rollup, denormalised from email_events for cheap list
+	// queries. LastEvent/LastEventAt track the most recent event of any type;
+	// DeliveredAt/FirstOpenedAt are first-occurrence timestamps; the counts are
+	// totals. All recomputed from email_events on every webhook.
+	LastEvent     string    `bun:"last_event,nullzero"      json:"last_event,omitempty"`
+	LastEventAt   time.Time `bun:"last_event_at,nullzero"   json:"last_event_at,omitempty"`
+	DeliveredAt   time.Time `bun:"delivered_at,nullzero"    json:"delivered_at,omitempty"`
+	FirstOpenedAt time.Time `bun:"first_opened_at,nullzero" json:"first_opened_at,omitempty"`
+	OpensCount    int       `bun:"opens_count,notnull,default:0"  json:"opens_count"`
+	ClicksCount   int       `bun:"clicks_count,notnull,default:0" json:"clicks_count"`
+
+	CreatedAt time.Time `bun:"created_at,nullzero,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt time.Time `bun:"updated_at,nullzero,notnull,default:current_timestamp" json:"updated_at"`
 }
