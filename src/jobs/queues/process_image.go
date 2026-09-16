@@ -203,7 +203,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	// downstream (embed) failure from re-invoking — and re-charging — the vision
 	// model on every River retry.
 	if ext.Status == models.ImageExtractionStatusDescribing {
-		return p.resumeFromCheckpoint(ctx, in, ext)
+		return p.resumeFromCheckpoint(ctx, in, ext, lastAttempt)
 	}
 
 	// Cost-cap gate (CON-86 usage.Checker) BEFORE the vision spend. Nil checker =
@@ -310,14 +310,14 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		return fmt.Errorf("process_image %s: checkpoint extraction: %w", in.AssetID, err)
 	}
 
-	return p.embedAndSettle(ctx, in, ext, embedInputsFromResult(res))
+	return p.embedAndSettle(ctx, in, ext, embedInputsFromResult(res), lastAttempt)
 }
 
 // resumeFromCheckpoint re-drives ONLY the embedding + settle steps of a run whose
 // vision pass already completed and was checkpointed (status `describing`). It
 // reloads the persisted description (asset.Content) + blocks and embeds them, so a
 // transient embedder outage retries without a second (paid) Extract.
-func (p *ProcessImageProcessor) resumeFromCheckpoint(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction) error {
+func (p *ProcessImageProcessor) resumeFromCheckpoint(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, lastAttempt bool) error {
 	asset, err := p.Deps.Assets.GetByID(ctx, in.AssetID)
 	if err != nil {
 		return fmt.Errorf("process_image %s: reload asset for resume: %w", in.AssetID, err)
@@ -326,7 +326,7 @@ func (p *ProcessImageProcessor) resumeFromCheckpoint(ctx context.Context, in Pro
 	if err != nil {
 		return fmt.Errorf("process_image %s: reload blocks for resume: %w", in.AssetID, err)
 	}
-	return p.embedAndSettle(ctx, in, ext, embedInputsFromPersisted(asset.Content, blocks))
+	return p.embedAndSettle(ctx, in, ext, embedInputsFromPersisted(asset.Content, blocks), lastAttempt)
 }
 
 // embedInput is one text to embed with its anchor + citation label.
@@ -378,12 +378,22 @@ func embedInputsFromPersisted(description string, blocks []models.ImageBlock) []
 
 // embedAndSettle embeds the given inputs into assets_chunks and settles the asset
 // + extraction to their terminal status. A total embed failure returns an error
-// so the job retries (resuming from the checkpoint, no re-Extract). The
+// so the job retries (resuming from the checkpoint, no re-Extract) — EXCEPT on the
+// final attempt, where it settles terminally so the asset never strands in
+// `processing` / the extraction in `describing` once River gives up. The
 // partial-vs-ready decision reads the quality flags persisted on the extraction,
 // so it is identical on the fresh and resume paths.
-func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, inputs []embedInput) error {
+func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, inputs []embedInput, lastAttempt bool) error {
 	embedFailures, err := p.embed(ctx, in, inputs)
 	if err != nil {
+		if lastAttempt {
+			// River has exhausted retries; a persistent embedder outage must not
+			// leave the asset stuck in `processing`. Settle terminally (nothing
+			// embedded → not searchable) with a retriable reason so the tenant can
+			// re-extract once the embedder recovers (mirrors the transient-Extract
+			// lastAttempt handling).
+			return p.terminalReject(ctx, in, ext, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable — please try again")
+		}
 		return err // transient embedder outage → retry (resumes from checkpoint)
 	}
 

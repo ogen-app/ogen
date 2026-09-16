@@ -79,7 +79,9 @@ func IsUnsupportedImage(err error) bool {
 // sentence remains available as the status message.
 func RejectedReason(err error) string {
 	st, ok := grpcstatus.FromError(err)
-	if !ok {
+	// FromError(nil) returns (nil, true), so guard st explicitly: a nil error (and
+	// a non-status error) carries no reject reason.
+	if !ok || st == nil {
 		return ""
 	}
 	for _, d := range st.Details() {

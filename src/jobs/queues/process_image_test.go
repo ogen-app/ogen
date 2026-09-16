@@ -251,6 +251,41 @@ func TestProcessImage_FineRejectCode(t *testing.T) {
 	}
 }
 
+// TestProcessImage_EmbedFailureLastAttemptSettles: a total embed failure retries
+// on earlier attempts, but on the FINAL attempt it settles the asset terminally
+// instead of stranding it in `processing` / the extraction in `describing` once
+// River gives up (CodeRabbit #149).
+func TestProcessImage_EmbedFailureLastAttemptSettles(t *testing.T) {
+	res := &imageclient.ExtractResult{
+		Shape:         models.ImageShapeProse,
+		Description:   "A screenshot.",
+		AltText:       "shot",
+		DescriptionOK: true,
+		ExtractionOK:  true,
+		Normalized:    imageclient.NormalizedMeta{Mime: "image/png"},
+	}
+
+	// Not the last attempt: a total embed outage is retryable (non-nil error).
+	deps, _, _, _, _ := baseImageDeps(&fakeImageClient{res: res})
+	deps.Embedder = &fakeEmbedder{failAll: true}
+	if err := newImageProc(deps).process(t.Context(), ProcessImageTask{AssetID: "e1", StorageKey: "assets/e1/original.png", RunKey: "run-1"}, false); err == nil {
+		t.Fatal("total embed failure should retry (want non-nil err) when not last attempt")
+	}
+
+	// Final attempt: settle terminally, no error — the asset must not strand.
+	deps2, assets2, _, _, exts2 := baseImageDeps(&fakeImageClient{res: res})
+	deps2.Embedder = &fakeEmbedder{failAll: true}
+	if err := newImageProc(deps2).process(t.Context(), ProcessImageTask{AssetID: "e2", StorageKey: "assets/e2/original.png", RunKey: "run-1"}, true); err != nil {
+		t.Fatalf("last attempt must settle (want nil err): %v", err)
+	}
+	if assets2.last() != models.AssetStatusFailed {
+		t.Fatalf("asset status = %q, want failed (not stranded in processing)", assets2.last())
+	}
+	if exts2.ext.Status != models.ImageExtractionStatusFailed {
+		t.Fatalf("extraction status = %q, want failed", exts2.ext.Status)
+	}
+}
+
 // TestProcessImage_TransientRetries: a transient service error is returned so
 // River retries; the asset is not marked failed.
 func TestProcessImage_TransientRetries(t *testing.T) {
