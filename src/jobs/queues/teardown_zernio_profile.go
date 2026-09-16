@@ -9,10 +9,21 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
+
+// TenantTeardownFence serializes the teardown against a concurrent tenant
+// restore (CON-190). It runs the destructive work while holding the tenant row
+// lock and hands back the status read under that lock, so SetStatus(active)
+// cannot restore the tenant mid-teardown. repository.TenantTeardownFence
+// implements it; a narrow interface here keeps the worker off the repository
+// package and unit-testable. See src/infra/repository/tenant_teardown_fence.go.
+type TenantTeardownFence interface {
+	WithTenantLock(ctx context.Context, tenantID string, fn func(ctx context.Context, status string) error) error
+}
 
 // TeardownZernioProfileQueue tears down a tenant's Zernio profile when its
 // workspace is deleted (CON-203, follow-up to CON-147 PR4). WorkspacesHandler.Delete
@@ -52,12 +63,12 @@ type TeardownZernioProfileProcessor struct {
 	// Settings reads the tenant-scoped zernio.profile_id (and clears the profile
 	// keys after a successful delete). Same store the bootstrapper writes.
 	Settings zernio.SettingsStore
-	// Tenants short-circuits teardown for a tenant restored between the
-	// workspace-delete enqueue and this run (CON-190): never delete a live
-	// tenant's profile. Fail-closed — a nil reader (or a status it can't
-	// resolve) reads as "active", so teardown skips rather than risk deleting a
-	// profile it can't confirm is dead. In prod it is always wired (r.tenantRepo).
-	Tenants TenantStatusReader
+	// Fence serializes the teardown against a concurrent CON-190 restore by
+	// holding the tenant row lock across the destructive Zernio calls (and
+	// surfacing the status read under that lock). Fail-closed — a nil fence
+	// (unwired) skips teardown rather than delete an unfenced profile. In prod it
+	// is always wired (repository.NewTenantTeardownFence).
+	Fence TenantTeardownFence
 }
 
 // Work is the River entrypoint. Like bootstrap, this job is scoped to a single
@@ -70,23 +81,12 @@ func (p *TeardownZernioProfileProcessor) Work(ctx context.Context, job *river.Jo
 		slog.WarnContext(ctx, "teardown skipped: empty tenant_id", logging.AttrComponent, "jobs.teardown_zernio_profile")
 		return nil
 	}
-	if p.Integration == nil || p.Settings == nil {
+	if p.Integration == nil || p.Settings == nil || p.Fence == nil {
 		slog.WarnContext(ctx, "teardown skipped: integration not wired", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid)
 		return nil
 	}
 
 	ctx = tenantctx.With(ctx, tid)
-
-	// Restore-guard (CON-190): a tenant restored between the soft-delete enqueue
-	// and now is active again — deleting its profile would orphan a live
-	// workspace. Skip (terminal). A transient status read fails to retry rather
-	// than guess. An unknown tenant (hard-deleted) reads as "not active" → proceed.
-	if active, aerr := tenantIsActive(ctx, p.Tenants, tid); aerr != nil {
-		return fmt.Errorf("zernio: teardown tenant status (tenant=%s): %w", tid, aerr)
-	} else if active {
-		slog.InfoContext(ctx, "teardown skipped: tenant active (restored)", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid)
-		return nil
-	}
 
 	// No key / permanently disabled: nothing to call upstream. Leave the profile
 	// orphaned (the pre-CON-203 status quo) rather than burn retries.
@@ -105,11 +105,26 @@ func (p *TeardownZernioProfileProcessor) Work(ctx context.Context, job *river.Jo
 		return nil
 	}
 
-	if err := p.teardown(ctx, profileID); err != nil {
+	// Run the destructive teardown under the tenant row lock, re-reading the
+	// status under it. This fences the whole disconnect+delete sequence against a
+	// concurrent CON-190 restore: SetStatus(active) takes the same lock, so it
+	// cannot restore the tenant mid-teardown. If a restore committed first, we
+	// observe 'active' here and skip — never deleting a live tenant's profile.
+	// (A hard-deleted tenant yields status "" and no lock; nothing can restore
+	// it, so proceeding is safe.)
+	err = p.Fence.WithTenantLock(ctx, tid, func(ctx context.Context, status string) error {
+		if status == models.TenantStatusActive {
+			slog.InfoContext(ctx, "teardown skipped: tenant active (restored)", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid)
+			return nil
+		}
+		return p.teardown(ctx, profileID)
+	})
+	if err != nil {
 		// Auth failures (bad/rejected key) won't be fixed by retrying — give up
 		// cleanly, leaving the profile orphaned. Everything else (5xx, 429,
-		// network, a lingering 400 while an account is still detaching) is
-		// transient enough to let River retry with backoff.
+		// network, a lingering 400 while an account is still detaching, or a
+		// transient DB error taking the lock) is transient enough to let River
+		// retry with backoff.
 		if zernio.IsStatus(err, http.StatusUnauthorized) || zernio.IsStatus(err, http.StatusForbidden) {
 			slog.WarnContext(ctx, "teardown gave up: auth failure", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid, "profile_id", profileID, logging.AttrError, err)
 			return nil
@@ -193,7 +208,7 @@ func init() {
 		river.AddWorker(w, &TeardownZernioProfileProcessor{
 			Integration: d.Integration,
 			Settings:    d.AnalyticsSettings,
-			Tenants:     d.Tenants,
+			Fence:       d.TenantFence,
 		})
 	})
 }

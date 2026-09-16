@@ -48,6 +48,10 @@ type Deps struct {
 	ProfileBootstrapper *zernio.Bootstrapper
 	Integration         *zernio.Integration
 
+	// CON-203: fences the Zernio profile teardown against a concurrent CON-190
+	// restore via the tenant row lock. nil disables teardown (fail-closed).
+	TenantFence TenantTeardownFence
+
 	// CON-103: the process_pdf worker's dependencies (pdf-service client,
 	// embedder, storage, asset repos). A nil Client (no PDF_SERVICE_ADDR) makes
 	// the job a no-op.

@@ -103,24 +103,32 @@ func (s *teardownStub) accountDeletes() []string {
 	return append([]string(nil), s.deletedAccounts...)
 }
 
-// fakeTenantStatus is a TenantStatusReader returning a fixed status, modelling a
-// soft-deleted tenant ("deleted") so teardown proceeds, or an "active" one to
-// exercise the restore-guard.
-type fakeTenantStatus struct{ status string }
+// fakeFence is a TenantTeardownFence that runs the teardown with a fixed status,
+// modelling a soft-deleted tenant ("deleted") so teardown proceeds, or an
+// "active" one to exercise the restore fence. The real fence holds the tenant
+// row lock; the fake just supplies the status the callback branches on. err, if
+// set, models the lock acquisition failing (transient DB error).
+type fakeFence struct {
+	status string
+	err    error
+}
 
-func (f fakeTenantStatus) GetStatus(context.Context, string) (string, error) {
-	return f.status, nil
+func (f fakeFence) WithTenantLock(ctx context.Context, _ string, fn func(context.Context, string) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	return fn(ctx, f.status)
 }
 
 // newTeardownProcessor wires the processor under test around the stub, seeding a
-// deleted-tenant status reader by default so teardown runs.
-func newTeardownProcessor(stubURL string, store zernio.SettingsStore, tenants queues.TenantStatusReader) *queues.TeardownZernioProfileProcessor {
+// deleted-tenant fence by default so teardown runs.
+func newTeardownProcessor(stubURL string, store zernio.SettingsStore, fence queues.TenantTeardownFence) *queues.TeardownZernioProfileProcessor {
 	integ := zernio.NewIntegration(zernio.NewClient(zernio.StaticKey("k"), stubURL, zernio.ClientOpts{Timeout: 5 * time.Second}))
 	integ.SetState(zernio.StateOK)
 	return &queues.TeardownZernioProfileProcessor{
 		Integration: integ,
 		Settings:    store,
-		Tenants:     tenants,
+		Fence:       fence,
 	}
 }
 
@@ -141,7 +149,7 @@ func TestTeardownDisconnectsAccountsThenDeletesProfile(t *testing.T) {
 
 	store := newFakeSettings()
 	seedTeardownProfile(store, "acme", "prof-acme")
-	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusDeleted})
+	p := newTeardownProcessor(srv.URL, store, fakeFence{status: models.TenantStatusDeleted})
 
 	if err := p.Work(t.Context(), teardownJob("acme")); err != nil {
 		t.Fatalf("Work: %v", err)
@@ -167,7 +175,7 @@ func TestTeardownNoProfileIsNoop(t *testing.T) {
 	defer srv.Close()
 
 	// No seeded profile id → nothing provisioned → no Zernio calls.
-	p := newTeardownProcessor(srv.URL, newFakeSettings(), fakeTenantStatus{status: models.TenantStatusDeleted})
+	p := newTeardownProcessor(srv.URL, newFakeSettings(), fakeFence{status: models.TenantStatusDeleted})
 
 	if err := p.Work(t.Context(), teardownJob("acme")); err != nil {
 		t.Fatalf("Work: %v", err)
@@ -186,7 +194,7 @@ func TestTeardownProfileAlreadyGoneIsIdempotent(t *testing.T) {
 
 	store := newFakeSettings()
 	seedTeardownProfile(store, "acme", "prof-acme")
-	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusDeleted})
+	p := newTeardownProcessor(srv.URL, store, fakeFence{status: models.TenantStatusDeleted})
 
 	if err := p.Work(t.Context(), teardownJob("acme")); err != nil {
 		t.Fatalf("expected 404 profile-delete to be an idempotent no-op, got: %v", err)
@@ -208,7 +216,7 @@ func TestTeardownProfileGoneOnListIsCleanedUp(t *testing.T) {
 
 	store := newFakeSettings()
 	seedTeardownProfile(store, "acme", "prof-acme")
-	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusDeleted})
+	p := newTeardownProcessor(srv.URL, store, fakeFence{status: models.TenantStatusDeleted})
 
 	if err := p.Work(t.Context(), teardownJob("acme")); err != nil {
 		t.Fatalf("expected a 404 on ListAccounts to converge to cleanup, got: %v", err)
@@ -232,7 +240,7 @@ func TestTeardownRetriesWhenLocalCleanupFails(t *testing.T) {
 	inner := newFakeSettings()
 	seedTeardownProfile(inner, "acme", "prof-acme")
 	store := deleteFailSettings{fakeSettings: inner}
-	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusDeleted})
+	p := newTeardownProcessor(srv.URL, store, fakeFence{status: models.TenantStatusDeleted})
 
 	if err := p.Work(t.Context(), teardownJob("acme")); err == nil {
 		t.Fatalf("expected an error when local cleanup fails so River retries")
@@ -254,7 +262,7 @@ func TestTeardownRetriesOnZernioError(t *testing.T) {
 
 	store := newFakeSettings()
 	seedTeardownProfile(store, "acme", "prof-acme")
-	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusDeleted})
+	p := newTeardownProcessor(srv.URL, store, fakeFence{status: models.TenantStatusDeleted})
 
 	if err := p.Work(t.Context(), teardownJob("acme")); err == nil {
 		t.Fatalf("expected an error on a 5xx so River retries")
@@ -262,6 +270,29 @@ func TestTeardownRetriesOnZernioError(t *testing.T) {
 	// The pointer must survive a failed teardown so the retry can find the profile.
 	if _, ok, _ := store.Get(tctx("acme"), zernio.SettingProfileID); !ok {
 		t.Fatalf("expected profile_id retained after a failed teardown")
+	}
+}
+
+func TestTeardownRetriesOnFenceError(t *testing.T) {
+	// Taking the tenant row lock fails transiently (DB blip). Work must surface
+	// the error so River retries — the teardown never ran, so nothing was
+	// deleted.
+	stub := &teardownStub{accounts: []string{"acc-1"}}
+	srv := stub.server()
+	defer srv.Close()
+
+	store := newFakeSettings()
+	seedTeardownProfile(store, "acme", "prof-acme")
+	p := newTeardownProcessor(srv.URL, store, fakeFence{err: errors.New("db unavailable")})
+
+	if err := p.Work(t.Context(), teardownJob("acme")); err == nil {
+		t.Fatalf("expected an error when the fence lock fails so River retries")
+	}
+	if got := stub.profileDeletes(); len(got) != 0 {
+		t.Fatalf("expected no delete when the lock could not be taken, got %v", got)
+	}
+	if _, ok, _ := store.Get(tctx("acme"), zernio.SettingProfileID); !ok {
+		t.Fatalf("expected profile_id retained when teardown never ran")
 	}
 }
 
@@ -274,7 +305,7 @@ func TestTeardownSkipsRestoredTenant(t *testing.T) {
 
 	store := newFakeSettings()
 	seedTeardownProfile(store, "acme", "prof-acme")
-	p := newTeardownProcessor(srv.URL, store, fakeTenantStatus{status: models.TenantStatusActive})
+	p := newTeardownProcessor(srv.URL, store, fakeFence{status: models.TenantStatusActive})
 
 	if err := p.Work(t.Context(), teardownJob("acme")); err != nil {
 		t.Fatalf("Work: %v", err)
