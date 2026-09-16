@@ -283,6 +283,18 @@ func rejectAttachment(c *fiber.Ctx, status int, code, msg string) error {
 	return c.Status(status).JSON(fiber.Map{"code": code, "error": msg})
 }
 
+// imageRejectStatus is the HTTP status for a fine-grained image reject code
+// (CON-281 Phase 2): a media type we don't accept (unsupported / vector) is 415;
+// a typed-but-unusable image (too large / dimensions / corrupt) is 400.
+func imageRejectStatus(code string) int {
+	switch code {
+	case models.UploadCodeUnsupportedMediaType, models.UploadCodeVectorRejected:
+		return fiber.StatusUnsupportedMediaType
+	default:
+		return fiber.StatusBadRequest
+	}
+}
+
 // Upload godoc
 // @Summary      Upload a post attachment
 // @Description  Accepts a single image (CON-73) or PDF (CON-75) file via
@@ -498,6 +510,12 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			// may have written to cleanKey before failing — never leave orphaned bytes.
 			_ = h.storage.Delete(c.Context(), origKey)
 			_ = h.storage.Delete(c.Context(), cleanKey)
+			// Prefer the fine-grained reason image-service attaches to a terminal
+			// reject over the coarse gRPC-code buckets (CON-281 Phase 2); the buckets
+			// stay as the fallback for an older service that carries no ErrorInfo.
+			if code := models.UploadCodeFromImageReject(imageclient.RejectedReason(err)); code != "" {
+				return rejectAttachment(c, imageRejectStatus(code), code, models.UploadRejectMessage(code))
+			}
 			switch {
 			case imageclient.IsUnsupportedImage(err):
 				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image format")

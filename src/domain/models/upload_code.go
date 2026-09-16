@@ -61,3 +61,47 @@ const (
 	// storage write, DB insert). Generic — the client should offer a retry.
 	UploadCodeInternalError = "internal_error"
 )
+
+// UploadCodeFromImageReject maps an image.v1.RejectedCode enum name — which
+// image-service attaches to a terminal reject as a google.rpc.ErrorInfo Reason
+// (CON-281 Phase 2) — to the upload code the client keys on. It refines the
+// coarse invalid_file/unsupported_media_type bucket ogen assigns from the gRPC
+// status code alone. An unknown or empty reason returns "" so the caller keeps
+// that coarse fallback (a newer service code costs the client nothing until it
+// is mapped here).
+func UploadCodeFromImageReject(reason string) string {
+	switch reason {
+	case "REJECTED_CODE_VECTOR":
+		return UploadCodeVectorRejected
+	case "REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE":
+		return UploadCodeUnsupportedMediaType
+	case "REJECTED_CODE_TOO_LARGE":
+		return UploadCodeTooLarge
+	case "REJECTED_CODE_DIMENSIONS_EXCEEDED":
+		return UploadCodeDimensionsExceeded
+	case "REJECTED_CODE_CORRUPT":
+		return UploadCodeInvalidFile
+	default:
+		return ""
+	}
+}
+
+// UploadRejectMessage is the default tenant-visible sentence for a reject code,
+// used where the reject is surfaced without a more specific message of its own
+// (the fine-grained service rejects of CON-281 Phase 2). The numeric caps are
+// deliberately NOT restated here — the client reads those from context — so this
+// never holds a second copy of a limit the server owns.
+func UploadRejectMessage(code string) string {
+	switch code {
+	case UploadCodeVectorRejected:
+		return "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)"
+	case UploadCodeUnsupportedMediaType:
+		return "unsupported image format"
+	case UploadCodeTooLarge:
+		return "the image is too large to process"
+	case UploadCodeDimensionsExceeded:
+		return "the image dimensions are too large to process"
+	default:
+		return "uploaded file is not a readable image"
+	}
+}

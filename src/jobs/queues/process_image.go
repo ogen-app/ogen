@@ -238,6 +238,13 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		ConfidenceThreshold: p.Deps.ConfidenceThreshold,
 	})
 	if err != nil {
+		// Prefer the fine-grained reason image-service attaches to a terminal reject
+		// (vector / too-large / dimensions / corrupt / unsupported) over the coarse
+		// gRPC-code buckets, which stay as the fallback for an older service that
+		// carries no ErrorInfo (CON-281 Phase 2).
+		if code := models.UploadCodeFromImageReject(imageclient.RejectedReason(err)); code != "" {
+			return p.terminalReject(ctx, in, ext, code, models.UploadRejectMessage(code))
+		}
 		switch {
 		case imageclient.IsUnsupportedImage(err):
 			return p.terminalReject(ctx, in, ext, models.UploadCodeUnsupportedMediaType, "the image format is not supported")

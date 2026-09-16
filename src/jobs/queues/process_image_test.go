@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
@@ -225,6 +226,28 @@ func TestProcessImage_UnsupportedIsTerminal(t *testing.T) {
 	// Unimplemented == "format not supported" → the unsupported-media code.
 	if exts.ext.FailureCode != models.UploadCodeUnsupportedMediaType {
 		t.Fatalf("failure_code = %q, want %q", exts.ext.FailureCode, models.UploadCodeUnsupportedMediaType)
+	}
+}
+
+// TestProcessImage_FineRejectCode: a terminal reject carrying an image.v1
+// ErrorInfo reason maps to the FINE failure_code, refining the coarse gRPC-code
+// bucket (CON-281 Phase 2). InvalidArgument alone would settle to invalid_file;
+// the REJECTED_CODE_VECTOR detail upgrades it to vector_rejected.
+func TestProcessImage_FineRejectCode(t *testing.T) {
+	st, derr := grpcstatus.New(codes.InvalidArgument, "vector images are not supported").
+		WithDetails(&errdetails.ErrorInfo{Domain: "image.v1", Reason: "REJECTED_CODE_VECTOR"})
+	if derr != nil {
+		t.Fatalf("build status detail: %v", derr)
+	}
+	deps, assets, _, _, exts := baseImageDeps(&fakeImageClient{err: st.Err()})
+	if err := newImageProc(deps).process(t.Context(), ProcessImageTask{AssetID: "i6", StorageKey: "assets/i6/original.svg", RunKey: "run-1"}, false); err != nil {
+		t.Fatalf("terminal reject must not be retried (want nil err): %v", err)
+	}
+	if assets.last() != models.AssetStatusFailed {
+		t.Fatalf("status = %q, want failed", assets.last())
+	}
+	if exts.ext.FailureCode != models.UploadCodeVectorRejected {
+		t.Fatalf("failure_code = %q, want %q (fine reason should beat the coarse bucket)", exts.ext.FailureCode, models.UploadCodeVectorRejected)
 	}
 }
 

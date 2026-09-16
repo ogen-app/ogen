@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -31,6 +32,11 @@ import (
 	documentsv1 "github.com/ogen-app/ogen/gen/documents/v1"
 	imagev1 "github.com/ogen-app/ogen/gen/image/v1"
 )
+
+// rejectInfoDomain is the google.rpc.ErrorInfo Domain image-service stamps on a
+// terminal reject; it MUST match the service's constant (image.v1). The Reason
+// beside it is an image.v1.RejectedCode enum name.
+const rejectInfoDomain = "image.v1"
 
 const defaultTimeout = 3 * time.Minute
 
@@ -63,6 +69,25 @@ func IsInvalidImage(err error) bool {
 func IsUnsupportedImage(err error) bool {
 	st, ok := grpcstatus.FromError(err)
 	return ok && st.Code() == codes.Unimplemented
+}
+
+// RejectedReason extracts the machine-readable reject reason image-service
+// attaches to a terminal reject as a google.rpc.ErrorInfo detail (CON-281): the
+// image.v1.RejectedCode enum NAME, e.g. "REJECTED_CODE_VECTOR". It returns "" when
+// err carries no such detail — an older service, or a non-reject error — so the
+// caller keeps its coarse IsInvalid/IsUnsupported fallback. The full human
+// sentence remains available as the status message.
+func RejectedReason(err error) string {
+	st, ok := grpcstatus.FromError(err)
+	if !ok {
+		return ""
+	}
+	for _, d := range st.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == rejectInfoDomain {
+			return info.GetReason()
+		}
+	}
+	return ""
 }
 
 // TokenUsage is one Gemini vision call's token count, priced by ogen via the
