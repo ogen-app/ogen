@@ -40,6 +40,10 @@ CREATE TABLE image_extractions (
     cost_micros          BIGINT           NOT NULL DEFAULT 0,
     price_version        TEXT             NOT NULL DEFAULT '',
     failure_reason       TEXT             NOT NULL DEFAULT '',
+    -- Stable, machine-readable companion to failure_reason (CON-281): the client
+    -- matches the code (quota / unsupported / unavailable / partial) and falls
+    -- back to the prose when it is unknown. Empty on a clean complete run.
+    failure_code         TEXT             NOT NULL DEFAULT '',
     created_at           TIMESTAMPTZ      NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ      NOT NULL DEFAULT now()
 );

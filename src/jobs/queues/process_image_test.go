@@ -205,17 +205,26 @@ func TestProcessImage_ExtractionFailedIsPartial(t *testing.T) {
 	if exts.ext.Status != models.ImageExtractionStatusPartial {
 		t.Fatalf("extraction status = %q, want partial", exts.ext.Status)
 	}
+	// A partial run carries the machine-readable code so the client can word it
+	// as searchable-but-incomplete rather than broken (CON-281).
+	if exts.ext.FailureCode != models.UploadCodeExtractionPartial {
+		t.Fatalf("failure_code = %q, want %q", exts.ext.FailureCode, models.UploadCodeExtractionPartial)
+	}
 }
 
 // TestProcessImage_UnsupportedIsTerminal: a terminal service verdict marks the
-// asset failed and is NOT retried (nil error).
+// asset failed and is NOT retried (nil error), stamping a machine-readable code.
 func TestProcessImage_UnsupportedIsTerminal(t *testing.T) {
-	deps, assets, _, _, _ := baseImageDeps(&fakeImageClient{err: grpcstatus.Error(codes.Unimplemented, "svg not supported")})
+	deps, assets, _, _, exts := baseImageDeps(&fakeImageClient{err: grpcstatus.Error(codes.Unimplemented, "svg not supported")})
 	if err := newImageProc(deps).process(t.Context(), ProcessImageTask{AssetID: "i3", StorageKey: "assets/i3/original.svg", RunKey: "run-1"}, false); err != nil {
 		t.Fatalf("terminal reject must not be retried (want nil err): %v", err)
 	}
 	if assets.last() != models.AssetStatusFailed {
 		t.Fatalf("status = %q, want failed", assets.last())
+	}
+	// Unimplemented == "format not supported" → the unsupported-media code.
+	if exts.ext.FailureCode != models.UploadCodeUnsupportedMediaType {
+		t.Fatalf("failure_code = %q, want %q", exts.ext.FailureCode, models.UploadCodeUnsupportedMediaType)
 	}
 }
 

@@ -96,6 +96,11 @@ type ImageExtraction struct {
 	// FailureReason is a tenant-visible reason for a terminal failed/partial run
 	// (unsupported/vector, over pixel-area/size, over quota, unreadable).
 	FailureReason string `bun:"failure_reason,notnull,default:''" json:"failure_reason,omitempty"`
+	// FailureCode is the stable, machine-readable companion to FailureReason
+	// (CON-281) — one of models.UploadCode* — so the client can distinguish a
+	// quota block from a bad image from a transient outage from a searchable-but-
+	// partial run without parsing prose. Empty on a clean complete run.
+	FailureCode string `bun:"failure_code,notnull,default:''" json:"failure_code,omitempty"`
 
 	// Blocks is hydrated by the read API from image_blocks; not persisted here.
 	Blocks []ImageBlock `bun:"-" json:"blocks,omitempty"`

@@ -272,6 +272,17 @@ func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
 	})
 }
 
+// rejectAttachment writes a terminal per-request attachment rejection carrying a
+// stable, machine-readable code beside the human message (CON-281). It mirrors
+// the batch content-bank upload's {code,error} shape so the front-end can match
+// on the code across both surfaces and fall back to the prose when it is
+// unknown. It returns nil because the response is already written — the central
+// error handler has no slot for a code, so it is intentionally bypassed (4xx
+// client rejections are not error-logged there anyway).
+func rejectAttachment(c *fiber.Ctx, status int, code, msg string) error {
+	return c.Status(status).JSON(fiber.Map{"code": code, "error": msg})
+}
+
 // Upload godoc
 // @Summary      Upload a post attachment
 // @Description  Accepts a single image (CON-73) or PDF (CON-75) file via
@@ -299,7 +310,7 @@ func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
 // @Router       /api/posts/{post_id}/attachments [post]
 func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	if h.storage == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
+		return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "storage not configured")
 	}
 
 	post, err := h.loadPostOrErr(c)
@@ -323,10 +334,8 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		preSniffCap = img
 	}
 	if fh.Size > preSniffCap {
-		return fiber.NewError(
-			fiber.StatusBadRequest,
-			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20),
-		)
+		return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
+			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20))
 	}
 
 	f, err := fh.Open()
@@ -340,7 +349,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	sniff := make([]byte, 512)
 	n, _ := io.ReadFull(f, sniff)
 	if n == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "file is empty")
+		return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeEmptyFile, "file is empty")
 	}
 	kind := http.DetectContentType(sniff[:n])
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -391,17 +400,15 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 
 	if kind == pdfprobe.MIME {
 		if fh.Size > maxPDFUploadBytes() {
-			return fiber.NewError(
-				fiber.StatusBadRequest,
-				fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes()>>20),
-			)
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
+				fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes()>>20))
 		}
 		probe, raw, err := pdfprobe.Probe(f, maxPDFUploadBytes())
 		if err != nil {
 			if errors.Is(err, pdfprobe.ErrUnsupportedMIME) {
-				return fiber.NewError(fiber.StatusUnsupportedMediaType, err.Error())
+				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, err.Error())
 			}
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, err.Error())
 		}
 		att.MimeType = probe.MIME
 		att.SizeBytes = probe.Size
@@ -428,7 +435,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 				// failures degrade gracefully: keep the attachment, no page count
 				// or thumbnail.
 				if pdf.IsInvalidPDF(rerr) {
-					return fiber.NewError(fiber.StatusBadRequest, "uploaded file is not a readable PDF")
+					return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable PDF")
 				}
 				slog.WarnContext(c.Context(), "pdf render failed", logging.AttrComponent, "post_attachments", "name", fh.Filename, logging.AttrError, rerr)
 			} else {
@@ -438,16 +445,14 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		}
 	} else {
 		if fh.Size > maxImageUploadBytes() {
-			return fiber.NewError(
-				fiber.StatusBadRequest,
-				fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes()>>20),
-			)
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
+				fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes()>>20))
 		}
 		// image-service is the sole image authority (D6): validate + metadata +
 		// EXIF-strip (pixels preserved) all happen there. Nil client → reject
 		// (no imageprobe fallback).
 		if h.image == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "image processing is not configured")
+			return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
 		}
 		// The extension routes the object key + presign content-type (the service
 		// preserves the format, pixels intact); the body is still sniffed
@@ -455,7 +460,11 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		ext := strings.ToLower(filepath.Ext(fh.Filename))
 		mime, ok := imageUploadMIMEs[ext]
 		if !ok {
-			return fiber.NewError(fiber.StatusUnsupportedMediaType, "unsupported image type — accepted: JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, BMP")
+			// An SVG lands here (it's in no raster allowlist); name it specifically.
+			if ext == ".svg" {
+				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)")
+			}
+			return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image type — accepted: JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, BMP")
 		}
 		raw, rerr := io.ReadAll(f)
 		if rerr != nil {
@@ -491,18 +500,22 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			_ = h.storage.Delete(c.Context(), cleanKey)
 			switch {
 			case imageclient.IsUnsupportedImage(err):
-				return fiber.NewError(fiber.StatusUnsupportedMediaType, "unsupported image format")
+				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image format")
 			case imageclient.IsInvalidImage(err):
-				return fiber.NewError(fiber.StatusBadRequest, "uploaded file is not a readable image")
+				return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable image")
 			default:
 				// Transient / unreachable — no imageprobe fallback (D6).
-				return fiber.NewError(fiber.StatusServiceUnavailable, "image processing is temporarily unavailable; please retry")
+				return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable; please retry")
 			}
 		}
 		if prep.RejectedReason != "" {
 			_ = h.storage.Delete(c.Context(), origKey)
 			_ = h.storage.Delete(c.Context(), cleanKey)
-			return fiber.NewError(fiber.StatusBadRequest, prep.RejectedReason)
+			// A structured verdict from the service, carried through with its own
+			// message. Phase 1 maps it to the coarse "not a usable image" bucket; the
+			// image.v1 RejectedCode enum (CON-281 Phase 2) refines it to the exact
+			// reason (vector / oversize / corrupt) without a client change.
+			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, prep.RejectedReason)
 		}
 		att.MimeType = prep.Mime
 		att.SizeBytes = prep.SizeBytes

@@ -201,17 +201,22 @@ var _ = Describe("AssetsHandler image upload (CON-281 async)", Ordered, Serial, 
 		Expect(imgEnq.calls).To(HaveLen(1))
 	})
 
-	It("rejects SVG / vector images with a specific message", func() {
+	It("rejects SVG / vector images with a specific message and code", func() {
 		results := postUpload([]struct{ Name, Body string }{{"icon.svg", "<svg/>"}})
 		Expect(results[0]["status"]).To(Equal("failed"))
 		Expect(results[0]["error"]).To(ContainSubstring("vector"))
+		// CON-281: a stable code rides beside the prose so the client can key off
+		// it rather than matching the (deletable) English message.
+		Expect(results[0]["code"]).To(Equal(models.UploadCodeVectorRejected))
 		Expect(imgEnq.calls).To(BeEmpty())
 	})
 
-	It("mentions images in the unsupported-type message", func() {
+	It("mentions images in the unsupported-type message and codes it", func() {
 		results := postUpload([]struct{ Name, Body string }{{"notes.bin", "plain"}})
 		Expect(results[0]["status"]).To(Equal("failed"))
 		Expect(results[0]["error"]).To(ContainSubstring("image"))
+		// A .bin extension is routed to nothing, so it's the extension gate.
+		Expect(results[0]["code"]).To(Equal(models.UploadCodeExtensionNotAllowed))
 	})
 
 	It("rejects image uploads when image-service is not configured (D6)", func() {
@@ -219,6 +224,7 @@ var _ = Describe("AssetsHandler image upload (CON-281 async)", Ordered, Serial, 
 		results := postUpload([]struct{ Name, Body string }{{"logo.png", pngBytes(2, 2)}})
 		Expect(results[0]["status"]).To(Equal("failed"))
 		Expect(results[0]["error"]).To(ContainSubstring("not configured"))
+		Expect(results[0]["code"]).To(Equal(models.UploadCodeServiceUnavailable))
 	})
 
 	It("processes a mixed batch of markdown and image independently", func() {

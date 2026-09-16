@@ -355,13 +355,27 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(asset)
 }
 
-// uploadResult is the per-file outcome in a batch markdown upload.
+// uploadResult is the per-file outcome in a batch upload.
 type uploadResult struct {
-	Filename string        `json:"filename"`
-	AssetID  string        `json:"asset_id,omitempty"`
-	Status   string        `json:"status"` // "created" | "failed"
-	Error    string        `json:"error,omitempty"`
-	Asset    *models.Asset `json:"asset,omitempty"`
+	Filename string `json:"filename"`
+	AssetID  string `json:"asset_id,omitempty"`
+	Status   string `json:"status"` // "created" | "failed"
+	Error    string `json:"error,omitempty"`
+	// Code is a stable, machine-readable companion to Error on a failed result
+	// (CON-281): the client matches the code and falls back to the prose when it
+	// is unknown. Empty on a created result. See models.UploadCode*.
+	Code  string        `json:"code,omitempty"`
+	Asset *models.Asset `json:"asset,omitempty"`
+}
+
+// fail stamps a terminal per-file outcome with a machine-readable code and its
+// human-readable message (CON-281), keeping the two in lockstep at every
+// rejection site.
+func (r *uploadResult) fail(code, msg string) uploadResult {
+	r.Status = "failed"
+	r.Code = code
+	r.Error = msg
+	return *r
 }
 
 // Upload godoc
@@ -402,8 +416,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		case uploadKindDocument:
 			res = h.processDocumentUpload(c, fh, session)
 		default:
-			res.Status = "failed"
-			res.Error = "only .md, .pdf, image, and office/text document files are accepted"
+			res = res.fail(models.UploadCodeExtensionNotAllowed, "only .md, .pdf, image, and office/text document files are accepted")
 		}
 		results = append(results, res)
 	}
@@ -450,16 +463,12 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 	res := uploadResult{Filename: fh.Filename}
 
 	if fh.Size > maxMarkdownUploadSize {
-		res.Status = "failed"
-		res.Error = fmt.Sprintf("file exceeds maximum size of %d MB", maxMarkdownUploadSize>>20)
-		return res
+		return res.fail(models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxMarkdownUploadSize>>20))
 	}
 
 	raw, err := readFormFile(fh, maxMarkdownUploadSize)
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not read file"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not read file")
 	}
 
 	content := string(raw)
@@ -467,9 +476,7 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 
 	id, err := models.NewID()
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not generate id"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
 	mdType := models.AssetTypeMarkdown
 	asset := &models.Asset{
@@ -483,9 +490,7 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 		CreatedBy: session.UserID,
 	}
 	if err := h.repo.Create(c.Context(), asset); err != nil {
-		res.Status = "failed"
-		res.Error = "could not create asset"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
 
 	if h.onSave != nil {
@@ -503,29 +508,21 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 	res := uploadResult{Filename: fh.Filename}
 
 	if fh.Size > maxPDFUploadSize {
-		res.Status = "failed"
-		res.Error = fmt.Sprintf("file exceeds maximum size of %d MB", maxPDFUploadSize>>20)
-		return res
+		return res.fail(models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxPDFUploadSize>>20))
 	}
 
 	raw, err := readFormFile(fh, maxPDFUploadSize)
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not read file"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not read file")
 	}
 	if len(raw) < 4 || string(raw[:4]) != "%PDF" {
-		res.Status = "failed"
-		res.Error = "file is not a valid PDF"
-		return res
+		return res.fail(models.UploadCodeInvalidFile, "file is not a valid PDF")
 	}
 
 	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
 	id, err := models.NewID()
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not generate id"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
 	pdfType := models.AssetTypePDF
 	asset := &models.Asset{
@@ -546,9 +543,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 	// asset but skip processing (it stays pending).
 	if h.storage == nil || h.pdfJobs == nil || h.db == nil {
 		if err := h.repo.Create(ctx, asset); err != nil {
-			res.Status = "failed"
-			res.Error = "could not create asset"
-			return res
+			return res.fail(models.UploadCodeInternalError, "could not create asset")
 		}
 		slog.WarnContext(c.Context(), "pdf ingestion disabled; asset left pending", logging.AttrComponent, "assets", "asset_id", asset.ID)
 		res.AssetID = asset.ID
@@ -561,9 +556,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 	//    attempt (the 50 MB bytes can't ride in the River job args).
 	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original.pdf", asset.ID))
 	if _, err := h.storage.Upload(ctx, key, bytes.NewReader(raw), int64(len(raw)), "application/pdf"); err != nil {
-		res.Status = "failed"
-		res.Error = "could not store pdf"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not store pdf")
 	}
 
 	// 2. Insert the asset and enqueue the ingestion job atomically (transactional
@@ -578,9 +571,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 		// the original.pdf uploaded above (same key) so it isn't left orphaned in
 		// the bucket. Best-effort: the failed upload is what the caller acts on.
 		_ = h.storage.Delete(ctx, key)
-		res.Status = "failed"
-		res.Error = "could not create asset"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
 
 	res.AssetID = asset.ID
@@ -603,15 +594,11 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 	mimeType, ok := documentUploadMIMEs[ext]
 	if !ok {
 		// detectUploadKind already gated this; stay defensive.
-		res.Status = "failed"
-		res.Error = "unsupported document type"
-		return res
+		return res.fail(models.UploadCodeUnsupportedMediaType, "unsupported document type")
 	}
 
 	if fh.Size > maxDocumentUploadSize {
-		res.Status = "failed"
-		res.Error = fmt.Sprintf("file exceeds maximum size of %d MB", maxDocumentUploadSize>>20)
-		return res
+		return res.fail(models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxDocumentUploadSize>>20))
 	}
 
 	// Document ingestion (CON-280) needs object storage (the worker re-reads the
@@ -620,38 +607,28 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 	// fast with a clear message — before reading the body into memory — instead of
 	// stranding a pending asset (AC6).
 	if h.storage == nil || h.docJobs == nil || h.db == nil {
-		res.Status = "failed"
-		res.Error = "document ingestion is not configured"
-		return res
+		return res.fail(models.UploadCodeServiceUnavailable, "document ingestion is not configured")
 	}
 
 	raw, err := readFormFile(fh, maxDocumentUploadSize)
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not read file"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not read file")
 	}
 	if len(raw) == 0 {
-		res.Status = "failed"
-		res.Error = "file is empty"
-		return res
+		return res.fail(models.UploadCodeEmptyFile, "file is empty")
 	}
 	// Light early reject: OLE2 is both the legacy binary container (.doc/.xls/.ppt)
 	// and the wrapper for password-protected OOXML — neither is supported.
 	// document-service would reject it too, but catching it here is faster and
 	// clearer.
 	if isOLE2(raw) {
-		res.Status = "failed"
-		res.Error = "legacy binary or password-protected Office files are not supported — save as unprotected .docx/.xlsx/.pptx and re-upload"
-		return res
+		return res.fail(models.UploadCodeUnsupportedMediaType, "legacy binary or password-protected Office files are not supported — save as unprotected .docx/.xlsx/.pptx and re-upload")
 	}
 
 	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
 	id, err := models.NewID()
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not generate id"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
 	docType := models.AssetTypeDocument
 	asset := &models.Asset{
@@ -673,9 +650,7 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, ext)
 	fullKey := storage.TenantKey(ctx, storageKey)
 	if _, err := h.storage.Upload(ctx, fullKey, bytes.NewReader(raw), int64(len(raw)), mimeType); err != nil {
-		res.Status = "failed"
-		res.Error = "could not store document"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not store document")
 	}
 
 	// 2. Insert the asset and enqueue ingestion atomically (transactional outbox):
@@ -688,9 +663,7 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 	}); err != nil {
 		// Rolled back — delete the orphaned original uploaded above. Best-effort.
 		_ = h.storage.Delete(ctx, fullKey)
-		res.Status = "failed"
-		res.Error = "could not create asset"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
 
 	res.AssetID = asset.ID
@@ -723,42 +696,30 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 	ext := strings.ToLower(filepath.Ext(fh.Filename))
 	// SVG / vector is a terminal reject with a specific message (CON-281 §18).
 	if ext == ".svg" {
-		res.Status = "failed"
-		res.Error = "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)"
-		return res
+		return res.fail(models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)")
 	}
 	mimeType, ok := imageUploadMIMEs[ext]
 	if !ok {
 		// detectUploadKind already gated this; stay defensive.
-		res.Status = "failed"
-		res.Error = "unsupported image type"
-		return res
+		return res.fail(models.UploadCodeUnsupportedMediaType, "unsupported image type")
 	}
 
 	// Image ingestion needs object storage, the DB, and the job enqueuer. D6: with
 	// imageprobe deleted, an empty IMAGE_SERVICE_ADDR (imgJobs nil) means uploads
 	// are rejected — there is no local validation fallback.
 	if h.storage == nil || h.db == nil || h.imgJobs == nil {
-		res.Status = "failed"
-		res.Error = "image processing is not configured"
-		return res
+		return res.fail(models.UploadCodeServiceUnavailable, "image processing is not configured")
 	}
 	if fh.Size > maxImageUploadBytes() {
-		res.Status = "failed"
-		res.Error = fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadBytes()>>20)
-		return res
+		return res.fail(models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadBytes()>>20))
 	}
 
 	raw, err := readFormFile(fh, maxImageUploadBytes())
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not read file"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not read file")
 	}
 	if len(raw) == 0 {
-		res.Status = "failed"
-		res.Error = "file is empty"
-		return res
+		return res.fail(models.UploadCodeEmptyFile, "file is empty")
 	}
 
 	ctx := c.Context()
@@ -783,15 +744,11 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
 	id, err := models.NewID()
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not generate id"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
 	fileID, err := models.NewID()
 	if err != nil {
-		res.Status = "failed"
-		res.Error = "could not generate id"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
 
 	imgType := models.AssetTypeImage
@@ -822,9 +779,7 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 	// Store the original before the rows exist so a failed upload never leaves a
 	// row pointing at missing bytes.
 	if _, err := h.storage.Upload(ctx, fullKey, bytes.NewReader(raw), int64(len(raw)), mimeType); err != nil {
-		res.Status = "failed"
-		res.Error = "could not store image"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not store image")
 	}
 
 	// Insert the asset + file row and enqueue the ingestion job atomically
@@ -855,9 +810,7 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 				}
 			}
 		}
-		res.Status = "failed"
-		res.Error = "could not create asset"
-		return res
+		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
 
 	asset.File = file

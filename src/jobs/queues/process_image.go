@@ -210,7 +210,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	// no gate. Over-cap is terminal (reject before spend).
 	if p.Deps.Checker != nil {
 		if err := p.Deps.Checker.Enforce(ctx); err != nil {
-			return p.terminalReject(ctx, in, ext, "your usage limit has been reached — image processing was not started")
+			return p.terminalReject(ctx, in, ext, models.UploadCodeQuotaExceeded, "your usage limit has been reached — image processing was not started")
 		}
 	}
 
@@ -238,19 +238,25 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		ConfidenceThreshold: p.Deps.ConfidenceThreshold,
 	})
 	if err != nil {
-		if imageclient.IsInvalidImage(err) || imageclient.IsUnsupportedImage(err) {
-			return p.terminalReject(ctx, in, ext, "the image could not be processed (unsupported, corrupt, or too large)")
+		switch {
+		case imageclient.IsUnsupportedImage(err):
+			return p.terminalReject(ctx, in, ext, models.UploadCodeUnsupportedMediaType, "the image format is not supported")
+		case imageclient.IsInvalidImage(err):
+			return p.terminalReject(ctx, in, ext, models.UploadCodeInvalidFile, "the image could not be processed (corrupt or too large)")
+		case lastAttempt:
+			// Transient (service down / deadline / 5xx). Retry — but on the FINAL
+			// attempt settle to failed so the asset never strands in "processing"
+			// once River gives up (mirrors process_audio/process_document handling).
+			return p.terminalReject(ctx, in, ext, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable — please try again")
+		default:
+			return fmt.Errorf("process_image %s: extract: %w", in.AssetID, err)
 		}
-		// Transient (service down / deadline / 5xx). Retry — but on the FINAL attempt
-		// settle to failed so the asset never strands in "processing" once River
-		// gives up (mirrors process_audio/process_document lastAttempt handling).
-		if lastAttempt {
-			return p.terminalReject(ctx, in, ext, "image processing is temporarily unavailable — please try again")
-		}
-		return fmt.Errorf("process_image %s: extract: %w", in.AssetID, err)
 	}
 	if res.RejectedReason != "" {
-		return p.terminalReject(ctx, in, ext, res.RejectedReason)
+		// A structured verdict from the service. Phase 1 maps it to the coarse
+		// "not a usable image" bucket; the image.v1 RejectedCode enum (CON-281
+		// Phase 2) refines it to the exact reason without a client change.
+		return p.terminalReject(ctx, in, ext, models.UploadCodeInvalidFile, res.RejectedReason)
 	}
 
 	// Persist the run's metadata + blocks, and the service-reported metadata onto
@@ -292,6 +298,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	// never re-calling the paid Extract.
 	ext.Status = models.ImageExtractionStatusDescribing
 	ext.FailureReason = ""
+	ext.FailureCode = ""
 	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
 		return fmt.Errorf("process_image %s: checkpoint extraction: %w", in.AssetID, err)
 	}
@@ -378,15 +385,23 @@ func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessIm
 	// signals come from the persisted extraction, so resume settles identically.
 	status := models.AssetStatusReady
 	extStatus := models.ImageExtractionStatusComplete
+	failureCode, failureReason := "", ""
 	if (ext.DescriptionOK && !ext.ExtractionOK && ext.Shape != models.ImageShapeCreative) || embedFailures > 0 {
 		status = models.AssetStatusPartial
 		extStatus = models.ImageExtractionStatusPartial
+		// Partial is not a hard failure: the description landed and the asset is
+		// searchable, but structured extraction (or a chunk embed) did not fully
+		// complete. Carry a code so the client can word it as retriable rather
+		// than broken (CON-281).
+		failureCode = models.UploadCodeExtractionPartial
+		failureReason = "the image was described and is searchable, but structured extraction did not fully complete"
 	}
 	if err := p.setAssetStatus(ctx, in.AssetID, status); err != nil {
 		return err
 	}
 	ext.Status = extStatus
-	ext.FailureReason = ""
+	ext.FailureReason = failureReason
+	ext.FailureCode = failureCode
 	return p.Deps.Extractions.Update(ctx, ext)
 }
 
@@ -566,10 +581,12 @@ func (p *ProcessImageProcessor) accrueCost(ctx context.Context, in ProcessImageT
 }
 
 // terminalReject marks the extraction + asset failed with a tenant-visible
-// reason and does NOT return an error (no retry).
-func (p *ProcessImageProcessor) terminalReject(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, reason string) error {
+// reason and its stable machine-readable code (CON-281), and does NOT return an
+// error (no retry).
+func (p *ProcessImageProcessor) terminalReject(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, code, reason string) error {
 	ext.Status = models.ImageExtractionStatusFailed
 	ext.FailureReason = reason
+	ext.FailureCode = code
 	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
 		return fmt.Errorf("process_image %s: mark extraction failed: %w", in.AssetID, err)
 	}
