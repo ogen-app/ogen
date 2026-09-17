@@ -83,7 +83,16 @@ var postLogActivityMap = map[models.PostLogEventType]struct{ category, typ strin
 // against the live instrumentation. The read is cross-tenant (each row carries
 // its tenant_id, preserved on insert under a system context). Returns the number
 // of rows inserted.
-func BackfillPostLogsToActivity(ctx context.Context, mainDB, analyticsDB *bun.DB) (int, error) {
+//
+// The upper bound `before` excludes rows at/after it. The backfill runs in a
+// background goroutine at boot (CON-301), concurrent with live serving, and the
+// live post-transition path writes both a post_log AND its own natively-id'd
+// activity event. Bounding the scan to rows that predate this process therefore
+// guarantees the backfill never migrates a post_log the live path is recording
+// in parallel, which would otherwise persist as a duplicate (the two carry
+// different ids, so no unique constraint catches it). Pass the instant captured
+// just before the HTTP listener opens.
+func BackfillPostLogsToActivity(ctx context.Context, mainDB, analyticsDB *bun.DB, before time.Time) (int, error) {
 	if mainDB == nil || analyticsDB == nil {
 		return 0, nil
 	}
@@ -113,16 +122,18 @@ func BackfillPostLogsToActivity(ctx context.Context, mainDB, analyticsDB *bun.DB
 		return 0, err
 	}
 
-	// Load only rows at/after the watermark. `>=` (not `>`) re-surfaces ties at
-	// the exact watermark timestamp, which the seen-map below dedups.
+	// Load only rows in [watermark, before). `>=` (not `>`) re-surfaces ties at
+	// the exact watermark timestamp, which the seen-map below dedups; `< before`
+	// excludes anything created at/after this process started serving, so a live
+	// write can never race into the backfill's window.
 	var logs []logRow
 	if err := mainDB.NewRaw(`
 		SELECT id, tenant_id, post_id, event_timestamp, event_type, actor,
 		       from_status, to_status, payload, summary
 		FROM post_logs
-		WHERE event_timestamp >= ?
+		WHERE event_timestamp >= ? AND event_timestamp < ?
 		ORDER BY event_timestamp
-	`, watermark).Scan(ctx, &logs); err != nil {
+	`, watermark, before).Scan(ctx, &logs); err != nil {
 		return 0, err
 	}
 	if len(logs) == 0 {
