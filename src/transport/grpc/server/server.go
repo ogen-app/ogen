@@ -57,6 +57,7 @@ func New(
 	emailLogRepo repository.EmailLogRepository,
 	emailEventRepo repository.EmailEventRepository,
 	emailBodies EmailBodyGetter,
+	announcementRepo repository.AnnouncementRepository,
 ) (*grpc.Server, error) {
 	// Env-configured secrets frequently arrive with a trailing newline (a very
 	// common Railway / docker-compose paste mistake). Trim it here so the
@@ -88,6 +89,9 @@ func New(
 	// CON-298: EmailAdminService serves a tenant's email history + per-email
 	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
 	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodies)
+	// CON-230: AnnouncementAdminService lets Harbor author informational
+	// announcements (banners) and read their per-user click/dismiss engagement.
+	registerAnnouncementAdmin(srv, announcementRepo)
 	return srv, nil
 }
 

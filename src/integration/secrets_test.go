@@ -73,6 +73,7 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 		repository.NewEmailLogRepository(db),
 		repository.NewEmailEventRepository(db),
 		nil,
+		repository.NewAnnouncementRepository(db),
 	)
 	Expect(err).NotTo(HaveOccurred())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

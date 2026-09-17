@@ -85,6 +85,10 @@ type AnnouncementRepository interface {
 	// Stats computes the engagement rollup + eligible-audience denominator for one
 	// announcement; sql.ErrNoRows when the id is unknown.
 	Stats(ctx context.Context, id string) (models.AnnouncementStats, error)
+	// StatsFor computes the same rollup for an already-loaded announcement (with
+	// its targeting hydrated) — lets a list read reuse the rows it already fetched
+	// instead of re-Getting each one.
+	StatsFor(ctx context.Context, an *models.Announcement) (models.AnnouncementStats, error)
 }
 
 type announcementRepository struct {
@@ -326,22 +330,26 @@ func (r *announcementRepository) Delete(ctx context.Context, id string) (found, 
 }
 
 func (r *announcementRepository) Stats(ctx context.Context, id string) (models.AnnouncementStats, error) {
-	var out models.AnnouncementStats
 	an, err := r.Get(ctx, id)
 	if err != nil {
-		return out, err
+		return models.AnnouncementStats{}, err
 	}
+	return r.StatsFor(ctx, an)
+}
 
-	if out.UniqueUsersClicked, err = r.countInteractions(ctx, id, "clicked_at", false); err != nil {
+func (r *announcementRepository) StatsFor(ctx context.Context, an *models.Announcement) (models.AnnouncementStats, error) {
+	var out models.AnnouncementStats
+	var err error
+	if out.UniqueUsersClicked, err = r.countInteractions(ctx, an.ID, "clicked_at", false); err != nil {
 		return out, err
 	}
-	if out.UniqueTenantsClicked, err = r.countInteractions(ctx, id, "clicked_at", true); err != nil {
+	if out.UniqueTenantsClicked, err = r.countInteractions(ctx, an.ID, "clicked_at", true); err != nil {
 		return out, err
 	}
-	if out.UniqueUsersDismissed, err = r.countInteractions(ctx, id, "dismissed_at", false); err != nil {
+	if out.UniqueUsersDismissed, err = r.countInteractions(ctx, an.ID, "dismissed_at", false); err != nil {
 		return out, err
 	}
-	if out.UniqueTenantsDismissed, err = r.countInteractions(ctx, id, "dismissed_at", true); err != nil {
+	if out.UniqueTenantsDismissed, err = r.countInteractions(ctx, an.ID, "dismissed_at", true); err != nil {
 		return out, err
 	}
 	if out.EligibleTenants, out.EligibleUsers, err = r.eligibleCounts(ctx, an); err != nil {
