@@ -203,17 +203,16 @@ func TestProcessImage_Success(t *testing.T) {
 	}
 }
 
-// TestStampFile_KeepsExistingThumbnail: the thumbnail slot is filled only when
-// empty. A file that already has one — a real downscaled thumbnail, or a PDF's
-// first-page preview — keeps it, while the normalized key is still recorded so
-// normalized_url is available (CON-299).
-func TestStampFile_KeepsExistingThumbnail(t *testing.T) {
+// TestExposeNormalizedDerivative_KeepsExistingThumbnail: the thumbnail slot is
+// filled only when empty. A file that already has one — a real downscaled
+// thumbnail, or a PDF's first-page preview — keeps it, while the normalized key is
+// still recorded so normalized_url is available (CON-299).
+func TestExposeNormalizedDerivative_KeepsExistingThumbnail(t *testing.T) {
 	existing := "assets/i9/thumb.png"
 	files := &fakeImageFiles{file: &models.AssetFile{ThumbnailS3Key: &existing}}
 	p := newImageProc(ImageDeps{Files: files})
-	res := &imageclient.ExtractResult{Normalized: imageclient.NormalizedMeta{Width: 10, Height: 20}}
-	if err := p.stampFile(t.Context(), ProcessImageTask{AssetID: "i9"}, res, "assets/i9/normalized.png"); err != nil {
-		t.Fatalf("stampFile: %v", err)
+	if err := p.exposeNormalizedDerivative(t.Context(), ProcessImageTask{AssetID: "i9"}); err != nil {
+		t.Fatalf("exposeNormalizedDerivative: %v", err)
 	}
 	if files.file.ThumbnailS3Key == nil || *files.file.ThumbnailS3Key != existing {
 		t.Fatalf("thumbnail clobbered: %v, want %q", files.file.ThumbnailS3Key, existing)
@@ -321,6 +320,12 @@ func TestProcessImage_EmbedFailureLastAttemptSettles(t *testing.T) {
 	}
 	if exts2.ext.Status != models.ImageExtractionStatusFailed {
 		t.Fatalf("extraction status = %q, want failed", exts2.ext.Status)
+	}
+	// AC4: a failed run must NOT publish a normalized_url. Dimensions are stamped
+	// pre-checkpoint (stampFile), but the browser-drawable key is exposed only at
+	// searchable settlement — which this run never reached.
+	if ff := deps2.Files.(*fakeImageFiles).file; ff != nil && ff.NormalizedS3Key != nil {
+		t.Fatalf("failed extraction must not expose a normalized key (AC4), got %q", *ff.NormalizedS3Key)
 	}
 }
 
