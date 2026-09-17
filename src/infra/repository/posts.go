@@ -451,7 +451,7 @@ func (r *postRepository) ListSummaryProjections(ctx context.Context) ([]models.P
 		Model(&posts).
 		Column("id", "campaign_id", "status", "scheduled_at", "published_at",
 			"platform_id", "platform_post_type", "campaign_type_phase_id",
-			"media_urls", "created_at", "updated_at").
+			"media_urls", "created_by", "failure_reason", "created_at", "updated_at").
 		OrderExpr("campaign_id ASC, created_at ASC").
 		Scan(ctx)
 	if err != nil {

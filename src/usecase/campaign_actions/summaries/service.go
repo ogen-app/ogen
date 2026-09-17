@@ -75,6 +75,8 @@ func projectPost(p models.Post) PostSummary {
 		PlatformPostType:    p.PlatformPostType,
 		CampaignTypePhaseID: p.CampaignTypePhaseID,
 		MediaURLs:           media,
+		CreatedBy:           p.CreatedBy,
+		FailureReason:       p.FailureReason,
 		CreatedAt:           p.CreatedAt,
 		UpdatedAt:           p.UpdatedAt,
 	}

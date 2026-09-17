@@ -27,6 +27,8 @@ type PostSummary struct {
 	PlatformPostType    string     `json:"platform_post_type"`
 	CampaignTypePhaseID *string    `json:"campaign_type_phase_id"`
 	MediaURLs           []string   `json:"media_urls"`
+	CreatedBy           string     `json:"created_by"`
+	FailureReason       string     `json:"failure_reason"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
