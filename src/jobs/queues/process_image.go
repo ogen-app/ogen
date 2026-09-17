@@ -288,7 +288,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	if err := p.persistBlocks(ctx, in, ext, res.Blocks); err != nil {
 		return err
 	}
-	if err := p.stampFile(ctx, in, res); err != nil {
+	if err := p.stampFile(ctx, in, res, normKey); err != nil {
 		return err
 	}
 
@@ -489,10 +489,14 @@ func (p *ProcessImageProcessor) persistBlocks(ctx context.Context, in ProcessIma
 	return nil
 }
 
-// stampFile writes the service-reported dimensions/animation onto the asset_file
-// row the upload created. The original S3 key, mime, name, size, and dedupe
-// checksum (computed by ogen at upload) are preserved.
-func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTask, res *imageclient.ExtractResult) error {
+// stampFile writes the service-reported dimensions/animation and the normalized
+// derivative's key onto the asset_file row the upload created. The original S3
+// key, mime, name, size, and dedupe checksum (computed by ogen at upload) are
+// preserved. normKey is the tenant-prefixed key of the browser-drawable
+// normalized.png (CON-299): recording it lets decorateFile mint normalized_url
+// so HEIC/TIFF — which no browser decodes — can be shown; it also fills a missing
+// thumbnail so the list preview cell draws the derivative instead of the original.
+func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTask, res *imageclient.ExtractResult, normKey string) error {
 	if p.Deps.Files == nil {
 		return nil
 	}
@@ -512,6 +516,15 @@ func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTa
 	file.Width = res.Normalized.Width
 	file.Height = res.Normalized.Height
 	file.IsAnimated = res.Normalized.IsAnimated
+	if normKey != "" {
+		file.NormalizedS3Key = &normKey
+		// Images had no thumbnail before this; the normalized copy is a browser-safe
+		// stand-in so the preview cell draws a picture. Only fill an empty slot — a
+		// real downscaled thumbnail (or a PDF's first-page preview) is never clobbered.
+		if file.ThumbnailS3Key == nil || *file.ThumbnailS3Key == "" {
+			file.ThumbnailS3Key = &normKey
+		}
+	}
 	if err := p.Deps.Files.Upsert(ctx, file); err != nil {
 		return fmt.Errorf("process_image %s: stamp asset_file: %w", in.AssetID, err)
 	}

@@ -4456,6 +4456,13 @@ const docTemplate = `{
                 "mime_type": {
                     "type": "string"
                 },
+                "normalized_s3_key": {
+                    "type": "string"
+                },
+                "normalized_url": {
+                    "description": "NormalizedURL is a transient public URL rendered from NormalizedS3Key by\nthe handler layer — the browser-drawable copy shown for HEIC/TIFF (CON-299).\nNot persisted.",
+                    "type": "string"
+                },
                 "original_name": {
                     "type": "string"
                 },

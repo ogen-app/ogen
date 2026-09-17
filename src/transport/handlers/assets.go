@@ -270,10 +270,12 @@ func (h *AssetsHandler) decorateImagesBatch(ctx context.Context, assets []models
 	}
 }
 
-// decorateFile fills File.URL (the original) and File.ThumbnailURL from their
-// s3 keys using the public storage URL, when present. URL is what an image
-// viewer renders (CON-246); ThumbnailURL is the PDF/first-page preview and, in
-// future, the image grid thumbnail.
+// decorateFile fills File.URL (the original), File.ThumbnailURL and
+// File.NormalizedURL from their s3 keys using the public storage URL, when
+// present. URL is the original bytes an image viewer downloads (CON-246);
+// NormalizedURL is the browser-drawable derivative — what the asset screen shows
+// for HEIC/TIFF, which no browser decodes (CON-299); ThumbnailURL is the
+// PDF/first-page preview and the image grid thumbnail.
 func (h *AssetsHandler) decorateFile(asset *models.Asset) {
 	if asset == nil || asset.File == nil || h.storage == nil {
 		return
@@ -285,6 +287,10 @@ func (h *AssetsHandler) decorateFile(asset *models.Asset) {
 	if asset.File.ThumbnailS3Key != nil && *asset.File.ThumbnailS3Key != "" {
 		u := h.storage.PublicURL(*asset.File.ThumbnailS3Key)
 		asset.File.ThumbnailURL = &u
+	}
+	if asset.File.NormalizedS3Key != nil && *asset.File.NormalizedS3Key != "" {
+		u := h.storage.PublicURL(*asset.File.NormalizedS3Key)
+		asset.File.NormalizedURL = &u
 	}
 }
 

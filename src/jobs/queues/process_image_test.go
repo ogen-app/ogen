@@ -173,6 +173,24 @@ func TestProcessImage_Success(t *testing.T) {
 	if !assets.wrote || assets.content != res.Description || assets.alt != res.AltText || !assets.setAlt {
 		t.Fatalf("asset description/alt not written: %+v", assets)
 	}
+	// stampFile records the browser-drawable normalized key so decorateFile can
+	// mint normalized_url (CON-299), and — since images arrive with no thumbnail —
+	// fills the empty thumbnail slot with the same key so the preview cell draws a
+	// picture. No tenant in ctx, so the key is unprefixed. Dimensions are stamped too.
+	ff := deps.Files.(*fakeImageFiles)
+	const wantKey = "assets/i1/normalized.png"
+	if ff.file == nil {
+		t.Fatal("asset_file was not stamped")
+	}
+	if ff.file.NormalizedS3Key == nil || *ff.file.NormalizedS3Key != wantKey {
+		t.Fatalf("normalized_s3_key = %v, want %q", ff.file.NormalizedS3Key, wantKey)
+	}
+	if ff.file.ThumbnailS3Key == nil || *ff.file.ThumbnailS3Key != wantKey {
+		t.Fatalf("thumbnail_s3_key = %v, want %q (empty slot should be filled)", ff.file.ThumbnailS3Key, wantKey)
+	}
+	if ff.file.Width != 800 || ff.file.Height != 600 {
+		t.Fatalf("dimensions not stamped: %dx%d", ff.file.Width, ff.file.Height)
+	}
 	// description + one block text = two embedded chunks.
 	if len(chunks.got) != 2 {
 		t.Fatalf("want 2 chunks (description + block), got %d", len(chunks.got))
@@ -182,6 +200,26 @@ func TestProcessImage_Success(t *testing.T) {
 	}
 	if assets.last() != models.AssetStatusReady {
 		t.Fatalf("final status = %q, want ready (saw %v)", assets.last(), assets.statuses)
+	}
+}
+
+// TestStampFile_KeepsExistingThumbnail: the thumbnail slot is filled only when
+// empty. A file that already has one — a real downscaled thumbnail, or a PDF's
+// first-page preview — keeps it, while the normalized key is still recorded so
+// normalized_url is available (CON-299).
+func TestStampFile_KeepsExistingThumbnail(t *testing.T) {
+	existing := "assets/i9/thumb.png"
+	files := &fakeImageFiles{file: &models.AssetFile{ThumbnailS3Key: &existing}}
+	p := newImageProc(ImageDeps{Files: files})
+	res := &imageclient.ExtractResult{Normalized: imageclient.NormalizedMeta{Width: 10, Height: 20}}
+	if err := p.stampFile(t.Context(), ProcessImageTask{AssetID: "i9"}, res, "assets/i9/normalized.png"); err != nil {
+		t.Fatalf("stampFile: %v", err)
+	}
+	if files.file.ThumbnailS3Key == nil || *files.file.ThumbnailS3Key != existing {
+		t.Fatalf("thumbnail clobbered: %v, want %q", files.file.ThumbnailS3Key, existing)
+	}
+	if files.file.NormalizedS3Key == nil || *files.file.NormalizedS3Key != "assets/i9/normalized.png" {
+		t.Fatalf("normalized_s3_key = %v, want the normalized key", files.file.NormalizedS3Key)
 	}
 }
 

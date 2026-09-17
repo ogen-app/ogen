@@ -72,6 +72,7 @@ func (r *assetFileRepository) Upsert(ctx context.Context, file *models.AssetFile
 		Set("size_bytes = EXCLUDED.size_bytes").
 		Set("s3_key = EXCLUDED.s3_key").
 		Set("thumbnail_s3_key = EXCLUDED.thumbnail_s3_key").
+		Set("normalized_s3_key = EXCLUDED.normalized_s3_key").
 		Set("page_count = EXCLUDED.page_count").
 		Set("width = EXCLUDED.width").
 		Set("height = EXCLUDED.height").
