@@ -190,6 +190,8 @@ func main() {
 			repository.NewEmailLogRepository(db),
 			repository.NewEmailEventRepository(db),
 			resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
+			// CON-230: AnnouncementAdminService (author + measure tenant announcements).
+			repository.NewAnnouncementRepository(db),
 		); err != nil {
 			slog.Error("grpc init failed; internal grpc disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
 			_ = lis.Close()
