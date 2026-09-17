@@ -61,6 +61,9 @@ type repos struct {
 	invitationRepo           repository.InvitationRepository
 	tierVersionRepo          repository.TenantTierVersionRepository
 	tierAssignmentRepo       repository.TenantTierAssignmentRepository
+	// tenantFence serialises the CON-203 Zernio profile teardown against a
+	// concurrent CON-190 restore via the tenant row lock.
+	tenantFence *repository.TenantTeardownFence
 }
 
 // wireRepositories constructs every repository the API server needs. db is the
@@ -79,6 +82,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		accountRepo:              repository.NewAccountRepository(db),
 		workspaceRepo:            repository.NewWorkspaceRepository(db),
 		tenantRepo:               repository.NewTenantRepository(db),
+		tenantFence:              repository.NewTenantTeardownFence(db),
 		sessionRepo:              repository.NewSessionRepository(db),
 		settingRepo:              repository.NewSettingRepository(db),
 		tagRepo:                  tagRepo,

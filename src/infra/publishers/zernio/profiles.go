@@ -90,6 +90,20 @@ func (c *Client) CreateProfile(ctx context.Context, name, description string) (*
 	return decodeProfile(env.Profile)
 }
 
+// DeleteProfile permanently deletes a profile on Zernio
+// (DELETE /profiles/{id}). Zernio responds 200 on success and 404 when the id
+// is unknown; the 404 surfaces as an *APIError{Status:404} so the caller can
+// treat an already-gone profile as an idempotent no-op (CON-203). Zernio
+// returns 400 while the profile still has active connected accounts — the
+// caller must disconnect them (DeleteAccount) first. There is no request body
+// or query parameter; the id is path-escaped defensively.
+func (c *Client) DeleteProfile(ctx context.Context, id string) error {
+	if c == nil {
+		return errors.New("zernio: client is disabled")
+	}
+	return c.do(ctx, http.MethodDelete, "/profiles/"+url.PathEscape(id), nil, nil, nil)
+}
+
 // CreateConnectLink fetches the OAuth authorization URL for a platform.
 // The Zernio endpoint is a GET (despite returning a derived value)
 // with the platform as a path segment and `profileId` as a query

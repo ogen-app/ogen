@@ -3,9 +3,11 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,6 +21,38 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
+// fakeLifecycleEnqueuer records the tenant ids the workspace handler asks to
+// bootstrap (on create) and tear down (on delete) their Zernio profile. It lets
+// the CON-203 tests assert the tx-coupling: a committed delete enqueues exactly
+// one teardown, a rolled-back delete enqueues none. It ignores the *sql.Tx (the
+// real enqueuer inserts a River job into it) and returns nil so the handler's
+// transaction commits normally.
+type fakeLifecycleEnqueuer struct {
+	mu           sync.Mutex
+	bootstrapped []string
+	tornDown     []string
+}
+
+func (f *fakeLifecycleEnqueuer) EnqueueBootstrapProfileTx(_ context.Context, _ *sql.Tx, tenantID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bootstrapped = append(f.bootstrapped, tenantID)
+	return nil
+}
+
+func (f *fakeLifecycleEnqueuer) EnqueueTeardownProfileTx(_ context.Context, _ *sql.Tx, tenantID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tornDown = append(f.tornDown, tenantID)
+	return nil
+}
+
+func (f *fakeLifecycleEnqueuer) teardowns() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.tornDown...)
+}
+
 // Exercises the CON-147 PR2 workspace surface end-to-end: one account holding
 // several workspaces, per-request workspace selection via the X-Workspace-Id
 // header (the multi-tab mechanism), and the default-workspace switch. Tags stand
@@ -28,6 +62,7 @@ var _ = Describe("Workspaces (CON-147)", Ordered, func() {
 	var (
 		app *fiber.App
 		db  *bun.DB
+		enq *fakeLifecycleEnqueuer
 	)
 
 	BeforeAll(func() { db = mustOpenTestDBWithMigrations() })
@@ -48,9 +83,12 @@ var _ = Describe("Workspaces (CON-147)", Ordered, func() {
 		tagRepo := repository.NewTagRepository(db)
 		settingRepo := repository.NewSettingRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		// profileJobs nil: no Zernio bootstrap in tests (creation still succeeds).
+		// signup's own bootstrap enqueuer stays nil (creation still succeeds); the
+		// workspace handler gets a recording fake so the CON-203 teardown enqueue
+		// (and its tx-coupling) can be asserted.
+		enq = &fakeLifecycleEnqueuer{}
 		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth).Register(app)
-		handlers.NewWorkspacesHandler(db, workspaceRepo, userRepo, accountRepo, tenantRepo, sessionRepo, nil, auth).Register(app)
+		handlers.NewWorkspacesHandler(db, workspaceRepo, userRepo, accountRepo, tenantRepo, sessionRepo, enq, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false).Register(app)
 		handlers.NewUsersHandler(db, userRepo, accountRepo, settingRepo, auth).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
@@ -287,6 +325,23 @@ var _ = Describe("Workspaces (CON-147)", Ordered, func() {
 			Expect(json.NewDecoder(lresp.Body).Decode(&items)).To(Succeed())
 			Expect(items).To(HaveLen(1))
 			Expect(items[0].ID).To(Equal(w1))
+		})
+
+		It("enqueues a Zernio profile teardown for the deleted workspace (CON-203)", func() {
+			cookie, _ := signup("Alpha", "alpha@test.local")
+			w2 := createWorkspace(cookie, "Beta")
+
+			Expect(do("DELETE", "/api/workspaces/"+w2, cookie, "", nil).StatusCode).To(Equal(fiber.StatusNoContent))
+			// The teardown is enqueued in the same tx as the soft-delete.
+			Expect(enq.teardowns()).To(ContainElement(w2))
+		})
+
+		It("enqueues no teardown when the delete rolls back (only workspace, 409) — CON-203", func() {
+			cookie, w1 := signup("Solo", "solo@test.local")
+			Expect(do("DELETE", "/api/workspaces/"+w1, cookie, "", nil).StatusCode).To(Equal(fiber.StatusConflict))
+			// The last-workspace guard rolls the tx back, so the tx-coupled enqueue
+			// never commits: no teardown job for a workspace that still exists.
+			Expect(enq.teardowns()).NotTo(ContainElement(w1))
 		})
 
 		It("is owner-only: a member gets 403", func() {

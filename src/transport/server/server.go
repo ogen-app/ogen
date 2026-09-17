@@ -480,6 +480,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		// CON-102: eager per-tenant profile provisioning at signup.
 		ProfileBootstrapper: zernioRT.Bootstrapper,
 		Integration:         zernioRT.Integration,
+		// CON-203: fence the profile teardown against a concurrent CON-190 restore.
+		TenantFence: r.tenantFence,
 		// CON-103: PDF ingestion worker deps.
 		PDF: pdfDeps,
 		// CON-280: document ingestion worker deps.

@@ -48,6 +48,10 @@ type Deps struct {
 	ProfileBootstrapper *zernio.Bootstrapper
 	Integration         *zernio.Integration
 
+	// CON-203: fences the Zernio profile teardown against a concurrent CON-190
+	// restore via the tenant row lock. nil disables teardown (fail-closed).
+	TenantFence TenantTeardownFence
+
 	// CON-103: the process_pdf worker's dependencies (pdf-service client,
 	// embedder, storage, asset repos). A nil Client (no PDF_SERVICE_ADDR) makes
 	// the job a no-op.
@@ -304,6 +308,21 @@ func (e *Enqueuer) EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, te
 		return nil
 	}
 	_, err := e.Client.InsertTx(ctx, tx, BootstrapZernioProfileTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueTeardownProfileTx enqueues a Zernio profile-teardown task inside the
+// given transaction, so it commits atomically with the workspace soft-delete
+// (CON-203, follow-up to CON-147 PR4): a rolled-back delete queues no job, a
+// committed one durably queues exactly one. The enqueue is a local DB insert —
+// the Zernio deletes happen later in the worker — so the delete request never
+// blocks on Zernio reachability. A nil enqueuer (Zernio queue unwired) is a
+// no-op; the profile is simply left orphaned, as it was before CON-203.
+func (e *Enqueuer) EnqueueTeardownProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, TeardownZernioProfileTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
 	return err
 }
 
