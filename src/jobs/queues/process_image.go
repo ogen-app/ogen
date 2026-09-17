@@ -416,6 +416,12 @@ func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessIm
 	if err := p.setAssetStatus(ctx, in.AssetID, status); err != nil {
 		return err
 	}
+	// The run has settled searchable (partial|complete) and the normalized.png
+	// exists — only now is it safe to publish the browser-drawable key (AC4). A
+	// failed run returns above (terminalReject) and never reaches here.
+	if err := p.exposeNormalizedDerivative(ctx, in); err != nil {
+		return err
+	}
 	ext.Status = extStatus
 	ext.FailureReason = failureReason
 	ext.FailureCode = failureCode
@@ -491,7 +497,10 @@ func (p *ProcessImageProcessor) persistBlocks(ctx context.Context, in ProcessIma
 
 // stampFile writes the service-reported dimensions/animation onto the asset_file
 // row the upload created. The original S3 key, mime, name, size, and dedupe
-// checksum (computed by ogen at upload) are preserved.
+// checksum (computed by ogen at upload) are preserved. The browser-drawable
+// normalized key is stamped separately, at settlement (exposeNormalizedDerivative),
+// not here — this runs on the fresh path before the retryable embed, so it must
+// not publish anything a still-pending or later-failed run would expose (AC4).
 func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTask, res *imageclient.ExtractResult) error {
 	if p.Deps.Files == nil {
 		return nil
@@ -514,6 +523,38 @@ func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTa
 	file.IsAnimated = res.Normalized.IsAnimated
 	if err := p.Deps.Files.Upsert(ctx, file); err != nil {
 		return fmt.Errorf("process_image %s: stamp asset_file: %w", in.AssetID, err)
+	}
+	return nil
+}
+
+// exposeNormalizedDerivative records the browser-drawable normalized.png key on the
+// asset_file so decorateFile can mint normalized_url — the copy an <img> renders for
+// HEIC/TIFF, which no browser decodes (CON-299). It runs ONLY after a run settles
+// searchable (partial|complete): the key is deterministic and the derivative already
+// exists in storage (image-service wrote it before the checkpoint), so a pending
+// (describing) or failed run never publishes a URL (AC4). It also fills a missing
+// thumbnail so the list preview cell draws the derivative instead of the original.
+func (p *ProcessImageProcessor) exposeNormalizedDerivative(ctx context.Context, in ProcessImageTask) error {
+	if p.Deps.Files == nil {
+		return nil
+	}
+	file, err := p.Deps.Files.GetByAssetID(ctx, in.AssetID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && file == nil) {
+		slog.WarnContext(ctx, "no asset_file to expose normalized derivative", logging.AttrComponent, "jobs.process_image", "asset_id", in.AssetID)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("process_image %s: load asset_file: %w", in.AssetID, err)
+	}
+	normKey := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/normalized.png", in.AssetID))
+	file.NormalizedS3Key = &normKey
+	// Only fill an empty slot — a real downscaled thumbnail (or a PDF's first-page
+	// preview) is never clobbered.
+	if file.ThumbnailS3Key == nil || *file.ThumbnailS3Key == "" {
+		file.ThumbnailS3Key = &normKey
+	}
+	if err := p.Deps.Files.Upsert(ctx, file); err != nil {
+		return fmt.Errorf("process_image %s: expose normalized derivative: %w", in.AssetID, err)
 	}
 	return nil
 }
