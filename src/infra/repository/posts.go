@@ -77,6 +77,16 @@ type PostRepository interface {
 	// hydration — the CON-239 "what works / fading" miner reads only the scalar
 	// content/media/cta columns and joins metrics app-side by post id.
 	ListPublishedSince(ctx context.Context, since time.Time) ([]models.Post, error)
+	// PublishedProjectionBetween returns id + platform_id + published_at for the
+	// tenant's posts published in [from, to) — a zero from means unbounded-low —
+	// newest first, optionally narrowed to one campaign. limit 0 = no cap. Feeds
+	// the Activity daily report's "published" bucket (CON-285).
+	PublishedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error)
+	// CreatedProjectionBetween returns id + created_by + scheduled_at + created_at
+	// for the tenant's posts created in [from, to) — a zero from means
+	// unbounded-low — newest first, optionally one campaign. limit 0 = no cap.
+	// Feeds the Activity report's "created" bucket (CON-285).
+	CreatedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error)
 }
 
 type postRepository struct {
@@ -119,6 +129,49 @@ func (r *postRepository) PublishedAtsBetween(ctx context.Context, from, to time.
 		return nil, err
 	}
 	return ats, nil
+}
+
+func (r *postRepository) PublishedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error) {
+	var posts []models.Post
+	q := r.db.NewSelect().Model(&posts).
+		Column("id", "platform_id", "published_at").
+		Where("po.published_at IS NOT NULL").
+		Where("po.published_at < ?", to)
+	if !from.IsZero() {
+		q = q.Where("po.published_at >= ?", from)
+	}
+	if campaignID != "" {
+		q = q.Where("po.campaign_id = ?", campaignID)
+	}
+	q = q.OrderExpr("po.published_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(ctx); err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
+func (r *postRepository) CreatedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error) {
+	var posts []models.Post
+	q := r.db.NewSelect().Model(&posts).
+		Column("id", "created_by", "scheduled_at", "created_at").
+		Where("po.created_at < ?", to)
+	if !from.IsZero() {
+		q = q.Where("po.created_at >= ?", from)
+	}
+	if campaignID != "" {
+		q = q.Where("po.campaign_id = ?", campaignID)
+	}
+	q = q.OrderExpr("po.created_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(ctx); err != nil {
+		return nil, err
+	}
+	return posts, nil
 }
 
 func (r *postRepository) List(ctx context.Context) ([]models.Post, error) {

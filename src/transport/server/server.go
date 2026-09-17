@@ -40,6 +40,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/video"
 	"github.com/ogen-app/ogen/src/transport/handlers"
+	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
 	"github.com/ogen-app/ogen/src/usecase/notes"
@@ -75,6 +76,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// CON-152: batched Campaigns-list summaries — one tenant-scoped read that
 	// replaces the per-card GET /:id/posts N+1 (CON-127).
 	campaignSummariesSvc := summaries.New(r.postRepo)
+	// CON-285: Activity daily report — server-side per-local-day counts over live
+	// post/campaign/post_logs data (tenant-scoped repos).
+	activityReportSvc := activityreport.New(r.postRepo, r.postLogRepo, r.campaignRepo)
 
 	auth := handlers.RequireAuth(r.sessionRepo, r.userRepo, cfg.SessionCookieName)
 
@@ -803,6 +807,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// /summaries) are a focused handler (CON-291 split out of CampaignsHandler),
 	// registered BEFORE it so the static /summaries route wins over /:id.
 	handlers.NewCampaignReadHandler(campaignOverviewSvc, campaignSummariesSvc, auth).Register(app)
+	// CON-285: Activity daily-report endpoints (GET /api/activity/report/:date +
+	// /reports). The live feed itself rides the CON-242 notification stream.
+	handlers.NewActivityHandler(activityReportSvc, auth).Register(app)
 	campaignsHandler := handlers.NewCampaignsHandler(r.campaignRepo, r.campaignTypeRepo, auth, gkRuntime.GenerateDraft, gkRuntime.IsAnthropicAvailable, gkRuntime.EnrichBrief, r.campaignMessageRepo, gkRuntime.RunCampaignAssistant)
 	campaignsHandler.SetLimiter(entitlementLimiter)
 	// CON-114/CON-116: targeted generation + consistency reviews are a focused
