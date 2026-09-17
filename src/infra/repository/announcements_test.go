@@ -105,7 +105,7 @@ func TestAnnouncementDeliveryTargeting(t *testing.T) {
 	}
 
 	// Dismissing hides it for that user only.
-	if ok, err := repo.RecordDismiss(ctx, annAll, "u-all", "tn-all"); err != nil || !ok {
+	if ok, err := repo.RecordDismiss(ctx, annAll, repository.AnnouncementAudience{TenantID: "tn-all", TierID: "default", UserID: "u-all"}); err != nil || !ok {
 		t.Fatalf("dismiss: ok=%v err=%v", ok, err)
 	}
 	got, err = repo.ActiveForTenant(ctx, repository.AnnouncementAudience{TenantID: "tn-all", TierID: "default", UserID: "u-all"})
@@ -135,8 +135,9 @@ func TestAnnouncementClickIdempotent(t *testing.T) {
 	seedTenant(t, db, "tn-a", "A", "default")
 	seedUser(t, db, "u-a", "tn-a", "a@x.com")
 	ann := publishAnnouncement(t, repo, &models.Announcement{Title: "Hi", Body: "b", TargetAll: true, CTALabel: "Go", CTAURL: "https://x/y"}, nil, nil)
+	audA := repository.AnnouncementAudience{TenantID: "tn-a", TierID: "default", UserID: "u-a"}
 
-	if ok, err := repo.RecordClick(ctx, ann, "u-a", "tn-a"); err != nil || !ok {
+	if ok, err := repo.RecordClick(ctx, ann, audA); err != nil || !ok {
 		t.Fatalf("click 1: ok=%v err=%v", ok, err)
 	}
 	first := getInteraction(t, db, ann, "u-a")
@@ -145,7 +146,7 @@ func TestAnnouncementClickIdempotent(t *testing.T) {
 	}
 	// Second click keeps the first timestamp (first-click-wins).
 	time.Sleep(2 * time.Millisecond)
-	if ok, err := repo.RecordClick(ctx, ann, "u-a", "tn-a"); err != nil || !ok {
+	if ok, err := repo.RecordClick(ctx, ann, audA); err != nil || !ok {
 		t.Fatalf("click 2: ok=%v err=%v", ok, err)
 	}
 	second := getInteraction(t, db, ann, "u-a")
@@ -164,15 +165,25 @@ func TestAnnouncementClickIdempotent(t *testing.T) {
 	}
 
 	// Unknown id and an unpublished (draft) id both report not-found.
-	if ok, _ := repo.RecordClick(ctx, "nope", "u-a", "tn-a"); ok {
+	if ok, _ := repo.RecordClick(ctx, "nope", audA); ok {
 		t.Fatal("click unknown should be false")
 	}
 	draft := &models.Announcement{Title: "D", Body: "b", TargetAll: true}
 	if err := repo.Create(ctx, draft, nil, nil); err != nil {
 		t.Fatalf("create draft: %v", err)
 	}
-	if ok, _ := repo.RecordClick(ctx, draft.ID, "u-a", "tn-a"); ok {
+	if ok, _ := repo.RecordClick(ctx, draft.ID, audA); ok {
 		t.Fatal("click on draft should be false")
+	}
+
+	// A tenant NOT in the announcement's audience can't record an interaction
+	// (targeting gate — no stats-inflation via a crafted id).
+	proOnly := publishAnnouncement(t, repo, &models.Announcement{Title: "Pro", Body: "b"}, nil, []string{"pro"})
+	if ok, _ := repo.RecordClick(ctx, proOnly, audA); ok { // audA is the default tier, not pro
+		t.Fatal("click by a non-targeted tenant should be false")
+	}
+	if ok, err := repo.RecordClick(ctx, proOnly, repository.AnnouncementAudience{TenantID: "tn-p", TierID: "pro", UserID: "u-p"}); err != nil || !ok {
+		t.Fatalf("click by a targeted tenant should succeed: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -192,11 +203,12 @@ func TestAnnouncementStats(t *testing.T) {
 
 	ann := publishAnnouncement(t, repo, &models.Announcement{Title: "Pro", Body: "b"}, nil, []string{"pro"})
 
-	// Two users in tn-1 click, plus u-2; u-2 also dismisses.
-	mustClick(t, repo, ann, "u-1a", "tn-1")
-	mustClick(t, repo, ann, "u-1b", "tn-1")
-	mustClick(t, repo, ann, "u-2", "tn-2")
-	if ok, err := repo.RecordDismiss(ctx, ann, "u-2", "tn-2"); err != nil || !ok {
+	// Two users in tn-1 click, plus u-2; u-2 also dismisses. All on the pro tier
+	// the announcement targets.
+	mustClick(t, repo, ann, repository.AnnouncementAudience{TenantID: "tn-1", TierID: "pro", UserID: "u-1a"})
+	mustClick(t, repo, ann, repository.AnnouncementAudience{TenantID: "tn-1", TierID: "pro", UserID: "u-1b"})
+	mustClick(t, repo, ann, repository.AnnouncementAudience{TenantID: "tn-2", TierID: "pro", UserID: "u-2"})
+	if ok, err := repo.RecordDismiss(ctx, ann, repository.AnnouncementAudience{TenantID: "tn-2", TierID: "pro", UserID: "u-2"}); err != nil || !ok {
 		t.Fatalf("dismiss: ok=%v err=%v", ok, err)
 	}
 
@@ -335,10 +347,10 @@ func TestAnnouncementListAndLifecycle(t *testing.T) {
 	}
 }
 
-func mustClick(t *testing.T, repo repository.AnnouncementRepository, annID, userID, tenantID string) {
+func mustClick(t *testing.T, repo repository.AnnouncementRepository, annID string, aud repository.AnnouncementAudience) {
 	t.Helper()
-	if ok, err := repo.RecordClick(context.Background(), annID, userID, tenantID); err != nil || !ok {
-		t.Fatalf("click %s/%s: ok=%v err=%v", annID, userID, ok, err)
+	if ok, err := repo.RecordClick(context.Background(), annID, aud); err != nil || !ok {
+		t.Fatalf("click %s/%s: ok=%v err=%v", annID, aud.UserID, ok, err)
 	}
 }
 

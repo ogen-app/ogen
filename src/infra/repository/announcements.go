@@ -2,8 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"strings"
 	"time"
 
@@ -11,6 +9,12 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
+
+// maxActiveAnnouncements caps how many active banners one delivery read returns.
+// Announcements are few and short-lived, but ends_at is optional so an operator
+// could leave many published at once; the cap bounds the query, memory, and
+// response without paginating a banner feed. Newest-published win.
+const maxActiveAnnouncements = 50
 
 // AnnouncementAudience is the delivery input for ActiveForTenant (CON-230): the
 // caller's active workspace resolved to its tier + group ids, plus the user
@@ -54,11 +58,13 @@ type AnnouncementRepository interface {
 	ActiveForTenant(ctx context.Context, a AnnouncementAudience) ([]AnnouncementForUser, error)
 	// RecordClick upserts the (announcement, user) interaction, stamping
 	// clicked_at on the first click (first-click wins). Returns false when the id
-	// is unknown or not published (treated as not-found by the handler).
-	RecordClick(ctx context.Context, announcementID, userID, tenantID string) (bool, error)
+	// is unknown, not published, or not targeted at the caller's audience (all
+	// treated as not-found by the handler) — so a non-targeted tenant can't
+	// inflate another announcement's engagement stats.
+	RecordClick(ctx context.Context, announcementID string, aud AnnouncementAudience) (bool, error)
 	// RecordDismiss upserts the (announcement, user) interaction, stamping
-	// dismissed_at. Returns false when the id is unknown or not published.
-	RecordDismiss(ctx context.Context, announcementID, userID, tenantID string) (bool, error)
+	// dismissed_at. Same targeting gate as RecordClick.
+	RecordDismiss(ctx context.Context, announcementID string, aud AnnouncementAudience) (bool, error)
 
 	// --- operator authoring / history / stats (Harbor gRPC) ---
 
@@ -109,15 +115,8 @@ func (r *announcementRepository) ActiveForTenant(ctx context.Context, a Announce
 		// Not dismissed by this user.
 		Where("NOT EXISTS (SELECT 1 FROM announcement_interactions ai WHERE ai.announcement_id = an.id AND ai.user_id = ? AND ai.dismissed_at IS NOT NULL)", a.UserID).
 		// Targeting: everyone, OR this tenant's tier, OR any of its groups.
-		WhereGroup(" AND ", func(sq *bun.SelectQuery) *bun.SelectQuery {
-			sq = sq.WhereOr("an.target_all = TRUE").
-				WhereOr("EXISTS (SELECT 1 FROM announcement_target_tiers att WHERE att.announcement_id = an.id AND att.tier_id = ?)", a.TierID)
-			if len(a.GroupIDs) > 0 {
-				sq = sq.WhereOr("EXISTS (SELECT 1 FROM announcement_target_groups atg WHERE atg.announcement_id = an.id AND atg.group_id IN (?))", bun.In(a.GroupIDs))
-			}
-			return sq
-		})
-	if err := q.OrderExpr("an.published_at DESC, an.id DESC").Scan(ctx); err != nil {
+		WhereGroup(" AND ", targetingWhere(a))
+	if err := q.OrderExpr("an.published_at DESC, an.id DESC").Limit(maxActiveAnnouncements).Scan(ctx); err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
@@ -152,27 +151,31 @@ func (r *announcementRepository) ActiveForTenant(ctx context.Context, a Announce
 	return out, nil
 }
 
-func (r *announcementRepository) RecordClick(ctx context.Context, announcementID, userID, tenantID string) (bool, error) {
-	return r.recordInteraction(ctx, announcementID, userID, tenantID, "clicked_at")
+func (r *announcementRepository) RecordClick(ctx context.Context, announcementID string, aud AnnouncementAudience) (bool, error) {
+	return r.recordInteraction(ctx, announcementID, aud, "clicked_at")
 }
 
-func (r *announcementRepository) RecordDismiss(ctx context.Context, announcementID, userID, tenantID string) (bool, error) {
-	return r.recordInteraction(ctx, announcementID, userID, tenantID, "dismissed_at")
+func (r *announcementRepository) RecordDismiss(ctx context.Context, announcementID string, aud AnnouncementAudience) (bool, error) {
+	return r.recordInteraction(ctx, announcementID, aud, "dismissed_at")
 }
 
 // recordInteraction upserts the one (announcement, user) row, stamping the given
 // timestamp column on first occurrence (COALESCE keeps the earlier value) and
-// leaving the other column untouched. The announcement must be published, else
-// the caller treats the id as not-found.
-func (r *announcementRepository) recordInteraction(ctx context.Context, announcementID, userID, tenantID, column string) (bool, error) {
-	published, err := r.db.NewSelect().Model((*models.Announcement)(nil)).
+// leaving the other column untouched. The announcement must be published AND
+// targeted at the caller's audience, else the caller treats the id as not-found
+// — so a user whose tenant isn't targeted can't create interaction rows for it.
+// Deliberately no active-window check: the contract permits interactions on any
+// published announcement (e.g. a stale client clicking just after ends_at).
+func (r *announcementRepository) recordInteraction(ctx context.Context, announcementID string, aud AnnouncementAudience, column string) (bool, error) {
+	eligible, err := r.db.NewSelect().Model((*models.Announcement)(nil)).
 		Where("an.id = ?", announcementID).
 		Where("an.status = ?", models.AnnouncementStatusPublished).
+		WhereGroup(" AND ", targetingWhere(aud)).
 		Exists(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !published {
+	if !eligible {
 		return false, nil
 	}
 
@@ -181,7 +184,7 @@ func (r *announcementRepository) recordInteraction(ctx context.Context, announce
 		return false, err
 	}
 	now := time.Now().UTC()
-	row := &models.AnnouncementInteraction{ID: id, AnnouncementID: announcementID, UserID: userID, TenantID: tenantID}
+	row := &models.AnnouncementInteraction{ID: id, AnnouncementID: announcementID, UserID: aud.UserID, TenantID: aud.TenantID}
 	switch column {
 	case "clicked_at":
 		row.ClickedAt = &now
@@ -309,24 +312,25 @@ func (r *announcementRepository) SetStatus(ctx context.Context, id string, statu
 }
 
 func (r *announcementRepository) Delete(ctx context.Context, id string) (found, deleted bool, err error) {
-	var status string
-	err = r.db.NewSelect().Model((*models.Announcement)(nil)).
-		Column("status").
+	// Guard the delete on draft status in the same statement, so a concurrent
+	// SetStatus(published) between a read and the delete can't drop a published
+	// row that must be retained for history.
+	res, err := r.db.NewDelete().Model((*models.Announcement)(nil)).
 		Where("an.id = ?", id).
-		Scan(ctx, &status)
+		Where("an.status = ?", models.AnnouncementStatusDraft).
+		Exec(ctx)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, false, nil
-		}
 		return false, false, err
 	}
-	if status != string(models.AnnouncementStatusDraft) {
-		return true, false, nil // exists but retained (published/archived)
+	if n, _ := res.RowsAffected(); n > 0 {
+		return true, true, nil
 	}
-	if _, err := r.db.NewDelete().Model((*models.Announcement)(nil)).Where("an.id = ?", id).Exec(ctx); err != nil {
-		return true, false, err
+	// Nothing deleted: the id is either unknown or exists but isn't a draft.
+	exists, err := r.db.NewSelect().Model((*models.Announcement)(nil)).Where("an.id = ?", id).Exists(ctx)
+	if err != nil {
+		return false, false, err
 	}
-	return true, true, nil
+	return exists, false, nil
 }
 
 func (r *announcementRepository) Stats(ctx context.Context, id string) (models.AnnouncementStats, error) {
@@ -398,6 +402,21 @@ func (r *announcementRepository) eligibleCounts(ctx context.Context, an *models.
 		return 0, 0, err
 	}
 	return tenants, users, nil
+}
+
+// targetingWhere returns the OR-group that matches an announcement against an
+// audience: target_all, OR the audience's tier, OR any of its groups. Shared by
+// the delivery read (ActiveForTenant) and the interaction gate (recordInteraction)
+// so both authorize identically. Operates over the `an` table alias.
+func targetingWhere(aud AnnouncementAudience) func(*bun.SelectQuery) *bun.SelectQuery {
+	return func(sq *bun.SelectQuery) *bun.SelectQuery {
+		sq = sq.WhereOr("an.target_all = TRUE").
+			WhereOr("EXISTS (SELECT 1 FROM announcement_target_tiers att WHERE att.announcement_id = an.id AND att.tier_id = ?)", aud.TierID)
+		if len(aud.GroupIDs) > 0 {
+			sq = sq.WhereOr("EXISTS (SELECT 1 FROM announcement_target_groups atg WHERE atg.announcement_id = an.id AND atg.group_id IN (?))", bun.In(aud.GroupIDs))
+		}
+		return sq
+	}
 }
 
 // targetingPredicate builds the "does tenant tn match" SQL fragment (over the

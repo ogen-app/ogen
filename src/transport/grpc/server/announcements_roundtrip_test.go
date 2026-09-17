@@ -121,7 +121,8 @@ func TestAnnouncementAdminRoundTrip(t *testing.T) {
 	}
 
 	// Seed engagement through the tenant path (repo), then read it back via Get.
-	if ok, err := annRepo.RecordClick(ctx, id, "u-pro", "tn-pro"); err != nil || !ok {
+	// The audience matches the pro-tier targeting (the gate the tenant handler applies).
+	if ok, err := annRepo.RecordClick(ctx, id, repository.AnnouncementAudience{TenantID: "tn-pro", TierID: "pro", UserID: "u-pro"}); err != nil || !ok {
 		t.Fatalf("seed click: ok=%v err=%v", ok, err)
 	}
 	got, err := cli.GetAnnouncement(ctx, &announcementsv1.GetAnnouncementRequest{Id: id})

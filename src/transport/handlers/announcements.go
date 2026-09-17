@@ -44,6 +44,27 @@ func (h *AnnouncementsHandler) session(c *fiber.Ctx) (*models.Session, error) {
 	return s, nil
 }
 
+// audience resolves the caller's active workspace to the targeting inputs
+// (tier + group ids) the repository uses to match — and authorize —
+// announcements. Shared by delivery and the click/dismiss gate so a user can
+// only interact with an announcement actually targeted at their workspace.
+func (h *AnnouncementsHandler) audience(c *fiber.Ctx, s *models.Session) (repository.AnnouncementAudience, error) {
+	tenant, err := h.tenants.GetByIDWithClassification(c.Context(), s.TenantID)
+	if err != nil {
+		return repository.AnnouncementAudience{}, err
+	}
+	groupIDs := make([]string, len(tenant.Groups))
+	for i := range tenant.Groups {
+		groupIDs[i] = tenant.Groups[i].ID
+	}
+	return repository.AnnouncementAudience{
+		TenantID: s.TenantID,
+		TierID:   tenant.TierID,
+		GroupIDs: groupIDs,
+		UserID:   s.UserID,
+	}, nil
+}
+
 // announcementDTO is the tenant-facing projection: only what the banner renders,
 // never the operator fields (status, targeting, draft window start, timestamps).
 type announcementDTO struct {
@@ -86,21 +107,11 @@ func (h *AnnouncementsHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	// Resolve the active workspace's tier + groups so targeting can be evaluated.
-	tenant, err := h.tenants.GetByIDWithClassification(c.Context(), s.TenantID)
+	aud, err := h.audience(c, s)
 	if err != nil {
 		return err
 	}
-	groupIDs := make([]string, len(tenant.Groups))
-	for i := range tenant.Groups {
-		groupIDs[i] = tenant.Groups[i].ID
-	}
-	rows, err := h.repo.ActiveForTenant(c.Context(), repository.AnnouncementAudience{
-		TenantID: s.TenantID,
-		TierID:   tenant.TierID,
-		GroupIDs: groupIDs,
-		UserID:   s.UserID,
-	})
+	rows, err := h.repo.ActiveForTenant(c.Context(), aud)
 	if err != nil {
 		return err
 	}
@@ -124,7 +135,11 @@ func (h *AnnouncementsHandler) Click(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ok, err := h.repo.RecordClick(c.Context(), c.Params("id"), s.UserID, s.TenantID)
+	aud, err := h.audience(c, s)
+	if err != nil {
+		return err
+	}
+	ok, err := h.repo.RecordClick(c.Context(), c.Params("id"), aud)
 	if err != nil {
 		return err
 	}
@@ -147,7 +162,11 @@ func (h *AnnouncementsHandler) Dismiss(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ok, err := h.repo.RecordDismiss(c.Context(), c.Params("id"), s.UserID, s.TenantID)
+	aud, err := h.audience(c, s)
+	if err != nil {
+		return err
+	}
+	ok, err := h.repo.RecordDismiss(c.Context(), c.Params("id"), aud)
 	if err != nil {
 		return err
 	}
