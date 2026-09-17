@@ -354,7 +354,8 @@ func appendQualityLog(ctx context.Context, repos PostQualityRepos, postID string
 
 // publishAssessmentFinalised announces the end of an assessment run on the
 // shared event hub. Topic is "entity:post:<id>"; type is
-// "assessment_completed" on success, "assessment_failed" on error.
+// "assessment.completed" on success, "assessment.failed" on error (dotted
+// convention, CON-285).
 func publishAssessmentFinalised(
 	hub eventhub.Hub,
 	postID, ownerID string,
@@ -375,14 +376,14 @@ func publishAssessmentFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "assessment_failed"
+		ev.Type = "assessment.failed"
 		ev.Payload = map[string]any{"postId": postID, "error": err.Error()}
 	} else {
 		overall := 0.0
 		if resp != nil && resp.Evaluation != nil {
 			overall = resp.Evaluation.OverallPct
 		}
-		ev.Type = "assessment_completed"
+		ev.Type = "assessment.completed"
 		ev.Payload = map[string]any{"postId": postID, "overallPct": overall}
 	}
 	if pubErr := hub.Publish(context.Background(), ev); pubErr != nil {

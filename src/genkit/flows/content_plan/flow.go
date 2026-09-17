@@ -153,7 +153,8 @@ func emit(onEvent OnEventFunc, name SSEEventKind, data any) {
 
 // publishContentPlanFinalised announces the end of a content-plan run on
 // the shared event hub. Topic is "entity:campaign:<id>"; type is
-// "content_plan_completed" on success, "content_plan_failed" on error.
+// "content_plan.completed" on success, "content_plan.failed" on error (dotted
+// convention, CON-285).
 func publishContentPlanFinalised(
 	hub eventhub.Hub,
 	campaignID, ownerID string,
@@ -174,7 +175,7 @@ func publishContentPlanFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "content_plan_failed"
+		ev.Type = "content_plan.failed"
 		ev.Payload = map[string]any{
 			"campaignId": campaignID,
 			"error":      err.Error(),
@@ -186,7 +187,7 @@ func publishContentPlanFinalised(
 			postCount = len(resp.Posts)
 			warningCount = len(resp.Warnings)
 		}
-		ev.Type = "content_plan_completed"
+		ev.Type = "content_plan.completed"
 		ev.Payload = map[string]any{
 			"campaignId":   campaignID,
 			"postCount":    postCount,

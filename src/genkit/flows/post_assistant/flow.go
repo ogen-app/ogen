@@ -104,7 +104,8 @@ func emit(onEvent OnEventFunc, name SSEEventKind, data any) {
 
 // publishAssistantFinalised announces the end of an assistant run on the
 // shared event hub. Topic is "entity:post:<id>"; type is
-// "assistant_completed" on success, "assistant_failed" on error.
+// "assistant.completed" on success, "assistant.failed" on error (dotted
+// convention, CON-285 — both event streams now agree on the spelling).
 //
 // Used by the SSE event-stream consumer to drive cross-tab notifications
 // (the per-request /assistant SSE already serves the requesting tab).
@@ -128,7 +129,7 @@ func publishAssistantFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "assistant_failed"
+		ev.Type = "assistant.failed"
 		ev.Payload = map[string]any{
 			"postId": postID,
 			"error":  err.Error(),
@@ -140,7 +141,7 @@ func publishAssistantFinalised(
 			action = resp.Action
 			saveVersion = resp.SaveVersion
 		}
-		ev.Type = "assistant_completed"
+		ev.Type = "assistant.completed"
 		ev.Payload = map[string]any{
 			"postId":      postID,
 			"action":      action,

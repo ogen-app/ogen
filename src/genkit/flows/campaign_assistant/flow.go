@@ -86,8 +86,9 @@ func emit(onEvent OnEventFunc, name SSEEventKind, data any) {
 }
 
 // publishAssistantFinalised announces the end of an assistant run on the shared
-// event hub. Topic is "entity:campaign:<id>"; type is "assistant_completed" on
-// success, "assistant_failed" on error — driving cross-tab notifications.
+// event hub. Topic is "entity:campaign:<id>"; type is "assistant.completed" on
+// success, "assistant.failed" on error (dotted convention, CON-285) — driving
+// cross-tab notifications.
 func publishAssistantFinalised(
 	hub eventhub.Hub,
 	campaignID, ownerID string,
@@ -108,7 +109,7 @@ func publishAssistantFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "assistant_failed"
+		ev.Type = "assistant.failed"
 		ev.Payload = map[string]any{
 			"campaignId": campaignID,
 			"error":      err.Error(),
@@ -118,7 +119,7 @@ func publishAssistantFinalised(
 		if resp != nil {
 			action = resp.Action
 		}
-		ev.Type = "assistant_completed"
+		ev.Type = "assistant.completed"
 		ev.Payload = map[string]any{
 			"campaignId": campaignID,
 			"action":     action,
