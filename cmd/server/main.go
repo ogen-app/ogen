@@ -183,7 +183,13 @@ func main() {
 	// resolver has a tier_id fallback and the activity history self-heals — so a
 	// redeploy no longer holds the listeners down and surfaces DeadlineExceeded on
 	// callers such as Harbor.
-	go runBootBackfills(db, analyticsDB)
+	//
+	// bootedAt is captured here, before app.Listen opens the HTTP surface, and
+	// bounds the activity backfill's scan: it only migrates post_logs that predate
+	// this process, so it can never race the live post-transition path (which
+	// writes its own activity event) into a duplicate.
+	bootedAt := time.Now()
+	go runBootBackfills(db, analyticsDB, bootedAt)
 
 	slog.Info("server listening", logging.AttrComponent, "boot", "addr", cfg.Addr)
 	if err := app.Listen(cfg.Addr); err != nil {
@@ -195,16 +201,17 @@ func main() {
 // off the critical boot path (CON-301). Each runs under its own bounded context
 // so a slow DB can't wedge it, and both are idempotent + restart-safe, so a
 // redeploy that kills a run mid-flight simply resumes on the next boot.
-func runBootBackfills(db, analyticsDB *bun.DB) {
+func runBootBackfills(db, analyticsDB *bun.DB, bootedAt time.Time) {
 	const backfillTimeout = 2 * time.Minute
 
 	// CON-125: historical post_logs audit trail → tenant_activity_events (curated
-	// to the activity taxonomy). Only runs when usage analytics is enabled.
+	// to the activity taxonomy). Only runs when usage analytics is enabled. Bounded
+	// to rows older than bootedAt so it never races the live path (CON-301).
 	if analyticsDB != nil {
 		func() {
 			ctx, cancel := context.WithTimeout(context.Background(), backfillTimeout)
 			defer cancel()
-			if n, berr := repository.BackfillPostLogsToActivity(ctx, db, analyticsDB); berr != nil {
+			if n, berr := repository.BackfillPostLogsToActivity(ctx, db, analyticsDB, bootedAt); berr != nil {
 				slog.Warn("post_logs → tenant_activity_events backfill failed (non-fatal)",
 					logging.AttrComponent, "boot", logging.AttrError, berr)
 			} else if n > 0 {
