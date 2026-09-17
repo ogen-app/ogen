@@ -444,18 +444,17 @@ func seqParam(c *fiber.Ctx, name string) (int64, error) {
 	return v, nil
 }
 
-// limitParam parses the page size, clamped to [1,100]; empty ⇒ 30.
+// limitParam parses the page size in [1,100]; empty ⇒ 30. An over-max limit is
+// rejected with 400 rather than silently clamped, so the spec and the server
+// agree on the page size the caller asked for (CON-242 §9).
 func limitParam(c *fiber.Ctx) (int, error) {
 	raw := c.Query("limit")
 	if raw == "" {
 		return 30, nil
 	}
 	v, err := strconv.Atoi(raw)
-	if err != nil || v <= 0 {
+	if err != nil || v <= 0 || v > 100 {
 		return 0, fiber.NewError(fiber.StatusBadRequest, "invalid limit")
-	}
-	if v > 100 {
-		v = 100
 	}
 	return v, nil
 }

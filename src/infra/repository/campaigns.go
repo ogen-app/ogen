@@ -41,6 +41,13 @@ type CampaignRepository interface {
 	// CountActive counts the tenant's live campaigns — neither soft-deleted nor
 	// archived (mirrors List) — the active_campaigns quota (CON-295).
 	CountActive(ctx context.Context) (int64, error)
+	// CreatedBetween returns id + created_at for the tenant's non-deleted
+	// campaigns created in [from, to) — a zero from means unbounded-low — newest
+	// first, optionally one campaign. limit 0 = no cap. Feeds the Activity daily
+	// report's "campaigns_created" bucket (CON-285). Archived campaigns are
+	// included (they were still created that day); soft-deleted ones drop out, so
+	// a deleted campaign simply leaves future recomputations.
+	CreatedBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Campaign, error)
 }
 
 type campaignRepository struct {
@@ -71,6 +78,28 @@ func (r *campaignRepository) List(ctx context.Context) ([]models.Campaign, error
 	return r.listFiltered(ctx, func(q *bun.SelectQuery) *bun.SelectQuery {
 		return q.Where("c.archived_at IS NULL")
 	})
+}
+
+func (r *campaignRepository) CreatedBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Campaign, error) {
+	var cs []models.Campaign
+	q := r.db.NewSelect().Model(&cs).
+		Column("id", "created_at").
+		Where("c.deleted_at IS NULL").
+		Where("c.created_at < ?", to)
+	if !from.IsZero() {
+		q = q.Where("c.created_at >= ?", from)
+	}
+	if campaignID != "" {
+		q = q.Where("c.id = ?", campaignID)
+	}
+	q = q.OrderExpr("c.created_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(ctx); err != nil {
+		return nil, err
+	}
+	return cs, nil
 }
 
 func (r *campaignRepository) CountActive(ctx context.Context) (int64, error) {

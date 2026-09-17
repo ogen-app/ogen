@@ -57,6 +57,8 @@ func TestBuild_ProjectsReadinessFields(t *testing.T) {
 		PlatformPostType:    "feed",
 		CampaignTypePhaseID: ptr("ph_2"),
 		MediaURLs:           nil, // notnull column, but guard the nil→[] normalisation
+		CreatedBy:           "usr_ana",
+		FailureReason:       "zernio_rejected",
 		CreatedAt:           created,
 		UpdatedAt:           updated,
 		// Heavy fields that must NOT influence the projection.
@@ -82,6 +84,9 @@ func TestBuild_ProjectsReadinessFields(t *testing.T) {
 	}
 	if !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) {
 		t.Fatalf("timestamps wrong: %+v", got)
+	}
+	if got.CreatedBy != "usr_ana" || got.FailureReason != "zernio_rejected" {
+		t.Fatalf("authorship/failure fields wrong: %+v", got)
 	}
 }
 

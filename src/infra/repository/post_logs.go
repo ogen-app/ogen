@@ -40,6 +40,28 @@ type PostLogRepository interface {
 	// Returns the number of rows deleted. Used by the cleanup_post_logs
 	// recurring task (CON-69 plan §3).
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
+
+	// TerminalTransitionsBetween returns the tenant's post state-transitions INTO
+	// a terminal non-publish state (failed / not_published) whose event_timestamp
+	// falls in [from, to) — a zero from means unbounded-low — newest first,
+	// optionally one campaign. limit 0 = no cap. It joins posts for the current
+	// platform_id + failure_reason. This is the transition-time source for the
+	// Activity report's "failed" bucket: a post that failed one local day and
+	// succeeded on a retry the next still counts on the day it failed (CON-285
+	// FR2/FR10), which a current-status read would miss.
+	TerminalTransitionsBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]TerminalTransition, error)
+}
+
+// TerminalTransition is one post's move into a terminal non-publish state, as
+// recorded in post_logs and joined to the post's current channel + failure
+// reason (CON-285). failure_reason is the post's current value (best-effort for
+// a historical transition); status is the transition's to_status.
+type TerminalTransition struct {
+	PostID        string    `bun:"post_id"`
+	PlatformID    string    `bun:"platform_id"`
+	Status        string    `bun:"to_status"`
+	FailureReason string    `bun:"failure_reason"`
+	At            time.Time `bun:"event_timestamp"`
 }
 
 // PostLogFilter is the search shape for ListFiltered. Zero-valued
@@ -124,6 +146,40 @@ func (r *postLogRepository) ListFiltered(ctx context.Context, f PostLogFilter) (
 		return nil, err
 	}
 	return logs, nil
+}
+
+func (r *postLogRepository) TerminalTransitionsBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]TerminalTransition, error) {
+	var rows []TerminalTransition
+	q := r.db.NewSelect().
+		Model((*models.PostLog)(nil)).
+		ColumnExpr("pl.post_id AS post_id").
+		ColumnExpr("po.platform_id AS platform_id").
+		ColumnExpr("pl.to_status AS to_status").
+		ColumnExpr("po.failure_reason AS failure_reason").
+		ColumnExpr("pl.event_timestamp AS event_timestamp").
+		Join("JOIN posts AS po ON po.id = pl.post_id").
+		Where("pl.event_type = ?", string(models.PostLogEventStateTransition)).
+		Where("pl.to_status IN (?)", bun.In([]string{
+			string(models.PostStatusFailed),
+			string(models.PostStatusNotPublished),
+		})).
+		Where("pl.event_timestamp < ?", to)
+	if !from.IsZero() {
+		q = q.Where("pl.event_timestamp >= ?", from)
+	}
+	if campaignID != "" {
+		q = q.Where("po.campaign_id = ?", campaignID)
+	}
+	q = q.OrderExpr("pl.event_timestamp DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	// pl carries the tenant predicate via TenantScoped.BeforeSelect
+	// (?TableAlias.tenant_id), so the join to posts stays within the tenant.
+	if err := q.Scan(ctx, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (r *postLogRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {

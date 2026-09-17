@@ -19,7 +19,9 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 )
 
@@ -52,6 +54,9 @@ type PostQualityFlowConfig struct {
 	// Hub publishes the "assessment finalised" event on success/failure.
 	// nil = silent.
 	Hub eventhub.Hub
+	// Notifier drops a durable "assessment finished / failed" notification to the
+	// post owner (CON-285). nil is a no-op.
+	Notifier *notify.Service
 
 	tmpl *templates
 }
@@ -129,15 +134,17 @@ func runPostQuality(
 	start := time.Now()
 	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.post_quality", "post_id", req.PostID)
 
-	// Captured once the post is loaded, so the finalisation event is scoped
-	// to the post owner. Empty before validateInput → very-early failures
-	// emit no finalisation event.
-	var ownerID string
+	// Captured once the post is loaded, so the finalisation event + durable
+	// notification are scoped to the post owner and tenant. Empty before
+	// validateInput → very-early failures emit no finalisation.
+	var ownerID, tenantID string
 	defer func() {
-		if cfg.Hub == nil || ownerID == "" {
+		if ownerID == "" {
 			return
 		}
 		publishAssessmentFinalised(cfg.Hub, req.PostID, ownerID, out, retErr)
+		// CON-285: a durable assessment finished/failed row for the initiator.
+		notifyAssessmentFinalised(cfg.Notifier, tenantID, ownerID, req.PostID, out, retErr)
 	}()
 
 	// ── Step 1: validateInput ────────────────────────────────────────────
@@ -160,6 +167,7 @@ func runPostQuality(
 		return nil, err
 	}
 	ownerID = post.CreatedBy
+	tenantID = post.TenantID
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateInput", Status: "done"})
 
 	// ── Step 2: buildContext ─────────────────────────────────────────────
@@ -346,7 +354,8 @@ func appendQualityLog(ctx context.Context, repos PostQualityRepos, postID string
 
 // publishAssessmentFinalised announces the end of an assessment run on the
 // shared event hub. Topic is "entity:post:<id>"; type is
-// "assessment_completed" on success, "assessment_failed" on error.
+// "assessment.completed" on success, "assessment.failed" on error (dotted
+// convention, CON-285).
 func publishAssessmentFinalised(
 	hub eventhub.Hub,
 	postID, ownerID string,
@@ -367,17 +376,56 @@ func publishAssessmentFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "assessment_failed"
+		ev.Type = "assessment.failed"
 		ev.Payload = map[string]any{"postId": postID, "error": err.Error()}
 	} else {
 		overall := 0.0
 		if resp != nil && resp.Evaluation != nil {
 			overall = resp.Evaluation.OverallPct
 		}
-		ev.Type = "assessment_completed"
+		ev.Type = "assessment.completed"
 		ev.Payload = map[string]any{"postId": postID, "overallPct": overall}
 	}
 	if pubErr := hub.Publish(context.Background(), ev); pubErr != nil {
 		slog.Error("hub publish failed", logging.AttrComponent, "genkit.post_quality", "post_id", postID, logging.AttrError, pubErr)
 	}
+}
+
+// notifyAssessmentFinalised drops a durable "assessment finished / failed"
+// notification to the post owner (CON-285): the initiator, who may have walked
+// away while the assessment ran. The client suppresses the live echo for the tab
+// that started it; this row is for other devices and a later return. The
+// dedupe_key collapses repeats for the same post while still unread. Uses a
+// fresh tenant-scoped, bounded context because the request ctx may already be
+// cancelled by the time this deferred call runs.
+func notifyAssessmentFinalised(n *notify.Service, tenantID, ownerID, postID string, resp *PostQualityResponse, runErr error) {
+	if n == nil || ownerID == "" || tenantID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(tenantctx.With(context.Background(), tenantID), 5*time.Second)
+	defer cancel()
+	spec := notify.Spec{
+		EntityType: "post",
+		EntityID:   postID,
+		ActionURL:  "/posts/" + postID,
+	}
+	if runErr != nil {
+		spec.Level = models.NotificationLevelError
+		spec.Type = "assessment.failed"
+		spec.Title = "Quality assessment failed"
+		spec.Body = "We couldn't assess your post's quality."
+		spec.DedupeKey = "assessment.failed:" + postID
+	} else {
+		overall := 0.0
+		if resp != nil && resp.Evaluation != nil {
+			overall = resp.Evaluation.OverallPct
+		}
+		spec.Level = models.NotificationLevelSuccess
+		spec.Type = "assessment.completed"
+		spec.Title = "Quality assessment ready"
+		spec.Body = "Your post's quality assessment is ready."
+		spec.Data = map[string]any{"overall_pct": overall}
+		spec.DedupeKey = "assessment.completed:" + postID
+	}
+	_ = n.Emit(ctx, ownerID, spec)
 }

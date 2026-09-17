@@ -60,6 +60,12 @@ type PostRepository interface {
 	// (CON-152), with no relation hydration. One batched read replaces the N
 	// per-card GET /campaigns/:id/posts requests the list used to fire.
 	ListSummaryProjections(ctx context.Context) ([]models.Post, error)
+	// ListManualPublishDue returns posts in status scheduled_for_manual_publishing
+	// whose scheduled_at has passed (<= now), oldest-due first. Cross-tenant when
+	// called under a system context (each row carries its tenant_id) — the CON-285
+	// detect_manual_publish_due sweep enumerates every tenant's overdue
+	// manual-publish posts in one read, then notifies per tenant. limit 0 = no cap.
+	ListManualPublishDue(ctx context.Context, now time.Time, limit int) ([]models.Post, error)
 	// CountPendingByAccount returns how many of the tenant's posts still
 	// reference the given social account in a not-yet-published, committed-to-
 	// publish state (scheduled or scheduled_for_manual_publishing). CON-133
@@ -77,6 +83,16 @@ type PostRepository interface {
 	// hydration — the CON-239 "what works / fading" miner reads only the scalar
 	// content/media/cta columns and joins metrics app-side by post id.
 	ListPublishedSince(ctx context.Context, since time.Time) ([]models.Post, error)
+	// PublishedProjectionBetween returns id + platform_id + published_at for the
+	// tenant's posts published in [from, to) — a zero from means unbounded-low —
+	// newest first, optionally narrowed to one campaign. limit 0 = no cap. Feeds
+	// the Activity daily report's "published" bucket (CON-285).
+	PublishedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error)
+	// CreatedProjectionBetween returns id + created_by + scheduled_at + created_at
+	// for the tenant's posts created in [from, to) — a zero from means
+	// unbounded-low — newest first, optionally one campaign. limit 0 = no cap.
+	// Feeds the Activity report's "created" bucket (CON-285).
+	CreatedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error)
 }
 
 type postRepository struct {
@@ -119,6 +135,66 @@ func (r *postRepository) PublishedAtsBetween(ctx context.Context, from, to time.
 		return nil, err
 	}
 	return ats, nil
+}
+
+func (r *postRepository) ListManualPublishDue(ctx context.Context, now time.Time, limit int) ([]models.Post, error) {
+	var posts []models.Post
+	q := r.db.NewSelect().Model(&posts).
+		Column("id", "tenant_id", "campaign_id", "platform_id", "created_by", "scheduled_at").
+		Where("po.status = ?", string(models.PostStatusScheduledForManualPublish)).
+		Where("po.scheduled_at IS NOT NULL").
+		Where("po.scheduled_at <= ?", now).
+		OrderExpr("po.scheduled_at ASC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(ctx); err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
+func (r *postRepository) PublishedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error) {
+	var posts []models.Post
+	q := r.db.NewSelect().Model(&posts).
+		Column("id", "platform_id", "published_at").
+		Where("po.published_at IS NOT NULL").
+		Where("po.published_at < ?", to)
+	if !from.IsZero() {
+		q = q.Where("po.published_at >= ?", from)
+	}
+	if campaignID != "" {
+		q = q.Where("po.campaign_id = ?", campaignID)
+	}
+	q = q.OrderExpr("po.published_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(ctx); err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
+func (r *postRepository) CreatedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error) {
+	var posts []models.Post
+	q := r.db.NewSelect().Model(&posts).
+		Column("id", "created_by", "scheduled_at", "created_at").
+		Where("po.created_at < ?", to)
+	if !from.IsZero() {
+		q = q.Where("po.created_at >= ?", from)
+	}
+	if campaignID != "" {
+		q = q.Where("po.campaign_id = ?", campaignID)
+	}
+	q = q.OrderExpr("po.created_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Scan(ctx); err != nil {
+		return nil, err
+	}
+	return posts, nil
 }
 
 func (r *postRepository) List(ctx context.Context) ([]models.Post, error) {
@@ -451,7 +527,7 @@ func (r *postRepository) ListSummaryProjections(ctx context.Context) ([]models.P
 		Model(&posts).
 		Column("id", "campaign_id", "status", "scheduled_at", "published_at",
 			"platform_id", "platform_post_type", "campaign_type_phase_id",
-			"media_urls", "created_at", "updated_at").
+			"media_urls", "created_by", "failure_reason", "created_at", "updated_at").
 		OrderExpr("campaign_id ASC, created_at ASC").
 		Scan(ctx)
 	if err != nil {

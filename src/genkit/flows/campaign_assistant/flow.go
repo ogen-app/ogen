@@ -86,8 +86,9 @@ func emit(onEvent OnEventFunc, name SSEEventKind, data any) {
 }
 
 // publishAssistantFinalised announces the end of an assistant run on the shared
-// event hub. Topic is "entity:campaign:<id>"; type is "assistant_completed" on
-// success, "assistant_failed" on error — driving cross-tab notifications.
+// event hub. Topic is "entity:campaign:<id>"; type is "assistant.completed" on
+// success, "assistant.failed" on error (dotted convention, CON-285) — driving
+// cross-tab notifications.
 func publishAssistantFinalised(
 	hub eventhub.Hub,
 	campaignID, ownerID string,
@@ -108,7 +109,7 @@ func publishAssistantFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "assistant_failed"
+		ev.Type = "assistant.failed"
 		ev.Payload = map[string]any{
 			"campaignId": campaignID,
 			"error":      err.Error(),
@@ -118,7 +119,7 @@ func publishAssistantFinalised(
 		if resp != nil {
 			action = resp.Action
 		}
-		ev.Type = "assistant_completed"
+		ev.Type = "assistant.completed"
 		ev.Payload = map[string]any{
 			"campaignId": campaignID,
 			"action":     action,
@@ -158,4 +159,47 @@ func notifyContentPlanReady(n *notify.Service, tenantID, ownerID, campaignID str
 		ActionURL:  "/campaigns/" + campaignID,
 		Data:       map[string]any{"post_count": postCount},
 	})
+}
+
+// notifyAssistantFinalised drops a durable "assistant finished / failed"
+// notification to the campaign owner (CON-285): the initiator, who may have
+// walked away while the run continued. The client suppresses the live echo for
+// the tab that started it (lib/localRuns) — this row is for other devices and a
+// later return. The dedupe_key collapses repeats for the same campaign while
+// still unread, so an iterating chat doesn't flood the inbox (FR7: one row per
+// meaningful outcome). The success case for a generated content plan is skipped:
+// campaign.content_plan_ready already announces that specific outcome.
+func notifyAssistantFinalised(n *notify.Service, tenantID, ownerID, campaignID string, resp *CampaignAssistantResponse, runErr error) {
+	if n == nil || ownerID == "" || tenantID == "" {
+		return
+	}
+	action := ""
+	if resp != nil {
+		action = resp.Action
+	}
+	if runErr == nil && action == "content_plan_generated" {
+		return // covered by notifyContentPlanReady
+	}
+	ctx, cancel := context.WithTimeout(tenantctx.With(context.Background(), tenantID), 5*time.Second)
+	defer cancel()
+	spec := notify.Spec{
+		EntityType: "campaign",
+		EntityID:   campaignID,
+		ActionURL:  "/campaigns/" + campaignID,
+	}
+	if runErr != nil {
+		spec.Level = models.NotificationLevelError
+		spec.Type = "assistant.failed"
+		spec.Title = "Assistant run failed"
+		spec.Body = "The campaign assistant couldn't finish your request."
+		spec.DedupeKey = "assistant.failed:" + campaignID
+	} else {
+		spec.Level = models.NotificationLevelSuccess
+		spec.Type = "assistant.completed"
+		spec.Title = "Assistant finished"
+		spec.Body = "The campaign assistant finished your request."
+		spec.Data = map[string]any{"action": action}
+		spec.DedupeKey = "assistant.completed:" + campaignID
+	}
+	_ = n.Emit(ctx, ownerID, spec)
 }

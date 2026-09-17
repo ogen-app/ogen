@@ -17,7 +17,9 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
 //go:embed prompts/content_plan.tmpl
@@ -64,7 +66,11 @@ type ContentPlanFlowConfig struct {
 	Embedder           ai.Embedder // nil = skip semantic ranking, fall back to creation order
 	// Hub is the event broker used to publish "operation finalised"
 	// events on success/failure. nil = silent (no events emitted).
-	Hub        eventhub.Hub
+	Hub eventhub.Hub
+	// Notifier drops a durable content_plan.failed notification to the campaign
+	// owner (CON-285) — the failure twin of campaign.content_plan_ready (which the
+	// campaign assistant emits on success). nil is a no-op.
+	Notifier   *notify.Service
 	systemTmpl *template.Template
 	userTmpl   *template.Template
 }
@@ -147,7 +153,8 @@ func emit(onEvent OnEventFunc, name SSEEventKind, data any) {
 
 // publishContentPlanFinalised announces the end of a content-plan run on
 // the shared event hub. Topic is "entity:campaign:<id>"; type is
-// "content_plan_completed" on success, "content_plan_failed" on error.
+// "content_plan.completed" on success, "content_plan.failed" on error (dotted
+// convention, CON-285).
 func publishContentPlanFinalised(
 	hub eventhub.Hub,
 	campaignID, ownerID string,
@@ -168,7 +175,7 @@ func publishContentPlanFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "content_plan_failed"
+		ev.Type = "content_plan.failed"
 		ev.Payload = map[string]any{
 			"campaignId": campaignID,
 			"error":      err.Error(),
@@ -180,7 +187,7 @@ func publishContentPlanFinalised(
 			postCount = len(resp.Posts)
 			warningCount = len(resp.Warnings)
 		}
-		ev.Type = "content_plan_completed"
+		ev.Type = "content_plan.completed"
 		ev.Payload = map[string]any{
 			"campaignId":   campaignID,
 			"postCount":    postCount,
@@ -190,6 +197,31 @@ func publishContentPlanFinalised(
 	if pubErr := hub.Publish(context.Background(), ev); pubErr != nil {
 		slog.Error("hub publish failed", logging.AttrComponent, "genkit.content_plan", "campaign_id", campaignID, logging.AttrError, pubErr)
 	}
+}
+
+// notifyContentPlanFailed drops a durable content_plan.failed notification to the
+// campaign owner (CON-285) when a plan generation fails — the failure twin of
+// campaign.content_plan_ready, which the campaign assistant emits on success (so
+// this fires only on error, never on the happy path). The dedupe_key collapses
+// repeats for the same campaign while still unread. Uses a fresh tenant-scoped,
+// bounded context because the request ctx may already be cancelled by the time
+// this deferred call runs.
+func notifyContentPlanFailed(n *notify.Service, tenantID, ownerID, campaignID string, runErr error) {
+	if n == nil || runErr == nil || ownerID == "" || tenantID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(tenantctx.With(context.Background(), tenantID), 5*time.Second)
+	defer cancel()
+	_ = n.Emit(ctx, ownerID, notify.Spec{
+		Level:      models.NotificationLevelError,
+		Type:       "content_plan.failed",
+		Title:      "Content plan failed",
+		Body:       "We couldn't generate your content plan.",
+		EntityType: "campaign",
+		EntityID:   campaignID,
+		ActionURL:  "/campaigns/" + campaignID,
+		DedupeKey:  "content_plan.failed:" + campaignID,
+	})
 }
 
 // runContentPlan executes the six steps of the flow.
@@ -210,17 +242,20 @@ func runContentPlan(
 		return nil, err
 	}
 
-	// finaliseOwnerID is captured once the campaign is loaded so the
-	// deferred finalisation event can be scoped to the campaign owner.
-	// Empty before validateInput → finalisation events for very-early
-	// failures are skipped.
-	var finaliseOwnerID string
+	// finaliseOwnerID / finaliseTenantID are captured once the campaign is loaded
+	// so the deferred finalisation event + durable notification can be scoped to
+	// the campaign owner and tenant. Empty before validateInput → finalisation
+	// for very-early failures is skipped.
+	var finaliseOwnerID, finaliseTenantID string
 
 	defer func() {
-		if cfg.Hub == nil || finaliseOwnerID == "" {
+		if finaliseOwnerID == "" {
 			return
 		}
 		publishContentPlanFinalised(cfg.Hub, req.CampaignID, finaliseOwnerID, out, retErr)
+		// CON-285: the durable content_plan.failed twin (success is announced by
+		// the campaign assistant's campaign.content_plan_ready).
+		notifyContentPlanFailed(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, retErr)
 	}()
 
 	// ── Step 1: validateInput ─────────────────────────────────────────────────
@@ -231,6 +266,7 @@ func runContentPlan(
 		return nil, err
 	}
 	finaliseOwnerID = campaign.CreatedBy
+	finaliseTenantID = campaign.TenantID
 	slog.InfoContext(ctx, "validateInput done", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "campaign", campaign.Name, "platforms", len(campaign.TargetPlatforms))
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateInput", Status: "done"})
 

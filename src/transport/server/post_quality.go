@@ -11,6 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
 // initPostQuality registers the assessPostQuality flow on the shared
@@ -25,6 +26,7 @@ func initPostQuality(
 	recorder *usage.Recorder,
 	checker *usage.Checker,
 	hub eventhub.Hub,
+	notifier *notify.Service,
 	repos post_quality.PostQualityRepos,
 ) (func(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error), error) {
 	weights, err := post_quality.WeightsFromJSON(cfg.QualityWeightProfiles)
@@ -43,6 +45,7 @@ func initPostQuality(
 		ModelID:  cfg.QualityModelID,
 		Weights:  weights,
 		Hub:      hub,
+		Notifier: notifier,
 	}
 	if err := post_quality.InitPostQuality(g, flowCfg, repos); err != nil {
 		return nil, fmt.Errorf("init post quality flow: %w", err)

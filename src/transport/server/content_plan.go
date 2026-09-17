@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
 // initContentPlan registers the content plan flow on the shared Genkit
@@ -24,6 +25,7 @@ func initContentPlan(
 	checker *usage.Checker,
 	embedder ai.Embedder,
 	hub eventhub.Hub,
+	notifier *notify.Service,
 	repos content_plan.ContentPlanRepos,
 ) (func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error), error) {
 	flowCfg := content_plan.ContentPlanFlowConfig{
@@ -38,6 +40,7 @@ func initContentPlan(
 		MaxParallelBatches: cfg.MaxParallelBatches,
 		Embedder:           embedder,
 		Hub:                hub,
+		Notifier:           notifier,
 	}
 	if err := content_plan.InitContentPlan(g, flowCfg, repos); err != nil {
 		return nil, fmt.Errorf("init content plan flow: %w", err)

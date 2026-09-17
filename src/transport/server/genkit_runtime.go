@@ -303,15 +303,15 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	// and the campaign_assistant routing loop uses cfg.PlanningModelID (CON-112).
 	provider := llm.NewProvider(r.cfg.ModelID, r.cfg.QualityModelID, r.cfg.PlanningModelID)
 
-	contentPlanFn, err := initContentPlan(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.contentPlanRepos)
+	contentPlanFn, err := initContentPlan(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.contentPlanRepos)
 	if err != nil {
 		return fmt.Errorf("init content plan: %w", err)
 	}
-	postAssistantFn, err := initPostAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.postAssistRepos, r.cloneSvc, r.restoreSvc, r.scheduleSvc, r.noteSvc)
+	postAssistantFn, err := initPostAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.postAssistRepos, r.cloneSvc, r.restoreSvc, r.scheduleSvc, r.noteSvc)
 	if err != nil {
 		return fmt.Errorf("init post assistant: %w", err)
 	}
-	postQualityFn, err := initPostQuality(g, r.cfg, provider, r.recorder, r.checker, r.hub, r.postQualityRepos)
+	postQualityFn, err := initPostQuality(g, r.cfg, provider, r.recorder, r.checker, r.hub, r.notifier, r.postQualityRepos)
 	if err != nil {
 		return fmt.Errorf("init post quality: %w", err)
 	}

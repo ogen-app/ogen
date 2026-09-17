@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
@@ -14,6 +15,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
 //go:embed prompts/post_assistant.tmpl
@@ -101,7 +104,8 @@ func emit(onEvent OnEventFunc, name SSEEventKind, data any) {
 
 // publishAssistantFinalised announces the end of an assistant run on the
 // shared event hub. Topic is "entity:post:<id>"; type is
-// "assistant_completed" on success, "assistant_failed" on error.
+// "assistant.completed" on success, "assistant.failed" on error (dotted
+// convention, CON-285 — both event streams now agree on the spelling).
 //
 // Used by the SSE event-stream consumer to drive cross-tab notifications
 // (the per-request /assistant SSE already serves the requesting tab).
@@ -125,7 +129,7 @@ func publishAssistantFinalised(
 		UserID: ownerID,
 	}
 	if err != nil {
-		ev.Type = "assistant_failed"
+		ev.Type = "assistant.failed"
 		ev.Payload = map[string]any{
 			"postId": postID,
 			"error":  err.Error(),
@@ -137,7 +141,7 @@ func publishAssistantFinalised(
 			action = resp.Action
 			saveVersion = resp.SaveVersion
 		}
-		ev.Type = "assistant_completed"
+		ev.Type = "assistant.completed"
 		ev.Payload = map[string]any{
 			"postId":      postID,
 			"action":      action,
@@ -147,4 +151,44 @@ func publishAssistantFinalised(
 	if pubErr := hub.Publish(context.Background(), ev); pubErr != nil {
 		slog.Error("hub publish failed", logging.AttrComponent, "genkit.post_assistant", "post_id", postID, logging.AttrError, pubErr)
 	}
+}
+
+// notifyAssistantFinalised drops a durable "assistant finished / failed"
+// notification to the post owner (CON-285): the initiator, who may have walked
+// away while the run continued. The client suppresses the live echo for the tab
+// that started it (lib/localRuns) — this row is for other devices and a later
+// return. The dedupe_key collapses repeats for the same post while still unread,
+// so an iterating edit session doesn't flood the inbox (FR7: one row per
+// meaningful outcome). Uses a fresh tenant-scoped, bounded context because the
+// request ctx may already be cancelled by the time this deferred call runs.
+func notifyAssistantFinalised(n *notify.Service, tenantID, ownerID, postID string, resp *PostAssistantResponse, runErr error) {
+	if n == nil || ownerID == "" || tenantID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(tenantctx.With(context.Background(), tenantID), 5*time.Second)
+	defer cancel()
+	spec := notify.Spec{
+		EntityType: "post",
+		EntityID:   postID,
+		ActionURL:  "/posts/" + postID,
+	}
+	if runErr != nil {
+		spec.Level = models.NotificationLevelError
+		spec.Type = "assistant.failed"
+		spec.Title = "Assistant run failed"
+		spec.Body = "The post assistant couldn't finish your request."
+		spec.DedupeKey = "assistant.failed:" + postID
+	} else {
+		action := ""
+		if resp != nil {
+			action = resp.Action
+		}
+		spec.Level = models.NotificationLevelSuccess
+		spec.Type = "assistant.completed"
+		spec.Title = "Assistant finished"
+		spec.Body = "The post assistant finished your request."
+		spec.Data = map[string]any{"action": action}
+		spec.DedupeKey = "assistant.completed:" + postID
+	}
+	_ = n.Emit(ctx, ownerID, spec)
 }

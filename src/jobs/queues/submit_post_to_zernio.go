@@ -54,9 +54,13 @@ type SubmitPostProcessor struct {
 	// Tenants gates publishing on the owning tenant's lifecycle status (CON-190):
 	// a suspended/deleted tenant's scheduled posts are not published. Nil = no gate.
 	Tenants TenantStatusReader
-	// Notifier drops a "post failed to publish" notification to the post's
-	// creator on a terminal submit failure (CON-242). Nil is a no-op.
+	// Notifier drops a "post failed to publish" notification on a terminal
+	// submit failure (CON-242). Nil is a no-op.
 	Notifier *notify.Service
+	// Members lists the workspace to fan a publish outcome across (CON-285: a
+	// failure is workspace business, not the author's private problem). Nil falls
+	// back to notifying just the author.
+	Members memberLister
 	// PollLeadTime is how far in advance of scheduled_at we begin
 	// polling. Defaults to 30s when zero.
 	PollLeadTime time.Duration
@@ -77,7 +81,7 @@ func (p *SubmitPostProcessor) Timeout(*river.Job[SubmitPostTask]) time.Duration 
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &SubmitPostProcessor{Deps: d.Zernio, Tenants: d.Tenants, Notifier: d.Notifier})
+		river.AddWorker(w, &SubmitPostProcessor{Deps: d.Zernio, Tenants: d.Tenants, Notifier: d.Notifier, Members: d.Users})
 	})
 }
 
@@ -521,17 +525,28 @@ func (p *SubmitPostProcessor) terminal(ctx context.Context, post *models.Post, r
 			"reason":  reason,
 			"message": msg,
 		}))
-	// CON-242: tell the post's creator it failed to publish.
-	emitPublishNotification(ctx, p.Notifier, post, false)
+	// CON-242/CON-285: tell the whole workspace it failed to publish.
+	emitPublishNotification(ctx, p.Notifier, p.Members, post, false)
 	return nil
 }
 
-// emitPublishNotification drops a publish-outcome notification to the post's
-// creator (CON-242). Shared by the submit (terminal failure) and poll
-// (published / failed) workers. Best-effort — a nil notifier is a no-op and an
-// emit failure never affects the job. The dedupe_key collapses repeats for the
-// same post+outcome while still unread (e.g. a manual retry that fails again).
-func emitPublishNotification(ctx context.Context, n *notify.Service, post *models.Post, success bool) {
+// memberLister lists the tenant's members from a tenant-scoped context — the
+// workspace fan-out target for a publish outcome. repository.UserRepository
+// satisfies it; a nil lister falls back to just the author.
+type memberLister interface {
+	List(ctx context.Context) ([]models.User, error)
+}
+
+// emitPublishNotification drops a publish-outcome notification to the whole
+// workspace (CON-242 producer, CON-285 recipient rule: post.published /
+// post.publish_failed are workspace business — silence when publishing works
+// reads as a broken scheduler, and a failure is not the author's private
+// problem). Shared by the submit (terminal failure) and poll (published /
+// failed) workers. Best-effort — a nil notifier is a no-op and an emit failure
+// never affects the job. The dedupe_key collapses repeats for the same
+// post+outcome per recipient while still unread (e.g. a manual retry that fails
+// again).
+func emitPublishNotification(ctx context.Context, n *notify.Service, members memberLister, post *models.Post, success bool) {
 	if n == nil || post == nil {
 		return
 	}
@@ -561,7 +576,43 @@ func emitPublishNotification(ctx context.Context, n *notify.Service, post *model
 			spec.Data["failure_reason"] = post.FailureReason
 		}
 	}
-	_ = n.Emit(ctx, post.CreatedBy, spec)
+	_ = n.EmitToUsers(ctx, publishRecipients(ctx, members, post.CreatedBy), spec)
+}
+
+// publishRecipients resolves the workspace members to notify for a publish
+// outcome. Best-effort: if the member list can't be loaded it falls back to the
+// author alone, and the author is always included even if absent from the list
+// (e.g. they since left the workspace).
+func publishRecipients(ctx context.Context, members memberLister, author string) []string {
+	if members == nil {
+		return authorOnly(author)
+	}
+	users, err := members.List(ctx)
+	if err != nil || len(users) == 0 {
+		return authorOnly(author)
+	}
+	ids := make([]string, 0, len(users)+1)
+	seen := false
+	for _, u := range users {
+		if u.ID == "" {
+			continue
+		}
+		ids = append(ids, u.ID)
+		if u.ID == author {
+			seen = true
+		}
+	}
+	if author != "" && !seen {
+		ids = append(ids, author)
+	}
+	return ids
+}
+
+func authorOnly(author string) []string {
+	if author == "" {
+		return nil
+	}
+	return []string{author}
 }
 
 // appendLog is a tiny helper that keeps the writes uniform across all
