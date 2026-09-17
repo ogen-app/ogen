@@ -318,6 +318,12 @@ type Config struct {
 	ZernioHealthCheckInterval time.Duration `envconfig:"ZERNIO_HEALTH_CHECK_INTERVAL" default:"6h"`
 	ConnectionExpiryLeadDays  int           `envconfig:"CONNECTION_EXPIRY_LEAD_DAYS"  default:"7"`
 
+	// Manual-publish-due sweep (CON-285). The detect_manual_publish_due queue
+	// notifies workspace owners once a post left for manual publishing reaches its
+	// scheduled time and nobody has published it yet. Per-post dedupe keeps it to
+	// one notification while unread.
+	ManualPublishDueSweepEvery time.Duration `envconfig:"MANUAL_PUBLISH_DUE_SWEEP_EVERY" default:"1h"`
+
 	// Optional post-OAuth redirect target. When set, every connect
 	// link Zernio issues will send the user here after authorization
 	// succeeds, with ?connected=<platform>&profileId=<id>&accountId=<id>&username=<name>

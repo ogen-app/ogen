@@ -552,6 +552,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 			IncludeConnectionExpiry: true,
 			// CON-242: notification retention/expiry sweep.
 			NotificationCleanupEvery: cfg.NotificationsCleanupEvery,
+			// CON-285: manual-publish-due sweep.
+			ManualPublishDueEvery: cfg.ManualPublishDueSweepEvery,
 		}.PeriodicJobs(),
 	})
 	if err != nil {

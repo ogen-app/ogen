@@ -93,6 +93,9 @@ func (r *fakePostRepo) ListWithPublisherPostID(context.Context) ([]models.Post, 
 	return out, nil
 }
 func (r *fakePostRepo) CountPendingByAccount(context.Context, string) (int, error) { return 0, nil }
+func (r *fakePostRepo) ListManualPublishDue(context.Context, time.Time, int) ([]models.Post, error) {
+	return nil, nil
+}
 func (r *fakePostRepo) PublishedAtsBetween(context.Context, time.Time, time.Time) ([]time.Time, error) {
 	return nil, nil
 }

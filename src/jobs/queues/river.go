@@ -165,6 +165,8 @@ type PeriodicConfig struct {
 	// CON-242: notification retention/expiry sweep. Gated on a positive interval
 	// so a zero value (e.g. in tests) can't create an invalid periodic job.
 	NotificationCleanupEvery time.Duration
+	// CON-285: manual-publish-due sweep. Positive-interval gated like the others.
+	ManualPublishDueEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -223,6 +225,12 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.NotificationCleanupEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.NotificationCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return CleanupNotificationsTask{}, nil
+		}, runOnStart))
+	}
+	// CON-285: manual-publish-due sweep. Positive-interval guard like above.
+	if cfg.ManualPublishDueEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.ManualPublishDueEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return DetectManualPublishDueTask{}, nil
 		}, runOnStart))
 	}
 	return jobs

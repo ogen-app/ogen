@@ -33,6 +33,10 @@ var (
 	// Reconciliation.
 	ReconciliationTimeouts = expvar.NewInt("ogen_jobs_reconciliation_timeouts")
 
+	// Manual-publish-due sweep (CON-285): posts past their manual-publish time
+	// that triggered a post.manual_publish_due notification this tick.
+	ManualPublishDueSwept = expvar.NewInt("ogen_jobs_manual_publish_due_swept")
+
 	// Analytics refresh lifecycle (CON-93 §11).
 	ZernioAnalyticsRefreshSucceeded = expvar.NewInt("ogen_jobs_zernio_analytics_refresh_succeeded")
 	ZernioAnalyticsRefreshFailed    = expvar.NewInt("ogen_jobs_zernio_analytics_refresh_failed")
