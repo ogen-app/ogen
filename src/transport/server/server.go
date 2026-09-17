@@ -139,6 +139,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	notifier := notify.New(r.notificationRepo, hub)
 	handlers.NewNotificationsHandler(r.notificationRepo, hub, r.sessionRepo, auth, 0).Register(app)
 
+	// CON-230: operator-authored informational announcements (banners). The
+	// tenant-facing delivery + per-user click/dismiss tracking; announcements are
+	// authored by Harbor over the internal gRPC surface (AnnouncementAdminService).
+	// Delivery resolves the caller's active workspace to its tier + groups to
+	// evaluate targeting, so it needs the tenant classification read.
+	handlers.NewAnnouncementsHandler(r.announcementRepo, r.tenantRepo, auth).Register(app)
+
 	// CON-295 §12: warn workspace owners via the durable inbox as a tenant nears a
 	// numeric cap. The Limiter fires crossing-only LimitEvents; this adapter turns
 	// them into notifications. Best-effort — it never affects the create path.
