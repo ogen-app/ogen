@@ -620,7 +620,7 @@ func (p *ProcessImageProcessor) setAssetStatus(ctx context.Context, assetID, sta
 	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
 		return fmt.Errorf("process_image %s: set status %s: %w", assetID, status, err)
 	}
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "image")
+	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "image", models.AssetTypeImage)
 	return nil
 }
 

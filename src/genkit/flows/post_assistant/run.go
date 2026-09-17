@@ -54,16 +54,19 @@ func runPostAssistant(
 		return nil, err
 	}
 
-	// finaliseOwnerID is captured once the post is loaded so the deferred
-	// finalisation event can be scoped to the post owner. Empty before
-	// load → finalisation events for very-early failures are skipped.
-	var finaliseOwnerID string
+	// finaliseOwnerID / finaliseTenantID are captured once the post is loaded so
+	// the deferred finalisation event + durable notification can be scoped to the
+	// post owner and tenant. Empty before load → finalisation for very-early
+	// failures is skipped.
+	var finaliseOwnerID, finaliseTenantID string
 
 	defer func() {
-		if cfg.Hub == nil || finaliseOwnerID == "" {
+		if finaliseOwnerID == "" {
 			return
 		}
 		publishAssistantFinalised(cfg.Hub, req.PostID, finaliseOwnerID, out, retErr)
+		// CON-285: a durable assistant finished/failed row for the initiator.
+		notifyAssistantFinalised(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.PostID, out, retErr)
 	}()
 
 	if req.Instruction == "" {
@@ -79,6 +82,7 @@ func runPostAssistant(
 		return nil, fmt.Errorf("load post: %w", err)
 	}
 	finaliseOwnerID = post.CreatedBy
+	finaliseTenantID = post.TenantID
 
 	// ── Ensure initial version ───────────────────────────────────────────────
 	count, err := repos.Versions.CountByPostID(ctx, req.PostID)

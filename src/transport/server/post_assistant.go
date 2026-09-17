@@ -13,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
@@ -28,6 +29,7 @@ func initPostAssistant(
 	checker *usage.Checker,
 	embedder ai.Embedder,
 	hub eventhub.Hub,
+	notifier *notify.Service,
 	repos post_assistant.PostAssistantRepos,
 	cloneSvc *clone.Service,
 	restoreSvc *restore.Service,
@@ -42,6 +44,7 @@ func initPostAssistant(
 		MaxOutputTokens: cfg.MaxOutputTokens,
 		Embedder:        embedder,
 		Hub:             hub,
+		Notifier:        notifier,
 		CloneService:    cloneSvc,
 		RestoreService:  restoreSvc,
 		ScheduleService: scheduleSvc,

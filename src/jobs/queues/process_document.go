@@ -258,7 +258,7 @@ func (p *ProcessDocumentProcessor) setStatus(ctx context.Context, assetID, statu
 	}
 	// CON-242: announce terminal outcomes to the asset's creator (no-op for the
 	// intermediate "processing" write).
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "document")
+	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "document", models.AssetTypeDocument)
 	return nil
 }
 

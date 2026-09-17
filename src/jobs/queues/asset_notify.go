@@ -21,24 +21,41 @@ type assetCreatorLookup interface {
 // creator-lookup miss is a silent no-op — ingestion never depends on it. The
 // ctx is already tenant-scoped by the worker, so the row lands in the right
 // tenant and the creator lookup is correctly isolated.
-func notifyAssetStatus(ctx context.Context, n *notify.Service, creators assetCreatorLookup, assetID, status, label string) {
+//
+// kind is the asset's models.AssetType*: a URL asset (CON-222) emits the
+// distinct url_asset.crawled/url_asset.failed types the feed renders with link
+// wording (CON-285 FR10); every other kind keeps asset.ready/asset.ingest_failed.
+func notifyAssetStatus(ctx context.Context, n *notify.Service, creators assetCreatorLookup, assetID, status, label, kind string) {
 	if n == nil {
 		return
 	}
+	isURL := kind == models.AssetTypeURL
 	var (
 		level            models.NotificationLevel
 		typ, title, body string
 	)
 	switch status {
 	case models.AssetStatusReady:
-		level, typ = models.NotificationLevelSuccess, "asset.ready"
-		title, body = "Asset ready", "Your "+label+" finished processing."
+		level = models.NotificationLevelSuccess
+		if isURL {
+			typ, title, body = "url_asset.crawled", "Link ready", "We finished reading your "+label+"."
+		} else {
+			typ, title, body = "asset.ready", "Asset ready", "Your "+label+" finished processing."
+		}
 	case models.AssetStatusPartial:
-		level, typ = models.NotificationLevelWarning, "asset.ready"
-		title, body = "Asset ready", "Your "+label+" processed, with some parts skipped."
+		level = models.NotificationLevelWarning
+		if isURL {
+			typ, title, body = "url_asset.crawled", "Link ready", "We read your "+label+", with some parts skipped."
+		} else {
+			typ, title, body = "asset.ready", "Asset ready", "Your "+label+" processed, with some parts skipped."
+		}
 	case models.AssetStatusFailed:
-		level, typ = models.NotificationLevelError, "asset.ingest_failed"
-		title, body = "Asset processing failed", "We couldn't process your "+label+"."
+		level = models.NotificationLevelError
+		if isURL {
+			typ, title, body = "url_asset.failed", "Couldn't read link", "We couldn't read your "+label+"."
+		} else {
+			typ, title, body = "asset.ingest_failed", "Asset processing failed", "We couldn't process your "+label+"."
+		}
 	default:
 		return // non-terminal (processing/pending): nothing to announce
 	}
@@ -54,6 +71,7 @@ func notifyAssetStatus(ctx context.Context, n *notify.Service, creators assetCre
 		EntityType: "asset",
 		EntityID:   assetID,
 		ActionURL:  "/assets/" + assetID,
+		Data:       map[string]any{"kind": kind},
 		DedupeKey:  typ + ":" + assetID,
 	})
 }

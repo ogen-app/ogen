@@ -8,6 +8,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
@@ -165,6 +166,9 @@ type PostAssistantFlowConfig struct {
 	// NoteService backs the createNote tool (CON-188). nil disables the
 	// tool — the assistant then cannot capture notes.
 	NoteService *notes.Service
+	// Notifier drops a durable "assistant finished / failed" notification to the
+	// post owner (CON-285). nil is a no-op.
+	Notifier *notify.Service
 }
 
 // ValidationError is returned when preconditions are not met (HTTP 400).

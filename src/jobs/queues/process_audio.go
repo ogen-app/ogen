@@ -629,7 +629,7 @@ func (p *ProcessAudioProcessor) setAssetStatus(ctx context.Context, assetID, sta
 	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
 		return fmt.Errorf("process_audio %s: set status %s: %w", assetID, status, err)
 	}
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "audio")
+	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "audio", models.AssetTypeAudio)
 	return nil
 }
 

@@ -57,6 +57,9 @@ func runCampaignAssistant(
 		// CON-242: a persistent "content plan ready" notification — fired only
 		// when this run actually generated a plan, not on every assistant turn.
 		notifyContentPlanReady(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, out, retErr)
+		// CON-285: a durable assistant finished/failed row for the initiator
+		// (skips the content-plan success, which the line above already covers).
+		notifyAssistantFinalised(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, out, retErr)
 	}()
 
 	if strings.TrimSpace(req.Instruction) == "" {
