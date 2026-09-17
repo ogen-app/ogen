@@ -128,10 +128,14 @@ func (p *DetectManualPublishDueProcessor) sweep(ctx context.Context, now time.Ti
 	}
 
 	notified := 0
+	var firstErr error
 	for _, tenantID := range order {
 		tctx := tenantctx.With(ctx, tenantID)
 		owners, ownersErr := p.Users.ListOwnersByTenant(tctx, tenantID)
 		if ownersErr != nil {
+			if firstErr == nil {
+				firstErr = ownersErr
+			}
 			slog.ErrorContext(tctx, "manual-publish-due: resolve owners failed", logging.AttrComponent, manualPublishComp,
 				"tenant_id", tenantID, logging.AttrError, ownersErr)
 			continue
@@ -146,7 +150,11 @@ func (p *DetectManualPublishDueProcessor) sweep(ctx context.Context, now time.Ti
 			continue
 		}
 		for _, post := range byTenant[tenantID] {
-			_ = p.Notifier.EmitToUsers(tctx, ownerIDs, notify.Spec{
+			// EmitToUsers returns the first per-recipient insert error; a durable
+			// row may be missing when it does, so record it and don't count this
+			// post as notified. Process still returns nil to River (best-effort),
+			// but the error surfaces in the "sweep failed" log + metric.
+			if err := p.Notifier.EmitToUsers(tctx, ownerIDs, notify.Spec{
 				Level:      models.NotificationLevelWarning,
 				Type:       "post.manual_publish_due",
 				Title:      "Post ready to publish",
@@ -156,9 +164,14 @@ func (p *DetectManualPublishDueProcessor) sweep(ctx context.Context, now time.Ti
 				ActionURL:  "/posts/" + post.ID,
 				Data:       map[string]any{"platform_id": post.PlatformID},
 				DedupeKey:  "manual_publish:" + post.ID,
-			})
+			}); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
 			notified++
 		}
 	}
-	return notified, nil
+	return notified, firstErr
 }

@@ -2,6 +2,7 @@ package queues_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
@@ -28,15 +30,20 @@ func (o ownersByTenant) ListOwnersByTenant(_ context.Context, tenantID string) (
 }
 
 // capturingNotifRepo records every inserted notification for assertions and
-// always reports a fresh insert.
+// reports a fresh insert, except for a configured EntityID whose insert fails
+// (to exercise the sweep's error recording).
 type capturingNotifRepo struct {
-	mu   sync.Mutex
-	rows []*models.Notification
+	mu      sync.Mutex
+	rows    []*models.Notification
+	failFor string
 }
 
 func (r *capturingNotifRepo) Insert(_ context.Context, n *models.Notification) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.failFor != "" && n.EntityID == r.failFor {
+		return false, errors.New("insert boom")
+	}
 	r.rows = append(r.rows, n)
 	return true, nil
 }
@@ -54,7 +61,9 @@ func (r *capturingNotifRepo) SetRead(context.Context, string, string, bool) (boo
 	return false, nil
 }
 func (r *capturingNotifRepo) MarkAllRead(context.Context, string, int64) (int, error) { return 0, nil }
-func (r *capturingNotifRepo) Dismiss(context.Context, string, string) (bool, error)   { return false, nil }
+func (r *capturingNotifRepo) Dismiss(context.Context, string, string) (bool, error) {
+	return false, nil
+}
 func (r *capturingNotifRepo) DeleteExpired(context.Context, time.Time, time.Duration) (int64, error) {
 	return 0, nil
 }
@@ -100,6 +109,34 @@ func TestManualPublishDueSweep_NotifiesOwnersPerPost(t *testing.T) {
 		if n.EntityID == "p3" && n.UserID != "owner_c" {
 			t.Fatalf("t2 post p3 leaked to %q", n.UserID)
 		}
+	}
+}
+
+// TestManualPublishDueSweep_CountsOnlySuccesses checks a failing notifier insert
+// is not counted as notified: the swept metric advances only by the rows that
+// actually persisted.
+func TestManualPublishDueSweep_CountsOnlySuccesses(t *testing.T) {
+	posts := []models.Post{
+		{ID: "ok1", TenantScoped: models.TenantScoped{TenantID: "t1"}, PlatformID: "x"},
+		{ID: "boom", TenantScoped: models.TenantScoped{TenantID: "t1"}, PlatformID: "x"},
+	}
+	repo := &capturingNotifRepo{failFor: "boom"}
+	proc := &queues.DetectManualPublishDueProcessor{
+		Posts:    dueLister{posts: posts},
+		Users:    ownersByTenant{owners: map[string][]models.User{"t1": {{ID: "o1"}}}},
+		Notifier: notify.New(repo, eventhub.New(eventhub.Config{})),
+	}
+
+	before := jobs.ManualPublishDueSwept.Value()
+	if err := proc.Process(context.Background(), queues.DetectManualPublishDueTask{}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	// Only ok1 persisted; boom failed and must not be counted.
+	if got := jobs.ManualPublishDueSwept.Value() - before; got != 1 {
+		t.Fatalf("swept delta = %d, want 1 (failed insert must not count)", got)
+	}
+	if len(repo.rows) != 1 || repo.rows[0].EntityID != "ok1" {
+		t.Fatalf("only ok1 should persist: %+v", repo.rows)
 	}
 }
 

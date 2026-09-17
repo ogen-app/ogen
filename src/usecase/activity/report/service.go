@@ -201,9 +201,12 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 }
 
 // loadLocation resolves an IANA tz name, mapping any failure (incl. empty) to
-// ErrInvalidTZ so the handler answers 400.
+// ErrInvalidTZ so the handler answers 400. "Local" is rejected explicitly:
+// time.LoadLocation("Local") succeeds but binds to the server's zone, so the
+// same request would bucket differently between deployments — the report must be
+// pinned to the caller's IANA zone.
 func loadLocation(tz string) (*time.Location, error) {
-	if tz == "" {
+	if tz == "" || tz == "Local" {
 		return nil, ErrInvalidTZ
 	}
 	loc, err := time.LoadLocation(tz)

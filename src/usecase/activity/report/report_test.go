@@ -1,9 +1,24 @@
 package report
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
+
+// TestLoadLocation_RejectsAmbiguousZones checks empty and the server-bound
+// "Local" pseudo-zone are rejected (both would make the report non-deterministic
+// across deployments), while a real IANA zone loads.
+func TestLoadLocation_RejectsAmbiguousZones(t *testing.T) {
+	for _, tz := range []string{"", "Local"} {
+		if _, err := loadLocation(tz); !errors.Is(err, ErrInvalidTZ) {
+			t.Fatalf("loadLocation(%q) = %v, want ErrInvalidTZ", tz, err)
+		}
+	}
+	if _, err := loadLocation("America/New_York"); err != nil {
+		t.Fatalf("loadLocation(IANA) unexpected error: %v", err)
+	}
+}
 
 func mustLoad(t *testing.T, tz string) *time.Location {
 	t.Helper()
@@ -202,5 +217,23 @@ func TestBucketReports_FloorDropsUndercoveredDays(t *testing.T) {
 	got := bucketReports(in, loc, 30, floor)
 	if len(got) != 1 || got[0].Date != "2026-08-18" {
 		t.Fatalf("floor should keep only fully-covered days: %+v", got)
+	}
+}
+
+// TestBucketReports_FloorInsideNewestDayStillReturns checks the corner where the
+// row cap is exhausted within the newest day: the floor lands inside it, so no
+// day is "fully covered" — but the sweep must still return the newest day so the
+// client gets a `before` cursor and pagination never dead-ends.
+func TestBucketReports_FloorInsideNewestDayStillReturns(t *testing.T) {
+	loc := mustLoad(t, "UTC")
+	d18row := time.Date(2026, 8, 18, 12, 0, 0, 0, loc)
+	in := Inputs{Published: []PublishedRow{{At: d18row, PlatformID: "x"}}}
+
+	// Floor after the fetched row but still inside 2026-08-18 (a single day
+	// exceeded the cap). Naive floor filtering would drop everything → empty.
+	floor := time.Date(2026, 8, 18, 18, 0, 0, 0, loc)
+	got := bucketReports(in, loc, 30, floor)
+	if len(got) != 1 || got[0].Date != "2026-08-18" {
+		t.Fatalf("floor inside newest day must still return it (no pagination dead-end): %+v", got)
 	}
 }

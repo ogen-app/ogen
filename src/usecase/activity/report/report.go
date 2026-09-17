@@ -273,18 +273,32 @@ func bucketReports(in Inputs, loc *time.Location, limit int, floor time.Time) []
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(keys))) // newest day first (lexical == chronological for YYYY-MM-DD)
 
+	// Apply the truncation floor: a day is fully covered only if its first instant
+	// is at/after floor; a day straddling it may be missing its older half. But if
+	// the floor falls inside the newest day (a single local day exceeded the row
+	// cap), filtering would drop every day and leave the client no date to page
+	// from — a pagination dead-end. In that corner we fall back to the newest days
+	// best-effort so the response is never empty-while-data-exists and the client
+	// can always advance `before`. The day's list totals may undercount only in
+	// that extreme single-day case; the per-day detail endpoint stays exact.
+	kept := keys
+	if !floor.IsZero() {
+		covered := make([]string, 0, len(keys))
+		for _, k := range keys {
+			dayStart, _ := time.ParseInLocation(dateLayout, k, loc)
+			if !dayStart.Before(floor) {
+				covered = append(covered, k)
+			}
+		}
+		if len(covered) > 0 {
+			kept = covered
+		}
+	}
+
 	out := make([]ListItem, 0, limit)
-	for _, k := range keys {
+	for _, k := range kept {
 		if len(out) >= limit {
 			break
-		}
-		if !floor.IsZero() {
-			// A day is fully covered only if its first instant is at/after floor;
-			// a day straddling floor may be missing its older half — skip it.
-			dayStart, _ := time.ParseInLocation(dateLayout, k, loc)
-			if dayStart.Before(floor) {
-				continue
-			}
 		}
 		a := days[k]
 		out = append(out, ListItem{
