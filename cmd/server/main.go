@@ -75,47 +75,9 @@ func main() {
 			} else {
 				analyticsDB = adb
 				defer analyticsDB.Close()
-
-				// CON-125: one-time, idempotent backfill into the analytics DB.
-				// Best-effort — never fatal to boot. It runs under a bounded
-				// context so a slow/unresponsive analytics DB can't hang boot; the
-				// backfill is restart-safe, so a timed-out run simply resumes on
-				// the next boot.
-				const backfillTimeout = 2 * time.Minute
-
-				// Historical post_logs audit trail → tenant_activity_events (curated to
-				// the activity taxonomy).
-				func() {
-					ctx, cancel := context.WithTimeout(context.Background(), backfillTimeout)
-					defer cancel()
-					if n, berr := repository.BackfillPostLogsToActivity(ctx, db, adb); berr != nil {
-						slog.Warn("post_logs → tenant_activity_events backfill failed (non-fatal)",
-							logging.AttrComponent, "boot", logging.AttrError, berr)
-					} else if n > 0 {
-						slog.Info("post_logs migrated to tenant_activity_events",
-							logging.AttrComponent, "boot", "rows", n)
-					}
-				}()
 			}
 		}
 	}
-
-	// CON-243: assign every tenant lacking an open tier-version assignment to its
-	// tier's latest active version. Idempotent + best-effort, never fatal to boot;
-	// the entitlement resolver has a tier_id fallback, so a skipped run only
-	// delays the explicit history rows.
-	func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if rep, berr := repository.BackfillTenantTierAssignments(ctx, db, false); berr != nil {
-			slog.Warn("tenant tier-assignment backfill failed (non-fatal)",
-				logging.AttrComponent, "boot", logging.AttrError, berr)
-		} else if rep.Assigned > 0 || rep.SkippedNoVersion > 0 {
-			slog.Info("tenant tier-assignment backfill",
-				logging.AttrComponent, "boot",
-				"assigned", rep.Assigned, "skipped_no_version", rep.SkippedNoVersion, "candidates", rep.Candidates)
-		}
-	}()
 
 	// Envelope encryption: load (or generate) the KEK, build a
 	// Cipher, then expose Get/Set through SecretStore. Boot fails on
@@ -214,10 +176,59 @@ func main() {
 		}
 	}
 
+	// CON-301: run the best-effort boot backfills in the background so the HTTP +
+	// gRPC listeners come up immediately after migrations instead of waiting out
+	// their (up to 2 min each) timeouts inline. Both are idempotent + restart-safe,
+	// and serving before they finish is safe by design — the CON-243 entitlement
+	// resolver has a tier_id fallback and the activity history self-heals — so a
+	// redeploy no longer holds the listeners down and surfaces DeadlineExceeded on
+	// callers such as Harbor.
+	go runBootBackfills(db, analyticsDB)
+
 	slog.Info("server listening", logging.AttrComponent, "boot", "addr", cfg.Addr)
 	if err := app.Listen(cfg.Addr); err != nil {
 		fatal("server exited", err)
 	}
+}
+
+// runBootBackfills executes the process's best-effort, non-fatal boot backfills
+// off the critical boot path (CON-301). Each runs under its own bounded context
+// so a slow DB can't wedge it, and both are idempotent + restart-safe, so a
+// redeploy that kills a run mid-flight simply resumes on the next boot.
+func runBootBackfills(db, analyticsDB *bun.DB) {
+	const backfillTimeout = 2 * time.Minute
+
+	// CON-125: historical post_logs audit trail → tenant_activity_events (curated
+	// to the activity taxonomy). Only runs when usage analytics is enabled.
+	if analyticsDB != nil {
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), backfillTimeout)
+			defer cancel()
+			if n, berr := repository.BackfillPostLogsToActivity(ctx, db, analyticsDB); berr != nil {
+				slog.Warn("post_logs → tenant_activity_events backfill failed (non-fatal)",
+					logging.AttrComponent, "boot", logging.AttrError, berr)
+			} else if n > 0 {
+				slog.Info("post_logs migrated to tenant_activity_events",
+					logging.AttrComponent, "boot", "rows", n)
+			}
+		}()
+	}
+
+	// CON-243: assign every tenant lacking an open tier-version assignment to its
+	// tier's latest active version. The entitlement resolver has a tier_id
+	// fallback, so a skipped run only delays the explicit history rows.
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), backfillTimeout)
+		defer cancel()
+		if rep, berr := repository.BackfillTenantTierAssignments(ctx, db, false); berr != nil {
+			slog.Warn("tenant tier-assignment backfill failed (non-fatal)",
+				logging.AttrComponent, "boot", logging.AttrError, berr)
+		} else if rep.Assigned > 0 || rep.SkippedNoVersion > 0 {
+			slog.Info("tenant tier-assignment backfill",
+				logging.AttrComponent, "boot",
+				"assigned", rep.Assigned, "skipped_no_version", rep.SkippedNoVersion, "candidates", rep.Candidates)
+		}
+	}()
 }
 
 // grpcAddrIsLoopback reports whether addr binds only a loopback interface, i.e.
