@@ -3,7 +3,6 @@ package server
 import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/uptrace/bun"
 
@@ -146,7 +145,10 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 		BodyLimit: 100 << 20,
 	})
 
-	app.Use(recover.New())
+	// CON-303: tracing + panic/error capture, outermost. Replaces the bare
+	// recover middleware that used to sit here. See useObservability.
+	useObservability(app)
+
 	// Per-request correlation id (CON-107): honours an inbound X-Request-ID,
 	// otherwise generates one, echoes it on the response, and stores it under
 	// logging.RequestIDKey so the slog ContextHandler attaches it to every line
@@ -164,7 +166,9 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 			AllowOrigins:     cfg.CORSAllowedOrigins,
 			AllowCredentials: true,
 			AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-			AllowHeaders:     "Content-Type",
+			// sentry-trace/baggage (Sentry browser SDK) + traceparent/tracestate
+			// (W3C) let the UI's trace continue into the API server span (CON-303).
+			AllowHeaders: "Content-Type,sentry-trace,baggage,traceparent,tracestate",
 		}))
 	}
 	return app

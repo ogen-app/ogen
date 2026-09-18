@@ -10,6 +10,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/anthropic"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
@@ -23,6 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/telemetry"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/notes"
@@ -166,6 +168,11 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 			slog.Error("rebuild after anthropic_api_key change failed",
 				logging.AttrComponent, "genkit",
 				logging.AttrError, err)
+			// CON-303: a failed rebuild silently disables all AI flows until the
+			// next key change — surface it to Sentry, not just the logs.
+			telemetry.CaptureError(context.Background(), err,
+				attribute.String("component", "genkit"),
+				attribute.String("cause", "anthropic_key_rebuild"))
 		}
 	})
 	return r, nil

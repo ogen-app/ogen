@@ -528,6 +528,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		// Route River's internal logging through the shared structured logger
 		// (CON-107) so job-queue lines join the same stream and format.
 		Logger: slog.Default(),
+		// CON-303: wrap every job in a root tracing span (so its DB/gRPC work is a
+		// coherent trace) and report exhausted-retry failures to Sentry.
+		Middleware: jobs.Middleware(),
 		// CON-282: a dedicated `audio` queue isolates long-running transcription
 		// from short ingestion on the default queue (its worker pool is sized
 		// separately, kept small). The worker is queue-agnostic; jobs are routed
@@ -955,6 +958,10 @@ func defaultErrorHandler(c *fiber.Ctx, err error) error {
 			"path", c.Path(),
 			"status", code,
 			logging.AttrError, err)
+		// CON-303: report the server fault to Sentry, linked to the request trace.
+		// A no-op when telemetry is disabled; skips panics already captured at
+		// recovery time.
+		reportServerError(c, err, code)
 	}
 	return c.Status(code).JSON(fiber.Map{"error": err.Error()})
 }

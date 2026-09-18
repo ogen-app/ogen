@@ -313,7 +313,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 	logCtx := logging.WithRequestID(context.Background(), reqID)
 	logCtx = logging.WithUserID(logCtx, session.UserID)
 	logCtx = tenantctx.With(logCtx, session.TenantID)
-	queryCtx := tenantctx.With(context.Background(), session.TenantID)
+	queryCtx := detachedContext(c, session.TenantID)
 
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		defer unsubscribe()

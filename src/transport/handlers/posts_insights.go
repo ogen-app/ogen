@@ -107,7 +107,7 @@ func (h *PostInsightsHandler) Assess(c *fiber.Ctx) error {
 	postID := post.ID
 	assess := h.assessQuality
 	tenantID, _ := c.Locals(tenantctx.Key).(string)
-	flowCtx := tenantctx.With(context.Background(), tenantID)
+	flowCtx := detachedContext(c, tenantID)
 	// Capture the actor now; the stream writer runs after the request context
 	// may be recycled, so the activity record can't read it from c.Context().
 	var actorID string

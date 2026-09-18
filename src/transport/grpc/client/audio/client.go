@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -145,6 +146,8 @@ func New(cfg Config) (*Client, error) {
 	// context into outgoing gRPC metadata so audio-service's logs join the
 	// API's (CON-111).
 	dialOpts := []grpc.DialOption{
+		// CON-303: emit a client span per RPC and propagate the trace to the service.
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainStreamInterceptor(correlationStreamInterceptor),
 		grpc.WithChainUnaryInterceptor(correlationUnaryInterceptor),

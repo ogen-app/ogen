@@ -717,7 +717,7 @@ func (h *CampaignsHandler) GenerateDraft(c *fiber.Ctx) error {
 	// Carry the tenant into the detached flow context (the StreamWriter runs
 	// after this handler returns) so usage recording + enforcement attribute
 	// to the right tenant (CON-86).
-	flowCtx := tenantctx.With(context.Background(), session.TenantID)
+	flowCtx := detachedContext(c, session.TenantID)
 
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		writeEvent := func(event string, data any) {
@@ -814,7 +814,7 @@ func (h *CampaignsHandler) EnrichBrief(c *fiber.Ctx) error {
 
 	req := enrich_brief.EnrichBriefRequest{CampaignID: campaign.ID, Instruction: body.Instruction}
 	enrichBrief := h.enrichBrief
-	flowCtx := tenantctx.With(context.Background(), session.TenantID)
+	flowCtx := detachedContext(c, session.TenantID)
 
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		writeEvent := func(event string, data any) {
@@ -905,7 +905,7 @@ func (h *CampaignsHandler) Assistant(c *fiber.Ctx) error {
 	// Carry the tenant into the detached flow context (the StreamWriter runs
 	// after this handler returns) so the tenant-scoped campaign load, brief
 	// write, and usage recording all attribute to the right tenant (CON-86/97).
-	flowCtx := tenantctx.With(context.Background(), session.TenantID)
+	flowCtx := detachedContext(c, session.TenantID)
 
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		writeEvent := func(event string, data any) {

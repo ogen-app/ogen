@@ -16,7 +16,9 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -28,6 +30,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/telemetry"
 	grpcserver "github.com/ogen-app/ogen/src/transport/grpc/server"
 	"github.com/ogen-app/ogen/src/transport/server"
 )
@@ -43,6 +46,24 @@ func main() {
 	// Install the structured logger before anything else logs, so even early
 	// boot errors are structured and any stray stdlib log.Print is bridged.
 	logging.New(cfg)
+
+	// CON-303: error monitoring + OpenTelemetry tracing (Sentry). Must be
+	// installed before anything creates OTel spans — the DB pool, the gRPC
+	// stack, and especially Genkit, which binds to whatever global
+	// TracerProvider exists when it first traces. A no-op when SENTRY_DSN is
+	// unset; an init failure is never fatal (fail-open, mirrors analytics).
+	telemetryShutdown, err := telemetry.Init(context.Background(), cfg)
+	if err != nil {
+		slog.Warn("telemetry init failed, disabling (fail-open)",
+			logging.AttrComponent, "boot", logging.AttrError, err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetryShutdown(ctx); err != nil {
+			slog.Warn("telemetry shutdown", logging.AttrComponent, "boot", logging.AttrError, err)
+		}
+	}()
 
 	db, err := database.New(cfg.DSN, cfg.Debug)
 	if err != nil {
@@ -192,8 +213,31 @@ func main() {
 	go runBootBackfills(db, analyticsDB, bootedAt)
 
 	slog.Info("server listening", logging.AttrComponent, "boot", "addr", cfg.Addr)
-	if err := app.Listen(cfg.Addr); err != nil {
-		fatal("server exited", err)
+
+	// Run the HTTP server in a goroutine and wait for either a listen failure or
+	// a termination signal. app.Listen blocks until the server stops, so serving
+	// inline would mean SIGTERM kills the process before the deferred telemetry
+	// flush and DB close can run (CON-303). On signal we drain in-flight requests
+	// with a bounded grace period, then return so the defers execute.
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- app.Listen(cfg.Addr) }()
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			fatal("server exited", err)
+		}
+	case <-sigCtx.Done():
+		stop() // restore default signal handling so a second signal force-quits
+		slog.Info("shutdown signal received; draining", logging.AttrComponent, "boot")
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := app.ShutdownWithContext(shutCtx); err != nil {
+			slog.Error("graceful shutdown failed", logging.AttrComponent, "boot", logging.AttrError, err)
+		}
 	}
 }
 
