@@ -21,6 +21,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -86,7 +87,16 @@ func Init(ctx context.Context, cfg *config.Config) (shutdown func(context.Contex
 	// Endpoint, URL path, headers and TLS mode are all derived from the DSN.
 	exporter, err := sentryotlp.NewTraceExporter(ctx, cfg.SentryDSN)
 	if err != nil {
+		// The Sentry client is already bound to the global hub. With no exporter
+		// there is nowhere for spans to go, and leaving the client live would let
+		// CaptureError keep queuing events — breaking the fail-open contract. Fully
+		// tear it down: drain, close the transport, then unbind so CaptureError
+		// (which checks hub.Client()) becomes a true no-op.
 		sentry.Flush(flushTimeout)
+		if c := sentry.CurrentHub().Client(); c != nil {
+			c.Close()
+		}
+		sentry.CurrentHub().BindClient(nil)
 		return noopShutdown, err
 	}
 
@@ -143,8 +153,13 @@ func Init(ctx context.Context, cfg *config.Config) (shutdown func(context.Contex
 
 	return func(ctx context.Context) error {
 		// Flush spans first (bounded by ctx), then drain the error transport.
+		// sentry.Flush returns false on timeout with events possibly undelivered;
+		// surface that as a shutdown error (unless a span-shutdown error already
+		// takes precedence) so a lossy drain isn't reported as clean.
 		err := tp.Shutdown(ctx)
-		sentry.Flush(flushTimeout)
+		if !sentry.Flush(flushTimeout) && err == nil {
+			return errors.New("sentry flush timed out")
+		}
 		return err
 	}, nil
 }
@@ -191,7 +206,7 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 		event.Request.Data = ""
 		for k := range event.Request.Headers {
 			switch k {
-			case "Authorization", "Cookie", "Set-Cookie", "X-Api-Key", "Sentry-Trace", "Baggage":
+			case "Authorization", "Cookie", "Set-Cookie", "X-Api-Key", "X-Admin-Token", "Sentry-Trace", "Baggage":
 				delete(event.Request.Headers, k)
 			}
 		}

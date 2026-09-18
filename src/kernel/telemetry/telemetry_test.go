@@ -43,6 +43,7 @@ func TestScrubEventStripsSensitive(t *testing.T) {
 			Headers: map[string]string{
 				"Authorization": "Bearer x",
 				"Cookie":        "c3_session=abc",
+				"X-Admin-Token": "super-secret",
 				"Content-Type":  "application/json",
 			},
 		},
@@ -56,6 +57,9 @@ func TestScrubEventStripsSensitive(t *testing.T) {
 	}
 	if _, ok := got.Request.Headers["Cookie"]; ok {
 		t.Error("Cookie header not scrubbed")
+	}
+	if _, ok := got.Request.Headers["X-Admin-Token"]; ok {
+		t.Error("X-Admin-Token header not scrubbed")
 	}
 	if got.Request.Headers["Content-Type"] != "application/json" {
 		t.Error("non-sensitive header should be preserved")
