@@ -434,15 +434,21 @@ func newConnectSessionID() (string, error) {
 // only when the param is absent or unrecoverable.
 func rawUserProfile(s string) json.RawMessage {
 	s = strings.TrimSpace(s)
-	// At most a few passes: one for the normal case, extra ones to unwind
-	// double/triple encoding. The loop always terminates — each QueryUnescape
-	// that changes nothing (or errors) breaks out.
-	for range 4 {
+	// Validate the value as-is, then after each of up to 4 URL-decode passes.
+	// The check sits at the TOP of the loop so the result of the LAST decode is
+	// still tested before we give up — a value that only becomes valid on the
+	// final pass must not be decoded and then discarded. The loop always
+	// terminates: any QueryUnescape that changes nothing (or errors) returns,
+	// and the pass count is bounded.
+	for i := 0; ; i++ {
 		if s == "" {
 			return nil
 		}
 		if json.Valid([]byte(s)) {
 			return json.RawMessage(s)
+		}
+		if i == 4 {
+			return nil
 		}
 		dec, err := url.QueryUnescape(s)
 		if err != nil || dec == s {
@@ -450,7 +456,6 @@ func rawUserProfile(s string) json.RawMessage {
 		}
 		s = strings.TrimSpace(dec)
 	}
-	return nil
 }
 
 func containsTargetID(opts []zernio.ConnectTarget, id string) bool {

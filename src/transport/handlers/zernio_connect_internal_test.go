@@ -54,8 +54,11 @@ func TestConnectErrorCodeForStatus(t *testing.T) {
 // decode until the object parses, and forward the fully-decoded original.
 func TestRawUserProfile(t *testing.T) {
 	const obj = `{"id":"123","username":"mybrand","displayName":"My Brand Page"}`
-	once := url.QueryEscape(obj)   // arrives single-encoded
-	twice := url.QueryEscape(once) // arrives double-encoded
+	once := url.QueryEscape(obj)     // arrives single-encoded
+	twice := url.QueryEscape(once)   // arrives double-encoded
+	thrice := url.QueryEscape(twice) // triple-encoded
+	quad := url.QueryEscape(thrice)  // 4 passes: the boundary the loop must still decode
+	quint := url.QueryEscape(quad)   // 5 passes: beyond the bound, must give up
 
 	cases := []struct {
 		name      string
@@ -65,6 +68,9 @@ func TestRawUserProfile(t *testing.T) {
 		{"plain json", obj, true},
 		{"single-encoded", once, true},
 		{"double-encoded", twice, true},
+		{"triple-encoded", thrice, true},
+		{"quad-encoded (boundary)", quad, true},
+		{"quint-encoded (beyond bound)", quint, false},
 		{"empty", "", false},
 		{"whitespace", "   ", false},
 		{"not json", "hello world", false},
