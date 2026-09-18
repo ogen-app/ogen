@@ -20,6 +20,21 @@ type Config struct {
 	LogLevel  string `envconfig:"LOG_LEVEL"  default:"info"`
 	LogFormat string `envconfig:"LOG_FORMAT" default:""`
 
+	// Telemetry (CON-303): error monitoring + OpenTelemetry tracing, unified in
+	// Sentry. SentryDSN is the single on/off switch — empty disables ALL
+	// telemetry (fail-open, mirrors AnalyticsDSN): no SDK init, no exporter, no
+	// spans, and the app behaves exactly as before. When set, errors are
+	// captured via the sentry-go SDK and OTel spans are exported to Sentry's
+	// OTLP endpoint (derived from the DSN). Instrumentation is vendor-neutral
+	// OpenTelemetry, so swapping to an OTLP collector later is an exporter change
+	// in src/kernel/telemetry only. See CON-302 for the architecture.
+	SentryDSN         string  `envconfig:"SENTRY_DSN"                  default:""`
+	SentryEnvironment string  `envconfig:"SENTRY_ENVIRONMENT"          default:"development"`
+	SentryRelease     string  `envconfig:"SENTRY_RELEASE"              default:""`
+	SentrySampleRate  float64 `envconfig:"SENTRY_TRACES_SAMPLE_RATE"   default:"0.1"`
+	SentryDebug       bool    `envconfig:"SENTRY_DEBUG"                default:"false"`
+	OTelServiceName   string  `envconfig:"OTEL_SERVICE_NAME"           default:"ogen-api"`
+
 	// AnthropicDebugHTTP (CON-112 perf diagnostics) logs every Anthropic
 	// round-trip split into httptrace phases (conn vs. server time), so a slow
 	// call can be attributed to connection acquisition vs. the API itself. This

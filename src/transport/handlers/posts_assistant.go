@@ -119,7 +119,7 @@ func (h *PostAssistantHandler) Assistant(c *fiber.Ctx) error {
 	// after this handler returns) so usage recording + enforcement attribute
 	// to the right tenant (CON-86).
 	tenantID, _ := c.Locals(tenantctx.Key).(string)
-	flowCtx := tenantctx.With(context.Background(), tenantID)
+	flowCtx := detachedContext(c, tenantID)
 
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		writeEvent := func(event string, data any) {

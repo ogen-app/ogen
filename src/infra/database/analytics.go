@@ -11,6 +11,7 @@ import (
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/extra/bundebug"
+	"github.com/uptrace/bun/extra/bunotel"
 	"github.com/uptrace/bun/migrate"
 
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -58,6 +59,10 @@ func NewAnalytics(dsn string, debug bool) (*bun.DB, error) {
 			db.Close()
 		}
 	}()
+
+	// CON-303: trace analytics-pool queries too, tagged with a distinct db.name
+	// so they are distinguishable from control-plane queries in a trace.
+	db.AddQueryHook(bunotel.NewQueryHook(bunotel.WithDBName("ogen_analytics")))
 
 	if debug {
 		db.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))

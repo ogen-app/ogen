@@ -17,7 +17,6 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 // CampaignGenerationHandler owns the campaign AI generation/review SSE endpoints
@@ -141,7 +140,7 @@ func (h *CampaignGenerationHandler) GeneratePosts(c *fiber.Ctx) error {
 	)
 
 	session := c.Locals("session").(*models.Session)
-	flowCtx := tenantctx.With(context.Background(), session.TenantID)
+	flowCtx := detachedContext(c, session.TenantID)
 	generatePosts := h.generatePosts
 	req := content_plan.GeneratePostsRequest{
 		// Copied: the StreamWriter below outlives the request buffer this id
@@ -225,7 +224,7 @@ func (h *CampaignGenerationHandler) BriefReview(c *fiber.Ctx) error {
 	c.Set("X-Accel-Buffering", "no")
 
 	session := c.Locals("session").(*models.Session)
-	flowCtx := tenantctx.With(context.Background(), session.TenantID)
+	flowCtx := detachedContext(c, session.TenantID)
 	h.recordActivity(c, activity.CategoryAIFlow, "brief_review",
 		activity.WithEntity("campaign", c.Params("id")),
 	)
@@ -304,7 +303,7 @@ func (h *CampaignGenerationHandler) PostsReview(c *fiber.Ctx) error {
 	c.Set("X-Accel-Buffering", "no")
 
 	session := c.Locals("session").(*models.Session)
-	flowCtx := tenantctx.With(context.Background(), session.TenantID)
+	flowCtx := detachedContext(c, session.TenantID)
 	h.recordActivity(c, activity.CategoryAIFlow, "posts_review",
 		activity.WithEntity("campaign", c.Params("id")),
 	)

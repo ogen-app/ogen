@@ -12,6 +12,7 @@ import (
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/extra/bundebug"
+	"github.com/uptrace/bun/extra/bunotel"
 )
 
 // Default connection-pool sizing. Postgres removes SQLite's single-writer
@@ -42,6 +43,13 @@ func New(dsn string, debug bool) (*bun.DB, error) {
 	sqldb.SetConnMaxIdleTime(defaultConnMaxIdleTime)
 
 	db := bun.NewDB(sqldb, pgdialect.New())
+
+	// CON-303: per-query OpenTelemetry spans (operation + table + placeholder SQL,
+	// never bound arg values — bunotel's default omits them). A no-op unless a
+	// real TracerProvider is installed (telemetry.Init runs before this), and the
+	// parentless-client sampler drops any query that runs outside a request/job
+	// trace, so this only surfaces DB work under an actual trace.
+	db.AddQueryHook(bunotel.NewQueryHook(bunotel.WithDBName("ogen")))
 
 	if debug {
 		db.AddQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))

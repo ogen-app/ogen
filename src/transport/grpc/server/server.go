@@ -22,6 +22,7 @@ import (
 	"errors"
 	"strings"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -68,6 +69,8 @@ func New(
 		return nil, errors.New("grpcserver: auth token is required")
 	}
 	srv := grpc.NewServer(
+		// CON-303: trace inbound operator RPCs; continues an inbound trace if present.
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(tokenAuthInterceptor(token)),
 	)
 	// CON-294: the versioned-tier-entitlement layer. Load the engineering-owned
