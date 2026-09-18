@@ -120,9 +120,11 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 	targets, err := h.integ.Client.ListConnectTargets(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken)
 	if err != nil {
 		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
+			code := connectErrorCodeForStatus(apiErr.Status)
 			slog.WarnContext(ctx, "connect list targets failed",
-				logging.AttrComponent, "zernio", "platform", sess.Platform, "status", apiErr.Status)
-			return h.redirectConnectError(c, sess.Platform, "upstream")
+				logging.AttrComponent, "zernio", "platform", sess.Platform,
+				"status", apiErr.Status, "reason", apiErr.Message, "code", code)
+			return h.redirectConnectError(c, sess.Platform, code)
 		}
 		return err
 	}
@@ -135,8 +137,12 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 	case len(targets) == 1:
 		if err := h.integ.Client.SelectConnectTarget(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken, targets[0].ID, userProfile); err != nil {
 			jobs.ZernioConnectSelectFailed.Add(1)
-			if _, ok := errors.AsType[*zernio.APIError](err); ok {
-				return h.redirectConnectError(c, sess.Platform, "upstream")
+			if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
+				code := connectErrorCodeForStatus(apiErr.Status)
+				slog.WarnContext(ctx, "connect select target failed (single target)",
+					logging.AttrComponent, "zernio", "platform", sess.Platform,
+					"status", apiErr.Status, "reason", apiErr.Message, "code", code)
+				return h.redirectConnectError(c, sess.Platform, code)
 			}
 			return err
 		}
@@ -263,7 +269,10 @@ func (h *ZernioHandler) SelectPendingConnection(c *fiber.Ctx) error {
 	}
 	if err := h.integ.Client.SelectConnectTarget(c.Context(), sess.Platform, sess.ProfileID, secrets.TempToken, secrets.ConnectToken, req.TargetID, secrets.UserProfile); err != nil {
 		jobs.ZernioConnectSelectFailed.Add(1)
-		if _, ok := errors.AsType[*zernio.APIError](err); ok {
+		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
+			slog.WarnContext(c.Context(), "connect select target failed (picker)",
+				logging.AttrComponent, "zernio", "platform", sess.Platform,
+				"connectionId", sess.ID, "status", apiErr.Status, "reason", apiErr.Message)
 			return fiber.NewError(http.StatusBadGateway, "integration_degraded")
 		}
 		return err
@@ -324,6 +333,32 @@ func (h *ZernioHandler) connectCallbackURL(sessionID string) string {
 
 func (h *ZernioHandler) redirectConnectSuccess(c *fiber.Ctx, platform string) error {
 	return c.Redirect(h.spaBase()+"/workspace-settings?connected="+url.QueryEscape(platform), fiber.StatusFound)
+}
+
+// connectErrorCodeForStatus maps a Zernio select-step HTTP status to the SPA
+// connect_error code that best explains the failure, so the user gets advice
+// that matches the actual cause instead of a blanket "try again in a moment".
+//
+//   - 5xx / 408 / 429 → "upstream": a transient reach-the-platform blip; a plain
+//     retry can succeed (this is the only case where "try again" is honest).
+//   - 401 → "expired": the short-lived tempToken/connect_token no longer
+//     authorizes the pick — the link went stale, so the user must reconnect
+//     (reuses the existing expired-link copy).
+//   - 403 / 400 (and other 4xx) → "permission": the platform did not grant a
+//     page/profile we can attach — Page access was not granted on the consent
+//     screen, or the account administers nothing postable. A blind retry of the
+//     same authorization won't fix it; the user must reconnect and grant access.
+//
+// The precise Zernio reason is logged at each call site; this only picks the
+// user-facing bucket.
+func connectErrorCodeForStatus(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "expired"
+	case http.StatusForbidden, http.StatusBadRequest:
+		return "permission"
+	}
+	return "upstream"
 }
 
 func (h *ZernioHandler) redirectConnectError(c *fiber.Ctx, platform, code string) error {
