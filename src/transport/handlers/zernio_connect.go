@@ -115,7 +115,8 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 	// Zernio screen ever appears.
 	tempToken := c.Query("tempToken")
 	connectToken := c.Query("connect_token")
-	userProfile := rawUserProfile(c.Query("userProfile"))
+	rawUserProfileParam := c.Query("userProfile")
+	userProfile := rawUserProfile(rawUserProfileParam)
 
 	targets, err := h.integ.Client.ListConnectTargets(ctx, sess.Platform, sess.ProfileID, tempToken, connectToken)
 	if err != nil {
@@ -141,7 +142,8 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 				code := connectErrorCodeForStatus(apiErr.Status)
 				slog.WarnContext(ctx, "connect select target failed (single target)",
 					logging.AttrComponent, "zernio", "platform", sess.Platform,
-					"status", apiErr.Status, "reason", apiErr.Message, "code", code)
+					"status", apiErr.Status, "reason", apiErr.Message, "code", code,
+					"userProfileParamPresent", rawUserProfileParam != "", "userProfileSent", len(userProfile) > 0)
 				return h.redirectConnectError(c, sess.Platform, code)
 			}
 			return err
@@ -417,14 +419,38 @@ func newConnectSessionID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// rawUserProfile passes Zernio's userProfile query param through as raw JSON
-// when it is valid JSON, else nil. Fiber has already URL-decoded the value.
+// rawUserProfile normalizes Zernio's userProfile callback param into the JSON
+// object its select-page POST requires. Zernio rejects a missing object with
+// "Invalid input: expected object, received undefined", so dropping this field
+// (as an earlier over-strict version did) breaks every single-target Facebook /
+// LinkedIn connect.
+//
+// The value is URL-encoded JSON that can reach us still percent-escaped after
+// the handler's single decode — Zernio's already-encoded JSON gets re-encoded
+// when appended to our redirect_url, and one decode then leaves stray %XX so it
+// is not yet valid JSON. URL-safe tokens (tempToken/connect_token) survive the
+// extra encoding unchanged, which is exactly why the list call works while this
+// field alone arrives broken. Decode again (bounded) until it parses; return nil
+// only when the param is absent or unrecoverable.
 func rawUserProfile(s string) json.RawMessage {
 	s = strings.TrimSpace(s)
-	if s == "" || !json.Valid([]byte(s)) {
-		return nil
+	// At most a few passes: one for the normal case, extra ones to unwind
+	// double/triple encoding. The loop always terminates — each QueryUnescape
+	// that changes nothing (or errors) breaks out.
+	for range 4 {
+		if s == "" {
+			return nil
+		}
+		if json.Valid([]byte(s)) {
+			return json.RawMessage(s)
+		}
+		dec, err := url.QueryUnescape(s)
+		if err != nil || dec == s {
+			return nil
+		}
+		s = strings.TrimSpace(dec)
 	}
-	return json.RawMessage(s)
+	return nil
 }
 
 func containsTargetID(opts []zernio.ConnectTarget, id string) bool {
