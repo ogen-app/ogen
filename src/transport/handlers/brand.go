@@ -43,7 +43,7 @@ func (h *BrandHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity
 	if h.activity == nil {
 		return
 	}
-	h.activity.Record(c.Context(), activity.CategoryBrand, typ,
+	h.activity.Record(reqCtx(c), activity.CategoryBrand, typ,
 		append([]activity.Option{activity.WithSource(activity.SourceAPI)}, opts...)...)
 }
 
@@ -78,7 +78,7 @@ func (h *BrandHandler) Register(app *fiber.App) {
 
 // GetAll returns the whole aggregate — every slot present (FR1).
 func (h *BrandHandler) GetAll(c *fiber.Ctx) error {
-	data, err := h.repo.GetAll(c.Context())
+	data, err := h.repo.GetAll(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (h *BrandHandler) CreateVoice(c *fiber.Ctx) error {
 	v.Summary = ""
 	now := brandNow()
 	v.CreatedAt, v.UpdatedAt = now, now
-	if err := h.repo.CreateVoice(c.Context(), &v); err != nil {
+	if err := h.repo.CreateVoice(reqCtx(c), &v); err != nil {
 		return err
 	}
 	h.recordActivity(c, "brand_voice_created", activity.WithEntity("brand_voice", v.ID))
@@ -127,7 +127,7 @@ func (h *BrandHandler) UpdateVoice(c *fiber.Ctx) error {
 	}
 	v.Summary = "" // FR5: withdrawn; regeneration is a follow-up.
 	v.UpdatedAt = brandNow()
-	if err := h.repo.UpdateVoice(c.Context(), &v); err != nil {
+	if err := h.repo.UpdateVoice(reqCtx(c), &v); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "voice not found")
 		}
@@ -139,7 +139,7 @@ func (h *BrandHandler) UpdateVoice(c *fiber.Ctx) error {
 }
 
 func (h *BrandHandler) DeleteVoice(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteVoice(c.Context(), c.Params("id"))
+	deleted, err := h.repo.DeleteVoice(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (h *BrandHandler) CreateAudience(c *fiber.Ctx) error {
 	a.Summary = "" // FR5
 	now := brandNow()
 	a.CreatedAt, a.UpdatedAt = now, now
-	if err := h.repo.CreateAudience(c.Context(), &a); err != nil {
+	if err := h.repo.CreateAudience(reqCtx(c), &a); err != nil {
 		return err
 	}
 	h.recordActivity(c, "brand_audience_created", activity.WithEntity("brand_audience", a.ID))
@@ -189,7 +189,7 @@ func (h *BrandHandler) UpdateAudience(c *fiber.Ctx) error {
 	}
 	a.Summary = "" // FR5
 	a.UpdatedAt = brandNow()
-	if err := h.repo.UpdateAudience(c.Context(), &a); err != nil {
+	if err := h.repo.UpdateAudience(reqCtx(c), &a); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "audience not found")
 		}
@@ -201,7 +201,7 @@ func (h *BrandHandler) UpdateAudience(c *fiber.Ctx) error {
 }
 
 func (h *BrandHandler) DeleteAudience(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteAudience(c.Context(), c.Params("id"))
+	deleted, err := h.repo.DeleteAudience(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
 	if err := validateGuardrails(&g); err != nil {
 		return err
 	}
-	existing, err := h.repo.GetGuardrails(c.Context())
+	existing, err := h.repo.GetGuardrails(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
 		g.ID = existing.ID
 		g.CreatedAt = existing.CreatedAt
 	}
-	if err := h.repo.UpsertGuardrails(c.Context(), &g); err != nil {
+	if err := h.repo.UpsertGuardrails(reqCtx(c), &g); err != nil {
 		return err
 	}
 	h.recordActivity(c, "brand_guardrails_updated")
@@ -255,7 +255,7 @@ func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
 }
 
 func (h *BrandHandler) DeleteGuardrails(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteGuardrails(c.Context())
+	deleted, err := h.repo.DeleteGuardrails(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -277,7 +277,7 @@ func (h *BrandHandler) PutLook(c *fiber.Ctx) error {
 	if err := validateLook(&l); err != nil {
 		return err
 	}
-	existing, err := h.repo.GetLook(c.Context())
+	existing, err := h.repo.GetLook(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func (h *BrandHandler) PutLook(c *fiber.Ctx) error {
 		l.ID = existing.ID
 		l.CreatedAt = existing.CreatedAt
 	}
-	if err := h.repo.UpsertLook(c.Context(), &l); err != nil {
+	if err := h.repo.UpsertLook(reqCtx(c), &l); err != nil {
 		return err
 	}
 	h.recordActivity(c, "brand_look_updated")
@@ -303,7 +303,7 @@ func (h *BrandHandler) PutLook(c *fiber.Ctx) error {
 }
 
 func (h *BrandHandler) DeleteLook(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteLook(c.Context())
+	deleted, err := h.repo.DeleteLook(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func (h *BrandHandler) CreateTemplate(c *fiber.Ctx) error {
 	t.ID = id
 	now := brandNow()
 	t.CreatedAt, t.UpdatedAt = now, now
-	if err := h.repo.CreateTemplate(c.Context(), &t); err != nil {
+	if err := h.repo.CreateTemplate(reqCtx(c), &t); err != nil {
 		return err
 	}
 	h.recordActivity(c, "brand_template_created", activity.WithEntity("brand_template", t.ID))
@@ -349,7 +349,7 @@ func (h *BrandHandler) UpdateTemplate(c *fiber.Ctx) error {
 		return err
 	}
 	t.UpdatedAt = brandNow()
-	if err := h.repo.UpdateTemplate(c.Context(), &t); err != nil {
+	if err := h.repo.UpdateTemplate(reqCtx(c), &t); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "template not found")
 		}
@@ -360,7 +360,7 @@ func (h *BrandHandler) UpdateTemplate(c *fiber.Ctx) error {
 }
 
 func (h *BrandHandler) DeleteTemplate(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteTemplate(c.Context(), c.Params("id"))
+	deleted, err := h.repo.DeleteTemplate(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -412,8 +412,8 @@ func (h *BrandHandler) Upload(c *fiber.Ctx) error {
 		return fmt.Errorf("brand: seek upload: %w", err)
 	}
 
-	key := storage.TenantKey(c.Context(), "brand/"+uuid.NewString()+ext)
-	url, err := h.storage.Upload(c.Context(), key, f, fh.Size, mimeType)
+	key := storage.TenantKey(reqCtx(c), "brand/"+uuid.NewString()+ext)
+	url, err := h.storage.Upload(reqCtx(c), key, f, fh.Size, mimeType)
 	if err != nil {
 		return fmt.Errorf("brand: storage upload: %w", err)
 	}

@@ -51,7 +51,7 @@ type autoPublishAllowlistRequest struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/auto-publish-allowlist [get]
 func (h *AutoPublishAllowlistHandler) Get(c *fiber.Ctx) error {
-	platforms, err := h.repo.List(c.Context())
+	platforms, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -97,11 +97,11 @@ func (h *AutoPublishAllowlistHandler) Put(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := h.repo.Set(c.Context(), req.Platforms); err != nil {
+	if err := h.repo.Set(reqCtx(c), req.Platforms); err != nil {
 		return err
 	}
 
-	platforms, err := h.repo.List(c.Context())
+	platforms, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}

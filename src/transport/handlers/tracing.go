@@ -31,8 +31,37 @@ func detachedContext(c *fiber.Ctx, tenantID string) context.Context {
 	if reqID, ok := logging.RequestIDFrom(c.Context()); ok {
 		ctx = logging.WithRequestID(ctx, reqID)
 	}
+	return graftRequestSpan(ctx, c)
+}
+
+// reqCtx is the context handlers pass into the service/repository layer for the
+// SYNCHRONOUS request path. It starts from c.Context() — the *fasthttp.RequestCtx,
+// which carries the request's Locals (request/tenant/user/trace ids for log
+// correlation, CON-107) and its cancellation — and grafts on the request's
+// OpenTelemetry span so the DB/gRPC/HTTP client spans below it nest under the
+// server span.
+//
+// This graft is the missing link for CON-303 DB/gRPC visibility. otelfiber records
+// the server span ONLY on c.UserContext(), and the *fasthttp.RequestCtx behind
+// c.Context() cannot carry it (its Value reads Locals, not the OTel span key). So a
+// bun/gRPC/otelhttp call made with a bare c.Context() starts a span with no parent
+// — a parentless client span, which parentlessClientDropSampler drops — which is
+// why DB and gRPC work never appeared under the request in Sentry. Passing
+// reqCtx(c) makes those client spans children of the server span so they join the
+// trace. It is the synchronous-path sibling of detachedContext.
+func reqCtx(c *fiber.Ctx) context.Context {
+	return graftRequestSpan(c.Context(), c)
+}
+
+// graftRequestSpan copies the request's server span context — which otelfiber puts
+// only on c.UserContext() — onto ctx, so spans started from ctx become children of
+// the server span. The span context is an immutable value (trace id, span id,
+// sampled flag), so copying it is safe; children need only the parent's ids, not a
+// live parent span. When telemetry is disabled the span context is invalid and ctx
+// is returned unchanged.
+func graftRequestSpan(ctx context.Context, c *fiber.Ctx) context.Context {
 	if sc := trace.SpanContextFromContext(c.UserContext()); sc.IsValid() {
-		ctx = trace.ContextWithSpanContext(ctx, sc)
+		return trace.ContextWithSpanContext(ctx, sc)
 	}
 	return ctx
 }

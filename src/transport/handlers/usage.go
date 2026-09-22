@@ -128,7 +128,7 @@ func (h *UsageHandler) Summary(c *fiber.Ctx) error {
 	// Analytics disabled → no events; return zeros (with analytics_enabled=false)
 	// rather than an error so a future UI degrades gracefully.
 	if h.events != nil {
-		rows, err := h.events.Summary(c.Context(), start, end)
+		rows, err := h.events.Summary(reqCtx(c), start, end)
 		if err != nil {
 			return err
 		}
@@ -165,7 +165,7 @@ type usageLimitsResponse struct {
 
 // GetLimits godoc — GET /api/usage/limits
 func (h *UsageHandler) GetLimits(c *fiber.Ctx) error {
-	row, err := h.limits.GetByTenant(c.Context())
+	row, err := h.limits.GetByTenant(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -174,10 +174,10 @@ func (h *UsageHandler) GetLimits(c *fiber.Ctx) error {
 	if h.events != nil {
 		now := time.Now().UTC()
 		dayStart, monthStart := usage.PeriodBounds(now)
-		if resp.DaySpentMicros, err = h.events.SpendBetween(c.Context(), dayStart, now); err != nil {
+		if resp.DaySpentMicros, err = h.events.SpendBetween(reqCtx(c), dayStart, now); err != nil {
 			return err
 		}
-		if resp.MonthSpentMicros, err = h.events.SpendBetween(c.Context(), monthStart, now); err != nil {
+		if resp.MonthSpentMicros, err = h.events.SpendBetween(reqCtx(c), monthStart, now); err != nil {
 			return err
 		}
 	}
@@ -224,7 +224,7 @@ func (h *UsageHandler) SetLimits(c *fiber.Ctx) error {
 		Mode:             mode,
 		Enabled:          enabled,
 	}
-	if err := h.limits.Upsert(c.Context(), lim); err != nil {
+	if err := h.limits.Upsert(reqCtx(c), lim); err != nil {
 		return err
 	}
 	return c.JSON(usage.Resolve(lim, h.defaults))

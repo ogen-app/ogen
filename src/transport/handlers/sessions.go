@@ -85,7 +85,7 @@ func (h *SessionsHandler) SetActivityRecorder(r *activity.Recorder) { h.activity
 // authCtx builds a context carrying the given tenant + user so the recorder can
 // attribute an auth event that happens before the auth middleware would run.
 func (h *SessionsHandler) authCtx(c *fiber.Ctx, tenantID, userID string) context.Context {
-	return logging.WithUserID(tenantctx.With(c.Context(), tenantID), userID)
+	return logging.WithUserID(tenantctx.With(reqCtx(c), tenantID), userID)
 }
 
 func (h *SessionsHandler) Register(app *fiber.App) {
@@ -136,7 +136,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 
 	// Authenticate the ACCOUNT (identity), which holds the credential since
 	// CON-147 PR1. The membership the session lands on is resolved from it below.
-	account, err := h.accountRepo.GetByEmail(c.Context(), req.Email)
+	account, err := h.accountRepo.GetByEmail(reqCtx(c), req.Email)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return h.loginFailed(c, req.Email)
@@ -153,7 +153,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 	// (GetByAccountID skips soft-deleted workspaces, CON-147 PR4). An account with
 	// no live workspace (e.g. removed from its last one) has nothing to open a
 	// session onto; answer 403 rather than a 500.
-	user, err := h.userRepo.GetByAccountID(c.Context(), account.ID)
+	user, err := h.userRepo.GetByAccountID(reqCtx(c), account.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusForbidden, "your account has no active workspace")
@@ -180,7 +180,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 		TenantID:  user.TenantID,
 		ExpiresAt: time.Now().UTC().Add(sessionTTL),
 	}
-	if err := h.sessionRepo.Create(c.Context(), session); err != nil {
+	if err := h.sessionRepo.Create(reqCtx(c), session); err != nil {
 		return err
 	}
 
@@ -269,11 +269,11 @@ func (h *SessionsHandler) Delete(c *fiber.Ctx) error {
 	// so the request context carries neither). Best-effort — a lookup miss just
 	// skips attribution.
 	var actorTenant, actorUser string
-	if s, gerr := h.sessionRepo.GetByID(c.Context(), token); gerr == nil && s != nil {
+	if s, gerr := h.sessionRepo.GetByID(reqCtx(c), token); gerr == nil && s != nil {
 		actorTenant, actorUser = s.TenantID, s.UserID
 	}
 
-	deleted, err := h.sessionRepo.Delete(c.Context(), token)
+	deleted, err := h.sessionRepo.Delete(reqCtx(c), token)
 	if err != nil {
 		return err
 	}

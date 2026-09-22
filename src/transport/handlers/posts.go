@@ -144,7 +144,7 @@ func (h *PostsHandler) SetActivityRecorder(r *activity.Recorder) {
 // user are resolved from the request context (set by the auth middleware);
 // source defaults to api and can be overridden by a later option.
 func (h *PostsHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity.Option) {
-	h.activity.Record(c.Context(), activity.CategoryPost, typ,
+	h.activity.Record(reqCtx(c), activity.CategoryPost, typ,
 		append([]activity.Option{activity.WithSource(activity.SourceAPI)}, opts...)...)
 }
 
@@ -164,7 +164,7 @@ func (h *PostsHandler) logEvent(c *fiber.Ctx, postID string, eventType models.Po
 	if sess, ok := c.Locals("session").(*models.Session); ok && sess != nil {
 		actor = sess.UserID
 	}
-	_ = h.postLogRepo.Append(c.Context(), &models.PostLog{
+	_ = h.postLogRepo.Append(reqCtx(c), &models.PostLog{
 		ID:         id,
 		PostID:     postID,
 		EventType:  eventType,
@@ -198,7 +198,7 @@ func (h *PostsHandler) validateReadyForPublish(c *fiber.Ctx, post *models.Post, 
 	if post.Status != models.PostStatusDraft || status != models.PostStatusReadyForPublish || h.attachmentRepo == nil {
 		return false, nil
 	}
-	atts, err := h.attachmentRepo.ListByPostID(c.Context(), post.ID)
+	atts, err := h.attachmentRepo.ListByPostID(reqCtx(c), post.ID)
 	if err != nil {
 		return false, err
 	}
@@ -209,7 +209,7 @@ func (h *PostsHandler) validateReadyForPublish(c *fiber.Ctx, post *models.Post, 
 	// platform repository when the request changed it.
 	platform := post.Platform
 	if req.PlatformID != "" && (platform == nil || platform.ID != req.PlatformID) && h.platformRepo != nil {
-		fresh, perr := h.platformRepo.GetByID(c.Context(), req.PlatformID)
+		fresh, perr := h.platformRepo.GetByID(reqCtx(c), req.PlatformID)
 		if perr == nil {
 			platform = fresh
 		}
@@ -332,7 +332,7 @@ func (h *PostsHandler) Schedule(c *fiber.Ctx) error {
 	}
 
 	session := c.Locals("session").(*models.Session)
-	res, err := h.scheduleSvc.Schedule(c.Context(), c.Params("id"), schedule.Options{
+	res, err := h.scheduleSvc.Schedule(reqCtx(c), c.Params("id"), schedule.Options{
 		ScheduledAt:  *req.ScheduledAt,
 		AllowPromote: req.AllowPromote,
 		Actor:        session.UserID,
@@ -362,7 +362,7 @@ func (h *PostsHandler) Schedule(c *fiber.Ctx) error {
 
 	// Re-fetch so the response carries a fully hydrated post (campaign /
 	// platform / assets), matching the Update/Restore handlers' contract.
-	updated, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	updated, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -419,7 +419,7 @@ func (h *PostsHandler) Cancel(c *fiber.Ctx) error {
 	if h.jobsClient == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "background job runtime not configured")
 	}
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -449,7 +449,7 @@ func (h *PostsHandler) Cancel(c *fiber.Ctx) error {
 		actor = sess.UserID
 	}
 
-	if err := h.jobsClient.EnqueueCancel(c.Context(), post.ID, target, actor); err != nil {
+	if err := h.jobsClient.EnqueueCancel(reqCtx(c), post.ID, target, actor); err != nil {
 		return fmt.Errorf("cancel: enqueue: %w", err)
 	}
 
@@ -540,7 +540,7 @@ func (h *PostsHandler) ConvertToManual(c *fiber.Ctx) error {
 			// Already where the caller wants it — idempotent success.
 			converted = append(converted, post.ID)
 		case models.PostStatusScheduled:
-			if err := h.jobsClient.EnqueueCancel(c.Context(), post.ID, queues.CancelTargetManualPublish, actor); err != nil {
+			if err := h.jobsClient.EnqueueCancel(reqCtx(c), post.ID, queues.CancelTargetManualPublish, actor); err != nil {
 				failed = append(failed, convertFailure{ID: post.ID, Reason: "could not enqueue conversion: " + err.Error()})
 				return
 			}
@@ -557,7 +557,7 @@ func (h *PostsHandler) ConvertToManual(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusBadRequest,
 				fmt.Sprintf("platform %q is not in the Ogen-supported set", req.Platform))
 		}
-		posts, err := h.repo.ListScheduledByPlatform(c.Context(), sqid)
+		posts, err := h.repo.ListScheduledByPlatform(reqCtx(c), sqid)
 		if err != nil {
 			return err
 		}
@@ -571,7 +571,7 @@ func (h *PostsHandler) ConvertToManual(c *fiber.Ctx) error {
 				continue
 			}
 			seen[id] = true
-			post, err := h.repo.GetByID(c.Context(), id)
+			post, err := h.repo.GetByID(reqCtx(c), id)
 			if err != nil {
 				reason := "could not load post: " + err.Error()
 				if errors.Is(err, sql.ErrNoRows) {
@@ -632,14 +632,14 @@ func (h *PostsHandler) SetBrand(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
 		}
 		return err
 	}
-	if err := validateBrandRefs(c.Context(), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
+	if err := validateBrandRefs(reqCtx(c), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
 		return err
 	}
 	// Presence-aware (CON-245): an omitted field leaves the post's existing ref
@@ -648,7 +648,7 @@ func (h *PostsHandler) SetBrand(c *fiber.Ctx) error {
 	req.BrandVoiceID.applyTo(&post.BrandVoiceID)
 	req.BrandAudienceID.applyTo(&post.BrandAudienceID)
 	post.UpdatedAt = time.Now().UTC()
-	if err := h.repo.Update(c.Context(), post); err != nil {
+	if err := h.repo.Update(reqCtx(c), post); err != nil {
 		return err
 	}
 	return c.JSON(post)
@@ -680,7 +680,7 @@ func (h *PostsHandler) AddAssets(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -693,7 +693,7 @@ func (h *PostsHandler) AddAssets(c *fiber.Ctx) error {
 	if post.Status.IsSubmitted() && addsNewID(post.UsedAssetIDs, req.AssetIDs) {
 		return submittedLockError(post.Status)
 	}
-	updated, err := h.repo.AddUsedAssetIDs(c.Context(), c.Params("id"), req.AssetIDs)
+	updated, err := h.repo.AddUsedAssetIDs(reqCtx(c), c.Params("id"), req.AssetIDs)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -731,7 +731,7 @@ func (h *PostsHandler) AddAssets(c *fiber.Ctx) error {
 // @Router       /api/posts/{id}/assets/{assetId} [delete]
 func (h *PostsHandler) RemoveAsset(c *fiber.Ctx) error {
 	assetID := c.Params("assetId")
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -741,7 +741,7 @@ func (h *PostsHandler) RemoveAsset(c *fiber.Ctx) error {
 	if post.Status.IsSubmitted() && slices.Contains(post.UsedAssetIDs, assetID) {
 		return submittedLockError(post.Status)
 	}
-	updated, err := h.repo.RemoveUsedAssetID(c.Context(), c.Params("id"), assetID)
+	updated, err := h.repo.RemoveUsedAssetID(reqCtx(c), c.Params("id"), assetID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -1003,7 +1003,7 @@ func (h *PostsHandler) validateForCreate(c *fiber.Ctx, post *models.Post) (done 
 	if post.Status == models.PostStatusDraft || post.PlatformID == "" || h.platformRepo == nil {
 		return false, nil
 	}
-	platform, err := h.platformRepo.GetByID(c.Context(), post.PlatformID)
+	platform, err := h.platformRepo.GetByID(reqCtx(c), post.PlatformID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, fiber.NewError(fiber.StatusBadRequest, "platform not found")
@@ -1040,7 +1040,7 @@ func (h *PostsHandler) validateForCreate(c *fiber.Ctx, post *models.Post) (done 
 // @Failure      401  {object}  map[string]string
 // @Router       /api/posts [get]
 func (h *PostsHandler) List(c *fiber.Ctx) error {
-	posts, err := h.repo.List(c.Context())
+	posts, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -1058,7 +1058,7 @@ func (h *PostsHandler) List(c *fiber.Ctx) error {
 // @Failure      401          {object}  map[string]string
 // @Router       /api/campaigns/{campaign_id}/posts [get]
 func (h *PostsHandler) ListByCampaign(c *fiber.Ctx) error {
-	posts, err := h.repo.ListByCampaign(c.Context(), c.Params("campaign_id"))
+	posts, err := h.repo.ListByCampaign(reqCtx(c), c.Params("campaign_id"))
 	if err != nil {
 		return err
 	}
@@ -1113,7 +1113,7 @@ func (h *PostsHandler) PreviewThread(c *fiber.Ctx) error {
 
 	var platform *models.Platform
 	if h.platformRepo != nil {
-		p, err := h.platformRepo.GetByID(c.Context(), req.PlatformID)
+		p, err := h.platformRepo.GetByID(reqCtx(c), req.PlatformID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fiber.NewError(fiber.StatusNotFound, "platform not found")
@@ -1217,7 +1217,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	// CON-284 R2: derive the thread's segment list from the canonical body (a
 	// non-thread post gets an empty list). Runs before validateForCreate so the
 	// create-time publish gate sees the same segments submit will publish.
-	h.deriveThreadSegments(c.Context(), post)
+	h.deriveThreadSegments(reqCtx(c), post)
 
 	if done, err := h.validateForCreate(c, post); err != nil {
 		return err
@@ -1225,7 +1225,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		return nil
 	}
 
-	if err := h.repo.Create(c.Context(), post); err != nil {
+	if err := h.repo.Create(reqCtx(c), post); err != nil {
 		return err
 	}
 	h.recordActivity(c, "post_created",
@@ -1247,7 +1247,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/posts/{id} [get]
 func (h *PostsHandler) Get(c *fiber.Ctx) error {
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -1292,11 +1292,11 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cta_type")
 	}
 
-	if err := validateBrandRefs(c.Context(), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
+	if err := validateBrandRefs(reqCtx(c), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
 		return err
 	}
 
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -1343,12 +1343,12 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	// fixtures).
 	if prevStatus == models.PostStatusReadyForPublish && status == models.PostStatusScheduled && h.scheduleSvc != nil {
 		req.apply(post, status, ctaType)
-		h.deriveThreadSegments(c.Context(), post) // CON-284 R2: materialise segments from the body before persist
+		h.deriveThreadSegments(reqCtx(c), post) // CON-284 R2: materialise segments from the body before persist
 		actor := models.ActorSystem
 		if sess, ok := c.Locals("session").(*models.Session); ok && sess != nil {
 			actor = sess.UserID
 		}
-		routed, err := h.scheduleSvc.RouteAndPersist(c.Context(), post, prevStatus, actor)
+		routed, err := h.scheduleSvc.RouteAndPersist(reqCtx(c), post, prevStatus, actor)
 		if err != nil {
 			if aerr, ok := errors.AsType[*schedule.AccountSelectionError](err); ok {
 				return writeAccountSelectionError(c, aerr)
@@ -1360,7 +1360,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		}
 	} else {
 		req.apply(post, status, ctaType)
-		h.deriveThreadSegments(c.Context(), post) // CON-284 R2: materialise segments from the body before persist
+		h.deriveThreadSegments(reqCtx(c), post) // CON-284 R2: materialise segments from the body before persist
 		// Presence-aware sources (CON-233): apply already left an omitted
 		// used_asset_ids at its hydrated value, but the whole-record UPDATE would
 		// still write that stale value back and clobber a concurrent membership
@@ -1370,14 +1370,14 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		if !req.UsedAssetIDs.Present {
 			omit = append(omit, "used_asset_ids")
 		}
-		if err := h.repo.Update(c.Context(), post, omit...); err != nil {
+		if err := h.repo.Update(reqCtx(c), post, omit...); err != nil {
 			return err
 		}
 		h.logTransition(c, post, prevStatus, status)
 	}
 
 	// Re-fetch to return fully hydrated response.
-	updated, err := h.repo.GetByID(c.Context(), post.ID)
+	updated, err := h.repo.GetByID(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}
@@ -1405,11 +1405,11 @@ func (h *PostsHandler) Delete(c *fiber.Ctx) error {
 	// erase on row delete. A hook error fails the whole DELETE so the
 	// caller can retry; we don't end up with an orphaned bucket.
 	if h.onBeforeDelete != nil {
-		if err := h.onBeforeDelete(c.Context(), id); err != nil {
+		if err := h.onBeforeDelete(reqCtx(c), id); err != nil {
 			return err
 		}
 	}
-	deleted, err := h.repo.Delete(c.Context(), id)
+	deleted, err := h.repo.Delete(reqCtx(c), id)
 	if err != nil {
 		return err
 	}
@@ -1433,7 +1433,7 @@ func (h *PostsHandler) Delete(c *fiber.Ctx) error {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/posts/{id}/versions [get]
 func (h *PostsHandler) ListVersions(c *fiber.Ctx) error {
-	versions, err := h.versionRepo.ListByPostID(c.Context(), c.Params("id"))
+	versions, err := h.versionRepo.ListByPostID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -1464,7 +1464,7 @@ func (h *PostsHandler) CreateVersion(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -1472,7 +1472,7 @@ func (h *PostsHandler) CreateVersion(c *fiber.Ctx) error {
 		return err
 	}
 
-	latest, err := h.versionRepo.GetLatestByPostID(c.Context(), post.ID)
+	latest, err := h.versionRepo.GetLatestByPostID(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}
@@ -1494,7 +1494,7 @@ func (h *PostsHandler) CreateVersion(c *fiber.Ctx) error {
 		Note:          req.Note,
 		Creator:       "user",
 	}
-	if err := h.versionRepo.Create(c.Context(), version); err != nil {
+	if err := h.versionRepo.Create(reqCtx(c), version); err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusCreated).JSON(version)

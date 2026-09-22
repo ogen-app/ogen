@@ -190,8 +190,8 @@ func (h *InvitationsHandler) Create(c *fiber.Ctx) error {
 	// to the tenant rather than to "has an account anywhere." Resolved against
 	// accounts (identity) since users.email is no longer unique. The caller is an
 	// authenticated owner, so surfacing membership state is acceptable.
-	if acct, err := h.accountRepo.GetByEmail(c.Context(), email); err == nil {
-		if _, merr := h.userRepo.GetMembership(c.Context(), acct.ID, tenantID); merr == nil {
+	if acct, err := h.accountRepo.GetByEmail(reqCtx(c), email); err == nil {
+		if _, merr := h.userRepo.GetMembership(reqCtx(c), acct.ID, tenantID); merr == nil {
 			return fiber.NewError(fiber.StatusConflict, "this email is already a member of this workspace")
 		} else if !errors.Is(merr, sql.ErrNoRows) {
 			return merr
@@ -225,7 +225,7 @@ func (h *InvitationsHandler) Create(c *fiber.Ctx) error {
 	// The email needs the workspace name; the invitee has no user/tenant to load
 	// at send time, so resolve it here and pass it as a template var.
 	workspaceName := ""
-	if t, terr := h.tenantRepo.GetByID(c.Context(), tenantID); terr == nil && t != nil {
+	if t, terr := h.tenantRepo.GetByID(reqCtx(c), tenantID); terr == nil && t != nil {
 		workspaceName = t.Name
 	}
 
@@ -235,7 +235,7 @@ func (h *InvitationsHandler) Create(c *fiber.Ctx) error {
 	// pending invite (live or expired) that holds the partial-unique slot and
 	// reports whether it replaced one, so re-inviting is idempotent (CON-147 §7.3).
 	var reissued bool
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		replaced, err := h.inviteRepo.CreateReplacingPendingTx(ctx, tx, inv)
 		if err != nil {
 			return err
@@ -256,7 +256,7 @@ func (h *InvitationsHandler) Create(c *fiber.Ctx) error {
 	}
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), tenantID), caller.ID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), tenantID), caller.ID),
 		activity.CategoryAuthentication, "member_invited",
 		activity.WithEntity("invitation", id), activity.WithSource(activity.SourceAPI),
 		activity.WithPayload(map[string]any{"role": role}),
@@ -284,7 +284,7 @@ func (h *InvitationsHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	invs, err := h.inviteRepo.ListByTenant(c.Context(), caller.TenantID)
+	invs, err := h.inviteRepo.ListByTenant(reqCtx(c), caller.TenantID)
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func (h *InvitationsHandler) Revoke(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ok, err := h.inviteRepo.Revoke(c.Context(), c.Params("id"), caller.TenantID)
+	ok, err := h.inviteRepo.Revoke(reqCtx(c), c.Params("id"), caller.TenantID)
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func (h *InvitationsHandler) Revoke(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "invitation not found")
 	}
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), caller.TenantID), caller.ID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), caller.TenantID), caller.ID),
 		activity.CategoryAuthentication, "invitation_revoked",
 		activity.WithEntity("invitation", c.Params("id")), activity.WithSource(activity.SourceAPI),
 	)
@@ -347,7 +347,7 @@ type invitationPreviewResponse struct {
 // @Failure      410  {object}  map[string]string
 // @Router       /api/invitations/accept/{token} [get]
 func (h *InvitationsHandler) Preview(c *fiber.Ctx) error {
-	inv, err := h.inviteRepo.GetByTokenHash(c.Context(), models.HashInvitationToken(c.Params("token")))
+	inv, err := h.inviteRepo.GetByTokenHash(reqCtx(c), models.HashInvitationToken(c.Params("token")))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Unknown, expired, and revoked tokens all answer with the same 410 +
@@ -363,7 +363,7 @@ func (h *InvitationsHandler) Preview(c *fiber.Ctx) error {
 	// The invite authorizes reading its own workspace's display data; scope the
 	// tenant-scoped reads to the invite's tenant. Both are best-effort — a missing
 	// name just renders blank on the accept page.
-	ctx := tenantctx.With(c.Context(), inv.TenantID)
+	ctx := tenantctx.With(reqCtx(c), inv.TenantID)
 	resp := invitationPreviewResponse{Email: inv.Email, Role: inv.Role, ExpiresAt: inv.ExpiresAt}
 	if t, terr := h.tenantRepo.GetByID(ctx, inv.TenantID); terr == nil && t != nil {
 		resp.WorkspaceName = t.Name
@@ -375,7 +375,7 @@ func (h *InvitationsHandler) Preview(c *fiber.Ctx) error {
 	// (identity), not users (membership), since the same email may hold memberships
 	// in several workspaces. A lookup error other than "no such account" is fatal;
 	// sql.ErrNoRows simply leaves has_account false (a new-account invite).
-	if _, aerr := h.accountRepo.GetByEmail(c.Context(), inv.Email); aerr == nil {
+	if _, aerr := h.accountRepo.GetByEmail(reqCtx(c), inv.Email); aerr == nil {
 		resp.HasAccount = true
 	} else if !errors.Is(aerr, sql.ErrNoRows) {
 		return aerr
@@ -432,7 +432,7 @@ func (h *InvitationsHandler) Accept(c *fiber.Ctx) error {
 	// in. The atomic single-use consume happens inside the path's transaction, so
 	// a token spent between here and there still yields one indistinguishable 410,
 	// and a rejected accept (bad credentials / not signed in) leaves it unspent.
-	inv, err := h.inviteRepo.GetByTokenHash(c.Context(), models.HashInvitationToken(c.Params("token")))
+	inv, err := h.inviteRepo.GetByTokenHash(reqCtx(c), models.HashInvitationToken(c.Params("token")))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusGone, invitationInvalidMsg)
@@ -443,7 +443,7 @@ func (h *InvitationsHandler) Accept(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusGone, invitationInvalidMsg)
 	}
 
-	account, err := h.accountRepo.GetByEmail(c.Context(), inv.Email)
+	account, err := h.accountRepo.GetByEmail(reqCtx(c), inv.Email)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -464,7 +464,7 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 	}
 	// Already a member? The unique(tenant, account) index is the hard backstop;
 	// this is the friendly pre-check.
-	if _, err := h.userRepo.GetMembership(c.Context(), account.ID, inv.TenantID); err == nil {
+	if _, err := h.userRepo.GetMembership(reqCtx(c), account.ID, inv.TenantID); err == nil {
 		return fiber.NewError(fiber.StatusConflict, "you are already a member of this workspace")
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -472,7 +472,7 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 
 	// CON-295: attaching an existing account is still a new seat, so the
 	// team_seats quota gates it exactly as acceptNew, before the token is consumed.
-	seatDec, err := h.seatQuota(c.Context(), inv.TenantID)
+	seatDec, err := h.seatQuota(reqCtx(c), inv.TenantID)
 	if err != nil {
 		return err
 	}
@@ -484,7 +484,7 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 	}
 	membership := &models.User{ID: uid, AccountID: account.ID, TenantID: inv.TenantID, Name: account.Name, Email: account.Email, Role: inv.Role, CreatedAt: now, UpdatedAt: now}
 
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, cerr := h.inviteRepo.ConsumeByTokenTx(ctx, tx, inv.TokenHash, now); cerr != nil {
 			if errors.Is(cerr, sql.ErrNoRows) {
 				return errInvitationInvalid
@@ -503,7 +503,7 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 	}
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), inv.TenantID), uid),
+		logging.WithUserID(tenantctx.With(reqCtx(c), inv.TenantID), uid),
 		activity.CategoryAuthentication, "invitation_accepted",
 		activity.WithEntity("user", uid), activity.WithSource(activity.SourceAPI),
 	)
@@ -513,7 +513,7 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 	// No cookie: the caller stays in whatever workspace their session is on; the
 	// client offers to switch to the newly joined one.
 	resp := acceptInvitationResponse{User: membership}
-	if t, terr := h.tenantRepo.GetByID(c.Context(), inv.TenantID); terr == nil {
+	if t, terr := h.tenantRepo.GetByID(reqCtx(c), inv.TenantID); terr == nil {
 		resp.Tenant = t
 	}
 	return c.Status(fiber.StatusOK).JSON(resp)
@@ -531,7 +531,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 	// returns a *QuotaExceededError (→ 402) when at cap in enforce mode. Checked
 	// before the token is consumed so an over-cap workspace leaves the invite
 	// valid (the owner can free a seat or upgrade, then the invitee retries).
-	seatDec, err := h.seatQuota(c.Context(), inv.TenantID)
+	seatDec, err := h.seatQuota(reqCtx(c), inv.TenantID)
 	if err != nil {
 		return err
 	}
@@ -541,7 +541,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 		newUser *models.User
 		session *models.Session
 	)
-	err = h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	err = h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, cerr := h.inviteRepo.ConsumeByTokenTx(ctx, tx, inv.TokenHash, now); cerr != nil {
 			if errors.Is(cerr, sql.ErrNoRows) {
 				return errInvitationInvalid
@@ -600,7 +600,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 	})
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), inv.TenantID), newUser.ID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), inv.TenantID), newUser.ID),
 		activity.CategoryAuthentication, "invitation_accepted",
 		activity.WithEntity("user", newUser.ID), activity.WithSource(activity.SourceAPI),
 	)
@@ -610,7 +610,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 	h.limiter.DispatchCrossing(tenantctx.With(c.Context(), inv.TenantID), inv.TenantID, seatDec)
 
 	resp := acceptInvitationResponse{User: newUser, Session: session}
-	if t, terr := h.tenantRepo.GetByID(c.Context(), inv.TenantID); terr == nil {
+	if t, terr := h.tenantRepo.GetByID(reqCtx(c), inv.TenantID); terr == nil {
 		resp.Tenant = t
 	}
 	return c.Status(fiber.StatusCreated).JSON(resp)
@@ -625,7 +625,7 @@ func (h *InvitationsHandler) callerAccountID(c *fiber.Ctx) string {
 	if token == "" {
 		return ""
 	}
-	s, err := h.sessionRepo.GetByID(c.Context(), token)
+	s, err := h.sessionRepo.GetByID(reqCtx(c), token)
 	if err != nil || s == nil || time.Now().UTC().After(s.ExpiresAt) {
 		return ""
 	}

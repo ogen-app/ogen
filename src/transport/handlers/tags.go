@@ -42,7 +42,7 @@ type tagRequest struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/tags [get]
 func (h *TagsHandler) List(c *fiber.Ctx) error {
-	tags, err := h.repo.List(c.Context())
+	tags, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (h *TagsHandler) Create(c *fiber.Ctx) error {
 		Color:     req.Color,
 		CreatedBy: session.UserID,
 	}
-	if err := h.repo.Create(c.Context(), tag); err != nil {
+	if err := h.repo.Create(reqCtx(c), tag); err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusCreated).JSON(tag)
@@ -98,7 +98,7 @@ func (h *TagsHandler) Create(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/tags/{id} [get]
 func (h *TagsHandler) Get(c *fiber.Ctx) error {
-	tag, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	tag, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "tag not found")
 	}
@@ -125,7 +125,7 @@ func (h *TagsHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	tag, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	tag, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "tag not found")
 	}
@@ -134,7 +134,7 @@ func (h *TagsHandler) Update(c *fiber.Ctx) error {
 	tag.Color = req.Color
 	tag.UpdatedAt = time.Now().UTC()
 
-	if err := h.repo.Update(c.Context(), tag); err != nil {
+	if err := h.repo.Update(reqCtx(c), tag); err != nil {
 		return err
 	}
 	return c.JSON(tag)
@@ -151,7 +151,7 @@ func (h *TagsHandler) Update(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/tags/{id} [delete]
 func (h *TagsHandler) Delete(c *fiber.Ctx) error {
-	deleted, err := h.repo.Delete(c.Context(), c.Params("id"))
+	deleted, err := h.repo.Delete(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}

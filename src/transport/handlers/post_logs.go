@@ -46,14 +46,14 @@ func (h *PostLogsHandler) Register(app *fiber.App) {
 // @Router       /api/posts/{post_id}/log [get]
 func (h *PostLogsHandler) ListByPost(c *fiber.Ctx) error {
 	postID := c.Params("post_id")
-	if _, err := h.postRepo.GetByID(c.Context(), postID); err != nil {
+	if _, err := h.postRepo.GetByID(reqCtx(c), postID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
 		}
 		return err
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	logs, err := h.repo.ListByPostID(c.Context(), postID, limit)
+	logs, err := h.repo.ListByPostID(reqCtx(c), postID, limit)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (h *PostLogsHandler) ListFiltered(c *fiber.Ctx) error {
 		}
 		f.Limit = n
 	}
-	logs, err := h.repo.ListFiltered(c.Context(), f)
+	logs, err := h.repo.ListFiltered(reqCtx(c), f)
 	if err != nil {
 		return err
 	}

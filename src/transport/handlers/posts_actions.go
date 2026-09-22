@@ -51,7 +51,7 @@ func (h *PostActionsHandler) Register(app *fiber.App) {
 // recordActivity emits a CON-125 post-category activity event with the API
 // source pre-set. A private copy of the PostsHandler helper of the same name.
 func (h *PostActionsHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity.Option) {
-	h.activity.Record(c.Context(), activity.CategoryPost, typ,
+	h.activity.Record(reqCtx(c), activity.CategoryPost, typ,
 		append([]activity.Option{activity.WithSource(activity.SourceAPI)}, opts...)...)
 }
 
@@ -100,7 +100,7 @@ func (h *PostActionsHandler) Clone(c *fiber.Ctx) error {
 	opts.TargetPostType = req.TargetPostType
 	opts.TitleOverride = req.Title
 
-	res, err := h.cloneSvc.Clone(c.Context(), c.Params("id"), opts)
+	res, err := h.cloneSvc.Clone(reqCtx(c), c.Params("id"), opts)
 	if err != nil {
 		switch {
 		case errors.Is(err, clone.ErrSourceNotFound):
@@ -154,7 +154,7 @@ func (h *PostActionsHandler) Restore(c *fiber.Ctx) error {
 	}
 
 	session := c.Locals("session").(*models.Session)
-	res, err := h.restoreSvc.Restore(c.Context(), c.Params("id"), restore.Options{
+	res, err := h.restoreSvc.Restore(reqCtx(c), c.Params("id"), restore.Options{
 		Actor:         session.UserID,
 		Trigger:       restore.TriggerAPI,
 		VersionNumber: req.VersionNumber,
@@ -173,7 +173,7 @@ func (h *PostActionsHandler) Restore(c *fiber.Ctx) error {
 
 	// Re-fetch so the response carries a fully hydrated post (campaign /
 	// platform / assets), matching the Update handler's contract.
-	updated, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	updated, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}

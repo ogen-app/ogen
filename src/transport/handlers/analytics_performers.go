@@ -63,7 +63,7 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 	}
 	platform := c.Query("platform")
 
-	ctx := c.Context()
+	ctx := reqCtx(c)
 	cur, err := h.repo.PublishedBetween(ctx, rng.From, rng.To)
 	if err != nil {
 		return err

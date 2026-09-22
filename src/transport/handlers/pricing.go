@@ -57,7 +57,7 @@ func (h *PricingHandler) Pricing(c *fiber.Ctx) error {
 	c.Set("Access-Control-Allow-Origin", "*")
 	c.Set("Cache-Control", "public, max-age=300")
 
-	versions, err := h.versions.ListCurrentPurchasable(c.Context())
+	versions, err := h.versions.ListCurrentPurchasable(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func (h *PricingHandler) Pricing(c *fiber.Ctx) error {
 	for i := range versions {
 		ids[i] = versions[i].ID
 	}
-	pricesByVersion, err := h.versions.PricesByVersionIDs(c.Context(), ids)
+	pricesByVersion, err := h.versions.PricesByVersionIDs(reqCtx(c), ids)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (h *PricingHandler) Pricing(c *fiber.Ctx) error {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/me/entitlements [get]
 func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
-	tenantID, ok := tenantctx.From(c.Context())
+	tenantID, ok := tenantctx.From(reqCtx(c))
 	if !ok {
 		if s, ok := c.Locals("session").(*models.Session); ok && s != nil {
 			tenantID = s.TenantID
@@ -103,7 +103,7 @@ func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
 	if tenantID == "" {
 		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 	}
-	res, err := h.resolver.ResolveCurrent(c.Context(), tenantID)
+	res, err := h.resolver.ResolveCurrent(reqCtx(c), tenantID)
 	if err != nil {
 		return notFound(err, "no entitlements resolved for this workspace")
 	}
@@ -112,7 +112,7 @@ func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
 	// than learning the cap only on refusal. Uncounted / boolean features keep
 	// current=nil (omitted). Scope the context to the resolved tenant so the
 	// counters (which read the tenant from ctx) count the right workspace.
-	qctx := tenantctx.With(c.Context(), tenantID)
+	qctx := tenantctx.With(reqCtx(c), tenantID)
 	for i := range res.Entitlements {
 		if res.Entitlements[i].ValueType != entitlements.ValueTypeNumeric {
 			continue

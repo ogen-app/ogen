@@ -167,7 +167,7 @@ type listResponse struct {
 // callers should additionally check lockedForMutations.
 func (h *PostAttachmentsHandler) loadPostOrErr(c *fiber.Ctx) (*models.Post, error) {
 	postID := c.Params("post_id")
-	post, err := h.postRepo.GetByID(c.Context(), postID)
+	post, err := h.postRepo.GetByID(reqCtx(c), postID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -195,12 +195,12 @@ func (h *PostAttachmentsHandler) hydratePresigned(c *fiber.Ctx, att *models.Post
 		return
 	}
 	if att.S3Key != "" {
-		if url, err := h.storage.PresignedGetURL(c.Context(), att.S3Key, PresignedURLTTL); err == nil {
+		if url, err := h.storage.PresignedGetURL(reqCtx(c), att.S3Key, PresignedURLTTL); err == nil {
 			att.PresignedURL = url
 		}
 	}
 	if att.ThumbnailS3Key != "" {
-		if url, err := h.storage.PresignedGetURL(c.Context(), att.ThumbnailS3Key, PresignedURLTTL); err == nil {
+		if url, err := h.storage.PresignedGetURL(reqCtx(c), att.ThumbnailS3Key, PresignedURLTTL); err == nil {
 			att.ThumbnailURL = url
 		}
 	}
@@ -226,7 +226,7 @@ func (h *PostAttachmentsHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	atts, err := h.repo.ListByPostID(c.Context(), post.ID)
+	atts, err := h.repo.ListByPostID(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	att, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	att, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "attachment not found")
 	}
@@ -358,9 +358,9 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// budget. Check before touching storage so a denied upload never leaves an
 	// orphaned object behind.
 	var mediaQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(c.Context())
+	tenantID, hasTenant := tenantctx.From(reqCtx(c))
 	if hasTenant {
-		dec, qErr := h.limiter.RequireAmount(c.Context(), tenantID, "media_storage_bytes", fh.Size)
+		dec, qErr := h.limiter.RequireAmount(reqCtx(c), tenantID, "media_storage_bytes", fh.Size)
 		if qErr != nil {
 			return qErr
 		}
@@ -450,7 +450,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		// rather than failing the upload. page_count is set here, before the
 		// platform soft-validation below, so the max_pages check still works.
 		if h.pdf != nil {
-			rctx, cancel := context.WithTimeout(c.Context(), pdfRenderTimeout)
+			rctx, cancel := context.WithTimeout(reqCtx(c), pdfRenderTimeout)
 			render, rerr := h.pdf.Render(rctx, bytes.NewReader(raw), pdf.RenderOptions{
 				RenderThumbnail: true,
 				ThumbnailDPI:    pdfThumbnailDPI,
@@ -466,7 +466,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 				if pdf.IsInvalidPDF(rerr) {
 					return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable PDF")
 				}
-				slog.WarnContext(c.Context(), "pdf render failed", logging.AttrComponent, "post_attachments", "name", fh.Filename, logging.AttrError, rerr)
+				slog.WarnContext(reqCtx(c), "pdf render failed", logging.AttrComponent, "post_attachments", "name", fh.Filename, logging.AttrError, rerr)
 			} else {
 				att.PageCount = render.PageCount
 				pendingThumbnail = render.ThumbnailPNG
@@ -504,18 +504,18 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		// GET/PUT, and let it write the cleaned (metadata-stripped, pixel-identical)
 		// copy to the final key. The original is discarded after — its EXIF /
 		// geolocation must never persist or publish (CON-281 §7, §17).
-		cleanKey := storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+ext)
-		origKey := storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+".orig"+ext)
-		if _, err := h.storage.Upload(c.Context(), origKey, bytes.NewReader(raw), int64(len(raw)), mime); err != nil {
+		cleanKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+ext)
+		origKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+".orig"+ext)
+		if _, err := h.storage.Upload(reqCtx(c), origKey, bytes.NewReader(raw), int64(len(raw)), mime); err != nil {
 			return fmt.Errorf("post_attachments: stage original: %w", err)
 		}
-		getURL, gerr := h.storage.PresignedGetURL(c.Context(), origKey, PresignedURLTTL)
-		putURL, perr := h.storage.PresignedPutURL(c.Context(), cleanKey, mime, PresignedURLTTL)
+		getURL, gerr := h.storage.PresignedGetURL(reqCtx(c), origKey, PresignedURLTTL)
+		putURL, perr := h.storage.PresignedPutURL(reqCtx(c), cleanKey, mime, PresignedURLTTL)
 		if gerr != nil || perr != nil {
-			_ = h.storage.Delete(c.Context(), origKey)
+			_ = h.storage.Delete(reqCtx(c), origKey)
 			return fmt.Errorf("post_attachments: presign image transfer: get=%v put=%v", gerr, perr)
 		}
-		prep, err := h.image.PrepareAttachment(c.Context(), imageclient.PrepareAttachmentOptions{
+		prep, err := h.image.PrepareAttachment(reqCtx(c), imageclient.PrepareAttachmentOptions{
 			SourceURL:     getURL,
 			DestPutURL:    putURL,
 			StripMetadata: true,
@@ -525,8 +525,8 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		if err != nil {
 			// Drop BOTH the staged original and any partial cleaned object the service
 			// may have written to cleanKey before failing — never leave orphaned bytes.
-			_ = h.storage.Delete(c.Context(), origKey)
-			_ = h.storage.Delete(c.Context(), cleanKey)
+			_ = h.storage.Delete(reqCtx(c), origKey)
+			_ = h.storage.Delete(reqCtx(c), cleanKey)
 			// Prefer the fine-grained reason image-service attaches to a terminal
 			// reject over the coarse gRPC-code buckets (CON-281 Phase 2); the buckets
 			// stay as the fallback for an older service that carries no ErrorInfo.
@@ -544,8 +544,8 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 			}
 		}
 		if prep.RejectedReason != "" {
-			_ = h.storage.Delete(c.Context(), origKey)
-			_ = h.storage.Delete(c.Context(), cleanKey)
+			_ = h.storage.Delete(reqCtx(c), origKey)
+			_ = h.storage.Delete(reqCtx(c), cleanKey)
 			// A structured verdict from the service, carried through with its own
 			// message. Phase 1 maps it to the coarse "not a usable image" bucket; the
 			// image.v1 RejectedCode enum (CON-281 Phase 2) refines it to the exact
@@ -561,12 +561,12 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		att.S3Key = cleanKey
 		imagePrepared = true
 		// The EXIF-bearing original has served its purpose — drop it (best-effort).
-		_ = h.storage.Delete(c.Context(), origKey)
+		_ = h.storage.Delete(reqCtx(c), origKey)
 	}
 
 	if !imagePrepared {
-		att.S3Key = storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+keyExt)
-		if _, err := h.storage.Upload(c.Context(), att.S3Key, bytes.NewReader(data), att.SizeBytes, att.MimeType); err != nil {
+		att.S3Key = storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+keyExt)
+		if _, err := h.storage.Upload(reqCtx(c), att.S3Key, bytes.NewReader(data), att.SizeBytes, att.MimeType); err != nil {
 			return fmt.Errorf("post_attachments: storage upload: %w", err)
 		}
 	}
@@ -574,8 +574,8 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// Upload the first-page thumbnail rendered by pdf-service (if any). Storing
 	// it is best-effort — the attachment stays valid without a thumbnail.
 	if len(pendingThumbnail) > 0 {
-		thumbKey := storage.TenantKey(c.Context(), "post-attachments/"+post.ID+"/"+id+".thumb.png")
-		if _, uerr := h.storage.Upload(c.Context(), thumbKey, bytes.NewReader(pendingThumbnail), int64(len(pendingThumbnail)), "image/png"); uerr == nil {
+		thumbKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+".thumb.png")
+		if _, uerr := h.storage.Upload(reqCtx(c), thumbKey, bytes.NewReader(pendingThumbnail), int64(len(pendingThumbnail)), "image/png"); uerr == nil {
 			att.ThumbnailS3Key = thumbKey
 		}
 	}
@@ -583,26 +583,26 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// CreateAtNextPosition assigns att.Position atomically, eliminating
 	// the read-then-insert race that NextPosition+Create exposed under
 	// concurrent uploads to the same post.
-	if err := h.repo.CreateAtNextPosition(c.Context(), att); err != nil {
+	if err := h.repo.CreateAtNextPosition(reqCtx(c), att); err != nil {
 		// Clean up the orphan objects — the metadata row is what makes
 		// the attachment discoverable; without it, the bytes are dead
 		// weight in the bucket (CON-73 §2.2 transactional rollback).
-		_ = h.storage.Delete(c.Context(), att.S3Key)
+		_ = h.storage.Delete(reqCtx(c), att.S3Key)
 		if att.ThumbnailS3Key != "" {
-			_ = h.storage.Delete(c.Context(), att.ThumbnailS3Key)
+			_ = h.storage.Delete(reqCtx(c), att.ThumbnailS3Key)
 		}
 		return err
 	}
 	// CON-295: the attachment (and its bytes) now exist — fire any near-limit crossing.
 	if hasTenant {
-		h.limiter.DispatchCrossing(c.Context(), tenantID, mediaQuota)
+		h.limiter.DispatchCrossing(reqCtx(c), tenantID, mediaQuota)
 	}
 
 	// Auto-generate alt text asynchronously for an image with no user-supplied one
 	// (CON-281 §10): the synchronous upload stays fast, and the generator writes
 	// only where alt text is still un-edited.
 	if imagePrepared && att.AltText == "" && h.image != nil {
-		go h.generateAttachmentAltText(context.WithoutCancel(c.Context()), session.TenantID, att.ID, att.S3Key)
+		go h.generateAttachmentAltText(context.WithoutCancel(reqCtx(c)), session.TenantID, att.ID, att.S3Key)
 	}
 
 	h.hydratePresigned(c, att)
@@ -725,7 +725,7 @@ func (h *PostAttachmentsHandler) Update(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
 	}
 
-	att, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	att, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "attachment not found")
 	}
@@ -767,7 +767,7 @@ func (h *PostAttachmentsHandler) Update(c *fiber.Ctx) error {
 	}
 
 	if req.Position != nil {
-		if err := h.repo.UpdatePosition(c.Context(), att.ID, *req.Position); err != nil {
+		if err := h.repo.UpdatePosition(reqCtx(c), att.ID, *req.Position); err != nil {
 			// UNIQUE(post_id, position): another attachment already holds the
 			// target position. Surface as 409 (not a raw 500) and point at the
 			// atomic reorder endpoint (CON-124).
@@ -779,19 +779,19 @@ func (h *PostAttachmentsHandler) Update(c *fiber.Ctx) error {
 		}
 	}
 	if req.AltText != nil {
-		if err := h.repo.UpdateAltText(c.Context(), att.ID, altText); err != nil {
+		if err := h.repo.UpdateAltText(reqCtx(c), att.ID, altText); err != nil {
 			return err
 		}
 	}
 	if req.SegmentIndex.Present {
 		// Optional[int].Value is already the *int UpdateSegmentIndex wants: a
 		// number sets the segment, an explicit null (nil) detaches it.
-		if err := h.repo.UpdateSegmentIndex(c.Context(), att.ID, req.SegmentIndex.Value); err != nil {
+		if err := h.repo.UpdateSegmentIndex(reqCtx(c), att.ID, req.SegmentIndex.Value); err != nil {
 			return err
 		}
 	}
 
-	updated, err := h.repo.GetByID(c.Context(), att.ID)
+	updated, err := h.repo.GetByID(reqCtx(c), att.ID)
 	if err != nil {
 		return err
 	}
@@ -844,7 +844,7 @@ func (h *PostAttachmentsHandler) ReorderAll(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "ids is required")
 	}
 
-	current, err := h.repo.ListByPostID(c.Context(), post.ID)
+	current, err := h.repo.ListByPostID(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}
@@ -866,11 +866,11 @@ func (h *PostAttachmentsHandler) ReorderAll(c *fiber.Ctx) error {
 		seen[id] = true
 	}
 
-	if err := h.repo.ReorderPositions(c.Context(), post.ID, req.IDs); err != nil {
+	if err := h.repo.ReorderPositions(reqCtx(c), post.ID, req.IDs); err != nil {
 		return err
 	}
 
-	updated, err := h.repo.ListByPostID(c.Context(), post.ID)
+	updated, err := h.repo.ListByPostID(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}
@@ -913,7 +913,7 @@ func (h *PostAttachmentsHandler) Delete(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
 	}
 
-	att, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	att, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "attachment not found")
 	}
@@ -926,18 +926,18 @@ func (h *PostAttachmentsHandler) Delete(c *fiber.Ctx) error {
 	// retries.
 	if h.storage != nil {
 		if att.S3Key != "" {
-			if err := h.storage.Delete(c.Context(), att.S3Key); err != nil {
+			if err := h.storage.Delete(reqCtx(c), att.S3Key); err != nil {
 				return fiber.NewError(fiber.StatusBadGateway, "failed to delete object from storage; please retry")
 			}
 		}
 		if att.ThumbnailS3Key != "" {
-			if err := h.storage.Delete(c.Context(), att.ThumbnailS3Key); err != nil {
+			if err := h.storage.Delete(reqCtx(c), att.ThumbnailS3Key); err != nil {
 				return fiber.NewError(fiber.StatusBadGateway, "failed to delete thumbnail from storage; please retry")
 			}
 		}
 	}
 
-	deleted, err := h.repo.Delete(c.Context(), att.ID)
+	deleted, err := h.repo.Delete(reqCtx(c), att.ID)
 	if err != nil {
 		return err
 	}

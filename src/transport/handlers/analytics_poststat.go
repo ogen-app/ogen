@@ -40,7 +40,7 @@ func (h *AnalyticsHandler) PostDetail(c *fiber.Ctx) error {
 	if h.repo == nil {
 		return c.JSON(insightEnvelope{Available: false, Reason: reasonNotConfigured})
 	}
-	ctx := c.Context()
+	ctx := reqCtx(c)
 
 	post, err := h.posts.GetByID(ctx, c.Params("post_id"))
 	if err != nil {

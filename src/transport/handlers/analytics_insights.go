@@ -41,7 +41,7 @@ func (h *AnalyticsHandler) serveInsight(c *fiber.Ctx, fetch func(ctx context.Con
 	if h.client == nil {
 		return c.JSON(insightEnvelope{Available: false, Reason: reasonNotConfigured})
 	}
-	profileID, err := h.resolveProfile(c.Context())
+	profileID, err := h.resolveProfile(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func (h *AnalyticsHandler) serveInsight(c *fiber.Ctx, fetch func(ctx context.Con
 	if source != "" && !validInsightSource[source] {
 		return fiber.NewError(fiber.StatusBadRequest, "source must be all, late, or external")
 	}
-	data, err := fetch(c.Context(), zernio.InsightQuery{
+	data, err := fetch(reqCtx(c), zernio.InsightQuery{
 		ProfileID: profileID,
 		Platform:  c.Query("platform"),
 		AccountID: c.Query("account_id"),
@@ -181,11 +181,11 @@ func (h *AnalyticsHandler) Followers(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "to must be a YYYY-MM-DD date")
 	}
 
-	summary, err := h.followerRepo.Summary(c.Context(), accountID)
+	summary, err := h.followerRepo.Summary(reqCtx(c), accountID)
 	if err != nil {
 		return err
 	}
-	points, err := h.followerRepo.Series(c.Context(), repository.FollowerSeriesOptions{
+	points, err := h.followerRepo.Series(reqCtx(c), repository.FollowerSeriesOptions{
 		AccountID: accountID,
 		From:      from,
 		To:        to,

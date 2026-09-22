@@ -118,7 +118,7 @@ func (h *NotificationsHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	list, err := h.repo.List(c.Context(), s.UserID, repository.NotificationListOpts{
+	list, err := h.repo.List(reqCtx(c), s.UserID, repository.NotificationListOpts{
 		UnreadOnly: c.Query("status") == "unread",
 		Limit:      limit,
 		BeforeSeq:  before,
@@ -146,7 +146,7 @@ func (h *NotificationsHandler) UnreadCount(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	n, err := h.repo.UnreadCount(c.Context(), s.UserID)
+	n, err := h.repo.UnreadCount(reqCtx(c), s.UserID)
 	if err != nil {
 		return err
 	}
@@ -180,14 +180,14 @@ func (h *NotificationsHandler) Patch(c *fiber.Ctx) error {
 	if req.Read == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "read is required")
 	}
-	found, err := h.repo.SetRead(c.Context(), s.UserID, c.Params("id"), *req.Read)
+	found, err := h.repo.SetRead(reqCtx(c), s.UserID, c.Params("id"), *req.Read)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return fiber.NewError(fiber.StatusNotFound, "notification not found")
 	}
-	n, err := h.repo.Get(c.Context(), s.UserID, c.Params("id"))
+	n, err := h.repo.Get(reqCtx(c), s.UserID, c.Params("id"))
 	if err != nil {
 		return notFound(err, "notification not found")
 	}
@@ -220,7 +220,7 @@ func (h *NotificationsHandler) MarkAllRead(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 	}
-	updated, err := h.repo.MarkAllRead(c.Context(), s.UserID, req.Before)
+	updated, err := h.repo.MarkAllRead(reqCtx(c), s.UserID, req.Before)
 	if err != nil {
 		return err
 	}
@@ -240,7 +240,7 @@ func (h *NotificationsHandler) Dismiss(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	found, err := h.repo.Dismiss(c.Context(), s.UserID, c.Params("id"))
+	found, err := h.repo.Dismiss(reqCtx(c), s.UserID, c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 	// Subscribe FIRST, then replay: any notification published between here and
 	// the replay query lands in the channel buffer and is deduped by seq during
 	// the replay→live handoff, so nothing is dropped across the gap.
-	eventCh, unsubscribe, err := h.hub.Subscribe(c.Context(), eventhub.SubscribeOpts{
+	eventCh, unsubscribe, err := h.hub.Subscribe(reqCtx(c), eventhub.SubscribeOpts{
 		UserID:   session.UserID,
 		TenantID: session.TenantID,
 		Topics:   []string{notify.StreamTopic},
@@ -309,7 +309,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 	maxLifetime := h.maxLifetime
 	repo := h.repo
 
-	reqID, _ := logging.RequestIDFrom(c.Context())
+	reqID, _ := logging.RequestIDFrom(reqCtx(c))
 	logCtx := logging.WithRequestID(context.Background(), reqID)
 	logCtx = logging.WithUserID(logCtx, session.UserID)
 	logCtx = tenantctx.With(logCtx, session.TenantID)

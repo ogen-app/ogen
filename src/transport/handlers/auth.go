@@ -41,7 +41,7 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 			return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 		}
 
-		session, err := sessionRepo.GetByID(c.Context(), token)
+		session, err := sessionRepo.GetByID(reqCtx(c), token)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired session")
@@ -70,7 +70,7 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 		if ws := c.Get(workspaceHeader); ws != "" {
 			active = ws
 		}
-		membership, merr := userRepo.GetMembership(c.Context(), session.AccountID, active)
+		membership, merr := userRepo.GetMembership(reqCtx(c), session.AccountID, active)
 		if errors.Is(merr, sql.ErrNoRows) {
 			if c.Get(workspaceHeader) != "" {
 				// An explicit header naming a workspace the account can't reach (not a
@@ -80,7 +80,7 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 			// No header and the default is gone (its workspace was deleted, or the
 			// membership removed): fall back to any live workspace so the account
 			// isn't stranded on a dead default. 401 only when nothing remains.
-			membership, merr = userRepo.GetByAccountID(c.Context(), session.AccountID)
+			membership, merr = userRepo.GetByAccountID(reqCtx(c), session.AccountID)
 			if errors.Is(merr, sql.ErrNoRows) {
 				return fiber.NewError(fiber.StatusUnauthorized, "no accessible workspace")
 			}
@@ -126,7 +126,7 @@ func callerUser(c *fiber.Ctx, userRepo repository.UserRepository) (*models.User,
 	if !ok || session == nil {
 		return nil, fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 	}
-	user, err := userRepo.GetByID(c.Context(), session.UserID)
+	user, err := userRepo.GetByID(reqCtx(c), session.UserID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fiber.NewError(fiber.StatusUnauthorized, "user not found")

@@ -99,7 +99,7 @@ func (h *PostAssistantHandler) Assistant(c *fiber.Ctx) error {
 	c.Set("Connection", "keep-alive")
 	c.Set("X-Accel-Buffering", "no")
 
-	h.activity.Record(c.Context(), activity.CategoryAIFlow, "post_assistant_turn",
+	h.activity.Record(reqCtx(c), activity.CategoryAIFlow, "post_assistant_turn",
 		activity.WithEntity("post", c.Params("id")),
 		activity.WithSource(activity.SourceAssistant),
 	)
@@ -169,7 +169,7 @@ func (h *PostAssistantHandler) Assistant(c *fiber.Ctx) error {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/posts/{id}/messages [get]
 func (h *PostAssistantHandler) ListMessages(c *fiber.Ctx) error {
-	msgs, err := h.messageRepo.ListRecentByPostID(c.Context(), c.Params("id"), 50)
+	msgs, err := h.messageRepo.ListRecentByPostID(reqCtx(c), c.Params("id"), 50)
 	if err != nil {
 		return err
 	}

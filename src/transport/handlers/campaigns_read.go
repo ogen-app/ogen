@@ -53,7 +53,7 @@ func (h *CampaignReadHandler) Overview(c *fiber.Ctx) error {
 	if h.overview == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "campaign overview is not available")
 	}
-	ov, err := h.overview.Overview(c.Context(), c.Params("id"))
+	ov, err := h.overview.Overview(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, overview.ErrNotFound) {
 			return fiber.NewError(fiber.StatusNotFound, "campaign not found")
@@ -81,7 +81,7 @@ func (h *CampaignReadHandler) Summaries(c *fiber.Ctx) error {
 	if h.summaries == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "campaign summaries are not available")
 	}
-	out, err := h.summaries.Summaries(c.Context())
+	out, err := h.summaries.Summaries(reqCtx(c))
 	if err != nil {
 		return err
 	}

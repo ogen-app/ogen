@@ -49,7 +49,7 @@ func (h *AnnouncementsHandler) session(c *fiber.Ctx) (*models.Session, error) {
 // announcements. Shared by delivery and the click/dismiss gate so a user can
 // only interact with an announcement actually targeted at their workspace.
 func (h *AnnouncementsHandler) audience(c *fiber.Ctx, s *models.Session) (repository.AnnouncementAudience, error) {
-	tenant, err := h.tenants.GetByIDWithClassification(c.Context(), s.TenantID)
+	tenant, err := h.tenants.GetByIDWithClassification(reqCtx(c), s.TenantID)
 	if err != nil {
 		return repository.AnnouncementAudience{}, err
 	}
@@ -111,7 +111,7 @@ func (h *AnnouncementsHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	rows, err := h.repo.ActiveForTenant(c.Context(), aud)
+	rows, err := h.repo.ActiveForTenant(reqCtx(c), aud)
 	if err != nil {
 		return err
 	}
@@ -139,7 +139,7 @@ func (h *AnnouncementsHandler) Click(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ok, err := h.repo.RecordClick(c.Context(), c.Params("id"), aud)
+	ok, err := h.repo.RecordClick(reqCtx(c), c.Params("id"), aud)
 	if err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func (h *AnnouncementsHandler) Dismiss(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ok, err := h.repo.RecordDismiss(c.Context(), c.Params("id"), aud)
+	ok, err := h.repo.RecordDismiss(reqCtx(c), c.Params("id"), aud)
 	if err != nil {
 		return err
 	}

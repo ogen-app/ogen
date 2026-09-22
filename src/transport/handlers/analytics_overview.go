@@ -50,7 +50,7 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 		}
 	}
 	prev := rng.Previous()
-	ctx := c.Context()
+	ctx := reqCtx(c)
 
 	curPosts, err := h.repo.PublishedBetween(ctx, rng.From, rng.To)
 	if err != nil {

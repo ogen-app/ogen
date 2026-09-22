@@ -95,9 +95,9 @@ func (h *ImagesHandler) Upload(c *fiber.Ctx) error {
 	// namespace the object key by tenant (CON-97). filepath.Base must run on
 	// the filename — running it on the final key would strip the
 	// t/<tenant_id>/ prefix.
-	key := storage.TenantKey(c.Context(), filepath.Base(uuid.NewString()+ext))
+	key := storage.TenantKey(reqCtx(c), filepath.Base(uuid.NewString()+ext))
 
-	url, err := h.storage.Upload(c.Context(), key, f, fh.Size, mimeType)
+	url, err := h.storage.Upload(reqCtx(c), key, f, fh.Size, mimeType)
 	if err != nil {
 		return fmt.Errorf("images: storage upload: %w", err)
 	}

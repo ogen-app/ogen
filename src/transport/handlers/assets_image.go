@@ -95,7 +95,7 @@ func (h *AssetsImageHandler) Extract(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if _, err := h.extractions.GetLatestByAsset(c.Context(), asset.ID); err == nil {
+	if _, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID); err == nil {
 		return fiber.NewError(fiber.StatusConflict, "an extraction already exists — use reextract")
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -141,14 +141,14 @@ func (h *AssetsImageHandler) Status(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ext, err := h.extractions.GetLatestByAsset(c.Context(), asset.ID)
+	ext, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "no extraction for this asset")
 		}
 		return err
 	}
-	blocks, err := h.blocks.ListByExtraction(c.Context(), ext.ID)
+	blocks, err := h.blocks.ListByExtraction(reqCtx(c), ext.ID)
 	if err != nil {
 		return err
 	}
@@ -166,15 +166,15 @@ func (h *AssetsImageHandler) RegenerateAltText(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	file, err := h.fileRepo.GetByAssetID(c.Context(), asset.ID)
+	file, err := h.fileRepo.GetByAssetID(reqCtx(c), asset.ID)
 	if err != nil || file == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "asset has no uploaded image")
 	}
-	getURL, err := h.storage.PresignedGetURL(c.Context(), file.S3Key, PresignedURLTTL)
+	getURL, err := h.storage.PresignedGetURL(reqCtx(c), file.S3Key, PresignedURLTTL)
 	if err != nil {
 		return err
 	}
-	res, err := h.image.GenerateAltText(c.Context(), imageclient.GenerateAltTextOptions{
+	res, err := h.image.GenerateAltText(reqCtx(c), imageclient.GenerateAltTextOptions{
 		SourceURL: getURL,
 		MaxChars:  h.altTextMaxChars,
 		Model:     h.altTextModel,
@@ -186,13 +186,13 @@ func (h *AssetsImageHandler) RegenerateAltText(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "image processing is temporarily unavailable; please retry")
 	}
 	for _, u := range res.Usage {
-		h.recorder.RecordResp(c.Context(), llm.VendorGemini, u.Model, "alt_text", llm.VisionUsage{Step: u.Step, InputTokens: u.Input, OutputTokens: u.Output})
+		h.recorder.RecordResp(reqCtx(c), llm.VendorGemini, u.Model, "alt_text", llm.VisionUsage{Step: u.Step, InputTokens: u.Input, OutputTokens: u.Output})
 	}
 	alt := strings.TrimSpace(res.AltText)
 	if utf8.RuneCountInString(alt) > maxAltTextLen() {
 		alt = string([]rune(alt)[:maxAltTextLen()])
 	}
-	if err := h.repo.SetAltText(c.Context(), asset.ID, alt); err != nil {
+	if err := h.repo.SetAltText(reqCtx(c), asset.ID, alt); err != nil {
 		return err
 	}
 	return c.JSON(fiber.Map{"asset_id": asset.ID, "alt_text": alt})
@@ -201,13 +201,13 @@ func (h *AssetsImageHandler) RegenerateAltText(c *fiber.Ctx) error {
 // enqueue confirms the asset has an uploaded original and enqueues a run in a
 // transaction (so a failed enqueue leaves no dangling state).
 func (h *AssetsImageHandler) enqueue(c *fiber.Ctx, asset *models.Asset, runKey, pinnedModel string) error {
-	file, err := h.fileRepo.GetByAssetID(c.Context(), asset.ID)
+	file, err := h.fileRepo.GetByAssetID(reqCtx(c), asset.ID)
 	if err != nil || file == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "asset has no uploaded image")
 	}
 	session := c.Locals("session").(*models.Session)
 	storageKey := relativeImageKey(asset.ID, file.OriginalName)
-	return h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	return h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		return h.imgJobs.EnqueueProcessImageTx(ctx, tx.Tx, asset.ID, session.TenantID, file.OriginalName, file.MimeType, storageKey, runKey, pinnedModel)
 	})
 }
@@ -215,7 +215,7 @@ func (h *AssetsImageHandler) enqueue(c *fiber.Ctx, asset *models.Asset, runKey, 
 // loadImageAsset loads the path :id asset, 404ing when it is missing or not an
 // IMG asset (cross-tenant is already 404 via the repo scope).
 func (h *AssetsImageHandler) loadImageAsset(c *fiber.Ctx) (*models.Asset, error) {
-	asset, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	asset, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil || asset.Type == nil || *asset.Type != models.AssetTypeImage {
 		return nil, fiber.NewError(fiber.StatusNotFound, "image asset not found")
 	}

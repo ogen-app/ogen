@@ -137,7 +137,7 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 
 	// The transactional create + job enqueues live in the signup use case; the
 	// handler keeps only transport: throttle, cookie, activity, response.
-	res, err := h.signup.Create(c.Context(), signup.Input{
+	res, err := h.signup.Create(reqCtx(c), signup.Input{
 		TenantName: req.Tenant.Name,
 		UserName:   req.User.Name,
 		Email:      req.User.Email,
@@ -161,7 +161,7 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 	})
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), res.Tenant.ID), res.User.ID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), res.Tenant.ID), res.User.ID),
 		activity.CategoryAuthentication, "signup",
 		activity.WithEntity("tenant", res.Tenant.ID), activity.WithSource(activity.SourceAPI),
 	)
@@ -226,17 +226,17 @@ func (h *TenantsHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	tenant, err := h.tenantRepo.GetByID(c.Context(), c.Params("id"))
+	tenant, err := h.tenantRepo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "tenant not found")
 	}
 
 	tenant.Name = req.Name
 	tenant.UpdatedAt = time.Now().UTC()
-	if err := h.tenantRepo.Update(c.Context(), tenant); err != nil {
+	if err := h.tenantRepo.Update(reqCtx(c), tenant); err != nil {
 		return err
 	}
-	h.activity.Record(c.Context(), activity.CategoryAuthentication, "tenant_updated",
+	h.activity.Record(reqCtx(c), activity.CategoryAuthentication, "tenant_updated",
 		activity.WithEntity("tenant", tenant.ID), activity.WithSource(activity.SourceAPI))
 	return c.JSON(tenant)
 }
@@ -245,7 +245,7 @@ func (h *TenantsHandler) Update(c *fiber.Ctx) error {
 // the request context (set by RequireAuth via tenantctx.Key), with the session
 // local as a defensive fallback.
 func (h *TenantsHandler) callerTenantID(c *fiber.Ctx) string {
-	if id, ok := tenantctx.From(c.Context()); ok {
+	if id, ok := tenantctx.From(reqCtx(c)); ok {
 		return id
 	}
 	if s, ok := c.Locals("session").(*models.Session); ok && s != nil {
@@ -255,7 +255,7 @@ func (h *TenantsHandler) callerTenantID(c *fiber.Ctx) string {
 }
 
 func (h *TenantsHandler) respondTenant(c *fiber.Ctx, id string) error {
-	tenant, err := h.tenantRepo.GetByID(c.Context(), id)
+	tenant, err := h.tenantRepo.GetByID(reqCtx(c), id)
 	if err != nil {
 		return notFound(err, "tenant not found")
 	}

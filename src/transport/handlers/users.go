@@ -116,7 +116,7 @@ type updateUserRequest struct {
 // @Router       /api/current_user [get]
 func (h *UsersHandler) CurrentUser(c *fiber.Ctx) error {
 	session := c.Locals("session").(*models.Session)
-	user, err := h.repo.GetByIDWithTenant(c.Context(), session.UserID)
+	user, err := h.repo.GetByIDWithTenant(reqCtx(c), session.UserID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusUnauthorized, "user not found")
@@ -136,7 +136,7 @@ func (h *UsersHandler) CurrentUser(c *fiber.Ctx) error {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/users [get]
 func (h *UsersHandler) List(c *fiber.Ctx) error {
-	users, err := h.repo.List(c.Context())
+	users, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 	}
 
 	// CON-295: the team_seats quota gates adding a member.
-	seatDec, err := h.limiter.Require(c.Context(), caller.TenantID, "team_seats")
+	seatDec, err := h.limiter.Require(reqCtx(c), caller.TenantID, "team_seats")
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := h.accountRepo.CreateTx(ctx, tx, account); err != nil {
 			return err
 		}
@@ -222,10 +222,10 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 
-	h.activity.Record(c.Context(), activity.CategoryAuthentication, "user_created",
+	h.activity.Record(reqCtx(c), activity.CategoryAuthentication, "user_created",
 		activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI))
 	// CON-295: the member now exists — fire any near-limit crossing.
-	h.limiter.DispatchCrossing(c.Context(), caller.TenantID, seatDec)
+	h.limiter.DispatchCrossing(reqCtx(c), caller.TenantID, seatDec)
 	return c.Status(fiber.StatusCreated).JSON(user)
 }
 
@@ -258,7 +258,7 @@ func (h *UsersHandler) SetRole(c *fiber.Ctx) error {
 
 	// SetRoleGuarded scopes to the caller's tenant (404 for an outsider) and
 	// enforces the >=1-owner invariant in one transaction (CON-26 §7/§11).
-	updated, err := h.repo.SetRoleGuarded(c.Context(), c.Params("id"), caller.TenantID, req.Role)
+	updated, err := h.repo.SetRoleGuarded(reqCtx(c), c.Params("id"), caller.TenantID, req.Role)
 	if err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -270,7 +270,7 @@ func (h *UsersHandler) SetRole(c *fiber.Ctx) error {
 		}
 	}
 
-	h.activity.Record(c.Context(), activity.CategoryAuthentication, "member_role_changed",
+	h.activity.Record(reqCtx(c), activity.CategoryAuthentication, "member_role_changed",
 		activity.WithEntity("user", updated.ID), activity.WithSource(activity.SourceAPI),
 		activity.WithPayload(map[string]any{"role": req.Role, "actor": caller.ID}))
 	return c.JSON(updated)
@@ -288,7 +288,7 @@ func (h *UsersHandler) SetRole(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/users/{id} [get]
 func (h *UsersHandler) Get(c *fiber.Ctx) error {
-	user, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	user, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "user not found")
 	}
@@ -323,7 +323,7 @@ func (h *UsersHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	user, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	user, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "user not found")
 	}
@@ -334,7 +334,7 @@ func (h *UsersHandler) Update(c *fiber.Ctx) error {
 		// the account (identity) and login is by account email, so both are updated
 		// together — a clash on the account email surfaces as 409 (CON-147).
 		now := time.Now().UTC()
-		if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 			user.Name = req.Name
 			user.Email = req.Email
 			user.UpdatedAt = now
@@ -368,7 +368,7 @@ func (h *UsersHandler) Update(c *fiber.Ctx) error {
 		// argon2 — password changes are rare, so hashing under the lock is fine. The
 		// caller's own session (session.ID) is preserved so they aren't logged out of
 		// the tab making the change.
-		if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 			account := new(models.Account)
 			if err := tx.NewSelect().Model(account).Where("a.id = ?", user.AccountID).For("UPDATE").Scan(ctx); err != nil {
 				return err
@@ -418,7 +418,7 @@ func (h *UsersHandler) Update(c *fiber.Ctx) error {
 		}
 	}
 
-	h.activity.Record(c.Context(), activity.CategoryAuthentication, "user_updated",
+	h.activity.Record(reqCtx(c), activity.CategoryAuthentication, "user_updated",
 		activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI))
 	return c.JSON(user)
 }
@@ -449,7 +449,7 @@ func (h *UsersHandler) Delete(c *fiber.Ctx) error {
 	// RemoveMemberGuarded scopes to the caller's tenant (404 for an outsider) and
 	// enforces the >=1-owner invariant, so the last owner can't be removed —
 	// including self-removal (CON-26 §7).
-	if err := h.repo.RemoveMemberGuarded(c.Context(), targetID, caller.TenantID); err != nil {
+	if err := h.repo.RemoveMemberGuarded(reqCtx(c), targetID, caller.TenantID); err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return fiber.NewError(fiber.StatusNotFound, "user not found")
@@ -465,7 +465,7 @@ func (h *UsersHandler) Delete(c *fiber.Ctx) error {
 	if caller.ID != targetID {
 		event = "member_removed"
 	}
-	h.activity.Record(c.Context(), activity.CategoryAuthentication, event,
+	h.activity.Record(reqCtx(c), activity.CategoryAuthentication, event,
 		activity.WithEntity("user", targetID), activity.WithSource(activity.SourceAPI))
 	return c.SendStatus(fiber.StatusNoContent)
 }
