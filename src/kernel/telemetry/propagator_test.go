@@ -88,3 +88,24 @@ func TestSentryTracePropagatorFields(t *testing.T) {
 		t.Errorf("Fields() = %v, want [%s]", got, sentryTraceHeader)
 	}
 }
+
+// When a request carries BOTH a valid `sentry-trace` and a valid W3C
+// `traceparent`, the composite must keep the browser's Sentry trace as the
+// parent — it is the intended head of the end-to-end trace. This is what pins
+// sentryTracePropagator after TraceContext in Propagator() (last valid extractor
+// wins), so guard the order here.
+func TestPropagatorPrefersSentryTraceOverTraceparent(t *testing.T) {
+	const traceparentTraceID = "11111111111111111111111111111111"
+	carrier := propagation.MapCarrier{
+		sentryTraceHeader: sampleTraceID + "-" + sampleSpanID + "-1",
+		"traceparent":     "00-" + traceparentTraceID + "-2222222222222222-01",
+	}
+
+	sc := trace.SpanContextFromContext(Propagator().Extract(context.Background(), carrier))
+	if !sc.IsValid() {
+		t.Fatal("expected a valid remote span context")
+	}
+	if got := sc.TraceID().String(); got != sampleTraceID {
+		t.Errorf("trace id = %s, want the sentry-trace id %s (traceparent must not win)", got, sampleTraceID)
+	}
+}
