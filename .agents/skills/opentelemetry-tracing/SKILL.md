@@ -244,8 +244,11 @@ it would just surface each DB query as its own one-span root trace. The fix is a
 | `SENTRY_DEBUG` | `SentryDebug` | `false` | sentry-go SDK debug logging |
 | `OTEL_SERVICE_NAME` | `OTelServiceName` | `ogen-api` | resource `service.name` |
 
-The backend logs `telemetry enabled` (once, at boot) only when the DSN is set; the
-disabled path logs nothing. **Absence of that line = telemetry is off.**
+Three boot states to tell apart from the API logs: **`telemetry enabled`** ⇒ on;
+**`telemetry init failed, disabling (fail-open)`** ⇒ `SENTRY_DSN` *is* set but `Init`
+errored (bad DSN / exporter) so telemetry is off despite config; **neither line** ⇒
+`SENTRY_DSN` is empty (the disabled path is silent). Absence of the success line alone
+does **not** prove the DSN is empty — check for the failure line too.
 
 ---
 
@@ -253,9 +256,11 @@ disabled path logs nothing. **Absence of that line = telemetry is off.**
 
 Work top-down; each answer tells you which layer is broken.
 
-1. **No backend spans at all?** Grep the API boot logs for `telemetry enabled`. Missing
-   ⇒ `SENTRY_DSN` is empty on *that* environment (Railway vars, not the local `.env`).
-   Set it and restart.
+1. **No backend spans at all?** Grep the API boot logs. `telemetry enabled` present ⇒
+   telemetry is on (look further down). `telemetry init failed, disabling (fail-open)`
+   ⇒ `SENTRY_DSN` *is* set but `Init` errored (bad DSN / exporter) — fix the DSN/config.
+   **Neither** line ⇒ `SENTRY_DSN` is empty on *that* environment (Railway vars, not the
+   local `.env`); set it and restart.
 2. **UI and API are two separate traces?** The `sentry-trace` header isn't making it
    from browser to the otelfiber `Extract`:
    - DevTools → Network → `/api/...` → Request Headers → is `sentry-trace` present?

@@ -44,6 +44,7 @@ func TestReqCtxParentsChildSpansUnderServerSpan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
