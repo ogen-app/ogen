@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
@@ -73,7 +74,22 @@ type InvitationsHandler struct {
 	ipLimiter     *keyedRateLimiter
 	acceptLimiter *keyedRateLimiter
 
+	limiter  *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 	activity *activity.Recorder
+}
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op). Invites are
+// the preferred way to add teammates, so the team_seats cap must gate the accept
+// path as well as the direct-create path in users.go (CON-295 §5).
+func (h *InvitationsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
+
+// seatQuota checks the team_seats entitlement for the workspace an invite joins.
+// Accepting is unauthenticated (acceptNew) or signed in as a different workspace
+// (acceptExisting), so the seat counter — which reads the tenant from the context
+// (userRepository.CountInTenant) — is scoped explicitly to the invite's tenant;
+// without this the count would span every tenant and wrongly block.
+func (h *InvitationsHandler) seatQuota(ctx context.Context, tenantID string) (entitlements.Decision, error) {
+	return h.limiter.Require(tenantctx.With(ctx, tenantID), tenantID, "team_seats")
 }
 
 // NewInvitationsHandler builds the handler. appBaseURL (APP_BASE_URL) is the base
@@ -454,6 +470,13 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 		return err
 	}
 
+	// CON-295: attaching an existing account is still a new seat, so the
+	// team_seats quota gates it exactly as acceptNew, before the token is consumed.
+	seatDec, err := h.seatQuota(c.Context(), inv.TenantID)
+	if err != nil {
+		return err
+	}
+
 	now := time.Now().UTC()
 	uid, err := models.NewID()
 	if err != nil {
@@ -484,6 +507,8 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 		activity.CategoryAuthentication, "invitation_accepted",
 		activity.WithEntity("user", uid), activity.WithSource(activity.SourceAPI),
 	)
+	// CON-295 §12: the seat is now taken — fire any near-limit crossing.
+	h.limiter.DispatchCrossing(tenantctx.With(c.Context(), inv.TenantID), inv.TenantID, seatDec)
 
 	// No cookie: the caller stays in whatever workspace their session is on; the
 	// client offers to switch to the newly joined one.
@@ -502,13 +527,21 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 	if req.Name == "" || len(req.Password) < 8 {
 		return fiber.NewError(fiber.StatusBadRequest, "name and a password of at least 8 characters are required")
 	}
+	// CON-295: the team_seats quota gates the workspace gaining a member. Require
+	// returns a *QuotaExceededError (→ 402) when at cap in enforce mode. Checked
+	// before the token is consumed so an over-cap workspace leaves the invite
+	// valid (the owner can free a seat or upgrade, then the invitee retries).
+	seatDec, err := h.seatQuota(c.Context(), inv.TenantID)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 
 	var (
 		newUser *models.User
 		session *models.Session
 	)
-	err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	err = h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, cerr := h.inviteRepo.ConsumeByTokenTx(ctx, tx, inv.TokenHash, now); cerr != nil {
 			if errors.Is(cerr, sql.ErrNoRows) {
 				return errInvitationInvalid
@@ -571,6 +604,10 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 		activity.CategoryAuthentication, "invitation_accepted",
 		activity.WithEntity("user", newUser.ID), activity.WithSource(activity.SourceAPI),
 	)
+	// CON-295 §12: the member now exists — fire any near-limit crossing to the
+	// workspace owners (tenant-scoped ctx so the notifier resolves the invite's
+	// tenant, not the acceptor's absent one).
+	h.limiter.DispatchCrossing(tenantctx.With(c.Context(), inv.TenantID), inv.TenantID, seatDec)
 
 	resp := acceptInvitationResponse{User: newUser, Session: session}
 	if t, terr := h.tenantRepo.GetByID(c.Context(), inv.TenantID); terr == nil {

@@ -603,6 +603,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	invitationsHandler := handlers.NewInvitationsHandler(db, r.userRepo, r.accountRepo, r.tenantRepo, r.invitationRepo, r.sessionRepo, cfg.AppBaseURL, cfg.SessionCookieName, !cfg.Debug, auth)
 	invitationsHandler.SetActivityRecorder(activityWiring.recorder)
 	invitationsHandler.SetEmailEnqueuer(enqueuer)
+	invitationsHandler.SetLimiter(entitlementLimiter) // CON-295: seat cap on the accept path
 	invitationsHandler.Register(app)
 
 	// CON-154: public unsubscribe (token-gated) + Resend delivery webhook
