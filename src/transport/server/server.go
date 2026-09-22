@@ -53,7 +53,7 @@ import (
 )
 
 // TODO: refactor this function
-func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secretStore secrets.Store) (*fiber.App, error) {
+func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secretStore secrets.Store, hub eventhub.Hub) (*fiber.App, error) {
 	// Opt-in pprof for perf diagnostics (CON-112). Container-internal only.
 	if cfg.EnablePprof {
 		startPprof("localhost:6060")
@@ -130,18 +130,10 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// the job producers stop.
 	activityWiring := initActivity(cfg, analyticsDB)
 
-	// In-process event hub: backend code publishes; the SSE endpoint
-	// fans events out to authenticated clients.
-	//
-	// CON-286: the per-user cap is counted across BOTH SSE streams
-	// (/api/events and /api/notifications/stream) and every device/tab. The
-	// library default of 10 is too tight once the `activity` feature opens a
-	// second stream per tab (2 streams/tab → only ~5 tabs before the cap):
-	// past the cap, evict-oldest doesn't settle, it rotates — each tab's
-	// reconnect evicts another's, and every eviction triggers a full cache
-	// reconcile in the victim. 30 (≥ 2× the tabs a normal person opens) keeps
-	// eviction off the normal path while staying a bound on runaway clients.
-	hub := eventhub.New(eventhub.Config{MaxSubscribersPerUser: 30})
+	// In-process event hub: backend code publishes; the SSE endpoint fans events
+	// out to authenticated clients. Created by the caller (cmd/server) and shared
+	// with the internal gRPC server, so an operator tier change over gRPC can
+	// invalidate a tenant's open tabs on the same bus (CON-295).
 	handlers.NewEventsHandler(hub, r.sessionRepo, auth, 0).Register(app)
 
 	// CON-242: notification center. A persistent per-user inbox (REST + durable
