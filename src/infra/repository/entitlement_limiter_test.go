@@ -75,6 +75,9 @@ func TestEntitlementCountersValidSQL(t *testing.T) {
 	if _, err := repository.NewAssetRepository(db, nil, nil).Count(ctx); err != nil {
 		t.Fatalf("Asset Count: %v", err)
 	}
+	if _, err := repository.NewAssetRepository(db, nil, nil).CountByType(ctx, models.AssetTypeURL); err != nil {
+		t.Fatalf("Asset CountByType: %v", err)
+	}
 	if _, err := repository.NewUserRepository(db).CountInTenant(ctx); err != nil {
 		t.Fatalf("CountInTenant: %v", err)
 	}

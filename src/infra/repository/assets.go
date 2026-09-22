@@ -19,6 +19,11 @@ type AssetRepository interface {
 	// Count counts the tenant's content-bank assets — the content_bank_assets
 	// quota (CON-295).
 	Count(ctx context.Context) (int64, error)
+	// CountByType counts the tenant's content-bank assets of one coarse type —
+	// backs the web_page_imports quota (type "URL"), a stricter sub-cap on the
+	// total bank (CON-295, CON-222). Tenant scoping comes from the TenantScoped
+	// hooks.
+	CountByType(ctx context.Context, assetType string) (int64, error)
 	Create(ctx context.Context, asset *models.Asset) error
 	GetByID(ctx context.Context, id string) (*models.Asset, error)
 	// GetBySourceURL returns the caller-tenant's URL asset with this source_url,
@@ -71,6 +76,11 @@ func NewAssetRepository(db *bun.DB, tagRepo TagRepository, fileRepo AssetFileRep
 
 func (r *assetRepository) Count(ctx context.Context) (int64, error) {
 	n, err := r.db.NewSelect().Model((*models.Asset)(nil)).Count(ctx)
+	return int64(n), err
+}
+
+func (r *assetRepository) CountByType(ctx context.Context, assetType string) (int64, error) {
+	n, err := r.db.NewSelect().Model((*models.Asset)(nil)).Where("a.type = ?", assetType).Count(ctx)
 	return int64(n), err
 }
 
