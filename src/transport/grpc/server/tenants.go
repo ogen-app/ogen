@@ -16,6 +16,7 @@ import (
 
 	tenantsv1 "github.com/ogen-app/ogen/gen/tenants/v1"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
@@ -32,6 +33,7 @@ type tenantAdminService struct {
 	tenantRepo     repository.TenantRepository
 	versionRepo    repository.TenantTierVersionRepository
 	assignmentRepo repository.TenantTierAssignmentRepository
+	hub            eventhub.Hub // CON-295: entitlement-invalidation events (nil-safe)
 }
 
 func newTenantAdminService(
@@ -40,6 +42,7 @@ func newTenantAdminService(
 	tenantRepo repository.TenantRepository,
 	versionRepo repository.TenantTierVersionRepository,
 	assignmentRepo repository.TenantTierAssignmentRepository,
+	hub eventhub.Hub,
 ) *tenantAdminService {
 	return &tenantAdminService{
 		tierRepo:       tierRepo,
@@ -47,6 +50,7 @@ func newTenantAdminService(
 		tenantRepo:     tenantRepo,
 		versionRepo:    versionRepo,
 		assignmentRepo: assignmentRepo,
+		hub:            hub,
 	}
 }
 
@@ -345,6 +349,8 @@ func (s *tenantAdminService) SetTenantTier(ctx context.Context, req *tenantsv1.S
 	if !ok {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
+	// CON-295 §4: nudge the tenant's open tabs to refetch their entitlements.
+	publishEntitlementChange(ctx, s.hub, tenantID)
 	tenant, err := s.tenantRepo.GetByIDWithClassification(ctx, tenantID)
 	if err != nil {
 		return nil, s.internal(ctx, "set tenant tier", err)

@@ -26,6 +26,7 @@ import (
 	_ "github.com/ogen-app/ogen/docs"
 	"github.com/ogen-app/ogen/src/infra/database"
 	"github.com/ogen-app/ogen/src/infra/email/resend"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/kernel/config"
@@ -137,7 +138,22 @@ func main() {
 	}
 	secrets.LogBootSummary(kekSrc, filepath.Join(cfg.KEKPath, secrets.KEKFilename), bootResult)
 
-	app, err := server.New(context.Background(), db, analyticsDB, cfg, store)
+	// In-process event hub, created here so it is shared by the HTTP server (SSE
+	// producers + /api/events) and the internal gRPC server below — an operator
+	// tier change over gRPC invalidates a tenant's open tabs on the same bus
+	// (CON-295 §4).
+	//
+	// CON-286: the per-user cap is counted across BOTH SSE streams (/api/events
+	// and /api/notifications/stream) and every device/tab. The library default of
+	// 10 is too tight once the `activity` feature opens a second stream per tab
+	// (2 streams/tab → only ~5 tabs before the cap): past the cap, evict-oldest
+	// doesn't settle, it rotates — each tab's reconnect evicts another's, and
+	// every eviction triggers a full cache reconcile in the victim. 30 (≥ 2× the
+	// tabs a normal person opens) keeps eviction off the normal path while staying
+	// a bound on runaway clients.
+	hub := eventhub.New(eventhub.Config{MaxSubscribersPerUser: 30})
+
+	app, err := server.New(context.Background(), db, analyticsDB, cfg, store, hub)
 	if err != nil {
 		fatal("init server", err)
 	}
@@ -175,6 +191,10 @@ func main() {
 			resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
 			// CON-230: AnnouncementAdminService (author + measure tenant announcements).
 			repository.NewAnnouncementRepository(db),
+			// CON-295: the shared event hub, so an operator tier change (SetTenantTier
+			// / SetTenantTierVersion) publishes an entitlement-invalidation event that
+			// reaches the affected tenant's open tabs.
+			hub,
 		); err != nil {
 			slog.Error("grpc init failed; internal grpc disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
 			_ = lis.Close()

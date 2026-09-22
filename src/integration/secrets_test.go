@@ -74,6 +74,7 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 		repository.NewEmailEventRepository(db),
 		nil,
 		repository.NewAnnouncementRepository(db),
+		nil, // CON-295: no event hub needed for the secrets rig
 	)
 	Expect(err).NotTo(HaveOccurred())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

@@ -18,6 +18,7 @@ import (
 	plansv1 "github.com/ogen-app/ogen/gen/plans/v1"
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
@@ -33,6 +34,7 @@ type planAdminService struct {
 	assignments repository.TenantTierAssignmentRepository
 	catalog     *entitlements.Catalog
 	resolver    *entitlements.Resolver
+	hub         eventhub.Hub // CON-295: entitlement-invalidation events (nil-safe)
 }
 
 func newPlanAdminService(
@@ -40,8 +42,9 @@ func newPlanAdminService(
 	assignments repository.TenantTierAssignmentRepository,
 	catalog *entitlements.Catalog,
 	resolver *entitlements.Resolver,
+	hub eventhub.Hub,
 ) *planAdminService {
-	return &planAdminService{versions: versions, assignments: assignments, catalog: catalog, resolver: resolver}
+	return &planAdminService{versions: versions, assignments: assignments, catalog: catalog, resolver: resolver, hub: hub}
 }
 
 // --- reads ---
@@ -452,6 +455,8 @@ func (s *planAdminService) SetTenantTierVersion(ctx context.Context, req *plansv
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 	slog.InfoContext(ctx, "tenant tier version set", logging.AttrComponent, "grpcserver", "tenant_id", tenantID, "version_id", versionID, "reason", reason)
+	// CON-295 §4: nudge the tenant's open tabs to refetch their entitlements.
+	publishEntitlementChange(ctx, s.hub, tenantID)
 	tv, err := s.versionProto(ctx, versionID)
 	if err != nil {
 		return nil, s.internal(ctx, "set tenant tier version", err)

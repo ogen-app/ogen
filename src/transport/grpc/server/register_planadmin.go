@@ -5,6 +5,7 @@ import (
 
 	plansv1 "github.com/ogen-app/ogen/gen/plans/v1"
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -16,6 +17,7 @@ func registerPlanAdmin(
 	assignmentRepo repository.TenantTierAssignmentRepository,
 	catalog *entitlements.Catalog,
 	resolver *entitlements.Resolver,
+	hub eventhub.Hub,
 ) {
-	plansv1.RegisterPlanAdminServiceServer(srv, newPlanAdminService(versionRepo, assignmentRepo, catalog, resolver))
+	plansv1.RegisterPlanAdminServiceServer(srv, newPlanAdminService(versionRepo, assignmentRepo, catalog, resolver, hub))
 }

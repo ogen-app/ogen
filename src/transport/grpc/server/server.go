@@ -31,6 +31,7 @@ import (
 	secretsv1 "github.com/ogen-app/ogen/gen/secrets/v1"
 	tenantsv1 "github.com/ogen-app/ogen/gen/tenants/v1"
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 )
@@ -59,6 +60,10 @@ func New(
 	emailEventRepo repository.EmailEventRepository,
 	emailBodies EmailBodyGetter,
 	announcementRepo repository.AnnouncementRepository,
+	// CON-295: shared in-process event hub so an operator tier change publishes an
+	// entitlement-invalidation event onto the tenant's /api/events stream. Nil-safe
+	// (a nil hub simply publishes nothing — the integration test passes nil).
+	hub eventhub.Hub,
 ) (*grpc.Server, error) {
 	// Env-configured secrets frequently arrive with a trailing newline (a very
 	// common Railway / docker-compose paste mistake). Trim it here so the
@@ -86,9 +91,9 @@ func New(
 	// TenantAdminService also gets the version + assignment repos: SetTenantTier
 	// now stamps a tenant_tier_assignment so tenants.tier_id and the open
 	// assignment never drift (CON-294).
-	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo))
+	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo, hub))
 	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
-	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver)
+	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver, hub)
 	// CON-298: EmailAdminService serves a tenant's email history + per-email
 	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
 	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodies)
