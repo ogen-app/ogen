@@ -41,7 +41,7 @@ func TestAnnouncementAdminRoundTrip(t *testing.T) {
 		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
 		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
 		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil,
+		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, nil,
 		annRepo, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)

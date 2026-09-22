@@ -188,6 +188,8 @@ func main() {
 			// unset key = body unavailable, summary + timeline still served).
 			repository.NewEmailLogRepository(db),
 			repository.NewEmailEventRepository(db),
+			// CON-306: the body persisted at send (preferred over the live fetch below).
+			repository.NewEmailBodyRepository(db),
 			resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
 			// CON-230: AnnouncementAdminService (author + measure tenant announcements).
 			repository.NewAnnouncementRepository(db),

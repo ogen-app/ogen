@@ -155,6 +155,12 @@ func (c *Client) Send(ctx context.Context, msg email.Message) (string, error) {
 // summary + persisted timeline — rather than failing the request (CON-298).
 var ErrDisabled = errors.New("resend: client disabled")
 
+// ErrNotFound is returned by Get on an HTTP 404 — Resend has no such message
+// (unknown id, or the message aged out of Resend's retention window). The caller
+// distinguishes it from other fetch failures to log a precise reason for a
+// missing body (resend_404 vs. resend_error, CON-306 §5.4).
+var ErrNotFound = errors.New("resend: email not found")
+
 // EmailDetail is the subset of Resend's GET /emails/{id} response the operator
 // console needs (CON-298): the rendered body + envelope. Fetched live so the
 // large HTML never has to be duplicated into the control-plane DB.
@@ -205,6 +211,9 @@ func (c *Client) Get(ctx context.Context, id string) (*EmailDetail, error) {
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, shortErrorMessage(raw))
+		}
 		return nil, fmt.Errorf("resend: get email: status %d: %s", resp.StatusCode, shortErrorMessage(raw))
 	}
 

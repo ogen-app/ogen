@@ -36,7 +36,7 @@ func TestPlanAdminRoundTrip(t *testing.T) {
 		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
 		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
 		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil,
+		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, nil,
 		repository.NewAnnouncementRepository(db), nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -175,7 +175,7 @@ func newPlanAdminClient(t *testing.T, db *bun.DB, token string) plansv1.PlanAdmi
 		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
 		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
 		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil,
+		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, nil,
 		repository.NewAnnouncementRepository(db), nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)

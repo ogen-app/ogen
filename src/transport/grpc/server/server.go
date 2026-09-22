@@ -58,6 +58,7 @@ func New(
 	assignmentRepo repository.TenantTierAssignmentRepository,
 	emailLogRepo repository.EmailLogRepository,
 	emailEventRepo repository.EmailEventRepository,
+	emailBodyRepo repository.EmailBodyRepository,
 	emailBodies EmailBodyGetter,
 	announcementRepo repository.AnnouncementRepository,
 	// CON-295: shared in-process event hub so an operator tier change publishes an
@@ -96,7 +97,7 @@ func New(
 	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver, hub)
 	// CON-298: EmailAdminService serves a tenant's email history + per-email
 	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
-	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodies)
+	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodyRepo, emailBodies)
 	// CON-230: AnnouncementAdminService lets Harbor author informational
 	// announcements (banners) and read their per-user click/dismiss engagement.
 	registerAnnouncementAdmin(srv, announcementRepo)

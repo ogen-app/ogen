@@ -25,27 +25,29 @@ const (
 	maxEmailPageSize     = 200
 )
 
-// EmailBodyGetter fetches one email's rendered body from Resend. *resend.Client
-// satisfies it; a nil getter (no Resend key configured) makes GetTenantEmail
-// return the summary + timeline with the body marked unavailable (CON-298).
+// EmailBodyGetter fetches one email's rendered body live from Resend.
+// *resend.Client satisfies it; a nil getter (no Resend key configured) makes
+// GetTenantEmail fall through to the stored body / marks it unavailable (CON-298).
 type EmailBodyGetter interface {
 	Get(ctx context.Context, id string) (*resend.EmailDetail, error)
 }
 
-// emailAdminService adapts the email_logs + email_events repositories (plus a
-// live Resend body fetch) to the generated EmailAdminServiceServer (CON-298) —
-// the operator-facing surface Harbor's per-tenant Emails tab (CON-192) consumes.
-// tenant_id is authoritative server-side scoping on every call; the caller's
-// value is never trusted for a cross-tenant read.
+// emailAdminService adapts the email_logs + email_events repositories (plus the
+// persisted body store and a live Resend body fetch) to the generated
+// EmailAdminServiceServer (CON-298) — the operator-facing surface Harbor's
+// per-tenant Emails tab (CON-192) consumes. tenant_id is authoritative
+// server-side scoping on every call; the caller's value is never trusted for a
+// cross-tenant read.
 type emailAdminService struct {
 	emailv1.UnimplementedEmailAdminServiceServer
-	logs   repository.EmailLogRepository
-	events repository.EmailEventRepository
-	bodies EmailBodyGetter
+	logs      repository.EmailLogRepository
+	events    repository.EmailEventRepository
+	bodyStore repository.EmailBodyRepository // CON-306: body persisted at send (preferred)
+	liveBody  EmailBodyGetter                // CON-298: live Resend fetch (fallback)
 }
 
-func newEmailAdminService(logs repository.EmailLogRepository, events repository.EmailEventRepository, bodies EmailBodyGetter) *emailAdminService {
-	return &emailAdminService{logs: logs, events: events, bodies: bodies}
+func newEmailAdminService(logs repository.EmailLogRepository, events repository.EmailEventRepository, bodyStore repository.EmailBodyRepository, liveBody EmailBodyGetter) *emailAdminService {
+	return &emailAdminService{logs: logs, events: events, bodyStore: bodyStore, liveBody: liveBody}
 }
 
 func (s *emailAdminService) ListTenantEmails(ctx context.Context, req *emailv1.ListTenantEmailsRequest) (*emailv1.ListTenantEmailsResponse, error) {
@@ -130,28 +132,73 @@ func (s *emailAdminService) GetTenantEmail(ctx context.Context, req *emailv1.Get
 		})
 	}
 
-	// The rendered body is fetched live from Resend. Degrade to body_available =
-	// false (summary + timeline still returned) when the key is unset, the
-	// message was never accepted (no provider id), or the fetch fails.
-	if s.bodies != nil && log.ProviderMessageID != "" {
-		body, ferr := s.bodies.Get(ctx, log.ProviderMessageID)
-		switch {
-		case ferr == nil && body != nil:
-			detail.BodyAvailable = true
-			detail.Subject = body.Subject
-			detail.Html = body.HTML
-			detail.Text = body.Text
-			detail.From = body.From
-			detail.ReplyTo = body.ReplyTo
-			detail.Cc = body.CC
-			detail.Bcc = body.BCC
-		case errors.Is(ferr, resend.ErrDisabled):
-			// No key configured — expected in some environments, not an error.
-		default:
-			slog.WarnContext(ctx, "resend body fetch failed", logging.AttrComponent, "grpcserver", "email_id", log.ID, logging.AttrError, ferr)
-		}
+	// Prefer the body persisted at send (CON-306): it renders even after the
+	// Resend message ages out of retention or the key is unset. Fall back to the
+	// live Resend fetch only for rows sent before CON-306 shipped (no stored body).
+	// Either way, degrade to body_available = false — summary + timeline are still
+	// returned — and log WHY so a missing body is diagnosable (§5.4) rather than a
+	// silent false.
+	if s.serveStoredBody(ctx, detail, log.ID) {
+		return &emailv1.GetTenantEmailResponse{Email: detail}, nil
 	}
+	s.serveLiveBody(ctx, detail, log)
 	return &emailv1.GetTenantEmailResponse{Email: detail}, nil
+}
+
+// serveStoredBody fills detail from the persisted body (CON-306) and reports
+// whether it did. A lookup error is logged and treated as "no stored body" so
+// the caller falls back to the live Resend fetch.
+func (s *emailAdminService) serveStoredBody(ctx context.Context, detail *emailv1.EmailDetail, emailLogID string) bool {
+	if s.bodyStore == nil {
+		return false
+	}
+	b, err := s.bodyStore.GetByEmailLogID(ctx, emailLogID)
+	if err != nil {
+		slog.WarnContext(ctx, "stored email body lookup failed", logging.AttrComponent, "grpcserver", "email_id", emailLogID, logging.AttrError, err)
+		return false
+	}
+	if b == nil {
+		return false
+	}
+	detail.BodyAvailable = true
+	detail.Subject = b.Subject
+	detail.Html = b.HTML
+	detail.Text = b.Text
+	detail.From = b.From
+	detail.ReplyTo = b.ReplyTo
+	return true
+}
+
+// serveLiveBody fills detail from a live Resend fetch (CON-298 fallback) and, on
+// failure, logs a precise reason so an unavailable body is diagnosable (CON-306
+// §5.4): key_unset / no_provider_message_id / resend_404 / resend_error.
+func (s *emailAdminService) serveLiveBody(ctx context.Context, detail *emailv1.EmailDetail, log *models.EmailLog) {
+	if s.liveBody == nil {
+		slog.InfoContext(ctx, "email body unavailable", logging.AttrComponent, "grpcserver", "email_id", log.ID, "reason", "key_unset")
+		return
+	}
+	if log.ProviderMessageID == "" {
+		slog.InfoContext(ctx, "email body unavailable", logging.AttrComponent, "grpcserver", "email_id", log.ID, "reason", "no_provider_message_id")
+		return
+	}
+	body, ferr := s.liveBody.Get(ctx, log.ProviderMessageID)
+	switch {
+	case ferr == nil && body != nil:
+		detail.BodyAvailable = true
+		detail.Subject = body.Subject
+		detail.Html = body.HTML
+		detail.Text = body.Text
+		detail.From = body.From
+		detail.ReplyTo = body.ReplyTo
+		detail.Cc = body.CC
+		detail.Bcc = body.BCC
+	case errors.Is(ferr, resend.ErrDisabled):
+		slog.InfoContext(ctx, "email body unavailable", logging.AttrComponent, "grpcserver", "email_id", log.ID, "reason", "key_unset")
+	case errors.Is(ferr, resend.ErrNotFound):
+		slog.InfoContext(ctx, "email body unavailable", logging.AttrComponent, "grpcserver", "email_id", log.ID, "reason", "resend_404")
+	default:
+		slog.WarnContext(ctx, "email body unavailable", logging.AttrComponent, "grpcserver", "email_id", log.ID, "reason", "resend_error", logging.AttrError, ferr)
+	}
 }
 
 // emailSummaryProto maps an email_logs row (+ rollup) to the wire summary.
