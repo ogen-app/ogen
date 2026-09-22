@@ -602,7 +602,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// (CON-281 §10): the synchronous upload stays fast, and the generator writes
 	// only where alt text is still un-edited.
 	if imagePrepared && att.AltText == "" && h.image != nil {
-		go h.generateAttachmentAltText(context.WithoutCancel(reqCtx(c)), session.TenantID, att.ID, att.S3Key)
+		go h.generateAttachmentAltText(detachedContext(c, session.TenantID), session.TenantID, att.ID, att.S3Key)
 	}
 
 	h.hydratePresigned(c, att)
