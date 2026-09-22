@@ -153,8 +153,8 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 	}
 
 	storageKey := fmt.Sprintf("assets/%s/original%s", id, ext)
-	fullKey := storage.TenantKey(c.Context(), storageKey)
-	uploadURL, err := h.storage.PresignedPutURL(c.Context(), fullKey, mime, audioUploadPresignTTL)
+	fullKey := storage.TenantKey(reqCtx(c), storageKey)
+	uploadURL, err := h.storage.PresignedPutURL(reqCtx(c), fullKey, mime, audioUploadPresignTTL)
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 		SizeBytes:    0,
 		S3Key:        fullKey,
 	}
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
 			return err
 		}
@@ -219,7 +219,7 @@ func (h *AudioAssetsHandler) Finalize(c *fiber.Ctx) error {
 		return err
 	}
 
-	asset, err := h.repo.GetByID(c.Context(), req.AssetID)
+	asset, err := h.repo.GetByID(reqCtx(c), req.AssetID)
 	if err != nil || asset.Type == nil || *asset.Type != models.AssetTypeAudio {
 		return fiber.NewError(fiber.StatusNotFound, "audio asset not found")
 	}
@@ -240,7 +240,7 @@ func (h *AudioAssetsHandler) Extract(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if _, err := h.extractions.GetLatestByAsset(c.Context(), asset.ID); err == nil {
+	if _, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID); err == nil {
 		return fiber.NewError(fiber.StatusConflict, "an extraction already exists — use retry or reextract")
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -291,7 +291,7 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ext, err := h.extractions.GetLatestByAsset(c.Context(), asset.ID)
+	ext, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "no extraction to retry")
@@ -301,12 +301,12 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	if ext.Status == models.AudioExtractionStatusComplete {
 		return fiber.NewError(fiber.StatusConflict, "extraction already complete — nothing to retry")
 	}
-	file, err := h.fileRepo.GetByAssetID(c.Context(), asset.ID)
+	file, err := h.fileRepo.GetByAssetID(reqCtx(c), asset.ID)
 	if err != nil || file == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "asset has no uploaded audio")
 	}
 	// CR8: re-validate the object size even on retry, before re-enqueueing.
-	size, ferr := h.headWithinCap(c.Context(), file.S3Key)
+	size, ferr := h.headWithinCap(reqCtx(c), file.S3Key)
 	if ferr != nil {
 		return ferr
 	}
@@ -317,7 +317,7 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	// aborts the tx and maps to 409.
 	session := c.Locals("session").(*models.Session)
 	now := time.Now().UTC()
-	err = h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	err = h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		res, err := tx.NewUpdate().Model((*models.AudioSegment)(nil)).
 			Set("status = ?", models.AudioSegmentStatusPending).
 			Set("failure_reason = ''").
@@ -368,14 +368,14 @@ func (h *AudioAssetsHandler) Status(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ext, err := h.extractions.GetLatestByAsset(c.Context(), asset.ID)
+	ext, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "no extraction for this asset")
 		}
 		return err
 	}
-	segs, err := h.segments.ListByExtraction(c.Context(), ext.ID)
+	segs, err := h.segments.ListByExtraction(reqCtx(c), ext.ID)
 	if err != nil {
 		return err
 	}
@@ -400,7 +400,7 @@ func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	ext, err := h.extractions.GetLatestByAsset(c.Context(), asset.ID)
+	ext, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Asset exists but hasn't been transcribed yet — empty transcript.
@@ -408,7 +408,7 @@ func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 		}
 		return err
 	}
-	utts, err := h.utterances.ListByExtraction(c.Context(), ext.ID)
+	utts, err := h.utterances.ListByExtraction(reqCtx(c), ext.ID)
 	if err != nil {
 		return err
 	}
@@ -434,11 +434,11 @@ func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 // the confirmed size, and enqueues the run — the size update and enqueue commit
 // together. Callers shape their own response on success.
 func (h *AudioAssetsHandler) prepareAndEnqueue(c *fiber.Ctx, asset *models.Asset, runKey, pinnedModel string) error {
-	file, err := h.fileRepo.GetByAssetID(c.Context(), asset.ID)
+	file, err := h.fileRepo.GetByAssetID(reqCtx(c), asset.ID)
 	if err != nil || file == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "no pending upload for this asset — call presign first")
 	}
-	size, ferr := h.headWithinCap(c.Context(), file.S3Key)
+	size, ferr := h.headWithinCap(reqCtx(c), file.S3Key)
 	if ferr != nil {
 		return ferr
 	}
@@ -446,7 +446,7 @@ func (h *AudioAssetsHandler) prepareAndEnqueue(c *fiber.Ctx, asset *models.Asset
 	file.UpdatedAt = time.Now().UTC()
 	session := c.Locals("session").(*models.Session)
 	storageKey := relativeAudioKey(asset.ID, file.OriginalName)
-	return h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	return h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewUpdate().Model(file).Column("size_bytes", "updated_at").WherePK().Exec(ctx); err != nil {
 			return err
 		}
@@ -471,7 +471,7 @@ func (h *AudioAssetsHandler) headWithinCap(ctx context.Context, s3Key string) (i
 // loadAudioAsset loads the path :id asset, 404ing when it is missing or not an
 // AUDIO asset (cross-tenant is already 404 via the repo scope).
 func (h *AudioAssetsHandler) loadAudioAsset(c *fiber.Ctx) (*models.Asset, error) {
-	asset, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	asset, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil || asset.Type == nil || *asset.Type != models.AssetTypeAudio {
 		return nil, fiber.NewError(fiber.StatusNotFound, "audio asset not found")
 	}

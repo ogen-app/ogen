@@ -94,7 +94,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "url or post_id is required")
 	}
 
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -104,7 +104,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 
 	profileID := ""
 	if h.profileID != nil {
-		if profileID, err = h.profileID(c.Context()); err != nil {
+		if profileID, err = h.profileID(reqCtx(c)); err != nil {
 			return err
 		}
 	}
@@ -124,7 +124,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 		return err
 	}
 
-	result, err := h.zernioClient.SyncExternalPost(c.Context(), zernio.SyncExternalRequest{
+	result, err := h.zernioClient.SyncExternalPost(reqCtx(c), zernio.SyncExternalRequest{
 		AccountID: accountID,
 		URL:       body.URL,
 		PostID:    body.PostID,
@@ -165,13 +165,13 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 	}
 	post.Status = models.PostStatusPublished
 	post.UpdatedAt = time.Now().UTC()
-	if err := h.repo.Update(c.Context(), post); err != nil {
+	if err := h.repo.Update(reqCtx(c), post); err != nil {
 		jobs.ZernioExternalVerifyFailed.Add(1)
 		return err
 	}
 	// CON-251: the post is now confirmed published — snapshot the content as a
 	// durable record of what went out (best-effort, deduped against the head).
-	h.snapshotPublished(c.Context(), post)
+	h.snapshotPublished(reqCtx(c), post)
 
 	// Refresh the current-state analytics row (best-effort) and emit the update
 	// event so open analytics streams refresh. The response carries the fetched
@@ -183,7 +183,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 	if h.analyticsRepo != nil {
 		now := time.Now().UTC()
 		built := h.buildExternalCurrent(post, ext)
-		prev, _ := h.analyticsRepo.GetByPostID(c.Context(), post.ID)
+		prev, _ := h.analyticsRepo.GetByPostID(reqCtx(c), post.ID)
 		changed := prev == nil || prev.MetricsKey() != built.MetricsKey()
 		built.LastCheckedAt = now
 		if prev == nil {
@@ -199,12 +199,12 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 		}
 		if changed {
 			if id, ierr := models.NewID(); ierr == nil {
-				if werr := h.analyticsRepo.UpsertWithSnapshot(c.Context(), built, built.NewSnapshot(id, now)); werr == nil {
-					h.publishAnalyticsUpdated(c.Context(), built)
+				if werr := h.analyticsRepo.UpsertWithSnapshot(reqCtx(c), built, built.NewSnapshot(id, now)); werr == nil {
+					h.publishAnalyticsUpdated(reqCtx(c), built)
 				}
 			}
 		} else {
-			_ = h.analyticsRepo.Upsert(c.Context(), built)
+			_ = h.analyticsRepo.Upsert(reqCtx(c), built)
 		}
 	}
 
@@ -237,7 +237,7 @@ func (h *PostVerificationHandler) resolveExternalAccountID(c *fiber.Ctx, post *m
 	if h.socialAccountRepo == nil {
 		return "", true, fiber.NewError(fiber.StatusServiceUnavailable, "social accounts are not available")
 	}
-	res, err := accountselect.Resolve(c.Context(), h.socialAccountRepo, profileID, post, zernioPlatform)
+	res, err := accountselect.Resolve(reqCtx(c), h.socialAccountRepo, profileID, post, zernioPlatform)
 	if err != nil {
 		return "", true, err
 	}

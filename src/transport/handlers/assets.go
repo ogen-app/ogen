@@ -230,14 +230,14 @@ type updateAssetRequest struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/content-bank/assets [get]
 func (h *AssetsHandler) List(c *fiber.Ctx) error {
-	assets, err := h.repo.List(c.Context())
+	assets, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}
 	for i := range assets {
 		h.decorateFile(&assets[i])
 	}
-	h.decorateImagesBatch(c.Context(), assets)
+	h.decorateImagesBatch(reqCtx(c), assets)
 	return c.JSON(assets)
 }
 
@@ -334,9 +334,9 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 
 	// CON-295: the content_bank_assets quota gates a new asset.
 	var assetQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(c.Context())
+	tenantID, hasTenant := tenantctx.From(reqCtx(c))
 	if hasTenant {
-		dec, qErr := h.limiter.Require(c.Context(), tenantID, "content_bank_assets")
+		dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "content_bank_assets")
 		if qErr != nil {
 			return qErr
 		}
@@ -365,12 +365,12 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 		Tags:      []models.Tag{},
 		CreatedBy: session.UserID,
 	}
-	if err := h.repo.Create(c.Context(), asset); err != nil {
+	if err := h.repo.Create(reqCtx(c), asset); err != nil {
 		return err
 	}
 	// CON-295: the asset now exists — fire any near-limit crossing.
 	if hasTenant {
-		h.limiter.DispatchCrossing(c.Context(), tenantID, assetQuota)
+		h.limiter.DispatchCrossing(reqCtx(c), tenantID, assetQuota)
 	}
 
 	if h.onSave != nil {
@@ -426,7 +426,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 	}
 
 	session := c.Locals("session").(*models.Session)
-	tenantID, hasTenant := tenantctx.From(c.Context())
+	tenantID, hasTenant := tenantctx.From(reqCtx(c))
 
 	results := make([]uploadResult, 0, len(files))
 	for _, fh := range files {
@@ -437,7 +437,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		// iteration's count reflects the ones already stored.
 		var fileQuota entitlements.Decision
 		if hasTenant {
-			dec, qErr := h.limiter.Require(c.Context(), tenantID, "content_bank_assets")
+			dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "content_bank_assets")
 			if qErr != nil {
 				res.Status = "failed"
 				res.Error = "content bank asset limit reached"
@@ -461,7 +461,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		}
 		// Only a stored asset counts — fire the crossing once we know it landed.
 		if hasTenant && res.Status == "created" {
-			h.limiter.DispatchCrossing(c.Context(), tenantID, fileQuota)
+			h.limiter.DispatchCrossing(reqCtx(c), tenantID, fileQuota)
 		}
 		results = append(results, res)
 	}
@@ -534,12 +534,12 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 		Tags:      []models.Tag{},
 		CreatedBy: session.UserID,
 	}
-	if err := h.repo.Create(c.Context(), asset); err != nil {
+	if err := h.repo.Create(reqCtx(c), asset); err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
 
 	if h.onSave != nil {
-		tid, _ := tenantctx.From(c.Context())
+		tid, _ := tenantctx.From(reqCtx(c))
 		go h.onSave(asset.ID, asset.Title, asset.Content, tid)
 	}
 
@@ -581,7 +581,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 		CreatedBy: session.UserID,
 	}
 
-	ctx := c.Context()
+	ctx := reqCtx(c)
 
 	// PDF ingestion (CON-103) needs object storage — the worker re-reads the PDF
 	// from it on each attempt — plus the job enqueuer. Without them, create the
@@ -590,7 +590,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 		if err := h.repo.Create(ctx, asset); err != nil {
 			return res.fail(models.UploadCodeInternalError, "could not create asset")
 		}
-		slog.WarnContext(c.Context(), "pdf ingestion disabled; asset left pending", logging.AttrComponent, "assets", "asset_id", asset.ID)
+		slog.WarnContext(reqCtx(c), "pdf ingestion disabled; asset left pending", logging.AttrComponent, "assets", "asset_id", asset.ID)
 		res.AssetID = asset.ID
 		res.Status = "created"
 		res.Asset = asset
@@ -687,7 +687,7 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 		CreatedBy: session.UserID,
 	}
 
-	ctx := c.Context()
+	ctx := reqCtx(c)
 
 	// 1. Store original.<ext> BEFORE enqueue so the worker can re-read it on each
 	//    attempt (the bytes can't ride in the River job args). storageKey is the
@@ -767,7 +767,7 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 		return res.fail(models.UploadCodeEmptyFile, "file is empty")
 	}
 
-	ctx := c.Context()
+	ctx := reqCtx(c)
 
 	// Dedupe within the tenant by original-bytes checksum (R-Dedup): the same image
 	// uploaded twice returns the first asset instead of a near-duplicate. The hash
@@ -906,7 +906,7 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 	// authoritative connect-time guard). Reject a submission whose host resolves
 	// to a private/loopback/link-local/metadata address. Bounded so a slow
 	// resolver can't stall the request.
-	lookupCtx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
+	lookupCtx, cancel := context.WithTimeout(reqCtx(c), 3*time.Second)
 	defer cancel()
 	if err := netguard.ResolveAllowed(lookupCtx, host); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "url host is not allowed")
@@ -915,12 +915,12 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 	// URL ingestion needs the enqueuer, the DB (transactional outbox), and a
 	// configured Firecrawl key; otherwise fail fast so the caller isn't left
 	// polling a pending asset that will never process.
-	if h.urlJobs == nil || h.db == nil || h.scrapeGate == nil || !h.scrapeGate.HasKey(c.Context()) {
+	if h.urlJobs == nil || h.db == nil || h.scrapeGate == nil || !h.scrapeGate.HasKey(reqCtx(c)) {
 		return fiber.NewError(fiber.StatusConflict, "url scraping is not configured")
 	}
 
 	session := c.Locals("session").(*models.Session)
-	ctx := c.Context()
+	ctx := reqCtx(c)
 
 	// Dedupe: an existing URL asset with this source_url refreshes in place.
 	existing, err := h.repo.GetBySourceURL(ctx, normalized)
@@ -996,7 +996,7 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 // scrape (refresh=true), returning it with 200. Content/images/chunks are
 // replaced by the worker; id/created_at/tags are preserved.
 func (h *AssetsHandler) refreshURLAsset(c *fiber.Ctx, asset *models.Asset, sourceURL, tenantID string) error {
-	ctx := c.Context()
+	ctx := reqCtx(c)
 	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewUpdate().
 			Model((*models.Asset)(nil)).
@@ -1012,7 +1012,7 @@ func (h *AssetsHandler) refreshURLAsset(c *fiber.Ctx, asset *models.Asset, sourc
 	}
 	asset.Status = models.AssetStatusPending
 	h.decorateFile(asset)
-	h.decorateImages(c.Context(), asset)
+	h.decorateImages(reqCtx(c), asset)
 	return c.Status(fiber.StatusOK).JSON(asset)
 }
 
@@ -1053,12 +1053,12 @@ func normalizeSourceURL(raw string) (normalized, host string, err error) {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/content-bank/assets/{id} [get]
 func (h *AssetsHandler) Get(c *fiber.Ctx) error {
-	asset, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	asset, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "asset not found")
 	}
 	h.decorateFile(asset)
-	h.decorateImages(c.Context(), asset)
+	h.decorateImages(reqCtx(c), asset)
 	return c.JSON(asset)
 }
 
@@ -1082,7 +1082,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	asset, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	asset, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "asset not found")
 	}
@@ -1124,12 +1124,12 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	}
 	asset.UpdatedAt = time.Now().UTC()
 
-	if err := h.repo.Update(c.Context(), asset); err != nil {
+	if err := h.repo.Update(reqCtx(c), asset); err != nil {
 		return err
 	}
 
 	if h.onSave != nil && embedInputChanged {
-		tid, _ := tenantctx.From(c.Context())
+		tid, _ := tenantctx.From(reqCtx(c))
 		go h.onSave(asset.ID, asset.Title, asset.Content, tid)
 	}
 
@@ -1180,7 +1180,7 @@ func (h *AssetsHandler) BulkTag(c *fiber.Ctx) error {
 		}
 	}
 
-	updated, err := h.repo.ApplyTags(c.Context(), req.AssetIDs, req.Add, req.Remove)
+	updated, err := h.repo.ApplyTags(reqCtx(c), req.AssetIDs, req.Add, req.Remove)
 	if err != nil {
 		if errors.Is(err, repository.ErrUnknownTag) {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
@@ -1210,7 +1210,7 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 	// drop the asset_files row when we delete the asset, so capture now.
 	var keysToDelete []string
 	if h.fileRepo != nil {
-		if f, err := h.fileRepo.GetByAssetID(c.Context(), id); err == nil && f != nil {
+		if f, err := h.fileRepo.GetByAssetID(reqCtx(c), id); err == nil && f != nil {
 			if f.S3Key != "" {
 				keysToDelete = append(keysToDelete, f.S3Key)
 			}
@@ -1223,7 +1223,7 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 	}
 	// CON-222: mirrored image blobs (the DB cascade drops asset_images rows).
 	if h.imageRepo != nil {
-		if imgs, err := h.imageRepo.GetByAssetID(c.Context(), id); err == nil {
+		if imgs, err := h.imageRepo.GetByAssetID(reqCtx(c), id); err == nil {
 			for i := range imgs {
 				if imgs[i].S3Key != "" {
 					keysToDelete = append(keysToDelete, imgs[i].S3Key)
@@ -1235,13 +1235,13 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 	// alongside the original (evicted with the asset, D5). It has no DB row of
 	// its own, so add it unconditionally — the best-effort Delete below is a
 	// no-op when the object doesn't exist (non-audio assets).
-	keysToDelete = append(keysToDelete, storage.TenantKey(c.Context(), fmt.Sprintf("assets/%s/normalized.opus", id)))
+	keysToDelete = append(keysToDelete, storage.TenantKey(reqCtx(c), fmt.Sprintf("assets/%s/normalized.opus", id)))
 	// CON-281: the image normalized.png derivative also lives at a deterministic
 	// key alongside the original with no DB row of its own; evict it with the
 	// asset. The best-effort Delete below is a no-op for non-image assets.
-	keysToDelete = append(keysToDelete, storage.TenantKey(c.Context(), fmt.Sprintf("assets/%s/normalized.png", id)))
+	keysToDelete = append(keysToDelete, storage.TenantKey(reqCtx(c), fmt.Sprintf("assets/%s/normalized.png", id)))
 
-	deleted, err := h.repo.Delete(c.Context(), id)
+	deleted, err := h.repo.Delete(reqCtx(c), id)
 	if err != nil {
 		return err
 	}
@@ -1253,7 +1253,7 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 	// and orphaned objects are tolerable.
 	if h.storage != nil {
 		for _, k := range keysToDelete {
-			if err := h.storage.Delete(c.Context(), k); err != nil {
+			if err := h.storage.Delete(reqCtx(c), k); err != nil {
 				// Fiber has no handler-level logger dependency here; swallow.
 				_ = err
 			}

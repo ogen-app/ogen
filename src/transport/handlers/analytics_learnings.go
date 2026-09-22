@@ -53,7 +53,7 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid_param")
 	}
 
-	ctx := c.Context()
+	ctx := reqCtx(c)
 	current, err := h.repo.CurrentByPostID(ctx)
 	if err != nil {
 		return err

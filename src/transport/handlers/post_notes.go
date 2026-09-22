@@ -33,7 +33,7 @@ func (h *PostNotesHandler) SetActivityRecorder(r *activity.Recorder) {
 }
 
 func (h *PostNotesHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity.Option) {
-	h.activity.Record(c.Context(), activity.CategoryPost, typ,
+	h.activity.Record(reqCtx(c), activity.CategoryPost, typ,
 		append([]activity.Option{activity.WithSource(activity.SourceAPI)}, opts...)...)
 }
 
@@ -49,7 +49,7 @@ func (h *PostNotesHandler) Register(app *fiber.App) {
 // loadPostOrErr fetches the parent post, returning 404 when it is missing or
 // belongs to another tenant.
 func (h *PostNotesHandler) loadPostOrErr(c *fiber.Ctx) (*models.Post, error) {
-	post, err := h.postRepo.GetByID(c.Context(), c.Params("post_id"))
+	post, err := h.postRepo.GetByID(reqCtx(c), c.Params("post_id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -62,7 +62,7 @@ func (h *PostNotesHandler) loadPostOrErr(c *fiber.Ctx) (*models.Post, error) {
 // loadNoteOrErr fetches a note and verifies it belongs to the post in the path,
 // returning 404 otherwise (so a note id from another post can't be reached).
 func (h *PostNotesHandler) loadNoteOrErr(c *fiber.Ctx, postID string) (*models.PostNote, error) {
-	note, err := h.svc.Get(c.Context(), c.Params("id"))
+	note, err := h.svc.Get(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fiber.NewError(fiber.StatusNotFound, "note not found")
@@ -96,7 +96,7 @@ func (h *PostNotesHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	list, err := h.svc.List(c.Context(), post.ID)
+	list, err := h.svc.List(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (h *PostNotesHandler) Create(c *fiber.Ctx) error {
 	}
 
 	session := c.Locals("session").(*models.Session)
-	note, err := h.svc.Create(c.Context(), notes.CreateInput{
+	note, err := h.svc.Create(reqCtx(c), notes.CreateInput{
 		PostID:    post.ID,
 		Type:      models.PostNoteType(req.Type),
 		Title:     req.Title,
@@ -176,7 +176,7 @@ func (h *PostNotesHandler) Update(c *fiber.Ctx) error {
 		t := models.PostNoteType(*req.Type)
 		typePatch = &t
 	}
-	updated, err := h.svc.Update(c.Context(), note, notes.UpdateInput{
+	updated, err := h.svc.Update(reqCtx(c), note, notes.UpdateInput{
 		Title: req.Title,
 		Body:  req.Body,
 		Type:  typePatch,
@@ -210,7 +210,7 @@ func (h *PostNotesHandler) Delete(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	deleted, err := h.svc.Delete(c.Context(), note.ID)
+	deleted, err := h.svc.Delete(reqCtx(c), note.ID)
 	if err != nil {
 		return err
 	}

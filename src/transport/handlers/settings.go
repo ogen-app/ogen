@@ -43,7 +43,7 @@ type upsertSettingRequest struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/settings [get]
 func (h *SettingsHandler) List(c *fiber.Ctx) error {
-	settings, err := h.repo.List(c.Context())
+	settings, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func (h *SettingsHandler) List(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/settings/{key} [get]
 func (h *SettingsHandler) Get(c *fiber.Ctx) error {
-	setting, err := h.repo.GetByKey(c.Context(), c.Params("key"))
+	setting, err := h.repo.GetByKey(reqCtx(c), c.Params("key"))
 	if err != nil {
 		return notFound(err, "setting not found")
 	}
@@ -103,7 +103,7 @@ func (h *SettingsHandler) Upsert(c *fiber.Ctx) error {
 		Key:   key,
 		Value: req.Value,
 	}
-	if err := h.repo.Upsert(c.Context(), setting); err != nil {
+	if err := h.repo.Upsert(reqCtx(c), setting); err != nil {
 		return err
 	}
 
@@ -121,7 +121,7 @@ func (h *SettingsHandler) Upsert(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/settings/{key} [delete]
 func (h *SettingsHandler) Delete(c *fiber.Ctx) error {
-	deleted, err := h.repo.Delete(c.Context(), c.Params("key"))
+	deleted, err := h.repo.Delete(reqCtx(c), c.Params("key"))
 	if err != nil {
 		return err
 	}

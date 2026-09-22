@@ -91,7 +91,7 @@ func (h *PostInsightsHandler) Assess(c *fiber.Ctx) error {
 	// gets a clean 404 rather than an in-stream error event. Posts are
 	// shared across the workspace — any authenticated user may assess any
 	// post, consistent with GET/PUT/DELETE/assistant/clone.
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -174,7 +174,7 @@ func (h *PostInsightsHandler) GetAssessment(c *fiber.Ctx) error {
 	if h.evaluationRepo == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "post quality assessment is not available")
 	}
-	eval, err := h.evaluationRepo.GetByPostID(c.Context(), c.Params("id"))
+	eval, err := h.evaluationRepo.GetByPostID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func (h *PostInsightsHandler) GetAnalytics(c *fiber.Ctx) error {
 	if h.analyticsRepo == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "post analytics is not available")
 	}
-	post, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
@@ -220,7 +220,7 @@ func (h *PostInsightsHandler) GetAnalytics(c *fiber.Ctx) error {
 			"error": "post has not been published through a publisher",
 		})
 	}
-	snapshot, err := h.analyticsRepo.GetByPostID(c.Context(), post.ID)
+	snapshot, err := h.analyticsRepo.GetByPostID(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}

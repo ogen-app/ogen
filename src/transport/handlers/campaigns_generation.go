@@ -70,7 +70,7 @@ func (h *CampaignGenerationHandler) Register(app *fiber.App) {
 // recordActivity emits a best-effort CON-125 activity event with the API source
 // pre-set. A private copy of the CampaignsHandler helper of the same name.
 func (h *CampaignGenerationHandler) recordActivity(c *fiber.Ctx, category, typ string, opts ...activity.Option) {
-	h.activity.Record(c.Context(), category, typ,
+	h.activity.Record(reqCtx(c), category, typ,
 		append([]activity.Option{activity.WithSource(activity.SourceAPI)}, opts...)...)
 }
 
@@ -122,7 +122,7 @@ func (h *CampaignGenerationHandler) GeneratePosts(c *fiber.Ctx) error {
 	}
 
 	// 404 before opening the stream (tenant-scoped).
-	if _, err := h.repo.GetByID(c.Context(), c.Params("id")); err != nil {
+	if _, err := h.repo.GetByID(reqCtx(c), c.Params("id")); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "campaign not found")
 		}
@@ -211,7 +211,7 @@ func (h *CampaignGenerationHandler) BriefReview(c *fiber.Ctx) error {
 	}
 
 	// 404 before opening the stream (tenant-scoped).
-	if _, err := h.repo.GetByID(c.Context(), c.Params("id")); err != nil {
+	if _, err := h.repo.GetByID(reqCtx(c), c.Params("id")); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "campaign not found")
 		}
@@ -290,7 +290,7 @@ func (h *CampaignGenerationHandler) PostsReview(c *fiber.Ctx) error {
 	}
 
 	// 404 before opening the stream (tenant-scoped).
-	if _, err := h.repo.GetByID(c.Context(), c.Params("id")); err != nil {
+	if _, err := h.repo.GetByID(reqCtx(c), c.Params("id")); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "campaign not found")
 		}

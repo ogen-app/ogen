@@ -54,7 +54,7 @@ func (h *ActivityHandler) Report(c *fiber.Ctx) error {
 	if h.reports == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "activity reports are not available")
 	}
-	out, err := h.reports.Report(c.Context(), c.Params("date"), c.Query("tz"), c.Query("campaign_id"))
+	out, err := h.reports.Report(reqCtx(c), c.Params("date"), c.Query("tz"), c.Query("campaign_id"))
 	if err != nil {
 		return mapReportErr(err)
 	}
@@ -87,7 +87,7 @@ func (h *ActivityHandler) Reports(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	out, err := h.reports.Reports(c.Context(), c.Query("tz"), c.Query("campaign_id"), c.Query("before"), limit)
+	out, err := h.reports.Reports(reqCtx(c), c.Query("tz"), c.Query("campaign_id"), c.Query("before"), limit)
 	if err != nil {
 		return mapReportErr(err)
 	}

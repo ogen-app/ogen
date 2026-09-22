@@ -128,7 +128,7 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 	// per the AC). Documented in swagger above.
 	_ = c.Get("Last-Event-Id")
 
-	eventCh, unsubscribe, err := h.hub.Subscribe(c.Context(), eventhub.SubscribeOpts{
+	eventCh, unsubscribe, err := h.hub.Subscribe(reqCtx(c), eventhub.SubscribeOpts{
 		UserID:   session.UserID,
 		TenantID: session.TenantID, // CON-97 §10.2: only this tenant's events
 		Topics:   topics,
@@ -163,7 +163,7 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 	// recover middleware can't see, taking the whole process down (CON-158).
 	// Detach a logging context now so writer-side logs still correlate with
 	// request_id / tenant_id / user_id without touching the recycled ctx.
-	reqID, _ := logging.RequestIDFrom(c.Context())
+	reqID, _ := logging.RequestIDFrom(reqCtx(c))
 	logCtx := logging.WithRequestID(context.Background(), reqID)
 	logCtx = logging.WithUserID(logCtx, session.UserID)
 	logCtx = tenantctx.With(logCtx, session.TenantID)

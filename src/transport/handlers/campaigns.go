@@ -85,15 +85,15 @@ const baselineCampaignTypeSlug = "evergreen"
 // system type requires all_campaign_types. The Evergreen baseline is always
 // allowed. Returns a *FeatureNotAvailableError (rendered 403) when gated off.
 func (h *CampaignsHandler) gateCampaignType(c *fiber.Ctx, ct *models.CampaignType) error {
-	tenantID, ok := tenantctx.From(c.Context())
+	tenantID, ok := tenantctx.From(reqCtx(c))
 	if !ok {
 		return nil
 	}
 	switch {
 	case !ct.IsSystem:
-		return h.limiter.RequireGate(c.Context(), tenantID, "custom_campaign_types")
+		return h.limiter.RequireGate(reqCtx(c), tenantID, "custom_campaign_types")
 	case ct.Name != baselineCampaignTypeSlug:
-		return h.limiter.RequireGate(c.Context(), tenantID, "all_campaign_types")
+		return h.limiter.RequireGate(reqCtx(c), tenantID, "all_campaign_types")
 	}
 	return nil
 }
@@ -108,7 +108,7 @@ func (h *CampaignsHandler) SetActivityRecorder(r *activity.Recorder) {
 // resolved from the request context (set by the auth middleware); source
 // defaults to api and can be overridden by a later option.
 func (h *CampaignsHandler) recordActivity(c *fiber.Ctx, category, typ string, opts ...activity.Option) {
-	h.activity.Record(c.Context(), category, typ,
+	h.activity.Record(reqCtx(c), category, typ,
 		append([]activity.Option{activity.WithSource(activity.SourceAPI)}, opts...)...)
 }
 
@@ -278,7 +278,7 @@ func (h *CampaignsHandler) List(c *fiber.Ctx) error {
 	if c.QueryBool("archived", false) {
 		list = h.repo.ListArchived
 	}
-	campaigns, err := list(c.Context())
+	campaigns, err := list(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -308,15 +308,15 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	}
 	// CON-295: the active_campaigns quota gates a new campaign.
 	var campaignQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(c.Context())
+	tenantID, hasTenant := tenantctx.From(reqCtx(c))
 	if hasTenant {
-		dec, qErr := h.limiter.Require(c.Context(), tenantID, "active_campaigns")
+		dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "active_campaigns")
 		if qErr != nil {
 			return qErr
 		}
 		campaignQuota = dec
 	}
-	campaignType, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID)
+	campaignType, err := h.campaignTypeRepo.GetByID(reqCtx(c), req.CampaignTypeID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
 	}
@@ -340,7 +340,7 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 
-	if err := validateBrandRefs(c.Context(), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
+	if err := validateBrandRefs(reqCtx(c), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
 		return err
 	}
 
@@ -373,12 +373,12 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 		GoalCadence:        goalCadence,
 		CreatedBy:          session.UserID,
 	}
-	if err := h.repo.Create(c.Context(), campaign); err != nil {
+	if err := h.repo.Create(reqCtx(c), campaign); err != nil {
 		return err
 	}
 	// CON-295: the campaign now exists — fire any near-limit crossing.
 	if hasTenant {
-		h.limiter.DispatchCrossing(c.Context(), tenantID, campaignQuota)
+		h.limiter.DispatchCrossing(reqCtx(c), tenantID, campaignQuota)
 	}
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_created",
 		activity.WithEntity("campaign", campaign.ID),
@@ -399,7 +399,7 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaigns/{id} [get]
 func (h *CampaignsHandler) Get(c *fiber.Ctx) error {
-	campaign, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	campaign, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign not found")
 	}
@@ -429,7 +429,7 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	if !validStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
-	campaignType, err := h.campaignTypeRepo.GetByID(c.Context(), req.CampaignTypeID)
+	campaignType, err := h.campaignTypeRepo.GetByID(reqCtx(c), req.CampaignTypeID)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
 	}
@@ -442,11 +442,11 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
-	if err := validateBrandRefs(c.Context(), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
+	if err := validateBrandRefs(reqCtx(c), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
 		return err
 	}
 
-	campaign, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	campaign, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign not found")
 	}
@@ -505,7 +505,7 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	if !(req.UseAssets.Present && req.UseAssets.Value != nil) {
 		omit = append(omit, "use_assets")
 	}
-	if err := h.repo.Update(c.Context(), campaign, omit...); err != nil {
+	if err := h.repo.Update(reqCtx(c), campaign, omit...); err != nil {
 		return err
 	}
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_updated",
@@ -557,7 +557,7 @@ func (h *CampaignsHandler) AddAssets(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	campaign, err := h.repo.AddAssetIDs(c.Context(), c.Params("id"), req.AssetIDs)
+	campaign, err := h.repo.AddAssetIDs(reqCtx(c), c.Params("id"), req.AssetIDs)
 	if err != nil {
 		return notFound(err, "campaign not found")
 	}
@@ -585,7 +585,7 @@ func (h *CampaignsHandler) AddAssets(c *fiber.Ctx) error {
 // @Failure      404      {object}  map[string]string
 // @Router       /api/campaigns/{id}/assets/{assetId} [delete]
 func (h *CampaignsHandler) RemoveAsset(c *fiber.Ctx) error {
-	campaign, err := h.repo.RemoveAssetID(c.Context(), c.Params("id"), c.Params("assetId"))
+	campaign, err := h.repo.RemoveAssetID(reqCtx(c), c.Params("id"), c.Params("assetId"))
 	if err != nil {
 		return notFound(err, "campaign not found")
 	}
@@ -607,7 +607,7 @@ func (h *CampaignsHandler) RemoveAsset(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaigns/{id} [delete]
 func (h *CampaignsHandler) Delete(c *fiber.Ctx) error {
-	deleted, err := h.repo.Delete(c.Context(), c.Params("id"))
+	deleted, err := h.repo.Delete(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -631,7 +631,7 @@ func (h *CampaignsHandler) Delete(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaigns/{id}/archive [post]
 func (h *CampaignsHandler) Archive(c *fiber.Ctx) error {
-	ok, err := h.repo.Archive(c.Context(), c.Params("id"))
+	ok, err := h.repo.Archive(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -655,7 +655,7 @@ func (h *CampaignsHandler) Archive(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaigns/{id}/unarchive [post]
 func (h *CampaignsHandler) Unarchive(c *fiber.Ctx) error {
-	ok, err := h.repo.Unarchive(c.Context(), c.Params("id"))
+	ok, err := h.repo.Unarchive(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -692,7 +692,7 @@ func (h *CampaignsHandler) GenerateDraft(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "content plan feature is not enabled")
 	}
 
-	campaign, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	campaign, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign not found")
 	}
@@ -793,7 +793,7 @@ func (h *CampaignsHandler) EnrichBrief(c *fiber.Ctx) error {
 		}
 	}
 
-	campaign, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	campaign, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign not found")
 	}
@@ -958,7 +958,7 @@ func (h *CampaignsHandler) ListMessages(c *fiber.Ctx) error {
 	if h.messageRepo == nil {
 		return c.JSON([]models.CampaignAssistantMessage{})
 	}
-	msgs, err := h.messageRepo.ListRecentByCampaignID(c.Context(), c.Params("id"), 50)
+	msgs, err := h.messageRepo.ListRecentByCampaignID(reqCtx(c), c.Params("id"), 50)
 	if err != nil {
 		return err
 	}

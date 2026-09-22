@@ -96,11 +96,11 @@ func (h *PlatformsHandler) List(c *fiber.Ctx) error {
 	// CON-292: the composer-facing list shows only enabled platforms, ordered by
 	// sort_order. Disabled platforms drop out of the catalog (soft-disable) while
 	// their already-scheduled posts still publish via the resolver.
-	platforms, err := h.repo.ListEnabled(c.Context())
+	platforms, err := h.repo.ListEnabled(reqCtx(c))
 	if err != nil {
 		return err
 	}
-	views, err := h.collectPublisherViews(c.Context(), platforms)
+	views, err := h.collectPublisherViews(reqCtx(c), platforms)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func (h *PlatformsHandler) List(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/platforms/{id} [get]
 func (h *PlatformsHandler) Get(c *fiber.Ctx) error {
-	platform, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	platform, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "platform not found")
 	}
@@ -137,7 +137,7 @@ func (h *PlatformsHandler) Get(c *fiber.Ctx) error {
 	if !platform.Enabled {
 		return fiber.NewError(fiber.StatusNotFound, "platform not found")
 	}
-	views, err := h.collectPublisherViews(c.Context(), []models.Platform{*platform})
+	views, err := h.collectPublisherViews(reqCtx(c), []models.Platform{*platform})
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func ensurePublishersSlice(s []publisherView) []publisherView {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/platforms/{id}/post-type-rules [get]
 func (h *PlatformsHandler) PostTypeRules(c *fiber.Ctx) error {
-	platform, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	platform, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "platform not found")
 	}

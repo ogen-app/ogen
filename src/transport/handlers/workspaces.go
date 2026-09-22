@@ -87,7 +87,7 @@ type createWorkspaceRequest struct {
 // @Router       /api/workspaces [get]
 func (h *WorkspacesHandler) List(c *fiber.Ctx) error {
 	session := c.Locals("session").(*models.Session)
-	items, err := h.workspaceRepo.ListForAccount(c.Context(), session.AccountID)
+	items, err := h.workspaceRepo.ListForAccount(reqCtx(c), session.AccountID)
 	if err != nil {
 		return err
 	}
@@ -123,12 +123,12 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	// The membership is created for the caller's account, so it inherits the
 	// account's display name/email (denormalised onto the users row, as signup
 	// does).
-	account, err := h.accountRepo.GetByID(c.Context(), session.AccountID)
+	account, err := h.accountRepo.GetByID(reqCtx(c), session.AccountID)
 	if err != nil {
 		return err
 	}
 
-	slug, err := h.uniqueSlug(c.Context(), req.Name)
+	slug, err := h.uniqueSlug(reqCtx(c), req.Name)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	// The creator owns the new workspace (CON-26 role model).
 	membership := &models.User{ID: userID, AccountID: account.ID, TenantID: tenantID, Name: account.Name, Email: account.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now}
 
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(tenant).Exec(ctx); err != nil {
 			return err
 		}
@@ -173,7 +173,7 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	}
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), tenantID), userID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), tenantID), userID),
 		activity.CategoryWorkspace, "workspace_created",
 		activity.WithEntity("tenant", tenantID), activity.WithSource(activity.SourceAPI),
 	)
@@ -196,7 +196,7 @@ func (h *WorkspacesHandler) Switch(c *fiber.Ctx) error {
 	targetID := c.Params("id")
 
 	// Only a workspace the account belongs to can become its default.
-	membership, err := h.userRepo.GetMembership(c.Context(), session.AccountID, targetID)
+	membership, err := h.userRepo.GetMembership(reqCtx(c), session.AccountID, targetID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// 404 (not 403) so the endpoint doesn't confirm a workspace the account
@@ -206,12 +206,12 @@ func (h *WorkspacesHandler) Switch(c *fiber.Ctx) error {
 		return err
 	}
 
-	if err := h.sessionRepo.SetDefaultWorkspace(c.Context(), session.ID, membership.ID, targetID); err != nil {
+	if err := h.sessionRepo.SetDefaultWorkspace(reqCtx(c), session.ID, membership.ID, targetID); err != nil {
 		return err
 	}
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), targetID), membership.ID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), targetID), membership.ID),
 		activity.CategoryWorkspace, "workspace_switched",
 		activity.WithEntity("tenant", targetID), activity.WithSource(activity.SourceAPI),
 	)
@@ -243,7 +243,7 @@ func (h *WorkspacesHandler) Delete(c *fiber.Ctx) error {
 	// Resolve the target from the path (like Switch), independent of the active
 	// workspace — an owner can delete any workspace they own. 404 (not 403) hides
 	// the existence of workspaces the account can't see (CON-97 §12.3).
-	membership, err := h.userRepo.GetMembership(c.Context(), session.AccountID, targetID)
+	membership, err := h.userRepo.GetMembership(reqCtx(c), session.AccountID, targetID)
 	if err != nil {
 		return notFound(err, "workspace not found")
 	}
@@ -252,7 +252,7 @@ func (h *WorkspacesHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	now := time.Now().UTC()
-	if err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := h.tenantRepo.SoftDeleteTx(ctx, tx, targetID, now); err != nil {
 			return err
 		}
@@ -293,13 +293,13 @@ func (h *WorkspacesHandler) Delete(c *fiber.Ctx) error {
 	// surviving one so a fresh tab / no-header request lands somewhere live. Best
 	// effort — RequireAuth's recovery also handles a dead default.
 	if def, _ := c.Locals(DefaultWorkspaceLocal).(string); def == targetID {
-		if next, nerr := h.userRepo.GetByAccountID(c.Context(), session.AccountID); nerr == nil {
-			_ = h.sessionRepo.SetDefaultWorkspace(c.Context(), session.ID, next.ID, next.TenantID)
+		if next, nerr := h.userRepo.GetByAccountID(reqCtx(c), session.AccountID); nerr == nil {
+			_ = h.sessionRepo.SetDefaultWorkspace(reqCtx(c), session.ID, next.ID, next.TenantID)
 		}
 	}
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), targetID), membership.ID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), targetID), membership.ID),
 		activity.CategoryWorkspace, "workspace_deleted",
 		activity.WithEntity("tenant", targetID), activity.WithSource(activity.SourceAPI),
 	)

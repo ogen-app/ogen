@@ -43,7 +43,7 @@ type secretStatus struct {
 // @Failure      503  {object}  map[string]string
 // @Router       /api/health [get]
 func (h *HealthHandler) Health(c *fiber.Ctx) error {
-	if err := h.db.PingContext(c.Context()); err != nil {
+	if err := h.db.PingContext(reqCtx(c)); err != nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 			"status": "unhealthy",
 			"error":  err.Error(),
@@ -55,7 +55,7 @@ func (h *HealthHandler) Health(c *fiber.Ctx) error {
 	if h.store != nil {
 		secretsOut := map[string]secretStatus{}
 		for _, name := range secrets.AllowedNames {
-			meta, err := h.store.GetMetadata(c.Context(), name)
+			meta, err := h.store.GetMetadata(reqCtx(c), name)
 			switch {
 			case errors.Is(err, secrets.ErrNotFound):
 				secretsOut[name] = secretStatus{Present: false, Decryptable: false}

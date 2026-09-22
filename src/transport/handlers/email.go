@@ -82,7 +82,7 @@ func (h *EmailHandler) UnsubscribeConfirm(c *fiber.Ctx) error {
 	if err != nil {
 		return err // secret-read / server error → 500
 	}
-	if err := h.suppress(c.Context(), addr); err != nil {
+	if err := h.suppress(reqCtx(c), addr); err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusOK).Type("html").SendString(unsubscribeOKPage(tokenFrom(c)))
@@ -104,7 +104,7 @@ func (h *EmailHandler) UnsubscribeOneClick(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := h.suppress(c.Context(), addr); err != nil {
+	if err := h.suppress(reqCtx(c), addr); err != nil {
 		return err
 	}
 	return c.SendStatus(fiber.StatusOK)
@@ -130,7 +130,7 @@ func (h *EmailHandler) Resubscribe(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := h.suppressions.RemoveMarketing(c.Context(), addr); err != nil {
+	if err := h.suppressions.RemoveMarketing(reqCtx(c), addr); err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusOK).Type("html").SendString(resubscribeOKPage())
@@ -159,7 +159,7 @@ func (h *EmailHandler) resolve(c *fiber.Ctx) (string, error) {
 	if token == "" {
 		return "", email.ErrInvalidToken
 	}
-	secret, err := h.linkSecret(c.Context())
+	secret, err := h.linkSecret(reqCtx(c))
 	if err != nil {
 		return "", err
 	}

@@ -140,14 +140,14 @@ func (h *ZernioHandler) Health(c *fiber.Ctx) error {
 	// (CON-100), so only include them when the caller carries a tenant. This
 	// endpoint is unauthenticated, so it must not run a tenant-scoped query
 	// without one (it would fail closed with ErrNoTenant).
-	if _, ok := tenantctx.From(c.Context()); ok {
-		profileID, _, err := h.settings.Get(c.Context(), zernio.SettingProfileID)
+	if _, ok := tenantctx.From(reqCtx(c)); ok {
+		profileID, _, err := h.settings.Get(reqCtx(c), zernio.SettingProfileID)
 		if err != nil {
 			return err
 		}
 		resp.ProfileID = profileID
 		if profileID != "" {
-			rows, err := h.accounts.ListActive(c.Context(), profileID)
+			rows, err := h.accounts.ListActive(reqCtx(c), profileID)
 			if err != nil {
 				return err
 			}
@@ -157,11 +157,11 @@ func (h *ZernioHandler) Health(c *fiber.Ctx) error {
 		// Surface real store I/O failures instead of masking them as empty
 		// metadata (consistent with the profileID read above). A missing row
 		// (found=false, err=nil) legitimately yields "" and is omitted.
-		lastAt, _, err := h.settings.Get(c.Context(), zernio.SettingLastSyncAt)
+		lastAt, _, err := h.settings.Get(reqCtx(c), zernio.SettingLastSyncAt)
 		if err != nil {
 			return err
 		}
-		lastStatus, _, err := h.settings.Get(c.Context(), zernio.SettingLastSyncStatus)
+		lastStatus, _, err := h.settings.Get(reqCtx(c), zernio.SettingLastSyncStatus)
 		if err != nil {
 			return err
 		}
@@ -204,7 +204,7 @@ func (h *ZernioHandler) ListPlatforms(c *fiber.Ctx) error {
 	allowlist := zernio.SupportedPlatforms()
 	out := make([]platformInfo, 0, len(allowlist))
 	for _, p := range allowlist {
-		platform, err := h.platforms.GetByID(c.Context(), p.OgenID)
+		platform, err := h.platforms.GetByID(reqCtx(c), p.OgenID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -276,17 +276,17 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusTooManyRequests, "rate_limited")
 	}
 
-	profileID, ok, err := h.settings.Get(c.Context(), zernio.SettingProfileID)
+	profileID, ok, err := h.settings.Get(reqCtx(c), zernio.SettingProfileID)
 	if err != nil {
 		return err
 	}
 	if !ok || profileID == "" {
 		// CON-100: lazily bootstrap THIS tenant's Zernio profile on its first
 		// connect (the request context carries the tenant), then re-read it.
-		if err := h.bootstrapper.Run(c.Context()); err != nil {
+		if err := h.bootstrapper.Run(reqCtx(c)); err != nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "integration_degraded")
 		}
-		profileID, ok, err = h.settings.Get(c.Context(), zernio.SettingProfileID)
+		profileID, ok, err = h.settings.Get(reqCtx(c), zernio.SettingProfileID)
 		if err != nil {
 			return err
 		}
@@ -308,7 +308,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 	// (which may not survive the cross-site redirect through Zernio), and hold
 	// the pending selection when a platform has 2+ targets. The session id rides
 	// the callback URL as ogen_cn.
-	tenantID, ok := tenantctx.From(c.Context())
+	tenantID, ok := tenantctx.From(reqCtx(c))
 	if !ok {
 		return fiber.NewError(fiber.StatusUnauthorized, "no_tenant")
 	}
@@ -317,7 +317,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 		return err
 	}
 	now := time.Now().UTC()
-	if err := h.connectSessions.Create(c.Context(), &models.ZernioConnectSession{
+	if err := h.connectSessions.Create(reqCtx(c), &models.ZernioConnectSession{
 		ID:        sessionID,
 		TenantID:  tenantID,
 		ProfileID: profileID,
@@ -330,7 +330,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 		return err
 	}
 
-	connectURL, err := h.integ.Client.CreateConnectLink(c.Context(), profileID, req.Platform, h.connectCallbackURL(sessionID))
+	connectURL, err := h.integ.Client.CreateConnectLink(reqCtx(c), profileID, req.Platform, h.connectCallbackURL(sessionID))
 	if err != nil {
 		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
 			return fiber.NewError(http.StatusBadGateway, apiErr.Error())
@@ -350,19 +350,19 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 	// write must be durable: surface store failures as a retryable error rather
 	// than silently stranding the account the user is about to authorize (they
 	// already received a link, so they would not retry on their own). Written once.
-	marker, ok, err := h.settings.Get(c.Context(), zernio.SettingConnectInitiatedAt)
+	marker, ok, err := h.settings.Get(reqCtx(c), zernio.SettingConnectInitiatedAt)
 	if err != nil {
 		return err
 	}
 	if !ok || marker == "" {
-		if err := h.settings.Set(c.Context(), zernio.SettingConnectInitiatedAt, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		if err := h.settings.Set(reqCtx(c), zernio.SettingConnectInitiatedAt, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return err
 		}
 	}
 
 	// Log redacted URL only — the query string contains a short-lived
 	// token that must not appear in log lines.
-	slog.InfoContext(c.Context(), "connect link issued", logging.AttrComponent, "zernio", "platform", req.Platform, "profile", profileID, "url", redactConnectURL(connectURL))
+	slog.InfoContext(reqCtx(c), "connect link issued", logging.AttrComponent, "zernio", "platform", req.Platform, "profile", profileID, "url", redactConnectURL(connectURL))
 
 	return c.JSON(connectLinkResponse{
 		Platform:   req.Platform,
@@ -404,13 +404,13 @@ func (h *ZernioHandler) ListAccounts(c *fiber.Ctx) error {
 	if !h.integ.Enabled() {
 		return fiber.NewError(fiber.StatusConflict, "integration_disabled")
 	}
-	profileID, _, err := h.settings.Get(c.Context(), zernio.SettingProfileID)
+	profileID, _, err := h.settings.Get(reqCtx(c), zernio.SettingProfileID)
 	if err != nil {
 		return err
 	}
 	var rows []accountInfo
 	if profileID != "" {
-		fetched, err := h.accounts.ListActive(c.Context(), profileID)
+		fetched, err := h.accounts.ListActive(reqCtx(c), profileID)
 		if err != nil {
 			return err
 		}
@@ -428,8 +428,8 @@ func (h *ZernioHandler) ListAccounts(c *fiber.Ctx) error {
 			})
 		}
 	}
-	lastAt, _, _ := h.settings.Get(c.Context(), zernio.SettingLastSyncAt)
-	lastStatus, _, _ := h.settings.Get(c.Context(), zernio.SettingLastSyncStatus)
+	lastAt, _, _ := h.settings.Get(reqCtx(c), zernio.SettingLastSyncAt)
+	lastStatus, _, _ := h.settings.Get(reqCtx(c), zernio.SettingLastSyncStatus)
 	return c.JSON(accountsResponse{
 		Accounts:       rows,
 		LastSyncAt:     lastAt,
@@ -466,7 +466,7 @@ func (h *ZernioHandler) DisconnectAccount(c *fiber.Ctx) error {
 	}
 	force := c.QueryBool("force", false)
 
-	profileID, _, err := h.settings.Get(c.Context(), zernio.SettingProfileID)
+	profileID, _, err := h.settings.Get(reqCtx(c), zernio.SettingProfileID)
 	if err != nil {
 		return err
 	}
@@ -475,14 +475,14 @@ func (h *ZernioHandler) DisconnectAccount(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "account_not_found")
 	}
 
-	account, err := h.accounts.GetActive(c.Context(), profileID, id)
+	account, err := h.accounts.GetActive(reqCtx(c), profileID, id)
 	if err != nil {
 		return notFound(err, "account_not_found")
 	}
 
 	// Refuse to strand scheduled posts unless the caller forces it.
 	if !force {
-		pending, err := h.posts.CountPendingByAccount(c.Context(), id)
+		pending, err := h.posts.CountPendingByAccount(reqCtx(c), id)
 		if err != nil {
 			return err
 		}
@@ -500,22 +500,22 @@ func (h *ZernioHandler) DisconnectAccount(c *fiber.Ctx) error {
 	// the account is already gone there — treat it as an idempotent no-op and
 	// proceed to heal local state. Any other upstream failure stops here (no
 	// local write) so Ogen and Zernio can't diverge.
-	if err := h.integ.Client.DeleteAccount(c.Context(), id); err != nil {
+	if err := h.integ.Client.DeleteAccount(reqCtx(c), id); err != nil {
 		if !zernio.IsStatus(err, http.StatusNotFound) {
 			jobs.ZernioAccountDisconnectFailed.Add(1)
-			slog.ErrorContext(c.Context(), "zernio account delete failed",
+			slog.ErrorContext(reqCtx(c), "zernio account delete failed",
 				logging.AttrComponent, "zernio",
 				"account_id", id,
 				"platform", account.Platform,
 				logging.AttrError, err)
 			return fiber.NewError(http.StatusBadGateway, "integration_degraded")
 		}
-		slog.InfoContext(c.Context(), "zernio account already absent upstream; healing local state",
+		slog.InfoContext(reqCtx(c), "zernio account already absent upstream; healing local state",
 			logging.AttrComponent, "zernio",
 			"account_id", id)
 	}
 
-	updated, err := h.accounts.SoftDelete(c.Context(), id, time.Now().UTC())
+	updated, err := h.accounts.SoftDelete(reqCtx(c), id, time.Now().UTC())
 	if err != nil {
 		jobs.ZernioAccountDisconnectFailed.Add(1)
 		return err
@@ -526,7 +526,7 @@ func (h *ZernioHandler) DisconnectAccount(c *fiber.Ctx) error {
 		// and here. The account is gone, so the caller's intent holds — return
 		// success, but skip the event / usage / success telemetry so the
 		// concurrent winner isn't double-counted.
-		slog.InfoContext(c.Context(), "account already disconnected concurrently; skipping duplicate side effects",
+		slog.InfoContext(reqCtx(c), "account already disconnected concurrently; skipping duplicate side effects",
 			logging.AttrComponent, "zernio",
 			"account_id", id)
 		return c.SendStatus(fiber.StatusNoContent)
@@ -534,12 +534,12 @@ func (h *ZernioHandler) DisconnectAccount(c *fiber.Ctx) error {
 
 	// Best-effort event + usage; skipped when no worker is wired (e.g. in tests).
 	if h.worker != nil {
-		h.worker.PublishAccountDisconnected(c.Context(), *account)
-		h.worker.RecordAccountDisconnect(c.Context(), *account)
+		h.worker.PublishAccountDisconnected(reqCtx(c), *account)
+		h.worker.RecordAccountDisconnect(reqCtx(c), *account)
 	}
 
 	jobs.ZernioAccountDisconnectSucceeded.Add(1)
-	slog.InfoContext(c.Context(), "account disconnected (user-initiated)",
+	slog.InfoContext(reqCtx(c), "account disconnected (user-initiated)",
 		logging.AttrComponent, "zernio",
 		"profile_id", profileID,
 		"platform", account.Platform,
@@ -564,7 +564,7 @@ func (h *ZernioHandler) TriggerSync(c *fiber.Ctx) error {
 	if !h.integ.Enabled() {
 		return fiber.NewError(fiber.StatusConflict, "integration_disabled")
 	}
-	prevAt, _, _ := h.settings.Get(c.Context(), zernio.SettingLastSyncAt)
+	prevAt, _, _ := h.settings.Get(reqCtx(c), zernio.SettingLastSyncAt)
 	if h.worker != nil {
 		h.worker.TriggerNow()
 	}
@@ -590,7 +590,7 @@ func (h *ZernioHandler) RepairProfile(c *fiber.Ctx) error {
 	if !h.integ.Enabled() {
 		return fiber.NewError(fiber.StatusConflict, "integration_disabled")
 	}
-	if err := h.bootstrapper.Run(c.Context()); err != nil {
+	if err := h.bootstrapper.Run(reqCtx(c)); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{

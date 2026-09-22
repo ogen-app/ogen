@@ -61,7 +61,7 @@ type campaignTypePhaseRequest struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/campaign_types [get]
 func (h *CampaignTypesHandler) List(c *fiber.Ctx) error {
-	types, err := h.repo.List(c.Context())
+	types, err := h.repo.List(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func (h *CampaignTypesHandler) Create(c *fiber.Ctx) error {
 		IsSystem:    false,
 		Phases:      []models.CampaignTypePhase{},
 	}
-	if err := h.repo.Create(c.Context(), ct); err != nil {
+	if err := h.repo.Create(reqCtx(c), ct); err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusCreated).JSON(ct)
@@ -117,7 +117,7 @@ func (h *CampaignTypesHandler) Create(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaign_types/{id} [get]
 func (h *CampaignTypesHandler) Get(c *fiber.Ctx) error {
-	ct, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	ct, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign type not found")
 	}
@@ -145,7 +145,7 @@ func (h *CampaignTypesHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	ct, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	ct, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign type not found")
 	}
@@ -158,7 +158,7 @@ func (h *CampaignTypesHandler) Update(c *fiber.Ctx) error {
 	ct.Description = req.Description
 	ct.UpdatedAt = time.Now().UTC()
 
-	if err := h.repo.Update(c.Context(), ct); err != nil {
+	if err := h.repo.Update(reqCtx(c), ct); err != nil {
 		return err
 	}
 	return c.JSON(ct)
@@ -176,7 +176,7 @@ func (h *CampaignTypesHandler) Update(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaign_types/{id} [delete]
 func (h *CampaignTypesHandler) Delete(c *fiber.Ctx) error {
-	ct, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	ct, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign type not found")
 	}
@@ -184,7 +184,7 @@ func (h *CampaignTypesHandler) Delete(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusForbidden, "system campaign type cannot be deleted")
 	}
 
-	deleted, err := h.repo.Delete(c.Context(), ct.ID)
+	deleted, err := h.repo.Delete(reqCtx(c), ct.ID)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func (h *CampaignTypesHandler) Clone(c *fiber.Ctx) error {
 		return err
 	}
 
-	src, err := h.repo.GetByID(c.Context(), c.Params("id"))
+	src, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return notFound(err, "campaign type not found")
 	}
@@ -232,7 +232,7 @@ func (h *CampaignTypesHandler) Clone(c *fiber.Ctx) error {
 		IsSystem:    false,
 		Phases:      []models.CampaignTypePhase{},
 	}
-	if err := h.repo.Create(c.Context(), clone); err != nil {
+	if err := h.repo.Create(reqCtx(c), clone); err != nil {
 		return err
 	}
 
@@ -248,7 +248,7 @@ func (h *CampaignTypesHandler) Clone(c *fiber.Ctx) error {
 			Purpose:        p.Purpose,
 			Sequence:       p.Sequence,
 		}
-		if err := h.repo.AddPhase(c.Context(), phase); err != nil {
+		if err := h.repo.AddPhase(reqCtx(c), phase); err != nil {
 			return err
 		}
 		clone.Phases = append(clone.Phases, *phase)
@@ -277,7 +277,7 @@ func (h *CampaignTypesHandler) AddPhase(c *fiber.Ctx) error {
 		return err
 	}
 
-	if _, err := h.repo.GetByID(c.Context(), c.Params("id")); err != nil {
+	if _, err := h.repo.GetByID(reqCtx(c), c.Params("id")); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fiber.NewError(fiber.StatusNotFound, "campaign type not found")
 		}
@@ -296,7 +296,7 @@ func (h *CampaignTypesHandler) AddPhase(c *fiber.Ctx) error {
 		Purpose:        req.Purpose,
 		Sequence:       req.Sequence,
 	}
-	if err := h.repo.AddPhase(c.Context(), phase); err != nil {
+	if err := h.repo.AddPhase(reqCtx(c), phase); err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusCreated).JSON(phase)
@@ -323,7 +323,7 @@ func (h *CampaignTypesHandler) UpdatePhase(c *fiber.Ctx) error {
 		return err
 	}
 
-	phase, err := h.repo.GetPhaseByID(c.Context(), c.Params("phase_id"))
+	phase, err := h.repo.GetPhaseByID(reqCtx(c), c.Params("phase_id"))
 	if err != nil {
 		return notFound(err, "phase not found")
 	}
@@ -336,7 +336,7 @@ func (h *CampaignTypesHandler) UpdatePhase(c *fiber.Ctx) error {
 	phase.Sequence = req.Sequence
 	phase.UpdatedAt = time.Now().UTC()
 
-	if err := h.repo.UpdatePhase(c.Context(), phase); err != nil {
+	if err := h.repo.UpdatePhase(reqCtx(c), phase); err != nil {
 		return err
 	}
 	return c.JSON(phase)
@@ -354,7 +354,7 @@ func (h *CampaignTypesHandler) UpdatePhase(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaign_types/{id}/phases/{phase_id} [delete]
 func (h *CampaignTypesHandler) DeletePhase(c *fiber.Ctx) error {
-	phase, err := h.repo.GetPhaseByID(c.Context(), c.Params("phase_id"))
+	phase, err := h.repo.GetPhaseByID(reqCtx(c), c.Params("phase_id"))
 	if err != nil {
 		return notFound(err, "phase not found")
 	}
@@ -362,7 +362,7 @@ func (h *CampaignTypesHandler) DeletePhase(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "phase not found")
 	}
 
-	deleted, err := h.repo.DeletePhase(c.Context(), phase.ID)
+	deleted, err := h.repo.DeletePhase(reqCtx(c), phase.ID)
 	if err != nil {
 		return err
 	}

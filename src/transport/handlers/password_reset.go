@@ -129,7 +129,7 @@ func (h *PasswordResetHandler) Request(c *fiber.Ctx) error {
 	// off the response path (dispatchReset), because an early return on a miss —
 	// or extra synchronous work on a hit — would leak account existence through
 	// timing alone.
-	account, err := h.accountRepo.GetByEmail(c.Context(), email)
+	account, err := h.accountRepo.GetByEmail(reqCtx(c), email)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -238,7 +238,7 @@ func (h *PasswordResetHandler) Confirm(c *fiber.Ctx) error {
 	now := time.Now().UTC()
 
 	var userID, tenantID string
-	err := h.db.RunInTx(c.Context(), nil, func(ctx context.Context, tx bun.Tx) error {
+	err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		row := new(models.PasswordResetToken)
 		if err := tx.NewSelect().Model(row).Where("token_hash = ?", tokenHash).Scan(ctx); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -318,7 +318,7 @@ func (h *PasswordResetHandler) Confirm(c *fiber.Ctx) error {
 	}
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(c.Context(), tenantID), userID),
+		logging.WithUserID(tenantctx.With(reqCtx(c), tenantID), userID),
 		activity.CategoryAuthentication, "password_reset_completed",
 		activity.WithEntity("user", userID), activity.WithSource(activity.SourceAPI),
 	)

@@ -73,7 +73,7 @@ type resendEvent struct {
 // @Failure      503  {object}  map[string]string
 // @Router       /api/webhooks/resend [post]
 func (h *ResendWebhookHandler) Handle(c *fiber.Ctx) error {
-	secret, err := h.webhookSecret(c.Context())
+	secret, err := h.webhookSecret(reqCtx(c))
 	if err != nil {
 		return err // secret-read failure → 500
 	}
@@ -93,7 +93,7 @@ func (h *ResendWebhookHandler) Handle(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload")
 	}
 
-	ctx := c.Context()
+	ctx := reqCtx(c)
 	// The event's occurred_at; fall back to now when the envelope omits it.
 	occurredAt := evt.CreatedAt
 	if occurredAt.IsZero() {

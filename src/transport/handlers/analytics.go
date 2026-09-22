@@ -172,7 +172,7 @@ func (h *AnalyticsHandler) ListPosts(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "order must be asc or desc")
 	}
 
-	items, overview, err := h.repo.List(c.Context(), repository.PostAnalyticsListOptions{
+	items, overview, err := h.repo.List(reqCtx(c), repository.PostAnalyticsListOptions{
 		// Restricted to Zernio-published posts (CON-93 §5/§6). The marker
 		// lives in models so this stays decoupled from the zernio adapter.
 		Publisher: models.PublisherZernio,

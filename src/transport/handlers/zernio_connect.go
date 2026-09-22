@@ -67,7 +67,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 		return h.redirectConnectError(c, "", "missing_session")
 	}
 	now := time.Now().UTC()
-	sess, err := h.connectSessions.GetLive(c.Context(), cn, now)
+	sess, err := h.connectSessions.GetLive(reqCtx(c), cn, now)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			jobs.ZernioConnectSessionExpired.Add(1)
@@ -78,7 +78,7 @@ func (h *ZernioHandler) ConnectCallback(c *fiber.Ctx) error {
 
 	// Resolve the tenant FROM the row: the browser round-tripped through Zernio
 	// without our session, so the opaque id is the capability that re-scopes us.
-	ctx := tenantctx.With(c.Context(), sess.TenantID)
+	ctx := tenantctx.With(reqCtx(c), sess.TenantID)
 
 	// Defense in depth: the profile Zernio echoes back must match the session's.
 	if pid := c.Query("profileId"); pid != "" && pid != sess.ProfileID {
@@ -269,10 +269,10 @@ func (h *ZernioHandler) SelectPendingConnection(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if err := h.integ.Client.SelectConnectTarget(c.Context(), sess.Platform, sess.ProfileID, secrets.TempToken, secrets.ConnectToken, req.TargetID, secrets.UserProfile); err != nil {
+	if err := h.integ.Client.SelectConnectTarget(reqCtx(c), sess.Platform, sess.ProfileID, secrets.TempToken, secrets.ConnectToken, req.TargetID, secrets.UserProfile); err != nil {
 		jobs.ZernioConnectSelectFailed.Add(1)
 		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
-			slog.WarnContext(c.Context(), "connect select target failed (picker)",
+			slog.WarnContext(reqCtx(c), "connect select target failed (picker)",
 				logging.AttrComponent, "zernio", "platform", sess.Platform,
 				"connectionId", sess.ID, "status", apiErr.Status, "reason", apiErr.Message)
 			return fiber.NewError(http.StatusBadGateway, "integration_degraded")
@@ -280,10 +280,10 @@ func (h *ZernioHandler) SelectPendingConnection(c *fiber.Ctx) error {
 		return err
 	}
 
-	_ = h.connectSessions.Delete(c.Context(), sess.ID)
-	h.finalizeConnect(c.Context())
+	_ = h.connectSessions.Delete(reqCtx(c), sess.ID)
+	h.finalizeConnect(reqCtx(c))
 	jobs.ZernioConnectSelectSucceeded.Add(1)
-	slog.InfoContext(c.Context(), "connect finalized (picker selection)",
+	slog.InfoContext(reqCtx(c), "connect finalized (picker selection)",
 		logging.AttrComponent, "zernio", "platform", sess.Platform, "connectionId", sess.ID)
 	return c.JSON(fiber.Map{"platform": sess.Platform, "status": "connected"})
 }
@@ -296,14 +296,14 @@ func (h *ZernioHandler) loadPendingForTenant(c *fiber.Ctx) (*models.ZernioConnec
 	if id == "" {
 		return nil, fiber.NewError(fiber.StatusNotFound, "connection_not_found")
 	}
-	sess, err := h.connectSessions.GetLive(c.Context(), id, time.Now().UTC())
+	sess, err := h.connectSessions.GetLive(reqCtx(c), id, time.Now().UTC())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fiber.NewError(fiber.StatusNotFound, "connection_not_found")
 		}
 		return nil, err
 	}
-	tenantID, ok := tenantctx.From(c.Context())
+	tenantID, ok := tenantctx.From(reqCtx(c))
 	if !ok || sess.TenantID != tenantID || sess.Status != models.ZernioConnectStatusAwaitingSelection {
 		return nil, fiber.NewError(fiber.StatusNotFound, "connection_not_found")
 	}
