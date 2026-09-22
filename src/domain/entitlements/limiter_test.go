@@ -158,6 +158,32 @@ func TestLimiterMultiplier(t *testing.T) {
 	}
 }
 
+func TestLimiterCurrentUsage(t *testing.T) {
+	ctx := context.Background()
+	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": float64(3)})}, nil, ModeEnforce).
+		Register("team_seats", fixedCount(2))
+
+	// Registered counter → live value + ok.
+	if n, ok := l.CurrentUsage(ctx, "tn", "team_seats"); !ok || n != 2 {
+		t.Fatalf("registered: got (%d, %v), want (2, true)", n, ok)
+	}
+	// No counter registered → (0, false) so the read omits `current` (never a fake 0).
+	if n, ok := l.CurrentUsage(ctx, "tn", "web_page_imports"); ok || n != 0 {
+		t.Fatalf("unregistered: got (%d, %v), want (0, false)", n, ok)
+	}
+	// A counter error degrades to (0, false), not a failed read.
+	lErr := NewLimiter(fakeResolver{res: resWith(map[string]any{"team_seats": float64(3)})}, nil, ModeEnforce).
+		Register("team_seats", CounterFunc(func(context.Context, string) (int64, error) { return 0, errors.New("db down") }))
+	if n, ok := lErr.CurrentUsage(ctx, "tn", "team_seats"); ok || n != 0 {
+		t.Fatalf("counter error: got (%d, %v), want (0, false)", n, ok)
+	}
+	// Nil-safe.
+	var nilLim *Limiter
+	if n, ok := nilLim.CurrentUsage(ctx, "tn", "team_seats"); ok || n != 0 {
+		t.Fatalf("nil limiter: got (%d, %v), want (0, false)", n, ok)
+	}
+}
+
 // spyNotifier records the crossings the Limiter reports.
 type spyNotifier struct{ events []LimitEvent }
 

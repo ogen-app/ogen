@@ -35,6 +35,12 @@ type TenantStore interface {
 type EntitlementValue struct {
 	Feature
 	Value any `json:"value"`
+	// Current is the tenant's live usage for a numeric feature that has a
+	// registered counter (CON-295), attached by the authenticated /me/entitlements
+	// read so the client can render "N of M". Omitted (nil) for an uncounted or
+	// boolean feature and for the public pricing catalog (no tenant) — the client
+	// treats absent as "unknown", distinct from a real 0.
+	Current *int64 `json:"current,omitempty"`
 }
 
 // Resolution is the fully-resolved entitlement picture for a tenant (or a single

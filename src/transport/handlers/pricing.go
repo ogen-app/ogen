@@ -20,6 +20,7 @@ type PricingHandler struct {
 	versions repository.TenantTierVersionRepository
 	catalog  *entitlements.Catalog
 	auth     fiber.Handler
+	limiter  *entitlements.Limiter // CON-295: live usage counts for /me/entitlements (nil-safe)
 }
 
 // NewPricingHandler builds the handler over the entitlement resolver, the
@@ -28,6 +29,10 @@ type PricingHandler struct {
 func NewPricingHandler(resolver *entitlements.Resolver, versions repository.TenantTierVersionRepository, catalog *entitlements.Catalog, auth fiber.Handler) *PricingHandler {
 	return &PricingHandler{resolver: resolver, versions: versions, catalog: catalog, auth: auth}
 }
+
+// SetLimiter wires the CON-295 limiter so MyEntitlements can attach each numeric
+// feature's live usage (nil-safe: without it the read simply omits `current`).
+func (h *PricingHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func (h *PricingHandler) Register(app *fiber.App) {
 	app.Get("/api/public/pricing", h.Pricing)                 // PUBLIC — no auth (marketing site)
@@ -101,6 +106,20 @@ func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
 	res, err := h.resolver.ResolveCurrent(c.Context(), tenantID)
 	if err != nil {
 		return notFound(err, "no entitlements resolved for this workspace")
+	}
+	// CON-295: attach live usage to each numeric feature that has a registered
+	// counter, so the client can render "N of M" and warn before the 402 rather
+	// than learning the cap only on refusal. Uncounted / boolean features keep
+	// current=nil (omitted). Scope the context to the resolved tenant so the
+	// counters (which read the tenant from ctx) count the right workspace.
+	qctx := tenantctx.With(c.Context(), tenantID)
+	for i := range res.Entitlements {
+		if res.Entitlements[i].ValueType != entitlements.ValueTypeNumeric {
+			continue
+		}
+		if n, ok := h.limiter.CurrentUsage(qctx, tenantID, res.Entitlements[i].Key); ok {
+			res.Entitlements[i].Current = &n
+		}
 	}
 	return c.JSON(res)
 }
