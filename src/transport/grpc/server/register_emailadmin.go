@@ -13,7 +13,8 @@ func registerEmailAdmin(
 	srv *grpc.Server,
 	logs repository.EmailLogRepository,
 	events repository.EmailEventRepository,
-	bodies EmailBodyGetter,
+	bodyStore repository.EmailBodyRepository,
+	liveBody EmailBodyGetter,
 ) {
-	emailv1.RegisterEmailAdminServiceServer(srv, newEmailAdminService(logs, events, bodies))
+	emailv1.RegisterEmailAdminServiceServer(srv, newEmailAdminService(logs, events, bodyStore, liveBody))
 }

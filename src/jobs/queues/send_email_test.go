@@ -158,6 +158,23 @@ func (f *fakeEmailLogRepo) ExistsByIdempotencyKey(_ context.Context, key string)
 	return false, nil
 }
 
+// fakeEmailBodyRepo is an in-memory EmailBodyRepository (CON-306). Insert is
+// last-write-wins here; the real repo is idempotent on the primary key.
+type fakeEmailBodyRepo struct{ rows []*models.EmailBody }
+
+func (f *fakeEmailBodyRepo) Insert(_ context.Context, b *models.EmailBody) error {
+	f.rows = append(f.rows, b)
+	return nil
+}
+func (f *fakeEmailBodyRepo) GetByEmailLogID(_ context.Context, id string) (*models.EmailBody, error) {
+	for _, r := range f.rows {
+		if r.EmailLogID == id {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
 // fakeActivityWriter satisfies activity.Writer so a real Recorder can be driven
 // against an in-memory sink. Close drains onto the loop goroutine, so reads are
 // only safe after the recorder is closed; the mutex keeps the race detector
@@ -394,6 +411,76 @@ func TestSendEmailRecordsActivity(t *testing.T) {
 		reason, _ := e.Payload["error"].(string)
 		if !strings.Contains(reason, "template not found") {
 			t.Errorf("payload error = %q, want it to mention 'template not found'", reason)
+		}
+	})
+}
+
+// TestSendEmailPersistsBody covers CON-306: the rendered body is stored against
+// the log row on a successful send (so the Emails tab renders it after the
+// Resend message ages out), also stored on a post-render terminal failure (so an
+// operator sees what we attempted), and never orphaned when no log row was
+// written (the email_bodies FK requires a committed parent).
+func TestSendEmailPersistsBody(t *testing.T) {
+	t.Run("sent", func(t *testing.T) {
+		sender := &fakeSender{id: "msg_1"}
+		logs := &fakeEmailLogRepo{}
+		bodies := &fakeEmailBodyRepo{}
+		p := newProcessor(sender, newFakeSuppRepo(), logs, "<p>Hi [[ .Name ]]</p>")
+		p.Deps.Bodies = bodies
+
+		if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
+			t.Fatalf("process: %v", err)
+		}
+		if len(logs.rows) != 1 || len(bodies.rows) != 1 {
+			t.Fatalf("want 1 log + 1 body row, got %d log / %d body", len(logs.rows), len(bodies.rows))
+		}
+		b := bodies.rows[0]
+		if b.EmailLogID != logs.rows[0].ID {
+			t.Errorf("body email_log_id = %q, want the sent log row id %q", b.EmailLogID, logs.rows[0].ID)
+		}
+		if b.Subject != "Hi Ann" || b.Text != "Hi Ann" || !strings.Contains(b.HTML, "Hi Ann") {
+			t.Errorf("persisted body = subject=%q html=%q text=%q, want the rendered content", b.Subject, b.HTML, b.Text)
+		}
+		if b.From != "Ogen <hello@ogen.test>" {
+			t.Errorf("body from = %q, want the send envelope From", b.From)
+		}
+	})
+
+	t.Run("post-render terminal failure persists the attempted body", func(t *testing.T) {
+		// A *SendError with Transient=false, Disabled=false is a terminal 4xx, so
+		// Process takes the failed-but-rendered path (not retry, not disabled).
+		sender := &fakeSender{err: &email.SendError{Status: 422, Message: "invalid", Transient: false}}
+		logs := &fakeEmailLogRepo{}
+		bodies := &fakeEmailBodyRepo{}
+		p := newProcessor(sender, newFakeSuppRepo(), logs, "<p>Hi [[ .Name ]]</p>")
+		p.Deps.Bodies = bodies
+
+		if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
+			t.Fatalf("process should swallow a terminal failure, got: %v", err)
+		}
+		if len(logs.rows) != 1 || logs.rows[0].Status != models.EmailLogFailed {
+			t.Fatalf("want 1 failed log row, got %+v", logs.rows)
+		}
+		if len(bodies.rows) != 1 || bodies.rows[0].EmailLogID != logs.rows[0].ID {
+			t.Fatalf("want the attempted body persisted against the failed log row, got %+v", bodies.rows)
+		}
+	})
+
+	t.Run("no log row means no orphan body", func(t *testing.T) {
+		sender := &fakeSender{id: "msg_1"}
+		bodies := &fakeEmailBodyRepo{}
+		p := newProcessor(sender, newFakeSuppRepo(), &fakeEmailLogRepo{}, "<p>x</p>")
+		p.Deps.Logs = nil // writeLog returns "" → no committed parent for the FK
+		p.Deps.Bodies = bodies
+
+		if err := p.Process(t.Context(), task("welcome", models.EmailKindTransactional)); err != nil {
+			t.Fatalf("process: %v", err)
+		}
+		if len(sender.sent) != 1 {
+			t.Fatalf("the send must still happen, got %d", len(sender.sent))
+		}
+		if len(bodies.rows) != 0 {
+			t.Fatalf("body must not be persisted without its parent log row, got %+v", bodies.rows)
 		}
 	})
 }

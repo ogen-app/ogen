@@ -53,7 +53,7 @@ func TestEmailAdminRoundTrip(t *testing.T) {
 		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
 		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
 		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
-		logs, events, fakeBodyGetter{},
+		logs, events, repository.NewEmailBodyRepository(db), fakeBodyGetter{},
 		repository.NewAnnouncementRepository(db), nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -160,6 +160,33 @@ func TestEmailAdminRoundTrip(t *testing.T) {
 	}
 	if det2.Email.BodyAvailable {
 		t.Fatal("a2 has no provider id; body must be unavailable")
+	}
+
+	// Stored-body preference (CON-306): a row with BOTH a persisted body and a
+	// live-fetchable provider id must serve the stored body, so it still renders
+	// after the Resend message ages out. Seeded here (after the pagination
+	// assertions) so it doesn't perturb them.
+	seed("a3", "tn-a", "msg_x", base.Add(4*time.Minute))
+	if err := repository.NewEmailBodyRepository(db).Insert(ctx, &models.EmailBody{
+		EmailLogID: "a3", Subject: "StoredSubject", HTML: "<p>stored</p>", Text: "stored",
+		From: "stored@o.com", ReplyTo: "reply@o.com",
+	}); err != nil {
+		t.Fatalf("seed a3 body: %v", err)
+	}
+	det3, err := cli.GetTenantEmail(ctx, &emailv1.GetTenantEmailRequest{TenantId: "tn-a", EmailId: "a3"})
+	if err != nil {
+		t.Fatalf("detail a3: %v", err)
+	}
+	if !det3.Email.BodyAvailable || det3.Email.Subject != "StoredSubject" || det3.Email.Text != "stored" {
+		t.Fatalf("a3 must serve the persisted body, got %+v", det3.Email)
+	}
+	if det3.Email.From != "stored@o.com" || det3.Email.ReplyTo != "reply@o.com" {
+		t.Fatalf("a3 persisted envelope: %+v", det3.Email)
+	}
+	// The live getter returns a CC for msg_x; its absence proves the stored path
+	// short-circuited the live fetch.
+	if len(det3.Email.Cc) != 0 {
+		t.Fatalf("stored-body path must not consult the live fetch (got cc=%v)", det3.Email.Cc)
 	}
 
 	// Cross-tenant detail is NotFound (never leaks another tenant's row).

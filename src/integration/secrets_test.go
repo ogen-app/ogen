@@ -73,6 +73,7 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 		repository.NewEmailLogRepository(db),
 		repository.NewEmailEventRepository(db),
 		nil,
+		nil,
 		repository.NewAnnouncementRepository(db),
 		nil, // CON-295: no event hub needed for the secrets rig
 	)

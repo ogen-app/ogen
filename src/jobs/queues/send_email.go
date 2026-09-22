@@ -245,12 +245,18 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 			slog.WarnContext(ctx, "send_email transient failure; will retry", logging.AttrComponent, comp, "template", t.TemplateKey, logging.AttrError, err)
 			return err
 		}
-		p.writeLog(ctx, logBase, models.EmailLogFailed, "", err.Error())
+		// Post-render terminal failure: persist what we attempted to send (CON-306)
+		// so an operator can see the rendered body behind a failed delivery.
+		id := p.writeLog(ctx, logBase, models.EmailLogFailed, "", err.Error())
+		p.writeBody(ctx, id, rendered, dep.From, dep.ReplyTo)
 		slog.WarnContext(ctx, "send_email terminal failure", logging.AttrComponent, comp, "template", t.TemplateKey, logging.AttrError, err)
 		return nil // terminal
 	}
 
-	p.writeLog(ctx, logBase, models.EmailLogSent, msgID, "")
+	// Persist the rendered body alongside the sent log (CON-306) so the operator
+	// Emails tab renders it even after the Resend message ages out of retention.
+	id := p.writeLog(ctx, logBase, models.EmailLogSent, msgID, "")
+	p.writeBody(ctx, id, rendered, dep.From, dep.ReplyTo)
 	slog.InfoContext(ctx, "send_email sent", logging.AttrComponent, comp, "template", t.TemplateKey, "kind", string(t.EmailKind))
 	return nil
 }
@@ -263,7 +269,12 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 // Because every terminal send outcome (sent / failed / skipped) funnels through
 // here — transient failures return earlier and are retried — this is also the
 // single point where the outcome is mirrored into the tenant activity log.
-func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog, status models.EmailLogStatus, providerMsgID, errMsg string) {
+//
+// Returns the inserted row id, or "" when no row was written (logs repo unwired,
+// id-gen failure, or insert error). The id lets the caller persist the rendered
+// body against it (CON-306); an empty id must NOT be used for that, since the
+// email_bodies FK references a committed email_logs row.
+func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog, status models.EmailLogStatus, providerMsgID, errMsg string) string {
 	// Mirror the outcome into tenant_activity_events (CON-125). The Recorder is
 	// nil-safe and resolves the tenant from ctx (set in Process), so this never
 	// blocks the send and is a no-op when analytics is disabled. Recorded
@@ -272,12 +283,12 @@ func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog,
 	p.recordActivity(ctx, base, status, providerMsgID, errMsg)
 
 	if p.Deps.Logs == nil {
-		return
+		return ""
 	}
 	id, err := models.NewID()
 	if err != nil {
 		slog.WarnContext(ctx, "email_log id gen failed", logging.AttrComponent, "jobs.send_email", logging.AttrError, err)
-		return
+		return ""
 	}
 	row := base
 	row.ID = id
@@ -286,6 +297,31 @@ func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog,
 	row.Error = errMsg
 	if err := p.Deps.Logs.Insert(ctx, &row); err != nil {
 		slog.WarnContext(ctx, "email_log insert failed (best-effort)", logging.AttrComponent, "jobs.send_email", logging.AttrError, err)
+		return "" // no committed parent row → don't attempt the body write
+	}
+	return id
+}
+
+// writeBody best-effort persists the rendered body against a just-written
+// email_logs row so the operator Emails tab (CON-192) renders it even after the
+// Resend message ages out of retention or the key is unset (CON-306). It is a
+// no-op when the log row wasn't written (empty id — the FK would fail) or the
+// body store isn't wired. A body-store failure is warned and swallowed: a
+// missing body must never fail or re-send the job. Call it only with an id
+// returned by writeLog (i.e. after the parent row committed).
+func (p *SendEmailProcessor) writeBody(ctx context.Context, emailLogID string, r templates.Rendered, from, replyTo string) {
+	if emailLogID == "" || p.Deps.Bodies == nil {
+		return
+	}
+	if err := p.Deps.Bodies.Insert(ctx, &models.EmailBody{
+		EmailLogID: emailLogID,
+		Subject:    r.Subject,
+		HTML:       r.HTML,
+		Text:       r.Text,
+		From:       from,
+		ReplyTo:    replyTo,
+	}); err != nil {
+		slog.WarnContext(ctx, "email_body insert failed (best-effort)", logging.AttrComponent, "jobs.send_email", logging.AttrError, err)
 	}
 }
 

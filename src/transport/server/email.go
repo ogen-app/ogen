@@ -40,6 +40,7 @@ func initEmail(
 	suppressionRepo repository.EmailSuppressionRepository,
 	logRepo repository.EmailLogRepository,
 	eventRepo repository.EmailEventRepository,
+	bodyRepo repository.EmailBodyRepository,
 	userRepo repository.UserRepository,
 	activityRecorder *activity.Recorder,
 ) (emailRuntime, error) {
@@ -62,6 +63,7 @@ func initEmail(
 		Templates:    templateRepo,
 		Suppressions: suppressionRepo,
 		Logs:         logRepo,
+		Bodies:       bodyRepo,
 		Users:        userRepo,
 		From:         cfg.EmailFrom,
 		ReplyTo:      cfg.EmailReplyTo,
