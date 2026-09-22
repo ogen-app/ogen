@@ -32,7 +32,6 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -127,13 +126,7 @@ func Init(ctx context.Context, cfg *config.Config) (shutdown func(context.Contex
 		sdktrace.WithSampler(sampler),
 	)
 	otel.SetTracerProvider(tp)
-	// W3C tracecontext + baggage: continue an inbound trace and propagate it to
-	// downstream services. (Sentry ingests W3C via OTLP; the browser SDK also
-	// emits W3C traceparent alongside sentry-trace.)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
+	otel.SetTextMapPropagator(Propagator())
 
 	// Trace outbound HTTP that goes through the default transport — the Genkit
 	// Anthropic plugin's model calls (it builds its client from

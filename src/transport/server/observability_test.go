@@ -11,19 +11,25 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/telemetry"
 )
 
 // newObservabilityTestApp builds a Fiber app with the production observability
 // chain (useObservability) and the real defaultErrorHandler, plus an in-memory
 // span exporter installed as the global OTel provider so otelfiber produces
-// real spans.
+// real spans, and the production propagator so it continues inbound traces.
 func newObservabilityTestApp(t *testing.T) (*fiber.App, *tracetest.InMemoryExporter) {
 	t.Helper()
 	exp := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
-	prev := otel.GetTracerProvider()
+	prevTP := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(tp)
-	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	otel.SetTextMapPropagator(telemetry.Propagator())
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
 
 	app := fiber.New(fiber.Config{ErrorHandler: defaultErrorHandler})
 	useObservability(app)
@@ -89,5 +95,38 @@ func TestObservabilityInjectsTraceIDs(t *testing.T) {
 	}
 	if len(exp.GetSpans()) == 0 {
 		t.Error("otelfiber exported no span for the request")
+	}
+}
+
+// TestObservabilityContinuesSentryBrowserTrace is the regression guard for the
+// UI→API disconnect (CON-303/304): the Sentry browser SDK propagates its trace
+// with a `sentry-trace` header (not W3C `traceparent`). The server span must
+// adopt the browser's trace id so the two join into one Sentry waterfall, rather
+// than otelfiber starting a fresh root trace per request.
+func TestObservabilityContinuesSentryBrowserTrace(t *testing.T) {
+	app, exp := newObservabilityTestApp(t)
+	app.Get("/ok", func(c *fiber.Ctx) error { return c.SendString("ok") })
+
+	const browserTraceID = "d49d9bf66f13450b81f65bc51cf49c03"
+	req := httptest.NewRequest(http.MethodGet, "/ok", nil)
+	req.Header.Set("sentry-trace", browserTraceID+"-7c51fd1f2147d9d5-1")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test: %v", err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("ok route: got status %d, want 200", resp.StatusCode)
+	}
+
+	spans := exp.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("otelfiber exported no span for the request")
+	}
+	if got := spans[0].SpanContext.TraceID().String(); got != browserTraceID {
+		t.Errorf("server span trace id = %s, want the browser's %s (trace not continued)", got, browserTraceID)
+	}
+	if !spans[0].Parent.IsRemote() {
+		t.Error("server span parent should be the remote browser span")
 	}
 }
