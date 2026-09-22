@@ -931,12 +931,20 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 		return h.refreshURLAsset(c, existing, normalized, session.TenantID)
 	}
 
-	// CON-295: a genuinely new URL asset counts against content_bank_assets; a
-	// refresh of an existing one (handled above) does not.
-	var urlQuota entitlements.Decision
+	// CON-295: a genuinely new URL asset counts against BOTH the total bank
+	// (content_bank_assets) and the stricter URL-only sub-cap (web_page_imports);
+	// a refresh of an existing one (handled above) does not. The URL sub-cap is
+	// checked first, so a workspace with bank room left but out of URL imports is
+	// refused on the allowance that actually ran out.
+	var urlQuota, importQuota entitlements.Decision
 	tenantID, hasTenant := tenantctx.From(ctx)
 	if hasTenant {
-		dec, qErr := h.limiter.Require(ctx, tenantID, "content_bank_assets")
+		dec, qErr := h.limiter.Require(ctx, tenantID, "web_page_imports")
+		if qErr != nil {
+			return qErr
+		}
+		importQuota = dec
+		dec, qErr = h.limiter.Require(ctx, tenantID, "content_bank_assets")
 		if qErr != nil {
 			return qErr
 		}
@@ -974,8 +982,10 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 		}
 		return err
 	}
-	// CON-295: the URL asset now exists — fire any near-limit crossing.
+	// CON-295: the URL asset now exists — fire any near-limit crossing on both
+	// the URL sub-cap and the total bank.
 	if hasTenant {
+		h.limiter.DispatchCrossing(ctx, tenantID, importQuota)
 		h.limiter.DispatchCrossing(ctx, tenantID, urlQuota)
 	}
 

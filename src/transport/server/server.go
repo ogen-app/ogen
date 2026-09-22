@@ -16,6 +16,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -100,6 +101,12 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Register("team_seats", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.userRepo.CountInTenant(ctx) })).
 		Register("active_campaigns", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.campaignRepo.CountActive(ctx) })).
 		Register("content_bank_assets", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.pieceRepo.Count(ctx) })).
+		// CON-295: web_page_imports is a stricter sub-cap on the total bank —
+		// it counts only URL-type assets (CON-222). Without its own counter the
+		// pricing page sold an allowance nothing measured.
+		Register("web_page_imports", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
+			return r.pieceRepo.CountByType(ctx, models.AssetTypeURL)
+		})).
 		Register("media_storage_bytes", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
 			return r.postAttachmentRepo.SumSizeBytesInTenant(ctx)
 		}))
