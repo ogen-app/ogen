@@ -135,9 +135,11 @@ var _ = Describe("InvitationsHandler seat cap (CON-295)", Ordered, func() {
 		Expect(invStatus("newbie@example.com")).To(Equal(models.InvitationPending))
 	})
 
-	It("admits acceptNew once a seat is free", func() {
-		// Free the single seat by removing the sole owner's membership.
-		_, err := db.NewDelete().Model((*models.User)(nil)).Where("id = ?", "seatcap-owner").Exec(ctx)
+	It("admits acceptNew when a seat is available", func() {
+		// Free a seat by moving the workspace to Pro (team_seats = 3) so its single
+		// owner is under cap. Done this way rather than deleting the owner, because
+		// the owner is the invite's invited_by and that FK must still resolve.
+		_, err := db.NewUpdate().Model((*models.Tenant)(nil)).Set("tier_id = ?", "pro").Where("id = ?", trialTenantID).Exec(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		token := seedInvite("newbie@example.com")
 		resp := accept(token, fiber.Map{"name": "New Bie", "password": "password123"})
