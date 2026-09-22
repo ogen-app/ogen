@@ -9,23 +9,26 @@ import (
 )
 
 // Propagator is the composite text-map propagator the API installs globally to
-// continue and forward distributed traces. Order matters on Extract (the first
-// propagator to produce a valid remote parent wins):
+// continue and forward distributed traces. On Extract the composite runs each
+// member in order and every valid one overrides the parent set before it, so the
+// LAST valid extractor wins. Ordering follows from that:
 //
-//   - sentryTracePropagator reads the UI's `sentry-trace` header — the browser
-//     SDK emits that, NOT W3C `traceparent`, so without it the UI→API trace is
-//     severed (CON-303/304).
 //   - TraceContext reads/writes W3C `traceparent`: continues a server-to-server
 //     inbound trace and, on Inject, carries this trace to the gRPC microservices
 //     and LLM HTTP (which read traceparent).
+//   - sentryTracePropagator reads the UI's `sentry-trace` header — the browser
+//     SDK emits that, NOT W3C `traceparent`, so without it the UI→API trace is
+//     severed (CON-303/304). It is placed AFTER TraceContext so that when a
+//     request somehow carries both, the browser's Sentry trace (the intended
+//     head) takes precedence rather than being clobbered by a traceparent.
 //   - Baggage carries W3C/Sentry baggage.
 //
 // Exported so the transport layer installs the exact same propagator in tests
 // without re-composing it (and drifting).
 func Propagator() propagation.TextMapPropagator {
 	return propagation.NewCompositeTextMapPropagator(
-		sentryTracePropagator{},
 		propagation.TraceContext{},
+		sentryTracePropagator{},
 		propagation.Baggage{},
 	)
 }
