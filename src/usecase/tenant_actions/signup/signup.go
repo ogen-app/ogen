@@ -48,6 +48,13 @@ type EmailEnqueuer interface {
 	EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error
 }
 
+// HarborEnqueuer enqueues the CON-229 "notify Harbor a new tenant registered"
+// webhook job inside the signup transaction, so operators are notified iff the
+// tenant commits. nil disables it (no operator notification).
+type HarborEnqueuer interface {
+	EnqueueNotifyHarborTenantRegisteredTx(ctx context.Context, tx *sql.Tx, tenantID string) error
+}
+
 // Input is the data a signup needs.
 type Input struct {
 	TenantName string
@@ -72,6 +79,7 @@ type Service struct {
 	tenants  repository.TenantRepository
 	profiles ProfileEnqueuer
 	emails   EmailEnqueuer
+	harbor   HarborEnqueuer
 
 	// now is injectable so tests can pin "current time". nil → time.Now().UTC().
 	now func() time.Time
@@ -84,6 +92,10 @@ func New(db *bun.DB, accounts repository.AccountRepository, tenants repository.T
 
 // SetEmailEnqueuer wires the lifecycle-email enqueuer (nil-safe: no mail sent).
 func (s *Service) SetEmailEnqueuer(e EmailEnqueuer) { s.emails = e }
+
+// SetHarborEnqueuer wires the new-tenant operator-notification enqueuer (CON-229).
+// nil-safe: no webhook is enqueued.
+func (s *Service) SetHarborEnqueuer(e HarborEnqueuer) { s.harbor = e }
 
 func (s *Service) clock() time.Time {
 	if s.now != nil {
@@ -171,6 +183,14 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 				return err
 			}
 			if err := s.emails.EnqueueDripTx(ctx, tx.Tx, userID, tenantID); err != nil {
+				return err
+			}
+		}
+		// CON-229: notify operators of the new registration, enqueued in this same
+		// tx so a rolled-back signup notifies no one. The job POSTs a signed webhook
+		// to Harbor, which resolves the admin recipients and calls back the send RPC.
+		if s.harbor != nil {
+			if err := s.harbor.EnqueueNotifyHarborTenantRegisteredTx(ctx, tx.Tx, tenantID); err != nil {
 				return err
 			}
 		}

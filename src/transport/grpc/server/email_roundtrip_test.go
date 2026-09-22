@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +55,7 @@ func TestEmailAdminRoundTrip(t *testing.T) {
 		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
 		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
 		logs, events, repository.NewEmailBodyRepository(db), fakeBodyGetter{},
+		nil, nil, "",
 		repository.NewAnnouncementRepository(db), nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -192,6 +194,177 @@ func TestEmailAdminRoundTrip(t *testing.T) {
 	// Cross-tenant detail is NotFound (never leaks another tenant's row).
 	if _, err := cli.GetTenantEmail(ctx, &emailv1.GetTenantEmailRequest{TenantId: "tn-a", EmailId: "b1"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("cross-tenant detail: got %v want NotFound", status.Code(err))
+	}
+}
+
+// fakeAdminEnqueuer records the per-recipient admin_tenant_registered enqueues so
+// the CON-229 round-trip can assert dedupe/normalisation + the rendered vars.
+type fakeAdminEnqueuer struct {
+	mu    sync.Mutex
+	calls []adminEnqCall
+}
+
+type adminEnqCall struct {
+	tenantID  string
+	recipient string
+	vars      map[string]string
+}
+
+func (f *fakeAdminEnqueuer) EnqueueAdminTenantRegisteredEmail(_ context.Context, tenantID, recipient string, vars map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, adminEnqCall{tenantID: tenantID, recipient: recipient, vars: vars})
+	return nil
+}
+
+// TestNotifyOperatorsTenantRegisteredRoundTrip exercises the CON-229 send RPC end
+// to end over the live listener: auth + validation, recipient trim/lower/dedupe,
+// the authoritative tenant + owner hydration into template vars (incl. the Harbor
+// deep link), and NotFound for an unknown tenant.
+func TestNotifyOperatorsTenantRegisteredRoundTrip(t *testing.T) {
+	const token = "notify-token"
+
+	db := pgtest.MustDB()
+	db.DB.SetMaxOpenConns(1)
+	db.DB.SetMaxIdleConns(1)
+	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
+		t.Fatalf("disable fks: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Seed a registered tenant + its owner (FKs disabled, so no tier/account rows
+	// needed — a missing tier hydrates to nil and the RPC falls back to tier_id).
+	now := time.Date(2026, 9, 22, 14, 3, 0, 0, time.UTC)
+	if _, err := db.NewInsert().Model(&models.Tenant{
+		ID: "tn-reg", Name: "Acme Co", Slug: "acme-co", TierID: "default",
+		Status: models.TenantStatusActive, CreatedAt: now, UpdatedAt: now,
+	}).Exec(t.Context()); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	if _, err := db.NewInsert().Model(&models.User{
+		ID: "u-owner", AccountID: "acc-owner", TenantID: "tn-reg", Name: "Jane Doe",
+		Email: "jane@acme.com", Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now,
+	}).Exec(t.Context()); err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	enq := &fakeAdminEnqueuer{}
+	srv, err := New(token, nil,
+		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
+		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
+		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
+		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, fakeBodyGetter{},
+		repository.NewUserRepository(db), enq, "https://harbor.example/",
+		repository.NewAnnouncementRepository(db), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	dial := func(tok string) emailv1.EmailAdminServiceClient {
+		conn, err := grpc.NewClient(
+			lis.Addr().String(),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+				ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+				return invoker(ctx, method, req, reply, cc, opts...)
+			}),
+		)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		return emailv1.NewEmailAdminServiceClient(conn)
+	}
+
+	ctx := t.Context()
+	cli := dial(token)
+
+	// Bad token is rejected by the shared interceptor.
+	if _, err := dial("nope").NotifyOperatorsTenantRegistered(ctx, &emailv1.NotifyOperatorsTenantRegisteredRequest{TenantId: "tn-reg"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("bad token: got %v want Unauthenticated", status.Code(err))
+	}
+	// tenant_id is required.
+	if _, err := cli.NotifyOperatorsTenantRegistered(ctx, &emailv1.NotifyOperatorsTenantRegisteredRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("missing tenant_id: got %v want InvalidArgument", status.Code(err))
+	}
+	// Empty recipient set is a clean no-op.
+	if resp, err := cli.NotifyOperatorsTenantRegistered(ctx, &emailv1.NotifyOperatorsTenantRegisteredRequest{TenantId: "tn-reg"}); err != nil || resp.GetEnqueued() != 0 {
+		t.Fatalf("empty recipients: resp=%v err=%v", resp, err)
+	}
+	// Unknown tenant → NotFound.
+	if _, err := cli.NotifyOperatorsTenantRegistered(ctx, &emailv1.NotifyOperatorsTenantRegisteredRequest{TenantId: "nope", RecipientEmails: []string{"a@b.com"}}); status.Code(err) != codes.NotFound {
+		t.Fatalf("unknown tenant: got %v want NotFound", status.Code(err))
+	}
+
+	// Happy path: trims, lower-cases, and de-duplicates; drops blanks.
+	resp, err := cli.NotifyOperatorsTenantRegistered(ctx, &emailv1.NotifyOperatorsTenantRegisteredRequest{
+		TenantId:        "tn-reg",
+		RecipientEmails: []string{"Ops@Ogen.app", "  ops@ogen.app ", "second@ogen.app", "  "},
+	})
+	if err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if resp.GetEnqueued() != 2 {
+		t.Fatalf("enqueued: got %d want 2", resp.GetEnqueued())
+	}
+
+	enq.mu.Lock()
+	defer enq.mu.Unlock()
+	if len(enq.calls) != 2 {
+		t.Fatalf("enqueue calls: got %d want 2 (%+v)", len(enq.calls), enq.calls)
+	}
+	gotRecipients := map[string]bool{}
+	for _, c := range enq.calls {
+		gotRecipients[c.recipient] = true
+		if c.tenantID != "tn-reg" {
+			t.Fatalf("call tenantID: got %q want tn-reg", c.tenantID)
+		}
+	}
+	if !gotRecipients["ops@ogen.app"] || !gotRecipients["second@ogen.app"] {
+		t.Fatalf("recipients not normalised/deduped: %v", gotRecipients)
+	}
+	// Vars reflect the authoritative tenant + owner + deep link.
+	v := enq.calls[0].vars
+	for k, want := range map[string]string{
+		"workspace_name": "Acme Co",
+		"tenant_id":      "tn-reg",
+		"tenant_slug":    "acme-co",
+		"owner_name":     "Jane Doe",
+		"owner_email":    "jane@acme.com",
+		"tier":           "Default", // hydrated tier display name (falls back to tier_id when unseeded)
+		"status":         "active",
+		"tenant_url":     "https://harbor.example/tenants/tn-reg",
+	} {
+		if v[k] != want {
+			t.Fatalf("var %q: got %q want %q", k, v[k], want)
+		}
+	}
+	if v["registered_at"] == "" {
+		t.Fatal("registered_at var is empty")
+	}
+}
+
+// TestNotifyOperatorsUnwiredReturnsUnavailable pins the CON-229 hardening: an
+// unwired notification path (nil enqueuer/tenants — e.g. the insert-only enqueuer
+// failed to build) must NOT ack the notification as done. Empty recipients is
+// still a 0 no-op; a real recipient set returns Unavailable so Harbor retries.
+func TestNotifyOperatorsUnwiredReturnsUnavailable(t *testing.T) {
+	svc := newEmailAdminService(nil, nil, nil, nil, nil, nil, nil, "")
+	ctx := t.Context()
+
+	resp, err := svc.NotifyOperatorsTenantRegistered(ctx, &emailv1.NotifyOperatorsTenantRegisteredRequest{TenantId: "tn-x"})
+	if err != nil || resp.GetEnqueued() != 0 {
+		t.Fatalf("empty recipients: resp=%v err=%v (want Enqueued 0, nil err)", resp, err)
+	}
+
+	if _, err := svc.NotifyOperatorsTenantRegistered(ctx, &emailv1.NotifyOperatorsTenantRegisteredRequest{TenantId: "tn-x", RecipientEmails: []string{"a@b.com"}}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("unwired with recipients: got %v want Unavailable", status.Code(err))
 	}
 }
 

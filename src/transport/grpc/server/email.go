@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"log/slog"
@@ -32,6 +33,13 @@ type EmailBodyGetter interface {
 	Get(ctx context.Context, id string) (*resend.EmailDetail, error)
 }
 
+// AdminEmailEnqueuer enqueues one admin_tenant_registered operator notification
+// (CON-229). *queues.Enqueuer satisfies it; it is kept as a local interface so
+// this transport package doesn't import the jobs/queues package.
+type AdminEmailEnqueuer interface {
+	EnqueueAdminTenantRegisteredEmail(ctx context.Context, tenantID, recipient string, vars map[string]string) error
+}
+
 // emailAdminService adapts the email_logs + email_events repositories (plus the
 // persisted body store and a live Resend body fetch) to the generated
 // EmailAdminServiceServer (CON-298) — the operator-facing surface Harbor's
@@ -44,10 +52,36 @@ type emailAdminService struct {
 	events    repository.EmailEventRepository
 	bodyStore repository.EmailBodyRepository // CON-306: body persisted at send (preferred)
 	liveBody  EmailBodyGetter                // CON-298: live Resend fetch (fallback)
+	// CON-229 admin-notification send path. tenants/users hydrate the newly-
+	// registered tenant's details; enqueuer fans out one durable send per operator
+	// recipient; harborBaseURL builds the "View in Harbor" deep link (empty ⇒ no
+	// link). All are nil/empty-safe: an unwired path is a soft no-op.
+	tenants       repository.TenantRepository
+	users         repository.UserRepository
+	enqueuer      AdminEmailEnqueuer
+	harborBaseURL string
 }
 
-func newEmailAdminService(logs repository.EmailLogRepository, events repository.EmailEventRepository, bodyStore repository.EmailBodyRepository, liveBody EmailBodyGetter) *emailAdminService {
-	return &emailAdminService{logs: logs, events: events, bodyStore: bodyStore, liveBody: liveBody}
+func newEmailAdminService(
+	logs repository.EmailLogRepository,
+	events repository.EmailEventRepository,
+	bodyStore repository.EmailBodyRepository,
+	liveBody EmailBodyGetter,
+	tenants repository.TenantRepository,
+	users repository.UserRepository,
+	enqueuer AdminEmailEnqueuer,
+	harborBaseURL string,
+) *emailAdminService {
+	return &emailAdminService{
+		logs:          logs,
+		events:        events,
+		bodyStore:     bodyStore,
+		liveBody:      liveBody,
+		tenants:       tenants,
+		users:         users,
+		enqueuer:      enqueuer,
+		harborBaseURL: strings.TrimRight(strings.TrimSpace(harborBaseURL), "/"),
+	}
 }
 
 func (s *emailAdminService) ListTenantEmails(ctx context.Context, req *emailv1.ListTenantEmailsRequest) (*emailv1.ListTenantEmailsResponse, error) {
@@ -143,6 +177,95 @@ func (s *emailAdminService) GetTenantEmail(ctx context.Context, req *emailv1.Get
 	}
 	s.serveLiveBody(ctx, detail, log)
 	return &emailv1.GetTenantEmailResponse{Email: detail}, nil
+}
+
+// NotifyOperatorsTenantRegistered fans out the admin_tenant_registered
+// operator-notification email to the given recipients (CON-229). It re-loads the
+// tenant by id (authoritative) and enqueues one durable send per recipient;
+// idempotency by (tenant, recipient) means a retried Harbor callback never
+// double-sends. Recipients are trimmed, lower-cased, and de-duplicated; an empty
+// resulting set — or an unwired notification path — is a clean no-op.
+func (s *emailAdminService) NotifyOperatorsTenantRegistered(ctx context.Context, req *emailv1.NotifyOperatorsTenantRegisteredRequest) (*emailv1.NotifyOperatorsTenantRegisteredResponse, error) {
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	seen := make(map[string]struct{}, len(req.GetRecipientEmails()))
+	recipients := make([]string, 0, len(req.GetRecipientEmails()))
+	for _, r := range req.GetRecipientEmails() {
+		r = strings.ToLower(strings.TrimSpace(r))
+		if r == "" {
+			continue
+		}
+		if _, dup := seen[r]; dup {
+			continue
+		}
+		seen[r] = struct{}{}
+		recipients = append(recipients, r)
+	}
+	// No recipients is a genuine no-op — ack so Harbor doesn't retry.
+	if len(recipients) == 0 {
+		return &emailv1.NotifyOperatorsTenantRegisteredResponse{Enqueued: 0}, nil
+	}
+	// But an UNWIRED notification path (enqueuer/tenant repo absent, e.g. the
+	// insert-only enqueuer failed to build at boot) must NOT be acked as done —
+	// that would permanently drop the notification. Return Unavailable so Harbor's
+	// durable webhook job retries once the path is wired.
+	if s.enqueuer == nil || s.tenants == nil {
+		return nil, status.Error(codes.Unavailable, "tenant registration notifications are unavailable")
+	}
+
+	tenant, err := s.tenants.GetByIDWithClassification(ctx, tenantID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && tenant == nil) {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	} else if err != nil {
+		return nil, s.internal(ctx, "notify operators: load tenant", err)
+	}
+
+	vars := s.tenantRegisteredVars(ctx, tenant)
+
+	enqueued := 0
+	for _, r := range recipients {
+		if err := s.enqueuer.EnqueueAdminTenantRegisteredEmail(ctx, tenantID, r, vars); err != nil {
+			return nil, s.internal(ctx, "notify operators: enqueue send", err)
+		}
+		enqueued++
+	}
+	return &emailv1.NotifyOperatorsTenantRegisteredResponse{Enqueued: int32(enqueued)}, nil
+}
+
+// tenantRegisteredVars builds the admin_tenant_registered template variables
+// from the tenant (+ its owner). Owner lookup is best-effort: a failure logs and
+// leaves the owner fields blank rather than aborting the notification.
+func (s *emailAdminService) tenantRegisteredVars(ctx context.Context, t *models.Tenant) map[string]string {
+	tier := t.TierID
+	if t.Tier != nil && t.Tier.Name != "" {
+		tier = t.Tier.Name
+	}
+	ownerName, ownerEmail := "", ""
+	if s.users != nil {
+		if owners, err := s.users.ListOwnersByTenant(ctx, t.ID); err != nil {
+			slog.WarnContext(ctx, "notify operators: owner lookup failed", logging.AttrComponent, "grpcserver", "tenant_id", t.ID, logging.AttrError, err)
+		} else if len(owners) > 0 {
+			ownerName, ownerEmail = owners[0].Name, owners[0].Email
+		}
+	}
+	tenantURL := ""
+	if s.harborBaseURL != "" {
+		tenantURL = s.harborBaseURL + "/tenants/" + t.ID
+	}
+	return map[string]string{
+		"workspace_name": t.Name,
+		"tenant_id":      t.ID,
+		"tenant_slug":    t.Slug,
+		"owner_name":     ownerName,
+		"owner_email":    ownerEmail,
+		"tier":           tier,
+		"status":         t.Status,
+		"registered_at":  t.CreatedAt.UTC().Format("2006-01-02 15:04 MST"),
+		"tenant_url":     tenantURL,
+	}
 }
 
 // serveStoredBody fills detail from the persisted body (CON-306) and reports

@@ -80,10 +80,11 @@ tidy:
 # DeleteTierVersion + ListTierVersionAssignments + retire reassignment in v1.5.0
 # (CON-297); image.v1 RejectedCode enum + rejected_code fields in v1.6.0 (CON-281);
 # email.v1 (EmailAdminService) in v1.7.0 (CON-298); announcements.v1
-# (AnnouncementAdminService) in v1.8.0 (CON-230)
+# (AnnouncementAdminService) in v1.8.0 (CON-230); NotifyOperatorsTenantRegistered
+# on EmailAdminService in v1.9.0 (CON-229)
 # — publish the proto repo tag before `make proto` can resolve it.
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.8.0
+PROTO_VERSION := v1.9.0
 
 proto:
 	buf generate $(PROTO_MODULE):$(PROTO_VERSION)

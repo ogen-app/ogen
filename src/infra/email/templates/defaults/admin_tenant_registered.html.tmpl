@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+</head>
+<body style="margin:0;width:100%;padding:0;word-break:break-word;background-color:#f2f1ef;">
+<div role="article" aria-roledescription="email" lang="en" dir="ltr" style="background-color:#f2f1ef;font-family:'Zalando Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:max(16px,1rem);color:#151515;">
+<div style="margin:0 auto;max-width:560px;padding:24px;">
+<div style="padding:16px 4px;"><p style="margin:0;font-size:18px;line-height:28px;font-weight:700;letter-spacing:-.025em;color:#151515;">Ogen</p></div>
+<div style="border-radius:4px;border:1px solid #e0deda;background-color:#fffffe;padding:40px 32px;">
+<h1 style="margin:0 0 8px;font-size:24px;line-height:30px;font-weight:700;color:#151515;">New tenant registered</h1>
+<p style="margin:0 0 24px;font-size:15px;line-height:24px;color:#57534d;">A new tenant just signed up on Ogen. The details captured at registration are below.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:14px;line-height:22px;color:#151515;">
+<tr><td style="padding:8px 0;color:#57534d;width:120px;vertical-align:top;">Tenant</td><td style="padding:8px 0;font-weight:600;">[[ .WorkspaceName ]]</td></tr>
+<tr><td style="padding:8px 0;color:#57534d;vertical-align:top;border-top:1px solid #f2f1ef;">Owner</td><td style="padding:8px 0;border-top:1px solid #f2f1ef;">[[ .OwnerName ]] &lt;[[ .OwnerEmail ]]&gt;</td></tr>
+<tr><td style="padding:8px 0;color:#57534d;vertical-align:top;border-top:1px solid #f2f1ef;">Slug</td><td style="padding:8px 0;border-top:1px solid #f2f1ef;">[[ .TenantSlug ]]</td></tr>
+<tr><td style="padding:8px 0;color:#57534d;vertical-align:top;border-top:1px solid #f2f1ef;">Tenant ID</td><td style="padding:8px 0;border-top:1px solid #f2f1ef;font-family:'SFMono-Regular',Consolas,monospace;font-size:13px;">[[ .TenantID ]]</td></tr>
+<tr><td style="padding:8px 0;color:#57534d;vertical-align:top;border-top:1px solid #f2f1ef;">Tier</td><td style="padding:8px 0;border-top:1px solid #f2f1ef;">[[ .Tier ]]</td></tr>
+<tr><td style="padding:8px 0;color:#57534d;vertical-align:top;border-top:1px solid #f2f1ef;">Status</td><td style="padding:8px 0;border-top:1px solid #f2f1ef;">[[ .Status ]]</td></tr>
+<tr><td style="padding:8px 0;color:#57534d;vertical-align:top;border-top:1px solid #f2f1ef;">Registered</td><td style="padding:8px 0;border-top:1px solid #f2f1ef;">[[ .RegisteredAt ]]</td></tr>
+</table>
+[[ if .TenantURL ]]
+<div style="margin-top:28px;">
+<a href="[[ .TenantURL ]]" style="display:inline-block;background-color:#151515;color:#fffffe;text-decoration:none;font-size:14px;font-weight:600;padding:12px 20px;border-radius:4px;">View in Harbor &rarr;</a>
+</div>
+[[ end ]]
+</div>
+<p style="margin:20px 4px 0;font-size:12px;line-height:18px;color:#8a857d;">Internal operator notification — Ogen.</p>
+</div>
+</div>
+</body>
+</html>

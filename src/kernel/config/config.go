@@ -411,6 +411,21 @@ type Config struct {
 	GRPCAddr      string `envconfig:"GRPC_ADDR"       default:"127.0.0.1:9091"`
 	GRPCAuthToken string `envconfig:"GRPC_AUTH_TOKEN" default:""`
 
+	// New-tenant admin notification (CON-229). On a committed signup, Ogen
+	// enqueues a durable River job that POSTs a signed event to Harbor's inbound
+	// webhook; Harbor resolves the operator recipients and calls back the
+	// EmailAdminService send RPC, which renders admin_tenant_registered and links
+	// to HarborBaseURL/tenants/{id}. All three are opt-in and empty-safe:
+	//   - HarborWebhookURL empty  ⇒ the outbound webhook is not enqueued (feature off).
+	//   - HarborWebhookSecret     ⇒ HMAC-SHA256 key signing the webhook body; Harbor
+	//                               verifies it. Empty ⇒ the body is sent unsigned
+	//                               (only acceptable on a trusted network).
+	//   - HarborBaseURL empty     ⇒ the notification email omits the "View in Harbor"
+	//                               deep link (the mail is still sent).
+	HarborWebhookURL    string `envconfig:"HARBOR_WEBHOOK_URL"    default:""`
+	HarborWebhookSecret string `envconfig:"HARBOR_WEBHOOK_SECRET" default:""`
+	HarborBaseURL       string `envconfig:"HARBOR_BASE_URL"       default:""`
+
 	// River background-job queue (CON-69 §1, §3; CON-87 WS3). Workers
 	// process `submit_post_to_zernio`, `poll_zernio_status`,
 	// `cancel_zernio_job`, plus the periodic `reconcile_scheduled_posts`,

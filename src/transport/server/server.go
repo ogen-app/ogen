@@ -521,6 +521,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Notifier:              notifier,
 		NotificationRepo:      r.notificationRepo,
 		NotificationRetention: time.Duration(cfg.NotificationsRetentionDays) * 24 * time.Hour,
+		// CON-229: outbound new-tenant webhook to Harbor (signed). Empty URL ⇒ no-op.
+		HarborNotify: queues.HarborNotifyDeps{URL: cfg.HarborWebhookURL, Secret: cfg.HarborWebhookSecret},
 	})
 
 	if err := jobs.MigrateRiver(ctx, db.DB); err != nil {
@@ -579,6 +581,11 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// through the River enqueuer, so this waits until the River client exists.
 	signupSvc := signup.New(db, r.accountRepo, r.tenantRepo, enqueuer)
 	signupSvc.SetEmailEnqueuer(enqueuer)
+	// CON-229: notify operators on a new registration. Only wired when the Harbor
+	// webhook URL is configured, so an unconfigured deploy queues no webhook jobs.
+	if cfg.HarborWebhookURL != "" {
+		signupSvc.SetHarborEnqueuer(enqueuer)
+	}
 	tenantsHandler := handlers.NewTenantsHandler(signupSvc, r.tenantRepo, cfg.SessionCookieName, !cfg.Debug, auth)
 	tenantsHandler.SetActivityRecorder(activityWiring.recorder)
 	tenantsHandler.Register(app)

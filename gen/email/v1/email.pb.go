@@ -611,6 +611,102 @@ func (x *GetTenantEmailResponse) GetEmail() *EmailDetail {
 	return nil
 }
 
+type NotifyOperatorsTenantRegisteredRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TenantId        string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                      // required; the newly-registered tenant
+	RecipientEmails []string               `protobuf:"bytes,2,rep,name=recipient_emails,json=recipientEmails,proto3" json:"recipient_emails,omitempty"` // operator/admin addresses to notify; empty = no-op
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *NotifyOperatorsTenantRegisteredRequest) Reset() {
+	*x = NotifyOperatorsTenantRegisteredRequest{}
+	mi := &file_email_v1_email_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NotifyOperatorsTenantRegisteredRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotifyOperatorsTenantRegisteredRequest) ProtoMessage() {}
+
+func (x *NotifyOperatorsTenantRegisteredRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_email_v1_email_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotifyOperatorsTenantRegisteredRequest.ProtoReflect.Descriptor instead.
+func (*NotifyOperatorsTenantRegisteredRequest) Descriptor() ([]byte, []int) {
+	return file_email_v1_email_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *NotifyOperatorsTenantRegisteredRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *NotifyOperatorsTenantRegisteredRequest) GetRecipientEmails() []string {
+	if x != nil {
+		return x.RecipientEmails
+	}
+	return nil
+}
+
+type NotifyOperatorsTenantRegisteredResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enqueued      int32                  `protobuf:"varint,1,opt,name=enqueued,proto3" json:"enqueued,omitempty"` // number of per-recipient send jobs enqueued
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NotifyOperatorsTenantRegisteredResponse) Reset() {
+	*x = NotifyOperatorsTenantRegisteredResponse{}
+	mi := &file_email_v1_email_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NotifyOperatorsTenantRegisteredResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotifyOperatorsTenantRegisteredResponse) ProtoMessage() {}
+
+func (x *NotifyOperatorsTenantRegisteredResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_email_v1_email_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotifyOperatorsTenantRegisteredResponse.ProtoReflect.Descriptor instead.
+func (*NotifyOperatorsTenantRegisteredResponse) Descriptor() ([]byte, []int) {
+	return file_email_v1_email_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *NotifyOperatorsTenantRegisteredResponse) GetEnqueued() int32 {
+	if x != nil {
+		return x.Enqueued
+	}
+	return 0
+}
+
 var File_email_v1_email_proto protoreflect.FileDescriptor
 
 const file_email_v1_email_proto_rawDesc = "" +
@@ -668,10 +764,16 @@ const file_email_v1_email_proto_rawDesc = "" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x19\n" +
 	"\bemail_id\x18\x02 \x01(\tR\aemailId\"E\n" +
 	"\x16GetTenantEmailResponse\x12+\n" +
-	"\x05email\x18\x01 \x01(\v2\x15.email.v1.EmailDetailR\x05email2\xc3\x01\n" +
+	"\x05email\x18\x01 \x01(\v2\x15.email.v1.EmailDetailR\x05email\"p\n" +
+	"&NotifyOperatorsTenantRegisteredRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12)\n" +
+	"\x10recipient_emails\x18\x02 \x03(\tR\x0frecipientEmails\"E\n" +
+	"'NotifyOperatorsTenantRegisteredResponse\x12\x1a\n" +
+	"\benqueued\x18\x01 \x01(\x05R\benqueued2\xcc\x02\n" +
 	"\x11EmailAdminService\x12Y\n" +
 	"\x10ListTenantEmails\x12!.email.v1.ListTenantEmailsRequest\x1a\".email.v1.ListTenantEmailsResponse\x12S\n" +
-	"\x0eGetTenantEmail\x12\x1f.email.v1.GetTenantEmailRequest\x1a .email.v1.GetTenantEmailResponseB\x8a\x01\n" +
+	"\x0eGetTenantEmail\x12\x1f.email.v1.GetTenantEmailRequest\x1a .email.v1.GetTenantEmailResponse\x12\x86\x01\n" +
+	"\x1fNotifyOperatorsTenantRegistered\x120.email.v1.NotifyOperatorsTenantRegisteredRequest\x1a1.email.v1.NotifyOperatorsTenantRegisteredResponseB\x8a\x01\n" +
 	"\fcom.email.v1B\n" +
 	"EmailProtoP\x01Z-github.com/ogen-app/ogen/gen/email/v1;emailv1\xa2\x02\x03EXX\xaa\x02\bEmail.V1\xca\x02\bEmail\\V1\xe2\x02\x14Email\\V1\\GPBMetadata\xea\x02\tEmail::V1b\x06proto3"
 
@@ -687,22 +789,24 @@ func file_email_v1_email_proto_rawDescGZIP() []byte {
 	return file_email_v1_email_proto_rawDescData
 }
 
-var file_email_v1_email_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_email_v1_email_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_email_v1_email_proto_goTypes = []any{
-	(*EmailSummary)(nil),             // 0: email.v1.EmailSummary
-	(*EmailEvent)(nil),               // 1: email.v1.EmailEvent
-	(*EmailDetail)(nil),              // 2: email.v1.EmailDetail
-	(*EmailFilter)(nil),              // 3: email.v1.EmailFilter
-	(*ListTenantEmailsRequest)(nil),  // 4: email.v1.ListTenantEmailsRequest
-	(*ListTenantEmailsResponse)(nil), // 5: email.v1.ListTenantEmailsResponse
-	(*GetTenantEmailRequest)(nil),    // 6: email.v1.GetTenantEmailRequest
-	(*GetTenantEmailResponse)(nil),   // 7: email.v1.GetTenantEmailResponse
-	(*timestamppb.Timestamp)(nil),    // 8: google.protobuf.Timestamp
+	(*EmailSummary)(nil),                            // 0: email.v1.EmailSummary
+	(*EmailEvent)(nil),                              // 1: email.v1.EmailEvent
+	(*EmailDetail)(nil),                             // 2: email.v1.EmailDetail
+	(*EmailFilter)(nil),                             // 3: email.v1.EmailFilter
+	(*ListTenantEmailsRequest)(nil),                 // 4: email.v1.ListTenantEmailsRequest
+	(*ListTenantEmailsResponse)(nil),                // 5: email.v1.ListTenantEmailsResponse
+	(*GetTenantEmailRequest)(nil),                   // 6: email.v1.GetTenantEmailRequest
+	(*GetTenantEmailResponse)(nil),                  // 7: email.v1.GetTenantEmailResponse
+	(*NotifyOperatorsTenantRegisteredRequest)(nil),  // 8: email.v1.NotifyOperatorsTenantRegisteredRequest
+	(*NotifyOperatorsTenantRegisteredResponse)(nil), // 9: email.v1.NotifyOperatorsTenantRegisteredResponse
+	(*timestamppb.Timestamp)(nil),                   // 10: google.protobuf.Timestamp
 }
 var file_email_v1_email_proto_depIdxs = []int32{
-	8,  // 0: email.v1.EmailSummary.last_event_at:type_name -> google.protobuf.Timestamp
-	8,  // 1: email.v1.EmailSummary.created_at:type_name -> google.protobuf.Timestamp
-	8,  // 2: email.v1.EmailEvent.occurred_at:type_name -> google.protobuf.Timestamp
+	10, // 0: email.v1.EmailSummary.last_event_at:type_name -> google.protobuf.Timestamp
+	10, // 1: email.v1.EmailSummary.created_at:type_name -> google.protobuf.Timestamp
+	10, // 2: email.v1.EmailEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: email.v1.EmailDetail.summary:type_name -> email.v1.EmailSummary
 	1,  // 4: email.v1.EmailDetail.events:type_name -> email.v1.EmailEvent
 	3,  // 5: email.v1.ListTenantEmailsRequest.filter:type_name -> email.v1.EmailFilter
@@ -710,10 +814,12 @@ var file_email_v1_email_proto_depIdxs = []int32{
 	2,  // 7: email.v1.GetTenantEmailResponse.email:type_name -> email.v1.EmailDetail
 	4,  // 8: email.v1.EmailAdminService.ListTenantEmails:input_type -> email.v1.ListTenantEmailsRequest
 	6,  // 9: email.v1.EmailAdminService.GetTenantEmail:input_type -> email.v1.GetTenantEmailRequest
-	5,  // 10: email.v1.EmailAdminService.ListTenantEmails:output_type -> email.v1.ListTenantEmailsResponse
-	7,  // 11: email.v1.EmailAdminService.GetTenantEmail:output_type -> email.v1.GetTenantEmailResponse
-	10, // [10:12] is the sub-list for method output_type
-	8,  // [8:10] is the sub-list for method input_type
+	8,  // 10: email.v1.EmailAdminService.NotifyOperatorsTenantRegistered:input_type -> email.v1.NotifyOperatorsTenantRegisteredRequest
+	5,  // 11: email.v1.EmailAdminService.ListTenantEmails:output_type -> email.v1.ListTenantEmailsResponse
+	7,  // 12: email.v1.EmailAdminService.GetTenantEmail:output_type -> email.v1.GetTenantEmailResponse
+	9,  // 13: email.v1.EmailAdminService.NotifyOperatorsTenantRegistered:output_type -> email.v1.NotifyOperatorsTenantRegisteredResponse
+	11, // [11:14] is the sub-list for method output_type
+	8,  // [8:11] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name
@@ -730,7 +836,7 @@ func file_email_v1_email_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_email_v1_email_proto_rawDesc), len(file_email_v1_email_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

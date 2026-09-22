@@ -29,6 +29,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
+	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/telemetry"
@@ -164,6 +165,17 @@ func main() {
 	// process lifetime with the HTTP server below; a listen/serve failure is
 	// logged but non-fatal so the primary HTTP surface still comes up.
 	if cfg.GRPCAddr != "" && cfg.GRPCAuthToken != "" {
+		// CON-229: an insert-only River enqueuer for the admin-registration send RPC
+		// (NotifyOperatorsTenantRegistered). It lives here because the gRPC server is
+		// built independently of the HTTP app that owns the processing client. A
+		// build failure degrades to no notifications (nil enqueuer ⇒ soft no-op)
+		// rather than blocking the internal gRPC surface.
+		var adminEmailEnqueuer grpcserver.AdminEmailEnqueuer
+		if enq, eerr := queues.NewInsertOnlyEnqueuer(db); eerr != nil {
+			slog.Error("grpc admin-email enqueuer init failed; registration notifications disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, eerr)
+		} else {
+			adminEmailEnqueuer = enq
+		}
 		if lis, err := net.Listen("tcp", cfg.GRPCAddr); err != nil {
 			slog.Error("grpc listen failed; internal grpc disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
 		} else if gs, err := grpcserver.New(
@@ -191,6 +203,12 @@ func main() {
 			// CON-306: the body persisted at send (preferred over the live fetch below).
 			repository.NewEmailBodyRepository(db),
 			resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
+			// CON-229: NotifyOperatorsTenantRegistered resolves the tenant owner (user
+			// repo), fans out one durable send per operator recipient (insert-only
+			// enqueuer), and links to Harbor's tenant page (base URL; empty ⇒ no link).
+			repository.NewUserRepository(db),
+			adminEmailEnqueuer,
+			cfg.HarborBaseURL,
 			// CON-230: AnnouncementAdminService (author + measure tenant announcements).
 			repository.NewAnnouncementRepository(db),
 			// CON-295: the shared event hub, so an operator tier change (SetTenantTier

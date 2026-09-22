@@ -216,6 +216,17 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 		ExpiresAt:    t.Vars["expires_at"],
 		ExpiresIn:    t.Vars["expires_in"],
 		ReconnectURL: t.Vars["reconnect_url"],
+		// admin_tenant_registered (CON-229): the operator notification carries the
+		// newly-registered tenant's details as vars (there's no user/tenant to load
+		// for the operator recipient); other templates leave them empty.
+		TenantID:     t.Vars["tenant_id"],
+		TenantSlug:   t.Vars["tenant_slug"],
+		OwnerName:    t.Vars["owner_name"],
+		OwnerEmail:   t.Vars["owner_email"],
+		Tier:         t.Vars["tier"],
+		Status:       t.Vars["status"],
+		RegisteredAt: t.Vars["registered_at"],
+		TenantURL:    t.Vars["tenant_url"],
 	})
 	if err != nil {
 		p.writeLog(ctx, logBase, models.EmailLogFailed, "", "render: "+err.Error())

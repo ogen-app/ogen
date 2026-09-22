@@ -74,6 +74,7 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 		repository.NewEmailEventRepository(db),
 		nil,
 		nil,
+		nil, nil, "", // CON-229: no admin-notification path needed for the secrets rig
 		repository.NewAnnouncementRepository(db),
 		nil, // CON-295: no event hub needed for the secrets rig
 	)

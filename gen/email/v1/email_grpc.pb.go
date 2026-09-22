@@ -19,19 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EmailAdminService_ListTenantEmails_FullMethodName = "/email.v1.EmailAdminService/ListTenantEmails"
-	EmailAdminService_GetTenantEmail_FullMethodName   = "/email.v1.EmailAdminService/GetTenantEmail"
+	EmailAdminService_ListTenantEmails_FullMethodName                = "/email.v1.EmailAdminService/ListTenantEmails"
+	EmailAdminService_GetTenantEmail_FullMethodName                  = "/email.v1.EmailAdminService/GetTenantEmail"
+	EmailAdminService_NotifyOperatorsTenantRegistered_FullMethodName = "/email.v1.EmailAdminService/NotifyOperatorsTenantRegistered"
 )
 
 // EmailAdminServiceClient is the client API for EmailAdminService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// EmailAdminService is Ogen's internal, operator-facing surface for READING a
-// tenant's transactional/marketing email history and per-email detail (CON-298).
-// Harbor is the client (CON-192 Emails tab); it shares the listener and the
-// shared-bearer-token gate with SecretsService / TenantAdminService (implemented
-// in the ogen repo, src/transport/grpc/server).
+// EmailAdminService is Ogen's internal, operator-facing surface for a tenant's
+// transactional/marketing email: READING history + per-email detail (CON-298),
+// plus sending internal operator notifications such as new-tenant-registration
+// alerts (CON-229). Harbor is the client (CON-192 Emails tab); it shares the
+// listener and the shared-bearer-token gate with SecretsService /
+// TenantAdminService (implemented in the ogen repo, src/transport/grpc/server).
 //
 // Harbor has no access to the Resend API key — ogen's SecretsService is
 // write-only, so plaintext only ever travels into Set and is never returned. All
@@ -55,6 +57,15 @@ type EmailAdminServiceClient interface {
 	// fails — the body fields are empty and body_available is false; the summary +
 	// timeline are still returned.
 	GetTenantEmail(ctx context.Context, in *GetTenantEmailRequest, opts ...grpc.CallOption) (*GetTenantEmailResponse, error)
+	// NotifyOperatorsTenantRegistered fans out an internal "a new tenant just
+	// registered" notification email (template admin_tenant_registered) to the
+	// given operator/admin recipients (CON-229). Unlike the read RPCs above this
+	// one SENDS: ogen re-loads the tenant by tenant_id (authoritative), renders the
+	// template, and enqueues one durable send per recipient — so a retried call is
+	// de-duplicated per (tenant_id, recipient) and never double-sends. The caller
+	// (Harbor) owns "who the admins are"; ogen owns "how email is sent". The reply
+	// reports how many sends were enqueued.
+	NotifyOperatorsTenantRegistered(ctx context.Context, in *NotifyOperatorsTenantRegisteredRequest, opts ...grpc.CallOption) (*NotifyOperatorsTenantRegisteredResponse, error)
 }
 
 type emailAdminServiceClient struct {
@@ -85,15 +96,26 @@ func (c *emailAdminServiceClient) GetTenantEmail(ctx context.Context, in *GetTen
 	return out, nil
 }
 
+func (c *emailAdminServiceClient) NotifyOperatorsTenantRegistered(ctx context.Context, in *NotifyOperatorsTenantRegisteredRequest, opts ...grpc.CallOption) (*NotifyOperatorsTenantRegisteredResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotifyOperatorsTenantRegisteredResponse)
+	err := c.cc.Invoke(ctx, EmailAdminService_NotifyOperatorsTenantRegistered_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EmailAdminServiceServer is the server API for EmailAdminService service.
 // All implementations must embed UnimplementedEmailAdminServiceServer
 // for forward compatibility.
 //
-// EmailAdminService is Ogen's internal, operator-facing surface for READING a
-// tenant's transactional/marketing email history and per-email detail (CON-298).
-// Harbor is the client (CON-192 Emails tab); it shares the listener and the
-// shared-bearer-token gate with SecretsService / TenantAdminService (implemented
-// in the ogen repo, src/transport/grpc/server).
+// EmailAdminService is Ogen's internal, operator-facing surface for a tenant's
+// transactional/marketing email: READING history + per-email detail (CON-298),
+// plus sending internal operator notifications such as new-tenant-registration
+// alerts (CON-229). Harbor is the client (CON-192 Emails tab); it shares the
+// listener and the shared-bearer-token gate with SecretsService /
+// TenantAdminService (implemented in the ogen repo, src/transport/grpc/server).
 //
 // Harbor has no access to the Resend API key — ogen's SecretsService is
 // write-only, so plaintext only ever travels into Set and is never returned. All
@@ -117,6 +139,15 @@ type EmailAdminServiceServer interface {
 	// fails — the body fields are empty and body_available is false; the summary +
 	// timeline are still returned.
 	GetTenantEmail(context.Context, *GetTenantEmailRequest) (*GetTenantEmailResponse, error)
+	// NotifyOperatorsTenantRegistered fans out an internal "a new tenant just
+	// registered" notification email (template admin_tenant_registered) to the
+	// given operator/admin recipients (CON-229). Unlike the read RPCs above this
+	// one SENDS: ogen re-loads the tenant by tenant_id (authoritative), renders the
+	// template, and enqueues one durable send per recipient — so a retried call is
+	// de-duplicated per (tenant_id, recipient) and never double-sends. The caller
+	// (Harbor) owns "who the admins are"; ogen owns "how email is sent". The reply
+	// reports how many sends were enqueued.
+	NotifyOperatorsTenantRegistered(context.Context, *NotifyOperatorsTenantRegisteredRequest) (*NotifyOperatorsTenantRegisteredResponse, error)
 	mustEmbedUnimplementedEmailAdminServiceServer()
 }
 
@@ -132,6 +163,9 @@ func (UnimplementedEmailAdminServiceServer) ListTenantEmails(context.Context, *L
 }
 func (UnimplementedEmailAdminServiceServer) GetTenantEmail(context.Context, *GetTenantEmailRequest) (*GetTenantEmailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantEmail not implemented")
+}
+func (UnimplementedEmailAdminServiceServer) NotifyOperatorsTenantRegistered(context.Context, *NotifyOperatorsTenantRegisteredRequest) (*NotifyOperatorsTenantRegisteredResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method NotifyOperatorsTenantRegistered not implemented")
 }
 func (UnimplementedEmailAdminServiceServer) mustEmbedUnimplementedEmailAdminServiceServer() {}
 func (UnimplementedEmailAdminServiceServer) testEmbeddedByValue()                           {}
@@ -190,6 +224,24 @@ func _EmailAdminService_GetTenantEmail_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EmailAdminService_NotifyOperatorsTenantRegistered_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NotifyOperatorsTenantRegisteredRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmailAdminServiceServer).NotifyOperatorsTenantRegistered(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmailAdminService_NotifyOperatorsTenantRegistered_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmailAdminServiceServer).NotifyOperatorsTenantRegistered(ctx, req.(*NotifyOperatorsTenantRegisteredRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EmailAdminService_ServiceDesc is the grpc.ServiceDesc for EmailAdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -204,6 +256,10 @@ var EmailAdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantEmail",
 			Handler:    _EmailAdminService_GetTenantEmail_Handler,
+		},
+		{
+			MethodName: "NotifyOperatorsTenantRegistered",
+			Handler:    _EmailAdminService_NotifyOperatorsTenantRegistered_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
