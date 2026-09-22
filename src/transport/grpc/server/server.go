@@ -60,6 +60,12 @@ func New(
 	emailEventRepo repository.EmailEventRepository,
 	emailBodyRepo repository.EmailBodyRepository,
 	emailBodies EmailBodyGetter,
+	// CON-229: the admin-registration-notification send path — the users repo for
+	// the owner lookup, the River enqueuer for durable per-recipient sends, and
+	// Harbor's base URL for the "View in Harbor" deep link. All nil/empty-safe.
+	userRepo repository.UserRepository,
+	adminEmailEnqueuer AdminEmailEnqueuer,
+	harborBaseURL string,
 	announcementRepo repository.AnnouncementRepository,
 	// CON-295: shared in-process event hub so an operator tier change publishes an
 	// entitlement-invalidation event onto the tenant's /api/events stream. Nil-safe
@@ -97,7 +103,7 @@ func New(
 	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver, hub)
 	// CON-298: EmailAdminService serves a tenant's email history + per-email
 	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
-	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodyRepo, emailBodies)
+	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodyRepo, emailBodies, tenantRepo, userRepo, adminEmailEnqueuer, harborBaseURL)
 	// CON-230: AnnouncementAdminService lets Harbor author informational
 	// announcements (banners) and read their per-user click/dismiss engagement.
 	registerAnnouncementAdmin(srv, announcementRepo)

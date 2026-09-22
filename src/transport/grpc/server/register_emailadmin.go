@@ -8,13 +8,19 @@ import (
 )
 
 // registerEmailAdmin wires the CON-298 EmailAdminService onto the internal gRPC
-// server, alongside Secrets + TenantAdmin + PlatformAdmin + PlanAdmin.
+// server, alongside Secrets + TenantAdmin + PlatformAdmin + PlanAdmin. The
+// tenants/users/enqueuer/harborBaseURL deps power the CON-229 send RPC
+// (NotifyOperatorsTenantRegistered); all are nil/empty-safe.
 func registerEmailAdmin(
 	srv *grpc.Server,
 	logs repository.EmailLogRepository,
 	events repository.EmailEventRepository,
 	bodyStore repository.EmailBodyRepository,
 	liveBody EmailBodyGetter,
+	tenants repository.TenantRepository,
+	users repository.UserRepository,
+	enqueuer AdminEmailEnqueuer,
+	harborBaseURL string,
 ) {
-	emailv1.RegisterEmailAdminServiceServer(srv, newEmailAdminService(logs, events, bodyStore, liveBody))
+	emailv1.RegisterEmailAdminServiceServer(srv, newEmailAdminService(logs, events, bodyStore, liveBody, tenants, users, enqueuer, harborBaseURL))
 }

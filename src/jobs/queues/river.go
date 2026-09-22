@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/rivertype"
+	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email/templates"
@@ -109,6 +111,11 @@ type Deps struct {
 	Notifier              *notify.Service
 	NotificationRepo      repository.NotificationRepository
 	NotificationRetention time.Duration
+
+	// CON-229: the notify_harbor_tenant_registered worker's config — the outbound
+	// webhook URL Harbor exposes + the HMAC signing secret. An empty URL makes the
+	// worker a no-op (feature off); an empty secret sends the body unsigned.
+	HarborNotify HarborNotifyDeps
 }
 
 // registrars is appended to by each worker file's init(). A job is registered
@@ -245,6 +252,22 @@ type Enqueuer struct {
 	Client *river.Client[*sql.Tx]
 }
 
+// NewInsertOnlyEnqueuer builds an Enqueuer over a fresh insert-only River client
+// (no queues/workers, never Started) on the shared DB pool. It exists for
+// callers that must enqueue jobs yet live OUTSIDE the main app's River client —
+// namely the internal gRPC server (CON-229), which cmd/server constructs
+// independently of the HTTP app that owns the processing client. Jobs inserted
+// here are worked by that processing client; both share one river_job table.
+// Requires the River schema to already exist (MigrateRiver runs in server.New,
+// before the gRPC server is built).
+func NewInsertOnlyEnqueuer(db *bun.DB) (*Enqueuer, error) {
+	client, err := river.NewClient[*sql.Tx](riverdatabasesql.New(db.DB), &river.Config{})
+	if err != nil {
+		return nil, err
+	}
+	return &Enqueuer{Client: client}, nil
+}
+
 // requestIDMetadata returns River job metadata carrying the originating request
 // id (CON-107) when one is present on ctx, so a job's logs correlate back to the
 // HTTP request that enqueued it. Returns nil for system/periodic enqueues that
@@ -362,6 +385,41 @@ func (e *Enqueuer) EnqueueWelcomeEmailTx(ctx context.Context, tx *sql.Tx, userID
 		EmailKind:      models.EmailKindTransactional,
 		IdempotencyKey: "welcome:" + userID,
 	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueAdminTenantRegisteredEmail enqueues one admin_tenant_registered
+// operator-notification send to a single admin recipient (CON-229). Unlike the
+// *Tx enqueuers this runs OUTSIDE any transaction — it is driven by Harbor's
+// gRPC callback after a tenant has already committed — so it is a plain (non-tx)
+// Insert. The tenant's details ride the job args as vars because the operator
+// recipient has no user/tenant to resolve at send time. Idempotency is keyed by
+// (tenant, recipient) so a retried webhook can't double-send. A nil enqueuer
+// (email queue unwired) is a no-op.
+func (e *Enqueuer) EnqueueAdminTenantRegisteredEmail(ctx context.Context, tenantID, recipient string, vars map[string]string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.Insert(ctx, SendEmailTask{
+		TenantID:       tenantID,
+		ToEmail:        recipient,
+		TemplateKey:    templates.KeyAdminTenantRegistered,
+		EmailKind:      models.EmailKindTransactional,
+		IdempotencyKey: "admin_tenant_registered:" + tenantID + ":" + recipient,
+		Vars:           vars,
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueNotifyHarborTenantRegisteredTx enqueues the CON-229 "notify Harbor a
+// new tenant registered" webhook job inside the signup transaction, so the
+// operator notification fires iff the tenant commits. A nil enqueuer (feature
+// unwired) is a no-op.
+func (e *Enqueuer) EnqueueNotifyHarborTenantRegisteredTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, NotifyHarborTenantRegisteredTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
 	return err
 }
 

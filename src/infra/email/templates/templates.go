@@ -21,6 +21,10 @@ const (
 	KeyDripDay5           = "drip_day5"
 	KeyDripDay7           = "drip_day7"
 	KeyConnectionExpiring = "connection_expiring"
+	// KeyAdminTenantRegistered is the internal operator notification sent to
+	// admins when a new tenant registers (CON-229). Unlike the templates above it
+	// is not customer-facing, so it is hand-authored rather than Maizzle-compiled.
+	KeyAdminTenantRegistered = "admin_tenant_registered"
 )
 
 // Connection-expiry notification stages (CON-219). The connection_expiring
@@ -62,6 +66,20 @@ type Data struct {
 	ExpiresAt    string
 	ExpiresIn    string
 	ReconnectURL string
+	// TenantID / TenantSlug / OwnerName / OwnerEmail / Tier / Status /
+	// RegisteredAt / TenantURL feed the admin_tenant_registered operator
+	// notification (CON-229): the newly-registered tenant's details plus a deep
+	// link into Harbor. WorkspaceName carries the tenant name; the recipient is an
+	// operator, not a tenant user, so Name is unset. Empty and ignored for every
+	// other template.
+	TenantID     string
+	TenantSlug   string
+	OwnerName    string
+	OwnerEmail   string
+	Tier         string
+	Status       string
+	RegisteredAt string
+	TenantURL    string
 }
 
 //go:embed defaults/*.tmpl
@@ -85,6 +103,14 @@ const (
 	varExpiresAt      = "The token's expiry date, formatted (empty when Zernio can't date it)."
 	varExpiresIn      = "Human-readable time until expiry, e.g. \"in 6 days\" (empty when undated)."
 	varReconnectURL   = "Deep link into the app's accounts screen to reconnect the account."
+	varTenantID       = "The newly-registered tenant's unique ID (UUID)."
+	varTenantSlug     = "The tenant's auto-generated, URL-safe slug."
+	varOwnerName      = "The name the signing-up owner provided at registration."
+	varOwnerEmail     = "The email the signing-up owner provided at registration."
+	varTier           = "The tenant's assigned tier at registration (default)."
+	varStatus         = "The tenant's lifecycle status at registration (active)."
+	varRegisteredAt   = "When the tenant registered, formatted (UTC)."
+	varTenantURL      = "Deep link to the tenant's detail page in Harbor (empty if HARBOR_BASE_URL is unset)."
 )
 
 // transactionalVars / marketingVars build the per-template variable doc sets.
@@ -137,6 +163,24 @@ func connectionExpiringVars() models.StringMap {
 	return m
 }
 
+// adminTenantRegisteredVars documents the admin_tenant_registered template's
+// placeholders (CON-229). This is internal operator mail: WorkspaceName carries
+// the new tenant's name, the rest are the registration details + Harbor deep
+// link. The recipient is an admin, not a tenant user, so Name is unset.
+func adminTenantRegisteredVars() models.StringMap {
+	return models.StringMap{
+		"WorkspaceName": varWorkspaceName,
+		"TenantID":      varTenantID,
+		"TenantSlug":    varTenantSlug,
+		"OwnerName":     varOwnerName,
+		"OwnerEmail":    varOwnerEmail,
+		"Tier":          varTier,
+		"Status":        varStatus,
+		"RegisteredAt":  varRegisteredAt,
+		"TenantURL":     varTenantURL,
+	}
+}
+
 // connectionExpiringSubject branches on Stage (text/template, so a conditional
 // is fine) so the same template key carries both the heads-up and the
 // action-required subject.
@@ -159,6 +203,7 @@ var defaultSpecs = []defaultSpec{
 	{KeyDripDay5, models.EmailKindMarketing, "Your content, on autopilot", marketingVars()},
 	{KeyDripDay7, models.EmailKindMarketing, "A quick check-in from Ogen", marketingVars()},
 	{KeyConnectionExpiring, models.EmailKindTransactional, connectionExpiringSubject, connectionExpiringVars()},
+	{KeyAdminTenantRegistered, models.EmailKindTransactional, "New tenant registered: [[ .WorkspaceName ]]", adminTenantRegisteredVars()},
 }
 
 // Defaults returns the built-in default templates, reading each body from the
