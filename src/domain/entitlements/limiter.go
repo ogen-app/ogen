@@ -314,6 +314,27 @@ func (l *Limiter) Multiplier(ctx context.Context, tenantID, featureKey string) f
 	return float64(*limit)
 }
 
+// CurrentUsage returns the tenant's live count for a numeric feature that has a
+// registered counter, and true; (0, false) when no counter is registered for the
+// key. It is the read-only counterpart to Allow used by the /me/entitlements
+// endpoint (CON-295) to surface "N of M". A counter error degrades to (0, false)
+// + a warn log rather than failing the read. Nil-safe.
+func (l *Limiter) CurrentUsage(ctx context.Context, tenantID, featureKey string) (int64, bool) {
+	if l == nil {
+		return 0, false
+	}
+	counter, has := l.counters[featureKey]
+	if !has {
+		return 0, false
+	}
+	n, err := counter.Count(ctx, tenantID)
+	if err != nil {
+		l.failOpen(ctx, featureKey, "count", err)
+		return 0, false
+	}
+	return n, true
+}
+
 // numericValue returns (limit, present, err): limit is nil for an unlimited
 // numeric entitlement. A non-numeric or absent value reports present=false.
 func (l *Limiter) numericValue(ctx context.Context, tenantID, key string) (*int64, bool, error) {

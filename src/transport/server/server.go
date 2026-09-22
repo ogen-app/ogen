@@ -92,7 +92,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		return nil, err
 	}
 	entitlementResolver := entitlements.NewResolver(r.tierVersionRepo, r.tierAssignmentRepo, r.tenantRepo, entitlementCatalog)
-	handlers.NewPricingHandler(entitlementResolver, r.tierVersionRepo, entitlementCatalog, auth).Register(app)
+	pricingHandler := handlers.NewPricingHandler(entitlementResolver, r.tierVersionRepo, entitlementCatalog, auth)
 	// CON-295: entitlement quota limiter over the resolver, wired to the
 	// control-plane counters for each capped feature. warn-first via config; the
 	// counters ignore the explicit tenant arg because the request ctx already
@@ -110,6 +110,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Register("media_storage_bytes", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
 			return r.postAttachmentRepo.SumSizeBytesInTenant(ctx)
 		}))
+	// CON-295: the same counters back the "N of M" usage on GET /api/me/entitlements.
+	pricingHandler.SetLimiter(entitlementLimiter)
+	pricingHandler.Register(app)
 
 	// CON-86: apply any operator price-map override (USAGE_MODEL_PRICES) before
 	// metering starts; a malformed payload or unknown vendor fails boot.
