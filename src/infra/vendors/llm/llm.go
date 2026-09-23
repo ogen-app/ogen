@@ -28,7 +28,11 @@ const (
 // cache-read 0.1×, cache-write-5m 1.25×) and ai.google.dev (Gemini Embedding
 // $0.15/1M input; Gemini 2.5 Flash: audio input $1.00/1M, output $2.50/1M —
 // transcription input is audio, so KindInput carries the audio rate, CON-282).
-const priceVersion = "2026-09-11"
+// Expanded 2026-09-23 (CON-308): added the current Anthropic chat catalog —
+// Opus 4.6/4.7/4.8 ($5/$25), Sonnet 4.6 ($3/$15), Fable 5 ($10/$50) — from the
+// Claude API model catalog, so operators can assign any of them per flow.
+// Re-verify against platform.claude.com/pricing before trusting for billing.
+const priceVersion = "2026-09-23"
 
 func init() {
 	vendors.Register(vendors.Descriptor{
@@ -52,11 +56,49 @@ func init() {
 					vendors.KindCacheRead:     100_000,
 					vendors.KindCacheCreation: 1_250_000,
 				},
+				// Current Anthropic chat catalog (Claude API model catalog). cache-read
+				// = 0.1× input, cache-write-5m = 1.25× input. Opus/Sonnet/Fable use the
+				// bare alias ids (no date suffix, per the catalog).
+				"claude-opus-4-8": {
+					vendors.KindInput:         5_000_000,
+					vendors.KindOutput:        25_000_000,
+					vendors.KindCacheRead:     500_000,
+					vendors.KindCacheCreation: 6_250_000,
+				},
+				"claude-opus-4-7": {
+					vendors.KindInput:         5_000_000,
+					vendors.KindOutput:        25_000_000,
+					vendors.KindCacheRead:     500_000,
+					vendors.KindCacheCreation: 6_250_000,
+				},
+				"claude-opus-4-6": {
+					vendors.KindInput:         5_000_000,
+					vendors.KindOutput:        25_000_000,
+					vendors.KindCacheRead:     500_000,
+					vendors.KindCacheCreation: 6_250_000,
+				},
+				"claude-sonnet-4-6": {
+					vendors.KindInput:         3_000_000,
+					vendors.KindOutput:        15_000_000,
+					vendors.KindCacheRead:     300_000,
+					vendors.KindCacheCreation: 3_750_000,
+				},
+				"claude-fable-5": {
+					vendors.KindInput:         10_000_000,
+					vendors.KindOutput:        50_000_000,
+					vendors.KindCacheRead:     1_000_000,
+					vendors.KindCacheCreation: 12_500_000,
+				},
 			},
 		},
 		Capabilities: map[string]modelconfig.ModelCapabilities{
 			"claude-sonnet-4-5-20250929": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 64000, ContextWindow: 200000},
 			"claude-haiku-4-5-20251001":  {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 64000, ContextWindow: 200000},
+			"claude-opus-4-8":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-opus-4-7":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-opus-4-6":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-sonnet-4-6":          {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 64000, ContextWindow: 1000000},
+			"claude-fable-5":             {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 		},
 	})
 
