@@ -8,7 +8,8 @@ import (
 )
 
 // registerModelConfigAdmin wires the CON-308 ModelConfigAdminService onto the
-// internal gRPC server, alongside Secrets + TenantAdmin + PlatformAdmin.
-func registerModelConfigAdmin(srv *grpc.Server, repo repository.FlowModelConfigRepository) {
-	modelconfigv1.RegisterModelConfigAdminServiceServer(srv, newModelConfigAdminService(repo))
+// internal gRPC server, alongside Secrets + TenantAdmin + PlatformAdmin. prober
+// backs TestSlotModel's live check (nil = static-only).
+func registerModelConfigAdmin(srv *grpc.Server, repo repository.FlowModelConfigRepository, prober modelProber) {
+	modelconfigv1.RegisterModelConfigAdminServiceServer(srv, newModelConfigAdminService(repo, prober))
 }
