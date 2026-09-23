@@ -78,6 +78,7 @@ var (
 	refreshOK    = expvar.NewInt("ogen_model_config_refresh_ok")
 	refreshFail  = expvar.NewInt("ogen_model_config_refresh_fail")
 	unconfigured = expvar.NewInt("ogen_model_config_unconfigured_slot")
+	staleModel   = expvar.NewInt("ogen_model_config_stale_model")
 )
 
 func scopeKey(tier, flow, slot string) string {
@@ -180,7 +181,13 @@ func Refresh(ctx context.Context) error {
 		if r.TierID != nil {
 			tier = *r.TierID
 		}
-		v, _ := cfgVendor(r.ModelID)
+		v, known := cfgVendor(r.ModelID)
+		if !known {
+			// A configured model id that's no longer in the vendor registry
+			// (retired in code). Keep it (Ref falls back to the bare id) but flag
+			// it so ops / Harbor's drift view can surface a re-pick.
+			staleModel.Add(1)
+		}
 		snap.scoped[scopeKey(tier, r.FlowKey, r.SlotKey)] = entry{vendor: v, model: r.ModelID}
 	}
 	active.Store(snap)

@@ -102,8 +102,13 @@ type Config struct {
 
 	// Anthropic config.
 	// todo: remove from config entirely
-	AnthropicAPIKey  string `envconfig:"ANTHROPIC_API_KEY"     default:""`
-	ModelID          string `envconfig:"MODEL_ID"              default:"claude-sonnet-4-5-20250929"` // claude-haiku-4-5-20251001 for testing
+	AnthropicAPIKey string `envconfig:"ANTHROPIC_API_KEY"     default:""`
+	// Deprecated (CON-308): ModelID / PlanningModelID / QualityModelID are now
+	// SEED-ONLY — read once at boot to seed the modelconfig resolver's
+	// global-default rows for any (flow, slot) missing one; the DB (Harbor-edited
+	// via ModelConfigAdminService) is authoritative thereafter. Safe to remove
+	// once every environment has booted once on a build that includes CON-308.
+	ModelID          string `envconfig:"MODEL_ID"              default:"claude-sonnet-4-5-20250929"`
 	MaxContextAssets int    `envconfig:"MAX_ASSET_CONTEXT"     default:"15"`
 	MaxContextChars  int    `envconfig:"MAX_CONTEXT_CHARS"     default:"10000"`
 
@@ -112,7 +117,7 @@ type Config struct {
 	// generation happens inside the content_plan / enrich_brief sub-flows it
 	// invokes as tools, which stay on ModelID (Sonnet-tier) — so the assistant
 	// routes cheaply on Haiku while the heavy writing stays capable.
-	PlanningModelID string `envconfig:"PLANNING_MODEL_ID" default:"claude-haiku-4-5-20251001"`
+	PlanningModelID string `envconfig:"PLANNING_MODEL_ID" default:"claude-haiku-4-5-20251001"` // CON-308: seed-only (see ModelID)
 
 	// 64K matches Claude 4.x Haiku/Sonnet's max output. Anthropic charges
 	// only for tokens actually emitted, so a generous cap costs nothing on
@@ -167,7 +172,7 @@ type Config struct {
 	// defaults (post_quality.DefaultWeights). Each profile's four weights
 	// must sum to 1.0. Example:
 	//   {"profiles":{"reel":{"correctness":0.2,"clarity":0.15,"engagement":0.4,"delivery":0.25}}}
-	QualityModelID        string `envconfig:"QUALITY_MODEL_ID"        default:"claude-sonnet-4-5-20250929"`
+	QualityModelID        string `envconfig:"QUALITY_MODEL_ID"        default:"claude-sonnet-4-5-20250929"` // CON-308: seed-only (see ModelID)
 	QualityWeightProfiles string `envconfig:"QUALITY_WEIGHT_PROFILES" default:""`
 
 	// Object storage (S3-compatible: Cloudflare R2, DigitalOcean Spaces, AWS S3).
