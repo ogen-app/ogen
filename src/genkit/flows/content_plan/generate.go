@@ -14,9 +14,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
@@ -193,10 +193,10 @@ func generatePosts(
 		maxParallel = 5
 	}
 
-	modelName := cfg.Provider.Ref(llm.RoleGeneration)
+	modelName := modelconfig.Ref(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
 	modelCfg := cfg.Provider.CallConfig(maxTokens)
-	usageVendor := cfg.Provider.Vendor()
-	usageModel := cfg.Provider.Model(llm.RoleGeneration)
+	usageVendor := modelconfig.Vendor(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
+	usageModel := modelconfig.Model(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
 	// recordUsage records one usage event per model call — the stream Done path
 	// and the blocking fallback each call it once (a partial double-count on
 	// fallback is tolerated, CON-86 §10). Nil recorder = no-op.

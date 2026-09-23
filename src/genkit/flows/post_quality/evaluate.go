@@ -11,8 +11,8 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -109,7 +109,7 @@ func evaluateDimension(
 	if maxTokens == 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	modelName := cfg.Provider.Ref(llm.RoleQuality)
+	modelName := modelconfig.Ref(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
 	userPrompt := prompts.user + dimensionInstruction(label, cfg.SuggestionCap)
 
 	var lastErr error
@@ -146,7 +146,7 @@ func evaluateDimension(
 		}
 		// Record every completed call (one per dimension, plus any empty-rationale
 		// retry that still consumed tokens) (CON-86 FR1). Nil recorder = no-op.
-		cfg.Recorder.RecordResp(ctx, cfg.Provider.Vendor(), cfg.Provider.Model(llm.RoleQuality), "post_quality", resp)
+		cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain), modelconfig.Model(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain), "post_quality", resp)
 		if strings.TrimSpace(out.Rationale) == "" {
 			lastErr = fmt.Errorf("empty rationale")
 			slog.WarnContext(ctx, "attempt returned empty rationale", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1)

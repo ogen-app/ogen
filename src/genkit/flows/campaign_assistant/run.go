@@ -14,9 +14,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 )
@@ -140,7 +140,7 @@ func runCampaignAssistant(
 	if maxTurns == 0 {
 		maxTurns = 4
 	}
-	modelName := cfg.Provider.Ref(llm.RolePlanning)
+	modelName := modelconfig.Ref(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)
 	systemBlock := actx.SystemPrompt + "\n\n" + actx.ContextBlock
 
 	// Stream the conversational reply. Only "explanation" is surfaced as a
@@ -253,7 +253,7 @@ func runCampaignAssistant(
 	// resp is nil when the turn was cut short at MaxTurns (CON-213) — nothing to
 	// record for that final partial turn; the heavy sub-flows already recorded.
 	if resp != nil {
-		cfg.Recorder.RecordResp(ctx, cfg.Provider.Vendor(), cfg.Provider.Model(llm.RolePlanning), "campaign_assistant", resp)
+		cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator), modelconfig.Model(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator), "campaign_assistant", resp)
 	}
 
 	// ── Assemble response from scanner ───────────────────────────────────────

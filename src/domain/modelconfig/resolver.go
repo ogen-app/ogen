@@ -224,6 +224,12 @@ func Model(ctx context.Context, flowKey, slotKey string) string {
 	return resolve(ctx, flowKey, slotKey).model
 }
 
+// Vendor returns the vendor slug of the resolved model for a flow slot — the
+// `vendor` usage dimension recorded alongside Model.
+func Vendor(ctx context.Context, flowKey, slotKey string) string {
+	return resolve(ctx, flowKey, slotKey).vendor
+}
+
 // Ref returns the genkit "vendor/model" reference for ai.WithModelName, e.g.
 // "anthropic/claude-sonnet-4-5-20250929". The vendor is derived from the model's
 // owning descriptor, replacing the fixed "anthropic/" prefix.
