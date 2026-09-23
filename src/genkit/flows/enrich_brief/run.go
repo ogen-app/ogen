@@ -67,7 +67,8 @@ func runEnrichBrief(
 	if maxTokens == 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	modelName := modelconfig.Ref(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain)
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain)
+	modelName := mc.Ref
 
 	// Watch the four brief fields so the client previews each one as it
 	// streams. The scanner decodes JSON escapes as they arrive, so the
@@ -129,7 +130,7 @@ func runEnrichBrief(
 	if resp.Usage != nil {
 		slog.InfoContext(ctx, "tokens", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens, "total", resp.Usage.InputTokens+resp.Usage.OutputTokens)
 	}
-	cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain), modelconfig.Model(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain), "enrich_brief", resp)
+	cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "enrich_brief", resp)
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "generate", Status: "done"})
 
 	// ── Assemble response from scanner ───────────────────────────────────────

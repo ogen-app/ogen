@@ -140,7 +140,8 @@ func runCampaignAssistant(
 	if maxTurns == 0 {
 		maxTurns = 4
 	}
-	modelName := modelconfig.Ref(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)
+	modelName := mc.Ref
 	systemBlock := actx.SystemPrompt + "\n\n" + actx.ContextBlock
 
 	// Stream the conversational reply. Only "explanation" is surfaced as a
@@ -253,7 +254,7 @@ func runCampaignAssistant(
 	// resp is nil when the turn was cut short at MaxTurns (CON-213) — nothing to
 	// record for that final partial turn; the heavy sub-flows already recorded.
 	if resp != nil {
-		cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator), modelconfig.Model(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator), "campaign_assistant", resp)
+		cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "campaign_assistant", resp)
 	}
 
 	// ── Assemble response from scanner ───────────────────────────────────────
