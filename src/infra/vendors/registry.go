@@ -143,6 +143,27 @@ func CostOf(vendorName, model string, u Usage) (micros int64, version string, ok
 	return Cost(u, rates), d.Prices.Version, true
 }
 
+// VendorOf returns the vendor slug that owns the given model id, scanning the
+// registered model vendors (a model belongs to exactly one). ok is false when no
+// registered vendor declares it. Used to build the genkit "vendor/model" ref
+// without a hardcoded provider prefix (CON-308).
+func VendorOf(model string) (string, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	for _, d := range registry {
+		if d.Family != FamilyModel {
+			continue
+		}
+		if _, ok := d.Capabilities[model]; ok {
+			return d.Name, true
+		}
+		if _, ok := d.Prices.Models[model]; ok {
+			return d.Name, true
+		}
+	}
+	return "", false
+}
+
 // CapabilitiesOf returns a vendor model's declared capabilities. ok is false
 // when the vendor is unknown or the model has no capability entry — the caller
 // (CON-308 §8a) then treats it as "unknown model, cannot assign".
