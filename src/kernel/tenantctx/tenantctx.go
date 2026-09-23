@@ -23,6 +23,10 @@ type ctxKey struct{}
 // systemKey marks a context as a system (intentionally cross-tenant) context.
 type systemKey struct{}
 
+// tierKey carries the caller's tenant tier id (CON-308) for per-tier model
+// resolution. Optional: absent means "resolve the global default".
+type tierKey struct{}
+
 // Key is the context/locals key under which the tenant id is stored. It is
 // exported (as a value of an unexported type) so the Fiber auth middleware can
 // call c.Locals(tenantctx.Key, id) and have From() read it back, while callers
@@ -59,6 +63,24 @@ func With(ctx context.Context, tenantID string) context.Context {
 // (CON-97 §6) — never run an unscoped query.
 func From(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(Key).(string)
+	if !ok || id == "" {
+		return "", false
+	}
+	return id, true
+}
+
+// WithTier returns a copy of ctx carrying the caller's tenant tier id, for
+// per-tier model resolution (CON-308). Optional — the model resolver falls back
+// to the global default when no tier is present.
+func WithTier(ctx context.Context, tierID string) context.Context {
+	return context.WithValue(ctx, tierKey{}, tierID)
+}
+
+// TierFrom returns the tier id carried by ctx and whether a non-empty one was
+// present. Its signature matches modelconfig.TierFunc so it can be injected
+// directly.
+func TierFrom(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(tierKey{}).(string)
 	if !ok || id == "" {
 		return "", false
 	}

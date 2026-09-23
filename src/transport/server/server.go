@@ -16,6 +16,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
@@ -30,10 +31,12 @@ import (
 	pubzernio "github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	audioclient "github.com/ogen-app/ogen/src/transport/grpc/client/audio"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/documents"
@@ -70,6 +73,34 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// CON-292: load the operator-controlled global upload/thread ceilings into
 	// the cached config the attachment handlers and thread validator read.
 	platforms.InitGlobalLimits(ctx, r.platformGlobalLimitsRepo)
+	// CON-308: load the per-flow/per-tier model configuration into the cached
+	// resolver the genkit flows read (Phase 4). Seeds any missing global-default
+	// row from the legacy config fields so day-one behaviour is byte-identical,
+	// then keeps the snapshot fresh. tierOf prefers a ctx-stamped tier and falls
+	// back to the caller's tenant tier (a rare, LLM-call-time lookup).
+	modelconfig.Init(ctx, r.flowModelConfigRepo,
+		modelconfig.Defaults{
+			Generation: cfg.ModelID,
+			Quality:    cfg.QualityModelID,
+			Planning:   cfg.PlanningModelID,
+			Embed:      cfg.EmbedModel,
+		},
+		vendors.VendorOf,
+		func(ctx context.Context) (string, bool) {
+			if t, ok := tenantctx.TierFrom(ctx); ok {
+				return t, true
+			}
+			tid, ok := tenantctx.From(ctx)
+			if !ok {
+				return "", false
+			}
+			t, err := r.tenantRepo.GetByID(ctx, tid)
+			if err != nil || t == nil || t.TierID == "" {
+				return "", false
+			}
+			return t.TierID, true
+		},
+	)
 	// CON-113: one overview service, shared by the REST endpoint and the
 	// Campaign Assistant's getCampaignOverview tool. Not gated by the Anthropic
 	// key — it's a plain tenant-scoped DB read.
