@@ -190,6 +190,9 @@ func main() {
 			// + single-row global limits.
 			repository.NewPlatformRepository(db),
 			repository.NewPlatformGlobalLimitsRepository(db),
+			// CON-308: ModelConfigAdminService reads/writes the per-flow/per-tier
+			// model assignments over the global flow_model_config table.
+			repository.NewFlowModelConfigRepository(db),
 			// CON-294: PlanAdminService (tier-version authoring/assignment) + the
 			// SetTenantTier assignment stamp use the tier-version + assignment repos.
 			repository.NewTenantTierVersionRepository(db),

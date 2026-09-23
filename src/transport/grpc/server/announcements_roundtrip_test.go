@@ -40,6 +40,7 @@ func TestAnnouncementAdminRoundTrip(t *testing.T) {
 	srv, err := New(token, nil,
 		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
 		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
+		repository.NewFlowModelConfigRepository(db),
 		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
 		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, nil,
 		nil, nil, "",
