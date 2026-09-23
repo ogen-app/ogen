@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 	"sync"
+
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 )
 
 // Descriptor is the registration record a vendor declares from its init().
@@ -34,6 +36,11 @@ type Descriptor struct {
 	// RecordResp. Nil for vendors that build MeterEvents directly and call
 	// Record (publishers) — only the RecordResp convenience path uses it.
 	Meter Meter
+	// Capabilities declares, per model id, what the model can do (tools,
+	// structured output, streaming, token limits, embed dims). The model-config
+	// admin path matches these against a slot's Requirements (CON-308 §8a).
+	// Keyed like Prices.Models; a model absent here has zero capabilities.
+	Capabilities map[string]modelconfig.ModelCapabilities
 }
 
 // Meter is the optional metering cross-cut a vendor implements to be
@@ -134,6 +141,18 @@ func CostOf(vendorName, model string, u Usage) (micros int64, version string, ok
 		return 0, d.Prices.Version, false
 	}
 	return Cost(u, rates), d.Prices.Version, true
+}
+
+// CapabilitiesOf returns a vendor model's declared capabilities. ok is false
+// when the vendor is unknown or the model has no capability entry — the caller
+// (CON-308 §8a) then treats it as "unknown model, cannot assign".
+func CapabilitiesOf(vendorName, model string) (modelconfig.ModelCapabilities, bool) {
+	d, found := Get(vendorName)
+	if !found {
+		return modelconfig.ModelCapabilities{}, false
+	}
+	c, found := d.Capabilities[model]
+	return c, found
 }
 
 // MergePrices merges per-model rate overrides into a registered vendor's price
