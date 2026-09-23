@@ -84,7 +84,7 @@ tidy:
 # on EmailAdminService in v1.9.0 (CON-229)
 # — publish the proto repo tag before `make proto` can resolve it.
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.9.0
+PROTO_VERSION := v1.10.0
 
 proto:
 	buf generate $(PROTO_MODULE):$(PROTO_VERSION)
