@@ -193,10 +193,11 @@ func generatePosts(
 		maxParallel = 5
 	}
 
-	modelName := modelconfig.Ref(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
+	modelName := mc.Ref
 	modelCfg := cfg.Provider.CallConfig(maxTokens)
-	usageVendor := modelconfig.Vendor(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
-	usageModel := modelconfig.Model(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
+	usageVendor := mc.Vendor
+	usageModel := mc.Model
 	// recordUsage records one usage event per model call — the stream Done path
 	// and the blocking fallback each call it once (a partial double-count on
 	// fallback is tolerated, CON-86 §10). Nil recorder = no-op.

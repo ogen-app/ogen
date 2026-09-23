@@ -169,10 +169,11 @@ func runDraftPost(
 	if maxTokens == 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	modelName := modelconfig.Ref(ctx, modelconfig.FlowDraftPost, modelconfig.SlotMain)
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowDraftPost, modelconfig.SlotMain)
+	modelName := mc.Ref
 	modelCfg := cfg.Provider.CallConfig(maxTokens)
-	usageVendor := modelconfig.Vendor(ctx, modelconfig.FlowDraftPost, modelconfig.SlotMain)
-	usageModel := modelconfig.Model(ctx, modelconfig.FlowDraftPost, modelconfig.SlotMain)
+	usageVendor := mc.Vendor
+	usageModel := mc.Model
 
 	loc, _ := settings.ResolveTimezone(campaign.Timezone)
 

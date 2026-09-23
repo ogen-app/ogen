@@ -4,6 +4,7 @@ import (
 	"context"
 	"expvar"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -62,7 +63,8 @@ type entry struct {
 
 // snapshot is an immutable, atomically-swapped view of the assignment table.
 type snapshot struct {
-	scoped map[string]entry // key: tier \x00 flow \x00 slot ; tier "" == global
+	scoped  map[string]entry // key: tier \x00 flow \x00 slot ; tier "" == global
+	hasTier bool             // any tier-scoped row present; false = skip the per-call tier lookup (day-one state)
 }
 
 var (
@@ -73,7 +75,12 @@ var (
 	cfgSource   Source
 	cfgVendor   VendorFunc
 	cfgTier     TierFunc
-	cfgFallback map[Capability]entry // capability -> default entry, the last-resort value
+	cfgDefaults Defaults // per-slot last-resort defaults, used only when a slot has no row at all
+
+	// refreshMu serialises Refresh so an in-flight tick that read stale rows
+	// can't Store its snapshot after a later admin-driven Refresh — which would
+	// hide an operator edit for up to refreshInterval (CodeRabbit).
+	refreshMu sync.Mutex
 
 	refreshOK    = expvar.NewInt("ogen_model_config_refresh_ok")
 	refreshFail  = expvar.NewInt("ogen_model_config_refresh_fail")
@@ -93,7 +100,7 @@ func Init(ctx context.Context, src Source, def Defaults, vendorOf VendorFunc, ti
 	cfgSource = src
 	cfgVendor = vendorOf
 	cfgTier = tierOf
-	cfgFallback = buildFallback(def, vendorOf)
+	cfgDefaults = def
 
 	if err := reconcile(ctx, src, def); err != nil {
 		slog.ErrorContext(ctx, "model config reconcile failed; global defaults may be incomplete",
@@ -118,17 +125,6 @@ func Init(ctx context.Context, src Source, def Defaults, vendorOf VendorFunc, ti
 			}
 		}
 	}()
-}
-
-func buildFallback(def Defaults, vendorOf VendorFunc) map[Capability]entry {
-	mk := func(model string) entry {
-		v, _ := vendorOf(model)
-		return entry{vendor: v, model: model}
-	}
-	return map[Capability]entry{
-		CapabilityChat:  mk(def.Generation),
-		CapabilityEmbed: mk(def.Embed),
-	}
 }
 
 // reconcile inserts a global-default row for any catalog slot that lacks one,
@@ -166,6 +162,8 @@ func reconcile(ctx context.Context, src Source, def Defaults) error {
 // an operator edit takes effect without waiting for the periodic tick. A failed
 // reload keeps the previous snapshot.
 func Refresh(ctx context.Context) error {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
 	src := cfgSource
 	if src == nil {
 		return nil
@@ -180,6 +178,7 @@ func Refresh(ctx context.Context) error {
 		tier := ""
 		if r.TierID != nil {
 			tier = *r.TierID
+			snap.hasTier = true
 		}
 		v, known := cfgVendor(r.ModelID)
 		if !known {
@@ -201,7 +200,10 @@ func resolve(ctx context.Context, flowKey, slotKey string) entry {
 	slot, haveSlot := LookupSlot(flowKey, slotKey)
 	if snap := active.Load(); snap != nil {
 		tier := ""
-		if cfgTier != nil && !(haveSlot && slot.GlobalOnly) {
+		// Only consult the caller's tier when tier overrides actually exist. On
+		// day one (no tier rows) this skips the per-call tenant lookup that
+		// cfgTier falls back to, so a normal flow turn does zero tenant reads.
+		if snap.hasTier && cfgTier != nil && !(haveSlot && slot.GlobalOnly) {
 			if t, ok := cfgTier(ctx); ok {
 				tier = t
 			}
@@ -216,14 +218,33 @@ func resolve(ctx context.Context, flowKey, slotKey string) entry {
 		}
 	}
 	// No configured row (fresh/broken DB, or a slot added in code before the next
-	// reconcile). Fall back to the capability default so a flow never gets an
-	// empty model.
+	// reconcile). Fall back to the slot's own default so a flow never gets an
+	// empty model — the per-slot mapping (planner/orchestrator → planning,
+	// post_quality → quality, embed → embed) rather than a capability-wide value.
 	unconfigured.Add(1)
-	capab := CapabilityChat
-	if haveSlot {
-		capab = slot.Capability
+	m := cfgDefaults.For(flowKey, slotKey)
+	v, _ := cfgVendor(m)
+	return entry{vendor: v, model: m}
+}
+
+// Resolved is one consistent resolution of a flow slot: the genkit ref, the
+// bare model id, and the vendor. Resolve once per call site and reuse all three
+// so a Refresh landing mid-turn can't record usage against a model that didn't
+// serve the call, and the slot resolves once instead of three times (CodeRabbit).
+type Resolved struct {
+	Ref    string
+	Vendor string
+	Model  string
+}
+
+// Resolve returns one consistent resolution of a flow slot.
+func Resolve(ctx context.Context, flowKey, slotKey string) Resolved {
+	e := resolve(ctx, flowKey, slotKey)
+	ref := e.model
+	if e.vendor != "" {
+		ref = e.vendor + "/" + e.model
 	}
-	return cfgFallback[capab]
+	return Resolved{Ref: ref, Vendor: e.vendor, Model: e.model}
 }
 
 // Model returns the bare model id for a flow slot (the `model` usage dimension).

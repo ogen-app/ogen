@@ -57,8 +57,9 @@ func runCheckBrief(
 	}
 	// WithSystem/WithPrompt Sprintf their first arg; pass text as a "%s" value
 	// so a brief containing "%" verbs is never interpreted (mirrors post_quality).
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain)
 	out, resp, err := genkit.GenerateData[briefReviewOutput](ctx, g,
-		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain)),
+		ai.WithModelName(mc.Ref),
 		ai.WithSystem("%s", systemPrompt),
 		ai.WithPrompt("%s", userPrompt),
 		cfg.Provider.CallConfig(maxTokens),
@@ -67,7 +68,7 @@ func runCheckBrief(
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, "genkit.consistency", "campaign_id", campaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
 		return nil, &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
 	}
-	cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain), modelconfig.Model(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain), "consistency", resp)
+	cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "consistency", resp)
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "analyze", Status: "done"})
 
 	findings := make([]Finding, 0, len(out.Findings))
@@ -154,8 +155,9 @@ func runCheckPosts(
 		return nil, err
 	}
 
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain)
 	out, resp, err := genkit.GenerateData[postsReviewOutput](ctx, g,
-		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain)),
+		ai.WithModelName(mc.Ref),
 		ai.WithSystem("%s", systemPrompt),
 		ai.WithPrompt("%s", userPrompt),
 		cfg.Provider.CallConfig(maxOutputTokens(cfg)),
@@ -164,7 +166,7 @@ func runCheckPosts(
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, "genkit.consistency", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
 		return nil, &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
 	}
-	cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain), modelconfig.Model(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain), "consistency", resp)
+	cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "consistency", resp)
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "analyze", Status: "done"})
 
 	// Keep only findings that reference a checked post (drop hallucinated / dup ids).

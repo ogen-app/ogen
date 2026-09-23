@@ -229,7 +229,8 @@ func runPostAssistant(
 		maxTurns = 8
 	}
 
-	modelName := modelconfig.Ref(ctx, modelconfig.FlowPostAssistant, loopSlot)
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, loopSlot)
+	modelName := mc.Ref
 
 	// System + context block forms the stable cached prefix.
 	systemBlock := actx.SystemPrompt + "\n\n" + actx.ContextBlock
@@ -348,7 +349,7 @@ func runPostAssistant(
 	if resp.Usage != nil {
 		slog.InfoContext(ctx, "tokens", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens, "total", resp.Usage.InputTokens+resp.Usage.OutputTokens)
 	}
-	cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowPostAssistant, loopSlot), modelconfig.Model(ctx, modelconfig.FlowPostAssistant, loopSlot), "post_assistant", resp)
+	cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant", resp)
 
 	// ── Assemble response from scanner ───────────────────────────────────────
 	// The scanner has been processing every chunk in the streaming callback

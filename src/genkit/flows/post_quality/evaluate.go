@@ -109,7 +109,8 @@ func evaluateDimension(
 	if maxTokens == 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	modelName := modelconfig.Ref(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
+	modelName := mc.Ref
 	userPrompt := prompts.user + dimensionInstruction(label, cfg.SuggestionCap)
 
 	var lastErr error
@@ -146,7 +147,7 @@ func evaluateDimension(
 		}
 		// Record every completed call (one per dimension, plus any empty-rationale
 		// retry that still consumed tokens) (CON-86 FR1). Nil recorder = no-op.
-		cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain), modelconfig.Model(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain), "post_quality", resp)
+		cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_quality", resp)
 		if strings.TrimSpace(out.Rationale) == "" {
 			lastErr = fmt.Errorf("empty rationale")
 			slog.WarnContext(ctx, "attempt returned empty rationale", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1)

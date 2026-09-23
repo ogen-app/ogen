@@ -115,3 +115,50 @@ func TestReconcileDoesNotClobber(t *testing.T) {
 		t.Fatalf("reconcile clobbered the existing row: Ref = %q, want anthropic/opus", got)
 	}
 }
+
+// TestDefaultsFor pins the per-slot default mapping the last-resort fallback
+// relies on: planner/orchestrator → planning, post_quality → quality, embed →
+// embed, everything else → generation.
+func TestDefaultsFor(t *testing.T) {
+	d := Defaults{Generation: "gen", Quality: "qual", Planning: "plan", Embed: "emb"}
+	cases := map[[2]string]string{
+		{FlowContentPlan, SlotMain}:               "gen",
+		{FlowPostAssistant, SlotWriter}:           "gen",
+		{FlowPostQuality, SlotMain}:               "qual",
+		{FlowPostAssistant, SlotPlanner}:          "plan",
+		{FlowCampaignAssistant, SlotOrchestrator}: "plan",
+		{FlowEmbed, SlotMain}:                     "emb",
+	}
+	for k, want := range cases {
+		if got := d.For(k[0], k[1]); got != want {
+			t.Errorf("For(%s/%s) = %q, want %q", k[0], k[1], got, want)
+		}
+	}
+}
+
+// TestHasTierGateSkipsTierLookup proves the resolver does not consult the
+// (potentially DB-backed) tier lookup when no tier override rows exist — the
+// day-one state — and does consult it once a tier row is present.
+func TestHasTierGateSkipsTierLookup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	src := &fakeSource{}
+	var tierCalls int
+	tierOf := func(context.Context) (string, bool) { tierCalls++; return "", false }
+	Init(ctx, src, testDefaults(), testVendorOf, tierOf)
+
+	_ = Ref(context.Background(), FlowContentPlan, SlotMain)
+	if tierCalls != 0 {
+		t.Fatalf("tierOf called %d times with no tier rows, want 0 (day-one skip)", tierCalls)
+	}
+
+	pro := "pro"
+	_ = src.Upsert(ctx, &models.FlowModelConfig{TierID: &pro, FlowKey: FlowContentPlan, SlotKey: SlotMain, ModelID: "opus"})
+	if err := Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = Ref(context.Background(), FlowContentPlan, SlotMain)
+	if tierCalls == 0 {
+		t.Fatal("tierOf not consulted after a tier override row exists")
+	}
+}

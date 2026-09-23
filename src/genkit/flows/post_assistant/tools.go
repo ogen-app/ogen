@@ -715,8 +715,9 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		maxTokens = 64000
 	}
 
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter)
 	resp, err := genkit.Generate(ctx, st.g,
-		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter)),
+		ai.WithModelName(mc.Ref),
 		ai.WithSystem(st.writerSystem),
 		ai.WithPrompt(composeWriterInstruction(instruction, st.retrieved)),
 		ai.WithStreaming(streamCb),
@@ -726,7 +727,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		return "", err
 	}
 	if st.recorder != nil {
-		st.recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter), modelconfig.Model(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter), "post_assistant_edit", resp)
+		st.recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant_edit", resp)
 	}
 
 	content := strings.TrimSpace(buf.String())
