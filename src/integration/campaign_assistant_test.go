@@ -114,6 +114,9 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			modelID = "claude-haiku-4-5-20251001"
 		}
 		provider := llm.NewProvider(modelID, modelID, modelID)
+		// CON-308: seed the modelconfig resolver so every flow slot (orchestrator
+		// + the content_plan/enrich_brief/draft_post sub-flows) resolves a model.
+		initModelConfig(ctx, modelID, modelID)
 
 		Expect(content_plan.InitContentPlan(g, content_plan.ContentPlanFlowConfig{Provider: provider, MaxContextAssets: 5}, content_plan.ContentPlanRepos{
 			Campaigns: campaignRepo,

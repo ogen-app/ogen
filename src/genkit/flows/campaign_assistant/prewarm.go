@@ -8,7 +8,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -29,7 +29,7 @@ func prewarmToolCache(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, t *tool
 
 	start := time.Now()
 	_, err := genkit.Generate(ctx, g,
-		ai.WithModelName(cfg.Provider.Ref(llm.RolePlanning)),
+		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)),
 		ai.WithSystem("warmup"),
 		ai.WithPrompt("warmup"),
 		ai.WithTools(

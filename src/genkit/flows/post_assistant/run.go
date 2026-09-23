@@ -16,9 +16,9 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -209,13 +209,16 @@ func runPostAssistant(
 	// small output cap. The legacy path keeps the single generation-model call
 	// that writes the full post inline, so it needs the generous output budget.
 	planner := cfg.PlannerEnabled
-	loopRole := llm.RoleGeneration
+	// In the hybrid path the loop routes on the planner slot and delegates
+	// copywriting to the writer slot (the editPost tool); in the legacy path the
+	// single loop call does the writing itself, so it maps to the writer slot.
+	loopSlot := modelconfig.SlotWriter
 	loopMaxTokens := cfg.MaxOutputTokens
 	if loopMaxTokens == 0 {
 		loopMaxTokens = 64000
 	}
 	if planner {
-		loopRole = llm.RolePlanning
+		loopSlot = modelconfig.SlotPlanner
 		loopMaxTokens = cfg.PlannerMaxOutputTokens
 		if loopMaxTokens == 0 {
 			loopMaxTokens = 8192
@@ -226,7 +229,7 @@ func runPostAssistant(
 		maxTurns = 8
 	}
 
-	modelName := cfg.Provider.Ref(loopRole)
+	modelName := modelconfig.Ref(ctx, modelconfig.FlowPostAssistant, loopSlot)
 
 	// System + context block forms the stable cached prefix.
 	systemBlock := actx.SystemPrompt + "\n\n" + actx.ContextBlock
@@ -345,7 +348,7 @@ func runPostAssistant(
 	if resp.Usage != nil {
 		slog.InfoContext(ctx, "tokens", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens, "total", resp.Usage.InputTokens+resp.Usage.OutputTokens)
 	}
-	cfg.Recorder.RecordResp(ctx, cfg.Provider.Vendor(), cfg.Provider.Model(loopRole), "post_assistant", resp)
+	cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowPostAssistant, loopSlot), modelconfig.Model(ctx, modelconfig.FlowPostAssistant, loopSlot), "post_assistant", resp)
 
 	// ── Assemble response from scanner ───────────────────────────────────────
 	// The scanner has been processing every chunk in the streaming callback

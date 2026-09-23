@@ -12,8 +12,8 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -67,7 +67,7 @@ func runEnrichBrief(
 	if maxTokens == 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	modelName := cfg.Provider.Ref(llm.RoleGeneration)
+	modelName := modelconfig.Ref(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain)
 
 	// Watch the four brief fields so the client previews each one as it
 	// streams. The scanner decodes JSON escapes as they arrive, so the
@@ -129,7 +129,7 @@ func runEnrichBrief(
 	if resp.Usage != nil {
 		slog.InfoContext(ctx, "tokens", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens, "total", resp.Usage.InputTokens+resp.Usage.OutputTokens)
 	}
-	cfg.Recorder.RecordResp(ctx, cfg.Provider.Vendor(), cfg.Provider.Model(llm.RoleGeneration), "enrich_brief", resp)
+	cfg.Recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain), modelconfig.Model(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain), "enrich_brief", resp)
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "generate", Status: "done"})
 
 	// ── Assemble response from scanner ───────────────────────────────────────

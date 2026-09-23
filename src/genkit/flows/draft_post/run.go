@@ -16,9 +16,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/notes"
@@ -169,10 +169,10 @@ func runDraftPost(
 	if maxTokens == 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	modelName := cfg.Provider.Ref(llm.RoleGeneration)
+	modelName := modelconfig.Ref(ctx, modelconfig.FlowDraftPost, modelconfig.SlotMain)
 	modelCfg := cfg.Provider.CallConfig(maxTokens)
-	usageVendor := cfg.Provider.Vendor()
-	usageModel := cfg.Provider.Model(llm.RoleGeneration)
+	usageVendor := modelconfig.Vendor(ctx, modelconfig.FlowDraftPost, modelconfig.SlotMain)
+	usageModel := modelconfig.Model(ctx, modelconfig.FlowDraftPost, modelconfig.SlotMain)
 
 	loc, _ := settings.ResolveTimezone(campaign.Timezone)
 

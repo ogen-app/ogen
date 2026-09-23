@@ -8,7 +8,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -32,19 +32,19 @@ func prewarmToolCache(g *genkit.Genkit, cfg PostAssistantFlowConfig, t *toolSet)
 	// the planner tool set (incl. editPost) on the planning model; in the legacy
 	// path it's the base tool set on the generation model. The writer sub-call
 	// carries no tools, so there is no separate grammar to warm for it.
-	role := llm.RoleGeneration
+	slot := modelconfig.SlotWriter
 	tools := []ai.ToolRef{
 		t.listAssets, t.getAssetChunks, t.searchAssetChunks, t.getCurrentContent,
 		t.clonePost, t.restoreVersion, t.schedulePost, t.createNote,
 	}
 	if cfg.PlannerEnabled {
-		role = llm.RolePlanning
+		slot = modelconfig.SlotPlanner
 		tools = append(tools, t.editPost)
 	}
 
 	start := time.Now()
 	_, err := genkit.Generate(ctx, g,
-		ai.WithModelName(cfg.Provider.Ref(role)),
+		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowPostAssistant, slot)),
 		ai.WithSystem("warmup"),
 		ai.WithPrompt("warmup"),
 		ai.WithTools(tools...),

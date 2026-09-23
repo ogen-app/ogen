@@ -11,6 +11,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/pgvector/pgvector-go"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -715,7 +716,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 	}
 
 	resp, err := genkit.Generate(ctx, st.g,
-		ai.WithModelName(st.provider.Ref(llm.RoleGeneration)),
+		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter)),
 		ai.WithSystem(st.writerSystem),
 		ai.WithPrompt(composeWriterInstruction(instruction, st.retrieved)),
 		ai.WithStreaming(streamCb),
@@ -725,7 +726,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		return "", err
 	}
 	if st.recorder != nil {
-		st.recorder.RecordResp(ctx, st.provider.Vendor(), st.provider.Model(llm.RoleGeneration), "post_assistant_edit", resp)
+		st.recorder.RecordResp(ctx, modelconfig.Vendor(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter), modelconfig.Model(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter), "post_assistant_edit", resp)
 	}
 
 	content := strings.TrimSpace(buf.String())

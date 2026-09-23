@@ -115,6 +115,9 @@ var _ = Describe("Post assistant flow", Ordered, func() {
 		// default); set POST_ASSISTANT_PLANNER=false to run the legacy
 		// single-Sonnet path instead, so the same suite covers both.
 		provider := llm.NewProvider(modelID, modelID, planningModelID)
+		// CON-308: the flow resolves its loop + writer models through the
+		// modelconfig resolver; seed it so Ref returns real model ids.
+		initModelConfig(ctx, modelID, planningModelID)
 		flowCfg := post_assistant.PostAssistantFlowConfig{
 			Provider:       provider,
 			ModelID:        modelID,

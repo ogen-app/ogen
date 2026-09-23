@@ -305,9 +305,10 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	plugin := &anthropic.Anthropic{APIKey: key}
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
-	// One Provider resolves model refs + call config by role for all flows;
-	// generation flows use cfg.ModelID, post_quality uses cfg.QualityModelID,
-	// and the campaign_assistant routing loop uses cfg.PlanningModelID (CON-112).
+	// The Provider now only builds the Anthropic call config (max tokens) the
+	// flows pass; model SELECTION moved to the DB-backed modelconfig resolver
+	// (CON-308), which each flow consults per (flow, slot). The model-id args are
+	// vestigial and ignored by CallConfig — kept until provider.go is trimmed.
 	provider := llm.NewProvider(r.cfg.ModelID, r.cfg.QualityModelID, r.cfg.PlanningModelID)
 
 	contentPlanFn, err := initContentPlan(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.contentPlanRepos)
