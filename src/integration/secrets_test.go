@@ -68,6 +68,7 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 		repository.NewTenantRepository(db),
 		repository.NewPlatformRepository(db),
 		repository.NewPlatformGlobalLimitsRepository(db),
+		repository.NewFlowModelConfigRepository(db), // CON-308: ModelConfigAdminService
 		repository.NewTenantTierVersionRepository(db),
 		repository.NewTenantTierAssignmentRepository(db),
 		repository.NewEmailLogRepository(db),

@@ -54,6 +54,7 @@ func New(
 	tenantRepo repository.TenantRepository,
 	platformRepo repository.PlatformRepository,
 	platformLimitsRepo repository.PlatformGlobalLimitsRepository,
+	flowModelConfigRepo repository.FlowModelConfigRepository,
 	versionRepo repository.TenantTierVersionRepository,
 	assignmentRepo repository.TenantTierAssignmentRepository,
 	emailLogRepo repository.EmailLogRepository,
@@ -100,6 +101,9 @@ func New(
 	// assignment never drift (CON-294).
 	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo, hub))
 	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
+	// CON-308: ModelConfigAdminService lets Harbor assign a model to each
+	// (tier, flow, slot) over the code-owned flow/model catalogs.
+	registerModelConfigAdmin(srv, flowModelConfigRepo)
 	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver, hub)
 	// CON-298: EmailAdminService serves a tenant's email history + per-email
 	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
