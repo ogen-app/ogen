@@ -11,6 +11,7 @@ package llm
 import (
 	"github.com/firebase/genkit/go/ai"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/infra/vendors"
 )
 
@@ -53,6 +54,10 @@ func init() {
 				},
 			},
 		},
+		Capabilities: map[string]modelconfig.ModelCapabilities{
+			"claude-sonnet-4-5-20250929": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 64000, ContextWindow: 200000},
+			"claude-haiku-4-5-20251001":  {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 64000, ContextWindow: 200000},
+		},
 	})
 
 	vendors.Register(vendors.Descriptor{
@@ -88,6 +93,14 @@ func init() {
 					vendors.KindOutput: 10_000_000,
 				},
 			},
+		},
+		Capabilities: map[string]modelconfig.ModelCapabilities{
+			"gemini-embedding-2": {Capability: modelconfig.CapabilityEmbed, EmbedDims: 3072},
+			// Chat-capable Gemini models (used today by the vision/transcription
+			// microservices, CON-310). Listed so ListModels can surface them; chat
+			// slots reject non-Anthropic models in v1 (CON-308 §4).
+			"gemini-2.5-flash": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576},
+			"gemini-2.5-pro":   {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576},
 		},
 	})
 }
