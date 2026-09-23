@@ -13,6 +13,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"expvar"
 	"log/slog"
 	"sort"
@@ -25,6 +26,7 @@ import (
 	modelconfigv1 "github.com/ogen-app/ogen/gen/modelconfig/v1"
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/modelprobe"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -37,13 +39,21 @@ var (
 	modelConfigAdminSlotCleared = expvar.NewInt("ogen_model_config_admin_slot_cleared")
 )
 
-type modelConfigAdminService struct {
-	modelconfigv1.UnimplementedModelConfigAdminServiceServer
-	repo repository.FlowModelConfigRepository
+// modelProber runs the CON-308 §8a live compatibility probe for a candidate
+// model. Satisfied by modelprobe.Runner; an interface so tests can inject a fake
+// and the service stays nil-safe (a nil prober = static-only TestSlotModel).
+type modelProber interface {
+	Probe(ctx context.Context, flowKey, slotKey, modelID string) (sample string, latencyMs int64, err error)
 }
 
-func newModelConfigAdminService(repo repository.FlowModelConfigRepository) *modelConfigAdminService {
-	return &modelConfigAdminService{repo: repo}
+type modelConfigAdminService struct {
+	modelconfigv1.UnimplementedModelConfigAdminServiceServer
+	repo   repository.FlowModelConfigRepository
+	prober modelProber
+}
+
+func newModelConfigAdminService(repo repository.FlowModelConfigRepository, prober modelProber) *modelConfigAdminService {
+	return &modelConfigAdminService{repo: repo, prober: prober}
 }
 
 // --- code-owned catalogs (read-only) ---
@@ -231,10 +241,11 @@ func (s *modelConfigAdminService) ClearSlotModel(ctx context.Context, req *model
 
 // --- verification (CON-308 §8a) ---
 
-// TestSlotModel runs the static requirements match. The live golden-probe
-// (missing key / plugin / schema-adherence) is added in Phase 7; until then a
-// static pass reports passed=true with a note.
-func (s *modelConfigAdminService) TestSlotModel(_ context.Context, req *modelconfigv1.TestSlotModelRequest) (*modelconfigv1.TestSlotModelResponse, error) {
+// TestSlotModel runs the static requirements match, then (if it passes) the
+// live golden-probe — a real model call that catches what static checks cannot:
+// a missing/rotated key, an unregistered plugin, an unknown model, region
+// gating. A static failure short-circuits (no billed call).
+func (s *modelConfigAdminService) TestSlotModel(ctx context.Context, req *modelconfigv1.TestSlotModelRequest) (*modelconfigv1.TestSlotModelResponse, error) {
 	flowKey := strings.TrimSpace(req.GetFlowKey())
 	slotKey := strings.TrimSpace(req.GetSlotKey())
 	slot, ok := modelconfig.LookupSlot(flowKey, slotKey)
@@ -248,7 +259,18 @@ func (s *modelConfigAdminService) TestSlotModel(_ context.Context, req *modelcon
 	if unmet := unmetForSlot(slot, modelID); len(unmet) > 0 {
 		return &modelconfigv1.TestSlotModelResponse{Passed: false, Detail: "static requirements not met", UnmetRequirements: unmet}, nil
 	}
-	return &modelconfigv1.TestSlotModelResponse{Passed: true, Detail: "static checks passed (live probe pending)"}, nil
+	if s.prober == nil {
+		return &modelconfigv1.TestSlotModelResponse{Passed: true, Detail: "static checks passed (live probe unavailable)"}, nil
+	}
+	sample, latency, err := s.prober.Probe(ctx, flowKey, slotKey, modelID)
+	switch {
+	case errors.Is(err, modelprobe.ErrProbeUnsupported):
+		return &modelconfigv1.TestSlotModelResponse{Passed: true, Detail: "static checks passed (no live probe for this slot)"}, nil
+	case err != nil:
+		return &modelconfigv1.TestSlotModelResponse{Passed: false, Detail: err.Error(), LatencyMs: latency}, nil
+	default:
+		return &modelconfigv1.TestSlotModelResponse{Passed: true, Detail: "ok", LatencyMs: latency, Sample: sample}, nil
+	}
 }
 
 // --- helpers ---

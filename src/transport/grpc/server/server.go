@@ -31,6 +31,7 @@ import (
 	secretsv1 "github.com/ogen-app/ogen/gen/secrets/v1"
 	tenantsv1 "github.com/ogen-app/ogen/gen/tenants/v1"
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/genkit/modelprobe"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
@@ -102,8 +103,9 @@ func New(
 	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo, hub))
 	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
 	// CON-308: ModelConfigAdminService lets Harbor assign a model to each
-	// (tier, flow, slot) over the code-owned flow/model catalogs.
-	registerModelConfigAdmin(srv, flowModelConfigRepo)
+	// (tier, flow, slot) over the code-owned flow/model catalogs. The prober
+	// (backed by the secrets store) runs TestSlotModel's live compatibility check.
+	registerModelConfigAdmin(srv, flowModelConfigRepo, modelprobe.New(store))
 	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver, hub)
 	// CON-298: EmailAdminService serves a tenant's email history + per-email
 	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
