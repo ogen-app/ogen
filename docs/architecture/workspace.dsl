@@ -24,7 +24,7 @@ workspace "Ogen" "Multi-tenant content operations platform — plan, draft, and 
             pdfSvc   = container "pdf-service" "Extracts text, page-aware chunks, and a thumbnail from PDFs. Private network only." "Go + pdfium (ogen-app/pdf-service)"
             videoSvc = container "video-service" "Probes duration/codec/resolution and captures a poster frame. Private network only." "Go + ffmpeg (ogen-app/video-service)"
 
-            harbor  = container "Harbor" "Operator dashboard — tenants, secrets, usage. Reads both databases; manages secrets over the operator gRPC surface." "Go + Next.js (ogen-app/harbor)"
+            harbor  = container "Harbor" "Operator dashboard — tenants, plans, models, secrets, email, announcements, usage. Reads both databases; administers Ogen over the operator gRPC surface." "Go + Next.js (ogen-app/harbor)"
             riverui = container "River UI" "Background-job dashboard; reads River's tables directly." "riverui image"
         }
 
@@ -34,6 +34,7 @@ workspace "Ogen" "Multi-tenant content operations platform — plan, draft, and 
         zernio    = softwareSystem "Zernio" "Social publishing broker — submit / poll / cancel / reconcile across networks." "External"
         firecrawl = softwareSystem "Firecrawl" "Scrapes a URL to Markdown so a page can be ingested as an asset." "External"
         resend    = softwareSystem "Resend" "Transactional and marketing email delivery." "External"
+        sentry    = softwareSystem "Sentry" "Error monitoring and OpenTelemetry trace storage." "External"
         social    = softwareSystem "Social platforms" "LinkedIn, X, Facebook, Instagram, Threads, YouTube." "External"
 
         # ── Context relationships ────────────────────────────────────────────
@@ -45,10 +46,11 @@ workspace "Ogen" "Multi-tenant content operations platform — plan, draft, and 
         zernio -> social "Publishes to"
         ogen -> firecrawl "Scrapes URLs with" "HTTPS"
         ogen -> resend "Sends email through" "HTTPS"
+        ogen -> sentry "Reports errors and traces to" "HTTPS / OTLP"
 
         # ── Container relationships ──────────────────────────────────────────
         creator -> ogen.spa "Plans, drafts, and schedules with" "HTTPS"
-        admin   -> ogen.harbor "Administers tenants and secrets with" "HTTPS"
+        admin   -> ogen.harbor "Administers tenants, plans, models, and secrets with" "HTTPS"
 
         ogen.spa -> ogen.api "Makes API calls to" "REST + SSE / HTTPS"
         ogen.api -> ogen.controlDb "Reads from and writes to; runs migrations at boot" "SQL (pgx)"
@@ -61,10 +63,12 @@ workspace "Ogen" "Multi-tenant content operations platform — plan, draft, and 
         ogen.api -> zernio "Submits and reconciles posts through" "HTTPS"
         ogen.api -> firecrawl "Scrapes URLs with" "HTTPS"
         ogen.api -> resend "Sends email through" "HTTPS"
+        ogen.api -> sentry "Reports errors and OTel spans to" "HTTPS / OTLP"
 
         ogen.harbor -> ogen.controlDb "Reads (never migrates)" "SQL"
         ogen.harbor -> ogen.analyticsDb "Reads" "SQL"
-        ogen.harbor -> ogen.api "Manages secrets and tenants via the operator surface" "gRPC (private)"
+        ogen.harbor -> ogen.api "Administers secrets, tenants, plans, models, email, and announcements via the operator surface" "gRPC (private)"
+        ogen.api -> ogen.harbor "Notifies of new tenant registrations" "HTTPS webhook (HMAC-signed)"
         ogen.riverui -> ogen.controlDb "Reads River job tables" "SQL"
 
         # ── Deployment (Railway) ─────────────────────────────────────────────
