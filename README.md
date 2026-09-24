@@ -529,14 +529,18 @@ gated behind [profiles](https://docs.docker.com/compose/profiles/) so the defaul
 `docker compose up` stays backend-only.
 
 ```bash
-docker compose up                      # API + Postgres + TimescaleDB + pdf-service (+ River UI on :9004)
+docker compose up                      # API + Postgres + TimescaleDB + pdf/document/audio/image sidecars (+ River UI on :9004)
 docker compose --profile ui up         # + the ogen-app/ui Vite dev server on :9002
 docker compose --profile video up      # + video-service
-docker compose --profile documents up  # + document-service
-docker compose --profile audio up      # + audio-service
-docker compose --profile image up      # + image-service
 docker compose --profile harbor up     # + Harbor backend (:9003) & UI (:9005)
 ```
+
+The document/audio/image sidecars are wired to the API by default (the api
+service defaults `DOCUMENTS_/AUDIO_/IMAGE_SERVICE_ADDR` to the compose
+addresses); set any of them to empty in `.env` to disable that pipeline. The
+audio and image sidecars read `GEMINI_API_KEY` from `.env` directly — not from
+the API's secret store — so keep it set there, or transcription and vision
+calls return Unavailable.
 
 | Service | URL | Notes |
 |---------|-----|-------|
