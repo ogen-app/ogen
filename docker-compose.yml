@@ -20,6 +20,13 @@ services:
             # override (Harbor reuses the SAME variable, so they always match).
             GRPC_ADDR: ":9091"
             GRPC_AUTH_TOKEN: "${GRPC_AUTH_TOKEN:-ogen-harbor-dev}"
+            # Ingestion sidecars (CON-280/282/281), wired to the compose services
+            # below by default. `-` (not `:-`): an explicitly EMPTY value in .env
+            # still disables that pipeline (the rollback path); only an unset
+            # variable falls back to the compose address.
+            DOCUMENTS_SERVICE_ADDR: "${DOCUMENTS_SERVICE_ADDR-document-service:50051}"
+            AUDIO_SERVICE_ADDR: "${AUDIO_SERVICE_ADDR-audio-service:50051}"
+            IMAGE_SERVICE_ADDR: "${IMAGE_SERVICE_ADDR-image-service:50051}"
         volumes:
             - ./ogen-keys:/var/lib/ogen/keys
         ports:
@@ -36,6 +43,11 @@ services:
                 condition: service_healthy
             timescaledb:
                 condition: service_healthy
+            # image-service is the sole path for every image upload (imageprobe
+            # was removed), so bring it up first. The other sidecars are dialed
+            # lazily and need no ordering.
+            image-service:
+                condition: service_started
 
     postgres:
         # pgvector image = stock Postgres 17 + the `vector` extension prebuilt
@@ -145,9 +157,9 @@ services:
     # `ports:` — at pdf-service:50051 (PDF_SERVICE_ADDR in .env).
     #
     # The pdf-service image is published, so it runs in the default `docker compose
-    # up` (no profile — unlike the still-gated video/documents/audio/image
-    # sidecars). Comment this block out to disable it; the API degrades gracefully
-    # (PDF features off).
+    # up` (no profile — like the documents/audio/image sidecars; only video is
+    # still gated). Comment this block out to disable it; the API degrades
+    # gracefully (PDF features off).
     pdf-service:
         image: alephbetai/pdf-service:latest
         platform: linux/amd64
@@ -176,17 +188,14 @@ services:
     # embedding-ready, source-anchored chunks. Built and published from the
     # separate ogen-app/document-service repo (pure Go, no CGO). The API reaches
     # it over the private network ONLY — no host `ports:` — at
-    # document-service:50051 (DOCUMENTS_SERVICE_ADDR in .env).
+    # document-service:50051 (DOCUMENTS_SERVICE_ADDR, defaulted on the api service).
     #
-    # Gated behind the `documents` profile until that image is published, so the
-    # default `docker compose up` keeps working (document uploads fail fast with a
-    # clear message while disabled). Once the image exists, set
-    # DOCUMENTS_SERVICE_ADDR=document-service:50051 in .env and enable with:
-    #   docker compose --profile documents up
+    # Runs in the default `docker compose up`. To disable, set
+    # DOCUMENTS_SERVICE_ADDR= (empty) in .env; document uploads then fail fast
+    # with a clear message.
     document-service:
         image: alephbetai/document-service:latest
         platform: linux/amd64
-        profiles: ["documents"]
         expose:
             - "50051"
 
@@ -196,18 +205,16 @@ services:
     # multimodal); ogen owns the resumable state machine on a dedicated `audio`
     # queue. Built and published from the separate ogen-app/audio-service repo. The
     # API reaches it over the private network ONLY — no host `ports:` — at
-    # audio-service:50051 (AUDIO_SERVICE_ADDR in .env). Shares GEMINI_API_KEY with
-    # the embedder (no separate STT credential).
+    # audio-service:50051 (AUDIO_SERVICE_ADDR, defaulted on the api service).
+    # Shares GEMINI_API_KEY with the embedder (no separate STT credential) — it
+    # MUST be set in .env: the API reads Gemini from its secret store, but this
+    # sidecar only sees the env var (empty key ⇒ transcription returns Unavailable).
     #
-    # Gated behind the `audio` profile until that image is published, so the
-    # default `docker compose up` keeps working (audio uploads fail fast with a
-    # clear message while disabled). Once the image exists, set
-    # AUDIO_SERVICE_ADDR=audio-service:50051 in .env and enable with:
-    #   docker compose --profile audio up
+    # Runs in the default `docker compose up`. To disable, set AUDIO_SERVICE_ADDR=
+    # (empty) in .env; audio uploads then fail fast with a clear message.
     audio-service:
         image: alephbetai/audio-service:latest
         platform: linux/amd64
-        profiles: ["audio"]
         environment:
             GEMINI_API_KEY: ${GEMINI_API_KEY:-}
             TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-gemini-2.5-flash}
@@ -220,19 +227,18 @@ services:
     # compute (libvips + Gemini); ogen owns the resumable state machine on a
     # dedicated `image` queue. Built and published from the separate
     # ogen-app/image-service repo. The API reaches it over the private network
-    # ONLY — no host `ports:` — at image-service:50051 (IMAGE_SERVICE_ADDR in .env).
-    # Shares GEMINI_API_KEY with the embedder (no separate vision credential).
+    # ONLY — no host `ports:` — at image-service:50051 (IMAGE_SERVICE_ADDR,
+    # defaulted on the api service). Shares GEMINI_API_KEY with the embedder (no
+    # separate vision credential) — it MUST be set in .env (see audio-service
+    # above); with an empty key the service boots but Extract/GenerateAltText
+    # return Unavailable.
     #
-    # Gated behind the `image` profile until that image is published, so the default
-    # `docker compose up` keeps working (image uploads fail fast with a clear
-    # message while disabled — imageprobe was removed, so there is no fallback).
-    # Once the image exists, set IMAGE_SERVICE_ADDR=image-service:50051 in .env and
-    # enable with:
-    #   docker compose --profile image up
+    # Runs in the default `docker compose up`. To disable, set IMAGE_SERVICE_ADDR=
+    # (empty) in .env; image uploads are then rejected (imageprobe was removed,
+    # so there is no fallback).
     image-service:
         image: alephbetai/image-service:latest
         platform: linux/amd64
-        profiles: ["image"]
         environment:
             GEMINI_API_KEY: ${GEMINI_API_KEY:-}
         expose:
@@ -241,7 +247,7 @@ services:
     # Harbor (../harbor) — Ogen's operations dashboard. Brought up ALONGSIDE
     # this stack so the two link over gRPC:
     #   docker compose --profile harbor up
-    # Opt-in via the `harbor` profile (like ui/pdf/video) so the default
+    # Opt-in via the `harbor` profile (like ui/video) so the default
     # `docker compose up` stays Ogen-only and needs no harbor checkout. Harbor
     # shares THIS stack's postgres — a SEPARATE `harbor` database it creates on
     # first boot (EnsureDatabase, connecting as the ogen superuser) — and reads
