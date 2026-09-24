@@ -62,6 +62,7 @@ C4Context
     System_Ext(social, "Social platforms", "LinkedIn · X · Facebook · Instagram · Threads · YouTube")
     System_Ext(firecrawl, "Firecrawl", "URL → Markdown scraping")
     System_Ext(resend, "Resend", "Transactional & marketing email")
+    System_Ext(sentry, "Sentry", "Error monitoring + OpenTelemetry traces")
 
     Rel(creator, ogen, "Plans, drafts, schedules", "HTTPS")
     Rel(admin, ogen, "Administers", "HTTPS / gRPC")
@@ -71,6 +72,7 @@ C4Context
     Rel(zernio, social, "Publishes to", "HTTPS")
     Rel(ogen, firecrawl, "Scrapes URLs", "HTTPS")
     Rel(ogen, resend, "Sends email", "HTTPS")
+    Rel(ogen, sentry, "Errors & traces", "HTTPS / OTLP")
 
     UpdateElementStyle(creator, $bgColor="#08427b", $fontColor="#ffffff", $borderColor="#052e56")
     UpdateElementStyle(admin, $bgColor="#08427b", $fontColor="#ffffff", $borderColor="#052e56")
@@ -81,6 +83,7 @@ C4Context
     UpdateElementStyle(social, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
     UpdateElementStyle(firecrawl, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
     UpdateElementStyle(resend, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
+    UpdateElementStyle(sentry, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
     UpdateRelStyle(creator, ogen, $textColor="#444444", $lineColor="#707070")
     UpdateRelStyle(admin, ogen, $textColor="#444444", $lineColor="#707070")
 
@@ -93,7 +96,7 @@ Inside the Ogen boundary, the **API** monolith is the hub: it serves the SPA ove
 REST + SSE, owns the control-plane and analytics databases, drains its own
 in-process River worker pool, runs the Genkit AI flows, and exposes an
 internal-only gRPC surface that Harbor uses to manage secrets, tenants, plans,
-and the platform catalog. PDF, video, document, audio, and image processing are
+the platform catalog, per-flow model assignments, email, and announcements. PDF, video, document, audio, and image processing are
 split out into private-network sidecar services.
 
 ```mermaid
@@ -114,7 +117,7 @@ C4Container
         Container(doc, "document-service", "Go (pure)", "Office/text docs → source-anchored chunks — private network")
         Container(audio, "audio-service", "Go + ffmpeg + Gemini", "Audio transcode + transcribe → time-anchored transcript — private network")
         Container(image, "image-service", "Go + libvips + Gemini", "Image normalize + EXIF-strip + vision extraction (classify/describe/alt) → anchored chunks — private network")
-        Container(harbor, "Harbor", "Go + Next.js (ogen-app/harbor)", "Ops dashboard: tenants, secrets, usage")
+        Container(harbor, "Harbor", "Go + Next.js (ogen-app/harbor)", "Ops dashboard: tenants, plans, models, secrets, email, usage")
         Container(riverui, "River UI", "riverui image", "Background-job dashboard")
     }
 
@@ -123,6 +126,7 @@ C4Container
     System_Ext(zernio, "Zernio", "Publishing broker")
     System_Ext(firecrawl, "Firecrawl", "Scraping")
     System_Ext(resend, "Resend", "Email")
+    System_Ext(sentry, "Sentry", "Errors + traces")
 
     Rel(creator, spa, "Uses", "HTTPS")
     Rel(admin, harbor, "Uses", "HTTPS")
@@ -144,10 +148,12 @@ C4Container
     Rel(api, zernio, "Submit / poll / cancel / reconcile", "HTTPS")
     Rel(api, firecrawl, "Scrape URL", "HTTPS")
     Rel(api, resend, "Send email", "HTTPS")
+    Rel(api, sentry, "Errors & OTel spans", "HTTPS / OTLP")
 
     Rel(harbor, pg, "Reads", "SQL")
     Rel(harbor, ts, "Reads", "SQL")
-    Rel(harbor, api, "Secret & tenant admin", "gRPC")
+    Rel(harbor, api, "Operator admin", "gRPC")
+    Rel(api, harbor, "New-tenant webhook", "HTTPS")
     Rel(riverui, pg, "Reads job tables", "SQL")
 
     UpdateElementStyle(creator, $bgColor="#08427b", $fontColor="#ffffff", $borderColor="#052e56")
@@ -169,6 +175,7 @@ C4Container
     UpdateElementStyle(zernio, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
     UpdateElementStyle(firecrawl, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
     UpdateElementStyle(resend, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
+    UpdateElementStyle(sentry, $bgColor="#999999", $fontColor="#ffffff", $borderColor="#6b6b6b")
 
     UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
 ```
@@ -186,21 +193,23 @@ cmd/server/        # main entrypoint: config → DB + migrations → secrets →
 src/
   transport/                       # inbound surface (CON-291 role grouping)
     handlers/                      # Fiber HTTP handlers (REST + SSE) with swag annotations
-    grpc/server/                   # internal operator gRPC surface (Secrets + TenantAdmin + PlanAdmin + PlatformAdmin services)
+    grpc/server/                   # internal operator gRPC surface (Secrets, TenantAdmin, PlanAdmin, PlatformAdmin, ModelConfigAdmin, EmailAdmin, AnnouncementAdmin)
     grpc/client/{pdf,video,documents,audio,image}/ # gRPC clients we consume (pdf/video/document/audio/image sidecars)
     server/                        # server.New: wires repos → handlers → workers → routes; Genkit runtime
   usecase/                         # application orchestration / services — the one home for "where orchestration lives"
     post_actions/ campaign_actions/ scheduling/ campaigngoal/ notes/ settings/
-    brandresolve/ notify/ accountselect/ tenant_actions/
+    brandresolve/ notify/ accountselect/ tenant_actions/ activity/
   domain/                          # business core
     models/                        # bun-tagged record structs (single source of truth for the schema)
-    platforms/                     # per-platform attachment + text validation rules
+    platforms/                     # per-platform attachment + text validation rules, Markdown → social-text flattening
+    entitlements/                  # tier entitlements resolver + nil-safe, fail-open Limiter (caps & gates)
+    modelconfig/                   # flow/slot catalog + tier-aware model resolver
   infra/                           # persistence + outward adapters
     repository/                    # narrow per-aggregate persistence layer
     database/                      # bun.DB factories (control-plane + analytics) and migrations
     publishers/                    # Publisher abstraction; publishers/zernio is the concrete impl
     storage/ secrets/ crypto/ email/ firecrawl/ embedding/ eventhub/ vendors/
-  kernel/                          # cross-cutting: config/ logging/ tenantctx/ netguard/ usage/ activity/
+  kernel/                          # cross-cutting: config/ logging/ telemetry/ tenantctx/ netguard/ usage/ activity/
   jobs/ jobs/queues/               # River runtime + workers (submit/poll/cancel/reconcile, analytics, PDF/URL, email)
   genkit/                          # Genkit AI flows (assistants, content plan, quality, embeddings)
   analytics/                       # post-analytics read models (overview / performers / lessons / per-post)
@@ -226,10 +235,12 @@ completed-job retention. Workers process `submit_post_to_zernio`,
 `process_url`, `process_audio` (on a dedicated `audio` queue so long
 transcriptions can't starve short ingestion), `process_image` (likewise on a
 dedicated `image` queue so heavy vision runs can't starve short ingestion),
-`send_email`, plus periodic
-`reconcile_scheduled_posts`,
+`send_email`, `bootstrap_zernio_profile` / `teardown_zernio_profile` (per-workspace
+Zernio profile on signup / workspace delete), `notify_harbor_tenant_registered`,
+plus periodic `reconcile_scheduled_posts`,
 `refresh_zernio_analytics`, `refresh_zernio_followers`,
-`detect_expiring_connections`, and the `cleanup_*` sweepers. The
+`detect_expiring_connections`, `detect_manual_publish_due`, and the `cleanup_*`
+sweepers. The
 [River UI](https://riverqueue.com/ui) dashboard (a standalone container) reads
 those tables directly.
 
@@ -243,14 +254,18 @@ those tables directly.
 | **Campaigns & posts** | Campaign types, campaigns, posts, post versions, notes, per-platform validation, quality scoring, and streaming AI assistants. |
 | **Content bank** | Markdown notes, PDF, office/text document, audio (transcribed to time-anchored chunks), image (vision-extracted to source-anchored blocks + alt text), and URL assets (scraped via Firecrawl), with paragraph-/source-aware chunking, Gemini embeddings, and pgvector similarity search used to ground the assistants. Document, audio, and image ingestion run in the `document-service` / `audio-service` / `image-service` sidecars. |
 | **Attachments** | Image, PDF, and video uploads on S3-compatible storage, processed by the `image-service` / `pdf-service` / `video-service` sidecars (EXIF/geo-strip + alt text, thumbnails, page counts, duration/codec/poster). Per-platform constraints surface as soft validation warnings. |
-| **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are River jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. |
+| **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are River jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. Native threads on X and Threads; Markdown is flattened to platform text at egress and limits count visible length. Deleting a workspace tears down its Zernio profile. |
 | **Post Log** | Auditable per-post history — state transitions, validation outcomes, background-task lifecycle, Zernio interactions, reconciliation timeouts, user actions. Sanitized of secrets, size-capped, configurable retention. |
 | **Analytics** | Cumulative overview KPIs, best/worst performers with age-adjusted "against typical", all-time lessons (heatmap + lifespan curve), and per-post drill-down — backed by TimescaleDB continuous aggregates. |
+| **Activity & notifications** | Durable per-user notification inbox (REST + SSE with `Last-Event-ID` replay), server-side Activity daily reports, and producers such as expiring connections and manual-publish-due posts. |
+| **Announcements** | Operator-authored in-app banners, targeted to all tenants or by tier or group, with per-user click/dismiss tracking. |
+| **Plans & entitlements** | Versioned tier entitlements (Trial / Pro / Max). A fail-open `Limiter` enforces standing caps (seats, campaigns, assets, storage, web imports → 402) and campaign-type gates (→ 403), and sends near-limit notifications. Live usage counts are returned by `GET /api/me/entitlements`. |
 | **Usage metering** | Per-tenant model/publisher cost metering with optional daily/monthly spend caps (enforce or warn), recorded to the analytics DB via a pluggable vendor registry. |
 | **Brand materials** | Voices, audiences, and guardrails bound to campaigns/posts and injected into the writing flows (precedence: post → campaign → default). |
-| **Email** | Transactional + drip email via Resend, with embedded templates, one-click unsubscribe, and delivery webhooks. |
+| **Email** | Transactional + drip email via Resend, with embedded templates, one-click unsubscribe, and delivery webhooks. Delivery events (delivered/opened/clicked/bounced…) and rendered bodies are persisted for the Harbor Emails tab. New-tenant signups notify operators via a signed Harbor webhook. |
 | **Secrets** | Envelope-encrypted at rest (per-secret DEK wrapped by an on-disk KEK). Rotatable via the operator gRPC surface without restart. |
-| **Operator surface** | Internal gRPC `SecretsService`, `TenantAdminService`, `PlanAdminService`, and `PlatformAdminService`, consumed by the Harbor ops dashboard over the private network. |
+| **Operator surface** | Internal gRPC `SecretsService`, `TenantAdminService`, `PlanAdminService`, `PlatformAdminService`, `ModelConfigAdminService`, `EmailAdminService`, and `AnnouncementAdminService`, consumed by the Harbor ops dashboard over the private network. |
+| **Observability** | Sentry error monitoring + OpenTelemetry tracing (HTTP → Genkit → model → DB → gRPC → River), continuing the UI's `sentry-trace`. Fail-open: disabled unless `SENTRY_DSN` is set. |
 
 ---
 
@@ -262,15 +277,30 @@ flows under `src/genkit/flows/`. Two long-lived Genkit instances run at boot:
 - **Embedding instance** — the `googlegenai` plugin (Gemini Embedding 2). The wrapper is stable for the process lifetime; its backing embedder is rebuilt when `gemini_api_key` is set or rotated, so the key rotates without restart.
 - **Anthropic instance** — owned by `gkRuntime` (`src/transport/server/genkit_runtime.go`). Hot-rebuildable, so rotating `anthropic_api_key` re-registers all Anthropic flows without a restart. With no key the runtime stays nil and consuming handlers return 503.
 
-Foundation models are addressed by **role** (`src/infra/vendors/llm`) so flows never
-hardcode a model id:
+Models are configured **per flow and per slot**, and are never hardcoded
+(`src/domain/modelconfig`). Each flow declares one or more model *slots*, and
+each slot sets the capabilities a model must have (tools, structured output,
+streaming, minimum output/context size, embedding dimensions). Assignments live
+in the `flow_model_config` table. They are resolved at call time, and a
+tier-specific row wins over the global default. Operators edit them from Harbor
+via `ModelConfigAdminService`. A write is rejected when the model doesn't meet
+the slot's requirements, and it can be checked first with a live probe. On boot,
+missing global-default rows are seeded from the legacy `MODEL_ID` /
+`PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` / `EMBED_MODEL` env vars (now
+**seed-only**; after that, the DB is authoritative).
 
-| Role | Default model | Used by |
-|------|---------------|---------|
-| `generation` | Claude Sonnet 4.5 (`MODEL_ID`) | content plan, post/campaign assistant writing, brief enrichment, draft post |
-| `planning` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) | campaign/post assistant orchestration & intent routing (cheap/fast loop) |
-| `quality` | Claude Sonnet 4.5 (`QUALITY_MODEL_ID`) | post quality scoring |
-| embeddings | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) | asset / PDF / document / audio-transcript / image-extraction chunk embedding for vector search |
+| Flow | Slot(s) | Seed default |
+|------|---------|--------------|
+| `content_plan`, `draft_post`, `enrich_brief`, `consistency` | `main` | Claude Sonnet 4.5 (`MODEL_ID`) |
+| `post_quality` | `main` | Claude Sonnet 4.5 (`QUALITY_MODEL_ID`) |
+| `post_assistant` | `planner` / `writer` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) / Sonnet 4.5 (`MODEL_ID`) |
+| `campaign_assistant` | `orchestrator` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) |
+| `embed` | `main` (global only, no tier override) | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) |
+
+The sidecars choose their own Gemini models (these aren't in the resolver yet):
+
+| Use | Model | Where |
+|-----|-------|-------|
 | transcription | Gemini 2.5 Flash (`TRANSCRIBE_MODEL`, multimodal) | `audio-service` segment transcription (priced via the `gemini` vendor) |
 | vision | Gemini 2.5 Flash / 2.5 Pro (`VISION_CLASSIFY_MODEL` / `VISION_EXTRACT_MODEL`) | `image-service` classify → extract → describe → alt text (priced via the `gemini` vendor) |
 
@@ -307,7 +337,7 @@ Railway's private network (`*.railway.internal`), never a public port.
 | [`ogen-app/document-service`](https://github.com/ogen-app/document-service) | Office/text document parsing sidecar (pure Go). |
 | [`ogen-app/audio-service`](https://github.com/ogen-app/audio-service) | Audio transcode + transcribe sidecar (ffmpeg + Gemini multimodal). |
 | [`ogen-app/image-service`](https://github.com/ogen-app/image-service) | Image normalize + vision-extraction sidecar (libvips/CGO + Gemini vision). |
-| `buf.build/ogen-app/proto` | Shared gRPC contracts (tenants, secrets, plans, platforms, pdf, video, documents, audio, image), published as a [BSR](https://buf.build) module and pinned via `make proto`. |
+| `buf.build/ogen-app/proto` | Shared gRPC contracts (tenants, secrets, plans, platforms, modelconfig, email, announcements, pdf, video, documents, audio, image), published as a [BSR](https://buf.build) module and pinned via `make proto`. |
 
 **Runtime topology**
 
@@ -448,8 +478,8 @@ All runtime knobs are env vars, loaded by
 | `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 5 | Shared pool sizing for HTTP + River workers. |
 | `GEMINI_API_KEY` | empty | Gemini Embedding 2 key — first-boot seed; rotate via the operator surface. Empty disables embedding/RAG. |
 | `EMBED_MODEL` / `EMBED_DIMENSIONS` | `gemini-embedding-2` / `3072` | Embedding model + vector width (must match `assets_chunks.embedding`). |
-| `ANTHROPIC_API_KEY` / `MODEL_ID` | empty / `claude-sonnet-4-5-20250929` | Claude key (first-boot seed) + generation model. |
-| `PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` | Haiku 4.5 / Sonnet 4.5 | Cheap routing model + quality-scoring model. |
+| `ANTHROPIC_API_KEY` / `MODEL_ID` | empty / `claude-sonnet-4-5-20250929` | Claude key (first-boot seed) + generation model (**seed-only**; see [AI flows](#ai-flows-genkit)). |
+| `PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` | Haiku 4.5 / Sonnet 4.5 | Routing + quality-scoring models (**seed-only**; Harbor-managed after first boot). |
 | `STORAGE_*` | empty | S3-compatible storage (R2/MinIO/AWS); empty disables uploads. |
 | `PDF_SERVICE_ADDR` / `VIDEO_SERVICE_ADDR` / `DOCUMENTS_SERVICE_ADDR` / `AUDIO_SERVICE_ADDR` / `IMAGE_SERVICE_ADDR` | empty | gRPC sidecar addresses (`*.railway.internal:50051` in prod). Empty disables that pipeline. |
 | `ZERNIO_API_KEY` / `ZERNIO_BASE_URL` | empty / `https://zernio.com/api/v1` | Zernio integration; key resolved per call, so rotations land without restart. |
@@ -457,6 +487,8 @@ All runtime knobs are env vars, loaded by
 | `RESEND_API_KEY` / `EMAIL_FROM` | empty / `Ogen <hello@getogen.com>` | Email delivery; empty disables sending. |
 | `OGEN_KEK_PATH` | `./kek` | Directory holding `kek.v1` — losing it bricks every encrypted secret. |
 | `GRPC_ADDR` / `GRPC_AUTH_TOKEN` | `127.0.0.1:9091` / empty | Internal operator gRPC surface; starts only when both are set. |
+| `HARBOR_WEBHOOK_URL` / `HARBOR_WEBHOOK_SECRET` / `HARBOR_BASE_URL` | empty | New-tenant operator notification: Harbor inbound webhook, HMAC signing key, and "View in Harbor" deep-link base. Empty URL turns the feature off. |
+| `SENTRY_DSN` | empty | Turns on error monitoring + OTel tracing; empty disables all telemetry. Also `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, `SENTRY_TRACES_SAMPLE_RATE` (`0.1`), `OTEL_SERVICE_NAME` (`ogen-api`). |
 | `JOB_WORKERS` / `JOB_SHUTDOWN_TIMEOUT` | 4 / 30s | River worker pool + graceful-shutdown wait. |
 | `RECONCILE_GRACE` | `1h` | Reconciliation timeout for stuck Scheduled posts. |
 | `POSTLOG_RETENTION_DAYS` | `90` | Post Log retention window. |
@@ -483,6 +515,7 @@ make test-integration      # MinIO + Postgres (slow, docker compose)
 | `/debug/vars` | `expvar` JSON — `ogen_jobs_*` counters and Zernio API latency (behind session auth). |
 | `/api/posts/:id/log` · `/api/post-logs` | Per-post and cross-post audit history. |
 | River UI (`:9004` in compose) | Running / upcoming / completed / failed jobs per queue. |
+| Sentry (when `SENTRY_DSN` is set) | Grouped panics/5xx and end-to-end OpenTelemetry traces (HTTP → Genkit → model → DB → gRPC), continued from the UI's `sentry-trace` header. See the `opentelemetry-tracing` skill. |
 
 The full REST reference (OpenAPI) is generated from swag annotations via
 `make openapi` and published from `docs/swagger.json` on every merge to `main`.
@@ -532,6 +565,7 @@ feature lands looking like the rest of the codebase.
 | **`add-river-job`** | Adding a background/async task, queue worker, or recurring sweep. | River args type, worker/processor, self-registration, transactional enqueue, periodic scheduling, and tests. |
 | **`add-grpc-service`** | Adding a gRPC service/client or a private-network sidecar. | buf-managed proto codegen, (client-)streaming RPCs, health service, graceful shutdown, status-error mapping, and a nil-disabled thin client — the `pdf-service` pattern. |
 | **`email-templates`** | Adding/editing an email, its copy/design, or the drip schedule. | The Maizzle authoring project + DB seeds + embedded-default → seed-on-boot → DB-wins lifecycle, the `[[ ]]` Go delimiters, and the brand tokens (CON-154). |
+| **`opentelemetry-tracing`** | Wiring, debugging, or extending tracing / Sentry — missing or unparented spans, broken `sentry-trace` / `traceparent` propagation, sampling. | The `telemetry.Init` wiring point, Sentry-via-OTLP export, the sampler + propagator, and the Fiber `c.Context()` vs `c.UserContext()` span-parenting trap. |
 
 All follow the project's conventions — real Postgres tests at the handler layer
 (no mocks), authz-before-lookup with 403-over-404, `feature/` branch naming — and
