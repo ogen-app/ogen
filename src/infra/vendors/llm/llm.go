@@ -97,7 +97,7 @@ func init() {
 			"claude-opus-4-8":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 			"claude-opus-4-7":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 			"claude-opus-4-6":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
-			"claude-sonnet-4-6":          {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 64000, ContextWindow: 1000000},
+			"claude-sonnet-4-6":          {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 			"claude-fable-5":             {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 		},
 	})
