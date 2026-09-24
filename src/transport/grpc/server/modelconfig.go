@@ -82,6 +82,9 @@ func (s *modelConfigAdminService) ListModels(_ context.Context, req *modelconfig
 	for _, d := range vendors.ByFamily(vendors.FamilyModel) {
 		for modelID, rates := range d.Prices.Models {
 			caps, _ := vendors.CapabilitiesOf(d.Name, modelID)
+			if !assignable(d.Name, caps) {
+				continue // v1: a non-Anthropic chat model fills no slot — omit it
+			}
 			if filter != "" && string(caps.Capability) != filter {
 				continue
 			}
@@ -312,6 +315,18 @@ func unmetForSlot(slot modelconfig.Slot, modelID string) []string {
 	}
 	unmet = append(unmet, modelconfig.Satisfies(caps, slot.Requires)...)
 	return unmet
+}
+
+// assignable reports whether a model can be assigned to any slot today, so
+// ListModels can omit models no slot would accept. It mirrors the v1 chat rule
+// in unmetForSlot: Provider.CallConfig is Anthropic-shaped, so a non-Anthropic
+// chat model fills no chat slot (and no other slot), and is dropped. Embed
+// models and Anthropic chat models are assignable.
+func assignable(vendor string, caps modelconfig.ModelCapabilities) bool {
+	if caps.Capability == modelconfig.CapabilityChat && vendor != llm.VendorAnthropic {
+		return false
+	}
+	return true
 }
 
 func scopeTier(c *models.FlowModelConfig) string {

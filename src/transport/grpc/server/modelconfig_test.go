@@ -63,6 +63,32 @@ func TestListFlowsAndModels(t *testing.T) {
 	}
 }
 
+// TestListModelsOmitsNonAssignableChat proves ListModels drops chat-capable
+// models that no chat slot could accept in v1 (non-Anthropic), while keeping the
+// Anthropic chat models.
+func TestListModelsOmitsNonAssignableChat(t *testing.T) {
+	s := newModelConfigAdminService(nil, nil)
+	resp, err := s.ListModels(context.Background(), &modelconfigv1.ListModelsRequest{Capability: "chat"})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(resp.GetModels()) == 0 {
+		t.Fatal("ListModels(chat) returned nothing")
+	}
+	sawAnthropic := false
+	for _, m := range resp.GetModels() {
+		if m.GetVendor() != "anthropic" {
+			t.Errorf("chat list includes non-assignable %s (vendor %s)", m.GetId(), m.GetVendor())
+		}
+		if m.GetVendor() == "anthropic" {
+			sawAnthropic = true
+		}
+	}
+	if !sawAnthropic {
+		t.Fatal("chat list has no Anthropic models")
+	}
+}
+
 // TestUnmetForSlot covers the §8a static match used by both SetSlotModel and
 // TestSlotModel: capability family, the v1 Anthropic-only-chat rule, and the
 // requirements matrix.
