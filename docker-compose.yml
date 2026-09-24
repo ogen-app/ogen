@@ -44,10 +44,13 @@ services:
             timescaledb:
                 condition: service_healthy
             # image-service is the sole path for every image upload (imageprobe
-            # was removed), so bring it up first. The other sidecars are dialed
-            # lazily and need no ordering.
+            # was removed), so bring it up first. Not required: with
+            # IMAGE_SERVICE_ADDR= (disabled) a failing image-service must not
+            # block the API. The other sidecars are dialed lazily and need no
+            # ordering.
             image-service:
                 condition: service_started
+                required: false
 
     postgres:
         # pgvector image = stock Postgres 17 + the `vector` extension prebuilt
