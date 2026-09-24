@@ -7,6 +7,7 @@ import (
 	"expvar"
 	"log/slog"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -101,6 +102,20 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 			return t.TierID, true
 		},
 	)
+	// CON-308 boot diagnostic: enumerate the model catalog this build ships, so an
+	// operator can confirm at startup which models ListModels / the resolver expose.
+	// A short catalog in the logs points at a stale binary, not a config problem.
+	{
+		var modelIDs []string
+		for _, d := range vendors.ByFamily(vendors.FamilyModel) {
+			for id := range d.Prices.Models {
+				modelIDs = append(modelIDs, d.Name+"/"+id)
+			}
+		}
+		sort.Strings(modelIDs)
+		slog.InfoContext(ctx, "model catalog loaded", logging.AttrComponent, "modelconfig",
+			"count", len(modelIDs), "models", modelIDs)
+	}
 	// CON-113: one overview service, shared by the REST endpoint and the
 	// Campaign Assistant's getCampaignOverview tool. Not gated by the Anthropic
 	// key — it's a plain tenant-scoped DB read.

@@ -256,19 +256,31 @@ func (s *modelConfigAdminService) TestSlotModel(ctx context.Context, req *modelc
 	if modelID == "" {
 		return nil, status.Error(codes.InvalidArgument, "model_id is required")
 	}
+	slog.InfoContext(ctx, "model test requested", logging.AttrComponent, "grpcserver",
+		"flow", flowKey, "slot", slotKey, "model", modelID)
 	if unmet := unmetForSlot(slot, modelID); len(unmet) > 0 {
+		slog.InfoContext(ctx, "model test: static requirements not met", logging.AttrComponent, "grpcserver",
+			"flow", flowKey, "slot", slotKey, "model", modelID, "unmet", unmet)
 		return &modelconfigv1.TestSlotModelResponse{Passed: false, Detail: "static requirements not met", UnmetRequirements: unmet}, nil
 	}
 	if s.prober == nil {
+		slog.InfoContext(ctx, "model test: static passed (live probe unavailable)", logging.AttrComponent, "grpcserver",
+			"flow", flowKey, "slot", slotKey, "model", modelID)
 		return &modelconfigv1.TestSlotModelResponse{Passed: true, Detail: "static checks passed (live probe unavailable)"}, nil
 	}
 	sample, latency, err := s.prober.Probe(ctx, flowKey, slotKey, modelID)
 	switch {
 	case errors.Is(err, modelprobe.ErrProbeUnsupported):
+		slog.InfoContext(ctx, "model test: static passed (no live probe for this slot)", logging.AttrComponent, "grpcserver",
+			"flow", flowKey, "slot", slotKey, "model", modelID)
 		return &modelconfigv1.TestSlotModelResponse{Passed: true, Detail: "static checks passed (no live probe for this slot)"}, nil
 	case err != nil:
+		slog.WarnContext(ctx, "model test failed", logging.AttrComponent, "grpcserver",
+			"flow", flowKey, "slot", slotKey, "model", modelID, "latency_ms", latency, logging.AttrError, err)
 		return &modelconfigv1.TestSlotModelResponse{Passed: false, Detail: err.Error(), LatencyMs: latency}, nil
 	default:
+		slog.InfoContext(ctx, "model test passed", logging.AttrComponent, "grpcserver",
+			"flow", flowKey, "slot", slotKey, "model", modelID, "latency_ms", latency)
 		return &modelconfigv1.TestSlotModelResponse{Passed: true, Detail: "ok", LatencyMs: latency, Sample: sample}, nil
 	}
 }
