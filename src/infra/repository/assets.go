@@ -32,6 +32,9 @@ type AssetRepository interface {
 	GetBySourceURL(ctx context.Context, sourceURL string) (*models.Asset, error)
 	Update(ctx context.Context, asset *models.Asset) error
 	UpdateStatus(ctx context.Context, id, status string) error
+	// MarkFailed sets status=failed with a machine-readable code
+	// (models.UploadCode*) and a tenant-visible reason (CON-312).
+	MarkFailed(ctx context.Context, id, code, reason string) error
 	// CreatorOf returns an asset's created_by (its owner), tenant-scoped — used
 	// to address ingest-completion notifications (CON-242). sql.ErrNoRows when
 	// the asset is gone.
@@ -153,10 +156,25 @@ func (r *assetRepository) Update(ctx context.Context, asset *models.Asset) error
 	return err
 }
 
+// UpdateStatus also clears the failure code/reason: they describe a failed run
+// and are stale under any status write that isn't MarkFailed (CON-312).
 func (r *assetRepository) UpdateStatus(ctx context.Context, id, status string) error {
 	_, err := r.db.NewUpdate().
 		Model((*models.Asset)(nil)).
 		Set("status = ?", status).
+		Set("failure_code = ''").
+		Set("failure_reason = ''").
+		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+func (r *assetRepository) MarkFailed(ctx context.Context, id, code, reason string) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.Asset)(nil)).
+		Set("status = ?", models.AssetStatusFailed).
+		Set("failure_code = ?", code).
+		Set("failure_reason = ?", reason).
 		Where("id = ?", id).
 		Exec(ctx)
 	return err

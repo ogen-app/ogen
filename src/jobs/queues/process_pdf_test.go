@@ -78,6 +78,8 @@ func (f *fakeBlob) Upload(_ context.Context, key string, r io.Reader, _ int64, _
 type fakeStatus struct {
 	all    []string
 	failOn string // when set, UpdateStatus fails for this status value
+	// failCode/failReason capture the last MarkFailed (CON-312).
+	failCode, failReason string
 }
 
 func (f *fakeStatus) UpdateStatus(_ context.Context, _, status string) error {
@@ -85,6 +87,11 @@ func (f *fakeStatus) UpdateStatus(_ context.Context, _, status string) error {
 	if f.failOn != "" && status == f.failOn {
 		return errors.New("status: db down")
 	}
+	return nil
+}
+func (f *fakeStatus) MarkFailed(_ context.Context, _, code, reason string) error {
+	f.all = append(f.all, models.AssetStatusFailed)
+	f.failCode, f.failReason = code, reason
 	return nil
 }
 func (f *fakeStatus) CreatorOf(context.Context, string) (string, error) { return "", nil }

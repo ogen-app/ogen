@@ -52,6 +52,10 @@ type AudioExtraction struct {
 	// FailureReason is a tenant-visible reason for a terminal failed/partial run
 	// (over-duration, over-cap, unusable audio).
 	FailureReason string `bun:"failure_reason"      json:"failure_reason,omitempty"`
+	// FailureCode is the stable, machine-readable companion to FailureReason
+	// (models.UploadCode*), so the client can word it without parsing prose
+	// (CON-312).
+	FailureCode string `bun:"failure_code,notnull,default:''" json:"failure_code,omitempty"`
 
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`

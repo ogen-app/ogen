@@ -133,6 +133,27 @@ func TestProcessDocument_InvalidIsTerminal(t *testing.T) {
 	if status.last() != models.AssetStatusFailed {
 		t.Fatalf("status = %q, want failed", status.last())
 	}
+	// CON-312: the client sees why, not just status=failed.
+	if status.failCode != models.UploadCodeInvalidFile || status.failReason == "" {
+		t.Fatalf("failure not recorded: code=%q reason=%q", status.failCode, status.failReason)
+	}
+}
+
+// TestProcessDocument_EmbedderOutageFailsWithCode: once retries are exhausted,
+// an embedder outage settles failed with a retriable code (CON-312).
+func TestProcessDocument_EmbedderOutageFailsWithCode(t *testing.T) {
+	status := &fakeStatus{}
+	p := newDocProc(DocumentDeps{
+		Client:   &fakeDocParser{res: &documents.Result{Chunks: []documents.Chunk{{Index: 0, Text: "some words here"}}}},
+		Embedder: &fakeEmbedder{failAll: true}, Storage: &fakeBlob{data: []byte("doc")},
+		Assets: status, Chunks: &fakeChunks{}, Files: &fakeFiles{},
+	})
+	if err := p.process(t.Context(), ProcessDocumentTask{AssetID: "d4", StorageKey: "assets/d4/original.docx"}, true); err != nil {
+		t.Fatalf("last attempt must settle, not retry: %v", err)
+	}
+	if status.last() != models.AssetStatusFailed || status.failCode != models.UploadCodeServiceUnavailable {
+		t.Fatalf("status=%q code=%q, want failed/service_unavailable", status.last(), status.failCode)
+	}
 }
 
 func TestProcessDocument_TransientParseErrorRetries(t *testing.T) {
