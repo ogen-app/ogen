@@ -409,6 +409,9 @@ func (h *CampaignsHandler) Get(c *fiber.Ctx) error {
 // Update godoc
 // @Summary      Update campaign
 // @Description  Replaces all mutable fields of an existing campaign.
+// @Description  campaign_type_id can't change once any post is planned against the type's phases
+// @Description  (type_locked; 409 campaign_type_locked). Changing the type, or dates such that a phase
+// @Description  window would empty out, drops a manual phase plan back to derived (phase_plan_reset: true).
 // @Tags         campaigns
 // @Accept       json
 // @Produce      json
@@ -419,6 +422,7 @@ func (h *CampaignsHandler) Get(c *fiber.Ctx) error {
 // @Failure      400   {object}  map[string]string
 // @Failure      401   {object}  map[string]string
 // @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "campaign_type_locked: posts are planned against the current type's phases"
 // @Router       /api/campaigns/{id} [put]
 func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	var req campaignRequest
@@ -451,9 +455,16 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 		return notFound(err, "campaign not found")
 	}
 
+	typeChanged := req.CampaignTypeID != campaign.CampaignTypeID
+	// CON-166: once posts are planned against the type's phases, the type is
+	// locked — switching would orphan their phase references. (A DB trigger
+	// backstops this against a concurrent phase assignment.)
+	if typeChanged && campaign.TypeLocked {
+		return rejectTypeLocked(c, campaign.PhasedPostCount)
+	}
 	// CON-295: only gate when the caller is switching to a gated campaign type,
 	// so an unrelated edit of a campaign that already uses one is never blocked.
-	if req.CampaignTypeID != campaign.CampaignTypeID {
+	if typeChanged {
 		if err := h.gateCampaignType(c, campaignType); err != nil {
 			return err
 		}
@@ -506,7 +517,21 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 		omit = append(omit, "use_assets")
 	}
 	if err := h.repo.Update(reqCtx(c), campaign, omit...); err != nil {
+		if repository.IsConstraintViolation(err, repository.ConstraintCampaignTypeLocked) {
+			// A phase was assigned between our read and the write (trigger backstop),
+			// so the pre-read count is stale — at least one post now holds a phase.
+			return rejectTypeLocked(c, max(campaign.PhasedPostCount, 1))
+		}
 		return err
+	}
+	datesChanged := !timePtrEqual(prevStart, campaign.StartDate) || !timePtrEqual(prevEnd, campaign.EndDate)
+	// CON-166: keep a stored manual phase plan consistent with the new type/dates.
+	if maintainPhasePlan(c, h.repo, campaign, typeChanged, datesChanged) {
+		campaign.PhaseWindows = nil
+		campaign.PhasePlanReset = true
+		h.recordActivity(c, activity.CategoryCampaign, "campaign_phase_plan_reset",
+			activity.WithEntity("campaign", campaign.ID),
+		)
 	}
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_updated",
 		activity.WithEntity("campaign", campaign.ID),
@@ -518,7 +543,7 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 			activity.WithStatus(string(prevStatus)+"->"+string(campaign.Status)),
 		)
 	}
-	if !timePtrEqual(prevStart, campaign.StartDate) || !timePtrEqual(prevEnd, campaign.EndDate) {
+	if datesChanged {
 		h.recordActivity(c, activity.CategoryCampaign, "campaign_dates_changed",
 			activity.WithEntity("campaign", campaign.ID),
 		)

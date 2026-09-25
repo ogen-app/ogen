@@ -326,9 +326,17 @@ func persistDraft(
 			logging.AttrComponent, "genkit.draft_post", "post_id", id, "date", publishDate)
 	}
 
+	// CON-166: a post's phase must belong to its campaign's type (a DB trigger
+	// rejects anything else). The calling tool resolves the phase against the
+	// campaign, but drop an unknown id rather than fail the whole draft.
 	var phaseIDPtr *string
 	if phaseID != "" {
-		phaseIDPtr = &phaseID
+		if phaseNameByID(campaign, phaseID) != "" {
+			phaseIDPtr = &phaseID
+		} else {
+			slog.WarnContext(ctx, "dropping phase that is not a phase of the campaign's type",
+				logging.AttrComponent, "genkit.draft_post", "post_id", id, "phase_id", phaseID)
+		}
 	}
 
 	row := &models.Post{

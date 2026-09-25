@@ -888,6 +888,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// CON-245: validate campaign brand_voice_id/brand_audience_id against the tenant.
 	campaignsHandler.SetBrandRepo(r.brandRepo)
 	campaignsHandler.Register(app)
+	// CON-166: a campaign's phase date plan (GET/PUT/DELETE /:id/phases).
+	handlers.NewCampaignPhasesHandler(r.campaignRepo, activityWiring.recorder, auth).Register(app)
 	// CON-228: Brand materials — tenant-scoped voices/audiences/guardrails/look/
 	// templates behind /api/brand. The ui repo built its /brand screens against a
 	// stub whose shapes this endpoint answers verbatim (CON-227).
@@ -902,6 +904,8 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	handlers.NewPostAssistantHandler(gkRuntime.RunPostAssistant, gkRuntime.IsAnthropicAvailable, r.postMessageRepo, activityWiring.recorder, auth).Register(app)
 	// CON-245: validate a post's brand_voice_id/brand_audience_id against the tenant.
 	postsHandler.SetBrandRepo(r.brandRepo)
+	// CON-166: a post's campaign_type_phase_id must be a phase of its campaign's type.
+	postsHandler.SetCampaignRepo(r.campaignRepo)
 	// CON-69 §11: every transition (success/blocked) and validation
 	// outcome lands in the Post Log.
 	postsHandler.SetPostLogRepo(r.postLogRepo)

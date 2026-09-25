@@ -344,7 +344,7 @@ func (h *CampaignTypesHandler) UpdatePhase(c *fiber.Ctx) error {
 
 // DeletePhase godoc
 // @Summary      Delete phase
-// @Description  Deletes a phase from a campaign type.
+// @Description  Deletes a phase from a campaign type. 409 phase_in_use while any post is planned against it.
 // @Tags         campaign_types
 // @Security     CookieAuth
 // @Param        id        path  string  true  "CampaignType ID"
@@ -352,6 +352,7 @@ func (h *CampaignTypesHandler) UpdatePhase(c *fiber.Ctx) error {
 // @Success      204
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]string
 // @Router       /api/campaign_types/{id}/phases/{phase_id} [delete]
 func (h *CampaignTypesHandler) DeletePhase(c *fiber.Ctx) error {
 	phase, err := h.repo.GetPhaseByID(reqCtx(c), c.Params("phase_id"))
@@ -364,6 +365,13 @@ func (h *CampaignTypesHandler) DeletePhase(c *fiber.Ctx) error {
 
 	deleted, err := h.repo.DeletePhase(reqCtx(c), phase.ID)
 	if err != nil {
+		// CON-166: posts still reference the phase (posts.campaign_type_phase_id
+		// FK) — a client error, not a 500. No count: campaign types are global, so
+		// the referencing posts may belong to other workspaces.
+		if repository.IsForeignKeyViolation(err) {
+			return rejectCoded(c, fiber.StatusConflict, codePhaseInUse,
+				"the phase can't be deleted while posts are planned against it", nil)
+		}
 		return err
 	}
 	if !deleted {

@@ -82,6 +82,9 @@ type resolvedPhase struct {
 	Name     string
 	Purpose  string
 	Sequence int
+	// Window pins the phase's date window from the campaign's manual phase plan
+	// (CON-166); nil = derive it from the campaign dates.
+	Window *dateWindow
 }
 
 // contentPlanTemplateData is the data passed to the user-prompt template.

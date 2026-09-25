@@ -12,6 +12,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
@@ -34,14 +35,18 @@ func Plan(campaign *models.Campaign, posts []models.Post) []Assignment {
 	if campaign == nil || campaign.StartDate == nil || campaign.EndDate == nil {
 		return nil
 	}
-	start, end := dateOnly(*campaign.StartDate), dateOnly(*campaign.EndDate)
+	start, end := campaignphase.Date(*campaign.StartDate), campaignphase.Date(*campaign.EndDate)
 
-	phases := sortedPhases(campaign)
-	windows := computeWindows(start, end, max(len(phases), 1))
-	windowByPhase := make(map[string][2]time.Time, len(phases))
+	// CON-166: each phase's slice is the campaign's effective phase plan — its
+	// manual plan when set, else the even split of the dates.
+	phases := campaignphase.SortedPhases(campaign)
+	windows, _ := campaignphase.Resolve(campaign)
+	windowByPhase := make(map[string][2]time.Time, len(windows))
+	for _, w := range windows {
+		windowByPhase[w.Phase.ID] = [2]time.Time{w.Start, w.End}
+	}
 	known := make(map[string]bool, len(phases))
-	for i, ph := range phases {
-		windowByPhase[ph.ID] = windows[i]
+	for _, ph := range phases {
 		known[ph.ID] = true
 	}
 
@@ -84,21 +89,6 @@ func Plan(campaign *models.Campaign, posts []models.Post) []Assignment {
 	return out
 }
 
-// dateOnly truncates a time to its calendar date at 00:00 UTC.
-func dateOnly(t time.Time) time.Time {
-	u := t.UTC()
-	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
-}
-
-func sortedPhases(campaign *models.Campaign) []models.CampaignTypePhase {
-	if campaign.CampaignType == nil {
-		return nil
-	}
-	phases := slices.Clone(campaign.CampaignType.Phases)
-	slices.SortStableFunc(phases, func(a, b models.CampaignTypePhase) int { return cmp.Compare(a.Sequence, b.Sequence) })
-	return phases
-}
-
 // sortPosts orders a group deterministically: earliest current ScheduledAt
 // first (nulls last), then created-at, then id.
 func sortPosts(posts []models.Post) {
@@ -117,35 +107,6 @@ func sortPosts(posts []models.Post) {
 		}
 		return cmp.Compare(a.ID, b.ID)
 	})
-}
-
-// computeWindows partitions [start, end] into n contiguous inclusive date
-// windows in chronological order (remainder to earliest windows). Mirrors
-// content_plan's per-phase date partition.
-func computeWindows(start, end time.Time, n int) [][2]time.Time {
-	if n <= 0 {
-		return nil
-	}
-	out := make([][2]time.Time, n)
-	totalDays := int(end.Sub(start).Hours()/24) + 1
-	if totalDays < n { // more phases than days → every window is the full range
-		for i := range out {
-			out[i] = [2]time.Time{start, end}
-		}
-		return out
-	}
-	base, rem := totalDays/n, totalDays%n
-	cursor := start
-	for i := range n {
-		d := base
-		if i < rem {
-			d++
-		}
-		winEnd := cursor.AddDate(0, 0, d-1)
-		out[i] = [2]time.Time{cursor, winEnd}
-		cursor = winEnd.AddDate(0, 0, 1)
-	}
-	return out
 }
 
 // spread returns n evenly-spaced dates across the inclusive window [ws, we],

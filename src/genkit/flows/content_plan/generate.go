@@ -14,6 +14,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -112,6 +113,14 @@ func generatePosts(
 	)
 	startDate, endDate := *campaign.StartDate, *campaign.EndDate
 
+	// CON-166: a stored manual phase plan pins each phase's window; otherwise
+	// planBatches derives them from the campaign dates (the same split).
+	pinned := map[string]*dateWindow{}
+	if windows, src := campaignphase.Resolve(campaign); src == campaignphase.SourceManual {
+		for _, w := range windows {
+			pinned[w.Phase.ID] = &dateWindow{Start: w.Start.Format(time.DateOnly), End: w.End.Format(time.DateOnly)}
+		}
+	}
 	phases := make([]resolvedPhase, len(campaign.CampaignType.Phases))
 	for i, p := range campaign.CampaignType.Phases {
 		phases[i] = resolvedPhase{
@@ -119,6 +128,7 @@ func generatePosts(
 			Name:     p.Name,
 			Purpose:  p.Purpose,
 			Sequence: p.Sequence,
+			Window:   pinned[p.ID],
 		}
 	}
 

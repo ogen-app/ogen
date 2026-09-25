@@ -266,3 +266,24 @@ func equalWindows(a, b []dateWindow) bool {
 	}
 	return true
 }
+
+// CON-166: a manual phase plan pins each phase's window, but only when every
+// phase carries one (the plan is stored whole).
+func TestPlanBatchesHonoursManualWindows(t *testing.T) {
+	platforms := []resolvedPlatform{{ID: "x", Name: "X"}}
+	start, end := mustDate(t, "2026-05-01"), mustDate(t, "2026-05-30")
+	pinned := []resolvedPhase{
+		{ID: "ph-1", Sequence: 1, Window: &dateWindow{Start: "2026-05-01", End: "2026-05-02"}},
+		{ID: "ph-2", Sequence: 2, Window: &dateWindow{Start: "2026-05-03", End: "2026-05-30"}},
+	}
+	b := planBatches(2, pinned, platforms, start, end, 1)
+	if len(b) != 2 || b[0].DateWindow != (dateWindow{Start: "2026-05-01", End: "2026-05-02"}) ||
+		b[1].DateWindow != (dateWindow{Start: "2026-05-03", End: "2026-05-30"}) {
+		t.Fatalf("batches = %+v, want the pinned windows", b)
+	}
+	partial := []resolvedPhase{pinned[0], {ID: "ph-2", Sequence: 2}}
+	b = planBatches(2, partial, platforms, start, end, 1)
+	if b[0].DateWindow != (dateWindow{Start: "2026-05-01", End: "2026-05-15"}) {
+		t.Fatalf("partial plan must be ignored, got %+v", b[0].DateWindow)
+	}
+}
