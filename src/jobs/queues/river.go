@@ -586,6 +586,18 @@ func (e *Enqueuer) EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetI
 	return err
 }
 
+// EnqueueReembedImage enqueues a re-embed of an image asset's edited description
+// plus its stored region blocks (CON-312). Not transactional: the description is
+// already saved, and the worker re-reads it, so a lost enqueue only leaves the
+// previous chunks in place until the next edit or re-extract.
+func (e *Enqueuer) EnqueueReembedImage(ctx context.Context, assetID, tenantID string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.Insert(ctx, ReembedImageTask{AssetID: assetID, TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
 // EnqueueProcessURLTx enqueues a URL-scrape task inside the given transaction,
 // so it commits atomically with the asset insert/reset (CON-222): a committed
 // submit always has a job, a rolled-back one never does. Refresh flips

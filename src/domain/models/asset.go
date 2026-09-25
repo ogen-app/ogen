@@ -36,6 +36,27 @@ const (
 	AssetTypeAudio = "AUDIO"
 )
 
+// AssetCodeContentLocked is the machine-readable code on the 409 a PUT gets when
+// it tries to change the content of a service-ingested PDF/DOC/AUDIO asset
+// (CON-312): that content is the ingestion service's output, so an edit is
+// refused. The client should re-extract instead.
+const AssetCodeContentLocked = "content_locked"
+
+// IsServiceIngestedAssetType reports whether an asset's chunks come from an
+// ingestion service (PDF/DOC/AUDIO/IMG) rather than the markdown embed of its
+// title + content (CON-312). Those chunks carry source_label/source_anchor and
+// don't depend on the title, so a rename must never re-chunk them.
+func IsServiceIngestedAssetType(t *string) bool {
+	if t == nil {
+		return false
+	}
+	switch *t {
+	case AssetTypePDF, AssetTypeDocument, AssetTypeAudio, AssetTypeImage:
+		return true
+	}
+	return false
+}
+
 type Asset struct {
 	bun.BaseModel `bun:"table:assets,alias:a" swaggerignore:"true"`
 	TenantScoped  // CON-97: tenant_id column + central scoping hooks

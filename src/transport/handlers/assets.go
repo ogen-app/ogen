@@ -119,6 +119,13 @@ type ImageIngestEnqueuer interface {
 	EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error
 }
 
+// ImageReembedEnqueuer enqueues a re-embed of an image asset's edited
+// description + its stored region blocks (CON-312), without re-running vision.
+// Implemented by *queues.Enqueuer.
+type ImageReembedEnqueuer interface {
+	EnqueueReembedImage(ctx context.Context, assetID, tenantID string) error
+}
+
 // URLScrapeGate reports whether URL scraping is currently configured, so the
 // endpoint can fail fast with 409. Implemented by *firecrawl.Client.
 type URLScrapeGate interface {
@@ -149,6 +156,9 @@ type AssetsHandler struct {
 	// imgJobs enqueues image ingestion (CON-281). Nil makes image uploads fail
 	// fast — image-service is a hard dependency (imageprobe was deleted, D6).
 	imgJobs ImageIngestEnqueuer
+	// imgReembed re-embeds an image asset after its description is edited
+	// (CON-312). Nil skips the re-embed (image ingestion not configured).
+	imgReembed ImageReembedEnqueuer
 }
 
 func NewAssetsHandler(
@@ -183,6 +193,9 @@ func NewAssetsHandler(
 
 // SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
 func (h *AssetsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
+
+// SetImageReembedder wires the image description re-embed (CON-312). Nil-safe.
+func (h *AssetsHandler) SetImageReembedder(e ImageReembedEnqueuer) { h.imgReembed = e }
 
 func (h *AssetsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/content-bank/assets")
@@ -1087,11 +1100,27 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return notFound(err, "asset not found")
 	}
 
-	// Content is required for document assets but optional for images, whose
-	// description may be empty (CON-246 R9). The type is only known now, after
-	// the load, which is why this isn't a struct-tag validation.
+	// Content rules depend on the type, which is only known now, after the load —
+	// which is why this isn't a struct-tag validation (CON-312):
+	//   - IMG: the description may be empty (CON-246 R9) and is editable.
+	//   - PDF/DOC/AUDIO: content is the ingestion service's output and read-only.
+	//     Empty or unchanged content means "keep it", so a title/tag-only save
+	//     works; a different value is a 409 (re-extract instead).
+	//   - everything else (MD/URL/plain): content is required.
 	isImage := asset.Type != nil && *asset.Type == models.AssetTypeImage
-	if !isImage && strings.TrimSpace(req.Content) == "" {
+	ingested := models.IsServiceIngestedAssetType(asset.Type)
+	switch {
+	case isImage:
+	case ingested:
+		if strings.TrimSpace(req.Content) == "" {
+			req.Content = asset.Content
+		} else if req.Content != asset.Content {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"code":  models.AssetCodeContentLocked,
+				"error": "content of an ingested asset can't be edited — re-extract it instead",
+			})
+		}
+	case strings.TrimSpace(req.Content) == "":
 		return fiber.NewError(fiber.StatusBadRequest, "content is required")
 	}
 
@@ -1110,6 +1139,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	// Detect whether the embedding inputs (title or content) actually changed,
 	// so we don't re-embed an asset when only a tag or the alt text was toggled.
 	embedInputChanged := asset.Title != req.Title || asset.Content != req.Content
+	descriptionChanged := asset.Content != req.Content
 
 	asset.Title = req.Title
 	asset.Content = req.Content
@@ -1128,8 +1158,21 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	if h.onSave != nil && embedInputChanged {
-		tid, _ := tenantctx.From(reqCtx(c))
+	// Service-ingested chunks (PDF/DOC/AUDIO/IMG) carry source anchors and don't
+	// embed the title, so the markdown re-embed must never run for them — it
+	// would replace them with plain title+content chunks (CON-312). An edited
+	// image description is re-embedded by the image pipeline instead, which
+	// keeps the region chunks.
+	tid, _ := tenantctx.From(reqCtx(c))
+	switch {
+	case isImage:
+		if descriptionChanged && h.imgReembed != nil {
+			if err := h.imgReembed.EnqueueReembedImage(reqCtx(c), asset.ID, tid); err != nil {
+				slog.ErrorContext(reqCtx(c), "enqueue image re-embed failed", logging.AttrComponent, "handlers.assets", "asset_id", asset.ID, "error", err)
+			}
+		}
+	case ingested:
+	case h.onSave != nil && embedInputChanged:
 		go h.onSave(asset.ID, asset.Title, asset.Content, tid)
 	}
 

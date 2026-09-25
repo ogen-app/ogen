@@ -86,6 +86,12 @@ func (f *fakeImageExtractions) GetByAssetAndRunKey(_ context.Context, _, _ strin
 	}
 	return f.ext, nil
 }
+func (f *fakeImageExtractions) GetLatestByAsset(_ context.Context, _ string) (*models.ImageExtraction, error) {
+	if f.ext == nil {
+		return nil, sql.ErrNoRows
+	}
+	return f.ext, nil
+}
 func (f *fakeImageExtractions) Update(_ context.Context, e *models.ImageExtraction) error {
 	f.update++
 	f.ext = e

@@ -404,6 +404,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Embedder:         embedder,
 		Storage:          store,
 		Assets:           r.pieceRepo,
+		Content:          r.pieceRepo,
 		Chunks:           r.chunksRepo,
 		Extractions:      r.audioExtractionRepo,
 		Segments:         r.audioSegmentRepo,
@@ -754,6 +755,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	assetsHandler := handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, imgJobs, auth, embedCallbacks.OnMarkdownSave)
 	assetsHandler.SetLimiter(entitlementLimiter)
+	if imageIngestEnabled {
+		assetsHandler.SetImageReembedder(enqueuer)
+	}
 	assetsHandler.Register(app)
 
 	// CON-282: audio asset lifecycle (presigned upload + extraction status/

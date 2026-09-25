@@ -39,6 +39,9 @@ type AssetRepository interface {
 	// UpdateContent sets title + content (and bumps updated_at) without touching
 	// status/source_url — the process_url worker's write after a scrape (CON-222).
 	UpdateContent(ctx context.Context, id, title, content string) error
+	// SetContent sets content only (title/status untouched) — the process_audio
+	// worker's transcript write on completion (CON-312).
+	SetContent(ctx context.Context, id, content string) error
 	// SetImageResult writes the vision description (content) of an IMG asset and,
 	// when setAlt is true, its generated alt text — but the alt write is guarded in
 	// SQL so it NEVER overwrites a user's edit (CON-281 D5): alt_text is set only
@@ -197,6 +200,16 @@ func (r *assetRepository) SetImageResult(ctx context.Context, id, content, altTe
 		q = q.Set("alt_text = CASE WHEN alt_text_edited_by_user THEN alt_text ELSE ? END", altText)
 	}
 	_, err := q.Exec(ctx)
+	return err
+}
+
+func (r *assetRepository) SetContent(ctx context.Context, id, content string) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.Asset)(nil)).
+		Set("content = ?", content).
+		Set("updated_at = ?", time.Now().UTC()).
+		Where("id = ?", id).
+		Exec(ctx)
 	return err
 }
 

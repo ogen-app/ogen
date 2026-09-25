@@ -74,6 +74,9 @@ type imageFileStore interface {
 type imageExtractionStore interface {
 	Create(ctx context.Context, e *models.ImageExtraction) error
 	GetByAssetAndRunKey(ctx context.Context, assetID, runKey string) (*models.ImageExtraction, error)
+	// GetLatestByAsset backs the description re-embed (CON-312); sql.ErrNoRows
+	// when the asset was never extracted.
+	GetLatestByAsset(ctx context.Context, assetID string) (*models.ImageExtraction, error)
 	Update(ctx context.Context, e *models.ImageExtraction) error
 }
 
