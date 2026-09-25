@@ -15,6 +15,922 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/activity/report/{date}": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Deterministic counts of what happened on a local calendar day in\nthe active workspace (CON-285): posts published (by channel),\nfailed/not-published (by channel + per-post detail), created (by\nauthor) and campaigns created. Computed server-side, so tz is\nrequired. A future or empty day returns a zeroed 200.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "activity"
+                ],
+                "summary": "Activity daily report",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Local calendar day (YYYY-MM-DD)",
+                        "name": "date",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone, e.g. America/New_York",
+                        "name": "tz",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Narrow to one campaign",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/report.Report"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/activity/reports": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Non-empty days newest-first (CON-285), keyset-paginated by date\nvia ` + "`" + `before` + "`" + `. Each item carries the four headline totals — enough\nfor a feed row without fetching each day's detail.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "activity"
+                ],
+                "summary": "Activity report list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "IANA time zone",
+                        "name": "tz",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Narrow to one campaign",
+                        "name": "campaign_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Keyset cursor: only days before this YYYY-MM-DD",
+                        "name": "before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size, default 30, max 100",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/report.ReportList"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/best-times": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Day-of-week × hour engagement grid for the tenant's connected accounts (CON-153). Live read-through to Zernio, scoped to the tenant's profile. Returns {available:false, reason:\"addon_required\"} when the tenant lacks the Analytics add-on.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Best times to post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Platform filter (e.g. instagram)",
+                        "name": "platform",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Social account id filter",
+                        "name": "account_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "all|late|external (default all)",
+                        "name": "source",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.insightEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/content-decay": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Engagement-accrual buckets showing what share of a post's total engagement is reached by each time window (CON-153). Live read-through to Zernio, scoped to the tenant's profile.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Content performance decay",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Platform filter",
+                        "name": "platform",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Social account id filter",
+                        "name": "account_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "all|late|external (default all)",
+                        "name": "source",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.insightEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/followers": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Follower-count history and growth per connected account (CON-153). Served entirely from the local daily snapshots (no publisher call on the request path); the daily refresh job keeps them current.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Follower stats",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Social account id filter",
+                        "name": "account_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start date YYYY-MM-DD",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End date YYYY-MM-DD",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "daily|weekly|monthly (default daily)",
+                        "name": "granularity",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.insightEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/learnings": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Heatmap + post-lifespan curve + structural what-works/fading patterns.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Learnings — all-time posting knowledge",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Optional baseline lower bound YYYY-MM-DD (default all-time)",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fading comparison window, e.g. 90d/3mo/12w (default 90d)",
+                        "name": "trend_window",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "reach|saves (default reach)",
+                        "name": "metric",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/overview": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "KPI cards + per-metric series + deterministic insights for a window.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Cumulative analytics overview",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relative window shorthand, e.g. 28d/12w/6mo (default 28d)",
+                        "name": "window",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Inclusive start date YYYY-MM-DD (with to, overrides window)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Inclusive end date YYYY-MM-DD",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "day|week|month (default adaptive)",
+                        "name": "granularity",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/performers": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Best/Worst posts for a window, age-adjusted vs the account's typical, plus insights.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Performers and outliers",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relative window shorthand, e.g. 28d (default 28d)",
+                        "name": "window",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Inclusive start date YYYY-MM-DD (with to, overrides window)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Inclusive end date YYYY-MM-DD",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "against_typical|reach|engagement_rate|interactions (default against_typical)",
+                        "name": "by",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Rows per list, default 5, clamped",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional platform filter",
+                        "name": "platform",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/posting-frequency": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Per-platform correlation between posts-per-week and engagement rate (CON-153). Live read-through to Zernio, scoped to the tenant's profile.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Posting frequency vs engagement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Platform filter",
+                        "name": "platform",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Social account id filter",
+                        "name": "account_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "all|late|external (default all)",
+                        "name": "source",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.insightEnvelope"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/posts": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Paged, sortable overview of analytics for Zernio-published posts, plus summed/averaged totals. Served entirely from the database — no publisher call on the request path (CON-93 FR5).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "List post analytics",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 50, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "engagement|impressions|reach|likes|comments|shares|saves|clicks|views|published_at",
+                        "name": "sort_by",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "asc|desc (default desc)",
+                        "name": "order",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optional platform name filter",
+                        "name": "platform",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.analyticsListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/analytics/posts/{post_id}": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Header + six metric cards (against-typical multiplier + usual-range band) + per-metric running-total series + narrative for one published post. Distinct from the lean /api/posts/{id}/analytics snapshot.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analytics"
+                ],
+                "summary": "Per-post statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post id",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.insightEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/announcements": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "announcements"
+                ],
+                "summary": "List active announcements for the caller's workspace",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/handlers.announcementDTO"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/announcements/{id}/click": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "tags": [
+                    "announcements"
+                ],
+                "summary": "Record a CTA click on an announcement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Announcement id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/announcements/{id}/dismiss": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "tags": [
+                    "announcements"
+                ],
+                "summary": "Dismiss (hide) an announcement for the caller",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Announcement id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/auto-publish-allowlist": {
             "get": {
                 "security": [
@@ -665,7 +1581,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns all campaigns ordered by creation date.",
+                "description": "Returns the active set (neither archived nor deleted) ordered by creation date. Pass ?archived=true to list archived campaigns instead.",
                 "produces": [
                     "application/json"
                 ],
@@ -673,6 +1589,14 @@ const docTemplate = `{
                     "campaigns"
                 ],
                 "summary": "List campaigns",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "List archived campaigns instead of the active set",
+                        "name": "archived",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -740,6 +1664,49 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/summaries": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns a slim per-post projection for every campaign in the\ntenant, grouped by campaign (CON-152). The Campaigns list runs\nits readiness rules on this single response instead of firing\none GET /campaigns/:id/posts per card. Carries only the fields\nthe rules read — no title, content, or hydrated relations.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Batched campaign post summaries",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/summaries.Summaries"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -924,7 +1891,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a campaign by Sqid.",
+                "description": "Soft-deletes a campaign by Sqid. The row is retained as a safety net (no self-serve restore); it disappears from lists and reads.",
                 "tags": [
                     "campaigns"
                 ],
@@ -953,6 +1920,399 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/archive": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Removes a campaign from the active list. Reversible via unarchive.",
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Archive campaign",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/assets": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Unions the given asset ids into the campaign's content-bank set\n(campaigns.asset_ids) and turns use_assets on, touching no other\nfield. The write is a single atomic UPDATE, so concurrent\nattaches of different documents both survive and omitted fields\nare never reset (CON-233). Adding an already-present id is a\nno-op. Returns the updated campaign.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Attach content-bank assets to a campaign",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Asset ids to attach",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assetMembershipRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Campaign"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/assets/{assetId}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Removes one asset id from the campaign's content-bank set\n(campaigns.asset_ids) and re-derives use_assets from it, so\ndetaching the last source turns use_assets off (CON-233).\nRemoving an id that is not present is a no-op. Returns the\nupdated campaign.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Detach a content-bank asset from a campaign",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid to detach",
+                        "name": "assetId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Campaign"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/assistant": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Sends an instruction to the Campaign Assistant and streams progress via Server-Sent Events.\n\"explanation_delta\" carries {\"delta\":\"...\"} fragments as the reply streams. \"tool_call\"/\"tool_result\"\nsignal tool invocations. When a content plan runs, \"content_plan_started\", \"content_plan_post\"\n(etc.) and \"content_plan_complete\" are forwarded; when the brief is enriched, \"enrich_brief_started\",\nthe per-field \"enrich_brief_*_delta\" events and \"enrich_brief_complete\" are forwarded. A final\n\"complete\" event carries the CampaignAssistantResponse. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}.\nAvailable to any user in the campaign's tenant.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Campaign assistant (SSE)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Instruction payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assistantRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: delta / tool_call / tool_result / *_complete / complete / error events"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/brief-review": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Read-only review of the brief's internal consistency and\ncompleteness (CON-116). Streams step / complete / error events.\nDoes not modify the brief. Available to any user in the tenant.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Review the campaign brief for consistency (SSE)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: step / complete / error events"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/enrich-brief": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Generates a campaign brief (description, target persona, key messages, tone guidelines)\nfrom the campaign's title and type, streaming progress via Server-Sent Events.\nPer-field \"*_delta\" events preview each value as it is written; a final \"complete\"\nevent carries the full EnrichBriefResponse and is the signal that the brief is ready.\nOn failure an \"error\" event carries {\"message\":\"\u003ctext\u003e\",\"code\":\u003chttp_code\u003e}.\nThe brief is returned as a suggestion only — it is not persisted to the campaign.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Enrich campaign brief with AI (SSE)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional steering: {\\",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: step / *_delta / complete / error events"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1020,6 +2380,299 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/generate-posts": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Generates a few new draft posts for a platform subset, a single\nphase, and a publish-date window (CON-114). Streams the same\nstep / post / warning / complete / error events as generate-draft.\nAvailable to any user in the campaign's tenant.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Generate targeted posts (SSE)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: step / post / warning / complete / error events"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/messages": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the most recent Campaign Assistant conversation messages for a campaign.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "List campaign assistant messages",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.CampaignAssistantMessage"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/overview": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the per-campaign overview projection (CON-113): a plain\ntenant-scoped DB read, available to any user in the tenant.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Campaign overview",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/overview.Overview"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/posts-review": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Read-only check of whether the campaign's non-published posts\nfollow the brief (CON-116). Only the first N posts are checked.\nStreams step / complete / error events. Does not modify any post.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Review campaign posts against the brief (SSE)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: step / complete / error events"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/unarchive": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns an archived campaign to the active list.",
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Unarchive campaign",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1122,16 +2775,16 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/content-bank/assets/upload": {
+        "/api/content-bank/assets/audio/finalize": {
             "post": {
                 "security": [
                     {
                         "CookieAuth": []
                     }
                 ],
-                "description": "Accepts one or more ` + "`" + `.md` + "`" + ` (max 10 MB) or ` + "`" + `.pdf` + "`" + ` (max 50 MB) files. Markdown files are converted to BlockNote JSON synchronously; PDFs are uploaded to object storage and processed asynchronously (text extraction, page-aware chunking, embedding, thumbnail). Files are processed independently — one failure does not block others.",
+                "description": "Step 3 of 3: confirms the PUT object (size + 5 GiB cap), then enqueues the first transcription run atomically. Idempotent (deterministic run_key). The asset then moves ` + "`" + `pending` + "`" + ` → ` + "`" + `processing` + "`" + ` → ` + "`" + `ready` + "`" + `/` + "`" + `partial` + "`" + `/` + "`" + `failed` + "`" + `; poll ` + "`" + `GET /{id}/audio` + "`" + `. On completion the transcript becomes the asset's ` + "`" + `content` + "`" + ` and time-anchored chunks (` + "`" + `GET /{id}/chunks` + "`" + `).\nGated by the media_storage_bytes tier limit on the uploaded size (402 ` + "`" + `entitlement_exceeded` + "`" + `).",
                 "consumes": [
-                    "multipart/form-data"
+                    "application/json"
                 ],
                 "produces": [
                     "application/json"
@@ -1139,22 +2792,190 @@ const docTemplate = `{
                 "tags": [
                     "content-bank"
                 ],
-                "summary": "Upload Markdown or PDF file(s)",
+                "summary": "Finalize an audio upload",
                 "parameters": [
                     {
-                        "type": "file",
-                        "description": "Markdown or PDF file(s)",
-                        "name": "files",
-                        "in": "formData",
-                        "required": true
+                        "description": "Asset to finalize (+ optional model pin)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.finalizeAudioRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Asset"
+                        }
+                    },
+                    "400": {
+                        "description": "no pending upload, or the object isn't there yet",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "media_storage_bytes limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "audio ingestion is not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "over the 5 GiB cap",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/audio/presign": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Step 1 of 3 of audio ingestion (CON-282): mints a pending ` + "`" + `AUDIO` + "`" + ` asset and returns a 30-minute presigned PUT. The client PUTs the bytes straight to object storage with the returned ` + "`" + `method` + "`" + ` + ` + "`" + `headers` + "`" + ` (the Content-Type is bound into the signature), then calls ` + "`" + `POST /audio/finalize` + "`" + `. Accepted: mp3, wav, m4a, aac, ogg/oga, opus, flac, webm, aif/aiff (max 5 GiB, enforced at finalize).\nGated by the content_bank_assets tier limit (402 ` + "`" + `entitlement_exceeded` + "`" + `).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Presign an audio upload",
+                "parameters": [
+                    {
+                        "description": "Original filename (drives format + title)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.presignAudioRequest"
+                        }
                     }
                 ],
                 "responses": {
                     "201": {
                         "description": "Created",
                         "schema": {
+                            "$ref": "#/definitions/handlers.presignAudioResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "unsupported audio type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "content_bank_assets limit reached",
+                        "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "audio ingestion is not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/tags": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Adds and/or removes tag IDs on many assets in one call — the\nfiling operation the Content Bank's multi-select needs (CON-279),\nwhere you tag many documents at once. Each listed asset keeps the\ntags it already has, minus ` + "`" + `remove` + "`" + `, plus ` + "`" + `add` + "`" + `; the result is\ndeduped and preserves order. Assets outside the caller's tenant\nare skipped. Returns the updated assets with tags hydrated.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Bulk add/remove tags across assets",
+                "parameters": [
+                    {
+                        "description": "Bulk tag payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.bulkTagRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Asset"
+                            }
                         }
                     },
                     "400": {
@@ -1168,6 +2989,133 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/upload": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Accepts one or more files under the field ` + "`" + `files` + "`" + `, routed by extension. Files are processed independently — one failure does not block others; each gets a result with ` + "`" + `status` + "`" + ` ` + "`" + `created` + "`" + ` or ` + "`" + `failed` + "`" + `.\n- ` + "`" + `.md` + "`" + ` (max 10 MB): converted to BlockNote JSON synchronously (` + "`" + `MD` + "`" + `, ` + "`" + `ready` + "`" + `).\n- ` + "`" + `.pdf` + "`" + ` (max 50 MB): stored, then processed asynchronously (text extraction, page-aware chunking, embedding, thumbnail) as ` + "`" + `PDF` + "`" + ` (` + "`" + `pending` + "`" + ` → ` + "`" + `ready` + "`" + `/` + "`" + `partial` + "`" + `/` + "`" + `failed` + "`" + `).\n- Images — JPEG, PNG, WebP, GIF, HEIC/HEIF, AVIF, TIFF, BMP (operator-set cap, default 50 MB; SVG is rejected): stored and ingested asynchronously by image-service (normalize, EXIF-strip, vision description, region extraction, alt text) as ` + "`" + `IMG` + "`" + ` (` + "`" + `pending` + "`" + ` → ` + "`" + `ready` + "`" + `/` + "`" + `partial` + "`" + `/` + "`" + `failed` + "`" + `); deduplicated within the tenant by checksum. Poll ` + "`" + `GET /{id}/image` + "`" + ` for the run.\n- Office/text documents — .docx/.docm/.dotx, .xlsx/.xlsm/.xltx, .pptx/.pptm/.potx, .odt/.ods/.odp (+ flat), .epub, .csv/.tsv, .html/.xhtml, .eml, .rtf, .txt/.log (max 50 MB; legacy/password-protected OLE2 rejected): parsed asynchronously by document-service into source-anchored chunks as ` + "`" + `DOC` + "`" + ` (` + "`" + `pending` + "`" + ` → ` + "`" + `ready` + "`" + `/` + "`" + `partial` + "`" + `/` + "`" + `failed` + "`" + `, with ` + "`" + `failure_code` + "`" + `/` + "`" + `failure_reason` + "`" + ` on the asset when failed).\nAudio is not accepted here — use ` + "`" + `POST /audio/presign` + "`" + ` + ` + "`" + `/audio/finalize` + "`" + `.\nA failed result carries a stable ` + "`" + `code` + "`" + ` beside the prose ` + "`" + `error` + "`" + `: ` + "`" + `extension_not_allowed` + "`" + `, ` + "`" + `unsupported_media_type` + "`" + `, ` + "`" + `vector_rejected` + "`" + `, ` + "`" + `too_large` + "`" + `, ` + "`" + `empty_file` + "`" + `, ` + "`" + `invalid_file` + "`" + `, ` + "`" + `dimensions_exceeded` + "`" + `, ` + "`" + `quota_exceeded` + "`" + ` (content-bank asset or media-storage tier limit), ` + "`" + `service_unavailable` + "`" + `, ` + "`" + `internal_error` + "`" + `. Match on the code; fall back to the prose for unknown codes.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Upload Markdown, PDF, image, or document file(s)",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Markdown, PDF, image, or document file(s)",
+                        "name": "files",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.uploadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/url": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Scrapes a web page to Markdown (with mirrored images) via Firecrawl and persists it as a URL asset (CON-222). Ingestion is asynchronous: the asset is created ` + "`" + `pending` + "`" + ` and a background job scrapes → embeds → flips status, publishing progress over ` + "`" + `GET /api/events` + "`" + ` (topic ` + "`" + `entity:asset:\u003cid\u003e` + "`" + `). Re-submitting the same URL refreshes the existing asset in place (200) instead of duplicating it (201).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Create asset from a URL",
+                "parameters": [
+                    {
+                        "description": "URL payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.createURLAssetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "existing asset, refresh re-enqueued",
+                        "schema": {
+                            "$ref": "#/definitions/models.Asset"
+                        }
+                    },
+                    "201": {
+                        "description": "new pending asset",
+                        "schema": {
+                            "$ref": "#/definitions/models.Asset"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "URL scraping not configured",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1235,7 +3183,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Updates title and content of an existing asset.",
+                "description": "Whole-resource write of an asset's title, content, and (when present) alt_text / tag_ids — an omitted alt_text or tag_ids keeps the stored value.\nContent rules by type: MD/URL require non-empty content and re-embed on a title/content change. IMG content is the image description — may be empty; an edit re-embeds it together with the stored region chunks. PDF/DOC/AUDIO content is ingestion output and read-only: send it unchanged or omit it (empty = keep); a different value is a 409 ` + "`" + `{code: \"content_locked\"}` + "`" + ` — re-extract instead. Renaming an ingested asset never re-chunks it.\n` + "`" + `alt_text_edited_by_user` + "`" + ` flips to true only when alt_text actually changes.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1297,6 +3245,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "409": {
+                        "description": "content_locked: content edit on a PDF/DOC/AUDIO asset",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             },
@@ -1345,6 +3302,690 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/content-bank/assets/{id}/audio": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the latest transcription run (status, detected language, duration, cost, ` + "`" + `failure_code` + "`" + `/` + "`" + `failure_reason` + "`" + `) with per-segment progress.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Get audio extraction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.audioStatusResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not an AUDIO asset, or no extraction yet",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/audio/extract": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Starts the first transcription run when finalize didn't (e.g. audio-service was down). 409 when a run already exists — use retry or reextract.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Start audio transcription",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional model pin",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pinnedModelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.extractionEnqueuedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "not configured, or a run already exists",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/audio/reextract": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Forces a fresh full run under a new run_key (optionally pinning a model). Prior chunks and transcript content are replaced on completion.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Re-transcribe audio",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional model pin",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pinnedModelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.extractionEnqueuedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "audio ingestion is not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/audio/retry": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Re-drives only the failed segments of the latest run (same run_key) — completed segments are not reprocessed. Use after a ` + "`" + `partial` + "`" + ` run (` + "`" + `failure_code: extraction_partial` + "`" + `). 409 when there is nothing to retry.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Retry failed audio segments",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.extractionEnqueuedResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "not configured, or no failed segments",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/audio/transcript": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the latest run's raw transcript in timeline order: every utterance (incl. non-speech spans, ` + "`" + `is_speech: false` + "`" + `) with original-timeline ` + "`" + `start_ms` + "`" + `/` + "`" + `end_ms` + "`" + `, an \"M:SS\" ` + "`" + `label` + "`" + `, language and confidence. Empty until the asset has been transcribed. For the searchable, de-overlapped chunks use ` + "`" + `GET /{id}/chunks` + "`" + `.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Get audio transcript",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.transcriptResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/chunks": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns one page of an asset's searchable chunks in chunk order, without embeddings (CON-312). Chunks from service-ingested assets carry ` + "`" + `source_label` + "`" + ` (a citation like \"Slide 4\", \"Sheet 'Q3' rows 10–24\", \"1:05–1:40\", \"Region 2\") and ` + "`" + `source_anchor` + "`" + ` (its structured location: page/slide/sheet/section/email/time/image, with ` + "`" + `start_ms` + "`" + `/` + "`" + `end_ms` + "`" + ` for audio and a normalized ` + "`" + `bbox` + "`" + ` for image regions). Both are absent on markdown and URL chunks.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "List asset chunks",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Chunks to skip (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 100, max 500)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assetChunksResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/image": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the latest vision run for an IMG asset (status, shape, quality flags, ` + "`" + `failure_code` + "`" + `/` + "`" + `failure_reason` + "`" + `, cost) with its structured region blocks. Each block carries a normalized ` + "`" + `bbox` + "`" + ` anchor on the source image.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Get image extraction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.imageStatusResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "not an IMG asset, or no extraction yet",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/image/alt-text": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Synchronously re-runs only alt-text generation for the stored image and overwrites the asset's alt text — an explicit user action, so it replaces even a user-edited value and does not flip ` + "`" + `alt_text_edited_by_user` + "`" + `.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Regenerate image alt text",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.altTextResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "no uploaded image, or it could not be read",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "image processing is not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "image-service temporarily unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/image/extract": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Starts the first vision run for an IMG asset when the upload-time enqueue didn't (e.g. image-service was down). 409 when a run already exists — use reextract. Optional body pins the extraction model.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Start image extraction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional model pin",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pinnedModelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.extractionEnqueuedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "asset has no uploaded image",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "not configured, or a run already exists",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/image/reextract": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Forces a fresh full vision run under a new run_key (optionally pinning a model). Prior blocks/chunks are replaced on completion; prior extraction rows are kept (additive history). A user-edited alt text is never overwritten.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Re-extract an image",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional model pin",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pinnedModelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.extractionEnqueuedResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "asset has no uploaded image",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "image processing is not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/current_user": {
             "get": {
                 "security": [
@@ -1374,6 +4015,146 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/email/resubscribe": {
+            "post": {
+                "description": "Verifies the token and removes the marketing suppression for\nthe address (re-opt-in). Any hard-bounce/complaint suppression\nis left in place.",
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Resubscribe to marketing email",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed unsubscribe token",
+                        "name": "token",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Resubscribed page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/email/unsubscribe": {
+            "get": {
+                "description": "Verifies a signed token and renders a confirmation page.\nIdempotent — GET never suppresses (so prefetchers / mail\nscanners can't unsubscribe a user); the form POSTs to /confirm.",
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Unsubscribe landing (link)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed unsubscribe token",
+                        "name": "token",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Confirmation page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "The POST target advertised in the List-Unsubscribe-Post header.",
+                "tags": [
+                    "email"
+                ],
+                "summary": "One-click unsubscribe (RFC 8058)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed unsubscribe token",
+                        "name": "token",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Unsubscribed"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/email/unsubscribe/confirm": {
+            "post": {
+                "description": "Verifies the token, suppresses the address from marketing mail,\nand renders the success page (with a resubscribe option).",
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Confirm unsubscribe (form POST)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed unsubscribe token",
+                        "name": "token",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Unsubscribed page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 }
@@ -1548,7 +4329,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns the local view of accounts attached via the\nZernio profile, plus the last sync timestamp + status.\nReads from SQLite — does not call Zernio.",
+                "description": "Returns the local view of accounts attached via the\nZernio profile, plus the last sync timestamp + status.\nReads from the database — does not call Zernio.",
                 "produces": [
                     "application/json"
                 ],
@@ -1574,6 +4355,79 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "integration_disabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/integrations/zernio/accounts/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Removes a connected social account: deletes it upstream on\nZernio (DELETE /accounts/{id}), then soft-deletes the local\nmirror row so a later sync doesn't revive it. Blocked with 409\nwhen the account still has scheduled posts, unless force=true.\nIdempotent: an unknown or already-disconnected id returns 404.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "zernio"
+                ],
+                "summary": "Disconnect a Zernio social account from the tenant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Social account id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Disconnect even if scheduled posts reference the account",
+                        "name": "force",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Disconnected"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "account_not_found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "integration_disabled | account_has_scheduled_posts",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "integration_degraded",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1668,9 +4522,187 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/integrations/zernio/connect/callback": {
+            "get": {
+                "description": "Browser redirect target from Zernio after the user authorizes a\nplatform (headless mode). Authenticated by the opaque connect\nsession id (ogen_cn), not a cookie. Drives any secondary target\nselection server-side, then 302s to the SPA (success or picker).",
+                "tags": [
+                    "zernio"
+                ],
+                "summary": "Zernio headless OAuth callback",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Connect session id",
+                        "name": "ogen_cn",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "302": {
+                        "description": "Redirect to SPA success or picker page"
+                    }
+                }
+            }
+        },
+        "/api/integrations/zernio/connect/pending/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Backs the in-Ogen picker for a multi-target connect (LinkedIn\norgs, Facebook pages). Returns display fields only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "zernio"
+                ],
+                "summary": "List a pending connect's selectable targets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Connect session id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pendingConnectionResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "connection_not_found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "integration_disabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/integrations/zernio/connect/pending/{id}/select": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Attaches the chosen target (page/org) to the tenant's profile.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "zernio"
+                ],
+                "summary": "Finalize a pending connect by selecting a target",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Connect session id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Chosen target id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.selectConnectionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_target",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "connection_not_found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "integration_disabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "integration_degraded",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/integrations/zernio/health": {
             "get": {
-                "description": "Public endpoint suitable for inclusion in monitoring\ndashboards. Reports whether the integration is enabled,\nits state (disabled / degraded / ok), the bootstrapped\nprofile ID, and the most recent sync result.",
+                "description": "Public endpoint suitable for inclusion in monitoring\ndashboards. Reports the app-wide enabled flag and state\n(disabled / degraded / ok). Per-tenant profile and sync\ndetail is included only when the caller carries a tenant.",
                 "produces": [
                     "application/json"
                 ],
@@ -1824,6 +4856,690 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/invitations": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Owner-only. Lists the caller's workspace invitations, newest first (CON-26).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "invitations"
+                ],
+                "summary": "List invitations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Invitation"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Owner-only. Emails a single-use invitation link to join the caller's active workspace with the given role (default member). Idempotent per email (CON-147 §7.3): re-inviting an address with a pending invite — live or expired — re-issues it with a fresh token, expiry and email and returns 200 (a brand-new invite returns 201); there is no separate resend endpoint. An existing Ogen account may be invited into another workspace; 409 only if the email is already a member of THIS workspace. Rate-limited per workspace and per IP (CON-26/CON-147).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "invitations"
+                ],
+                "summary": "Invite a teammate",
+                "parameters": [
+                    {
+                        "description": "Invitation payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.createInvitationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Existing pending invitation re-issued",
+                        "schema": {
+                            "$ref": "#/definitions/models.Invitation"
+                        }
+                    },
+                    "201": {
+                        "description": "New invitation created",
+                        "schema": {
+                            "$ref": "#/definitions/models.Invitation"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/invitations/accept/{token}": {
+            "get": {
+                "description": "Public. Returns the workspace, inviter, invited email, role, and has_account (whether the invited email already has an Ogen account, so the accept page can prompt sign-in vs name+password) for a valid, pending, unexpired invitation token; every unusable token returns the same generic 410 so the endpoint is not an oracle (CON-26/CON-147).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "invitations"
+                ],
+                "summary": "Preview an invitation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invitation token",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.invitationPreviewResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Public. Consumes a single-use invitation token and joins its workspace with the invited role. If the invited email has no Ogen account, the body's name+password create one and a session is opened (auto-login, 201). If the email already has an account, the caller must be signed in as it and only a membership is added (200, no new session). Returns a generic 410 for any unusable token.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "invitations"
+                ],
+                "summary": "Accept an invitation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invitation token",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Name + password (new accounts only)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acceptInvitationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Membership added to an existing account",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acceptInvitationResponse"
+                        }
+                    },
+                    "201": {
+                        "description": "New account created and logged in",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acceptInvitationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/invitations/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Owner-only. Revokes a pending invitation in the caller's workspace, killing its link (CON-26).",
+                "tags": [
+                    "invitations"
+                ],
+                "summary": "Revoke an invitation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invitation id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/me/entitlements": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The authenticated tenant's tier version in force now: its price, its full entitlement set, and its change_reason (CON-243). The cheapest answer to a disputed change — the customer sees exactly what they are on.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "pricing"
+                ],
+                "summary": "Current entitlements",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/entitlements.Resolution"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "List notifications",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "unread|all (default all)",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "page size (default 30, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "keyset cursor: seq to page before (older)",
+                        "name": "before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "only notifications newer than this seq",
+                        "name": "since",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Notification"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/mark-all-read": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Mark all notifications read",
+                "parameters": [
+                    {
+                        "description": "optional seq upper bound",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.markAllReadRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/stream": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Long-lived Server-Sent Events stream of the caller's\nnotifications. On connect the server replays everything created\nafter the client's cursor (Last-Event-ID header, or ?since=)\nfrom the durable log, then switches to live push — so a client\nthat was offline during a burst misses nothing. A fresh client\n(no cursor) goes live-only and catches history via the REST list.\n\nEach notification is one frame: ` + "`" + `id: \u003cseq\u003e` + "`" + ` / ` + "`" + `event:\nnotification` + "`" + ` / ` + "`" + `data: \u003cjson\u003e` + "`" + `. A heartbeat comment (` + "`" + `: ping` + "`" + `)\nis sent every 20 seconds.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Notification stream (SSE)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Replay cursor (seq)",
+                        "name": "Last-Event-ID",
+                        "in": "header"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Replay cursor (seq); Last-Event-ID wins",
+                        "name": "since",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream"
+                    }
+                }
+            }
+        },
+        "/api/notifications/unread-count": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Unread notification count (badge)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/notifications/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Dismiss (soft-delete) a notification",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Notification id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "notifications"
+                ],
+                "summary": "Mark a notification read/unread",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Notification id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "read state",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.patchNotificationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Notification"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/password-reset": {
+            "post": {
+                "description": "Always answers 202, whether or not the address has an account, and in the same latency envelope — the response never reveals whether an account exists (CON-161). On a hit it emails a single-use reset link; on a miss it does nothing.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "password-reset"
+                ],
+                "summary": "Request a password reset",
+                "parameters": [
+                    {
+                        "description": "Email",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.passwordResetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/password-reset/confirm": {
+            "post": {
+                "description": "Consumes a single-use reset token, sets the new password, and revokes all of the user's sessions. Opens no session — the user logs in afterwards (CON-161).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "password-reset"
+                ],
+                "summary": "Complete a password reset",
+                "parameters": [
+                    {
+                        "description": "Token + new password",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.passwordResetConfirmRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/platforms": {
             "get": {
                 "security": [
@@ -1846,61 +5562,6 @@ const docTemplate = `{
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/handlers.platformResponse"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            },
-            "post": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "description": "Creates a new platform.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "platforms"
-                ],
-                "summary": "Create platform",
-                "parameters": [
-                    {
-                        "description": "Platform payload",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.platformRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/models.Platform"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
                             }
                         }
                     },
@@ -1966,24 +5627,23 @@ const docTemplate = `{
                         }
                     }
                 }
-            },
-            "put": {
+            }
+        },
+        "/api/platforms/{id}/post-type-rules": {
+            "get": {
                 "security": [
                     {
                         "CookieAuth": []
                     }
                 ],
-                "description": "Replaces all mutable fields of an existing platform.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Returns each post-type slug supported by the platform\nwith the structural rules enforced by the publish gate\n(CON-74) — required content, allowed attachment kinds,\nand min/max attachment counts. ` + "`" + `max_attachments` + "`" + ` is\nresolved against the platform's per-kind cap; ` + "`" + `null` + "`" + `\nmeans unbounded. Slugs that are whitelist-only carry\n` + "`" + `rule: null` + "`" + ` and ` + "`" + `whitelist_only: true` + "`" + `.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "platforms"
                 ],
-                "summary": "Update platform",
+                "summary": "List per-post-type rules for a platform",
                 "parameters": [
                     {
                         "type": "string",
@@ -1991,30 +5651,15 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "description": "Platform payload",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.platformRequest"
-                        }
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.Platform"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/platforms.PostTypeRuleView"
                             }
                         }
                     },
@@ -2037,33 +5682,73 @@ const docTemplate = `{
                         }
                     }
                 }
-            },
-            "delete": {
+            }
+        },
+        "/api/post-logs": {
+            "get": {
                 "security": [
                     {
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a platform by Sqid.",
-                "tags": [
-                    "platforms"
+                "description": "Returns log entries filtered by any combination of\n` + "`" + `post_id` + "`" + `, ` + "`" + `event_type` + "`" + `, ` + "`" + `actor` + "`" + `, ` + "`" + `since` + "`" + `/` + "`" + `until` + "`" + `\n(RFC3339), and ` + "`" + `limit` + "`" + `. Default order is newest first.",
+                "produces": [
+                    "application/json"
                 ],
-                "summary": "Delete platform",
+                "tags": [
+                    "post-logs"
+                ],
+                "summary": "Search Post Log entries",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Platform Sqid",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
+                        "description": "Post Sqid",
+                        "name": "post_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Event type",
+                        "name": "event_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Actor (user id or 'system')",
+                        "name": "actor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339 lower bound",
+                        "name": "since",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339 upper bound",
+                        "name": "until",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max entries",
+                        "name": "limit",
+                        "in": "query"
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.PostLog"
+                            }
+                        }
                     },
-                    "401": {
-                        "description": "Unauthorized",
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2071,8 +5756,8 @@ const docTemplate = `{
                             }
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2165,6 +5850,130 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/convert-to-manual": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Converts a set of posts — or every scheduled post for a\nplatform — from auto-publish (` + "`" + `scheduled` + "`" + `) to\n` + "`" + `scheduled_for_manual_publishing` + "`" + `, keeping ` + "`" + `scheduled_at` + "`" + `.\nEach post's live Zernio job is cancelled server-side by a\ncancel_zernio_job task, which then lands the post directly\non ` + "`" + `scheduled_for_manual_publishing` + "`" + ` — no detour through\n` + "`" + `ready_for_publish` + "`" + `, so the post is never left unscheduled\nif the client disconnects mid-flight. Returns per-post\noutcomes: ` + "`" + `converted` + "`" + ` (accepted / already manual) and\n` + "`" + `failed` + "`" + ` (not found, or not in a convertible state). A\npost that publishes before its cancel lands is handled by\nthe worker and recorded in the Post Log (CON-130).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Convert scheduled posts to manual publishing",
+                "parameters": [
+                    {
+                        "description": "Platform or explicit post ids",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.convertToManualRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/thread/preview": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Splits a single authored body into thread segments (manual \"---\"\ndelimiters, else auto-split by the platform's per-segment limit)\nand validates them exactly as the publish gate will. Stateless.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Preview a thread split",
+                "parameters": [
+                    {
+                        "description": "Body + target platform",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.previewThreadRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.previewThreadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2342,6 +6151,348 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/posts/{id}/analytics": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the latest engagement snapshot for a post published through a publisher. Served entirely from the database — never live-calls the publisher (CON-93 FR4). Two 200 shapes: a full snapshot, or — when the background refresh has not yet covered the post — the pending form ` + "`" + `{\"status\":\"pending\",\"post_id\":\"...\"}` + "`" + ` so clients can poll. Both are covered by the schema below (the snapshot fields are absent on the pending response; ` + "`" + `status` + "`" + ` is absent on a snapshot).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Get a post's analytics snapshot",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.postAnalyticsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/assess": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Runs the Post quality assessment agent (CON-85) and streams\nServer-Sent Events: a \"step\" event per flow stage, then a\nfinal \"complete\" event carrying the persisted evaluation\n(four 0-10 dimension scores with rationale, weakness, and\nspan-anchored suggestions, plus the backend-computed overall).",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Assess post quality",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/post_quality.PostQualityResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/assessment": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the most recent persisted quality evaluation for a\npost (CON-85/CON-92) without invoking the model. The frontend\nreads this to render an existing assessment and only triggers\nPOST /assess when the post has changed since it was scored.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Get stored post quality assessment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.PostEvaluation"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/assets": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Unions the given asset ids into the post's sources\n(posts.used_asset_ids), touching no other field. The write is a\nsingle atomic UPDATE, so concurrent attaches of different sources\nboth survive and omitted fields are never reset (CON-233).\nAdding an already-present id is a no-op. A source change to a\nsubmitted post (scheduled/published) is content-locked (409),\nmirroring PUT (CON-251). Returns the updated post.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Attach source assets to a post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Asset ids to attach",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assetMembershipRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Post"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/assets/{assetId}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Removes one asset id from the post's sources\n(posts.used_asset_ids), touching no other field (CON-233).\nRemoving an id that is not present is a no-op. Detaching a source\nfrom a submitted post (scheduled/published) is content-locked\n(409), mirroring PUT (CON-251). Returns the updated post.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Detach a source asset from a post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid to detach",
+                        "name": "assetId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Post"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/posts/{id}/assistant": {
             "post": {
                 "security": [
@@ -2421,6 +6572,180 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/posts/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Enqueues a River cancel_zernio_job task. The Post\nremains in ` + "`" + `Scheduled` + "`" + ` until Zernio confirms the\ncancellation; on confirmation it transitions to the\nrequested target (` + "`" + `ready_for_publish` + "`" + ` or ` + "`" + `draft` + "`" + `).\nIf Zernio reports the job has already been published\n(race), the cancellation is a no-op and the next poll\ncycle lands ` + "`" + `Published` + "`" + ` per the normal success path\n(CON-69 §9).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Cancel a Scheduled post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Cancellation target",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.cancelRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/clone": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Duplicates a post as a new draft in the same campaign and phase, copying\ntitle, content, media/attachments, used assets, CTA, and audience notes.\nAttachments are deep-copied in object storage so the clone is independent\nof its source. Pass target_platform_id/target_post_type to retarget the\nclone (verbatim content — the assistant path adapts content for you).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Clone post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Source post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional clone overrides",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.cloneRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.Post"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/posts/{id}/messages": {
             "get": {
                 "security": [
@@ -2457,6 +6782,235 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/restore": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Restore is non-destructive: the target version's content is\ncopied into a brand-new version that becomes the new HEAD, so\nthe full history is preserved and the restore is itself\nreversible. If the live post has unsnapshotted edits, they are\nauto-saved as a version first so nothing is lost. Restoring to\nthe version that already matches the current content is a no-op.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Restore post to a version",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Target version",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.restoreRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/schedule": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Schedules a ` + "`" + `ready_for_publish` + "`" + ` post for the given absolute\ntime (CON-78). Allowlisted platforms route to ` + "`" + `scheduled` + "`" + `\n(auto-publish, Zernio submit enqueued); others route to\n` + "`" + `scheduled_for_manual_publishing` + "`" + `. Pass ` + "`" + `allow_promote` + "`" + ` to\nauto-promote a ` + "`" + `draft` + "`" + ` (runs CON-74 pre-publish validation,\nthen Draft → ReadyForPublish) before scheduling. The status\nchange, ` + "`" + `scheduled_at` + "`" + `, audit entries, and Zernio enqueue\ncommit in one transaction.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Schedule a post for publishing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Schedule payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.scheduleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/verify-external": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Confirms a manually-published post exists on the platform via Zernio sync-external, back-fills its publisher linkage + permalink, marks it published, and records a first analytics snapshot (CON-153).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Verify a manually-published post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Verification payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.verifyExternalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2632,7 +7186,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Accepts a single image (CON-73) or PDF (CON-75) file via\nmultipart/form-data under the field ` + "`" + `file` + "`" + `. The file is\ndecoded server-side to validate the MIME — JPEG/PNG/WebP/GIF\nfor images, application/pdf for PDFs — then streamed to\nobject storage. Hard caps: 50 MB images, 100 MB PDFs.\nPDF uploads also render a first-page PNG thumbnail\n(best-effort; failures do not abort the upload).\nPer-platform caps are surfaced as soft warnings in the\nresponse.",
+                "description": "Accepts a single image (CON-73) or PDF (CON-75) file via\nmultipart/form-data under the field ` + "`" + `file` + "`" + `. Images — JPEG,\nPNG, WebP, GIF, HEIC/HEIF, AVIF, TIFF, BMP — are validated and\nEXIF-stripped (pixels preserved) by image-service (CON-281);\nSVG is rejected. PDFs are validated as application/pdf and\nget a best-effort first-page PNG thumbnail. Video uses the\npresign flow instead. Caps are operator-set (defaults: 50 MB\nimages, 100 MB PDFs) and the upload counts toward the\ntenant's media_storage_bytes tier limit (402 when over).\nPer-platform caps are surfaced as soft warnings in the\nresponse. A reject is ` + "`" + `{code, error}` + "`" + ` with a stable code:\nunsupported_media_type, vector_rejected, too_large,\nempty_file, invalid_file, dimensions_exceeded,\nservice_unavailable, internal_error.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -2684,6 +7238,13 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "402": {
+                        "description": "media_storage_bytes limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -2713,6 +7274,288 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{post_id}/attachments/finalize": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Probes the uploaded object via video-service (duration, codec,\nresolution, poster frame), validates it against the post's\nplatform, and persists the attachment row (CON-148). Corrupt\nor unreadable video is a terminal 400; an unrecognised\ncontainer/codec is 415. If video-service is unreachable the\nattachment is still created, unprobed (no duration/poster,\nweaker validation).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "post-attachments"
+                ],
+                "summary": "Finalize a presigned video upload",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Finalize body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.finalizeVideoRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.attachmentResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{post_id}/attachments/presign": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns a short-lived PUT URL the client uses to upload video\nbytes straight to object storage, bypassing the API process so\nmulti-GB files never buffer in memory (CON-148). The client\nthen calls finalize with the returned ` + "`" + `s3_key` + "`" + `. Only video\ncontent types are accepted here; images/PDFs use the direct\nupload endpoint. Hard cap: 5 GiB.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "post-attachments"
+                ],
+                "summary": "Presign a direct-to-storage video upload",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Declared upload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.presignVideoRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.presignVideoResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{post_id}/attachments/reorder": {
+            "patch": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Renumbers the post's attachments to match ` + "`" + `ids` + "`" + ` (0..n-1) in one\ntransaction, so the whole list reorders in a single request\nwithout tripping UNIQUE(post_id, position) (CON-124). ` + "`" + `ids` + "`" + ` must\nlist every current attachment exactly once. Returns the\nreordered list.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "post-attachments"
+                ],
+                "summary": "Reorder all post attachments (atomic)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Attachment ids in the new order",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.reorderAllRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.listResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2856,7 +7699,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Updates the ` + "`" + `position` + "`" + ` of an attachment. Last-write-wins;\nno optimistic concurrency token (CON-73 §6 MVP decision).",
+                "description": "Updates an attachment's ` + "`" + `position` + "`" + ` and/or ` + "`" + `alt_text` + "`" + ` (at least\none required). Last-write-wins; no optimistic concurrency token\n(CON-73 §6 MVP decision).",
                 "consumes": [
                     "application/json"
                 ],
@@ -2866,7 +7709,7 @@ const docTemplate = `{
                 "tags": [
                     "post-attachments"
                 ],
-                "summary": "Reorder a post attachment",
+                "summary": "Update a post attachment",
                 "parameters": [
                     {
                         "type": "string",
@@ -2883,12 +7726,12 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "New position",
+                        "description": "Fields to update",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.reorderRequest"
+                            "$ref": "#/definitions/handlers.updateAttachmentRequest"
                         }
                     }
                 ],
@@ -2938,9 +7781,90 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/posts/{post_id}/log": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the audit log for a single post in chronological\norder (oldest first). Default cap 500 entries; pass\n` + "`" + `?limit=N` + "`" + ` to override.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "post-logs"
+                ],
+                "summary": "List Post Log entries for a post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max entries",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.PostLog"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/public/pricing": {
+            "get": {
+                "description": "Unauthenticated source for the marketing Pricing page (CON-243). Returns every currently offered tier — each tier's latest active + purchasable version — with its price rows and its entitlement values enriched with catalog metadata. Net prices; retired/draft/internal tiers never appear. Cacheable (versions are immutable).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "pricing"
+                ],
+                "summary": "Public pricing catalog",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pricingResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/sessions": {
             "post": {
-                "description": "Authenticates a user by email and password, sets a session cookie, and returns the created session.",
+                "description": "Authenticates a user by email and password, sets a session cookie, and returns the created session. Failed attempts are rate-limited per client IP and per address; once a budget is exhausted the endpoint answers 429 with a Retry-After header (CON-162).",
                 "consumes": [
                     "application/json"
                 ],
@@ -2980,6 +7904,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3055,7 +7988,12 @@ const docTemplate = `{
         },
         "/api/settings/{key}": {
             "get": {
-                "description": "Returns a single setting by key. Authentication is not required when setup_complete is false, allowing the frontend to check setup status before any user exists.",
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns a single setting by key (scoped to the caller's tenant).",
                 "produces": [
                     "application/json"
                 ],
@@ -3465,6 +8403,197 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/tenants": {
+            "post": {
+                "description": "Public self-service signup: atomically creates a tenant and its first user, opens a session, and returns the session cookie (CON-97 §7.1).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Sign up (create tenant)",
+                "parameters": [
+                    {
+                        "description": "Signup payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.signupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.signupResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/tenants/current": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the authenticated caller's tenant.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Get current tenant",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Tenant"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/tenants/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns a tenant by id. Only the caller's own tenant is visible; any other id returns 404 (no existence leak — CON-97 §12.3).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Get tenant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Tenant"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Updates the caller's own tenant name. Any other id returns 404. The slug is stable across renames (CON-97 §7.3).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Update tenant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Tenant payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.updateTenantRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Tenant"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/users": {
             "get": {
                 "security": [
@@ -3507,7 +8636,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Creates a new user. Open (no auth required) while setup_complete=false; requires authentication once setup is complete.",
+                "description": "Creates a new user in the authenticated caller's tenant (CON-97). Owner-only (CON-26); the new user defaults to the member role. Any tenant_id in the body is ignored. Email-based invitations (POST /api/invitations) are the preferred way to add teammates.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3547,6 +8676,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3614,7 +8752,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Updates name and/or email of an existing user.",
+                "description": "Updates name and/or email of an existing user. When ` + "`" + `password` + "`" + ` is present the caller must also send ` + "`" + `current_password` + "`" + `; it is re-verified and, on success, every other session for the user is revoked (the caller's own session is kept). CON-193.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3668,6 +8806,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -3685,7 +8832,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a user by Sqid.",
+                "description": "Removes a workspace member. A user may remove themselves; an owner may remove anyone in the workspace (CON-26). The workspace must always keep at least one owner, so removing the last owner (including self) returns 409.",
                 "tags": [
                     "users"
                 ],
@@ -3712,8 +8859,377 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/users/{id}/role": {
+            "patch": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Owner-only. Sets a workspace member's role to owner or member (CON-26). The workspace must always keep at least one owner, so demoting the last owner returns 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "Change a member's role",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Role payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.setRoleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.User"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/webhooks/resend": {
+            "post": {
+                "description": "Signature-verified ingest of Resend events. Bounces/complaints\nsuppress the address; delivery events update the send audit.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Resend delivery webhook",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Svix message id",
+                        "name": "svix-id",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Svix timestamp",
+                        "name": "svix-timestamp",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Svix signature",
+                        "name": "svix-signature",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Acknowledged"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/workspaces": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns every workspace the authenticated account is a member of, with the caller's role, the member count, and which one is the session default (CON-147).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "List workspaces",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/repository.WorkspaceListItem"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Creates a new, independent workspace owned by the authenticated account, provisions its Zernio profile, and returns it. Does not switch — the caller chooses when to move into it (CON-147).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Create a workspace",
+                "parameters": [
+                    {
+                        "description": "Workspace name",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.createWorkspaceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.Tenant"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/workspaces/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Owner-only. Soft-deletes the workspace: it leaves every member's list and can't be entered again, but the row survives (recovery is a manual support request — there is no self-serve restore). Published posts stay live on the networks. Refuses to delete the account's only workspace (409). If it was the session default, the default is re-pointed to a surviving workspace (CON-147 PR4).",
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Delete a workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Workspace id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/workspaces/{id}/switch": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Repoints the session's default workspace — where a fresh tab or the next login seeds. It does not rescope open tabs (each carries its own X-Workspace-Id), so switching in one tab leaves the others alone (CON-147). 403 if the account isn't a member of the target.",
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Set the default workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Workspace id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3726,6 +9242,164 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "entitlements.EntitlementValue": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "current": {
+                    "description": "Current is the tenant's live usage for a numeric feature that has a\nregistered counter (CON-295), attached by the authenticated /me/entitlements\nread so the client can render \"N of M\". Omitted (nil) for an uncounted or\nboolean feature and for the public pricing catalog (no tenant) — the client\ntreats absent as \"unknown\", distinct from a real 0.",
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "is_material": {
+                    "type": "boolean"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "linear_issue": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reset": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "value": {},
+                "value_type": {
+                    "type": "string"
+                }
+            }
+        },
+        "entitlements.Resolution": {
+            "type": "object",
+            "properties": {
+                "change_reason": {
+                    "type": "string"
+                },
+                "entitlements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/entitlements.EntitlementValue"
+                    }
+                },
+                "prices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.TenantTierVersionPrice"
+                    }
+                },
+                "purchasable": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tier_id": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                },
+                "version_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.Optional-bool": {
+            "type": "object",
+            "properties": {
+                "present": {
+                    "description": "the key appeared in the request body",
+                    "type": "boolean"
+                },
+                "value": {
+                    "description": "nil when the value was explicit null",
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.Optional-int": {
+            "type": "object",
+            "properties": {
+                "present": {
+                    "description": "the key appeared in the request body",
+                    "type": "boolean"
+                },
+                "value": {
+                    "description": "nil when the value was explicit null",
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.Optional-models_StringSlice": {
+            "type": "object",
+            "properties": {
+                "present": {
+                    "description": "the key appeared in the request body",
+                    "type": "boolean"
+                },
+                "value": {
+                    "description": "nil when the value was explicit null",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.Optional-string": {
+            "type": "object",
+            "properties": {
+                "present": {
+                    "description": "the key appeared in the request body",
+                    "type": "boolean"
+                },
+                "value": {
+                    "description": "nil when the value was explicit null",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.acceptInvitationRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string",
+                    "minLength": 8
+                }
+            }
+        },
+        "handlers.acceptInvitationResponse": {
+            "type": "object",
+            "properties": {
+                "session": {
+                    "description": "Session is set only on the new-account path (auto-login); an existing\naccount is already signed in, so it accepts without a new session.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Session"
+                        }
+                    ]
+                },
+                "tenant": {
+                    "$ref": "#/definitions/models.Tenant"
+                },
+                "user": {
+                    "$ref": "#/definitions/models.User"
+                }
+            }
+        },
         "handlers.accountInfo": {
             "type": "object",
             "properties": {
@@ -3795,6 +9469,117 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.altTextResponse": {
+            "type": "object",
+            "properties": {
+                "alt_text": {
+                    "type": "string"
+                },
+                "asset_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.analyticsListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/repository.PostAnalyticsListItem"
+                    }
+                },
+                "overview": {
+                    "$ref": "#/definitions/repository.PostAnalyticsOverview"
+                },
+                "pagination": {
+                    "$ref": "#/definitions/handlers.analyticsPagination"
+                }
+            }
+        },
+        "handlers.analyticsPagination": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "pages": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.announcementDTO": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "clicked": {
+                    "type": "boolean"
+                },
+                "cta_label": {
+                    "type": "string"
+                },
+                "cta_url": {
+                    "type": "string"
+                },
+                "ends_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "image_alt": {
+                    "type": "string"
+                },
+                "image_url": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.assetChunksResponse": {
+            "type": "object",
+            "properties": {
+                "chunks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AssetChunk"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.assetMembershipRequest": {
+            "type": "object",
+            "properties": {
+                "asset_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "handlers.assistantRequest": {
             "type": "object",
             "required": [
@@ -3809,7 +9594,18 @@ const docTemplate = `{
         "handlers.attachmentResponse": {
             "type": "object",
             "properties": {
+                "alt_text": {
+                    "description": "AltText is the accessibility description for the media (CON-122). Empty\nmeans \"no alt text\". Editable on upload and via PATCH; sent to Zernio as\nmediaItems[].altText. For images it is auto-generated by image-service\n(CON-281) unless a user has supplied/edited it (see AltTextEditedByUser).",
+                    "type": "string"
+                },
+                "alt_text_edited_by_user": {
+                    "description": "AltTextEditedByUser guards a user's alt text from being overwritten by\nasync auto-generation (CON-281 D5): the generator fills AltText only while\nthis is false; a user-supplied alt_text on upload or a PATCH sets it true.",
+                    "type": "boolean"
+                },
                 "checksum_sha256": {
+                    "type": "string"
+                },
+                "codec": {
                     "type": "string"
                 },
                 "created_at": {
@@ -3817,6 +9613,10 @@ const docTemplate = `{
                 },
                 "created_by": {
                     "type": "string"
+                },
+                "duration_ms": {
+                    "description": "DurationMs and Codec carry video metadata probed by video-service\n(CON-148). Zero/empty for non-video attachments and when the probe\nis unavailable (graceful degradation). Width/Height are reused for\nthe video's frame size.",
+                    "type": "integer"
                 },
                 "height": {
                     "type": "integer"
@@ -3852,6 +9652,10 @@ const docTemplate = `{
                 "s3_key": {
                     "type": "string"
                 },
+                "segment_index": {
+                    "description": "SegmentIndex names which message of a threaded post this attachment\nbelongs to (CON-284), 0-based into Post.ThreadSegments. NULL for every\nattachment of a non-thread post — it belongs to the whole/single post,\ntoday's behaviour. Within a segment, Position still orders the media. A\npointer so nil ⇔ NULL is distinct from a valid segment 0.",
+                    "type": "integer"
+                },
                 "size_bytes": {
                     "type": "integer"
                 },
@@ -3863,6 +9667,20 @@ const docTemplate = `{
                 },
                 "width": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.audioStatusResponse": {
+            "type": "object",
+            "properties": {
+                "extraction": {
+                    "$ref": "#/definitions/models.AudioExtraction"
+                },
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AudioSegment"
+                    }
                 }
             }
         },
@@ -3888,6 +9706,33 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.bulkTagRequest": {
+            "type": "object",
+            "required": [
+                "asset_ids"
+            ],
+            "properties": {
+                "add": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "asset_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "remove": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "handlers.campaignRequest": {
             "type": "object",
             "required": [
@@ -3896,10 +9741,18 @@ const docTemplate = `{
             ],
             "properties": {
                 "asset_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
+                    "$ref": "#/definitions/handlers.Optional-models_StringSlice"
+                },
+                "brand_audience_id": {
+                    "$ref": "#/definitions/handlers.Optional-string"
+                },
+                "brand_voice_id": {
+                    "description": "Presence-aware (CON-245): omitting a brand ref on a full-replace save\nleaves the stored value alone; an explicit null clears it. See Optional.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.Optional-string"
+                        }
+                    ]
                 },
                 "budget": {
                     "type": "number"
@@ -3919,6 +9772,10 @@ const docTemplate = `{
                 "estimated_post_count": {
                     "type": "integer"
                 },
+                "goal_cadence": {
+                    "description": "Goal cadence (CON-182): \"week\" | \"month\". Empty falls back to \"month\".\nestimated_post_count is the target posts per one of these periods.",
+                    "type": "string"
+                },
                 "key_messages": {
                     "type": "string"
                 },
@@ -3927,6 +9784,19 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "publishing_days": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "publishing_time": {
+                    "description": "Scheduling settings (CON-181). All optional; omitted fields fall back to\ndefaults (09:00 / UTC / every day / ±15 min) via normalizeScheduling.",
+                    "type": "string"
+                },
+                "spread_minutes": {
+                    "type": "integer"
                 },
                 "start_date": {
                     "type": "string"
@@ -3949,11 +9819,19 @@ const docTemplate = `{
                         "$ref": "#/definitions/models.CampaignPlatform"
                     }
                 },
+                "timezone": {
+                    "type": "string"
+                },
                 "tone_guidelines": {
                     "type": "string"
                 },
                 "use_assets": {
-                    "type": "boolean"
+                    "description": "UseAssets / AssetIDs are presence-aware (CON-233): the content-bank set has\nits own membership endpoints (POST/DELETE /campaigns/:id/assets) that keep\nuse_assets derived from it, so an ordinary whole-record save that omits\nthese must leave them alone rather than restate the set (and reset the flag)\nover an in-flight membership write. Present replaces; explicit null on\nasset_ids clears. See Optional, applyToValue and applyOptionalSlice.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.Optional-bool"
+                        }
+                    ]
                 }
             }
         },
@@ -3993,6 +9871,15 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.cancelRequest": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "description": "Target is the status the user wants the post moved to once\nZernio confirms the cancellation. Defaults to \"ready_for_publish\"\nwhen omitted (CON-69 §9 — ReadyForPublish is the most common\n\"cancel and edit\" landing state).",
+                    "type": "string"
+                }
+            }
+        },
         "handlers.cloneCampaignTypeRequest": {
             "type": "object",
             "required": [
@@ -4004,6 +9891,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.cloneRequest": {
+            "type": "object",
+            "properties": {
+                "target_platform_id": {
+                    "type": "string"
+                },
+                "target_post_type": {
+                    "type": "string"
+                },
+                "title": {
                     "type": "string"
                 }
             }
@@ -4033,6 +9934,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.convertToManualRequest": {
+            "type": "object",
+            "properties": {
+                "platform": {
+                    "type": "string"
+                },
+                "post_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "handlers.createAssetRequest": {
             "type": "object",
             "required": [
@@ -4040,6 +9955,9 @@ const docTemplate = `{
                 "title"
             ],
             "properties": {
+                "alt_text": {
+                    "type": "string"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -4054,6 +9972,25 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.createInvitationRequest": {
+            "type": "object",
+            "required": [
+                "email"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "role": {
+                    "description": "Role defaults to member; an owner may invite a co-owner by passing \"owner\".",
+                    "type": "string",
+                    "enum": [
+                        "owner",
+                        "member"
+                    ]
+                }
+            }
+        },
         "handlers.createSessionRequest": {
             "type": "object",
             "required": [
@@ -4065,6 +10002,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "password": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.createURLAssetRequest": {
+            "type": "object",
+            "required": [
+                "url"
+            ],
+            "properties": {
+                "url": {
                     "type": "string"
                 }
             }
@@ -4086,6 +10034,14 @@ const docTemplate = `{
                 "password": {
                     "type": "string",
                     "minLength": 8
+                },
+                "role": {
+                    "description": "Role is optional; it defaults to member. Only an owner may create users\n(CON-26), so an owner can also mint a co-owner by passing \"owner\".",
+                    "type": "string",
+                    "enum": [
+                        "owner",
+                        "member"
+                    ]
                 }
             }
         },
@@ -4097,10 +10053,65 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.createWorkspaceRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "minLength": 1
+                }
+            }
+        },
+        "handlers.extractionEnqueuedResponse": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "run_key": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "enqueued"
+                }
+            }
+        },
+        "handlers.finalizeAudioRequest": {
+            "type": "object",
+            "required": [
+                "asset_id"
+            ],
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "model": {
+                    "description": "PinnedModel optionally overrides TRANSCRIBE_MODEL for this run.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.finalizeVideoRequest": {
+            "type": "object",
+            "properties": {
+                "alt_text": {
+                    "type": "string"
+                },
+                "s3_key": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.healthResponse": {
             "type": "object",
             "properties": {
                 "accountCount": {
+                    "description": "AccountCount is per-tenant, so it is a pointer that stays nil (and is\nomitted) on the unauthenticated/tenantless path — a bare \"accountCount\":0\nthere would falsely read as \"this tenant has 0 accounts\". It is set only\ninside the tenant-scoped branch below, after ListActive.",
                     "type": "integer"
                 },
                 "enabled": {
@@ -4116,6 +10127,56 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.imageStatusResponse": {
+            "type": "object",
+            "properties": {
+                "blocks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ImageBlock"
+                    }
+                },
+                "extraction": {
+                    "$ref": "#/definitions/models.ImageExtraction"
+                }
+            }
+        },
+        "handlers.insightEnvelope": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "data": {},
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.invitationPreviewResponse": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "has_account": {
+                    "description": "HasAccount tells the accept page which mode applies without a wasted POST:\ntrue → the invited email already has an Ogen account, so prompt \"sign in as\n\u003cemail\u003e\" (no password field) and accept; false → collect name + password to\ncreate the account. The invitee already holds the capability token and sees\ntheir own email here, so disclosing whether that one address is registered\nadds no meaningful enumeration surface (CON-147).",
+                    "type": "boolean"
+                },
+                "inviter_name": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "workspace_name": {
                     "type": "string"
                 }
             }
@@ -4137,6 +10198,73 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.markAllReadRequest": {
+            "type": "object",
+            "properties": {
+                "before": {
+                    "description": "Before bounds the update to notifications the caller has actually seen\n(seq \u003c= Before), so one that arrives mid-click stays unread. 0 = all.",
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.passwordResetConfirmRequest": {
+            "type": "object",
+            "required": [
+                "password",
+                "token"
+            ],
+            "properties": {
+                "password": {
+                    "description": "min=8 mirrors signup (createUserRequest); the client additionally requires\nupper/lower/digit.",
+                    "type": "string",
+                    "minLength": 8
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.passwordResetRequest": {
+            "type": "object",
+            "required": [
+                "email"
+            ],
+            "properties": {
+                "email": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.patchNotificationRequest": {
+            "type": "object",
+            "properties": {
+                "read": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.pendingConnectionResponse": {
+            "type": "object",
+            "properties": {
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/zernio.ConnectTarget"
+                    }
+                },
+                "platform": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pinnedModelRequest": {
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.platformInfo": {
             "type": "object",
             "properties": {
@@ -4154,37 +10282,25 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.platformRequest": {
-            "type": "object",
-            "required": [
-                "name"
-            ],
-            "properties": {
-                "cadence": {
-                    "type": "string"
-                },
-                "constraints": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "post_types": {
-                    "$ref": "#/definitions/models.PostTypeMap"
-                }
-            }
-        },
         "handlers.platformResponse": {
             "type": "object",
             "properties": {
                 "cadence": {
                     "type": "string"
                 },
+                "connect_supported": {
+                    "description": "ConnectSupported records whether Ogen can OAuth-redirect connect this\nplatform. false documents the Bluesky-style app-password exclusion as data\nrather than code.",
+                    "type": "boolean"
+                },
                 "constraints": {
                     "type": "string"
                 },
                 "created_at": {
                     "type": "string"
+                },
+                "enabled": {
+                    "description": "Enabled is the operator soft on/off switch (CON-292). A disabled platform\ndrops from GET /api/platforms and blocks new connects, but already-scheduled\nposts still publish (the publish path resolves zernio_id regardless).",
+                    "type": "boolean"
                 },
                 "id": {
                     "type": "string"
@@ -4207,7 +10323,28 @@ const docTemplate = `{
                         "$ref": "#/definitions/handlers.publisherView"
                     }
                 },
+                "sort_order": {
+                    "description": "SortOrder drives composer/picker ordering (CON-292).",
+                    "type": "integer"
+                },
+                "supported_post_types": {
+                    "description": "SupportedPostTypes is the Zernio-publishable subset of PostTypes' slugs\n(CON-292) — replaces SupportedPlatform.SupportedPostTypes. PostTypes carries\nevery slug for display; this array marks which ones actually publish.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "text_constraints": {
+                    "$ref": "#/definitions/models.TextConstraints"
+                },
                 "updated_at": {
+                    "type": "string"
+                },
+                "video_constraints": {
+                    "$ref": "#/definitions/models.VideoConstraints"
+                },
+                "zernio_id": {
+                    "description": "ZernioID is the Zernio wire slug (\"twitter\", \"linkedin\", …). It replaces\nthe retired Go registry's sqidToZernioID map (CON-292): the publish path\nand connect flow resolve this off the row. \"\" means the operator has not\nyet assigned a slug (the row is not publishable until they do).",
                     "type": "string"
                 }
             }
@@ -4223,12 +10360,59 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.postAnalyticsResponse": {
+            "type": "object",
+            "properties": {
+                "analytics": {
+                    "$ref": "#/definitions/models.PostAnalyticsMetrics"
+                },
+                "last_refreshed_at": {
+                    "type": "string"
+                },
+                "metrics_last_updated": {
+                    "type": "string"
+                },
+                "platform_analytics": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.PostPlatformAnalytics"
+                    }
+                },
+                "post_id": {
+                    "type": "string"
+                },
+                "publisher": {
+                    "type": "string"
+                },
+                "publisher_post_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is \"pending\" ONLY on the no-snapshot-yet variant, where the\n200 body is just {status, post_id} (the background refresh hasn't\ncovered this post). Omitted on a real snapshot — don't confuse it\nwith SyncStatus, which is the publisher sync state of an existing\nsnapshot. Declared here so the single Swagger 2.0 success schema\ndocuments both 200 shapes (Swagger 2.0 allows one schema per code).",
+                    "type": "string"
+                },
+                "sync_status": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.postRequest": {
             "type": "object",
             "required": [
                 "campaign_id"
             ],
             "properties": {
+                "brand_audience_id": {
+                    "$ref": "#/definitions/handlers.Optional-string"
+                },
+                "brand_voice_id": {
+                    "description": "BrandVoiceID / BrandAudienceID are presence-aware (CON-245): unlike the\nother client-authored fields on this full-replace body, these are stamped\nserver-side by content_plan / draft_post, so an omitted key must leave the\nstored ref untouched rather than null it. See Optional and apply.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.Optional-string"
+                        }
+                    ]
+                },
                 "campaign_id": {
                     "type": "string"
                 },
@@ -4260,7 +10444,15 @@ const docTemplate = `{
                 "published_at": {
                     "type": "string"
                 },
+                "published_url": {
+                    "description": "PublishedURL (CON-165) lets the front-end record a permalink for posts\nZernio cannot verify (the CON-149 skip path — e.g. LinkedIn personal\naccounts) or correct a wrong one. Like every field on this whole-resource\nPUT, the FE round-trips the current value; an empty string clears it.",
+                    "type": "string"
+                },
                 "scheduled_at": {
+                    "type": "string"
+                },
+                "social_account_id": {
+                    "description": "SocialAccountID (CON-150) names which same-platform account the post\npublishes to. Optional: omit it and the submit worker auto-selects the\nplatform's single account, or requires a choice when there are several.",
                     "type": "string"
                 },
                 "status": {
@@ -4269,13 +10461,144 @@ const docTemplate = `{
                 "target_audience_notes": {
                     "type": "string"
                 },
+                "thread_segments": {
+                    "description": "ThreadSegments (CON-284) is DERIVED, not authored (R2): a thread is written\nas a single body in Content (with \"---\" delimiter lines, or auto-split by the\nper-segment char limit), and the server materialises the segment list from it.\nA client-sent value here is IGNORED — the field is retained only so existing\ncallers that still send it don't error, and GET responses carry the derived\nlist back on the Post model (not this request type).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ThreadSegment"
+                    }
+                },
                 "title": {
                     "type": "string"
                 },
                 "used_asset_ids": {
+                    "description": "UsedAssetIDs is presence-aware (CON-233): the sources have their own\nmembership endpoints (POST/DELETE /posts/:id/assets), so an ordinary\nwhole-record save that omits the key must leave the stored set alone rather\nthan restate it and race the membership write. A present array replaces it;\nan explicit null clears it. See Optional and applyOptionalSlice.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.Optional-models_StringSlice"
+                        }
+                    ]
+                }
+            }
+        },
+        "handlers.presignAudioRequest": {
+            "type": "object",
+            "required": [
+                "filename"
+            ],
+            "properties": {
+                "content_type": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.presignAudioResponse": {
+            "type": "object",
+            "properties": {
+                "asset": {
+                    "$ref": "#/definitions/models.Asset"
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "method": {
+                    "type": "string"
+                },
+                "storage_key": {
+                    "type": "string"
+                },
+                "upload_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.presignVideoRequest": {
+            "type": "object",
+            "properties": {
+                "content_type": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.presignVideoResponse": {
+            "type": "object",
+            "properties": {
+                "expires_in": {
+                    "description": "seconds",
+                    "type": "integer"
+                },
+                "s3_key": {
+                    "type": "string"
+                },
+                "upload_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.previewSegment": {
+            "type": "object",
+            "properties": {
+                "char_count": {
+                    "type": "integer"
+                },
+                "content": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.previewThreadRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "platform_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.previewThreadResponse": {
+            "type": "object",
+            "properties": {
+                "errors": {
                     "type": "array",
                     "items": {
-                        "type": "string"
+                        "$ref": "#/definitions/platforms.ValidationError"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.previewSegment"
+                    }
+                },
+                "valid": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.pricingResponse": {
+            "type": "object",
+            "properties": {
+                "tiers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/entitlements.Resolution"
                     }
                 }
             }
@@ -4312,22 +10635,110 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.reorderRequest": {
+        "handlers.reorderAllRequest": {
             "type": "object",
-            "required": [
-                "position"
-            ],
             "properties": {
-                "position": {
+                "ids": {
+                    "description": "IDs is the post's attachments in their new order. It must list every\ncurrent attachment exactly once.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.restoreRequest": {
+            "type": "object",
+            "properties": {
+                "version_number": {
                     "type": "integer"
                 }
             }
         },
-        "handlers.secretPutRequest": {
+        "handlers.scheduleRequest": {
             "type": "object",
             "properties": {
-                "value": {
+                "allow_promote": {
+                    "type": "boolean"
+                },
+                "scheduled_at": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.selectConnectionRequest": {
+            "type": "object",
+            "required": [
+                "targetId"
+            ],
+            "properties": {
+                "targetId": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.setRoleRequest": {
+            "type": "object",
+            "required": [
+                "role"
+            ],
+            "properties": {
+                "role": {
+                    "type": "string",
+                    "enum": [
+                        "owner",
+                        "member"
+                    ]
+                }
+            }
+        },
+        "handlers.signupRequest": {
+            "type": "object",
+            "properties": {
+                "tenant": {
+                    "type": "object",
+                    "required": [
+                        "name"
+                    ],
+                    "properties": {
+                        "name": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "user": {
+                    "type": "object",
+                    "required": [
+                        "email",
+                        "name",
+                        "password"
+                    ],
+                    "properties": {
+                        "email": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "password": {
+                            "type": "string",
+                            "minLength": 8
+                        }
+                    }
+                }
+            }
+        },
+        "handlers.signupResponse": {
+            "type": "object",
+            "properties": {
+                "session": {
+                    "$ref": "#/definitions/models.Session"
+                },
+                "tenant": {
+                    "$ref": "#/definitions/models.Tenant"
+                },
+                "user": {
+                    "$ref": "#/definitions/models.User"
                 }
             }
         },
@@ -4345,13 +10756,55 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.transcriptEntry": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "end_ms": {
+                    "type": "integer"
+                },
+                "is_speech": {
+                    "type": "boolean"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "language": {
+                    "type": "string"
+                },
+                "start_ms": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.transcriptResponse": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "transcript": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.transcriptEntry"
+                    }
+                }
+            }
+        },
         "handlers.updateAssetRequest": {
             "type": "object",
             "required": [
-                "content",
                 "title"
             ],
             "properties": {
+                "alt_text": {
+                    "type": "string"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -4366,6 +10819,36 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.updateAttachmentRequest": {
+            "type": "object",
+            "properties": {
+                "alt_text": {
+                    "type": "string"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "segment_index": {
+                    "description": "SegmentIndex reassigns which thread segment the media belongs to (CON-284).\nPresence-aware so the three JSON states stay distinct: absent ⇒ leave as-is,\na number ⇒ move to that segment, explicit null ⇒ detach (back to a\nwhole-post attachment).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.Optional-int"
+                        }
+                    ]
+                }
+            }
+        },
+        "handlers.updateTenantRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.updateUserRequest": {
             "type": "object",
             "required": [
@@ -4373,6 +10856,10 @@ const docTemplate = `{
                 "name"
             ],
             "properties": {
+                "current_password": {
+                    "description": "CurrentPassword re-authenticates a credential change (CON-193 §1): it is\nrequired only when Password is present and is verified against the stored\nhash, so it carries no min-length rule of its own. A plain name/email edit\nleaves it empty and unchecked.",
+                    "type": "string"
+                },
                 "email": {
                     "type": "string"
                 },
@@ -4383,6 +10870,42 @@ const docTemplate = `{
                     "description": "Password is optional on update; when provided it must be at least 8 characters.",
                     "type": "string",
                     "minLength": 8
+                }
+            }
+        },
+        "handlers.uploadResponse": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.uploadResult"
+                    }
+                }
+            }
+        },
+        "handlers.uploadResult": {
+            "type": "object",
+            "properties": {
+                "asset": {
+                    "$ref": "#/definitions/models.Asset"
+                },
+                "asset_id": {
+                    "type": "string"
+                },
+                "code": {
+                    "description": "Code is a stable, machine-readable companion to Error on a failed result\n(CON-281): the client matches the code and falls back to the prose when it\nis unknown. Empty on a created result. See models.UploadCode*.",
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "\"created\" | \"failed\"",
+                    "type": "string"
                 }
             }
         },
@@ -4397,9 +10920,28 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.verifyExternalRequest": {
+            "type": "object",
+            "properties": {
+                "post_id": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "models.Asset": {
             "type": "object",
             "properties": {
+                "alt_text": {
+                    "description": "AltText is a short accessibility description for image assets (CON-246),\ndistinct from content (the longer, embeddable description). Empty for\nnon-image assets. For images it is auto-generated by image-service unless a\nuser has edited it (CON-281, see AltTextEditedByUser).",
+                    "type": "string"
+                },
+                "alt_text_edited_by_user": {
+                    "description": "AltTextEditedByUser guards a user's manual alt text from being overwritten\nby (re-)processing (CON-281 D5): image-service fills AltText only while this\nis false; a PUT that sets alt_text flips it true, so re-extraction never\nclobbers a human edit.",
+                    "type": "boolean"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -4409,10 +10951,28 @@ const docTemplate = `{
                 "created_by": {
                     "type": "string"
                 },
+                "failure_code": {
+                    "description": "FailureCode/FailureReason say why ingestion failed (CON-312): a stable\nmodels.UploadCode* plus tenant-visible prose. Set only while status is\nfailed; any other status write clears them. Written for DOC assets —\naudio/image carry theirs on the extraction row.",
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
                 "file": {
                     "$ref": "#/definitions/models.AssetFile"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "images": {
+                    "description": "Images are the mirrored page images for URL assets (CON-222), hydrated and\nURL-decorated by the handler layer. Not persisted on assets.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AssetImage"
+                    }
+                },
+                "source_url": {
+                    "description": "SourceURL is the origin URL for URL-scraped assets (CON-222); nil for\nMD/PDF/text assets. Unique per tenant, so re-submitting a URL refreshes\nthe same asset instead of duplicating it.",
                     "type": "string"
                 },
                 "status": {
@@ -4441,26 +11001,76 @@ const docTemplate = `{
                 }
             }
         },
+        "models.AssetChunk": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "chunk_index": {
+                    "type": "integer"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "page_end": {
+                    "type": "integer"
+                },
+                "page_start": {
+                    "type": "integer"
+                },
+                "source_anchor": {
+                    "description": "SourceAnchor is the structured location backing SourceLabel (CON-280),\nstored as jsonb. nil for non-document chunks.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SourceAnchor"
+                        }
+                    ]
+                },
+                "source_label": {
+                    "description": "SourceLabel is a human-readable citation for the chunk's origin (CON-280),\ne.g. \"Slide 4\", \"Sheet 'Q3 Pipeline' rows 10-24\", or a heading breadcrumb.\nnil for chunks that predate document ingestion (PDF/URL/MD).",
+                    "type": "string"
+                },
+                "token_count": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.AssetFile": {
             "type": "object",
             "properties": {
                 "asset_id": {
                     "type": "string"
                 },
+                "checksum_sha256": {
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
+                "height": {
+                    "type": "integer"
+                },
                 "id": {
                     "type": "string"
+                },
+                "is_animated": {
+                    "type": "boolean"
                 },
                 "mime_type": {
                     "type": "string"
                 },
                 "normalized_s3_key": {
+                    "description": "NormalizedS3Key points at the browser-drawable derivative image-service\nwrites for every image (assets/{id}/normalized.png). It exists precisely so\nformats a browser can't decode — HEIC/HEIF, TIFF (CON-281/CON-299) — can\nstill be shown: url is the original bytes, this is the copy an \u003cimg\u003e renders.\nNull for PDFs and for images whose extraction failed or is still pending.",
                     "type": "string"
                 },
                 "normalized_url": {
-                    "description": "NormalizedURL is a transient public URL rendered from NormalizedS3Key by\nthe handler layer — the browser-drawable copy shown for HEIC/TIFF (CON-299).\nNot persisted.",
                     "type": "string"
                 },
                 "original_name": {
@@ -4479,7 +11089,111 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "thumbnail_url": {
-                    "description": "ThumbnailURL is a transient public URL rendered from ThumbnailS3Key by\nthe handler layer before serialization. Not persisted.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "description": "URL, ThumbnailURL and NormalizedURL are transient public URLs rendered from\nS3Key / ThumbnailS3Key / NormalizedS3Key by the handler layer before\nserialization. URL is the original bytes (CON-246); NormalizedURL is the copy\na browser can draw (CON-299) — the full-size asset screen renders it for\nHEIC/TIFF; ThumbnailURL is the small preview. Not persisted; minted per\nresponse so a signed/public URL is never stored or cached client-side.",
+                    "type": "string"
+                },
+                "width": {
+                    "description": "Width, Height, IsAnimated and ChecksumSHA256 describe image files (CON-246).\nSame names/types as post_attachments so the attach-to-post bridge is a\nfield copy. Zero/empty for PDFs. ChecksumSHA256 also backs upload dedupe.",
+                    "type": "integer"
+                }
+            }
+        },
+        "models.AssetImage": {
+            "type": "object",
+            "properties": {
+                "alt": {
+                    "type": "string"
+                },
+                "asset_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "idx": {
+                    "type": "integer"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "s3_key": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "source_url": {
+                    "type": "string"
+                },
+                "url": {
+                    "description": "URL is a transient public URL rendered from S3Key by the handler layer\nbefore serialization. Not persisted.",
+                    "type": "string"
+                }
+            }
+        },
+        "models.AudioExtraction": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "audio_seconds": {
+                    "description": "AudioSeconds is the processed source duration (a usage/quota dimension).",
+                    "type": "integer"
+                },
+                "cost_micros": {
+                    "description": "CostMicros is the run's transcription cost, snapshotted at write time from\nthe versioned gemini price table (CON-86); PriceVersion records which table.",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "detected_language": {
+                    "type": "string"
+                },
+                "embed_model": {
+                    "type": "string"
+                },
+                "failure_code": {
+                    "description": "FailureCode is the stable, machine-readable companion to FailureReason\n(models.UploadCode*), so the client can word it without parsing prose\n(CON-312).",
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "description": "FailureReason is a tenant-visible reason for a terminal failed/partial run\n(over-duration, over-cap, unusable audio).",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "normalized_s3_key": {
+                    "type": "string"
+                },
+                "price_version": {
+                    "type": "string"
+                },
+                "run_key": {
+                    "description": "RunKey makes an extraction idempotent: a duplicate enqueue for the same\n(asset_id, run_key) hits the unique index and no-ops. A re-extract uses a\nnew RunKey so it is a distinct run.",
+                    "type": "string"
+                },
+                "segment_count": {
+                    "type": "integer"
+                },
+                "source_duration_ms": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "transcribe_model": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -4487,14 +11201,87 @@ const docTemplate = `{
                 }
             }
         },
+        "models.AudioSegment": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "cost_micros": {
+                    "description": "CostMicros is this segment's transcription cost (CON-282), snapshotted from\nthe versioned gemini price table and persisted in the SAME write that marks\nthe segment done — so cost and completion commit atomically and a resume\nthat skips a done segment never loses its cost. The extraction total sums\nthese.",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "end_ms": {
+                    "type": "integer"
+                },
+                "extraction_id": {
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "retry_count": {
+                    "type": "integer"
+                },
+                "start_ms": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "utterance_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.Bbox": {
+            "type": "object",
+            "properties": {
+                "h": {
+                    "type": "number"
+                },
+                "w": {
+                    "type": "number"
+                },
+                "x": {
+                    "type": "number"
+                },
+                "y": {
+                    "type": "number"
+                }
+            }
+        },
         "models.Campaign": {
             "type": "object",
             "properties": {
+                "archived_at": {
+                    "description": "Lifecycle (CON-156 BE 6). A campaign leaves the active set by being\narchived (reversible) or soft-deleted (an operational safety net, not an\nundo — no self-serve restore). Both are nullable timestamps filtered\nexplicitly in the repository rather than via bun's soft_delete tag, so\narchive and delete stay independent: GetByID still returns an archived\ncampaign (to unarchive it) while hiding a deleted one.",
+                    "type": "string"
+                },
                 "asset_ids": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
+                },
+                "brand_audience_id": {
+                    "type": "string"
+                },
+                "brand_voice_id": {
+                    "description": "Brand bindings (CON-245): the voice/audience this campaign writes in.\nNullable — resolution falls back to the workspace default voice /\ntone_guidelines prose when unset. FK ON DELETE SET NULL.",
+                    "type": "string"
                 },
                 "budget": {
                     "type": "number"
@@ -4514,6 +11301,9 @@ const docTemplate = `{
                 "currency": {
                     "type": "string"
                 },
+                "deleted_at": {
+                    "type": "string"
+                },
                 "description": {
                     "description": "meta",
                     "type": "string"
@@ -4523,6 +11313,10 @@ const docTemplate = `{
                 },
                 "estimated_post_count": {
                     "type": "integer"
+                },
+                "goal_cadence": {
+                    "description": "Goal (CON-182). estimated_post_count above is the target number of posts\nPER goal_cadence period; the content-plan flow multiplies it by the number\nof week/month periods the campaign's [start_date, end_date] window spans,\nand the campaign overview reports per-period progress against it.",
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -4541,6 +11335,19 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/models.Platform"
                     }
+                },
+                "publishing_days": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "publishing_time": {
+                    "description": "Scheduling settings (CON-181) — consumed by the content-plan flow to\nplace each generated draft's scheduled_at. PublishingTime is a local\n\"HH:MM\" wall clock; Timezone is an IANA name (\"\" = UTC); PublishingDays\nis a subset of mon..sun; SpreadMinutes is the ± jitter (0 = exact).",
+                    "type": "string"
+                },
+                "spread_minutes": {
+                    "type": "integer"
                 },
                 "start_date": {
                     "type": "string"
@@ -4574,6 +11381,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/models.CampaignPlatform"
                     }
                 },
+                "timezone": {
+                    "type": "string"
+                },
                 "tone_guidelines": {
                     "type": "string"
                 },
@@ -4582,6 +11392,26 @@ const docTemplate = `{
                 },
                 "use_assets": {
                     "type": "boolean"
+                }
+            }
+        },
+        "models.CampaignAssistantMessage": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
                 }
             }
         },
@@ -4664,6 +11494,151 @@ const docTemplate = `{
                 }
             }
         },
+        "models.EvaluationDimension": {
+            "type": "object",
+            "properties": {
+                "contribution": {
+                    "type": "number"
+                },
+                "rationale": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "integer"
+                },
+                "suggestions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.EvaluationSuggestion"
+                    }
+                },
+                "weakness": {
+                    "type": "string"
+                },
+                "weight": {
+                    "description": "Weight is the fraction (0-1) this dimension contributed to the\noverall, taken from the Type weight profile. Contribution is the\nweighted percentage points it added to overall_pct\n(Weight * Score/10 * 100). Both are backend-computed.",
+                    "type": "number"
+                }
+            }
+        },
+        "models.EvaluationDimensionKey": {
+            "type": "string",
+            "enum": [
+                "correctness",
+                "clarity",
+                "engagement",
+                "delivery"
+            ],
+            "x-enum-varnames": [
+                "DimensionCorrectness",
+                "DimensionClarity",
+                "DimensionEngagement",
+                "DimensionDelivery"
+            ]
+        },
+        "models.EvaluationResult": {
+            "type": "object",
+            "properties": {
+                "clarity": {
+                    "$ref": "#/definitions/models.EvaluationDimension"
+                },
+                "correctness": {
+                    "$ref": "#/definitions/models.EvaluationDimension"
+                },
+                "delivery": {
+                    "$ref": "#/definitions/models.EvaluationDimension"
+                },
+                "engagement": {
+                    "$ref": "#/definitions/models.EvaluationDimension"
+                }
+            }
+        },
+        "models.EvaluationSuggestion": {
+            "type": "object",
+            "properties": {
+                "dimension": {
+                    "$ref": "#/definitions/models.EvaluationDimensionKey"
+                },
+                "fix": {
+                    "type": "string"
+                },
+                "issue": {
+                    "type": "string"
+                },
+                "severity": {
+                    "$ref": "#/definitions/models.SuggestionSeverity"
+                },
+                "span": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ImageBlock": {
+            "type": "object",
+            "properties": {
+                "anchor": {
+                    "description": "Anchor is the image-region location (Kind == \"image\", a normalized bbox),\nreusing the shared SourceAnchor jsonb shape.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SourceAnchor"
+                        }
+                    ]
+                },
+                "asset_id": {
+                    "type": "string"
+                },
+                "cells": {
+                    "description": "Cells carries a table block's grid (row/col/text), stored as jsonb; nil for\nnon-table blocks.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ImageCell"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "extraction_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "description": "Kind/Level/Text mirror a documents Block: kind is heading|paragraph|\nlist_item|table|composite|...; level is a heading depth (0 otherwise).",
+                    "type": "string"
+                },
+                "level": {
+                    "type": "integer"
+                },
+                "low_confidence": {
+                    "type": "boolean"
+                },
+                "provenance": {
+                    "description": "Provenance is \"image_extraction\"; LowConfidence marks a tabular block whose\nsource is a screenshot rather than a source file (CON-281 §9).",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ImageCell": {
+            "type": "object",
+            "properties": {
+                "col": {
+                    "type": "integer"
+                },
+                "row": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
         "models.ImageConstraints": {
             "type": "object",
             "properties": {
@@ -4683,6 +11658,209 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
+        },
+        "models.ImageExtraction": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "blocks": {
+                    "description": "Blocks is hydrated by the read API from image_blocks; not persisted here.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ImageBlock"
+                    }
+                },
+                "checksum_sha256": {
+                    "type": "string"
+                },
+                "classify_confidence": {
+                    "type": "number"
+                },
+                "classify_model": {
+                    "description": "Model ids used this run (config, never compiled in). EscalateModel is only\nmeaningful when Escalated is true.",
+                    "type": "string"
+                },
+                "cost_micros": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description_ok": {
+                    "description": "DescriptionOK/ExtractionOK/Truncated are the service's self-reported quality\nsignals; a description-ok/extraction-failed run settles to ` + "`" + `partial` + "`" + `.",
+                    "type": "boolean"
+                },
+                "escalate_model": {
+                    "type": "string"
+                },
+                "escalated": {
+                    "description": "Escalated marks a one-shot re-run at a stronger model on low confidence;\nEscalationImproved records whether it actually helped (recorded regardless).",
+                    "type": "boolean"
+                },
+                "escalation_improved": {
+                    "type": "boolean"
+                },
+                "extract_model": {
+                    "type": "string"
+                },
+                "extraction_ok": {
+                    "type": "boolean"
+                },
+                "failure_code": {
+                    "description": "FailureCode is the stable, machine-readable companion to FailureReason\n(CON-281) — one of models.UploadCode* — so the client can distinguish a\nquota block from a bad image from a transient outage from a searchable-but-\npartial run without parsing prose. Empty on a clean complete run.",
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "description": "FailureReason is a tenant-visible reason for a terminal failed/partial run\n(unsupported/vector, over pixel-area/size, over quota, unreadable).",
+                    "type": "string"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "input_tokens": {
+                    "description": "Token totals across the run's vision calls (classify + extract + describe +\nalt + any escalation); CostMicros is the snapshotted price, PriceVersion the\ntable it came from.",
+                    "type": "integer"
+                },
+                "is_animated": {
+                    "type": "boolean"
+                },
+                "normalized_mime": {
+                    "type": "string"
+                },
+                "normalized_s3_key": {
+                    "description": "Normalized derivative metadata (the re-encoded normalized.png the service\nwrote and future re-runs read). NormalizedS3Key is the tenant-relative key;\nnil until normalization succeeds.",
+                    "type": "string"
+                },
+                "output_tokens": {
+                    "type": "integer"
+                },
+                "price_version": {
+                    "type": "string"
+                },
+                "run_key": {
+                    "description": "RunKey makes an extraction idempotent: a duplicate enqueue for the same\n(asset_id, run_key) hits the unique index and no-ops. A re-extract uses a\nnew RunKey so it is a distinct, additive run.",
+                    "type": "string"
+                },
+                "shape": {
+                    "description": "Shape is the classified image shape (prose/conversation/social_post/\ntabular/creative); ClassifyConfidence is the model's self-reported\nconfidence in it.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.Invitation": {
+            "type": "object",
+            "properties": {
+                "accepted_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "invited_by": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tenant_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.JSONMap": {
+            "type": "object",
+            "additionalProperties": {}
+        },
+        "models.Notification": {
+            "type": "object",
+            "properties": {
+                "action_url": {
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "data": {
+                    "$ref": "#/definitions/models.JSONMap"
+                },
+                "entity_id": {
+                    "type": "string"
+                },
+                "entity_type": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "level": {
+                    "$ref": "#/definitions/models.NotificationLevel"
+                },
+                "read_at": {
+                    "type": "string"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.NotificationLevel": {
+            "type": "string",
+            "enum": [
+                "info",
+                "success",
+                "warning",
+                "error"
+            ],
+            "x-enum-varnames": [
+                "NotificationLevelInfo",
+                "NotificationLevelSuccess",
+                "NotificationLevelWarning",
+                "NotificationLevelError"
+            ]
         },
         "models.PDFConstraints": {
             "type": "object",
@@ -4710,11 +11888,19 @@ const docTemplate = `{
                 "cadence": {
                     "type": "string"
                 },
+                "connect_supported": {
+                    "description": "ConnectSupported records whether Ogen can OAuth-redirect connect this\nplatform. false documents the Bluesky-style app-password exclusion as data\nrather than code.",
+                    "type": "boolean"
+                },
                 "constraints": {
                     "type": "string"
                 },
                 "created_at": {
                     "type": "string"
+                },
+                "enabled": {
+                    "description": "Enabled is the operator soft on/off switch (CON-292). A disabled platform\ndrops from GET /api/platforms and blocks new connects, but already-scheduled\nposts still publish (the publish path resolves zernio_id regardless).",
+                    "type": "boolean"
                 },
                 "id": {
                     "type": "string"
@@ -4731,7 +11917,28 @@ const docTemplate = `{
                 "post_types": {
                     "$ref": "#/definitions/models.PostTypeMap"
                 },
+                "sort_order": {
+                    "description": "SortOrder drives composer/picker ordering (CON-292).",
+                    "type": "integer"
+                },
+                "supported_post_types": {
+                    "description": "SupportedPostTypes is the Zernio-publishable subset of PostTypes' slugs\n(CON-292) — replaces SupportedPlatform.SupportedPostTypes. PostTypes carries\nevery slug for display; this array marks which ones actually publish.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "text_constraints": {
+                    "$ref": "#/definitions/models.TextConstraints"
+                },
                 "updated_at": {
+                    "type": "string"
+                },
+                "video_constraints": {
+                    "$ref": "#/definitions/models.VideoConstraints"
+                },
+                "zernio_id": {
+                    "description": "ZernioID is the Zernio wire slug (\"twitter\", \"linkedin\", …). It replaces\nthe retired Go registry's sqidToZernioID map (CON-292): the publish path\nand connect flow resolve this off the row. \"\" means the operator has not\nyet assigned a slug (the row is not publishable until they do).",
                     "type": "string"
                 }
             }
@@ -4739,6 +11946,13 @@ const docTemplate = `{
         "models.Post": {
             "type": "object",
             "properties": {
+                "brand_audience_id": {
+                    "type": "string"
+                },
+                "brand_voice_id": {
+                    "description": "Brand bindings (CON-245): this post's own voice/audience. Nullable —\nresolution falls back to the campaign's, then the workspace default /\nlegacy prose. content_plan/draft_post stamp the voice; both are overridable\nvia PUT /api/posts/:id or the targeted /:id/brand. FK ON DELETE SET NULL.",
+                    "type": "string"
+                },
                 "campaign": {
                     "description": "Hydrated relations — not stored in the database.",
                     "allOf": [
@@ -4756,6 +11970,10 @@ const docTemplate = `{
                 "campaign_type_phase_id": {
                     "type": "string"
                 },
+                "cloned_from_post_id": {
+                    "description": "ClonedFromPostID links a clone back to the Post it was duplicated\nfrom (CON-59). Nil for posts created directly. ` + "`" + `nullzero` + "`" + ` sends\nNULL (not \"\") so the lineage is a clean \"has a source / does not\".",
+                    "type": "string"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -4769,6 +11987,9 @@ const docTemplate = `{
                     "$ref": "#/definitions/models.PostCTAType"
                 },
                 "cta_url": {
+                    "type": "string"
+                },
+                "failure_reason": {
                     "type": "string"
                 },
                 "id": {
@@ -4793,7 +12014,31 @@ const docTemplate = `{
                 "published_at": {
                     "type": "string"
                 },
+                "published_results": {
+                    "type": "string"
+                },
+                "published_url": {
+                    "description": "PublishedURL is the platform permalink for the live post (CON-165), kept\nas a first-class field so the front-end can render \"View post\" off the\npost it already has, without an analytics round-trip (CON-149). Set from\nthe publisher's canonical URL on publish/verify, or accepted on PUT for\nthe Zernio skip path. ` + "`" + `nullzero` + "`" + ` sends NULL (not \"\") when unset; a URL\nwith an empty PublisherPostID is a user-supplied (unverified) link.",
+                    "type": "string"
+                },
+                "publisher": {
+                    "description": "Publisher integration fields (CON-69 §6/§7, generalized to\npublisher-agnostic names in CON-93 §14).\nPublisher marks which publisher adapter owns the external identity\n(matches publishers.Publisher.ID(), e.g. \"zernio\"); empty until a\npost is published through a publisher.\nPublisherPostID is the id the publisher assigns when a Post is\nsubmitted; the UNIQUE index in the migration prevents accidental\ndouble-submit and is the join key into publisher analytics (CON-93).\nPublisherStatus mirrors the publisher's enum verbatim so the polling\ntask can short-circuit on already-handled terminal states.\nPublishedResults carries the publisher's per-platform outcomes (URLs,\nplatform IDs) once the post resolves.\nFailureReason distinguishes a publisher-reported failure from\nreconciliation timeout — see CON-69 §8.",
+                    "type": "string"
+                },
+                "publisher_post_id": {
+                    "type": "string"
+                },
+                "publisher_status": {
+                    "type": "string"
+                },
                 "scheduled_at": {
+                    "type": "string"
+                },
+                "social_account": {
+                    "$ref": "#/definitions/models.SocialAccount"
+                },
+                "social_account_id": {
+                    "description": "SocialAccountID names which same-platform account this post\npublishes to (CON-150). NULL when unspecified — the submit worker\nthen auto-selects the platform's single account, or fails\n` + "`" + `account_selection_required` + "`" + ` when the platform has more than one.\n` + "`" + `nullzero` + "`" + ` sends NULL (not \"\") so the FK to social_accounts holds.",
                     "type": "string"
                 },
                 "status": {
@@ -4801,6 +12046,13 @@ const docTemplate = `{
                 },
                 "target_audience_notes": {
                     "type": "string"
+                },
+                "thread_segments": {
+                    "description": "ThreadSegments holds the ordered messages of a threaded post (CON-284),\nused only when PlatformPostType == PostTypeThread: index 0 is the root,\n1..N-1 the ordered replies. Empty [] for every other post. Content\nmirrors segment 0 so thread-unaware readers (quality CON-184, listings,\ncampaign summaries CON-152, analytics title) keep working; writes that\nset segments restamp Content from the root. Per-segment media is carried\nby PostAttachment.SegmentIndex, not here.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ThreadSegment"
+                    }
                 },
                 "title": {
                     "type": "string"
@@ -4819,6 +12071,38 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/models.Asset"
                     }
+                }
+            }
+        },
+        "models.PostAnalyticsMetrics": {
+            "type": "object",
+            "properties": {
+                "clicks": {
+                    "type": "integer"
+                },
+                "comments": {
+                    "type": "integer"
+                },
+                "engagement_rate": {
+                    "type": "number"
+                },
+                "impressions": {
+                    "type": "integer"
+                },
+                "likes": {
+                    "type": "integer"
+                },
+                "reach": {
+                    "type": "integer"
+                },
+                "saves": {
+                    "type": "integer"
+                },
+                "shares": {
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
                 }
             }
         },
@@ -4854,6 +12138,163 @@ const docTemplate = `{
                 "CTATypeButton",
                 "CTATypeNone"
             ]
+        },
+        "models.PostEvaluation": {
+            "type": "object",
+            "properties": {
+                "caption_scoped": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "input_hash": {
+                    "description": "InputHash fingerprints the assessment inputs (rendered prompt + model)\nso the assess flow skips re-running the model when nothing the model\nsees has changed (CON-92).",
+                    "type": "string"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "overall_pct": {
+                    "type": "number"
+                },
+                "platform_id": {
+                    "type": "string"
+                },
+                "platform_post_type": {
+                    "type": "string"
+                },
+                "post_id": {
+                    "type": "string"
+                },
+                "result": {
+                    "$ref": "#/definitions/models.EvaluationResult"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.PostLog": {
+            "type": "object",
+            "properties": {
+                "actor": {
+                    "type": "string"
+                },
+                "event_timestamp": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "$ref": "#/definitions/models.PostLogEventType"
+                },
+                "from_status": {
+                    "$ref": "#/definitions/models.PostStatus"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "payload": {
+                    "type": "string"
+                },
+                "post_id": {
+                    "type": "string"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "to_status": {
+                    "$ref": "#/definitions/models.PostStatus"
+                }
+            }
+        },
+        "models.PostLogEventType": {
+            "type": "string",
+            "enum": [
+                "state_transition",
+                "state_transition_blocked",
+                "validation_passed",
+                "validation_failed",
+                "allowlist_decision",
+                "task_enqueued",
+                "task_started",
+                "task_succeeded",
+                "task_failed",
+                "task_retried",
+                "task_panicked",
+                "zernio_submit",
+                "zernio_poll",
+                "zernio_cancel",
+                "zernio_retry",
+                "reconciliation_timeout",
+                "user_schedule",
+                "user_cancel",
+                "user_retry",
+                "post_cloned",
+                "post_restored",
+                "quality_assessed"
+            ],
+            "x-enum-varnames": [
+                "PostLogEventStateTransition",
+                "PostLogEventStateTransitionBlocked",
+                "PostLogEventValidationPassed",
+                "PostLogEventValidationFailed",
+                "PostLogEventAllowlistDecision",
+                "PostLogEventTaskEnqueued",
+                "PostLogEventTaskStarted",
+                "PostLogEventTaskSucceeded",
+                "PostLogEventTaskFailed",
+                "PostLogEventTaskRetried",
+                "PostLogEventTaskPanicked",
+                "PostLogEventZernioSubmit",
+                "PostLogEventZernioPoll",
+                "PostLogEventZernioCancel",
+                "PostLogEventZernioRetry",
+                "PostLogEventReconciliationTimeout",
+                "PostLogEventUserSchedule",
+                "PostLogEventUserCancel",
+                "PostLogEventUserRetry",
+                "PostLogEventPostCloned",
+                "PostLogEventPostRestored",
+                "PostLogEventQualityAssessed"
+            ]
+        },
+        "models.PostPlatformAnalytics": {
+            "type": "object",
+            "properties": {
+                "account_id": {
+                    "type": "string"
+                },
+                "account_username": {
+                    "type": "string"
+                },
+                "analytics": {
+                    "$ref": "#/definitions/models.PostAnalyticsMetrics"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "platform_post_id": {
+                    "type": "string"
+                },
+                "platform_post_url": {
+                    "type": "string"
+                },
+                "reauthorize_url": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "sync_status": {
+                    "type": "string"
+                }
+            }
         },
         "models.PostStatus": {
             "type": "string",
@@ -4911,6 +12352,10 @@ const docTemplate = `{
         "models.Session": {
             "type": "object",
             "properties": {
+                "account_id": {
+                    "description": "AccountID is the login identity this session authenticates (CON-147). The\nsession belongs to the account; UserID + TenantID are the active membership\n/ default workspace it currently resolves to.",
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -4918,6 +12363,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "tenant_id": {
                     "type": "string"
                 },
                 "user_id": {
@@ -4936,6 +12384,115 @@ const docTemplate = `{
                 }
             }
         },
+        "models.SocialAccount": {
+            "type": "object",
+            "properties": {
+                "avatar_url": {
+                    "type": "string"
+                },
+                "connected_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "health_status": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "last_health_checked_at": {
+                    "type": "string"
+                },
+                "last_synced_at": {
+                    "type": "string"
+                },
+                "needs_reconnect": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "profile_id": {
+                    "type": "string"
+                },
+                "token_expires_at": {
+                    "description": "Health snapshot (CON-219). Populated by the detect_expiring_connections\nsweep from Zernio's GET /v1/accounts/health; all nullable and NULL until\nthe first sweep. TokenExpiresAt is the forward-looking token expiry that\ndrives the \"connection expiring\" owner notification; HealthStatus is\nZernio's healthy/warning/error verdict. Kept out of the reconciler's\nupsert set so a sync never overwrites them.",
+                    "type": "string"
+                },
+                "token_valid": {
+                    "type": "boolean"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.SourceAnchor": {
+            "type": "object",
+            "properties": {
+                "bbox": {
+                    "description": "Bbox is the normalized image region a block was extracted from (CON-281),\nKind == \"image\". A pointer so a nil bbox is omitted while a present one is\nalways serialized in full (all four coords, incl. legitimate 0 origins).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Bbox"
+                        }
+                    ]
+                },
+                "cell_range": {
+                    "type": "string"
+                },
+                "end_ms": {
+                    "type": "integer"
+                },
+                "heading_path": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "kind": {
+                    "description": "page|slide|sheet|section|email|time|image",
+                    "type": "string"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "provenance": {
+                    "type": "string"
+                },
+                "sheet": {
+                    "type": "string"
+                },
+                "slide": {
+                    "type": "integer"
+                },
+                "start_ms": {
+                    "description": "StartMs/EndMs bound an audio transcript chunk on the ORIGINAL asset\ntimeline (CON-282), Kind == \"time\". Provenance marks how the anchor was\nderived (e.g. \"transcript\", \"image_extraction\"). Empty for non-audio,\nnon-image anchors.",
+                    "type": "integer"
+                }
+            }
+        },
+        "models.SuggestionSeverity": {
+            "type": "string",
+            "enum": [
+                "high",
+                "medium",
+                "low"
+            ],
+            "x-enum-varnames": [
+                "SeverityHigh",
+                "SeverityMedium",
+                "SeverityLow"
+            ]
+        },
         "models.Tag": {
             "type": "object",
             "properties": {
@@ -4946,6 +12503,81 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.Tenant": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "description": "DeletedAt marks a soft-deleted workspace (CON-147 PR4). Membership\nresolution filters it out, so a deleted workspace can't be listed, switched\nto, or entered — but the row survives for support-side recovery. Plain\ntimestamp, NOT a bun ` + "`" + `,soft_delete` + "`" + ` column: see the migration comment.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.TenantTierVersionPrice": {
+            "type": "object",
+            "properties": {
+                "billing_interval": {
+                    "type": "string"
+                },
+                "country_code": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "net_minor": {
+                    "type": "integer"
+                },
+                "tier_version_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.TextConstraints": {
+            "type": "object",
+            "properties": {
+                "max_content_chars": {
+                    "description": "MaxContentChars is the default body-text ceiling applied to every post\ntype that PerPostType doesn't override. 0 = unbounded.",
+                    "type": "integer"
+                },
+                "max_title_chars": {
+                    "description": "MaxTitleChars caps the title on platforms with a distinct title field\n(YouTube, LinkedIn article). 0 = no separate title limit.",
+                    "type": "integer"
+                },
+                "per_post_type": {
+                    "description": "PerPostType overrides MaxContentChars for specific post-type slugs —\ne.g. LinkedIn {\"article\": 100000} while its feed posts stay at 3000.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "models.ThreadSegment": {
+            "type": "object",
+            "properties": {
+                "content": {
                     "type": "string"
                 }
             }
@@ -4965,8 +12597,305 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "role": {
+                    "description": "Role is the account's authority in this tenant (CON-26). Backfilled to\n'owner' for every pre-CON-26 user (each was the sole member of its tenant).",
+                    "type": "string"
+                },
+                "tenant": {
+                    "description": "Tenant is loaded only on demand (e.g. GET /api/current_user via\nUserRepository.GetByIDWithTenant) and omitted otherwise, so ordinary\nuser responses stay unchanged. CON-97.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Tenant"
+                        }
+                    ]
+                },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "models.VideoConstraints": {
+            "type": "object",
+            "properties": {
+                "allowed_aspect_ratios": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowed_formats": {
+                    "description": "e.g. [\"mp4\",\"mov\",\"webm\"]",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "max_attachments_per_post": {
+                    "description": "usually 1",
+                    "type": "integer"
+                },
+                "max_duration_seconds": {
+                    "type": "integer"
+                },
+                "max_file_size_bytes": {
+                    "type": "integer"
+                },
+                "max_height": {
+                    "description": "0 = unbounded",
+                    "type": "integer"
+                },
+                "max_width": {
+                    "description": "0 = unbounded",
+                    "type": "integer"
+                },
+                "min_duration_seconds": {
+                    "description": "Reels/Shorts have floors",
+                    "type": "integer"
+                },
+                "requires_video_title": {
+                    "description": "RequiresVideoTitle blocks publishing a video post whose title is empty\n(CON-148 §9). YouTube requires a title; most feed/Reel platforms derive\none from the caption, so this stays false for them.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "overview.Brief": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "keyMessages": {
+                    "type": "string"
+                },
+                "targetPersona": {
+                    "type": "string"
+                },
+                "toneGuidelines": {
+                    "type": "string"
+                }
+            }
+        },
+        "overview.Bucket": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "key": {
+                    "description": "status string / platform id / post-type slug",
+                    "type": "string"
+                },
+                "label": {
+                    "description": "human label (platform name; else the key or \"None\")",
+                    "type": "string"
+                }
+            }
+        },
+        "overview.Distribution": {
+            "type": "object",
+            "properties": {
+                "byContentType": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/overview.Bucket"
+                    }
+                },
+                "byPlatform": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/overview.Bucket"
+                    }
+                },
+                "byStatus": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/overview.Bucket"
+                    }
+                },
+                "unassignedPhasePostCount": {
+                    "description": "UnassignedPhasePostCount counts posts with no phase (or a stale phase id).",
+                    "type": "integer"
+                }
+            }
+        },
+        "overview.GoalBucket": {
+            "type": "object",
+            "properties": {
+                "achieved": {
+                    "type": "integer"
+                },
+                "end": {
+                    "type": "string"
+                },
+                "index": {
+                    "description": "1-based",
+                    "type": "integer"
+                },
+                "label": {
+                    "description": "\"Week 1\" / \"Aug 2026\"",
+                    "type": "string"
+                },
+                "reached": {
+                    "type": "boolean"
+                },
+                "start": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "integer"
+                }
+            }
+        },
+        "overview.GoalProgress": {
+            "type": "object",
+            "properties": {
+                "buckets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/overview.GoalBucket"
+                    }
+                },
+                "cadence": {
+                    "description": "\"week\" | \"month\"",
+                    "type": "string"
+                },
+                "percent": {
+                    "description": "0..100, capped",
+                    "type": "integer"
+                },
+                "periods": {
+                    "type": "integer"
+                },
+                "postsPerPeriod": {
+                    "description": "= estimated_post_count",
+                    "type": "integer"
+                },
+                "reached": {
+                    "type": "boolean"
+                },
+                "streak": {
+                    "description": "trailing consecutive reached periods",
+                    "type": "integer"
+                },
+                "totalAchieved": {
+                    "type": "integer"
+                },
+                "totalTarget": {
+                    "description": "postsPerPeriod × periods",
+                    "type": "integer"
+                }
+            }
+        },
+        "overview.Overview": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "$ref": "#/definitions/overview.Brief"
+                },
+                "campaignId": {
+                    "type": "string"
+                },
+                "distribution": {
+                    "$ref": "#/definitions/overview.Distribution"
+                },
+                "generatedAt": {
+                    "type": "string"
+                },
+                "goal": {
+                    "description": "Goal is the CON-182 post-rate goal progress, or null when the campaign has\nno goal configured (no positive estimated_post_count).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/overview.GoalProgress"
+                        }
+                    ]
+                },
+                "language": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "phases": {
+                    "description": "ordered by sequence",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/overview.PhaseInfo"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "totalPosts": {
+                    "type": "integer"
+                },
+                "type": {
+                    "description": "campaign type name",
+                    "type": "string"
+                }
+            }
+        },
+        "overview.PhaseInfo": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "postCount": {
+                    "type": "integer"
+                },
+                "purpose": {
+                    "type": "string"
+                },
+                "sequence": {
+                    "type": "integer"
+                }
+            }
+        },
+        "platforms.PostTypeRuleView": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "rule": {
+                    "$ref": "#/definitions/platforms.ResolvedPostTypeRule"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "whitelist_only": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "platforms.ResolvedPostTypeRule": {
+            "type": "object",
+            "properties": {
+                "allowed_kinds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "max_attachments": {
+                    "type": "integer"
+                },
+                "max_content_chars": {
+                    "description": "MaxContentChars is the body-text ceiling for this post type, resolved\nfrom the platform's TextConstraints (per-post-type override, else the\nplatform default). nil means unbounded — the UI shows no counter cap.\nCounts are Unicode code points, matching the server-side check (CON-91).",
+                    "type": "integer"
+                },
+                "min_attachments": {
+                    "type": "integer"
+                },
+                "requires_content": {
+                    "type": "boolean"
+                },
+                "segmented": {
+                    "description": "Segmented marks a post type whose composer authors an ordered list of\nmessages rather than one body (CON-284: the \"thread\" type). MaxContentChars\nthen carries the PER-SEGMENT limit (X 280 / Threads 500), and the UI renders\nthe segmented composer with a counter per message. false for every other type.",
+                    "type": "boolean"
                 }
             }
         },
@@ -4990,28 +12919,375 @@ const docTemplate = `{
                 },
                 "rule": {
                     "type": "string"
+                },
+                "segment": {
+                    "description": "Segment names the 0-based thread message a failure belongs to (CON-284),\nso the composer can highlight the offending message. nil for whole-post\nfailures and every non-thread post.",
+                    "type": "integer"
                 }
             }
         },
-        "secrets.Metadata": {
+        "post_quality.PostQualityResponse": {
             "type": "object",
             "properties": {
-                "algorithm": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "decryptable": {
+                "cached": {
                     "type": "boolean"
                 },
-                "kek_version": {
+                "evaluation": {
+                    "$ref": "#/definitions/models.PostEvaluation"
+                },
+                "generatedAt": {
+                    "type": "string"
+                },
+                "postId": {
+                    "type": "string"
+                }
+            }
+        },
+        "report.AuthorCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "report.CampaignsCreated": {
+            "type": "object",
+            "properties": {
+                "campaign_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "report.ChannelCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "platform_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "report.Created": {
+            "type": "object",
+            "properties": {
+                "by_author": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/report.AuthorCount"
+                    }
+                },
+                "posts_total": {
+                    "type": "integer"
+                },
+                "scheduled_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "report.Failed": {
+            "type": "object",
+            "properties": {
+                "by_channel": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/report.ChannelCount"
+                    }
+                },
+                "posts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/report.FailedPost"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "report.FailedPost": {
+            "type": "object",
+            "properties": {
+                "failure_reason": {
+                    "type": "string"
+                },
+                "platform_id": {
+                    "type": "string"
+                },
+                "post_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "report.ListItem": {
+            "type": "object",
+            "properties": {
+                "campaigns_created_total": {
+                    "type": "integer"
+                },
+                "created_total": {
+                    "type": "integer"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "failed_total": {
+                    "type": "integer"
+                },
+                "published_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "report.Published": {
+            "type": "object",
+            "properties": {
+                "by_channel": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/report.ChannelCount"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "report.Report": {
+            "type": "object",
+            "properties": {
+                "campaigns_created": {
+                    "$ref": "#/definitions/report.CampaignsCreated"
+                },
+                "created": {
+                    "$ref": "#/definitions/report.Created"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "failed": {
+                    "$ref": "#/definitions/report.Failed"
+                },
+                "published": {
+                    "$ref": "#/definitions/report.Published"
+                },
+                "tz": {
+                    "type": "string"
+                }
+            }
+        },
+        "report.ReportList": {
+            "type": "object",
+            "properties": {
+                "generated_at": {
+                    "type": "string"
+                },
+                "reports": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/report.ListItem"
+                    }
+                }
+            }
+        },
+        "repository.PostAnalyticsListItem": {
+            "type": "object",
+            "properties": {
+                "analytics": {
+                    "$ref": "#/definitions/models.PostAnalyticsMetrics"
+                },
+                "last_refreshed_at": {
+                    "type": "string"
+                },
+                "metrics_last_updated": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "post_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "publisher": {
+                    "type": "string"
+                },
+                "publisher_post_id": {
+                    "type": "string"
+                },
+                "sync_status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "repository.PostAnalyticsOverview": {
+            "type": "object",
+            "properties": {
+                "clicks": {
+                    "type": "integer"
+                },
+                "comments": {
+                    "type": "integer"
+                },
+                "engagement_rate_avg": {
+                    "type": "number"
+                },
+                "impressions": {
+                    "type": "integer"
+                },
+                "likes": {
+                    "type": "integer"
+                },
+                "post_count": {
+                    "type": "integer"
+                },
+                "reach": {
+                    "type": "integer"
+                },
+                "saves": {
+                    "type": "integer"
+                },
+                "shares": {
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "repository.WorkspaceListItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "member_count": {
                     "type": "integer"
                 },
                 "name": {
                     "type": "string"
                 },
+                "role": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "summaries.CampaignSummary": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "posts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/summaries.PostSummary"
+                    }
+                }
+            }
+        },
+        "summaries.PostSummary": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "campaign_type_phase_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "media_urls": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "platform_id": {
+                    "type": "string"
+                },
+                "platform_post_type": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "scheduled_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "summaries.Summaries": {
+            "type": "object",
+            "properties": {
+                "generated_at": {
+                    "type": "string"
+                },
+                "summaries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/summaries.CampaignSummary"
+                    }
+                }
+            }
+        },
+        "zernio.ConnectTarget": {
+            "type": "object",
+            "properties": {
+                "avatarUrl": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "username": {
                     "type": "string"
                 }
             }

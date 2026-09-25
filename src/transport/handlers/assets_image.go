@@ -84,9 +84,34 @@ func (h *AssetsImageHandler) configured() bool {
 	return h.imgJobs != nil && h.storage != nil && h.db != nil
 }
 
-// Extract manually starts the first vision run when the upload-time enqueue
-// didn't (e.g. the service was down). 409 when a run already exists — use
-// reextract instead.
+// extractionEnqueuedResponse is the 202 body of the audio/image extract, retry
+// and reextract triggers.
+type extractionEnqueuedResponse struct {
+	AssetID string `json:"asset_id"`
+	RunKey  string `json:"run_key"`
+	Status  string `json:"status" example:"enqueued"`
+}
+
+// pinnedModelRequest optionally pins the model for one run.
+type pinnedModelRequest struct {
+	Model string `json:"model"`
+}
+
+// Extract godoc
+// @Summary      Start image extraction
+// @Description  Starts the first vision run for an IMG asset when the upload-time enqueue didn't (e.g. image-service was down). 409 when a run already exists — use reextract. Optional body pins the extraction model.
+// @Tags         content-bank
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id    path      string              true   "Asset Sqid"
+// @Param        body  body      pinnedModelRequest  false  "Optional model pin"
+// @Success      202   {object}  extractionEnqueuedResponse
+// @Failure      400   {object}  map[string]string  "asset has no uploaded image"
+// @Failure      401   {object}  map[string]string
+// @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "not configured, or a run already exists"
+// @Router       /api/content-bank/assets/{id}/image/extract [post]
 func (h *AssetsImageHandler) Extract(c *fiber.Ctx) error {
 	if !h.configured() {
 		return fiber.NewError(fiber.StatusConflict, "image processing is not configured")
@@ -104,12 +129,24 @@ func (h *AssetsImageHandler) Extract(c *fiber.Ctx) error {
 	if err := h.enqueue(c, asset, "run-1", model); err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": "run-1", "status": "enqueued"})
+	return c.Status(fiber.StatusAccepted).JSON(extractionEnqueuedResponse{AssetID: asset.ID, RunKey: "run-1", Status: "enqueued"})
 }
 
-// Reextract forces a fresh full run under a new run_key (optionally pinning a
-// model). Prior blocks/chunks are replaced on completion; prior extraction rows
-// are kept (additive history).
+// Reextract godoc
+// @Summary      Re-extract an image
+// @Description  Forces a fresh full vision run under a new run_key (optionally pinning a model). Prior blocks/chunks are replaced on completion; prior extraction rows are kept (additive history). A user-edited alt text is never overwritten.
+// @Tags         content-bank
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id    path      string              true   "Asset Sqid"
+// @Param        body  body      pinnedModelRequest  false  "Optional model pin"
+// @Success      202   {object}  extractionEnqueuedResponse
+// @Failure      400   {object}  map[string]string  "asset has no uploaded image"
+// @Failure      401   {object}  map[string]string
+// @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "image processing is not configured"
+// @Router       /api/content-bank/assets/{id}/image/reextract [post]
 func (h *AssetsImageHandler) Reextract(c *fiber.Ctx) error {
 	if !h.configured() {
 		return fiber.NewError(fiber.StatusConflict, "image processing is not configured")
@@ -127,7 +164,7 @@ func (h *AssetsImageHandler) Reextract(c *fiber.Ctx) error {
 	if err := h.enqueue(c, asset, runKey, model); err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": runKey, "status": "enqueued"})
+	return c.Status(fiber.StatusAccepted).JSON(extractionEnqueuedResponse{AssetID: asset.ID, RunKey: runKey, Status: "enqueued"})
 }
 
 type imageStatusResponse struct {
@@ -135,7 +172,17 @@ type imageStatusResponse struct {
 	Blocks     []models.ImageBlock     `json:"blocks"`
 }
 
-// Status returns the latest extraction with its structured blocks.
+// Status godoc
+// @Summary      Get image extraction
+// @Description  Returns the latest vision run for an IMG asset (status, shape, quality flags, `failure_code`/`failure_reason`, cost) with its structured region blocks. Each block carries a normalized `bbox` anchor on the source image.
+// @Tags         content-bank
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id   path      string  true  "Asset Sqid"
+// @Success      200  {object}  imageStatusResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string  "not an IMG asset, or no extraction yet"
+// @Router       /api/content-bank/assets/{id}/image [get]
 func (h *AssetsImageHandler) Status(c *fiber.Ctx) error {
 	asset, err := h.loadImageAsset(c)
 	if err != nil {
@@ -155,9 +202,26 @@ func (h *AssetsImageHandler) Status(c *fiber.Ctx) error {
 	return c.JSON(imageStatusResponse{Extraction: ext, Blocks: blocks})
 }
 
-// RegenerateAltText re-runs only alt-text generation for the stored image and
-// overwrites the asset's alt text (an explicit user action; it does not flip the
-// user-edited flag). 409 when the image client is unwired.
+// altTextResponse is the regenerated alt text.
+type altTextResponse struct {
+	AssetID string `json:"asset_id"`
+	AltText string `json:"alt_text"`
+}
+
+// RegenerateAltText godoc
+// @Summary      Regenerate image alt text
+// @Description  Synchronously re-runs only alt-text generation for the stored image and overwrites the asset's alt text — an explicit user action, so it replaces even a user-edited value and does not flip `alt_text_edited_by_user`.
+// @Tags         content-bank
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id   path      string  true  "Asset Sqid"
+// @Success      200  {object}  altTextResponse
+// @Failure      400  {object}  map[string]string  "no uploaded image, or it could not be read"
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]string  "image processing is not configured"
+// @Failure      503  {object}  map[string]string  "image-service temporarily unavailable"
+// @Router       /api/content-bank/assets/{id}/image/alt-text [post]
 func (h *AssetsImageHandler) RegenerateAltText(c *fiber.Ctx) error {
 	if h.image == nil || h.storage == nil {
 		return fiber.NewError(fiber.StatusConflict, "image processing is not configured")
@@ -195,7 +259,7 @@ func (h *AssetsImageHandler) RegenerateAltText(c *fiber.Ctx) error {
 	if err := h.repo.SetAltText(reqCtx(c), asset.ID, alt); err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"asset_id": asset.ID, "alt_text": alt})
+	return c.JSON(altTextResponse{AssetID: asset.ID, AltText: alt})
 }
 
 // enqueue confirms the asset has an uploaded original and enqueues a run in a

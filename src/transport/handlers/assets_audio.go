@@ -134,8 +134,21 @@ type presignAudioResponse struct {
 	Headers    map[string]string `json:"headers"`
 }
 
-// Presign mints a pending AUDIO asset and returns a short-lived presigned PUT the
-// client uploads the bytes to directly, plus the storage key finalize confirms.
+// Presign godoc
+// @Summary      Presign an audio upload
+// @Description  Step 1 of 3 of audio ingestion (CON-282): mints a pending `AUDIO` asset and returns a 30-minute presigned PUT. The client PUTs the bytes straight to object storage with the returned `method` + `headers` (the Content-Type is bound into the signature), then calls `POST /audio/finalize`. Accepted: mp3, wav, m4a, aac, ogg/oga, opus, flac, webm, aif/aiff (max 5 GiB, enforced at finalize).
+// @Description  Gated by the content_bank_assets tier limit (402 `entitlement_exceeded`).
+// @Tags         content-bank
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        body  body      presignAudioRequest  true  "Original filename (drives format + title)"
+// @Success      201   {object}  presignAudioResponse
+// @Failure      400   {object}  map[string]string  "unsupported audio type"
+// @Failure      401   {object}  map[string]string
+// @Failure      402   {object}  map[string]any     "content_bank_assets limit reached"
+// @Failure      409   {object}  map[string]string  "audio ingestion is not configured"
+// @Router       /api/content-bank/assets/audio/presign [post]
 func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 	if !h.configured() {
 		return fiber.NewError(fiber.StatusConflict, "audio ingestion is not configured")
@@ -230,9 +243,23 @@ type finalizeAudioRequest struct {
 	PinnedModel string `json:"model"`
 }
 
-// Finalize confirms the uploaded object (Head → size + cap), then enqueues the
-// first transcription run atomically. Idempotent: the run_key is deterministic,
-// so a duplicate finalize hits the job's (asset_id, run_key) uniqueness.
+// Finalize godoc
+// @Summary      Finalize an audio upload
+// @Description  Step 3 of 3: confirms the PUT object (size + 5 GiB cap), then enqueues the first transcription run atomically. Idempotent (deterministic run_key). The asset then moves `pending` → `processing` → `ready`/`partial`/`failed`; poll `GET /{id}/audio`. On completion the transcript becomes the asset's `content` and time-anchored chunks (`GET /{id}/chunks`).
+// @Description  Gated by the media_storage_bytes tier limit on the uploaded size (402 `entitlement_exceeded`).
+// @Tags         content-bank
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        body  body      finalizeAudioRequest  true  "Asset to finalize (+ optional model pin)"
+// @Success      200   {object}  models.Asset
+// @Failure      400   {object}  map[string]string  "no pending upload, or the object isn't there yet"
+// @Failure      401   {object}  map[string]string
+// @Failure      402   {object}  map[string]any     "media_storage_bytes limit reached"
+// @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "audio ingestion is not configured"
+// @Failure      413   {object}  map[string]string  "over the 5 GiB cap"
+// @Router       /api/content-bank/assets/audio/finalize [post]
 func (h *AudioAssetsHandler) Finalize(c *fiber.Ctx) error {
 	if !h.configured() {
 		return fiber.NewError(fiber.StatusConflict, "audio ingestion is not configured")
@@ -252,9 +279,21 @@ func (h *AudioAssetsHandler) Finalize(c *fiber.Ctx) error {
 	return c.JSON(asset)
 }
 
-// Extract manually starts the first transcription run when finalize didn't (e.g.
-// the service was down at upload time). 409 when a run already exists — use
-// retry or reextract instead.
+// Extract godoc
+// @Summary      Start audio transcription
+// @Description  Starts the first transcription run when finalize didn't (e.g. audio-service was down). 409 when a run already exists — use retry or reextract.
+// @Tags         content-bank
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id    path      string              true   "Asset Sqid"
+// @Param        body  body      pinnedModelRequest  false  "Optional model pin"
+// @Success      202   {object}  extractionEnqueuedResponse
+// @Failure      400   {object}  map[string]string
+// @Failure      401   {object}  map[string]string
+// @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "not configured, or a run already exists"
+// @Router       /api/content-bank/assets/{id}/audio/extract [post]
 func (h *AudioAssetsHandler) Extract(c *fiber.Ctx) error {
 	if !h.configured() {
 		return fiber.NewError(fiber.StatusConflict, "audio ingestion is not configured")
@@ -275,11 +314,24 @@ func (h *AudioAssetsHandler) Extract(c *fiber.Ctx) error {
 	if err := h.prepareAndEnqueue(c, asset, "run-1", body.PinnedModel); err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": "run-1", "status": "enqueued"})
+	return c.Status(fiber.StatusAccepted).JSON(extractionEnqueuedResponse{AssetID: asset.ID, RunKey: "run-1", Status: "enqueued"})
 }
 
-// Reextract forces a fresh full run under a new run_key (optionally pinning a
-// model). Prior chunks are replaced on completion.
+// Reextract godoc
+// @Summary      Re-transcribe audio
+// @Description  Forces a fresh full run under a new run_key (optionally pinning a model). Prior chunks and transcript content are replaced on completion.
+// @Tags         content-bank
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id    path      string              true   "Asset Sqid"
+// @Param        body  body      pinnedModelRequest  false  "Optional model pin"
+// @Success      202   {object}  extractionEnqueuedResponse
+// @Failure      400   {object}  map[string]string
+// @Failure      401   {object}  map[string]string
+// @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "audio ingestion is not configured"
+// @Router       /api/content-bank/assets/{id}/audio/reextract [post]
 func (h *AudioAssetsHandler) Reextract(c *fiber.Ctx) error {
 	if !h.configured() {
 		return fiber.NewError(fiber.StatusConflict, "audio ingestion is not configured")
@@ -300,12 +352,21 @@ func (h *AudioAssetsHandler) Reextract(c *fiber.Ctx) error {
 	if err := h.prepareAndEnqueue(c, asset, runKey, body.PinnedModel); err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": runKey, "status": "enqueued"})
+	return c.Status(fiber.StatusAccepted).JSON(extractionEnqueuedResponse{AssetID: asset.ID, RunKey: runKey, Status: "enqueued"})
 }
 
-// Retry re-drives only the failed segments of the latest run (same run_key): it
-// flips them back to pending and re-enqueues, so completed segments are not
-// reprocessed.
+// Retry godoc
+// @Summary      Retry failed audio segments
+// @Description  Re-drives only the failed segments of the latest run (same run_key) — completed segments are not reprocessed. Use after a `partial` run (`failure_code: extraction_partial`). 409 when there is nothing to retry.
+// @Tags         content-bank
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id   path      string  true  "Asset Sqid"
+// @Success      202  {object}  extractionEnqueuedResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]string  "not configured, or no failed segments"
+// @Router       /api/content-bank/assets/{id}/audio/retry [post]
 func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	if !h.configured() {
 		return fiber.NewError(fiber.StatusConflict, "audio ingestion is not configured")
@@ -378,7 +439,7 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"asset_id": asset.ID, "run_key": ext.RunKey, "status": "enqueued"})
+	return c.Status(fiber.StatusAccepted).JSON(extractionEnqueuedResponse{AssetID: asset.ID, RunKey: ext.RunKey, Status: "enqueued"})
 }
 
 type audioStatusResponse struct {
@@ -386,7 +447,17 @@ type audioStatusResponse struct {
 	Segments   []models.AudioSegment   `json:"segments"`
 }
 
-// Status returns the latest extraction with per-segment progress.
+// Status godoc
+// @Summary      Get audio extraction
+// @Description  Returns the latest transcription run (status, detected language, duration, cost, `failure_code`/`failure_reason`) with per-segment progress.
+// @Tags         content-bank
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id   path      string  true  "Asset Sqid"
+// @Success      200  {object}  audioStatusResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string  "not an AUDIO asset, or no extraction yet"
+// @Router       /api/content-bank/assets/{id}/audio [get]
 func (h *AudioAssetsHandler) Status(c *fiber.Ctx) error {
 	asset, err := h.loadAudioAsset(c)
 	if err != nil {
@@ -416,9 +487,23 @@ type transcriptEntry struct {
 	IsSpeech   bool    `json:"is_speech"`
 }
 
-// Transcript returns the latest extraction's raw transcript in timeline order,
-// each span carrying its original-timeline offsets and a "12:03" label. Scoped
-// to the latest run so a re-extraction doesn't concatenate an older run's spans.
+// transcriptResponse is an audio asset's raw transcript.
+type transcriptResponse struct {
+	AssetID    string            `json:"asset_id"`
+	Transcript []transcriptEntry `json:"transcript"`
+}
+
+// Transcript godoc
+// @Summary      Get audio transcript
+// @Description  Returns the latest run's raw transcript in timeline order: every utterance (incl. non-speech spans, `is_speech: false`) with original-timeline `start_ms`/`end_ms`, an "M:SS" `label`, language and confidence. Empty until the asset has been transcribed. For the searchable, de-overlapped chunks use `GET /{id}/chunks`.
+// @Tags         content-bank
+// @Produce      json
+// @Security     CookieAuth
+// @Param        id   path      string  true  "Asset Sqid"
+// @Success      200  {object}  transcriptResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Router       /api/content-bank/assets/{id}/audio/transcript [get]
 func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 	asset, err := h.loadAudioAsset(c)
 	if err != nil {
@@ -428,7 +513,7 @@ func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Asset exists but hasn't been transcribed yet — empty transcript.
-			return c.JSON(fiber.Map{"asset_id": asset.ID, "transcript": []transcriptEntry{}})
+			return c.JSON(transcriptResponse{AssetID: asset.ID, Transcript: []transcriptEntry{}})
 		}
 		return err
 	}
@@ -449,7 +534,7 @@ func (h *AudioAssetsHandler) Transcript(c *fiber.Ctx) error {
 			IsSpeech:   u.IsSpeech,
 		})
 	}
-	return c.JSON(fiber.Map{"asset_id": asset.ID, "transcript": entries})
+	return c.JSON(transcriptResponse{AssetID: asset.ID, Transcript: entries})
 }
 
 // prepareAndEnqueue is the shared trigger path for finalize/extract/reextract:
