@@ -9,6 +9,10 @@
 #   conversion -> Ef
 #   retention  -> Vq
 
+# Custom types belong to the workspace that created them (CON-314): the list
+# returns the system types plus the workspace's own, and another workspace's
+# custom type is 404 on every endpoint.
+
 ### List all campaign types with phases  [protected]
 GET {{baseUrl}}/api/campaign_types
 Accept: application/json
@@ -119,6 +123,24 @@ Content-Type: application/json
 
 ### Delete phase  [protected]
 DELETE {{baseUrl}}/api/campaign_types/{{campaignTypeId}}/phases/{{phaseId}}
+
+### Add phase to a system type (expects 403)  [protected]
+POST {{baseUrl}}/api/campaign_types/Uk/phases
+Content-Type: application/json
+
+{
+  "name": "Extra",
+  "sequence": 9
+}
+
+### Create campaign type named like a system type (expects 409 campaign_type_name_taken)  [protected]
+POST {{baseUrl}}/api/campaign_types
+Content-Type: application/json
+
+{
+  "name": "Awareness",
+  "label": "My awareness"
+}
 
 ### Delete campaign type  [protected]
 DELETE {{baseUrl}}/api/campaign_types/{{campaignTypeId}}
