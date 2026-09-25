@@ -98,5 +98,20 @@ ALTER TABLE campaigns ENABLE TRIGGER campaigns_type_locked;
 ALTER TABLE campaigns_types
     ADD CONSTRAINT campaigns_types_owner_matches_system CHECK ((tenant_id IS NULL) = is_system);
 
-CREATE UNIQUE INDEX campaigns_types_tenant_name_key ON campaigns_types (tenant_id, name) WHERE tenant_id IS NOT NULL;
-CREATE UNIQUE INDEX campaigns_types_system_name_key ON campaigns_types (name) WHERE tenant_id IS NULL;
+-- Names are unique case-insensitively (the API's name_taken check and the UI's
+-- slug lookup both ignore case). The old global UNIQUE(name) was
+-- case-sensitive, so a workspace may now own two names differing only by case:
+-- keep the oldest as-is and suffix the rest with their id, which is unique.
+UPDATE campaigns_types ct
+SET name = ct.name || ' (' || ct.id || ')', updated_at = now()
+FROM (
+    SELECT id, row_number() OVER (PARTITION BY tenant_id, lower(name) ORDER BY created_at, id) AS rn
+    FROM campaigns_types
+    WHERE tenant_id IS NOT NULL
+) dup
+WHERE dup.id = ct.id AND dup.rn > 1;
+
+-- Plain (not CONCURRENTLY) builds: the migration runs in one transaction and
+-- campaigns_types is a small reference table.
+CREATE UNIQUE INDEX campaigns_types_tenant_name_key ON campaigns_types (tenant_id, lower(name)) WHERE tenant_id IS NOT NULL;
+CREATE UNIQUE INDEX campaigns_types_system_name_key ON campaigns_types (lower(name)) WHERE tenant_id IS NULL;

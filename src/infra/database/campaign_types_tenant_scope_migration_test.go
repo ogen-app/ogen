@@ -16,7 +16,8 @@ const (
 // Seed:
 //   - "launch" is used by workspaces a (earliest campaign) and b, whose posts
 //     and phase plans sit on its phases;
-//   - "solo" is used by workspace c only;
+//   - "solo" is used by workspace c only, and so is "SOLO" (created later) —
+//     legal under the old case-sensitive UNIQUE(name);
 //   - "unused" is used by nobody.
 func TestCampaignTypesTenantScopeBackfill(t *testing.T) {
 	ctx := t.Context()
@@ -62,15 +63,17 @@ func TestCampaignTypesTenantScopeBackfill(t *testing.T) {
 		('ta', 'A', 'a', 'default'), ('tb', 'B', 'b', 'default'), ('tc', 'C', 'c', 'default')`)
 	exec(`INSERT INTO accounts (id, email, password_hash, name) VALUES ('acc', 'o@x.test', 'x', 'Owner')`)
 	exec(`INSERT INTO users (id, name, email, tenant_id, account_id) VALUES ('u', 'Owner', 'o@x.test', 'default', 'acc')`)
-	exec(`INSERT INTO campaigns_types (id, name, label, is_system) VALUES
-		('launch', 'launch', 'Launch', FALSE), ('solo', 'solo', 'Solo', FALSE), ('unused', 'unused', 'Unused', FALSE)`)
+	exec(`INSERT INTO campaigns_types (id, name, label, is_system, created_at) VALUES
+		('launch', 'launch', 'Launch', FALSE, now()), ('solo', 'solo', 'Solo', FALSE, now() - interval '1 day'),
+		('solo_caps', 'SOLO', 'Solo', FALSE, now()), ('unused', 'unused', 'Unused', FALSE, now())`)
 	exec(`INSERT INTO campaigns_types_phases (id, campaign_type_id, name, sequence) VALUES
 		('launch1', 'launch', 'Tease', 1), ('launch2', 'launch', 'Reveal', 2), ('solo1', 'solo', 'Only', 1)`)
 	exec(`INSERT INTO campaigns (id, name, campaign_type_id, created_by, tenant_id, created_at, deleted_at) VALUES
 		('ca', 'A launch', 'launch', 'u', 'ta', now() - interval '2 days', NULL),
 		('cb', 'B launch', 'launch', 'u', 'tb', now() - interval '1 day', NULL),
 		('cb_deleted', 'B old launch', 'launch', 'u', 'tb', now(), now()),
-		('cc', 'C solo', 'solo', 'u', 'tc', now(), NULL)`)
+		('cc', 'C solo', 'solo', 'u', 'tc', now(), NULL),
+		('cc_caps', 'C SOLO', 'solo_caps', 'u', 'tc', now(), NULL)`)
 	exec(`INSERT INTO posts (id, campaign_id, title, created_by, tenant_id, campaign_type_phase_id) VALUES
 		('pa', 'ca', 'a', 'u', 'ta', 'launch1'),
 		('pb', 'cb', 'b', 'u', 'tb', 'launch2'),
@@ -139,6 +142,23 @@ func TestCampaignTypesTenantScopeBackfill(t *testing.T) {
 		JOIN campaigns_types_phases ph ON ph.id = w.phase_id
 		WHERE ph.campaign_type_id <> c.campaign_type_id`); n != 0 {
 		t.Errorf("%d phase windows sit on a phase outside their campaign's type", n)
+	}
+
+	// Names are unique per workspace ignoring case: the newer of the two names
+	// differing only by case was suffixed, and a third spelling is rejected.
+	if got := scanString(`SELECT name FROM campaigns_types WHERE id = 'solo'`); got != "solo" {
+		t.Errorf("older solo renamed to %q, want it kept", got)
+	}
+	if got := scanString(`SELECT name FROM campaigns_types WHERE id = 'solo_caps'`); got != "SOLO (solo_caps)" {
+		t.Errorf("newer SOLO name = %q, want %q", got, "SOLO (solo_caps)")
+	}
+	if _, err := db.DB.ExecContext(ctx, `INSERT INTO campaigns_types (id, name, is_system, tenant_id)
+		VALUES ('solo_again', 'Solo', FALSE, 'tc')`); err == nil {
+		t.Error("a case-only duplicate name in one workspace was accepted")
+	}
+	if _, err := db.DB.ExecContext(ctx, `INSERT INTO campaigns_types (id, name, is_system, tenant_id)
+		VALUES ('solo_other', 'Solo', FALSE, 'ta')`); err != nil {
+		t.Errorf("the same name in another workspace was rejected: %v", err)
 	}
 
 	// The CON-166 integrity triggers are back on.
