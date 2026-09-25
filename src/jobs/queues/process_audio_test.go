@@ -215,6 +215,43 @@ func TestProcessAudio_Success_TimeAnchoredChunks(t *testing.T) {
 	}
 }
 
+type fakeContent struct{ got map[string]string }
+
+func (f *fakeContent) SetContent(_ context.Context, id, content string) error {
+	if f.got == nil {
+		f.got = map[string]string{}
+	}
+	f.got[id] = content
+	return nil
+}
+
+// TestProcessAudio_WritesTranscriptToContent: a completed run stores the
+// assembled transcript on asset.Content (CON-312), so a later title-only PUT has
+// real content to keep.
+func TestProcessAudio_WritesTranscriptToContent(t *testing.T) {
+	client := &fakeAudioClient{
+		probe: &audio.ProbeResult{DurationMs: 60_000},
+		norm:  &audio.NormalizeResult{DurationMs: 60_000},
+		transcribe: &audio.TranscribeSegmentResult{Utterances: []audio.Utterance{
+			{Text: "hello world", StartMs: 0, EndMs: 2_000, IsSpeech: true},
+			{Text: "[music]", StartMs: 2_000, EndMs: 3_000},
+			{Text: "second line", StartMs: 3_000, EndMs: 4_000, IsSpeech: true},
+		}},
+	}
+	ext, seg, utt, status, chunks := &fakeExtractions{}, &fakeSegments{}, &fakeUtterances{}, &fakeStatus{}, &fakeChunks{}
+	d := baseAudioDeps(client, ext, seg, utt, status, chunks)
+	content := &fakeContent{}
+	d.Content = content
+
+	task := ProcessAudioTask{AssetID: "a1", RunKey: "run-1", StorageKey: "assets/a1/original.mp3", MimeType: "audio/mpeg"}
+	if err := newAudioProc(d).process(t.Context(), task, false); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if got := content.got["a1"]; got != "hello world second line" {
+		t.Fatalf("transcript content = %q", got)
+	}
+}
+
 // TestProcessAudio_ResumeFromIncomplete: a pre-normalized run with segment 0
 // already done transcribes ONLY segment 1 (no re-probe / re-normalize).
 func TestProcessAudio_ResumeFromIncomplete(t *testing.T) {

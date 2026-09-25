@@ -591,6 +591,7 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 		authCookie   *http.Cookie
 		onSaveCh     chan string // receives asset IDs whenever onSave fires
 		onSaveTenant chan string // receives the tenant id passed to onSave
+		reembed      *fakeImageReembedder
 	)
 
 	BeforeAll(func() {
@@ -624,10 +625,13 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
-		handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, func(assetID, _, _, tenantID string) {
+		reembed = &fakeImageReembedder{ch: make(chan string, 16)}
+		h := handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, func(assetID, _, _, tenantID string) {
 			saveCh <- assetID
 			tenantCh <- tenantID
-		}).Register(app)
+		})
+		h.SetImageReembedder(reembed)
+		h.Register(app)
 
 		seedTenantUser(db, "Admin", "admin@example.com", "admin-password")
 
@@ -751,4 +755,101 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 		updateAsset(asset.ID, "Title", "Body", map[string]any{"tag_ids": []string{tagID}})
 		Expect(waitForSave()).To(BeFalse(), "onSave must not fire for a tag-only change")
 	})
+
+	// CON-312: service-ingested assets keep their anchored chunks. The markdown
+	// re-embed (onSave) must never run for them, and their content is read-only
+	// except for an image's description.
+	Context("service-ingested assets (CON-312)", func() {
+		// seedIngested creates an asset through the API, then retypes it the way
+		// an ingestion upload would have stored it.
+		seedIngested := func(assetType, content string) models.Asset {
+			a := createAsset("Ingested", "placeholder")
+			Expect(waitForSave()).To(BeTrue()) // drain create event
+			_, err := db.NewUpdate().TableExpr("assets").
+				Set("type = ?", assetType).Set("content = ?", content).
+				Where("id = ?", a.ID).Exec(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			a.Type, a.Content = &assetType, content
+			return a
+		}
+
+		putAsset := func(id string, body fiber.Map) *http.Response {
+			buf, _ := json.Marshal(body)
+			req := httptest.NewRequest("PUT", "/api/content-bank/assets/"+id, bytes.NewReader(buf))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			return resp
+		}
+
+		waitForReembed := func() bool {
+			select {
+			case <-reembed.ch:
+				return true
+			case <-time.After(200 * time.Millisecond):
+				return false
+			}
+		}
+
+		for _, t := range []string{models.AssetTypePDF, models.AssetTypeDocument, models.AssetTypeAudio} {
+			It("renames a "+t+" asset without re-embedding it", func() {
+				a := seedIngested(t, "extracted text")
+				resp := putAsset(a.ID, fiber.Map{"title": "Renamed", "content": "extracted text"})
+				Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+				Expect(waitForSave()).To(BeFalse(), "onSave must not replace service-produced chunks")
+			})
+		}
+
+		It("saves an AUDIO asset with no content in the payload and keeps its transcript", func() {
+			a := seedIngested(models.AssetTypeAudio, "the transcript")
+			resp := putAsset(a.ID, fiber.Map{"title": "Episode 1"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+			var got models.Asset
+			Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
+			Expect(got.Title).To(Equal("Episode 1"))
+			Expect(got.Content).To(Equal("the transcript"))
+			Expect(waitForSave()).To(BeFalse())
+		})
+
+		It("saves a still-pending AUDIO asset whose content is empty", func() {
+			a := seedIngested(models.AssetTypeAudio, "")
+			resp := putAsset(a.ID, fiber.Map{"title": "Episode 1", "content": ""})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+		})
+
+		It("rejects a content edit on a PDF asset with 409 content_locked", func() {
+			a := seedIngested(models.AssetTypePDF, "extracted text")
+			resp := putAsset(a.ID, fiber.Map{"title": "Ingested", "content": "hand-edited"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusConflict))
+			var body map[string]string
+			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+			Expect(body["code"]).To(Equal(models.AssetCodeContentLocked))
+			Expect(waitForSave()).To(BeFalse())
+		})
+
+		It("re-embeds an edited image description through the image pipeline", func() {
+			a := seedIngested(models.AssetTypeImage, "a chart")
+			resp := putAsset(a.ID, fiber.Map{"title": "Ingested", "content": "a bar chart of Q3 revenue"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+			Expect(waitForReembed()).To(BeTrue(), "expected an image re-embed for a description edit")
+			Expect(waitForSave()).To(BeFalse(), "the markdown re-embed would drop the region chunks")
+		})
+
+		It("does not re-embed an image on a title-only change", func() {
+			a := seedIngested(models.AssetTypeImage, "a chart")
+			resp := putAsset(a.ID, fiber.Map{"title": "Renamed", "content": "a chart"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+			Expect(waitForReembed()).To(BeFalse())
+			Expect(waitForSave()).To(BeFalse())
+		})
+	})
 })
+
+// fakeImageReembedder records image re-embed enqueues (CON-312).
+type fakeImageReembedder struct{ ch chan string }
+
+func (f *fakeImageReembedder) EnqueueReembedImage(_ context.Context, assetID, _ string) error {
+	f.ch <- assetID
+	return nil
+}

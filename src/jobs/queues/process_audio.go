@@ -88,6 +88,10 @@ type audioSegmentStore interface {
 	Update(ctx context.Context, s *models.AudioSegment) error
 }
 
+type assetContentSetter interface {
+	SetContent(ctx context.Context, id, content string) error
+}
+
 type utteranceStore interface {
 	ReplaceForSegment(ctx context.Context, segmentID string, utterances []models.Utterance) error
 	// ListByExtraction scopes to the current run's segments so a re-extraction
@@ -100,10 +104,14 @@ type utteranceStore interface {
 // server.go). A nil Client (no AUDIO_SERVICE_ADDR configured) disables the job —
 // it no-ops.
 type AudioDeps struct {
-	Client      audioTranscriber
-	Embedder    chunkEmbedder
-	Storage     audioBlobStore
-	Assets      assetStatusUpdater
+	Client   audioTranscriber
+	Embedder chunkEmbedder
+	Storage  audioBlobStore
+	Assets   assetStatusUpdater
+	// Content writes the assembled transcript onto asset.Content on completion
+	// (CON-312), so previews and the assistant's asset-content tools see it. Nil
+	// skips the write.
+	Content     assetContentSetter
 	Chunks      chunkUpserter
 	Extractions audioExtractionStore
 	Segments    audioSegmentStore
@@ -580,6 +588,19 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 	if len(chunks) > 0 && p.Deps.Chunks != nil {
 		if err := p.Deps.Chunks.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
 			return fmt.Errorf("process_audio %s: store chunks: %w", in.AssetID, err)
+		}
+	}
+	// The transcript becomes the asset's content (read-only to PUT, CON-312):
+	// the same de-overlapped text the chunks hold, one paragraph per chunk.
+	if p.Deps.Content != nil {
+		paras := make([]string, 0, len(assembled))
+		for _, a := range assembled {
+			if t := a.text(); hasWords(t) {
+				paras = append(paras, t)
+			}
+		}
+		if err := p.Deps.Content.SetContent(ctx, in.AssetID, strings.Join(paras, "\n\n")); err != nil {
+			return fmt.Errorf("process_audio %s: store transcript: %w", in.AssetID, err)
 		}
 	}
 

@@ -164,7 +164,7 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 	asset := &models.Asset{
 		ID:        id,
 		Title:     title,
-		Content:   "", // filled with the transcript's chunks on completion
+		Content:   "", // process_audio writes the transcript here on completion
 		Status:    models.AssetStatusPending,
 		Type:      &audioType,
 		TagIDs:    models.StringSlice{},
