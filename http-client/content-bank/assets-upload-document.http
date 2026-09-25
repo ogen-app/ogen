@@ -1,0 +1,120 @@
+@baseUrl = http://localhost:9001
+
+# Office/text document upload (CON-280) for POST /api/content-bank/assets/upload.
+# All requests require authentication — run "Login" from sessions/sessions.http first.
+# Needs document-service running (default `docker compose up`) and GEMINI_API_KEY
+# set (chunks are embedded).
+#
+# Accepted: .docx/.docm/.dotx, .xlsx/.xlsm/.xltx, .pptx/.pptm/.potx,
+# .odt/.ods/.odp (+ flat .fodt/.fods/.fodp), .epub, .csv/.tsv, .html/.xhtml,
+# .eml, .rtf, .txt/.log — max 50 MB. Legacy binary / password-protected Office
+# files (OLE2) are rejected up front.
+#
+# The asset lands as type=DOC, status=pending; document-service parses it into
+# source-anchored chunks asynchronously → ready / partial / failed. A failed
+# asset carries failure_code + failure_reason (CON-312).
+#
+# Fixtures: sample.docx (headings → section anchors), sample.csv (sheet anchors).
+
+### Upload DOCX  [protected]
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="files"; filename="Q3 launch plan.docx"
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+
+< ./sample.docx
+--boundary--
+
+> {% client.global.set("docAssetId", response.body.results[0].asset_id) %}
+
+### Get document asset (poll until status=ready|partial|failed)  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{docAssetId}}
+Accept: application/json
+
+### List its chunks with source_label / source_anchor (CON-312)  [protected]
+# Expect section anchors from the headings, e.g. source_label "Q3 Launch Plan › Audience".
+GET {{baseUrl}}/api/content-bank/assets/{{docAssetId}}/chunks?offset=0&limit=50
+Accept: application/json
+
+### Rename it — title-only save keeps the anchored chunks (CON-312)  [protected]
+# Omitting content (or sending it unchanged) keeps the extracted text.
+PUT {{baseUrl}}/api/content-bank/assets/{{docAssetId}}
+Content-Type: application/json
+
+{
+  "title": "Q3 launch plan (final)"
+}
+
+### Content edit on an ingested asset (expects 409 code=content_locked)  [protected]
+PUT {{baseUrl}}/api/content-bank/assets/{{docAssetId}}
+Content-Type: application/json
+
+{
+  "title": "Q3 launch plan (final)",
+  "content": "hand-edited text"
+}
+
+### Upload CSV (sheet anchors)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="files"; filename="channel-stats.csv"
+Content-Type: text/csv
+
+< ./sample.csv
+--boundary--
+
+> {% client.global.set("csvAssetId", response.body.results[0].asset_id) %}
+
+### List CSV chunks (expect kind=sheet with a cell_range)  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{csvAssetId}}/chunks
+Accept: application/json
+
+### Upload plain text  [protected]
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="files"; filename="notes.txt"
+Content-Type: text/plain
+
+Launch checklist: finalize the landing page, schedule the announcement thread,
+record the demo video, and brief the two design partners before Tuesday.
+--boundary--
+
+### Upload a legacy .doc (expects failed, code=extension_not_allowed)  [protected]
+# Legacy binary extensions aren't routed at all. A password-protected .docx (an
+# OLE2 container under a .docx name) gets code=unsupported_media_type instead:
+# `< ./protected.docx`.
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="files"; filename="legacy.doc"
+Content-Type: application/msword
+
+not really a doc
+--boundary--
+
+### Upload a corrupt .docx (created, then settles failed with code=invalid_file)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="files"; filename="broken.docx"
+Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+
+this is not a zip archive
+--boundary--
+
+> {% client.global.set("brokenDocAssetId", response.body.results[0].asset_id) %}
+
+### Get the corrupt document (expect status=failed, failure_code=invalid_file)  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{brokenDocAssetId}}
+Accept: application/json
+
+### Delete the document asset  [protected]
+DELETE {{baseUrl}}/api/content-bank/assets/{{docAssetId}}

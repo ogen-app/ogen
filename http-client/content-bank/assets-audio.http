@@ -1,0 +1,125 @@
+@baseUrl = http://localhost:9001
+
+# Audio ingestion (CON-282). All requests require authentication — run "Login"
+# from sessions/sessions.http first. Needs audio-service running (default
+# `docker compose up`), object storage (STORAGE_*) and GEMINI_API_KEY
+# (transcription + chunk embedding).
+#
+# Audio never goes through /upload. It's three steps:
+#   1. POST /audio/presign   → pending AUDIO asset + presigned PUT URL (30 min)
+#   2. PUT <upload_url>      → the client sends the bytes straight to storage
+#                              (Content-Type must match the presigned one)
+#   3. POST /audio/finalize  → size check (≤ 5 GiB) + tier quota, enqueues the run
+# Then poll GET /{id}/audio until the extraction is complete/partial/failed.
+#
+# Accepted: mp3, wav, m4a, aac, ogg/oga, opus, flac, webm, aif/aiff.
+# Quotas (CON-312): presign checks content_bank_assets, finalize checks
+# media_storage_bytes — both 402 entitlement_exceeded.
+#
+# Fixture: sample.m4a (~15 s of synthesized speech).
+
+### 1. Presign  [protected]
+POST {{baseUrl}}/api/content-bank/assets/audio/presign
+Content-Type: application/json
+
+{
+  "filename": "product-update.m4a"
+}
+
+> {%
+client.global.set("audioAssetId", response.body.asset.id);
+client.global.set("audioUploadUrl", response.body.upload_url);
+%}
+
+### 2. PUT the bytes to storage (no auth — the URL is signed)
+PUT {{audioUploadUrl}}
+Content-Type: audio/mp4
+
+< ./sample.m4a
+
+### 3. Finalize — starts transcription  [protected]
+POST {{baseUrl}}/api/content-bank/assets/audio/finalize
+Content-Type: application/json
+
+{
+  "asset_id": "{{audioAssetId}}"
+}
+
+### Extraction status + per-segment progress (poll)  [protected]
+# extraction.status: pending → normalizing → transcribing → complete | partial | failed.
+# A failed/partial run carries failure_code + failure_reason (CON-312).
+GET {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}/audio
+Accept: application/json
+
+### Raw transcript (every utterance, incl. non-speech spans)  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}/audio/transcript
+Accept: application/json
+
+### Searchable chunks with time anchors (CON-312)  [protected]
+# Each chunk: source_label "0:00–0:12", source_anchor {kind:"time", start_ms, end_ms}.
+GET {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}/chunks
+Accept: application/json
+
+### Asset — content holds the transcript once ready (CON-312)  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}
+Accept: application/json
+
+### Rename — title/tags-only save, no content needed (CON-312)  [protected]
+PUT {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}
+Content-Type: application/json
+
+{
+  "title": "Product update — week 39"
+}
+
+### Content edit (expects 409 code=content_locked)  [protected]
+PUT {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}
+Content-Type: application/json
+
+{
+  "title": "Product update — week 39",
+  "content": "hand-edited transcript"
+}
+
+### Retry failed segments of a partial run (409 when none failed)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}/audio/retry
+
+### Re-transcribe from scratch, optionally pinning a model  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}/audio/reextract
+Content-Type: application/json
+
+{
+  "model": "gemini-2.5-flash"
+}
+
+### Manual first run — only when finalize didn't enqueue (409 if a run exists)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}/audio/extract
+
+### Presign an unsupported type (expects 400)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/audio/presign
+Content-Type: application/json
+
+{
+  "filename": "notes.pdf"
+}
+
+### Finalize before the PUT (expects 400 "upload not found")  [protected]
+POST {{baseUrl}}/api/content-bank/assets/audio/presign
+Content-Type: application/json
+
+{
+  "filename": "never-uploaded.mp3"
+}
+
+> {% client.global.set("emptyAudioAssetId", response.body.asset.id) %}
+
+###
+POST {{baseUrl}}/api/content-bank/assets/audio/finalize
+Content-Type: application/json
+
+{
+  "asset_id": "{{emptyAudioAssetId}}"
+}
+
+### Delete the audio asset  [protected]
+DELETE {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}

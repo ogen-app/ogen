@@ -1,0 +1,102 @@
+@baseUrl = http://localhost:9001
+
+# Content-bank image ingestion (CON-281). All requests require authentication —
+# run "Login" from sessions/sessions.http first. Needs image-service running
+# (default `docker compose up`) and GEMINI_API_KEY (vision + embedding).
+#
+# Accepted: JPEG, PNG, WebP, GIF, HEIC/HEIF, AVIF, TIFF, BMP (operator cap,
+# default 50 MB). SVG is rejected (code=vector_rejected). Uploads are
+# deduplicated within the tenant by checksum.
+#
+# The asset lands as type=IMG, status=pending; image-service normalizes,
+# EXIF-strips, classifies, extracts regions, describes, and writes alt text
+# asynchronously → ready / partial / failed. content = the description;
+# alt_text = the generated alt text (never overwrites a user edit).
+#
+# Fixture: ../images/sample.png.
+
+### Upload an image  [protected]
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="files"; filename="sample.png"
+Content-Type: image/png
+
+< ../images/sample.png
+--boundary--
+
+> {% client.global.set("imgAssetId", response.body.results[0].asset_id) %}
+
+### Extraction + region blocks (poll)  [protected]
+# extraction.status → complete | partial | failed, with failure_code/failure_reason.
+# Each block has a normalized bbox anchor.
+GET {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}/image
+Accept: application/json
+
+### Asset — description in content, alt_text, normalized_url on file  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}
+Accept: application/json
+
+### Chunks: description + one per region (CON-312)  [protected]
+# source_label "Image description" / "Region N"; region chunks carry the bbox.
+GET {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}/chunks
+Accept: application/json
+
+### Edit the description — re-embeds it and keeps the region chunks (CON-312)  [protected]
+PUT {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}
+Content-Type: application/json
+
+{
+  "title": "sample",
+  "content": "A bar chart of monthly revenue, peaking in March."
+}
+
+### Echo the stored alt text back — alt_text_edited_by_user stays false (CON-312)  [protected]
+# Replace the value with the asset's current alt_text to see the flag not flip.
+PUT {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}
+Content-Type: application/json
+
+{
+  "title": "sample",
+  "content": "A bar chart of monthly revenue, peaking in March.",
+  "alt_text": "<current alt_text>"
+}
+
+### Set alt text by hand — flips alt_text_edited_by_user=true  [protected]
+PUT {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}
+Content-Type: application/json
+
+{
+  "title": "sample",
+  "content": "A bar chart of monthly revenue, peaking in March.",
+  "alt_text": "Bar chart: monthly revenue, highest in March"
+}
+
+### Regenerate alt text (sync; overwrites even a hand edit)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}/image/alt-text
+
+### Re-extract, optionally pinning the extract model  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}/image/reextract
+Content-Type: application/json
+
+{
+  "model": "gemini-2.5-pro"
+}
+
+### Manual first run — only when the upload didn't enqueue (409 if a run exists)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}/image/extract
+
+### Upload an SVG (expects failed, code=vector_rejected)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="files"; filename="logo.svg"
+Content-Type: image/svg+xml
+
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>
+--boundary--
+
+### Delete the image asset  [protected]
+DELETE {{baseUrl}}/api/content-bank/assets/{{imgAssetId}}
