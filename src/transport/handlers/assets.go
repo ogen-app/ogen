@@ -459,6 +459,17 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 			}
 			fileQuota = dec
 		}
+		// CON-312: the file's bytes join media_storage_bytes ("all uploaded
+		// media"). Checked before storage so a denied file leaves no object.
+		var mediaQuota entitlements.Decision
+		if hasTenant {
+			dec, qErr := h.limiter.RequireAmount(reqCtx(c), tenantID, "media_storage_bytes", fh.Size)
+			if qErr != nil {
+				results = append(results, res.fail(models.UploadCodeQuotaExceeded, "media storage limit reached"))
+				continue
+			}
+			mediaQuota = dec
+		}
 
 		switch detectUploadKind(fh.Filename) {
 		case uploadKindMarkdown:
@@ -475,6 +486,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		// Only a stored asset counts — fire the crossing once we know it landed.
 		if hasTenant && res.Status == "created" {
 			h.limiter.DispatchCrossing(reqCtx(c), tenantID, fileQuota)
+			h.limiter.DispatchCrossing(reqCtx(c), tenantID, mediaQuota)
 		}
 		results = append(results, res)
 	}
