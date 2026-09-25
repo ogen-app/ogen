@@ -281,4 +281,170 @@ type BrandData struct {
 	Guardrails *BrandGuardrails `json:"guardrails"`
 	Look       *BrandLook       `json:"look"`
 	Templates  []BrandTemplate  `json:"templates"`
+	// Facts is the ledger (CON-316), all facts including expired ones, ordered
+	// by created_at then id. Always an array.
+	Facts []BrandFact `json:"facts"`
+	// GuardrailsStance is always present; None=false means undecided.
+	GuardrailsStance GuardrailsStance `json:"guardrailsStance"`
+}
+
+// ── Facts ledger (CON-316) ──────────────────────────────────────────────────
+
+// FactSubject is what a fact is about. The generator groups facts by it.
+type FactSubject string
+
+const (
+	FactSubjectUs          FactSubject = "us"
+	FactSubjectProblem     FactSubject = "problem"
+	FactSubjectOpportunity FactSubject = "opportunity"
+)
+
+func (s FactSubject) Valid() bool {
+	switch s {
+	case FactSubjectUs, FactSubjectProblem, FactSubjectOpportunity:
+		return true
+	}
+	return false
+}
+
+// FactKind is what sort of claim a fact supports. The generator hints
+// judgement and commitment facts so they are not stated as measurements.
+type FactKind string
+
+const (
+	FactKindMeasured   FactKind = "measured"
+	FactKindDocumented FactKind = "documented"
+	FactKindCommitment FactKind = "commitment"
+	FactKindJudgement  FactKind = "judgement"
+)
+
+func (k FactKind) Valid() bool {
+	switch k {
+	case FactKindMeasured, FactKindDocumented, FactKindCommitment, FactKindJudgement:
+		return true
+	}
+	return false
+}
+
+// CalendarDateLayout is the wire and storage form of a CalendarDate.
+const CalendarDateLayout = "2006-01-02"
+
+// CalendarDate is a day with no time or zone: a Postgres DATE on the wire as
+// "YYYY-MM-DD". The ledger works in calendar days, so a timestamp would only
+// invite off-by-a-zone bugs.
+type CalendarDate struct {
+	time.Time
+}
+
+// ParseCalendarDate parses "YYYY-MM-DD", rejecting impossible dates.
+func ParseCalendarDate(s string) (CalendarDate, error) {
+	t, err := time.Parse(CalendarDateLayout, s)
+	if err != nil {
+		return CalendarDate{}, err
+	}
+	return CalendarDate{t}, nil
+}
+
+// CalendarDateOf is the UTC calendar day t falls on.
+func CalendarDateOf(t time.Time) CalendarDate {
+	y, m, d := t.UTC().Date()
+	return CalendarDate{time.Date(y, m, d, 0, 0, 0, 0, time.UTC)}
+}
+
+func (d CalendarDate) String() string { return d.Format(CalendarDateLayout) }
+
+func (d CalendarDate) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+func (d *CalendarDate) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	p, err := ParseCalendarDate(s)
+	if err != nil {
+		return err
+	}
+	*d = p
+	return nil
+}
+
+func (d CalendarDate) Value() (driver.Value, error) { return d.String(), nil }
+
+func (d *CalendarDate) Scan(src any) error {
+	switch v := src.(type) {
+	case time.Time:
+		// The driver hands a DATE back as midnight; take its fields as they are
+		// rather than converting zones, which could move it a day.
+		*d = CalendarDate{time.Date(v.Year(), v.Month(), v.Day(), 0, 0, 0, 0, time.UTC)}
+		return nil
+	case string:
+		p, err := ParseCalendarDate(v)
+		*d = p
+		return err
+	case []byte:
+		p, err := ParseCalendarDate(string(v))
+		*d = p
+		return err
+	default:
+		return fmt.Errorf("CalendarDate: cannot scan %T", v)
+	}
+}
+
+// BrandFact is one row of the facts ledger: a statement the generator may rest
+// claims on, with what it is about, what kind of claim it supports, where it
+// came from and when it goes off. A nil date means "not recorded" (addedAt,
+// checkedAt) or "does not expire" (expiresAt).
+type BrandFact struct {
+	bun.BaseModel `bun:"table:brand_facts,alias:bf" swaggerignore:"true"`
+	TenantScoped
+
+	ID            string        `bun:"id,pk"                                        json:"id"`
+	Statement     string        `bun:"statement,notnull"                            json:"statement"`
+	Subject       FactSubject   `bun:"subject,notnull"                              json:"subject" enums:"us,problem,opportunity"`
+	Kind          FactKind      `bun:"kind,notnull"                                 json:"kind" enums:"measured,documented,commitment,judgement"`
+	Source        string        `bun:"source,notnull"                               json:"source"`
+	AddedAt       *CalendarDate `bun:"added_on,type:date"                           json:"addedAt" swaggertype:"string" example:"2026-09-01"`
+	CheckedAt     *CalendarDate `bun:"checked_on,type:date"                         json:"checkedAt" swaggertype:"string" example:"2026-09-20"`
+	ExpiresAt     *CalendarDate `bun:"expires_on,type:date"                         json:"expiresAt" swaggertype:"string" example:"2027-01-31"`
+	CreatedBy     *string       `bun:"created_by"                                   json:"createdBy"`
+	CreatedByName string        `bun:"created_by_name,notnull"                      json:"createdByName"`
+	CreatedAt     time.Time     `bun:"created_at,notnull,default:current_timestamp" json:"-"`
+	UpdatedAt     time.Time     `bun:"updated_at,notnull,default:current_timestamp" json:"updatedAt"`
+}
+
+// ExpiredOn reports whether the fact has gone off by the given day: its expiry
+// date is strictly before it. A fact expiring today is still current.
+func (f *BrandFact) ExpiredOn(today CalendarDate) bool {
+	return f.ExpiresAt != nil && f.ExpiresAt.Before(today.Time)
+}
+
+// BrandGuardrailsStanceRecord is the stored stance: a row means the workspace
+// has decided it needs no guardrails.
+type BrandGuardrailsStanceRecord struct {
+	bun.BaseModel `bun:"table:brand_guardrails_stance,alias:bgs" swaggerignore:"true"`
+	TenantScoped
+
+	DecidedAt     time.Time `bun:"decided_at,notnull,default:current_timestamp"`
+	DecidedBy     *string   `bun:"decided_by"`
+	DecidedByName string    `bun:"decided_by_name,notnull"`
+}
+
+// GuardrailsStance is the wire form of the stance. When None is false every
+// other field is null.
+type GuardrailsStance struct {
+	None          bool       `json:"none"`
+	DecidedAt     *time.Time `json:"decidedAt"`
+	DecidedBy     *string    `json:"decidedBy"`
+	DecidedByName *string    `json:"decidedByName"`
+}
+
+// StanceOf renders a stored stance (nil = undecided) for the wire.
+func StanceOf(rec *BrandGuardrailsStanceRecord) GuardrailsStance {
+	if rec == nil {
+		return GuardrailsStance{}
+	}
+	at, by, name := rec.DecidedAt, rec.DecidedBy, rec.DecidedByName
+	return GuardrailsStance{None: true, DecidedAt: &at, DecidedBy: by, DecidedByName: &name}
 }

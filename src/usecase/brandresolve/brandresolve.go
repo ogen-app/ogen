@@ -13,7 +13,9 @@ package brandresolve
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -22,9 +24,12 @@ import (
 // Resolved is the outcome of resolution. Any of Voice/Audience/Guardrails may be
 // nil; the legacy strings carry the campaign's prose for the fallback path.
 type Resolved struct {
-	Voice         *models.BrandVoice
-	Audience      *models.BrandAudience
-	Guardrails    *models.BrandGuardrails
+	Voice      *models.BrandVoice
+	Audience   *models.BrandAudience
+	Guardrails *models.BrandGuardrails
+	// Facts are the ledger's current facts (CON-316): expired ones are
+	// already dropped. Independent of Guardrails, which may be nil.
+	Facts         []models.BrandFact
 	LegacyTone    string // campaign.ToneGuidelines — used when Voice is nil
 	LegacyPersona string // campaign.TargetPersona — used when Audience is nil
 }
@@ -34,6 +39,7 @@ type Resolved struct {
 //	voice:    post.BrandVoiceID → campaign.BrandVoiceID → workspace default → (legacy prose)
 //	audience: post.BrandAudienceID → campaign.BrandAudienceID → (legacy prose)
 //	guardrails: always the workspace singleton.
+//	facts: the workspace ledger minus facts expired before today (UTC).
 //
 // post may be nil (campaign-level resolution, e.g. draft_post batches). It never
 // returns a nil *Resolved on a nil error.
@@ -66,7 +72,27 @@ func Resolve(ctx context.Context, repo repository.BrandRepository, campaign *mod
 	}
 
 	r.Guardrails = data.Guardrails
+	r.Facts = currentFacts(ctx, data.Facts, models.CalendarDateOf(now()))
 	return r, nil
+}
+
+// now is the clock expiry is judged against; tests replace it.
+var now = time.Now
+
+// currentFacts drops facts that expired before today. A fact expiring today, or
+// soon ("due"), is still used. It logs how many it skipped, so expiry taking
+// effect is visible.
+func currentFacts(ctx context.Context, facts []models.BrandFact, today models.CalendarDate) []models.BrandFact {
+	out := make([]models.BrandFact, 0, len(facts))
+	for _, f := range facts {
+		if !f.ExpiredOn(today) {
+			out = append(out, f)
+		}
+	}
+	if skipped := len(facts) - len(out); skipped > 0 {
+		slog.InfoContext(ctx, "brand_facts_expired_skipped", "count", skipped)
+	}
+	return out
 }
 
 // VoiceID returns the resolved voice's id, or nil when resolution landed on the
@@ -150,9 +176,14 @@ func (r *Resolved) PromptBlock(platformID string) string {
 	}
 
 	// ── Guardrails (always, voice-independent) ──
-	if g := r.Guardrails; g != nil {
+	// Facts come from the ledger (CON-316) and render with or without a
+	// guardrails row.
+	g := r.Guardrails
+	if g != nil || len(r.Facts) > 0 {
 		b.WriteString("\n## Guardrails — non-negotiable, whichever voice writes\n")
-		writeList(&b, "True (rest claims on these facts)", g.Facts)
+		writeFacts(&b, r.Facts)
+	}
+	if g != nil {
 		writeList(&b, "May claim", g.MayClaim)
 		writeList(&b, "NEVER claim", g.NeverClaim)
 		if len(g.BannedWords) > 0 {
@@ -266,6 +297,40 @@ func writeList(b *strings.Builder, label string, items models.StringSlice) {
 	fmt.Fprintf(b, "- %s:\n", label)
 	for _, it := range items {
 		fmt.Fprintf(b, "  - %s\n", oneLine(it))
+	}
+}
+
+// factGroups is the order and heading facts render under, by subject.
+var factGroups = []struct {
+	subject models.FactSubject
+	label   string
+}{
+	{models.FactSubjectUs, "True about us (rest claims on these facts)"},
+	{models.FactSubjectProblem, "Problems our audience has"},
+	{models.FactSubjectOpportunity, "Openings in the market"},
+}
+
+// factHints tells the model how far a fact of each kind can be pushed.
+// measured and documented facts need no hint.
+var factHints = map[models.FactKind]string{
+	models.FactKindJudgement:  " (our view: never state as a figure or a statistic)",
+	models.FactKindCommitment: " (a commitment: state it as a promise, not a measurement)",
+}
+
+// writeFacts renders facts grouped by subject, skipping empty groups.
+func writeFacts(b *strings.Builder, facts []models.BrandFact) {
+	for _, grp := range factGroups {
+		wrote := false
+		for _, f := range facts {
+			if f.Subject != grp.subject {
+				continue
+			}
+			if !wrote {
+				fmt.Fprintf(b, "- %s:\n", grp.label)
+				wrote = true
+			}
+			fmt.Fprintf(b, "  - %s%s\n", oneLine(f.Statement), factHints[f.Kind])
+		}
 	}
 }
 
