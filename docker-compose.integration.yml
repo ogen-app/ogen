@@ -23,19 +23,16 @@ services:
   # helper — keeping that out of the compose file means each test run
   # starts from a clean state without docker volume juggling.
   #
-  # Pulled from quay.io (MinIO's official registry) and pinned to a release:
-  # the minio/minio image was removed from Docker Hub in Sept 2026, so
-  # `minio/minio:latest` now fails to pull with "repository does not exist".
+  # Chainguard's build: minio/minio left Docker Hub and quay.io/minio now
+  # answers "unauthorized" to anonymous pulls (Sept 2026). The free tier only
+  # serves :latest. It runs as non-root (65532) with no shell or curl, so data
+  # lives in /tmp and readiness is polled from the host (make test-integration)
+  # instead of a container healthcheck.
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: cgr.dev/chainguard/minio:latest
     ports:
       - "9100:9000"
     environment:
       MINIO_ROOT_USER: integration
       MINIO_ROOT_PASSWORD: integration-secret
-    command: server /data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
+    command: ["server", "/tmp/minio-data"]
