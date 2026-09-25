@@ -86,8 +86,8 @@ var updateIdeaFields = []string{"title", "note", "campaign_id"}
 // ideaVerdictRequest is the PUT …/verdict body. Both keys must be present;
 // verdict null returns the idea to the inbox.
 type ideaVerdictRequest struct {
-	Verdict  *string    `json:"verdict"   enums:"yes,later,no"`
-	RemindAt *time.Time `json:"remind_at"`
+	Verdict  *string    `json:"verdict"   enums:"yes,later,no" extensions:"x-nullable"`
+	RemindAt *time.Time `json:"remind_at" extensions:"x-nullable"`
 }
 
 // ideaVerdictFields is the exact key set PUT …/verdict requires.
