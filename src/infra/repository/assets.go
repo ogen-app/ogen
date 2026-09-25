@@ -48,9 +48,10 @@ type AssetRepository interface {
 	// SetImageResult writes the vision description (content) of an IMG asset and,
 	// when setAlt is true, its generated alt text — but the alt write is guarded in
 	// SQL so it NEVER overwrites a user's edit (CON-281 D5): alt_text is set only
-	// where alt_text_edited_by_user is false. content is always written. Title is
-	// left untouched (the upload filename stays the title).
-	SetImageResult(ctx context.Context, id, content, altText string, setAlt bool) error
+	// where alt_text_edited_by_user is false. content is written only while it
+	// still equals prevContent, so a mid-run user edit survives (CON-312). Title
+	// is left untouched (the upload filename stays the title).
+	SetImageResult(ctx context.Context, id, prevContent, content, altText string, setAlt bool) error
 	// SetAltText sets an image asset's alt text unconditionally (CON-281) — the
 	// explicit "regenerate alt text" action, which overwrites even a prior
 	// generated value. It does NOT flip alt_text_edited_by_user (a regeneration is
@@ -207,11 +208,13 @@ func (r *assetRepository) UpdateContent(ctx context.Context, id, title, content 
 // SetImageResult writes an IMG asset's vision description and (optionally) its
 // generated alt text (CON-281). The alt write uses a CASE guard so a user's
 // edited alt text (alt_text_edited_by_user = true) is preserved even across a
-// re-extraction; content is always overwritten with the latest description.
-func (r *assetRepository) SetImageResult(ctx context.Context, id, content, altText string, setAlt bool) error {
+// re-extraction. The description is a compare-and-set (CON-312): it replaces
+// content only while content still equals prevContent (its value when the run
+// started), so a description the user edited mid-run is kept.
+func (r *assetRepository) SetImageResult(ctx context.Context, id, prevContent, content, altText string, setAlt bool) error {
 	q := r.db.NewUpdate().
 		Model((*models.Asset)(nil)).
-		Set("content = ?", content).
+		Set("content = CASE WHEN content = ? THEN ? ELSE content END", prevContent, content).
 		Set("updated_at = ?", time.Now().UTC()).
 		Where("id = ?", id)
 	if setAlt {

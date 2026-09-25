@@ -59,7 +59,7 @@ type imageExtractor interface {
 type imageAssetWriter interface {
 	UpdateStatus(ctx context.Context, id, status string) error
 	CreatorOf(ctx context.Context, id string) (string, error)
-	SetImageResult(ctx context.Context, id, content, altText string, setAlt bool) error
+	SetImageResult(ctx context.Context, id, prevContent, content, altText string, setAlt bool) error
 	GetByID(ctx context.Context, id string) (*models.Asset, error)
 }
 
@@ -217,6 +217,13 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		}
 	}
 
+	// The description as it stands before the vision call: the result replaces it
+	// only if nobody edits it meanwhile (compare-and-set, CON-312).
+	before, err := p.Deps.Assets.GetByID(ctx, in.AssetID)
+	if err != nil {
+		return fmt.Errorf("process_image %s: load asset: %w", in.AssetID, err)
+	}
+
 	// Presign the original (in) and the normalized-derivative slot (out). Bytes
 	// never traverse gRPC — image-service reads/writes these directly.
 	originalKey := storage.TenantKey(ctx, in.StorageKey)
@@ -297,7 +304,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 
 	// Description → asset.Content; alt text → asset.AltText (guarded against a user
 	// edit in SQL, D5). Title stays the upload filename.
-	if err := p.Deps.Assets.SetImageResult(ctx, in.AssetID, res.Description, res.AltText, res.AltText != ""); err != nil {
+	if err := p.Deps.Assets.SetImageResult(ctx, in.AssetID, before.Content, res.Description, res.AltText, res.AltText != ""); err != nil {
 		return fmt.Errorf("process_image %s: set description/alt: %w", in.AssetID, err)
 	}
 
@@ -313,13 +320,16 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		return fmt.Errorf("process_image %s: checkpoint extraction: %w", in.AssetID, err)
 	}
 
-	return p.embedAndSettle(ctx, in, ext, embedInputsFromResult(res), lastAttempt)
+	// Embed from the persisted state, not res: the description may have been
+	// edited mid-run and kept by the compare-and-set above (CON-312).
+	return p.resumeFromCheckpoint(ctx, in, ext, lastAttempt)
 }
 
 // resumeFromCheckpoint re-drives ONLY the embedding + settle steps of a run whose
 // vision pass already completed and was checkpointed (status `describing`). It
 // reloads the persisted description (asset.Content) + blocks and embeds them, so a
-// transient embedder outage retries without a second (paid) Extract.
+// transient embedder outage retries without a second (paid) Extract. The fresh
+// path settles through it too, so both embed the same stored state.
 func (p *ProcessImageProcessor) resumeFromCheckpoint(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, lastAttempt bool) error {
 	asset, err := p.Deps.Assets.GetByID(ctx, in.AssetID)
 	if err != nil {
@@ -339,28 +349,9 @@ type embedInput struct {
 	label  string
 }
 
-// embedInputsFromResult builds the embed set from a fresh Extract response.
-func embedInputsFromResult(res *imageclient.ExtractResult) []embedInput {
-	inputs := make([]embedInput, 0, len(res.Blocks)+1)
-	if hasWords(res.Description) {
-		inputs = append(inputs, embedInput{
-			text:   res.Description,
-			anchor: &models.SourceAnchor{Kind: "image", Provenance: "image_extraction"},
-			label:  "Image description",
-		})
-	}
-	for i, b := range res.Blocks {
-		if !hasWords(b.Text) {
-			continue
-		}
-		inputs = append(inputs, embedInput{text: b.Text, anchor: blockAnchor(b), label: fmt.Sprintf("Region %d", i+1)})
-	}
-	return inputs
-}
-
-// embedInputsFromPersisted rebuilds the embed set from checkpointed state on a
-// resume: the description (asset.Content) + the stored image_blocks (which already
-// carry their persisted SourceAnchor).
+// embedInputsFromPersisted builds the embed set from the stored state: the
+// description (asset.Content) + the stored image_blocks (which already carry
+// their persisted SourceAnchor).
 func embedInputsFromPersisted(description string, blocks []models.ImageBlock) []embedInput {
 	inputs := make([]embedInput, 0, len(blocks)+1)
 	if hasWords(description) {
