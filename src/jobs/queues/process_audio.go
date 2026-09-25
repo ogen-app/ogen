@@ -547,6 +547,7 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 
 	chunks := make([]models.AssetChunk, 0, len(assembled))
 	var embedAttempts, embedFailures int
+	var totalEmbedTokens int64
 	for idx, a := range assembled {
 		text := a.text()
 		if !hasWords(text) {
@@ -562,12 +563,14 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 			continue
 		}
 		label := formatTimeRange(a.startMs, a.endMs)
+		tokens := estimateTokens(text)
+		totalEmbedTokens += int64(tokens)
 		chunks = append(chunks, models.AssetChunk{
 			ID:          fmt.Sprintf("%s:%d", in.AssetID, idx),
 			AssetID:     in.AssetID,
 			ChunkIndex:  idx,
 			Content:     text,
-			TokenCount:  estimateTokens(text),
+			TokenCount:  tokens,
 			Embedding:   pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
 			Model:       p.Deps.Embedder.Name(),
 			SourceLabel: &label,
@@ -617,6 +620,12 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 	}
 	if err := p.setAssetStatus(ctx, in.AssetID, status); err != nil {
 		return err
+	}
+	// Meter the transcript-chunk embeddings on the gemini vendor, like
+	// document_extract (CON-312): only after the durable writes (chunks +
+	// transcript + status), so a retry from a late failure can't double-count.
+	if totalEmbedTokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "audio_embed", llm.EmbedUsage{Tokens: totalEmbedTokens})
 	}
 	ext.Status = models.AudioExtractionStatusComplete
 	ext.FailureReason = ""
