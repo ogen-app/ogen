@@ -48,6 +48,7 @@ import (
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
+	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/notes"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
@@ -996,6 +997,11 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	postNotesHandler := handlers.NewPostNotesHandler(noteSvc, r.postRepo, auth)
 	postNotesHandler.SetActivityRecorder(activityWiring.recorder)
 	postNotesHandler.Register(app)
+
+	// CON-315: the workspace Ideas backlog (capture + triage verdicts).
+	ideasHandler := handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), auth)
+	ideasHandler.SetActivityRecorder(activityWiring.recorder)
+	ideasHandler.Register(app)
 
 	// The React SPA is deployed separately (CON-98) — the API serves only
 	// /api/* (plus SSE). Non-API routes fall through to a 404.

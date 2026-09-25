@@ -1,0 +1,142 @@
+@baseUrl = http://localhost:9001
+
+# CON-315: the workspace Ideas backlog. All endpoints require authentication.
+# Run "Login" from sessions/sessions.http first — the HTTP client stores and
+# sends the cookie automatically on subsequent requests to the same host.
+# Set campaignId (e.g. from campaigns/campaigns.http) for the attach flows.
+
+### List every idea in the workspace  [protected]
+GET {{baseUrl}}/api/ideas
+Accept: application/json
+
+### List ideas attached to one campaign  [protected]
+GET {{baseUrl}}/api/ideas?campaign_id={{campaignId}}
+Accept: application/json
+
+### List only workspace-wide (unfiled) ideas  [protected]
+GET {{baseUrl}}/api/ideas?campaign_id=none
+Accept: application/json
+
+### Capture an idea (title only → workspace-wide, waiting)  [protected]
+# @name captureIdea
+POST {{baseUrl}}/api/ideas
+Content-Type: application/json
+
+{
+  "title": "A teardown of our own onboarding",
+  "note": "",
+  "campaign_id": null
+}
+
+> {% client.global.set("ideaId", response.body.id) %}
+
+### Capture an idea on a campaign  [protected]
+POST {{baseUrl}}/api/ideas
+Content-Type: application/json
+
+{
+  "title": "Customer quote carousel",
+  "campaign_id": "{{campaignId}}"
+}
+
+### Capture — blank title (expects 400)  [protected]
+POST {{baseUrl}}/api/ideas
+Content-Type: application/json
+
+{
+  "title": "   "
+}
+
+### Edit the title only (note and campaign untouched)  [protected]
+PATCH {{baseUrl}}/api/ideas/{{ideaId}}
+Content-Type: application/json
+
+{
+  "title": "A teardown of our onboarding, week one"
+}
+
+### Clear the note  [protected]
+PATCH {{baseUrl}}/api/ideas/{{ideaId}}
+Content-Type: application/json
+
+{
+  "note": ""
+}
+
+### Attach to a campaign  [protected]
+PATCH {{baseUrl}}/api/ideas/{{ideaId}}
+Content-Type: application/json
+
+{
+  "campaign_id": "{{campaignId}}"
+}
+
+### Detach back to workspace-wide  [protected]
+PATCH {{baseUrl}}/api/ideas/{{ideaId}}
+Content-Type: application/json
+
+{
+  "campaign_id": null
+}
+
+### PATCH with a verdict (expects 400 — decisions go through PUT …/verdict)  [protected]
+PATCH {{baseUrl}}/api/ideas/{{ideaId}}
+Content-Type: application/json
+
+{
+  "verdict": "yes"
+}
+
+### Verdict: yes  [protected]
+PUT {{baseUrl}}/api/ideas/{{ideaId}}/verdict
+Content-Type: application/json
+
+{
+  "verdict": "yes",
+  "remind_at": null
+}
+
+### Verdict: later, back in a week  [protected]
+< {%
+    request.variables.set("inAWeek", new Date(Date.now() + 7 * 864e5).toISOString());
+%}
+PUT {{baseUrl}}/api/ideas/{{ideaId}}/verdict
+Content-Type: application/json
+
+{
+  "verdict": "later",
+  "remind_at": "{{inAWeek}}"
+}
+
+### Verdict: later without remind_at (expects 400)  [protected]
+PUT {{baseUrl}}/api/ideas/{{ideaId}}/verdict
+Content-Type: application/json
+
+{
+  "verdict": "later",
+  "remind_at": null
+}
+
+### Verdict: no (archive)  [protected]
+PUT {{baseUrl}}/api/ideas/{{ideaId}}/verdict
+Content-Type: application/json
+
+{
+  "verdict": "no",
+  "remind_at": null
+}
+
+### Undo — back to the inbox  [protected]
+PUT {{baseUrl}}/api/ideas/{{ideaId}}/verdict
+Content-Type: application/json
+
+{
+  "verdict": null,
+  "remind_at": null
+}
+
+### Delete the idea (hard delete)  [protected]
+DELETE {{baseUrl}}/api/ideas/{{ideaId}}
+
+### Delete again (expects 404)  [protected]
+DELETE {{baseUrl}}/api/ideas/{{ideaId}}
