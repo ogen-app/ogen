@@ -1020,6 +1020,253 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/brand/facts": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Add a fact to the ledger",
+                "parameters": [
+                    {
+                        "description": "Fact",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandFactRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.BrandFact"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "a fact with this statement already exists",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/facts/{id}": {
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Full replace of statement, subject, kind, source and the three dates. The author never changes; an unchanged save keeps updatedAt.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Replace a fact's editable fields",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Fact id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fact",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandFactRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.BrandFact"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "a fact with this statement already exists",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Remove a fact from the ledger",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Fact id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/guardrails/stance": {
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "none=true is only accepted while there are no guardrails (409 otherwise). none=false returns the workspace to undecided. Saving guardrails clears the stance.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Record whether the workspace has decided it needs no guardrails",
+                "parameters": [
+                    {
+                        "description": "Stance",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.guardrailsStanceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.GuardrailsStance"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/campaign_types": {
             "get": {
                 "security": [
@@ -1528,7 +1775,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a phase from a campaign type.",
+                "description": "Deletes a phase from a campaign type. 409 phase_in_use while any post is planned against it.",
                 "tags": [
                     "campaign_types"
                 ],
@@ -1564,6 +1811,15 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1820,7 +2076,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Replaces all mutable fields of an existing campaign.",
+                "description": "Replaces all mutable fields of an existing campaign.\ncampaign_type_id can't change once any post is planned against the type's phases\n(type_locked; 409 campaign_type_locked). Changing the type, or dates such that a phase\nwindow would empty out, drops a manual phase plan back to derived (phase_plan_reset: true).",
                 "consumes": [
                     "application/json"
                 ],
@@ -1876,6 +2132,15 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "campaign_type_locked: posts are planned against the current type's phases",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2557,6 +2822,188 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/phases": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns each phase of the campaign's type with its inclusive date window and post count (CON-166).\nWith no stored plan the windows are derived: the campaign's start/end dates split evenly across\nthe phases (remainder days to the earliest) — the same windows content generation uses.\nsource is \"unscheduled\" (and the dates null) while the campaign has no dates.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Get campaign phase plan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.campaignPhasePlan"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Replaces the campaign's phase windows with a manual plan (CON-166). The plan must hold exactly one\nwindow per phase of the campaign's type, contiguous in phase order (each starts the day after the\nprevious ends — no gaps or overlaps), the first starting on start_date and the last ending on\nend_date. Content generation then plans posts into these windows. 400 invalid_phase_plan names\nthe first offending phase; 409 campaign_unscheduled when the campaign has no dates.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Set campaign phase plan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Whole phase plan",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.campaignPhasePlanRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.campaignPhasePlan"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Drops the campaign's manual phase plan so the windows are derived from its dates again (CON-166).\nIdempotent. Returns the resulting (derived) plan.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Reset campaign phase plan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.campaignPhasePlan"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9479,6 +9926,19 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "campaignphase.Source": {
+            "type": "string",
+            "enum": [
+                "derived",
+                "manual",
+                "unscheduled"
+            ],
+            "x-enum-varnames": [
+                "SourceDerived",
+                "SourceManual",
+                "SourceUnscheduled"
+            ]
+        },
         "entitlements.EntitlementValue": {
             "type": "object",
             "properties": {
@@ -9943,6 +10403,46 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.brandFactRequest": {
+            "type": "object",
+            "properties": {
+                "addedAt": {
+                    "type": "string",
+                    "example": "2026-09-01"
+                },
+                "checkedAt": {
+                    "type": "string",
+                    "example": "2026-09-20"
+                },
+                "expiresAt": {
+                    "type": "string",
+                    "example": "2027-01-31"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "measured",
+                        "documented",
+                        "commitment",
+                        "judgement"
+                    ]
+                },
+                "source": {
+                    "type": "string"
+                },
+                "statement": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string",
+                    "enum": [
+                        "us",
+                        "problem",
+                        "opportunity"
+                    ]
+                }
+            }
+        },
         "handlers.bulkTagRequest": {
             "type": "object",
             "required": [
@@ -9967,6 +10467,93 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "handlers.campaignPhaseEntry": {
+            "type": "object",
+            "properties": {
+                "end_date": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "phase_id": {
+                    "type": "string"
+                },
+                "post_count": {
+                    "type": "integer"
+                },
+                "purpose": {
+                    "type": "string"
+                },
+                "sequence": {
+                    "type": "integer"
+                },
+                "start_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.campaignPhasePlan": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "campaign_type_id": {
+                    "type": "string"
+                },
+                "phases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.campaignPhaseEntry"
+                    }
+                },
+                "source": {
+                    "description": "Source is derived (even split of the campaign dates), manual (user-edited)\nor unscheduled (the campaign has no dates, so the phases have none).",
+                    "enum": [
+                        "derived",
+                        "manual",
+                        "unscheduled"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/campaignphase.Source"
+                        }
+                    ]
+                },
+                "type_locked": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.campaignPhasePlanRequest": {
+            "type": "object",
+            "properties": {
+                "phases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.campaignPhaseWindowInput"
+                    }
+                }
+            }
+        },
+        "handlers.campaignPhaseWindowInput": {
+            "type": "object",
+            "properties": {
+                "end_date": {
+                    "type": "string",
+                    "example": "2026-10-15"
+                },
+                "phase_id": {
+                    "type": "string",
+                    "example": "98"
+                },
+                "start_date": {
+                    "type": "string",
+                    "example": "2026-10-01"
                 }
             }
         },
@@ -10355,6 +10942,14 @@ const docTemplate = `{
                 },
                 "s3_key": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.guardrailsStanceRequest": {
+            "type": "object",
+            "properties": {
+                "none": {
+                    "type": "boolean"
                 }
             }
         },
@@ -11557,6 +12152,66 @@ const docTemplate = `{
                 }
             }
         },
+        "models.BrandFact": {
+            "type": "object",
+            "properties": {
+                "addedAt": {
+                    "type": "string",
+                    "example": "2026-09-01"
+                },
+                "checkedAt": {
+                    "type": "string",
+                    "example": "2026-09-20"
+                },
+                "createdBy": {
+                    "type": "string"
+                },
+                "createdByName": {
+                    "type": "string"
+                },
+                "expiresAt": {
+                    "type": "string",
+                    "example": "2027-01-31"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "enum": [
+                        "measured",
+                        "documented",
+                        "commitment",
+                        "judgement"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.FactKind"
+                        }
+                    ]
+                },
+                "source": {
+                    "type": "string"
+                },
+                "statement": {
+                    "type": "string"
+                },
+                "subject": {
+                    "enum": [
+                        "us",
+                        "problem",
+                        "opportunity"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.FactSubject"
+                        }
+                    ]
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "models.Campaign": {
             "type": "object",
             "properties": {
@@ -11624,6 +12279,9 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "phase_plan_reset": {
+                    "type": "boolean"
+                },
                 "platforms": {
                     "type": "array",
                     "items": {
@@ -11680,6 +12338,10 @@ const docTemplate = `{
                 },
                 "tone_guidelines": {
                     "type": "string"
+                },
+                "type_locked": {
+                    "description": "Phase plan (CON-166). TypeLocked: campaign_type_id can no longer change\nbecause posts are planned against the type's phases (PhasedPostCount \u003e 0);\nhydrated on reads. PhaseWindows is the stored manual phase plan, hydrated\non GetByID — empty means derived; read it via campaignphase.Resolve.\nPhasePlanReset is set on a PUT response when a type/date change dropped\nthe manual plan back to derived.",
+                    "type": "boolean"
                 },
                 "updated_at": {
                     "type": "string"
@@ -11864,6 +12526,51 @@ const docTemplate = `{
                 },
                 "span": {
                     "type": "string"
+                }
+            }
+        },
+        "models.FactKind": {
+            "type": "string",
+            "enum": [
+                "measured",
+                "documented",
+                "commitment",
+                "judgement"
+            ],
+            "x-enum-varnames": [
+                "FactKindMeasured",
+                "FactKindDocumented",
+                "FactKindCommitment",
+                "FactKindJudgement"
+            ]
+        },
+        "models.FactSubject": {
+            "type": "string",
+            "enum": [
+                "us",
+                "problem",
+                "opportunity"
+            ],
+            "x-enum-varnames": [
+                "FactSubjectUs",
+                "FactSubjectProblem",
+                "FactSubjectOpportunity"
+            ]
+        },
+        "models.GuardrailsStance": {
+            "type": "object",
+            "properties": {
+                "decidedAt": {
+                    "type": "string"
+                },
+                "decidedBy": {
+                    "type": "string"
+                },
+                "decidedByName": {
+                    "type": "string"
+                },
+                "none": {
+                    "type": "boolean"
                 }
             }
         },
@@ -13179,6 +13886,9 @@ const docTemplate = `{
         "overview.PhaseInfo": {
             "type": "object",
             "properties": {
+                "endDate": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -13193,6 +13903,10 @@ const docTemplate = `{
                 },
                 "sequence": {
                     "type": "integer"
+                },
+                "startDate": {
+                    "description": "StartDate/EndDate are the phase's effective window (YYYY-MM-DD, inclusive)\nfrom the campaign's phase plan (CON-166); null when the campaign is undated.",
+                    "type": "string"
                 }
             }
         },

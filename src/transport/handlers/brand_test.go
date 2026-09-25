@@ -63,7 +63,7 @@ var _ = Describe("BrandHandler", Ordered, func() {
 
 	AfterEach(func() {
 		for _, tbl := range []string{
-			"brand_voices", "brand_audiences", "brand_guardrails",
+			"brand_voices", "brand_audiences", "brand_guardrails", "brand_facts", "brand_guardrails_stance",
 			"brand_look", "brand_templates", "sessions", "users", "accounts",
 		} {
 			_, err := db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(context.Background())
