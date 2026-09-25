@@ -19,6 +19,10 @@ type AssetChunksRepository interface {
 	UpsertChunks(ctx context.Context, assetID string, chunks []models.AssetChunk) error
 	// GetByAssetID returns all chunks for an asset, ordered by chunk_index.
 	GetByAssetID(ctx context.Context, assetID string) ([]models.AssetChunk, error)
+	// ListPageByAssetID returns one page of an asset's chunks ordered by
+	// chunk_index, without the embedding vector, plus the asset's total chunk
+	// count — the REST chunk view (CON-312).
+	ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error)
 	// SearchSimilar returns embedded chunks ordered by cosine similarity to
 	// query (closest first), keeping only those scoring >= minScore. When
 	// assetIDs is non-empty the search is scoped to those assets; limit <= 0
@@ -78,6 +82,19 @@ func (r *assetChunksRepository) GetByAssetID(ctx context.Context, assetID string
 		OrderExpr("ac.chunk_index ASC").
 		Scan(ctx)
 	return chunks, err
+}
+
+func (r *assetChunksRepository) ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error) {
+	chunks := []models.AssetChunk{}
+	total, err := r.db.NewSelect().
+		Model(&chunks).
+		ExcludeColumn("embedding").
+		Where("ac.asset_id = ?", assetID).
+		OrderExpr("ac.chunk_index ASC").
+		Offset(offset).
+		Limit(limit).
+		ScanAndCount(ctx)
+	return chunks, total, err
 }
 
 func (r *assetChunksRepository) SearchSimilar(ctx context.Context, query pgvector.HalfVector, assetIDs []string, minScore float64, limit int) ([]models.AssetChunk, error) {

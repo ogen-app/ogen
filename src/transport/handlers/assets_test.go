@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -11,10 +12,12 @@ import (
 	"github.com/gofiber/fiber/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/pgvector/pgvector-go"
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
@@ -843,6 +846,129 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 			Expect(waitForReembed()).To(BeFalse())
 			Expect(waitForSave()).To(BeFalse())
 		})
+	})
+})
+
+// ── chunk view (CON-312) ────────────────────────────────────────────────────
+
+var _ = Describe("AssetsHandler GET /:id/chunks (CON-312)", Ordered, func() {
+	var (
+		app        *fiber.App
+		db         *bun.DB
+		authCookie *http.Cookie
+		chunksRepo repository.AssetChunksRepository
+		userID     string
+	)
+	ctx := context.Background()
+
+	BeforeAll(func() { db = mustOpenTestDBWithMigrations() })
+
+	BeforeEach(func() {
+		app = fiber.New(fiber.Config{
+			ErrorHandler: func(c *fiber.Ctx, err error) error {
+				code := fiber.StatusInternalServerError
+				if e, ok := err.(*fiber.Error); ok {
+					code = e.Code
+				}
+				return c.Status(code).JSON(fiber.Map{"error": err.Error()})
+			},
+		})
+		userRepo := repository.NewUserRepository(db)
+		sessionRepo := repository.NewSessionRepository(db)
+		tagRepo := repository.NewTagRepository(db)
+		fileRepo := repository.NewAssetFileRepository(db)
+		assetRepo := repository.NewAssetRepository(db, tagRepo, fileRepo)
+		chunksRepo = repository.NewAssetChunksRepository(db)
+		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		h := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil)
+		h.SetChunkLister(chunksRepo)
+		h.Register(app)
+
+		userID = seedTenantUser(db, "Admin", "chunks@example.com", "admin-password").ID
+		loginBody, _ := json.Marshal(fiber.Map{"email": "chunks@example.com", "password": "admin-password"})
+		loginReq := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(loginBody))
+		loginReq.Header.Set("Content-Type", "application/json")
+		loginResp, err := app.Test(loginReq)
+		Expect(err).NotTo(HaveOccurred())
+		authCookie = loginResp.Cookies()[0]
+	})
+
+	AfterEach(func() {
+		for _, tbl := range []string{"assets_chunks", "assets", "sessions", "users", "accounts"} {
+			_, err := db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(ctx)
+			Expect(err).NotTo(HaveOccurred())
+		}
+	})
+
+	// seedAudio stores an AUDIO asset with n time-anchored transcript chunks.
+	seedAudio := func(n int) string {
+		GinkgoHelper()
+		tctx := tenantctx.With(ctx, models.DefaultTenantID)
+		id, err := models.NewID()
+		Expect(err).NotTo(HaveOccurred())
+		audioType := models.AssetTypeAudio
+		_, err = db.NewInsert().Model(&models.Asset{
+			ID: id, Title: "Episode", Content: "t", Status: models.AssetStatusReady, Type: &audioType,
+			TagIDs: models.StringSlice{}, CreatedBy: userID,
+		}).Exec(tctx)
+		Expect(err).NotTo(HaveOccurred())
+		chunks := make([]models.AssetChunk, n)
+		for i := range chunks {
+			label := fmt.Sprintf("0:%02d–0:%02d", i*10, i*10+10)
+			chunks[i] = models.AssetChunk{
+				ID: fmt.Sprintf("%s:%d", id, i), AssetID: id, ChunkIndex: i, Content: fmt.Sprintf("part %d", i),
+				TokenCount: 2, Embedding: pgvector.NewHalfVector(make([]float32, 3072)), Model: "m",
+				SourceLabel:  &label,
+				SourceAnchor: &models.SourceAnchor{Kind: "time", StartMs: int64(i) * 10_000, EndMs: int64(i+1) * 10_000, Provenance: "transcript"},
+			}
+		}
+		Expect(chunksRepo.UpsertChunks(tctx, id, chunks)).To(Succeed())
+		return id
+	}
+
+	get := func(path string) *http.Response {
+		GinkgoHelper()
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(authCookie)
+		resp, err := app.Test(req)
+		Expect(err).NotTo(HaveOccurred())
+		return resp
+	}
+
+	It("returns chunks with their source label and anchor, in order", func() {
+		id := seedAudio(3)
+		resp := get("/api/content-bank/assets/" + id + "/chunks")
+		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+		var body map[string]any
+		Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+		Expect(body["total"]).To(BeNumerically("==", 3))
+		chunks := body["chunks"].([]any)
+		Expect(chunks).To(HaveLen(3))
+		first := chunks[0].(map[string]any)
+		Expect(first["source_label"]).To(Equal("0:00–0:10"))
+		anchor := first["source_anchor"].(map[string]any)
+		Expect(anchor["kind"]).To(Equal("time"))
+		Expect(anchor).To(HaveKeyWithValue("start_ms", BeNumerically("==", 0)))
+		Expect(first).NotTo(HaveKey("embedding"))
+	})
+
+	It("pages with offset and limit", func() {
+		id := seedAudio(5)
+		resp := get("/api/content-bank/assets/" + id + "/chunks?offset=2&limit=2")
+		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+		var body struct {
+			Chunks []models.AssetChunk `json:"chunks"`
+			Total  int                 `json:"total"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+		Expect(body.Total).To(Equal(5))
+		Expect(body.Chunks).To(HaveLen(2))
+		Expect(body.Chunks[0].ChunkIndex).To(Equal(2))
+	})
+
+	It("returns 404 for an unknown asset", func() {
+		Expect(get("/api/content-bank/assets/nope/chunks").StatusCode).To(Equal(fiber.StatusNotFound))
 	})
 })
 
