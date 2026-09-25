@@ -1274,7 +1274,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns all campaign types with their phases ordered by name.",
+                "description": "Returns the system campaign types plus the workspace's own custom types, with their phases, ordered by name.",
                 "produces": [
                     "application/json"
                 ],
@@ -1309,7 +1309,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Creates a new user-defined campaign type without phases.",
+                "description": "Creates a campaign type owned by the caller's workspace, without phases. 409 campaign_type_name_taken when the name (case-insensitive) is used by a system type or another of the workspace's types.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1355,6 +1355,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -1366,7 +1375,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns a single campaign type with its phases by ID.",
+                "description": "Returns a single campaign type with its phases by ID. Another workspace's custom type is 404.",
                 "produces": [
                     "application/json"
                 ],
@@ -1416,7 +1425,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Updates name, label, and description of a user-created campaign type. System types cannot be modified.",
+                "description": "Updates name, label, and description of one of the workspace's own campaign types. System types cannot be modified. 409 campaign_type_name_taken on a name clash.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1487,6 +1496,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             },
@@ -1496,7 +1514,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a user-created campaign type and all its phases. System types cannot be deleted.",
+                "description": "Deletes one of the workspace's own campaign types and all its phases. System types cannot be deleted.",
                 "tags": [
                     "campaign_types"
                 ],
@@ -1551,7 +1569,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Creates a new user-defined campaign type by deep-copying an existing type and all its phases.",
+                "description": "Creates a workspace-owned campaign type by deep-copying a visible type (system or the workspace's own) and all its phases. 409 campaign_type_name_taken on a name clash.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1613,6 +1631,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -1624,7 +1651,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Adds a new phase to a campaign type.",
+                "description": "Adds a phase to one of the workspace's own campaign types. System types are read-only (403).",
                 "consumes": [
                     "application/json"
                 ],
@@ -1678,6 +1705,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -1697,7 +1733,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Updates a phase within a campaign type.",
+                "description": "Updates a phase of one of the workspace's own campaign types. System types are read-only (403).",
                 "consumes": [
                     "application/json"
                 ],
@@ -1758,6 +1794,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -1775,7 +1820,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a phase from a campaign type. 409 phase_in_use while any post is planned against it.",
+                "description": "Deletes a phase from one of the workspace's own campaign types. 403 for a system type; 409 phase_in_use while any post is planned against it.",
                 "tags": [
                     "campaign_types"
                 ],
@@ -1802,6 +1847,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
