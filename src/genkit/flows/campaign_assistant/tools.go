@@ -1,12 +1,10 @@
 package campaign_assistant
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/pgvector/pgvector-go"
 
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
@@ -1101,55 +1100,14 @@ func resolvePhase(campaign *models.Campaign, phase string, today time.Time) (id,
 	return "", "", fmt.Errorf("unknown phase %q; the campaign's phases are: %s", phase, strings.Join(pnames, ", "))
 }
 
-// currentPhase returns the phase whose timeline window contains today, by
-// partitioning [StartDate, EndDate] across phases in sequence order. Falls back
-// to the first phase when the campaign has no dates.
+// currentPhase returns the phase whose window contains today — the campaign's
+// effective phase plan (CON-166: its manual plan when set, else the even split
+// of [StartDate, EndDate]). Before the campaign starts it's the first phase,
+// after it ends the last; an undated campaign falls back to the first phase.
+// Callers guarantee the type has phases.
 func currentPhase(campaign *models.Campaign, today time.Time) models.CampaignTypePhase {
-	phases := append([]models.CampaignTypePhase(nil), campaignPhases(campaign)...)
-	slices.SortStableFunc(phases, func(a, b models.CampaignTypePhase) int { return cmp.Compare(a.Sequence, b.Sequence) })
-	if campaign.StartDate == nil || campaign.EndDate == nil {
-		return phases[0]
-	}
-	start, end := *campaign.StartDate, *campaign.EndDate
-	if !today.After(start) {
-		return phases[0]
-	}
-	if today.After(end) {
-		return phases[len(phases)-1]
-	}
-	windows := equalDayWindows(start, end, len(phases))
-	for i, w := range windows {
-		if !today.Before(w[0]) && !today.After(w[1]) {
-			return phases[i]
-		}
-	}
-	return phases[len(phases)-1]
-}
-
-// equalDayWindows partitions [start, end] into n contiguous inclusive day
-// windows (remainder to earliest), mirroring content_plan's date partition.
-func equalDayWindows(start, end time.Time, n int) [][2]time.Time {
-	out := make([][2]time.Time, n)
-	totalDays := int(end.Sub(start).Hours()/24) + 1
-	if totalDays < n {
-		for i := range out {
-			out[i] = [2]time.Time{start, end}
-		}
-		return out
-	}
-	base := totalDays / n
-	rem := totalDays % n
-	cursor := start
-	for i := range n {
-		d := base
-		if i < rem {
-			d++
-		}
-		winEnd := cursor.AddDate(0, 0, d-1)
-		out[i] = [2]time.Time{cursor, winEnd}
-		cursor = winEnd.AddDate(0, 0, 1)
-	}
-	return out
+	ph, _ := campaignphase.PhaseAt(campaign, today)
+	return ph
 }
 
 // resolveWindow validates the model-resolved publish window and fills in a

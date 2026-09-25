@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"slices"
 	"time"
+
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 )
 
 // batchSpec is the slot allocator's output for a single batch. Carried into the
@@ -85,6 +87,12 @@ func planBatches(
 
 	phasePosts := evenSplit(totalPosts, len(sortedPhases))
 	phaseWindows := computeDateWindows(startDate, endDate, len(sortedPhases))
+	// CON-166: a campaign's manual phase plan pins each phase's window; it is
+	// all-or-nothing (the plan is stored whole), so only apply it when every
+	// phase carries one.
+	if manual := manualWindows(sortedPhases); manual != nil {
+		phaseWindows = manual
+	}
 
 	type slot struct {
 		phaseIdx    int
@@ -192,45 +200,33 @@ func evenSplit(total, n int) []int {
 }
 
 // computeDateWindows partitions the closed inclusive interval [start, end]
-// into n contiguous windows in chronological order. When n exceeds the day
-// count (rare: e.g. 1-day campaign with multiple phases) all windows collapse
-// to the full range — the alternative (zero-day windows) would produce
-// invalid publish dates downstream.
+// into n contiguous windows in chronological order — the shared
+// campaignphase.Split rule (CON-166), so these derived windows are exactly the
+// ones GET /api/campaigns/:id/phases reports. When n exceeds the day count
+// (rare: e.g. 1-day campaign with multiple phases) all windows collapse to the
+// full range — the alternative (zero-day windows) would produce invalid
+// publish dates downstream.
 func computeDateWindows(start, end time.Time, n int) []dateWindow {
-	if n <= 0 {
+	spans := campaignphase.Split(start, end, n)
+	if spans == nil {
 		return nil
 	}
-	if n == 1 {
-		return []dateWindow{{
-			Start: start.Format("2006-01-02"),
-			End:   end.Format("2006-01-02"),
-		}}
+	out := make([]dateWindow, len(spans))
+	for i, sp := range spans {
+		out[i] = dateWindow{Start: sp[0].Format(time.DateOnly), End: sp[1].Format(time.DateOnly)}
 	}
+	return out
+}
 
-	totalDays := int(end.Sub(start).Hours()/24) + 1
-	if totalDays < 1 {
-		totalDays = 1
-	}
-	if totalDays < n {
-		out := make([]dateWindow, n)
-		s := start.Format("2006-01-02")
-		e := end.Format("2006-01-02")
-		for i := range out {
-			out[i] = dateWindow{Start: s, End: e}
+// manualWindows returns the phases' pinned windows (CON-166 manual plan) in
+// order, or nil unless every phase carries one.
+func manualWindows(phases []resolvedPhase) []dateWindow {
+	out := make([]dateWindow, len(phases))
+	for i, ph := range phases {
+		if ph.Window == nil {
+			return nil
 		}
-		return out
-	}
-
-	dayCounts := evenSplit(totalDays, n)
-	out := make([]dateWindow, n)
-	cursor := start
-	for i, d := range dayCounts {
-		winEnd := cursor.AddDate(0, 0, d-1)
-		out[i] = dateWindow{
-			Start: cursor.Format("2006-01-02"),
-			End:   winEnd.Format("2006-01-02"),
-		}
-		cursor = winEnd.AddDate(0, 0, 1)
+		out[i] = *ph.Window
 	}
 	return out
 }

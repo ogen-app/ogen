@@ -439,3 +439,31 @@ Accept: text/event-stream
 ### Check campaign posts — non-existent campaign (expects 404)  [protected]
 POST {{baseUrl}}/api/campaigns/nonexistent/posts-review
 Accept: text/event-stream
+
+# ── Phase date plan (CON-166) ─────────────────────────────────────────────────
+# Each phase of the campaign type gets an inclusive date window. With no stored
+# plan the windows are derived (start_date..end_date split evenly across the
+# phases); PUT stores a manual plan, DELETE resets it. source: derived | manual |
+# unscheduled. type_locked is true once a post is planned against a phase — the
+# campaign type can then no longer change (PUT /campaigns/:id → 409
+# campaign_type_locked).
+
+### Get the phase plan  [protected]  (CON-166)
+GET {{baseUrl}}/api/campaigns/{{campaignId}}/phases
+
+### Set a manual phase plan  [protected]  (CON-166)
+# One window per phase, contiguous (no gaps/overlaps), first starts on start_date,
+# last ends on end_date. 400 invalid_phase_plan names the first offending phase;
+# 409 campaign_unscheduled when the campaign has no dates.
+PUT {{baseUrl}}/api/campaigns/{{campaignId}}/phases
+Content-Type: application/json
+
+{
+  "phases": [
+    { "phase_id": "98", "start_date": "2026-10-01", "end_date": "2026-10-10" },
+    { "phase_id": "xh", "start_date": "2026-10-11", "end_date": "2026-10-31" }
+  ]
+}
+
+### Reset the phase plan to derived  [protected]  (CON-166)
+DELETE {{baseUrl}}/api/campaigns/{{campaignId}}/phases

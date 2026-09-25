@@ -79,4 +79,15 @@ type Campaign struct {
 	CreatedBy    string         `bun:"created_by,notnull"                           json:"created_by"`
 	CreatedAt    time.Time      `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt    time.Time      `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+
+	// Phase plan (CON-166). TypeLocked: campaign_type_id can no longer change
+	// because posts are planned against the type's phases (PhasedPostCount > 0);
+	// hydrated on reads. PhaseWindows is the stored manual phase plan, hydrated
+	// on GetByID — empty means derived; read it via campaignphase.Resolve.
+	// PhasePlanReset is set on a PUT response when a type/date change dropped
+	// the manual plan back to derived.
+	TypeLocked      bool                  `bun:"-" json:"type_locked"`
+	PhasedPostCount int                   `bun:"-" json:"-"`
+	PhaseWindows    []CampaignPhaseWindow `bun:"-" json:"-"`
+	PhasePlanReset  bool                  `bun:"-" json:"phase_plan_reset,omitempty"`
 }

@@ -80,6 +80,26 @@ type PostsHandler struct {
 	// post_scheduled, …) to the analytics store. nil is a no-op (analytics
 	// disabled / fixtures). Wired via SetActivityRecorder.
 	activity *activity.Recorder
+	// campaignRepo answers "is this phase one of the campaign's type's
+	// phases?" (CON-166) so a mismatched campaign_type_phase_id gets a clean
+	// 400. Optional (SetCampaignRepo); nil leaves it to the DB trigger, whose
+	// rejection is mapped to the same 400.
+	campaignRepo repository.CampaignRepository
+}
+
+// SetCampaignRepo wires the CON-166 phase-ownership check. Optional.
+func (h *PostsHandler) SetCampaignRepo(r repository.CampaignRepository) {
+	h.campaignRepo = r
+}
+
+// checkPhase reports whether a post's campaign_type_phase_id (when set) is a
+// phase of its campaign's type (CON-166). Without a wired campaign repo it
+// passes and the DB trigger decides.
+func (h *PostsHandler) checkPhase(ctx context.Context, campaignID string, phaseID *string) (bool, error) {
+	if phaseID == nil || h.campaignRepo == nil {
+		return true, nil
+	}
+	return h.campaignRepo.PhaseBelongsToCampaign(ctx, campaignID, *phaseID)
 }
 
 // SetOnBeforeDelete registers a hook that runs before a post is
@@ -1219,6 +1239,12 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	// create-time publish gate sees the same segments submit will publish.
 	h.deriveThreadSegments(reqCtx(c), post)
 
+	if ok, err := h.checkPhase(reqCtx(c), post.CampaignID, post.CampaignTypePhaseID); err != nil {
+		return err
+	} else if !ok {
+		return rejectInvalidPhase(c)
+	}
+
 	if done, err := h.validateForCreate(c, post); err != nil {
 		return err
 	} else if done {
@@ -1226,6 +1252,9 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Create(reqCtx(c), post); err != nil {
+		if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
+			return rejectInvalidPhase(c)
+		}
 		return err
 	}
 	h.recordActivity(c, "post_created",
@@ -1326,6 +1355,16 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	if err := requirePlatformIfNotDraft(status, req.PlatformID, req.PlatformPostType); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
+	// CON-166: a (re)assigned phase — or a move to another campaign keeping one
+	// — must be a phase of the target campaign's type.
+	if req.CampaignTypePhaseID != nil &&
+		(req.CampaignID != post.CampaignID || post.CampaignTypePhaseID == nil || *req.CampaignTypePhaseID != *post.CampaignTypePhaseID) {
+		if ok, err := h.checkPhase(reqCtx(c), req.CampaignID, req.CampaignTypePhaseID); err != nil {
+			return err
+		} else if !ok {
+			return rejectInvalidPhase(c)
+		}
+	}
 
 	if done, err := h.validateReadyForPublish(c, post, &req, status); err != nil {
 		return err
@@ -1353,6 +1392,9 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 			if aerr, ok := errors.AsType[*schedule.AccountSelectionError](err); ok {
 				return writeAccountSelectionError(c, aerr)
 			}
+			if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
+				return rejectInvalidPhase(c)
+			}
 			return err
 		}
 		if routed != "" {
@@ -1371,6 +1413,9 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 			omit = append(omit, "used_asset_ids")
 		}
 		if err := h.repo.Update(reqCtx(c), post, omit...); err != nil {
+			if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
+				return rejectInvalidPhase(c)
+			}
 			return err
 		}
 		h.logTransition(c, post, prevStatus, status)

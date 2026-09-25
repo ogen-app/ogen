@@ -75,6 +75,10 @@ type PhaseInfo struct {
 	Name      string `json:"name"`
 	Purpose   string `json:"purpose"`
 	PostCount int    `json:"postCount"`
+	// StartDate/EndDate are the phase's effective window (YYYY-MM-DD, inclusive)
+	// from the campaign's phase plan (CON-166); null when the campaign is undated.
+	StartDate *string `json:"startDate"`
+	EndDate   *string `json:"endDate"`
 }
 
 // Distribution holds the flat post breakdowns. Counts reconcile: TotalPosts

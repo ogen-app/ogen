@@ -123,3 +123,20 @@ func TestSpread_Evenness(t *testing.T) {
 		t.Fatalf("single spread = %v, want window start", s[0])
 	}
 }
+
+// CON-166: a manual phase plan moves each phase's slice of the timeline.
+func TestPlan_HonoursManualPhasePlan(t *testing.T) {
+	c := threePhaseCampaign()
+	c.PhaseWindows = []models.CampaignPhaseWindow{
+		{PhaseID: "p1", StartDate: day("2026-01-01"), EndDate: day("2026-01-02")},
+		{PhaseID: "p2", StartDate: day("2026-01-03"), EndDate: day("2026-01-28")},
+		{PhaseID: "p3", StartDate: day("2026-01-29"), EndDate: day("2026-01-30")},
+	}
+	got := planMap(c, []models.Post{
+		mkPost("b1", "p2", models.PostStatusDraft, day("2025-01-01")),
+		mkPost("c1", "p3", models.PostStatusDraft, day("2025-01-01")),
+	})
+	if got["b1"] != "2026-01-03" || got["c1"] != "2026-01-29" {
+		t.Fatalf("plan = %v, want p2 from 01-03 and p3 from 01-29", got)
+	}
+}

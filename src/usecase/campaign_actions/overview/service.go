@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
@@ -109,15 +110,27 @@ func buildOverview(campaign *models.Campaign, posts []models.Post, platformNames
 		typeCount[p.PlatformPostType]++
 	}
 
+	// CON-166: each phase's effective window from the campaign's phase plan.
+	windows, _ := campaignphase.Resolve(campaign)
+	windowByPhase := make(map[string]campaignphase.Window, len(windows))
+	for _, w := range windows {
+		windowByPhase[w.Phase.ID] = w
+	}
+
 	phases := make([]PhaseInfo, 0, len(phaseDefs))
 	for _, ph := range phaseDefs {
-		phases = append(phases, PhaseInfo{
+		info := PhaseInfo{
 			ID:        ph.ID,
 			Sequence:  ph.Sequence,
 			Name:      ph.Name,
 			Purpose:   ph.Purpose,
 			PostCount: phaseCount[ph.ID],
-		})
+		}
+		if w, ok := windowByPhase[ph.ID]; ok {
+			s, e := w.Start.Format(time.DateOnly), w.End.Format(time.DateOnly)
+			info.StartDate, info.EndDate = &s, &e
+		}
+		phases = append(phases, info)
 	}
 
 	return &Overview{

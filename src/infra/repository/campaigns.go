@@ -48,6 +48,16 @@ type CampaignRepository interface {
 	// included (they were still created that day); soft-deleted ones drop out, so
 	// a deleted campaign simply leaves future recomputations.
 	CreatedBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Campaign, error)
+
+	// CON-166 phase plan. PhasePostCounts counts a campaign's posts per phase
+	// (posts with no phase are not counted). ReplacePhaseWindows swaps the stored
+	// manual plan for windows atomically; DeletePhaseWindows drops it (back to
+	// derived). PhaseBelongsToCampaign reports whether phaseID is a phase of the
+	// campaign's current type — false for an unknown/foreign campaign too.
+	PhasePostCounts(ctx context.Context, campaignID string) (map[string]int, error)
+	ReplacePhaseWindows(ctx context.Context, campaignID string, windows []models.CampaignPhaseWindow) error
+	DeletePhaseWindows(ctx context.Context, campaignID string) error
+	PhaseBelongsToCampaign(ctx context.Context, campaignID, phaseID string) (bool, error)
 }
 
 type campaignRepository struct {
@@ -134,6 +144,9 @@ func (r *campaignRepository) listFiltered(ctx context.Context, extra func(*bun.S
 	if err := r.hydrateCampaignTypes(ctx, campaigns); err != nil {
 		return nil, err
 	}
+	if err := r.hydrateTypeLocked(ctx, campaigns); err != nil {
+		return nil, err
+	}
 	return campaigns, nil
 }
 
@@ -162,6 +175,12 @@ func (r *campaignRepository) GetByID(ctx context.Context, id string) (*models.Ca
 		return nil, err
 	}
 	if err := r.hydrateCampaignTypes(ctx, campaigns); err != nil {
+		return nil, err
+	}
+	if err := r.hydrateTypeLocked(ctx, campaigns); err != nil {
+		return nil, err
+	}
+	if err := r.hydratePhaseWindows(ctx, &campaigns[0]); err != nil {
 		return nil, err
 	}
 	return &campaigns[0], nil
