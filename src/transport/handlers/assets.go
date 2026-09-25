@@ -159,6 +159,8 @@ type AssetsHandler struct {
 	// imgReembed re-embeds an image asset after its description is edited
 	// (CON-312). Nil skips the re-embed (image ingestion not configured).
 	imgReembed ImageReembedEnqueuer
+	// chunks backs GET /:id/chunks (CON-312). Nil answers 409.
+	chunks AssetChunkLister
 }
 
 func NewAssetsHandler(
@@ -205,6 +207,7 @@ func (h *AssetsHandler) Register(app *fiber.App) {
 	g.Post("/url", h.auth, h.CreateURL)
 	g.Post("/tags", h.auth, h.BulkTag)
 	g.Get("/:id", h.auth, h.Get)
+	g.Get("/:id/chunks", h.auth, h.Chunks)
 	g.Put("/:id", h.auth, h.Update)
 	g.Delete("/:id", h.auth, h.Delete)
 }

@@ -176,10 +176,14 @@ type GetChunksInput struct {
 }
 
 // ChunkContent is a single chunk returned by chunk-retrieval tools.
+// SourceLabel/SourceAnchor locate it in the source (CON-312) so the assistant can
+// cite "Slide 4" or "1:05–1:40"; both are absent for markdown/URL chunks.
 type ChunkContent struct {
-	ID      string `json:"id"`
-	Index   int    `json:"index"`
-	Content string `json:"content"`
+	ID           string               `json:"id"`
+	Index        int                  `json:"index"`
+	Content      string               `json:"content"`
+	SourceLabel  string               `json:"sourceLabel,omitempty"`
+	SourceAnchor *models.SourceAnchor `json:"sourceAnchor,omitempty"`
 }
 
 // ChunksOutput wraps chunk results with a truncation indicator.
@@ -303,14 +307,14 @@ func defineTools(g *genkit.Genkit) *toolSet {
 	)
 
 	getChunks := genkit.DefineTool(g, "getAssetChunks",
-		"Retrieves text chunks from a specific asset. Omit chunkIds to get all chunks (subject to token budget).",
+		"Retrieves text chunks from a specific asset. Omit chunkIds to get all chunks (subject to token budget). sourceLabel, when present, says where a chunk came from (e.g. \"Slide 4\", \"0:45–1:30\") — use it to cite the source.",
 		func(ctx *ai.ToolContext, in GetChunksInput) (*ChunksOutput, error) {
 			return toolGetAssetChunks(ctx, in)
 		},
 	)
 
 	searchChunks := genkit.DefineTool(g, "searchAssetChunks",
-		"Semantic search over an asset's chunks. Returns the most relevant chunks for the given query.",
+		"Semantic search over an asset's chunks. Returns the most relevant chunks for the given query, each with a sourceLabel citation when the asset has one.",
 		func(ctx *ai.ToolContext, in SearchChunksInput) (*ChunksOutput, error) {
 			return toolSearchAssetChunks(ctx, in)
 		},
@@ -879,11 +883,16 @@ func packChunks(chunks []models.AssetChunk) *ChunksOutput {
 			out.Truncated = true
 			break
 		}
-		out.Chunks = append(out.Chunks, ChunkContent{
-			ID:      c.ID,
-			Index:   c.ChunkIndex,
-			Content: c.Content,
-		})
+		cc := ChunkContent{
+			ID:           c.ID,
+			Index:        c.ChunkIndex,
+			Content:      c.Content,
+			SourceAnchor: c.SourceAnchor,
+		}
+		if c.SourceLabel != nil {
+			cc.SourceLabel = *c.SourceLabel
+		}
+		out.Chunks = append(out.Chunks, cc)
 		tokens += c.TokenCount
 	}
 	return &out

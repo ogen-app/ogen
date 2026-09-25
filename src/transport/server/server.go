@@ -766,6 +766,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	assetsHandler := handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, store, db, pdfJobs, urlJobs, firecrawlClient, docJobs, imgJobs, auth, embedCallbacks.OnMarkdownSave)
 	assetsHandler.SetLimiter(entitlementLimiter)
+	assetsHandler.SetChunkLister(r.chunksRepo)
 	if imageIngestEnabled {
 		assetsHandler.SetImageReembedder(enqueuer)
 	}
