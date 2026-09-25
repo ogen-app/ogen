@@ -455,9 +455,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		if hasTenant {
 			dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "content_bank_assets")
 			if qErr != nil {
-				res.Status = "failed"
-				res.Error = "content bank asset limit reached"
-				results = append(results, res)
+				results = append(results, res.fail(models.UploadCodeQuotaExceeded, "content bank asset limit reached"))
 				continue
 			}
 			fileQuota = dec
@@ -1156,14 +1154,15 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	embedInputChanged := asset.Title != req.Title || asset.Content != req.Content
 	descriptionChanged := asset.Content != req.Content
 
+	// CON-281 D5: an alt_text edit marks the text hand-written so a later image
+	// re-extraction never overwrites it. Only a real change counts (CON-312): a
+	// client echoing the stored value back must not lock generated text.
+	if altText != asset.AltText {
+		asset.AltTextEditedByUser = true
+	}
 	asset.Title = req.Title
 	asset.Content = req.Content
 	asset.AltText = altText
-	// CON-281 D5: an explicit alt_text in the PUT is a manual edit — mark it so a
-	// later image re-extraction never overwrites the user's wording.
-	if req.AltText != nil {
-		asset.AltTextEditedByUser = true
-	}
 	if req.TagIDs != nil {
 		asset.TagIDs = nullSlice(*req.TagIDs)
 	}

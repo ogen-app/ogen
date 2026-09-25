@@ -239,14 +239,14 @@ type Config struct {
 	// AudioSegmentMaxMs windows + AudioSegmentOverlapMs overlap. AudioMaxDurationMs
 	// is the pre-spend max-duration tier gate (0 = no cap; a CON-208 tier lowers
 	// it). TranscribeModel is the Gemini multimodal model id (config, never
-	// compiled in). AudioRawEmbedding stubs the deferred raw-audio-embedding flag.
+	// compiled in). Raw-audio embedding is deferred (CON-282 PRD); it gets a flag
+	// when it is built, not before (CON-312 removed the unused stub).
 	AudioJobWorkers       int           `envconfig:"AUDIO_JOB_WORKERS"        default:"2"`
 	AudioJobTimeout       time.Duration `envconfig:"AUDIO_JOB_TIMEOUT"        default:"3h"`
 	AudioSegmentMaxMs     int64         `envconfig:"AUDIO_SEGMENT_MAX_MS"     default:"300000"`
 	AudioSegmentOverlapMs int64         `envconfig:"AUDIO_SEGMENT_OVERLAP_MS" default:"5000"`
 	AudioMaxDurationMs    int64         `envconfig:"AUDIO_MAX_DURATION_MS"    default:"14400000"`
 	TranscribeModel       string        `envconfig:"TRANSCRIBE_MODEL"         default:"gemini-2.5-flash"`
-	AudioRawEmbedding     bool          `envconfig:"AUDIO_RAW_EMBEDDING"      default:"false"`
 
 	// Image microservice (CON-281), mirroring audio/document-service. image-service
 	// is the SINGLE image ingress: both content-bank IMG assets and post-attachment

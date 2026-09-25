@@ -456,6 +456,22 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 			})
 		})
 
+		// CON-312: alt_text_edited_by_user locks the text against re-extraction,
+		// so it may only flip on a real edit.
+		Context("alt_text_edited_by_user", func() {
+			It("stays false when the PUT echoes the stored alt text back", func() {
+				p := createPiece("Doc", body)
+				Expect(putJSON(p.ID, fiber.Map{"title": "Doc", "content": body, "alt_text": ""}).StatusCode).To(Equal(200))
+				Expect(getAsset(p.ID).AltTextEditedByUser).To(BeFalse())
+			})
+
+			It("flips to true when the alt text changes", func() {
+				p := createPiece("Doc", body)
+				Expect(putJSON(p.ID, fiber.Map{"title": "Doc", "content": body, "alt_text": "a bar chart"}).StatusCode).To(Equal(200))
+				Expect(getAsset(p.ID).AltTextEditedByUser).To(BeTrue())
+			})
+		})
+
 		Context("POST /api/content-bank/assets/tags (bulk)", func() {
 			It("adds a tag across multiple assets", func() {
 				tagID := createTag("Legal")

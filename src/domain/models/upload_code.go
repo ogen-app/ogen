@@ -45,6 +45,10 @@ const (
 	// UploadCodeDimensionsExceeded: over the pixel-area / dimension ceiling.
 	UploadCodeDimensionsExceeded = "dimensions_exceeded"
 
+	// UploadCodeDurationExceeded: audio longer than the plan's max duration
+	// (CON-312). The limit stays in the message.
+	UploadCodeDurationExceeded = "duration_exceeded"
+
 	// UploadCodeQuotaExceeded: the tenant's usage / cost cap was hit before the
 	// (paid) processing spend — terminal, and distinct from a transient failure.
 	UploadCodeQuotaExceeded = "quota_exceeded"

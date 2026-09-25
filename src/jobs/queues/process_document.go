@@ -37,6 +37,13 @@ type documentsParser interface {
 	Parse(ctx context.Context, r io.Reader, opts documents.Options) (*documents.Result, error)
 }
 
+// documentAssetWriter is the asset status surface plus MarkFailed, which records
+// why a document failed (CON-312). The asset repo satisfies it.
+type documentAssetWriter interface {
+	assetStatusUpdater
+	MarkFailed(ctx context.Context, id, code, reason string) error
+}
+
 // DocumentDeps bundles the process_document worker's dependencies (built in
 // server.go). A nil Client (no DOCUMENTS_SERVICE_ADDR configured) disables the
 // job — it no-ops.
@@ -44,7 +51,7 @@ type DocumentDeps struct {
 	Client   documentsParser
 	Embedder chunkEmbedder
 	Storage  blobStore
-	Assets   assetStatusUpdater
+	Assets   documentAssetWriter
 	Chunks   chunkUpserter
 	Files    fileUpserter
 	// Recorder + EmbedModel meter document-ingestion embedding usage (CON-86).
@@ -111,7 +118,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 	}
 	if p.Deps.Storage == nil {
 		// Best-effort status write; we return the more descriptive error below.
-		_ = p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
+		_ = p.fail(ctx, in.AssetID, models.UploadCodeInternalError, "document processing is not configured")
 		return fmt.Errorf("process_document %s: storage not configured", in.AssetID)
 	}
 
@@ -122,7 +129,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 	// exhausted, so the asset never stays stuck in "processing".
 	if !embedopts.Available(p.Deps.Embedder) {
 		if lastAttempt {
-			return p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
+			return p.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, "document processing is temporarily unavailable — please try again")
 		}
 		slog.WarnContext(ctx, "embedder unavailable will retry", logging.AttrComponent, "jobs.process_document", "asset_id", in.AssetID)
 		return fmt.Errorf("process_document %s: embedder unavailable", in.AssetID)
@@ -154,7 +161,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 	if err != nil {
 		if isTerminalParseErr(err) {
 			slog.WarnContext(ctx, "unparseable document", logging.AttrComponent, "jobs.process_document", "asset_id", in.AssetID, logging.AttrError, err)
-			return p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
+			return p.fail(ctx, in.AssetID, models.UploadCodeInvalidFile, "the document could not be read (corrupt, encrypted, or unsupported)")
 		}
 		return fmt.Errorf("process_document %s: parse: %w", in.AssetID, err)
 	}
@@ -225,7 +232,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 		if !lastAttempt {
 			return fmt.Errorf("process_document %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
 		}
-		finalStatus = models.AssetStatusFailed
+		return p.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, "document processing is temporarily unavailable — please try again")
 	case embedFailures > 0:
 		finalStatus = models.AssetStatusPartial
 	default:
@@ -259,6 +266,19 @@ func (p *ProcessDocumentProcessor) setStatus(ctx context.Context, assetID, statu
 	// CON-242: announce terminal outcomes to the asset's creator (no-op for the
 	// intermediate "processing" write).
 	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "document", models.AssetTypeDocument)
+	return nil
+}
+
+// fail marks the asset failed with a machine-readable code and a tenant-visible
+// reason (CON-312) and announces it to the creator, like setStatus(failed).
+func (p *ProcessDocumentProcessor) fail(ctx context.Context, assetID, code, reason string) error {
+	if p.Deps.Assets == nil {
+		return nil
+	}
+	if err := p.Deps.Assets.MarkFailed(ctx, assetID, code, reason); err != nil {
+		return fmt.Errorf("process_document %s: mark failed: %w", assetID, err)
+	}
+	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, models.AssetStatusFailed, "document", models.AssetTypeDocument)
 	return nil
 }
 

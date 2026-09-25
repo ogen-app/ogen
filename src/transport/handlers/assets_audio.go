@@ -357,6 +357,7 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 		if _, err := tx.NewUpdate().Model((*models.AudioExtraction)(nil)).
 			Set("status = ?", models.AudioExtractionStatusTranscribing).
 			Set("failure_reason = ''").
+			Set("failure_code = ''").
 			Set("updated_at = ?", now).
 			Where("id = ?", ext.ID).
 			Exec(ctx); err != nil {

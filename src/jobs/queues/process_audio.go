@@ -306,21 +306,21 @@ func (p *ProcessAudioProcessor) probeGateNormalize(ctx context.Context, in Proce
 	probe, err := p.Deps.Client.Probe(ctx, audio.ProbeOptions{SourceURL: srcURL, Filename: in.OriginalName})
 	if err != nil {
 		if audio.IsInvalidAudio(err) || audio.IsUnsupportedAudio(err) {
-			return p.terminalReject(ctx, in, ext, "the audio could not be read (corrupt or unsupported format)")
+			return p.terminalReject(ctx, in, ext, models.UploadCodeInvalidFile, "the audio could not be read (corrupt or unsupported format)")
 		}
 		return fmt.Errorf("process_audio %s: probe: %w", in.AssetID, err)
 	}
 	if probe.Silent || probe.DurationMs <= 0 {
-		return p.terminalReject(ctx, in, ext, "the audio is empty or silent throughout")
+		return p.terminalReject(ctx, in, ext, models.UploadCodeEmptyFile, "the audio is empty or silent throughout")
 	}
 	// Max-duration tier gate (before any transcode/transcribe spend).
 	if p.Deps.MaxDurationMs > 0 && probe.DurationMs > p.Deps.MaxDurationMs {
-		return p.terminalReject(ctx, in, ext, fmt.Sprintf("audio is %d min, over the %d min limit for your plan", probe.DurationMs/60000, p.Deps.MaxDurationMs/60000))
+		return p.terminalReject(ctx, in, ext, models.UploadCodeDurationExceeded, fmt.Sprintf("audio is %d min, over the %d min limit for your plan", probe.DurationMs/60000, p.Deps.MaxDurationMs/60000))
 	}
 	// Cost-cap gate (CON-86 usage.Checker). Nil checker = no gate.
 	if p.Deps.Checker != nil {
 		if err := p.Deps.Checker.Enforce(ctx); err != nil {
-			return p.terminalReject(ctx, in, ext, "your usage limit has been reached — transcription was not started")
+			return p.terminalReject(ctx, in, ext, models.UploadCodeQuotaExceeded, "your usage limit has been reached — transcription was not started")
 		}
 	}
 
@@ -347,7 +347,7 @@ func (p *ProcessAudioProcessor) probeGateNormalize(ctx context.Context, in Proce
 	norm, err := p.Deps.Client.Normalize(ctx, audio.NormalizeOptions{SourceURL: srcURL, DestPutURL: dstURL})
 	if err != nil {
 		if audio.IsInvalidAudio(err) || audio.IsUnsupportedAudio(err) {
-			return p.terminalReject(ctx, in, ext, "the audio could not be transcoded (corrupt or unsupported format)")
+			return p.terminalReject(ctx, in, ext, models.UploadCodeInvalidFile, "the audio could not be transcoded (corrupt or unsupported format)")
 		}
 		return fmt.Errorf("process_audio %s: normalize: %w", in.AssetID, err) // transient → retry
 	}
@@ -521,6 +521,7 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 	if failed > 0 {
 		ext.Status = models.AudioExtractionStatusPartial
 		ext.FailureReason = "some segments could not be transcribed"
+		ext.FailureCode = models.UploadCodeExtractionPartial
 		if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
 			return err
 		}
@@ -629,14 +630,17 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 	}
 	ext.Status = models.AudioExtractionStatusComplete
 	ext.FailureReason = ""
+	ext.FailureCode = ""
 	return p.Deps.Extractions.Update(ctx, ext)
 }
 
 // terminalReject marks the extraction + asset failed with a tenant-visible
-// reason and does NOT return an error (no retry). Leaves ext.Status == failed.
-func (p *ProcessAudioProcessor) terminalReject(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction, reason string) error {
+// reason and its machine-readable code (CON-312), and does NOT return an error
+// (no retry). Leaves ext.Status == failed.
+func (p *ProcessAudioProcessor) terminalReject(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction, code, reason string) error {
 	ext.Status = models.AudioExtractionStatusFailed
 	ext.FailureReason = reason
+	ext.FailureCode = code
 	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
 		return fmt.Errorf("process_audio %s: mark extraction failed: %w", in.AssetID, err)
 	}
