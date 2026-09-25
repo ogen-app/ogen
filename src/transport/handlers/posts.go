@@ -1457,7 +1457,6 @@ type createVersionRequest struct {
 // @Failure      401   {object}  map[string]string
 // @Failure      404   {object}  map[string]string
 // @Router       /api/posts/{id}/versions [post]
-
 func (h *PostsHandler) CreateVersion(c *fiber.Ctx) error {
 	var req createVersionRequest
 	if err := c.BodyParser(&req); err != nil {

@@ -419,15 +419,26 @@ func (r *uploadResult) fail(code, msg string) uploadResult {
 	return *r
 }
 
+// uploadResponse is the batch upload outcome: one result per file, in order.
+type uploadResponse struct {
+	Results []uploadResult `json:"results"`
+}
+
 // Upload godoc
-// @Summary      Upload Markdown, PDF, or image file(s)
-// @Description  Accepts one or more `.md` (max 10 MB), `.pdf` (max 50 MB), or image (JPEG/PNG/WebP/GIF, max 10 MB) files. Markdown files are converted to BlockNote JSON synchronously; PDFs are uploaded to object storage and processed asynchronously (text extraction, page-aware chunking, embedding, thumbnail); images (CON-246) are probed and stored synchronously as `IMG` assets (`ready`), deduplicated within the tenant by checksum. Files are processed independently — one failure does not block others.
+// @Summary      Upload Markdown, PDF, image, or document file(s)
+// @Description  Accepts one or more files under the field `files`, routed by extension. Files are processed independently — one failure does not block others; each gets a result with `status` `created` or `failed`.
+// @Description  - `.md` (max 10 MB): converted to BlockNote JSON synchronously (`MD`, `ready`).
+// @Description  - `.pdf` (max 50 MB): stored, then processed asynchronously (text extraction, page-aware chunking, embedding, thumbnail) as `PDF` (`pending` → `ready`/`partial`/`failed`).
+// @Description  - Images — JPEG, PNG, WebP, GIF, HEIC/HEIF, AVIF, TIFF, BMP (operator-set cap, default 50 MB; SVG is rejected): stored and ingested asynchronously by image-service (normalize, EXIF-strip, vision description, region extraction, alt text) as `IMG` (`pending` → `ready`/`partial`/`failed`); deduplicated within the tenant by checksum. Poll `GET /{id}/image` for the run.
+// @Description  - Office/text documents — .docx/.docm/.dotx, .xlsx/.xlsm/.xltx, .pptx/.pptm/.potx, .odt/.ods/.odp (+ flat), .epub, .csv/.tsv, .html/.xhtml, .eml, .rtf, .txt/.log (max 50 MB; legacy/password-protected OLE2 rejected): parsed asynchronously by document-service into source-anchored chunks as `DOC` (`pending` → `ready`/`partial`/`failed`, with `failure_code`/`failure_reason` on the asset when failed).
+// @Description  Audio is not accepted here — use `POST /audio/presign` + `/audio/finalize`.
+// @Description  A failed result carries a stable `code` beside the prose `error`: `extension_not_allowed`, `unsupported_media_type`, `vector_rejected`, `too_large`, `empty_file`, `invalid_file`, `dimensions_exceeded`, `quota_exceeded` (content-bank asset or media-storage tier limit), `service_unavailable`, `internal_error`. Match on the code; fall back to the prose for unknown codes.
 // @Tags         content-bank
 // @Accept       multipart/form-data
 // @Produce      json
 // @Security     CookieAuth
-// @Param        files  formData  file  true  "Markdown, PDF, or image file(s)"
-// @Success      201    {object}  map[string]any
+// @Param        files  formData  file  true  "Markdown, PDF, image, or document file(s)"
+// @Success      201    {object}  uploadResponse
 // @Failure      400    {object}  map[string]string
 // @Failure      401    {object}  map[string]string
 // @Router       /api/content-bank/assets/upload [post]
@@ -492,7 +503,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		results = append(results, res)
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"results": results})
+	return c.Status(fiber.StatusCreated).JSON(uploadResponse{Results: results})
 }
 
 type uploadKind int
@@ -1090,7 +1101,9 @@ func (h *AssetsHandler) Get(c *fiber.Ctx) error {
 
 // Update godoc
 // @Summary      Update asset
-// @Description  Updates title and content of an existing asset.
+// @Description  Whole-resource write of an asset's title, content, and (when present) alt_text / tag_ids — an omitted alt_text or tag_ids keeps the stored value.
+// @Description  Content rules by type: MD/URL require non-empty content and re-embed on a title/content change. IMG content is the image description — may be empty; an edit re-embeds it together with the stored region chunks. PDF/DOC/AUDIO content is ingestion output and read-only: send it unchanged or omit it (empty = keep); a different value is a 409 `{code: "content_locked"}` — re-extract instead. Renaming an ingested asset never re-chunks it.
+// @Description  `alt_text_edited_by_user` flips to true only when alt_text actually changes.
 // @Tags         content-bank
 // @Accept       json
 // @Produce      json
@@ -1101,6 +1114,7 @@ func (h *AssetsHandler) Get(c *fiber.Ctx) error {
 // @Failure      400   {object}  map[string]string
 // @Failure      401   {object}  map[string]string
 // @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "content_locked: content edit on a PDF/DOC/AUDIO asset"
 // @Router       /api/content-bank/assets/{id} [put]
 func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	var req updateAssetRequest

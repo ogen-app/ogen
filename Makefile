@@ -92,7 +92,7 @@ proto:
 # ── OpenAPI ──────────────────────────────────────────────────────────────────
 openapi:
 	go install github.com/swaggo/swag/cmd/swag@latest
-	swag init -g main.go -d cmd/server,src/transport/handlers,src/domain/models,src/domain/platforms,src/infra/secrets,src/infra/repository,src/genkit/flows/post_quality -o docs --outputTypes go,json
+	swag init -g main.go -d cmd/server,src/transport/handlers,src/domain/models,src/domain/platforms,src/domain/entitlements,src/infra/secrets,src/infra/repository,src/infra/publishers/zernio,src/genkit/flows/post_quality,src/usecase/activity/report,src/usecase/campaign_actions/overview,src/usecase/campaign_actions/summaries -o docs --outputTypes go,json
 
 # ── Genkit ───────────────────────────────────────────────────────────────────
 genkit:

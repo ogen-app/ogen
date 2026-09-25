@@ -303,14 +303,19 @@ func imageRejectStatus(code string) int {
 // Upload godoc
 // @Summary      Upload a post attachment
 // @Description  Accepts a single image (CON-73) or PDF (CON-75) file via
-// @Description  multipart/form-data under the field `file`. The file is
-// @Description  decoded server-side to validate the MIME — JPEG/PNG/WebP/GIF
-// @Description  for images, application/pdf for PDFs — then streamed to
-// @Description  object storage. Hard caps: 50 MB images, 100 MB PDFs.
-// @Description  PDF uploads also render a first-page PNG thumbnail
-// @Description  (best-effort; failures do not abort the upload).
+// @Description  multipart/form-data under the field `file`. Images — JPEG,
+// @Description  PNG, WebP, GIF, HEIC/HEIF, AVIF, TIFF, BMP — are validated and
+// @Description  EXIF-stripped (pixels preserved) by image-service (CON-281);
+// @Description  SVG is rejected. PDFs are validated as application/pdf and
+// @Description  get a best-effort first-page PNG thumbnail. Video uses the
+// @Description  presign flow instead. Caps are operator-set (defaults: 50 MB
+// @Description  images, 100 MB PDFs) and the upload counts toward the
+// @Description  tenant's media_storage_bytes tier limit (402 when over).
 // @Description  Per-platform caps are surfaced as soft warnings in the
-// @Description  response.
+// @Description  response. A reject is `{code, error}` with a stable code:
+// @Description  unsupported_media_type, vector_rejected, too_large,
+// @Description  empty_file, invalid_file, dimensions_exceeded,
+// @Description  service_unavailable, internal_error.
 // @Tags         post-attachments
 // @Accept       multipart/form-data
 // @Produce      json
@@ -320,6 +325,7 @@ func imageRejectStatus(code string) int {
 // @Success      201      {object}  attachmentResponse
 // @Failure      400      {object}  map[string]string
 // @Failure      401      {object}  map[string]string
+// @Failure      402      {object}  map[string]any     "media_storage_bytes limit reached"
 // @Failure      404      {object}  map[string]string
 // @Failure      409      {object}  map[string]string  "post is in a terminal publishing state"
 // @Failure      415      {object}  map[string]string
