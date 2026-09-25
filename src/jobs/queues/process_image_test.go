@@ -19,10 +19,15 @@ type fakeImageClient struct {
 	res     *imageclient.ExtractResult
 	err     error
 	gotOpts imageclient.ExtractOptions
+	// during runs inside Extract, e.g. to simulate a user edit mid-run.
+	during func()
 }
 
 func (f *fakeImageClient) Extract(_ context.Context, opts imageclient.ExtractOptions) (*imageclient.ExtractResult, error) {
 	f.gotOpts = opts
+	if f.during != nil {
+		f.during()
+	}
 	return f.res, f.err
 }
 
@@ -42,9 +47,11 @@ func (f *fakeImageAssets) CreatorOf(context.Context, string) (string, error) { r
 func (f *fakeImageAssets) GetByID(_ context.Context, id string) (*models.Asset, error) {
 	return &models.Asset{ID: id, Content: f.content}, nil
 }
-func (f *fakeImageAssets) SetImageResult(_ context.Context, _, content, altText string, setAlt bool) error {
+func (f *fakeImageAssets) SetImageResult(_ context.Context, _, prevContent, content, altText string, setAlt bool) error {
 	f.wrote = true
-	f.content = content
+	if f.content == prevContent { // compare-and-set, like the repo (CON-312)
+		f.content = content
+	}
 	f.alt = altText
 	f.setAlt = setAlt
 	return nil

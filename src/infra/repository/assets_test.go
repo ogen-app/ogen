@@ -209,6 +209,49 @@ func TestAssetDelete_SystemContext_ScopesScrubToOwningTenant(t *testing.T) {
 	assertUsedAssetIDs(ctxB, "b", assetID, keepID)
 }
 
+// TestAssetSetImageResult_KeepsMidRunEdit: the vision description replaces the
+// content only while it still holds the value from when the run started, so a
+// description the user edited mid-run survives (CON-312).
+func TestAssetSetImageResult_KeepsMidRunEdit(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewAssetRepository(db, nil, nil)
+	imgType := models.AssetTypeImage
+	seed := func(id, content string) {
+		t.Helper()
+		if _, err := db.NewInsert().Model(&models.Asset{
+			ID: id, Title: id, Content: content, Status: models.AssetStatusProcessing,
+			Type: &imgType, TagIDs: models.StringSlice{}, CreatedBy: "user-1",
+		}).Exec(ctx); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	content := func(id string) string {
+		t.Helper()
+		var c string
+		if err := db.NewSelect().Model((*models.Asset)(nil)).Column("content").Where("id = ?", id).Scan(ctx, &c); err != nil {
+			t.Fatalf("reload %s: %v", id, err)
+		}
+		return c
+	}
+
+	seed("img-untouched", "")
+	if err := repo.SetImageResult(ctx, "img-untouched", "", "generated", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := content("img-untouched"); got != "generated" {
+		t.Fatalf("untouched asset: content = %q, want the generated description", got)
+	}
+
+	seed("img-edited", "user's words") // edited after the run read "" as prevContent
+	if err := repo.SetImageResult(ctx, "img-edited", "", "generated", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := content("img-edited"); got != "user's words" {
+		t.Fatalf("edited asset: content = %q, want the user's edit kept", got)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

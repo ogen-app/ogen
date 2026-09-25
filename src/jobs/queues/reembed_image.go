@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/riverqueue/river"
 
@@ -21,6 +22,15 @@ import (
 // chunks survive the edit. No vision call and no status change: the asset is
 // already searchable; only its chunks are refreshed.
 const ReembedImageQueue = "reembed_image"
+
+const (
+	// reembedSnooze is how long the job waits for an in-flight extraction to
+	// settle before checking again.
+	reembedSnooze = 30 * time.Second
+	// reembedStaleAfter bounds that wait: an extraction not updated for this
+	// long (well past the image job's attempts × timeout) is treated as stuck.
+	reembedStaleAfter = 2 * time.Hour
+)
 
 // ReembedImageTask carries the edited asset. The description is re-read from
 // the DB on each attempt, so a later edit is never overwritten by an older job.
@@ -68,11 +78,19 @@ func (p *ReembedImageProcessor) process(ctx context.Context, in ReembedImageTask
 	if err != nil {
 		return fmt.Errorf("reembed_image %s: load extraction: %w", in.AssetID, err)
 	}
-	// Only a settled run owns the asset's chunks. A run still in flight embeds
-	// on settle, and a failed one left nothing to keep.
-	if ext.Status != models.ImageExtractionStatusComplete && ext.Status != models.ImageExtractionStatusPartial {
-		slog.InfoContext(ctx, "image re-embed skipped: extraction not settled", logging.AttrComponent, "jobs.reembed_image", "asset_id", in.AssetID, "extraction_status", ext.Status)
-		return nil
+	switch ext.Status {
+	case models.ImageExtractionStatusComplete, models.ImageExtractionStatusPartial:
+	case models.ImageExtractionStatusFailed:
+		return nil // a failed run left no chunks to refresh
+	default:
+		// A run is in flight and may settle on chunks from before the edit, so
+		// wait for it rather than drop the edit (CON-312). A run idle this long
+		// is stuck, not in flight — stop waiting.
+		if time.Since(ext.UpdatedAt) > reembedStaleAfter {
+			slog.WarnContext(ctx, "image re-embed skipped: extraction stuck", logging.AttrComponent, "jobs.reembed_image", "asset_id", in.AssetID, "extraction_status", ext.Status)
+			return nil
+		}
+		return river.JobSnooze(reembedSnooze)
 	}
 
 	asset, err := p.Deps.Assets.GetByID(ctx, in.AssetID)
