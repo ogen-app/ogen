@@ -568,6 +568,7 @@ func (p *ProcessImageProcessor) exposeNormalizedDerivative(ctx context.Context, 
 func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, inputs []embedInput) (int, error) {
 	chunks := make([]models.AssetChunk, 0, len(inputs))
 	var embedAttempts, embedFailures int
+	var totalEmbedTokens int64
 	for idx, e := range inputs {
 		embedAttempts++
 		emb, eErr := p.Deps.Embedder.Embed(ctx, &ai.EmbedRequest{
@@ -579,12 +580,14 @@ func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, 
 			continue
 		}
 		label := e.label
+		tokens := estimateTokens(e.text)
+		totalEmbedTokens += int64(tokens)
 		chunks = append(chunks, models.AssetChunk{
 			ID:           fmt.Sprintf("%s:%d", in.AssetID, idx),
 			AssetID:      in.AssetID,
 			ChunkIndex:   idx,
 			Content:      e.text,
-			TokenCount:   estimateTokens(e.text),
+			TokenCount:   tokens,
 			Embedding:    pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
 			Model:        p.Deps.Embedder.Name(),
 			SourceLabel:  &label,
@@ -601,6 +604,12 @@ func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, 
 		if err := p.Deps.Chunks.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
 			return embedFailures, fmt.Errorf("process_image %s: store chunks: %w", in.AssetID, err)
 		}
+	}
+	// Meter the description/region embeddings on the gemini vendor, like
+	// document_extract (CON-312), once the chunks are stored — a retry after a
+	// failed store doesn't double-count. Covers ingestion and the re-embed.
+	if totalEmbedTokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "image_embed", llm.EmbedUsage{Tokens: totalEmbedTokens})
 	}
 	return embedFailures, nil
 }
