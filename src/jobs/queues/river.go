@@ -127,6 +127,19 @@ func register(fn func(*river.Workers, Deps)) {
 	registrars = append(registrars, fn)
 }
 
+// QueueConfigs is the River client's queue set: the default queue plus the
+// dedicated audio and image queues (CON-282/CON-281), each with its own worker
+// pool so heavy runs can't starve short jobs. A job inserted into a queue
+// missing here is never worked, so every InsertOpts Queue must appear —
+// TestEveryInsertQueueIsConfigured guards it (CON-312).
+func QueueConfigs(defaultWorkers, audioWorkers, imageWorkers int) map[string]river.QueueConfig {
+	return map[string]river.QueueConfig{
+		river.QueueDefault: {MaxWorkers: defaultWorkers},
+		AudioQueue:         {MaxWorkers: audioWorkers},
+		ImageQueue:         {MaxWorkers: imageWorkers},
+	}
+}
+
 // RegisterAll adds every self-registered worker to the River registry.
 func RegisterAll(workers *river.Workers, deps Deps) {
 	for _, fn := range registrars {

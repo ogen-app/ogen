@@ -593,15 +593,10 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		// CON-303: wrap every job in a root tracing span (so its DB/gRPC work is a
 		// coherent trace) and report exhausted-retry failures to Sentry.
 		Middleware: jobs.Middleware(),
-		// CON-282: a dedicated `audio` queue isolates long-running transcription
-		// from short ingestion on the default queue (its worker pool is sized
-		// separately, kept small). The worker is queue-agnostic; jobs are routed
-		// here by ProcessAudioTask.InsertOpts().
-		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: cfg.JobWorkers},
-			queues.AudioQueue:  {MaxWorkers: cfg.AudioJobWorkers},
-			queues.ImageQueue:  {MaxWorkers: cfg.ImageJobWorkers},
-		},
+		// CON-282/CON-281: dedicated `audio` and `image` queues isolate long
+		// transcription/vision runs from short jobs on the default queue (their
+		// pools are sized separately). Jobs are routed by each task's InsertOpts.
+		Queues:  queues.QueueConfigs(cfg.JobWorkers, cfg.AudioJobWorkers, cfg.ImageJobWorkers),
 		Workers: workers,
 		PeriodicJobs: queues.PeriodicConfig{
 			CleanupEvery:      cleanupEvery,
