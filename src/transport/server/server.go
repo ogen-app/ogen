@@ -153,8 +153,19 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Register("web_page_imports", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
 			return r.pieceRepo.CountByType(ctx, models.AssetTypeURL)
 		})).
+		// media_storage_bytes is "all uploaded media" (catalog): post attachments
+		// plus content-bank originals (CON-312 — before, only attachments counted,
+		// so a multi-GB audio upload was invisible to the cap).
 		Register("media_storage_bytes", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
-			return r.postAttachmentRepo.SumSizeBytesInTenant(ctx)
+			att, err := r.postAttachmentRepo.SumSizeBytesInTenant(ctx)
+			if err != nil {
+				return 0, err
+			}
+			bank, err := r.assetFileRepo.SumSizeBytesInTenant(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return att + bank, nil
 		}))
 	// CON-295: the same counters back the "N of M" usage on GET /api/me/entitlements.
 	pricingHandler.SetLimiter(entitlementLimiter)
@@ -767,7 +778,9 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if audioIngestEnabled {
 		audioJobs = enqueuer
 	}
-	handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, store, db, audioJobs, auth).Register(app)
+	audioAssetsHandler := handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, store, db, audioJobs, auth)
+	audioAssetsHandler.SetLimiter(entitlementLimiter)
+	audioAssetsHandler.Register(app)
 
 	// CON-281: content-bank image extraction surface (status/blocks + extract/
 	// reextract/regenerate-alt-text). imgJobs is wired only when image ingestion is

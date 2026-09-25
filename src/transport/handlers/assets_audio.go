@@ -12,9 +12,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 // maxAudioUploadBytes caps a direct-to-storage audio upload (CON-282). Audio is
@@ -71,7 +73,13 @@ type AudioAssetsHandler struct {
 	db          *bun.DB
 	audioJobs   AudioIngestEnqueuer
 	auth        fiber.Handler
+	limiter     *entitlements.Limiter // CON-295 quota gate (nil-safe), CON-312
 }
+
+// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op): presign
+// gates content_bank_assets, finalize gates media_storage_bytes on the real
+// uploaded size (CON-312).
+func (h *AudioAssetsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func NewAudioAssetsHandler(
 	repo repository.AssetRepository,
@@ -142,6 +150,18 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "unsupported audio type — accepted: mp3, wav, m4a, aac, ogg, opus, flac, webm, aiff")
 	}
 
+	// CON-295/CON-312: presign mints a content_bank_assets row, so gate it like
+	// /upload does. The bytes aren't known yet — finalize gates storage.
+	var assetQuota entitlements.Decision
+	tenantID, hasTenant := tenantctx.From(reqCtx(c))
+	if hasTenant {
+		dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "content_bank_assets")
+		if qErr != nil {
+			return qErr
+		}
+		assetQuota = dec
+	}
+
 	session := c.Locals("session").(*models.Session)
 	id, err := models.NewID()
 	if err != nil {
@@ -190,6 +210,9 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 		return err
 	}); err != nil {
 		return err
+	}
+	if hasTenant {
+		h.limiter.DispatchCrossing(reqCtx(c), tenantID, assetQuota)
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(presignAudioResponse{
@@ -442,16 +465,34 @@ func (h *AudioAssetsHandler) prepareAndEnqueue(c *fiber.Ctx, asset *models.Asset
 	if ferr != nil {
 		return ferr
 	}
+	// CON-295/CON-312: the uploaded bytes join the tenant's media_storage_bytes.
+	// Only the growth over what the file row already records is new (0 on a
+	// retry/reextract, whose size was stamped by the first finalize).
+	var mediaQuota entitlements.Decision
+	tenantID, hasTenant := tenantctx.From(reqCtx(c))
+	if added := size - file.SizeBytes; hasTenant && added > 0 {
+		dec, qErr := h.limiter.RequireAmount(reqCtx(c), tenantID, "media_storage_bytes", added)
+		if qErr != nil {
+			return qErr
+		}
+		mediaQuota = dec
+	}
 	file.SizeBytes = size
 	file.UpdatedAt = time.Now().UTC()
 	session := c.Locals("session").(*models.Session)
 	storageKey := relativeAudioKey(asset.ID, file.OriginalName)
-	return h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
+	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewUpdate().Model(file).Column("size_bytes", "updated_at").WherePK().Exec(ctx); err != nil {
 			return err
 		}
 		return h.audioJobs.EnqueueProcessAudioTx(ctx, tx.Tx, asset.ID, session.TenantID, file.OriginalName, file.MimeType, storageKey, runKey, pinnedModel)
-	})
+	}); err != nil {
+		return err
+	}
+	if hasTenant {
+		h.limiter.DispatchCrossing(reqCtx(c), tenantID, mediaQuota)
+	}
+	return nil
 }
 
 // headWithinCap confirms the uploaded object exists and is within the size cap,

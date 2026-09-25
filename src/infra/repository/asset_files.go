@@ -21,6 +21,10 @@ type AssetFileRepository interface {
 	Upsert(ctx context.Context, file *models.AssetFile) error
 	DeleteByAssetID(ctx context.Context, assetID string) error
 	ListByAssetIDs(ctx context.Context, assetIDs []string) (map[string]*models.AssetFile, error)
+	// SumSizeBytesInTenant totals the stored originals across the ctx tenant's
+	// content bank — its share of the media_storage_bytes quota (CON-312), beside
+	// post attachments.
+	SumSizeBytesInTenant(ctx context.Context) (int64, error)
 }
 
 type assetFileRepository struct {
@@ -81,6 +85,15 @@ func (r *assetFileRepository) Upsert(ctx context.Context, file *models.AssetFile
 		Set("updated_at = EXCLUDED.updated_at").
 		Exec(ctx)
 	return err
+}
+
+func (r *assetFileRepository) SumSizeBytesInTenant(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.db.NewSelect().
+		Model((*models.AssetFile)(nil)).
+		ColumnExpr("COALESCE(SUM(af.size_bytes), 0)").
+		Scan(ctx, &total)
+	return total, err
 }
 
 func (r *assetFileRepository) DeleteByAssetID(ctx context.Context, assetID string) error {
