@@ -33,9 +33,24 @@ type BrandRepository interface {
 	UpdateAudience(ctx context.Context, a *models.BrandAudience) error // sql.ErrNoRows when unknown
 	DeleteAudience(ctx context.Context, id string) (bool, error)
 
-	GetGuardrails(ctx context.Context) (*models.BrandGuardrails, error) // nil when unset
-	UpsertGuardrails(ctx context.Context, g *models.BrandGuardrails) error
-	DeleteGuardrails(ctx context.Context) (bool, error)
+	// GetGuardrails returns nil when unset. Facts is the ledger projection.
+	GetGuardrails(ctx context.Context) (*models.BrandGuardrails, error)
+	// SaveGuardrails upserts the row and clears the stance; a non-nil facts
+	// reconciles the ledger by statement (CON-316 FR6).
+	SaveGuardrails(ctx context.Context, g *models.BrandGuardrails, facts []string, author *string) (FactsReconciled, error)
+	DeleteGuardrails(ctx context.Context) (bool, error) // leaves the ledger alone
+
+	// Facts ledger (CON-316).
+	ListFacts(ctx context.Context) ([]models.BrandFact, error)
+	GetFact(ctx context.Context, id string) (*models.BrandFact, error) // nil when not in tenant
+	CreateFact(ctx context.Context, f *models.BrandFact) error         // ErrFactDuplicate, ErrFactLimit
+	UpdateFact(ctx context.Context, f *models.BrandFact) (*models.BrandFact, error)
+	DeleteFact(ctx context.Context, id string) (*models.BrandFact, error) // nil when not in tenant
+
+	// Guardrails stance (CON-316 FR7). nil = undecided.
+	GetGuardrailsStance(ctx context.Context) (*models.BrandGuardrailsStanceRecord, error)
+	SetGuardrailsStance(ctx context.Context, s *models.BrandGuardrailsStanceRecord) (*models.BrandGuardrailsStanceRecord, error) // ErrGuardrailsExist
+	DeleteGuardrailsStance(ctx context.Context) error
 
 	GetLook(ctx context.Context) (*models.BrandLook, error) // nil when unset
 	UpsertLook(ctx context.Context, l *models.BrandLook) error
@@ -70,7 +85,18 @@ func (r *brandRepository) GetAll(ctx context.Context) (*models.BrandData, error)
 	if err := r.db.NewSelect().Model(&templates).OrderExpr("created_at ASC").Scan(ctx); err != nil {
 		return nil, err
 	}
-	guardrails, err := r.GetGuardrails(ctx)
+	facts, err := listFacts(ctx, r.db)
+	if err != nil {
+		return nil, err
+	}
+	guardrails, err := r.getGuardrailsRow(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if guardrails != nil {
+		guardrails.Facts = factStatements(facts)
+	}
+	stance, err := getStance(ctx, r.db)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +125,9 @@ func (r *brandRepository) GetAll(ctx context.Context) (*models.BrandData, error)
 		Guardrails: guardrails,
 		Look:       look,
 		Templates:  templates,
+		Facts:      facts,
+
+		GuardrailsStance: models.StanceOf(stance),
 	}, nil
 }
 
@@ -309,6 +338,21 @@ func (r *brandRepository) DeleteAudience(ctx context.Context, id string) (bool, 
 // ── Guardrails (singleton) ──────────────────────────────────────────────────
 
 func (r *brandRepository) GetGuardrails(ctx context.Context) (*models.BrandGuardrails, error) {
+	g, err := r.getGuardrailsRow(ctx)
+	if err != nil || g == nil {
+		return g, err
+	}
+	facts, err := listFacts(ctx, r.db)
+	if err != nil {
+		return nil, err
+	}
+	g.Facts = factStatements(facts)
+	return g, nil
+}
+
+// getGuardrailsRow reads the row as stored. Its facts column is legacy
+// (CON-316); callers project the ledger over it.
+func (r *brandRepository) getGuardrailsRow(ctx context.Context) (*models.BrandGuardrails, error) {
 	g := new(models.BrandGuardrails)
 	err := r.db.NewSelect().Model(g).Limit(1).Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -318,26 +362,6 @@ func (r *brandRepository) GetGuardrails(ctx context.Context) (*models.BrandGuard
 		return nil, err
 	}
 	return g, nil
-}
-
-// UpsertGuardrails writes the tenant's one guardrails row. An atomic
-// tenant-keyed upsert, not select-then-insert: FOR UPDATE cannot lock an absent
-// row, so two concurrent first-writes would both insert and one would hit the
-// unique(tenant_id) violation. ON CONFLICT collapses that to one statement.
-// id / created_at / tenant_id stay out of the SET so an existing row keeps them;
-// FR8's "unchanged save does not restamp" is enforced upstream in the handler,
-// which only reaches here when content actually differs.
-func (r *brandRepository) UpsertGuardrails(ctx context.Context, g *models.BrandGuardrails) error {
-	_, err := r.db.NewInsert().Model(g).
-		On("CONFLICT (tenant_id) DO UPDATE").
-		Set("facts = EXCLUDED.facts").
-		Set("may_claim = EXCLUDED.may_claim").
-		Set("never_claim = EXCLUDED.never_claim").
-		Set("banned_words = EXCLUDED.banned_words").
-		Set("disclaimer = EXCLUDED.disclaimer").
-		Set("updated_at = EXCLUDED.updated_at").
-		Exec(ctx)
-	return err
 }
 
 func (r *brandRepository) DeleteGuardrails(ctx context.Context) (bool, error) {

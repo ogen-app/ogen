@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -62,6 +63,7 @@ func (h *BrandHandler) Register(app *fiber.App) {
 	// Singletons — literal segments, no :id.
 	g.Put("/guardrails", h.auth, h.PutGuardrails)
 	g.Delete("/guardrails", h.auth, h.DeleteGuardrails)
+	g.Put("/guardrails/stance", h.auth, h.PutGuardrailsStance)
 	g.Put("/look", h.auth, h.PutLook)
 	g.Delete("/look", h.auth, h.DeleteLook)
 	// Libraries.
@@ -74,6 +76,10 @@ func (h *BrandHandler) Register(app *fiber.App) {
 	g.Post("/templates", h.auth, h.CreateTemplate)
 	g.Put("/templates/:id", h.auth, h.UpdateTemplate)
 	g.Delete("/templates/:id", h.auth, h.DeleteTemplate)
+	// Facts ledger (CON-316).
+	g.Post("/facts", h.auth, h.CreateFact)
+	g.Put("/facts/:id", h.auth, h.UpdateFact)
+	g.Delete("/facts/:id", h.auth, h.DeleteFact)
 }
 
 // GetAll returns the whole aggregate — every slot present (FR1).
@@ -214,13 +220,35 @@ func (h *BrandHandler) DeleteAudience(c *fiber.Ctx) error {
 
 // ── Guardrails (singleton) ──────────────────────────────────────────────────
 
+// guardrailsRequest is the PUT /api/brand/guardrails body. facts is
+// presence-aware (CON-316 FR6): omitted leaves the ledger alone, present
+// reconciles the ledger to it by statement.
+type guardrailsRequest struct {
+	Facts       Optional[models.StringSlice] `json:"facts"       swaggertype:"array,string"`
+	MayClaim    models.StringSlice           `json:"mayClaim"`
+	NeverClaim  models.StringSlice           `json:"neverClaim"`
+	BannedWords models.StringSlice           `json:"bannedWords"`
+	Disclaimer  string                       `json:"disclaimer"`
+}
+
 func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
-	var g models.BrandGuardrails
-	if err := c.BodyParser(&g); err != nil {
+	var req guardrailsRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
+	g := models.BrandGuardrails{
+		MayClaim:    req.MayClaim,
+		NeverClaim:  req.NeverClaim,
+		BannedWords: req.BannedWords,
+		Disclaimer:  req.Disclaimer,
+	}
+	// nil facts = key omitted: the ledger is not touched.
+	var facts []string
+	if req.Facts.Present {
+		facts = normalizeFactStatements(req.Facts.orZero())
+	}
 	normalizeGuardrails(&g)
-	if err := validateGuardrails(&g); err != nil {
+	if err := validateGuardrails(&g, facts); err != nil {
 		return err
 	}
 	existing, err := h.repo.GetGuardrails(reqCtx(c))
@@ -228,8 +256,11 @@ func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
 		return err
 	}
 	// FR8: an unchanged save must not restamp updated_at — this is the one
-	// section where "when was this last checked" is a real question.
-	if existing != nil && guardrailsEqual(existing, &g) {
+	// section where "when was this last checked" is a real question. With
+	// facts present, unchanged also means the ledger already holds exactly
+	// those statements.
+	if existing != nil && guardrailsEqual(existing, &g) &&
+		(facts == nil || sameStatementSet(existing.Facts, facts)) {
 		return c.JSON(existing)
 	}
 	now := brandNow()
@@ -242,18 +273,29 @@ func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
 		g.ID = id
 		g.CreatedAt = now
 	} else {
-		// The repo upsert is ON CONFLICT DO UPDATE and does not touch id /
-		// created_at, so carry the stored ones through for an accurate response.
+		// The upsert is ON CONFLICT DO UPDATE and does not touch id /
+		// created_at, so carry the stored ones through.
 		g.ID = existing.ID
 		g.CreatedAt = existing.CreatedAt
 	}
-	if err := h.repo.UpsertGuardrails(reqCtx(c), &g); err != nil {
+	rec, err := h.repo.SaveGuardrails(reqCtx(c), &g, facts, sessionUserID(c))
+	if err != nil {
+		return factError(err)
+	}
+	var opts []activity.Option
+	if facts != nil {
+		opts = append(opts, activity.WithPayload(map[string]any{"facts_reconciled": rec}))
+	}
+	h.recordActivity(c, "brand_guardrails_updated", opts...)
+	saved, err := h.repo.GetGuardrails(reqCtx(c))
+	if err != nil {
 		return err
 	}
-	h.recordActivity(c, "brand_guardrails_updated")
-	return c.JSON(&g)
+	return c.JSON(saved)
 }
 
+// DeleteGuardrails removes the rules. The facts ledger is its own section now
+// and is not touched (CON-316 FR6), nor is a previous stance brought back.
 func (h *BrandHandler) DeleteGuardrails(c *fiber.Ctx) error {
 	deleted, err := h.repo.DeleteGuardrails(reqCtx(c))
 	if err != nil {
@@ -531,9 +573,6 @@ func validateAudience(a *models.BrandAudience) error {
 }
 
 func normalizeGuardrails(g *models.BrandGuardrails) {
-	if g.Facts == nil {
-		g.Facts = models.StringSlice{}
-	}
 	if g.MayClaim == nil {
 		g.MayClaim = models.StringSlice{}
 	}
@@ -545,12 +584,23 @@ func normalizeGuardrails(g *models.BrandGuardrails) {
 	}
 }
 
-func validateGuardrails(g *models.BrandGuardrails) error {
-	if len(g.Facts) == 0 && len(g.MayClaim) == 0 && len(g.NeverClaim) == 0 &&
+// validateGuardrails checks the rules, and facts when the key was present
+// (non-nil). Rules and facts all empty is a 422: DELETE is the way to clear
+// the rules.
+func validateGuardrails(g *models.BrandGuardrails, facts []string) error {
+	if len(facts) == 0 && len(g.MayClaim) == 0 && len(g.NeverClaim) == 0 &&
 		len(g.BannedWords) == 0 && strings.TrimSpace(g.Disclaimer) == "" {
 		return unprocessable("guardrails are empty — use DELETE to clear the section")
 	}
-	for _, list := range []models.StringSlice{g.Facts, g.MayClaim, g.NeverClaim} {
+	if len(facts) > repository.MaxBrandFacts {
+		return unprocessable("at most %d facts per workspace", repository.MaxBrandFacts)
+	}
+	for _, s := range facts {
+		if len(s) > maxGuardrailStmtBytes {
+			return unprocessable("a statement exceeds %d KB", maxGuardrailStmtBytes>>10)
+		}
+	}
+	for _, list := range []models.StringSlice{g.MayClaim, g.NeverClaim} {
 		if len(list) > maxGuardrailStmts {
 			return unprocessable("at most %d statements per list", maxGuardrailStmts)
 		}
@@ -569,9 +619,41 @@ func validateGuardrails(g *models.BrandGuardrails) error {
 	return nil
 }
 
+// normalizeFactStatements trims, drops blanks and de-duplicates, keeping the
+// first occurrence. Never nil, so a present-but-empty list still reconciles
+// (to an empty ledger).
+func normalizeFactStatements(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func sameStatementSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]bool, len(a))
+	for _, s := range a {
+		set[s] = true
+	}
+	for _, s := range b {
+		if !set[s] {
+			return false
+		}
+	}
+	return true
+}
+
 func guardrailsEqual(a, b *models.BrandGuardrails) bool {
 	return a.Disclaimer == b.Disclaimer &&
-		slices.Equal(a.Facts, b.Facts) &&
 		slices.Equal(a.MayClaim, b.MayClaim) &&
 		slices.Equal(a.NeverClaim, b.NeverClaim) &&
 		slices.Equal(a.BannedWords, b.BannedWords)

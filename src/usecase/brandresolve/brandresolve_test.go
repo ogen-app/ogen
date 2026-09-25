@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
 // fakeBrandRepo implements repository.BrandRepository; only GetAll is functional
@@ -28,14 +29,36 @@ func (f *fakeBrandRepo) DeleteAudience(context.Context, string) (bool, error)   
 func (f *fakeBrandRepo) GetGuardrails(context.Context) (*models.BrandGuardrails, error) {
 	return f.data.Guardrails, nil
 }
-func (f *fakeBrandRepo) UpsertGuardrails(context.Context, *models.BrandGuardrails) error { return nil }
-func (f *fakeBrandRepo) DeleteGuardrails(context.Context) (bool, error)                  { return false, nil }
-func (f *fakeBrandRepo) GetLook(context.Context) (*models.BrandLook, error)              { return nil, nil }
-func (f *fakeBrandRepo) UpsertLook(context.Context, *models.BrandLook) error             { return nil }
-func (f *fakeBrandRepo) DeleteLook(context.Context) (bool, error)                        { return false, nil }
-func (f *fakeBrandRepo) CreateTemplate(context.Context, *models.BrandTemplate) error     { return nil }
-func (f *fakeBrandRepo) UpdateTemplate(context.Context, *models.BrandTemplate) error     { return nil }
-func (f *fakeBrandRepo) DeleteTemplate(context.Context, string) (bool, error)            { return false, nil }
+func (f *fakeBrandRepo) SaveGuardrails(context.Context, *models.BrandGuardrails, []string, *string) (repository.FactsReconciled, error) {
+	return repository.FactsReconciled{}, nil
+}
+func (f *fakeBrandRepo) ListFacts(context.Context) ([]models.BrandFact, error) {
+	return f.data.Facts, nil
+}
+func (f *fakeBrandRepo) GetFact(context.Context, string) (*models.BrandFact, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) CreateFact(context.Context, *models.BrandFact) error { return nil }
+func (f *fakeBrandRepo) UpdateFact(context.Context, *models.BrandFact) (*models.BrandFact, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) DeleteFact(context.Context, string) (*models.BrandFact, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) GetGuardrailsStance(context.Context) (*models.BrandGuardrailsStanceRecord, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) SetGuardrailsStance(context.Context, *models.BrandGuardrailsStanceRecord) (*models.BrandGuardrailsStanceRecord, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) DeleteGuardrailsStance(context.Context) error                { return nil }
+func (f *fakeBrandRepo) DeleteGuardrails(context.Context) (bool, error)              { return false, nil }
+func (f *fakeBrandRepo) GetLook(context.Context) (*models.BrandLook, error)          { return nil, nil }
+func (f *fakeBrandRepo) UpsertLook(context.Context, *models.BrandLook) error         { return nil }
+func (f *fakeBrandRepo) DeleteLook(context.Context) (bool, error)                    { return false, nil }
+func (f *fakeBrandRepo) CreateTemplate(context.Context, *models.BrandTemplate) error { return nil }
+func (f *fakeBrandRepo) UpdateTemplate(context.Context, *models.BrandTemplate) error { return nil }
+func (f *fakeBrandRepo) DeleteTemplate(context.Context, string) (bool, error)        { return false, nil }
 
 func strptr(s string) *string { return &s }
 
