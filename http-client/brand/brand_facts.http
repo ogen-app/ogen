@@ -1,0 +1,146 @@
+@baseUrl = http://localhost:9001
+
+# CON-316 — Facts ledger (/api/brand/facts) and the guardrails stance.
+# All endpoints require authentication: run "Login" from sessions/sessions.http
+# first. Dates are "YYYY-MM-DD" or null.
+
+### Brand aggregate — `facts` (the ledger) and `guardrailsStance`  [protected]
+GET {{baseUrl}}/api/brand
+Accept: application/json
+
+### Add a fact  [protected]
+# @name createFact
+POST {{baseUrl}}/api/brand/facts
+Content-Type: application/json
+
+{
+  "statement": "Support answered 94% of tickets within one working day in 2026.",
+  "subject": "us",
+  "kind": "measured",
+  "source": "Helpdesk export, Q4",
+  "addedAt": "2026-09-01",
+  "checkedAt": "2026-09-20",
+  "expiresAt": "2027-01-31"
+}
+
+> {% client.global.set("factId", response.body.id) %}
+
+### Add a fact — defaults (subject us, kind documented, addedAt today)  [protected]
+POST {{baseUrl}}/api/brand/facts
+Content-Type: application/json
+
+{
+  "statement": "Finance teams rebuild the same report every month.",
+  "subject": "problem"
+}
+
+### Add a judgement (rendered with "never state as a figure")  [protected]
+POST {{baseUrl}}/api/brand/facts
+Content-Type: application/json
+
+{
+  "statement": "Our onboarding is the calmest in the category.",
+  "kind": "judgement"
+}
+
+### Add an already-expired fact (kept on the ledger, left out of generation)  [protected]
+POST {{baseUrl}}/api/brand/facts
+Content-Type: application/json
+
+{
+  "statement": "Launch pricing runs to the end of August.",
+  "kind": "commitment",
+  "expiresAt": "2026-08-31"
+}
+
+### Add a duplicate statement (expects 409)  [protected]
+POST {{baseUrl}}/api/brand/facts
+Content-Type: application/json
+
+{
+  "statement": "Support answered 94% of tickets within one working day in 2026."
+}
+
+### Add a fact — bad kind (expects 422)  [protected]
+POST {{baseUrl}}/api/brand/facts
+Content-Type: application/json
+
+{
+  "statement": "Something.",
+  "kind": "rumour"
+}
+
+### Add a fact — impossible date (expects 422)  [protected]
+POST {{baseUrl}}/api/brand/facts
+Content-Type: application/json
+
+{
+  "statement": "Something else.",
+  "expiresAt": "2026-02-30"
+}
+
+### Re-check a fact — full replace, same id  [protected]
+PUT {{baseUrl}}/api/brand/facts/{{factId}}
+Content-Type: application/json
+
+{
+  "statement": "Support answered 95% of tickets within one working day in 2026.",
+  "subject": "us",
+  "kind": "measured",
+  "source": "Helpdesk export, Q4",
+  "addedAt": "2026-09-01",
+  "checkedAt": "2026-09-25",
+  "expiresAt": "2027-03-31"
+}
+
+### Remove a fact  [protected]
+DELETE {{baseUrl}}/api/brand/facts/{{factId}}
+
+### Remove it again (expects 404)  [protected]
+DELETE {{baseUrl}}/api/brand/facts/{{factId}}
+
+### ── Guardrails compatibility (flag-off editor) ─────────────────────────────
+
+### Save rules without `facts` — the ledger is not touched  [protected]
+PUT {{baseUrl}}/api/brand/guardrails
+Content-Type: application/json
+
+{
+  "mayClaim": ["Fastest onboarding we have measured"],
+  "neverClaim": ["Guaranteed returns"],
+  "bannedWords": ["revolutionary"],
+  "disclaimer": ""
+}
+
+### Save rules with `facts` — reconciles the ledger by statement  [protected]
+PUT {{baseUrl}}/api/brand/guardrails
+Content-Type: application/json
+
+{
+  "facts": ["Finance teams rebuild the same report every month.", "A brand-new statement."],
+  "mayClaim": ["Fastest onboarding we have measured"],
+  "neverClaim": ["Guaranteed returns"],
+  "bannedWords": ["revolutionary"],
+  "disclaimer": ""
+}
+
+### Delete the rules — facts stay  [protected]
+DELETE {{baseUrl}}/api/brand/guardrails
+
+### ── Stance ─────────────────────────────────────────────────────────────────
+
+### Decide the workspace needs no guardrails (409 while rules exist)  [protected]
+PUT {{baseUrl}}/api/brand/guardrails/stance
+Content-Type: application/json
+
+{
+  "none": true
+}
+
+### Back to undecided  [protected]
+PUT {{baseUrl}}/api/brand/guardrails/stance
+Content-Type: application/json
+
+{
+  "none": false
+}
