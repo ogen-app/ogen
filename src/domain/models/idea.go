@@ -41,7 +41,7 @@ type Idea struct {
 	Title      string       `bun:"title,notnull"                                json:"title"`
 	Note       string       `bun:"note,notnull,default:''"                      json:"note"`
 	CampaignID *string      `bun:"campaign_id"                                  json:"campaign_id"`
-	Verdict    *IdeaVerdict `bun:"verdict"                                      json:"verdict"      swaggertype:"string" enums:"yes,later,no"`
+	Verdict    *IdeaVerdict `bun:"verdict"                                      json:"verdict"      swaggertype:"string" enums:"yes,later,no" extensions:"x-nullable"`
 	RemindAt   *time.Time   `bun:"remind_at"                                    json:"remind_at"`
 	DecidedAt  *time.Time   `bun:"decided_at"                                   json:"decided_at"`
 	DecidedBy  *string      `bun:"decided_by"                                   json:"decided_by"`

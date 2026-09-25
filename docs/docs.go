@@ -10397,7 +10397,8 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "remind_at": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "verdict": {
                     "type": "string",
@@ -10405,7 +10406,8 @@ const docTemplate = `{
                         "yes",
                         "later",
                         "no"
-                    ]
+                    ],
+                    "x-nullable": true
                 }
             }
         },
@@ -11908,7 +11910,8 @@ const docTemplate = `{
                         "yes",
                         "later",
                         "no"
-                    ]
+                    ],
+                    "x-nullable": true
                 }
             }
         },
