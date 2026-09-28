@@ -10,6 +10,7 @@ import (
 	"errors"
 	"expvar"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -323,7 +324,7 @@ func (s *platformAdminService) internal(ctx context.Context, op string, err erro
 	return status.Error(codes.Internal, op+" failed")
 }
 
-// validatePlatformWrite enforces the §12 write rules: required name + zernio_id,
+// validatePlatformWrite enforces the write rules: required name + zernio_id,
 // non-negative + internally consistent numeric limits, per-platform file sizes
 // within the global upload ceilings, and per-post-type char overrides keyed on a
 // known post type.
@@ -335,44 +336,70 @@ func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGloba
 		return status.Error(codes.InvalidArgument, "zernio_id is required")
 	}
 	if img := pb.GetImageConstraints(); img != nil {
-		if img.GetMaxFileSizeBytes() < 0 {
-			return status.Error(codes.InvalidArgument, "image max_file_size_bytes must be >= 0")
-		}
-		if img.GetMaxFileSizeBytes() > limits.MaxImageUploadBytes {
-			return status.Errorf(codes.InvalidArgument, "image max_file_size_bytes (%d) exceeds the global image upload ceiling (%d); raise the global cap first", img.GetMaxFileSizeBytes(), limits.MaxImageUploadBytes)
+		if err := checkFileSize("image", img.GetMaxFileSizeBytes(), limits.MaxImageUploadBytes); err != nil {
+			return err
 		}
 	}
 	if vid := pb.GetVideoConstraints(); vid != nil {
-		if vid.GetMaxFileSizeBytes() < 0 || vid.GetMinDurationSeconds() < 0 || vid.GetMaxDurationSeconds() < 0 {
-			return status.Error(codes.InvalidArgument, "video limits must be >= 0")
-		}
-		if vid.GetMaxFileSizeBytes() > limits.MaxVideoUploadBytes {
-			return status.Errorf(codes.InvalidArgument, "video max_file_size_bytes (%d) exceeds the global video upload ceiling (%d); raise the global cap first", vid.GetMaxFileSizeBytes(), limits.MaxVideoUploadBytes)
-		}
-		if maxDur := vid.GetMaxDurationSeconds(); maxDur > 0 && vid.GetMinDurationSeconds() > maxDur {
-			return status.Error(codes.InvalidArgument, "video min_duration_seconds must be <= max_duration_seconds")
+		if err := validateVideoLimits(vid, limits.MaxVideoUploadBytes); err != nil {
+			return err
 		}
 	}
 	if pdf := pb.GetPdfConstraints(); pdf != nil {
-		if pdf.GetMaxFileSizeBytes() < 0 {
-			return status.Error(codes.InvalidArgument, "pdf max_file_size_bytes must be >= 0")
-		}
-		if pdf.GetMaxFileSizeBytes() > limits.MaxPDFUploadBytes {
-			return status.Errorf(codes.InvalidArgument, "pdf max_file_size_bytes (%d) exceeds the global pdf upload ceiling (%d); raise the global cap first", pdf.GetMaxFileSizeBytes(), limits.MaxPDFUploadBytes)
+		if err := checkFileSize("pdf", pdf.GetMaxFileSizeBytes(), limits.MaxPDFUploadBytes); err != nil {
+			return err
 		}
 	}
 	if txt := pb.GetTextConstraints(); txt != nil {
-		if txt.GetMaxContentChars() < 0 || txt.GetMaxTitleChars() < 0 {
-			return status.Error(codes.InvalidArgument, "text char limits must be >= 0")
+		return validateTextLimits(txt, pb.GetPostTypes())
+	}
+	return nil
+}
+
+// nonNegative reports whether every value is >= 0.
+func nonNegative[T int32 | int64](vals ...T) bool {
+	return !slices.ContainsFunc(vals, func(v T) bool { return v < 0 })
+}
+
+// checkFileSize rejects a negative per-platform max_file_size_bytes for kind
+// or one above the global upload ceiling.
+func checkFileSize(kind string, size, ceiling int64) error {
+	if !nonNegative(size) {
+		return status.Errorf(codes.InvalidArgument, "%s max_file_size_bytes must be >= 0", kind)
+	}
+	return checkCeiling(kind, size, ceiling)
+}
+
+func checkCeiling(kind string, size, ceiling int64) error {
+	if size > ceiling {
+		return status.Errorf(codes.InvalidArgument, "%s max_file_size_bytes (%d) exceeds the global %s upload ceiling (%d); raise the global cap first", kind, size, kind, ceiling)
+	}
+	return nil
+}
+
+func validateVideoLimits(vid *platformsv1.VideoConstraints, ceiling int64) error {
+	if !nonNegative(vid.GetMaxFileSizeBytes(), int64(vid.GetMinDurationSeconds()), int64(vid.GetMaxDurationSeconds())) {
+		return status.Error(codes.InvalidArgument, "video limits must be >= 0")
+	}
+	if err := checkCeiling("video", vid.GetMaxFileSizeBytes(), ceiling); err != nil {
+		return err
+	}
+	if maxDur := vid.GetMaxDurationSeconds(); maxDur > 0 && vid.GetMinDurationSeconds() > maxDur {
+		return status.Error(codes.InvalidArgument, "video min_duration_seconds must be <= max_duration_seconds")
+	}
+	return nil
+}
+
+func validateTextLimits(txt *platformsv1.TextConstraints, postTypes map[string]string) error {
+	if !nonNegative(txt.GetMaxContentChars(), txt.GetMaxTitleChars()) {
+		return status.Error(codes.InvalidArgument, "text char limits must be >= 0")
+	}
+	for slug, limit := range txt.GetPerPostType() {
+		if limit < 0 {
+			return status.Errorf(codes.InvalidArgument, "text per_post_type override %q must be >= 0", slug)
 		}
-		pts := pb.GetPostTypes()
-		for slug, limit := range txt.GetPerPostType() {
-			if limit < 0 {
-				return status.Errorf(codes.InvalidArgument, "text per_post_type override %q must be >= 0", slug)
-			}
-			if _, ok := pts[slug]; !ok {
-				return status.Errorf(codes.InvalidArgument, "text per_post_type override %q is not one of the platform's post_types", slug)
-			}
+		if _, ok := postTypes[slug]; !ok {
+			return status.Errorf(codes.InvalidArgument, "text per_post_type override %q is not one of the platform's post_types", slug)
 		}
 	}
 	return nil

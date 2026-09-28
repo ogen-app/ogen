@@ -158,10 +158,9 @@ type TierAssignmentBackfillReport struct {
 
 // BackfillTenantTierAssignments assigns every tenant that lacks an open
 // (upper-infinity) tier-version assignment to its current tier's latest active
-// version, with valid = [tenant.created_at, infinity) and reason 'signup'
-// (CON-243 §13 Phase 4). Idempotent: a tenant that already has an open
-// assignment is skipped, so it is safe on every boot. dryRun reports what would
-// happen without writing.
+// version, with valid = [tenant.created_at, infinity) and reason 'signup'.
+// Idempotent: a tenant that already has an open assignment is skipped, so it
+// is safe on every boot. dryRun reports what would happen without writing.
 func BackfillTenantTierAssignments(ctx context.Context, db *bun.DB, dryRun bool) (TierAssignmentBackfillReport, error) {
 	ctx = tenantctx.WithSystem(ctx)
 	report := TierAssignmentBackfillReport{DryRun: dryRun}
@@ -177,30 +176,13 @@ func BackfillTenantTierAssignments(ctx context.Context, db *bun.DB, dryRun bool)
 	}
 	report.Candidates = len(tenants)
 
-	versionRepo := NewTenantTierVersionRepository(db)
+	versions := newLatestTierVersions(NewTenantTierVersionRepository(db))
 	assignmentRepo := NewTenantTierAssignmentRepository(db)
-	latestByTier := make(map[string]string) // tier_id -> version id ("" = no active version)
-
-	resolveVersion := func(tierID string) (string, error) {
-		if id, ok := latestByTier[tierID]; ok {
-			return id, nil
-		}
-		v, verr := versionRepo.LatestActiveByTier(ctx, tierID)
-		switch {
-		case errors.Is(verr, sql.ErrNoRows):
-			latestByTier[tierID] = ""
-		case verr != nil:
-			return "", verr
-		default:
-			latestByTier[tierID] = v.ID
-		}
-		return latestByTier[tierID], nil
-	}
 
 	for _, t := range tenants {
-		versionID, verr := resolveVersion(t.TierID)
-		if verr != nil {
-			return report, verr
+		versionID, err := versions.resolve(ctx, t.TierID)
+		if err != nil {
+			return report, err
 		}
 		if versionID == "" {
 			report.SkippedNoVersion++
@@ -209,9 +191,9 @@ func BackfillTenantTierAssignments(ctx context.Context, db *bun.DB, dryRun bool)
 		if dryRun {
 			continue
 		}
-		id, ierr := models.NewID()
-		if ierr != nil {
-			return report, ierr
+		id, err := models.NewID()
+		if err != nil {
+			return report, err
 		}
 		a := &models.TenantTierAssignment{
 			ID:            id,
@@ -220,38 +202,79 @@ func BackfillTenantTierAssignments(ctx context.Context, db *bun.DB, dryRun bool)
 			Reason:        models.AssignmentReasonSignup,
 			CreatedAt:     time.Now().UTC(),
 		}
-		if cerr := assignmentRepo.Create(ctx, a, t.CreatedAt, nil); cerr != nil {
-			if !isExclusionViolation(cerr) {
-				return report, cerr
-			}
-			// The [created_at, infinity) range overlapped existing history. If an
-			// open assignment now exists (a concurrent backfill won the race),
-			// we're done and stay idempotent. Otherwise the overlap is with CLOSED
-			// history — resume the open range at the end of the latest closed
-			// assignment so the tenant is left with exactly one open assignment.
-			open, oerr := assignmentRepo.HasOpen(ctx, t.ID)
-			if oerr != nil {
-				return report, oerr
-			}
-			if open {
-				continue
-			}
-			end, eerr := assignmentRepo.LatestClosedUpper(ctx, t.ID)
-			if eerr != nil {
-				return report, eerr
-			}
-			if end == nil {
-				return report, cerr // overlap with no closed range to resume from
-			}
-			if cerr2 := assignmentRepo.Create(ctx, a, *end, nil); cerr2 != nil {
-				return report, cerr2
-			}
-			report.Assigned++
-			continue
+		assigned, err := createOpenAssignment(ctx, assignmentRepo, a, t.CreatedAt)
+		if err != nil {
+			return report, err
 		}
-		report.Assigned++
+		if assigned {
+			report.Assigned++
+		}
 	}
 	return report, nil
+}
+
+// latestTierVersions memoises LatestActiveByTier per tier; "" records a
+// tier with no active version.
+type latestTierVersions struct {
+	repo   TenantTierVersionRepository
+	byTier map[string]string
+}
+
+func newLatestTierVersions(repo TenantTierVersionRepository) *latestTierVersions {
+	return &latestTierVersions{repo: repo, byTier: make(map[string]string)}
+}
+
+func (m *latestTierVersions) resolve(ctx context.Context, tierID string) (string, error) {
+	if id, ok := m.byTier[tierID]; ok {
+		return id, nil
+	}
+	v, err := m.repo.LatestActiveByTier(ctx, tierID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		m.byTier[tierID] = ""
+	case err != nil:
+		return "", err
+	default:
+		m.byTier[tierID] = v.ID
+	}
+	return m.byTier[tierID], nil
+}
+
+// createOpenAssignment writes a with valid = [from, infinity). It reports
+// false without error when a concurrent writer already opened one.
+func createOpenAssignment(ctx context.Context, repo TenantTierAssignmentRepository, a *models.TenantTierAssignment, from time.Time) (bool, error) {
+	err := repo.Create(ctx, a, from, nil)
+	if err == nil {
+		return true, nil
+	}
+	if !isExclusionViolation(err) {
+		return false, err
+	}
+	return resumeAfterClosedHistory(ctx, repo, a, err)
+}
+
+// resumeAfterClosedHistory recovers from an exclusion violation on an open
+// range. If an open assignment now exists (a concurrent backfill won the
+// race) there is nothing to do. Otherwise the overlap is with closed
+// history, so the open range resumes at the end of the latest closed
+// assignment, leaving the tenant with exactly one open assignment.
+// createErr is returned when there is no closed range to resume from.
+func resumeAfterClosedHistory(ctx context.Context, repo TenantTierAssignmentRepository, a *models.TenantTierAssignment, createErr error) (bool, error) {
+	open, err := repo.HasOpen(ctx, a.TenantID)
+	if err != nil || open {
+		return false, err
+	}
+	end, err := repo.LatestClosedUpper(ctx, a.TenantID)
+	if err != nil {
+		return false, err
+	}
+	if end == nil {
+		return false, createErr
+	}
+	if err := repo.Create(ctx, a, *end, nil); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // isExclusionViolation reports whether err is a Postgres exclusion-constraint

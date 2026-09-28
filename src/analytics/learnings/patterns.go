@@ -59,8 +59,29 @@ func buildPatterns(posts []PostFact, metric string, now time.Time, trendDays int
 		return &Patterns{InsufficientHistory: true}
 	}
 
+	segs, segsPerDim := aggregateSegments(posts, metric, now, trendDays)
+	works, fading := selectCards(segs, segsPerDim, overall, metric, trendDays)
+
+	// works ranked by lift × log(support); fading by steepest decline. ID breaks
+	// ties so capCards picks the same cards deterministically across runs.
+	slices.SortFunc(works, func(x, y PatternCard) int {
+		ka := x.Lift * math.Log(float64(x.Support+1))
+		kb := y.Lift * math.Log(float64(y.Support+1))
+		return cmp.Or(cmp.Compare(kb, ka), cmp.Compare(x.ID, y.ID))
+	})
+	slices.SortFunc(fading, func(a, b PatternCard) int {
+		return cmp.Or(cmp.Compare(a.Trend, b.Trend), cmp.Compare(a.ID, b.ID))
+	})
+
+	return &Patterns{Works: capCards(works), Fading: capCards(fading)}
+}
+
+// aggregateSegments buckets each post's metric value into every segment it
+// belongs to, splitting the trend windows into recent and prior. It also
+// returns how many distinct segments each dimension has.
+func aggregateSegments(posts []PostFact, metric string, now time.Time, trendDays int) (map[dimSeg]*segAgg, map[string]int) {
 	segs := map[dimSeg]*segAgg{}
-	dimSegs := map[string]map[string]bool{}
+	segsPerDim := map[string]int{}
 	recentStart := now.AddDate(0, 0, -trendDays)
 	priorStart := now.AddDate(0, 0, -2*trendDays)
 	for _, p := range posts {
@@ -70,6 +91,7 @@ func buildPatterns(posts []PostFact, metric string, now time.Time, trendDays int
 			if a == nil {
 				a = &segAgg{dim: ds.dim, seg: ds.seg}
 				segs[ds] = a
+				segsPerDim[ds.dim]++
 			}
 			a.vals = append(a.vals, v)
 			switch {
@@ -78,50 +100,50 @@ func buildPatterns(posts []PostFact, metric string, now time.Time, trendDays int
 			case !p.PublishedAt.Before(priorStart):
 				a.prior = append(a.prior, v)
 			}
-			if dimSegs[ds.dim] == nil {
-				dimSegs[ds.dim] = map[string]bool{}
-			}
-			dimSegs[ds.dim][ds.seg] = true
 		}
 	}
+	return segs, segsPerDim
+}
 
-	var works, fading []PatternCard
+// selectCards turns qualifying segments into unsorted works and fading
+// cards. A dimension with a single segment has no contrast and is skipped.
+func selectCards(segs map[dimSeg]*segAgg, segsPerDim map[string]int, overall float64, metric string, trendDays int) (works, fading []PatternCard) {
 	for ds, a := range segs {
-		if len(dimSegs[ds.dim]) < 2 { // a dimension with one segment has no contrast
+		if segsPerDim[ds.dim] < 2 {
 			continue
 		}
-		if len(a.vals) >= minSupport {
-			if lift := medianInts(a.vals) / overall; lift >= liftThreshold {
-				works = append(works, worksCard(a, metric, lift))
-			}
+		if lift, ok := segmentLift(a, overall); ok {
+			works = append(works, worksCard(a, metric, lift))
 		}
-		if len(a.recent) >= minTrendSupport && len(a.prior) >= minTrendSupport {
-			if prior := medianInts(a.prior); prior > 0 {
-				if trend := medianInts(a.recent) / prior; trend <= fadeThreshold {
-					fading = append(fading, fadingCard(a, metric, trend, trendDays))
-				}
-			}
+		if trend, ok := segmentTrend(a); ok {
+			fading = append(fading, fadingCard(a, metric, trend, trendDays))
 		}
 	}
+	return works, fading
+}
 
-	// works ranked by lift × log(support); fading by steepest decline. ID breaks
-	// ties so capCards picks the same cards deterministically across runs.
-	slices.SortFunc(works, func(x, y PatternCard) int {
-		ka := x.Lift * math.Log(float64(x.Support+1))
-		kb := y.Lift * math.Log(float64(y.Support+1))
-		if c := cmp.Compare(kb, ka); c != 0 {
-			return c
-		}
-		return cmp.Compare(x.ID, y.ID)
-	})
-	slices.SortFunc(fading, func(a, b PatternCard) int {
-		if c := cmp.Compare(a.Trend, b.Trend); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.ID, b.ID)
-	})
+// segmentLift reports the segment's median relative to overall when it has
+// enough support and clears liftThreshold.
+func segmentLift(a *segAgg, overall float64) (float64, bool) {
+	if len(a.vals) < minSupport {
+		return 0, false
+	}
+	lift := medianInts(a.vals) / overall
+	return lift, lift >= liftThreshold
+}
 
-	return &Patterns{Works: capCards(works), Fading: capCards(fading)}
+// segmentTrend reports recent ÷ prior median when both windows have enough
+// support and the ratio is at or below fadeThreshold.
+func segmentTrend(a *segAgg) (float64, bool) {
+	if len(a.recent) < minTrendSupport || len(a.prior) < minTrendSupport {
+		return 0, false
+	}
+	prior := medianInts(a.prior)
+	if prior <= 0 {
+		return 0, false
+	}
+	trend := medianInts(a.recent) / prior
+	return trend, trend <= fadeThreshold
 }
 
 func worksCard(a *segAgg, metric string, lift float64) PatternCard {
@@ -215,47 +237,31 @@ func segmentsOf(f PostFact) []dimSeg {
 	return out
 }
 
+// headlines labels the fixed (dimension, segment) pairs.
+var headlines = map[dimSeg]string{
+	{"media_format", "carousel"}:     "Carousels",
+	{"media_format", "single_image"}: "Single images",
+	{"media_format", "video"}:        "Video posts",
+	{"media_format", "text_only"}:    "Text-only posts",
+	{"content_length", "long"}:       "Longer posts",
+	{"content_length", "medium"}:     "Medium-length posts",
+	{"content_length", "short"}:      "Short posts",
+	{"hashtag_count", "many"}:        "Posts with lots of hashtags",
+	{"hashtag_count", "few"}:         "Posts with a few hashtags",
+	{"hashtag_count", "none"}:        "Posts with no hashtags",
+	{"has_link", "with_link"}:        "Posts with a link",
+	{"posting_time", "weekend"}:      "Weekend posts",
+}
+
 // headline renders a human label for a (dimension, segment).
 func headline(dim, seg string) string {
+	if h, ok := headlines[dimSeg{dim, seg}]; ok {
+		return h
+	}
 	switch dim {
-	case "media_format":
-		switch seg {
-		case "carousel":
-			return "Carousels"
-		case "single_image":
-			return "Single images"
-		case "video":
-			return "Video posts"
-		case "text_only":
-			return "Text-only posts"
-		}
-	case "content_length":
-		switch seg {
-		case "long":
-			return "Longer posts"
-		case "medium":
-			return "Medium-length posts"
-		case "short":
-			return "Short posts"
-		}
-	case "hashtag_count":
-		switch seg {
-		case "many":
-			return "Posts with lots of hashtags"
-		case "few":
-			return "Posts with a few hashtags"
-		case "none":
-			return "Posts with no hashtags"
-		}
 	case "has_link":
-		if seg == "with_link" {
-			return "Posts with a link"
-		}
 		return "Posts without a link"
 	case "posting_time":
-		if seg == "weekend" {
-			return "Weekend posts"
-		}
 		return "Weekday posts"
 	case "platform":
 		return titleCasePlatform(seg) + " posts"

@@ -81,30 +81,49 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 		return nil
 	}
 
-	// A threaded post is validated per segment (count + per-segment
-	// char limit + per-segment media + segment_index integrity), not as one
-	// whole message. Its structure lives in ThreadSegments + the attachments'
-	// segment_index, which the single-message checks below can't express — so
-	// the thread path replaces them entirely.
+	// A thread's structure lives in ThreadSegments and the attachments'
+	// segment_index, which the single-message checks can't express, so it
+	// is validated per segment instead.
 	if post.PlatformPostType == models.PostTypeThread {
 		return validateThread(post, p, atts)
 	}
 
 	var errs []ValidationError
-
-	// Measure the flattened body: a post whose content is only Markdown syntax
-	// (e.g. a lone "---") publishes as empty once we flatten at egress,
-	// so it must fail requires_content rather than slip through as "non-empty".
-	if rule.RequiresContent && strings.TrimSpace(FlattenSocialText(post.Content)) == "" {
-		errs = append(errs, ValidationError{
-			Platform: p.ID,
-			Rule:     RuleRequiresContent,
-			Expected: "non-empty content",
-			Actual:   "empty",
-			Message:  fmt.Sprintf("post type %q requires non-empty content", post.PlatformPostType),
-		})
+	for _, check := range postTypeChecks {
+		errs = append(errs, check(post, p, rule, atts)...)
 	}
+	return errs
+}
 
+// postTypeCheck validates one constraint family of a single-message post.
+type postTypeCheck func(post *models.Post, p *models.Platform, rule PostTypeRule, atts []models.PostAttachment) []ValidationError
+
+// postTypeChecks run in order; their errors are concatenated.
+var postTypeChecks = []postTypeCheck{
+	checkRequiresContent,
+	checkAttachmentCount,
+	checkAttachmentKinds,
+	checkVideoTitle,
+	checkCharLimits,
+}
+
+// checkRequiresContent measures the flattened body: content that is only
+// Markdown syntax (e.g. a lone "---") publishes as empty.
+func checkRequiresContent(post *models.Post, p *models.Platform, rule PostTypeRule, _ []models.PostAttachment) []ValidationError {
+	if !rule.RequiresContent || strings.TrimSpace(FlattenSocialText(post.Content)) != "" {
+		return nil
+	}
+	return []ValidationError{{
+		Platform: p.ID,
+		Rule:     RuleRequiresContent,
+		Expected: "non-empty content",
+		Actual:   "empty",
+		Message:  fmt.Sprintf("post type %q requires non-empty content", post.PlatformPostType),
+	}}
+}
+
+func checkAttachmentCount(post *models.Post, p *models.Platform, rule PostTypeRule, atts []models.PostAttachment) []ValidationError {
+	var errs []ValidationError
 	if len(atts) < rule.MinAttachments {
 		errs = append(errs, ValidationError{
 			Platform: p.ID,
@@ -114,7 +133,6 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 			Message:  fmt.Sprintf("post type %q requires at least %d attachment(s); got %d", post.PlatformPostType, rule.MinAttachments, len(atts)),
 		})
 	}
-
 	if rule.MaxAttachments != -1 && len(atts) > rule.MaxAttachments {
 		errs = append(errs, ValidationError{
 			Platform: p.ID,
@@ -124,42 +142,52 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 			Message:  fmt.Sprintf("post type %q allows at most %d attachment(s); got %d", post.PlatformPostType, rule.MaxAttachments, len(atts)),
 		})
 	}
+	return errs
+}
 
-	if len(rule.AllowedKinds) > 0 {
-		for i := range atts {
-			kind := AttachmentKind(atts[i].MimeType)
-			if !slices.Contains(rule.AllowedKinds, kind) {
-				errs = append(errs, ValidationError{
-					Platform:     p.ID,
-					AttachmentID: atts[i].ID,
-					Rule:         RuleAttachmentKind,
-					Expected:     strings.Join(rule.AllowedKinds, ","),
-					Actual:       kind,
-					Message:      fmt.Sprintf("post type %q does not allow %s attachments", post.PlatformPostType, kindLabel(kind)),
-				})
-			}
-		}
+func checkAttachmentKinds(post *models.Post, p *models.Platform, rule PostTypeRule, atts []models.PostAttachment) []ValidationError {
+	if len(rule.AllowedKinds) == 0 {
+		return nil
 	}
-
-	// A video post type on a platform that requires a title (YouTube)
-	// can't publish untitled. Only fires for video post types so image/text
-	// posts are unaffected.
-	if slices.Contains(rule.AllowedKinds, KindVideo) && p.VideoConstraints.RequiresVideoTitle && strings.TrimSpace(post.Title) == "" {
+	var errs []ValidationError
+	for i := range atts {
+		kind := AttachmentKind(atts[i].MimeType)
+		if slices.Contains(rule.AllowedKinds, kind) {
+			continue
+		}
 		errs = append(errs, ValidationError{
-			Platform: p.ID,
-			Rule:     RuleRequiresVideoTitle,
-			Expected: "non-empty title",
-			Actual:   "empty",
-			Message:  fmt.Sprintf("%s requires a title for %s posts", p.Name, post.PlatformPostType),
+			Platform:     p.ID,
+			AttachmentID: atts[i].ID,
+			Rule:         RuleAttachmentKind,
+			Expected:     strings.Join(rule.AllowedKinds, ","),
+			Actual:       kind,
+			Message:      fmt.Sprintf("post type %q does not allow %s attachments", post.PlatformPostType, kindLabel(kind)),
 		})
 	}
+	return errs
+}
 
-	// Enforce the same char limits the composer surfaces client-side, so a
-	// client bug can't slip an over-length post past the publish gate. Count the
-	// flattened, visible length (VisibleLen) — the text that actually publishes now
-	// that we flatten Markdown at egress — so **bold** and [text](url)
-	// don't spend budget on syntax the reader never sees. A zero limit means
-	// unbounded → skip.
+// checkVideoTitle requires a title for video post types on platforms that
+// can't publish untitled video (YouTube).
+func checkVideoTitle(post *models.Post, p *models.Platform, rule PostTypeRule, _ []models.PostAttachment) []ValidationError {
+	if !slices.Contains(rule.AllowedKinds, KindVideo) || !p.VideoConstraints.RequiresVideoTitle || strings.TrimSpace(post.Title) != "" {
+		return nil
+	}
+	return []ValidationError{{
+		Platform: p.ID,
+		Rule:     RuleRequiresVideoTitle,
+		Expected: "non-empty title",
+		Actual:   "empty",
+		Message:  fmt.Sprintf("%s requires a title for %s posts", p.Name, post.PlatformPostType),
+	}}
+}
+
+// checkCharLimits enforces the same char limits the composer shows, so a
+// client bug can't slip an over-length post past the publish gate. Content
+// is counted by VisibleLen (the flattened text that publishes, not the
+// Markdown syntax); a zero limit is unbounded.
+func checkCharLimits(post *models.Post, p *models.Platform, _ PostTypeRule, _ []models.PostAttachment) []ValidationError {
+	var errs []ValidationError
 	if limit := p.TextConstraints.ContentLimitFor(post.PlatformPostType); limit > 0 {
 		if n := VisibleLen(post.Content); n > limit {
 			errs = append(errs, ValidationError{
@@ -182,7 +210,6 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 			})
 		}
 	}
-
 	return errs
 }
 

@@ -13,10 +13,9 @@ package clone
 import (
 	"cmp"
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"time"
@@ -27,7 +26,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
-	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/internal/postaudit"
 )
 
 // ErrSourceNotFound is returned when the post being cloned does not exist.
@@ -45,8 +44,8 @@ var ErrStorageUnavailable = errors.New("cannot clone attachments without object 
 // Trigger identifies which entry point initiated a clone (recorded in
 // the audit log).
 const (
-	TriggerAPI       = "api"
-	TriggerAssistant = "assistant"
+	TriggerAPI       = postaudit.TriggerAPI
+	TriggerAssistant = postaudit.TriggerAssistant
 )
 
 // Options controls a single clone. The zero value copies nothing; use
@@ -99,7 +98,7 @@ type Result struct {
 	Adapted bool
 	// PostTypeFellBack is true when a requested target post type was
 	// invalid for the target platform and was replaced with the
-	// platform default (AC #3 — the caller should tell the user).
+	// platform default; the caller should tell the user.
 	PostTypeFellBack bool
 	// ResolvedPostType is the post type actually assigned to the clone.
 	ResolvedPostType string
@@ -141,81 +140,143 @@ func New(
 	}
 }
 
+// target is the resolved platform and post type a clone lands on.
+type target struct {
+	platformID string
+	platform   *models.Platform // nil for a platform-less draft
+	postType   string
+	fellBack   bool
+}
+
 // Clone duplicates the post identified by sourceID per opts and returns
 // the new draft. The DB writes (post, attachment rows, v1 version,
 // audit entry) commit in one transaction; storage copies happen before
-// the transaction and are cleaned up if it fails.
+// the transaction and are cleaned up if anything after them fails.
 func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Result, error) {
 	src, err := s.posts.GetByID(ctx, sourceID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrSourceNotFound
-		}
+		return nil, postaudit.NotFound(err, ErrSourceNotFound)
+	}
+	tgt, err := s.resolveTarget(ctx, src, opts)
+	if err != nil {
 		return nil, err
 	}
 
-	// Resolve target platform + post type.
-	targetPlatformID := opts.TargetPlatformID
-	targetPlatformID = cmp.Or(targetPlatformID, src.PlatformID)
-	targetPostType := opts.TargetPostType
-	if targetPostType == "" {
-		targetPostType = src.PlatformPostType
-	}
-	crossPlatform := targetPlatformID != "" && targetPlatformID != src.PlatformID
-
-	var targetPlatform *models.Platform
-	fellBack := false
-	if targetPlatformID != "" {
-		p, err := s.platforms.GetByID(ctx, targetPlatformID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil, fmt.Errorf("%w: %s", ErrInvalidPlatform, targetPlatformID)
-			}
-			return nil, err
-		}
-		targetPlatform = p
-		if _, ok := p.PostTypes[targetPostType]; targetPostType == "" || !ok {
-			def := defaultPostType(p.PostTypes)
-			if def == "" {
-				return nil, fmt.Errorf("%w: %s has no post types", ErrInvalidPlatform, targetPlatformID)
-			}
-			// Only a fallback worth reporting if the caller asked for a
-			// specific (non-empty) type that didn't fit the platform.
-			fellBack = targetPostType != "" && targetPostType != def
-			targetPostType = def
-		}
-	} else {
-		// Platform-less draft clone: no post type either.
-		targetPostType = ""
-	}
-
-	// Title convention.
-	title := src.Title
-	switch {
-	case opts.TitleOverride != nil:
-		title = *opts.TitleOverride
-	case crossPlatform && targetPlatform != nil:
-		title = src.Title + " (" + targetPlatform.Name + ")"
-	}
-
-	// Content.
 	content := src.Content
 	if opts.ContentOverride != nil {
 		content = *opts.ContentOverride
 	}
 	adapted := content != src.Content
+	// An adapted body would diverge from the stored segments, and a
+	// retarget to a single-message type demotes the clone.
+	keepThread := tgt.postType == models.PostTypeThread && !adapted
 
 	newID, err := models.NewID()
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
+	clone := buildClone(src, tgt, opts, newID, content, keepThread, now)
+
+	var copiedKeys []string
+	committed := false
+	defer func() {
+		if !committed {
+			s.cleanupKeys(context.Background(), copiedKeys)
+		}
+	}()
+
+	// Blobs are copied before the transaction so the rows reference keys
+	// that already exist.
+	newAtts, copiedKeys, err := s.copyAttachments(ctx, src.ID, newID, opts, now, keepThread)
+	if err != nil {
+		return nil, err
+	}
+	versionID, err := models.NewID()
+	if err != nil {
+		return nil, err
+	}
+	version := &models.PostVersion{
+		ID:            versionID,
+		PostID:        newID,
+		VersionNumber: 1,
+		Content:       content,
+		Note:          fmt.Sprintf("Cloned from #%s", src.ID),
+		Creator:       postaudit.CreatorFor(opts.Trigger),
+	}
+	logEntry, err := postaudit.NewLog(newID, models.PostLogEventPostCloned, opts.Actor, "post cloned from #"+src.ID, map[string]any{
+		"source_post_id":  src.ID,
+		"new_post_id":     newID,
+		"target_platform": tgt.platformID,
+		"adapted":         adapted,
+		"trigger":         opts.Trigger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := s.insert(ctx, clone, newAtts, version, logEntry); err != nil {
+		return nil, err
+	}
+	committed = true
+
+	// Dotted bus wire type; the persisted post_logs / activity taxonomy
+	// stays "post_cloned".
+	postaudit.Publish(s.hub, newID, "post.cloned", opts.Actor, map[string]any{
+		"sourcePostId": src.ID,
+		"newPostId":    newID,
+		"adapted":      adapted,
+	})
+
+	return &Result{
+		Post:             clone,
+		Adapted:          adapted,
+		PostTypeFellBack: tgt.fellBack,
+		ResolvedPostType: tgt.postType,
+	}, nil
+}
+
+// resolveTarget picks the clone's platform and post type. An unknown
+// platform or one without post types yields ErrInvalidPlatform; a
+// requested post type the platform lacks falls back to its default.
+func (s *Service) resolveTarget(ctx context.Context, src *models.Post, opts Options) (target, error) {
+	tgt := target{platformID: cmp.Or(opts.TargetPlatformID, src.PlatformID)}
+	if tgt.platformID == "" {
+		return tgt, nil
+	}
+	p, err := s.platforms.GetByID(ctx, tgt.platformID)
+	if err != nil {
+		return target{}, postaudit.NotFound(err, fmt.Errorf("%w: %s", ErrInvalidPlatform, tgt.platformID))
+	}
+	tgt.platform = p
+	tgt.postType = cmp.Or(opts.TargetPostType, src.PlatformPostType)
+	if _, ok := p.PostTypes[tgt.postType]; tgt.postType != "" && ok {
+		return tgt, nil
+	}
+	def := defaultPostType(p.PostTypes)
+	if def == "" {
+		return target{}, fmt.Errorf("%w: %s has no post types", ErrInvalidPlatform, tgt.platformID)
+	}
+	// Only a requested (non-empty) type that didn't fit is worth reporting.
+	tgt.fellBack = tgt.postType != "" && tgt.postType != def
+	tgt.postType = def
+	return tgt, nil
+}
+
+// buildClone assembles the new draft row from src per opts.
+func buildClone(src *models.Post, tgt target, opts Options, newID, content string, keepThread bool, now time.Time) *models.Post {
+	title := src.Title
+	switch {
+	case opts.TitleOverride != nil:
+		title = *opts.TitleOverride
+	case tgt.platform != nil && tgt.platformID != src.PlatformID:
+		title = src.Title + " (" + tgt.platform.Name + ")"
+	}
 
 	clone := &models.Post{
 		ID:               newID,
 		CampaignID:       src.CampaignID,
-		PlatformID:       targetPlatformID,
-		PlatformPostType: targetPostType,
+		PlatformID:       tgt.platformID,
+		PlatformPostType: tgt.postType,
 		Title:            title,
 		Content:          content,
 		MediaURLs:        models.StringSlice{},
@@ -228,11 +289,6 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 		UpdatedAt:        now,
 		UsedAssets:       []models.Asset{},
 	}
-	// Keep the thread's ordered segments only when the clone remains a
-	// thread and the content wasn't adapted (an adapted body would diverge from
-	// the stored segments). A retarget to a single-message type demotes the
-	// clone — segments stay empty, matching the PUT demotion path.
-	keepThread := targetPostType == models.PostTypeThread && !adapted
 	if keepThread {
 		clone.ThreadSegments = append(models.ThreadSegments{}, src.ThreadSegments...)
 	}
@@ -250,48 +306,17 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 	if opts.CopyPhase {
 		clone.CampaignTypePhaseID = src.CampaignTypePhaseID
 	}
+	return clone
+}
 
-	// Deep-copy attachments in object storage before the DB transaction
-	// so the rows reference keys that already exist. copiedKeys lets us
-	// roll the storage side back if the transaction fails.
-	newAtts, copiedKeys, err := s.copyAttachments(ctx, src.ID, newID, opts, now, keepThread)
-	if err != nil {
-		s.cleanupKeys(context.Background(), copiedKeys)
-		return nil, err
-	}
-
-	versionID, err := models.NewID()
-	if err != nil {
-		s.cleanupKeys(context.Background(), copiedKeys)
-		return nil, err
-	}
-	// post_versions.creator is a role enum ('user' | 'assistant'), not a
-	// user id — an assistant-driven clone (which may adapt content) is
-	// "assistant"; anything else is "user".
-	versionCreator := "user"
-	if opts.Trigger == TriggerAssistant {
-		versionCreator = "assistant"
-	}
-	version := &models.PostVersion{
-		ID:            versionID,
-		PostID:        newID,
-		VersionNumber: 1,
-		Content:       content,
-		Note:          fmt.Sprintf("Cloned from #%s", src.ID),
-		Creator:       versionCreator,
-	}
-
-	logEntry, err := buildLogEntry(newID, src.ID, targetPlatformID, opts.Actor, opts.Trigger, adapted)
-	if err != nil {
-		s.cleanupKeys(context.Background(), copiedKeys)
-		return nil, err
-	}
-
-	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+// insert writes the clone, its attachments, its v1 version and the
+// audit entry in one transaction.
+func (s *Service) insert(ctx context.Context, clone *models.Post, atts []*models.PostAttachment, version *models.PostVersion, logEntry *models.PostLog) error {
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(clone).Exec(ctx); err != nil {
 			return err
 		}
-		for _, a := range newAtts {
+		for _, a := range atts {
 			if _, err := tx.NewInsert().Model(a).Exec(ctx); err != nil {
 				return err
 			}
@@ -299,32 +324,17 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 		if _, err := tx.NewInsert().Model(version).Exec(ctx); err != nil {
 			return err
 		}
-		if s.logs != nil {
-			if err := s.logs.AppendTx(ctx, tx, logEntry); err != nil {
-				return err
-			}
+		if s.logs == nil {
+			return nil
 		}
-		return nil
+		return s.logs.AppendTx(ctx, tx, logEntry)
 	})
-	if err != nil {
-		s.cleanupKeys(context.Background(), copiedKeys)
-		return nil, err
-	}
-
-	s.publishCloned(src.ID, newID, opts.Actor, adapted)
-
-	return &Result{
-		Post:             clone,
-		Adapted:          adapted,
-		PostTypeFellBack: fellBack,
-		ResolvedPostType: targetPostType,
-	}, nil
 }
 
 // copyAttachments duplicates the source post's attachments to newPostID,
 // copying each blob (and thumbnail) to a fresh key. Returns the new
-// rows (to be inserted in the caller's transaction) and the list of
-// keys written (for rollback on a later failure).
+// rows (to be inserted in the caller's transaction) and the keys
+// written, which the caller deletes if a later step fails.
 func (s *Service) copyAttachments(
 	ctx context.Context,
 	srcPostID,
@@ -340,15 +350,9 @@ func (s *Service) copyAttachments(
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// Without object storage we cannot copy the blobs, so refuse rather
-	// than write attachment rows that reference never-copied objects.
-	if s.store == nil {
-		for _, a := range srcAtts {
-			if a.S3Key != "" || a.ThumbnailS3Key != "" {
-				return nil, nil, ErrStorageUnavailable
-			}
-		}
+	// Refuse rather than write rows that reference never-copied objects.
+	if s.store == nil && slices.ContainsFunc(srcAtts, hasBlob) {
+		return nil, nil, ErrStorageUnavailable
 	}
 
 	var newAtts []*models.PostAttachment
@@ -358,29 +362,20 @@ func (s *Service) copyAttachments(
 		if err != nil {
 			return nil, copiedKeys, err
 		}
-
-		newKey := storage.TenantKey(ctx, "post-attachments/"+newPostID+"/"+attID+path.Ext(a.S3Key))
-		if s.store != nil && a.S3Key != "" {
-			if err := s.store.Copy(ctx, a.S3Key, newKey); err != nil {
-				return nil, copiedKeys, err
-			}
-			copiedKeys = append(copiedKeys, newKey)
+		prefix := "post-attachments/" + newPostID + "/" + attID
+		newKey := storage.TenantKey(ctx, prefix+path.Ext(a.S3Key))
+		if err := s.copyBlob(ctx, a.S3Key, newKey, &copiedKeys); err != nil {
+			return nil, copiedKeys, err
 		}
-
 		var newThumb string
 		if a.ThumbnailS3Key != "" {
-			newThumb = storage.TenantKey(ctx, "post-attachments/"+newPostID+"/"+attID+".thumb.png")
-			if s.store != nil {
-				if err := s.store.Copy(ctx, a.ThumbnailS3Key, newThumb); err != nil {
-					return nil, copiedKeys, err
-				}
-				copiedKeys = append(copiedKeys, newThumb)
+			newThumb = storage.TenantKey(ctx, prefix+".thumb.png")
+			if err := s.copyBlob(ctx, a.ThumbnailS3Key, newThumb, &copiedKeys); err != nil {
+				return nil, copiedKeys, err
 			}
 		}
 
-		// Carry which thread segment the media belonged to only when
-		// the clone stays a thread; otherwise it becomes an ordinary (NULL)
-		// attachment.
+		// Segment membership only survives when the clone stays a thread.
 		var segIdx *int
 		if keepThread {
 			segIdx = a.SegmentIndex
@@ -406,6 +401,23 @@ func (s *Service) copyAttachments(
 	return newAtts, copiedKeys, nil
 }
 
+func hasBlob(a models.PostAttachment) bool {
+	return a.S3Key != "" || a.ThumbnailS3Key != ""
+}
+
+// copyBlob copies srcKey to dstKey and records dstKey in copied. It is a
+// no-op when storage is disabled or srcKey is empty.
+func (s *Service) copyBlob(ctx context.Context, srcKey, dstKey string, copied *[]string) error {
+	if s.store == nil || srcKey == "" {
+		return nil
+	}
+	if err := s.store.Copy(ctx, srcKey, dstKey); err != nil {
+		return err
+	}
+	*copied = append(*copied, dstKey)
+	return nil
+}
+
 func (s *Service) cleanupKeys(ctx context.Context, keys []string) {
 	if s.store == nil {
 		return
@@ -415,65 +427,14 @@ func (s *Service) cleanupKeys(ctx context.Context, keys []string) {
 	}
 }
 
-func (s *Service) publishCloned(srcID, newID, actor string, adapted bool) {
-	if s.hub == nil {
-		return
-	}
-	evID, err := models.NewID()
-	if err != nil {
-		return
-	}
-	_ = s.hub.Publish(context.Background(), eventhub.Event{
-		ID:    evID,
-		Topic: "entity:post:" + newID,
-		// Dotted bus wire type. Distinct from the post_logs.event_type
-		// and tenant_activity_events taxonomy constants, which stay "post_cloned"
-		// (persisted history + stability contract — do not rename those).
-		Type:   "post.cloned",
-		UserID: actor,
-		Payload: map[string]any{
-			"sourcePostId": srcID,
-			"newPostId":    newID,
-			"adapted":      adapted,
-		},
-	})
-}
-
-func buildLogEntry(newID, srcID, targetPlatform, actor, trigger string, adapted bool) (*models.PostLog, error) {
-	logID, err := models.NewID()
-	if err != nil {
-		return nil, err
-	}
-	payload, _ := json.Marshal(map[string]any{
-		"source_post_id":  srcID,
-		"new_post_id":     newID,
-		"target_platform": targetPlatform,
-		"adapted":         adapted,
-		"trigger":         trigger,
-	})
-	return &models.PostLog{
-		ID:        logID,
-		PostID:    newID,
-		EventType: models.PostLogEventPostCloned,
-		Actor:     actor,
-		Summary:   "post cloned from #" + srcID,
-		Payload:   logs.SanitizeAndCap(string(payload)),
-	}, nil
-}
-
 // defaultPostType picks a platform's default post type, preferring
 // "text-post" and otherwise the lexicographically first slug.
 func defaultPostType(types models.PostTypeMap) string {
 	if _, ok := types["text-post"]; ok {
 		return "text-post"
 	}
-	keys := make([]string, 0, len(types))
-	for k := range types {
-		keys = append(keys, k)
+	if len(types) == 0 {
+		return ""
 	}
-	slices.Sort(keys)
-	if len(keys) > 0 {
-		return keys[0]
-	}
-	return ""
+	return slices.Min(slices.Collect(maps.Keys(types)))
 }
