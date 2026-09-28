@@ -16,6 +16,30 @@ func TestKnownDeviceRepository(t *testing.T) {
 	repo := repository.NewKnownDeviceRepository(db)
 	ctx := t.Context()
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := db.NewInsert().Model(&models.Account{ID: "acc", Email: "a@x.io", PasswordHash: "x", Name: "A"}).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	enrolled := func() bool {
+		t.Helper()
+		ok, err := repo.LockEnrollment(ctx, nil, "acc")
+		if err != nil {
+			t.Fatalf("lock enrollment: %v", err)
+		}
+		return ok
+	}
+	if enrolled() {
+		t.Fatal("a new account has not enrolled a device")
+	}
+	if err := repo.MarkEnrolled(ctx, nil, "acc", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkEnrolled(ctx, nil, "acc", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if !enrolled() {
+		t.Fatal("MarkEnrolled must stick")
+	}
 
 	if ok, err := repo.Touch(ctx, "acc", "h1", "203.0.113.1", "ua", "Chrome on macOS", now); err != nil || ok {
 		t.Fatalf("touch of an unknown device = %v, %v; want false", ok, err)
@@ -38,7 +62,7 @@ func TestKnownDeviceRepository(t *testing.T) {
 		t.Fatalf("same hash, other account: %v", err)
 	}
 
-	if n, err := repo.CountForAccount(ctx, nil, "acc"); err != nil || n != 1 {
+	if n, err := db.NewSelect().Model((*models.KnownDevice)(nil)).Where("account_id = ?", "acc").Count(ctx); err != nil || n != 1 {
 		t.Fatalf("count = %d, %v; want 1", n, err)
 	}
 	if ok, err := repo.Touch(ctx, "acc", "h1", "203.0.113.1", "ua", "Chrome on macOS", now.Add(time.Minute)); err != nil || !ok {
@@ -48,8 +72,14 @@ func TestKnownDeviceRepository(t *testing.T) {
 	if n, err := repo.DeleteUnseenSince(ctx, now.Add(30*time.Second)); err != nil || n != 1 {
 		t.Fatalf("stale sweep deleted %d, %v; want only the untouched device", n, err)
 	}
+	if !enrolled() {
+		t.Fatal("the retention sweep must not clear the enrolment")
+	}
 	if n, err := repo.DeleteForAccount(ctx, nil, "acc"); err != nil || n != 1 {
 		t.Fatalf("delete for account = %d, %v; want 1", n, err)
+	}
+	if enrolled() {
+		t.Fatal("DeleteForAccount must clear the enrolment")
 	}
 }
 

@@ -18,6 +18,12 @@ CREATE TABLE account_known_devices (
 -- The retention sweep drops devices unseen for longer than the cookie lives.
 CREATE INDEX idx_account_known_devices_last_seen ON account_known_devices (last_seen_at);
 
+-- Set when an account first enrols a device, cleared only by the secure-account
+-- action. "First device, no alert" is decided by this marker, not by counting
+-- rows: the retention sweep can remove every device of a dormant account, and
+-- the next unfamiliar login to it must still be reported.
+ALTER TABLE accounts ADD COLUMN devices_enrolled_at TIMESTAMPTZ;
+
 -- An alert token is the capability behind the email's "This wasn't me" link.
 -- user_id/tenant_id are the membership the login opened, kept for attribution
 -- only: the membership can be gone by the time the link is used, so they carry

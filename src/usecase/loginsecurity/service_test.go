@@ -78,7 +78,11 @@ func newFixture(t *testing.T) *fixture {
 	f.svc.now = func() time.Time { return f.now }
 
 	ctx := t.Context()
-	acc := &models.Account{ID: "acc-1", Email: "jane@acme.com", PasswordHash: "x", Name: "Jane"}
+	pw, err := models.HashPassword("old-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc := &models.Account{ID: "acc-1", Email: "jane@acme.com", PasswordHash: pw, Name: "Jane"}
 	if _, err := db.NewInsert().Model(acc).Exec(ctx); err != nil {
 		t.Fatalf("seed account: %v", err)
 	}
@@ -210,6 +214,20 @@ func TestObserveCapsAlertsPerHour(t *testing.T) {
 	}
 }
 
+// The retention sweep can remove every device of a dormant account; that must
+// not turn its next unfamiliar login back into a silent "first device".
+func TestObserveAlertsAfterRetentionEmptiedDevices(t *testing.T) {
+	f := newFixture(t)
+	f.loginFrom(t, "")
+	if _, err := f.db.NewDelete().Model((*models.KnownDevice)(nil)).Where("account_id = ?", f.login.AccountID).Exec(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.loginFrom(t, "")
+	if f.emails.count() != 1 {
+		t.Fatalf("login after the sweep emptied the devices sent %d alerts, want 1", f.emails.count())
+	}
+}
+
 func TestEnrollIsSilentAndMakesTheDeviceKnown(t *testing.T) {
 	f := newFixture(t)
 	tok := f.svc.Enroll(t.Context(), f.login)
@@ -258,6 +276,13 @@ func TestPreviewAndSecure(t *testing.T) {
 	}
 	if f.devices(t) != 0 {
 		t.Fatal("securing must forget every device")
+	}
+	acc := new(models.Account)
+	if err := f.db.NewSelect().Model(acc).Where("a.id = ?", "acc-1").Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := models.VerifyPassword("old-password", acc.PasswordHash); ok {
+		t.Fatal("securing must stop the old password from working")
 	}
 	if n := f.count(t, (*models.LoginAlertToken)(nil), "account_id = ? AND consumed_at IS NULL", "acc-1"); n != 0 {
 		t.Fatalf("%d alert tokens still pending", n)

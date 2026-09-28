@@ -187,8 +187,16 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 		TenantID:  user.TenantID,
 		ExpiresAt: time.Now().UTC().Add(sessionTTL),
 	}
-	if err := h.sessionRepo.Create(reqCtx(c), session); err != nil {
+	// The password was verified against account.PasswordHash outside any
+	// transaction; the session is only created if that is still the hash, so a
+	// login can't outlive a password reset or secure-account action that
+	// committed in between.
+	created, err := h.sessionRepo.CreateForCredential(reqCtx(c), session, account.PasswordHash)
+	if err != nil {
 		return err
+	}
+	if !created {
+		return h.loginFailed(c, req.Email)
 	}
 
 	h.activity.Record(h.authCtx(c, session.TenantID, user.ID), activity.CategoryAuthentication, "login",
