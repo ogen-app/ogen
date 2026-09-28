@@ -1,6 +1,9 @@
 package modelconfig
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestCatalogIntegrity guards the shape the resolver, reconcile, and gRPC
 // validation all assume: every slot has a real capability, the embed slot is
@@ -24,7 +27,17 @@ func TestCatalogIntegrity(t *testing.T) {
 				t.Fatalf("duplicate slot %s", key)
 			}
 			seen[key] = true
-			if s.Capability != CapabilityChat && s.Capability != CapabilityEmbed {
+			switch s.Capability {
+			case CapabilityChat:
+				if !slices.Equal(s.Vendors, []string{VendorAnthropic}) {
+					t.Fatalf("%s: chat slot vendors = %v, want anthropic only", key, s.Vendors)
+				}
+			case CapabilityVision, CapabilityTranscribe:
+				if !slices.Equal(s.Vendors, []string{VendorGemini}) {
+					t.Fatalf("%s: service slot vendors = %v, want gemini only", key, s.Vendors)
+				}
+			case CapabilityEmbed:
+			default:
 				t.Fatalf("%s: bad capability %q", key, s.Capability)
 			}
 		}
@@ -40,6 +53,14 @@ func TestCatalogIntegrity(t *testing.T) {
 	}
 	if _, ok := LookupSlot(FlowPostAssistant, SlotWriter); !ok {
 		t.Fatal("missing post_assistant/writer")
+	}
+	for _, s := range []string{SlotClassify, SlotExtract, SlotEscalate, SlotAltText} {
+		if sl, ok := LookupSlot(FlowVision, s); !ok || sl.Capability != CapabilityVision || sl.GlobalOnly {
+			t.Fatalf("vision/%s = %+v ok=%v, want per-tier vision slot", s, sl, ok)
+		}
+	}
+	if sl, ok := LookupSlot(FlowTranscribe, SlotMain); !ok || sl.Capability != CapabilityTranscribe || sl.GlobalOnly {
+		t.Fatalf("transcribe/main = %+v ok=%v, want per-tier transcribe slot", sl, ok)
 	}
 	if _, ok := LookupSlot("nope", "nope"); ok {
 		t.Fatal("unknown (flow, slot) resolved")
@@ -67,5 +88,44 @@ func TestSatisfies(t *testing.T) {
 	embed := ModelCapabilities{Capability: CapabilityEmbed, EmbedDims: 1536}
 	if unmet := Satisfies(embed, Requirements{EmbedDims: 3072}); len(unmet) != 1 {
 		t.Fatalf("wrong-dim embed unmet=%v, want 1", unmet)
+	}
+}
+
+// TestSupports covers the modality mapping: vision/transcribe slots take a chat
+// model with the matching input, never a text-only chat or an embed model.
+func TestSupports(t *testing.T) {
+	text := ModelCapabilities{Capability: CapabilityChat}
+	multimodal := ModelCapabilities{Capability: CapabilityChat, VisionInput: true, AudioInput: true}
+	embed := ModelCapabilities{Capability: CapabilityEmbed, VisionInput: true}
+
+	cases := []struct {
+		name string
+		caps ModelCapabilities
+		want Capability
+		ok   bool
+	}{
+		{"text chat → chat", text, CapabilityChat, true},
+		{"text chat → vision", text, CapabilityVision, false},
+		{"text chat → transcribe", text, CapabilityTranscribe, false},
+		{"multimodal → vision", multimodal, CapabilityVision, true},
+		{"multimodal → transcribe", multimodal, CapabilityTranscribe, true},
+		{"multimodal → embed", multimodal, CapabilityEmbed, false},
+		{"embed with vision flag → vision", embed, CapabilityVision, false},
+		{"embed → embed", embed, CapabilityEmbed, true},
+	}
+	for _, c := range cases {
+		if got := c.caps.Supports(c.want); got != c.ok {
+			t.Errorf("%s: Supports = %v, want %v", c.name, got, c.ok)
+		}
+	}
+}
+
+func TestAllowsVendor(t *testing.T) {
+	if !(Slot{}).AllowsVendor("anything") {
+		t.Fatal("slot without an allowlist rejected a vendor")
+	}
+	s := Slot{Vendors: []string{VendorGemini}}
+	if !s.AllowsVendor(VendorGemini) || s.AllowsVendor(VendorAnthropic) {
+		t.Fatalf("gemini-only slot: gemini=%v anthropic=%v", s.AllowsVendor(VendorGemini), s.AllowsVendor(VendorAnthropic))
 	}
 }

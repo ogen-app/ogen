@@ -117,6 +117,49 @@ func TestUnmetForSlot(t *testing.T) {
 	if u := unmetForSlot(chat, "does-not-exist"); len(u) == 0 {
 		t.Error("unknown model accepted")
 	}
+
+	extract, ok := modelconfig.LookupSlot(modelconfig.FlowVision, modelconfig.SlotExtract)
+	if !ok {
+		t.Fatal("vision/extract missing")
+	}
+	transcribe, ok := modelconfig.LookupSlot(modelconfig.FlowTranscribe, modelconfig.SlotMain)
+	if !ok {
+		t.Fatal("transcribe/main missing")
+	}
+	if u := unmetForSlot(extract, "gemini-2.5-pro"); len(u) != 0 {
+		t.Errorf("gemini-2.5-pro→vision/extract unmet=%v, want none", u)
+	}
+	if u := unmetForSlot(transcribe, "gemini-2.5-flash"); len(u) != 0 {
+		t.Errorf("gemini-2.5-flash→transcribe unmet=%v, want none", u)
+	}
+	if u := unmetForSlot(extract, "claude-sonnet-4-5-20250929"); len(u) == 0 {
+		t.Error("Claude model accepted into a vision slot")
+	}
+	if u := unmetForSlot(transcribe, "gemini-embedding-2"); len(u) == 0 {
+		t.Error("embed model accepted into the transcribe slot")
+	}
+}
+
+// TestListModelsVision lists exactly the models a vision slot accepts: the
+// multimodal Gemini models, not Claude and not the embedder.
+func TestListModelsVision(t *testing.T) {
+	resp, err := newModelConfigAdminService(nil, nil).ListModels(context.Background(), &modelconfigv1.ListModelsRequest{Capability: "vision"})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	got := map[string]bool{}
+	for _, m := range resp.GetModels() {
+		got[m.GetId()] = true
+		if m.GetVendor() != "gemini" {
+			t.Errorf("vision list includes %s (vendor %s)", m.GetId(), m.GetVendor())
+		}
+	}
+	if !got["gemini-2.5-flash"] || !got["gemini-2.5-pro"] {
+		t.Fatalf("vision list = %v, want gemini-2.5-flash and gemini-2.5-pro", got)
+	}
+	if got["gemini-embedding-2"] {
+		t.Fatal("vision list includes the embedding model")
+	}
 }
 
 // TestTestSlotModelWiring covers the static→live sequencing of TestSlotModel:
