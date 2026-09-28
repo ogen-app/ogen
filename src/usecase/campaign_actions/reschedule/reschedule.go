@@ -1,5 +1,5 @@
 // Package reschedule computes new publish dates for a campaign's non-published
-// posts (CON-115). Plan is a pure function — no I/O — so it is unit-testable
+// posts. Plan is a pure function — no I/O — so it is unit-testable
 // without a database or model. It reassigns the ScheduledAt of draft and
 // ready-for-publish posts, spreading each phase's eligible posts evenly across
 // that phase's slice of the campaign timeline (posts with no phase spread
@@ -37,7 +37,7 @@ func Plan(campaign *models.Campaign, posts []models.Post) []Assignment {
 	}
 	start, end := campaignphase.Date(*campaign.StartDate), campaignphase.Date(*campaign.EndDate)
 
-	// CON-166: each phase's slice is the campaign's effective phase plan — its
+	// Each phase's slice is the campaign's effective phase plan — its
 	// manual plan when set, else the even split of the dates.
 	phases := campaignphase.SortedPhases(campaign)
 	windows, _ := campaignphase.Resolve(campaign)

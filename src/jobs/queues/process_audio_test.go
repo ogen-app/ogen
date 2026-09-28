@@ -224,7 +224,7 @@ func (f *fakeContent) SetContent(_ context.Context, id, content string) error {
 }
 
 // TestProcessAudio_WritesTranscriptToContent: a completed run stores the
-// assembled transcript on asset.Content (CON-312), so a later title-only PUT has
+// assembled transcript on asset.Content, so a later title-only PUT has
 // real content to keep.
 func TestProcessAudio_WritesTranscriptToContent(t *testing.T) {
 	client := &fakeAudioClient{

@@ -44,7 +44,7 @@ func (h *UsageHandler) Register(app *fiber.App) {
 	g.Get("/limits", h.auth, h.GetLimits)
 	// Raising a cap or disabling enforcement is an operator action, not tenant
 	// self-service — otherwise a tenant could lift its own spend limit. The
-	// user model has no admin/owner role yet (CON-86 §15), so the write is
+	// user model has no admin/owner role yet, so the write is
 	// gated behind an operator token (X-Admin-Token == USAGE_ADMIN_TOKEN) on
 	// top of auth. Empty token fails closed. Operator-only RBAC is the
 	// follow-up that replaces this stopgap.

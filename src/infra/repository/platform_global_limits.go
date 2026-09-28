@@ -12,7 +12,7 @@ import (
 )
 
 // PlatformGlobalLimitsRepository persists the single-row cross-platform safety
-// ceilings (CON-292). The row always exists (seeded by migration); Get returns
+// ceilings. The row always exists (seeded by migration); Get returns
 // sql.ErrNoRows only on a fresh/broken DB, which callers treat as "fall back to
 // the built-in defaults".
 type PlatformGlobalLimitsRepository interface {

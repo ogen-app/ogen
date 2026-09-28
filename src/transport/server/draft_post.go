@@ -12,7 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 )
 
-// initDraftPost registers the draftPost generation flow (CON-207) on the shared
+// initDraftPost registers the draftPost generation flow on the shared
 // Genkit instance and returns an SSE-capable callback for the campaign assistant
 // tool. Copywriting runs on the generation role (Sonnet-tier, cfg.ModelID), like
 // content_plan; MaxOutputTokens is left at 0 so the flow uses its own default.

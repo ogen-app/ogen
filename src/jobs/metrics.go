@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Metrics surfaces Ogen's job-queue health to operators (CON-69 §13).
+// Metrics surfaces Ogen's job-queue health to operators.
 // Counters are exposed via expvar at /debug/vars; latency averages
 // live as a small in-process histogram so we don't pull a metrics
 // library for the MVP. River's tables cover per-queue depth
@@ -33,11 +33,11 @@ var (
 	// Reconciliation.
 	ReconciliationTimeouts = expvar.NewInt("ogen_jobs_reconciliation_timeouts")
 
-	// Manual-publish-due sweep (CON-285): posts past their manual-publish time
+	// Manual-publish-due sweep: posts past their manual-publish time
 	// that triggered a post.manual_publish_due notification this tick.
 	ManualPublishDueSwept = expvar.NewInt("ogen_jobs_manual_publish_due_swept")
 
-	// Analytics refresh lifecycle (CON-93 §11).
+	// Analytics refresh lifecycle.
 	ZernioAnalyticsRefreshSucceeded = expvar.NewInt("ogen_jobs_zernio_analytics_refresh_succeeded")
 	ZernioAnalyticsRefreshFailed    = expvar.NewInt("ogen_jobs_zernio_analytics_refresh_failed")
 	// ZernioAnalyticsPostsUpserted counts posts whose metrics actually CHANGED
@@ -48,12 +48,12 @@ var (
 	ZernioAnalyticsPostsUnchanged  = expvar.NewInt("ogen_jobs_zernio_analytics_posts_unchanged")
 	ZernioAnalyticsPostsDueSkipped = expvar.NewInt("ogen_jobs_zernio_analytics_posts_due_skipped")
 
-	// Follower refresh lifecycle (CON-153).
+	// Follower refresh lifecycle.
 	ZernioFollowerRefreshSucceeded = expvar.NewInt("ogen_jobs_zernio_follower_refresh_succeeded")
 	ZernioFollowerRefreshFailed    = expvar.NewInt("ogen_jobs_zernio_follower_refresh_failed")
 	ZernioFollowerPointsInserted   = expvar.NewInt("ogen_jobs_zernio_follower_points_inserted")
 
-	// External-post verification lifecycle (CON-153).
+	// External-post verification lifecycle.
 	ZernioExternalVerifySucceeded = expvar.NewInt("ogen_jobs_zernio_external_verify_succeeded")
 	ZernioExternalVerifyFailed    = expvar.NewInt("ogen_jobs_zernio_external_verify_failed")
 	ZernioExternalVerifyNotFound  = expvar.NewInt("ogen_jobs_zernio_external_verify_not_found")
@@ -62,7 +62,7 @@ var (
 	ZernioAccountDisconnectSucceeded = expvar.NewInt("ogen_jobs_zernio_account_disconnect_succeeded")
 	ZernioAccountDisconnectFailed    = expvar.NewInt("ogen_jobs_zernio_account_disconnect_failed")
 
-	// Connection-expiry notification sweep (CON-219). Detected counts every
+	// Connection-expiry notification sweep. Detected counts every
 	// account entering a notify stage on a tick (may repeat across ticks until
 	// reconnected); Notified counts emails actually enqueued (deduped).
 	ZernioHealthSweepSucceeded             = expvar.NewInt("ogen_jobs_zernio_health_sweep_succeeded")

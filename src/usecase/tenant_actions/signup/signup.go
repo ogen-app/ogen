@@ -1,7 +1,7 @@
-// Package signup owns the transactional self-service signup use case (CON-97):
+// Package signup owns the transactional self-service signup use case:
 // atomically create a tenant, its owning account + first membership user, and a
-// session, and enqueue the profile-bootstrap (CON-102) and lifecycle-email
-// (CON-154) jobs in the same transaction so they exist iff the tenant does.
+// session, and enqueue the profile-bootstrap and lifecycle-email
+// jobs in the same transaction so they exist iff the tenant does.
 //
 // It is the application-layer counterpart to the TenantsHandler transport: the
 // handler parses the request, throttles per IP, sets the session cookie and
@@ -26,12 +26,12 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// sessionTTL mirrors handlers.sessionTTL (CON-147): a fresh signup opens a
+// sessionTTL mirrors handlers.sessionTTL: a fresh signup opens a
 // session that lives as long as a login's.
 const sessionTTL = 7 * 24 * time.Hour
 
-// ErrEmailInUse is returned when the email already identifies an account
-// (CON-147). The transport maps it to 409; an existing account should log in and
+// ErrEmailInUse is returned when the email already identifies an account.
+// The transport maps it to 409; an existing account should log in and
 // create a workspace instead.
 var ErrEmailInUse = errors.New("email already in use")
 
@@ -93,7 +93,7 @@ func New(db *bun.DB, accounts repository.AccountRepository, tenants repository.T
 // SetEmailEnqueuer wires the lifecycle-email enqueuer (nil-safe: no mail sent).
 func (s *Service) SetEmailEnqueuer(e EmailEnqueuer) { s.emails = e }
 
-// SetHarborEnqueuer wires the new-tenant operator-notification enqueuer (CON-229).
+// SetHarborEnqueuer wires the new-tenant operator-notification enqueuer.
 // nil-safe: no webhook is enqueued.
 func (s *Service) SetHarborEnqueuer(e HarborEnqueuer) { s.harbor = e }
 
@@ -108,7 +108,7 @@ func (s *Service) clock() time.Time {
 // when the email already identifies an account — both from the up-front check
 // and, under a race, from the accounts.email unique-constraint backstop.
 func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
-	// Email uniquely identifies an ACCOUNT (CON-147). Reject a duplicate up front;
+	// Email uniquely identifies an ACCOUNT. Reject a duplicate up front;
 	// the unique constraint below is the TOCTOU backstop.
 	if _, err := s.accounts.GetByEmail(ctx, in.Email); err == nil {
 		return nil, ErrEmailInUse
@@ -143,12 +143,12 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 	}
 
 	now := s.clock()
-	// CON-208: tenant.tier_id is required (NOT NULL). New workspaces start on the
+	// tenant.tier_id is required (NOT NULL). New workspaces start on the
 	// seeded default tier; Harbor reassigns them later over the gRPC admin surface.
 	tenant := &models.Tenant{ID: tenantID, Name: in.TenantName, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now}
 	// Identity (the credential) lives on the account; the users row is this
-	// account's membership of the new workspace (CON-147). The signup user creates
-	// the workspace, so they are its first owner (CON-26).
+	// account's membership of the new workspace. The signup user creates
+	// the workspace, so they are its first owner.
 	account := &models.Account{ID: accountID, Email: in.Email, PasswordHash: hash, Name: in.UserName, CreatedAt: now, UpdatedAt: now}
 	user := &models.User{ID: userID, AccountID: accountID, TenantID: tenantID, Name: in.UserName, Email: in.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now}
 	session := &models.Session{ID: token, AccountID: accountID, UserID: userID, TenantID: tenantID, ExpiresAt: now.Add(sessionTTL), CreatedAt: now}
@@ -166,7 +166,7 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 		if _, err := tx.NewInsert().Model(session).Exec(ctx); err != nil {
 			return err
 		}
-		// CON-102: eagerly provision this tenant's Zernio profile in the
+		// Eagerly provision this tenant's Zernio profile in the
 		// background, enqueued inside THIS tx so the job exists iff the tenant
 		// does. The enqueue is a local DB insert; the Zernio call happens later in
 		// the worker, so signup never blocks on Zernio reachability.
@@ -175,7 +175,7 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 				return err
 			}
 		}
-		// CON-154: welcome (immediate) + onboarding drip (day 2/5/7) enqueued in
+		// Welcome (immediate) + onboarding drip (day 2/5/7) enqueued in
 		// this same tx, so a rolled-back signup queues no mail and a committed one
 		// durably queues exactly one welcome + drip.
 		if s.emails != nil {
@@ -186,7 +186,7 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 				return err
 			}
 		}
-		// CON-229: notify operators of the new registration, enqueued in this same
+		// Notify operators of the new registration, enqueued in this same
 		// tx so a rolled-back signup notifies no one. The job POSTs a signed webhook
 		// to Harbor, which resolves the admin recipients and calls back the send RPC.
 		if s.harbor != nil {

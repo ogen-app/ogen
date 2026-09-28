@@ -34,7 +34,7 @@ func runCampaignAssistant(
 	start := time.Now()
 	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "instruction_len", len(req.Instruction))
 
-	// Enforcement gate (CON-86 FR9): block before any provider call when the
+	// Enforcement gate: block before any provider call when the
 	// tenant is already over a cap in enforce mode. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
@@ -54,10 +54,10 @@ func runCampaignAssistant(
 			return
 		}
 		publishAssistantFinalised(cfg.Hub, req.CampaignID, finaliseOwnerID, out, retErr)
-		// CON-242: a persistent "content plan ready" notification — fired only
+		// A persistent "content plan ready" notification — fired only
 		// when this run actually generated a plan, not on every assistant turn.
 		notifyContentPlanReady(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, out, retErr)
-		// CON-285: a durable assistant finished/failed row for the initiator
+		// A durable assistant finished/failed row for the initiator
 		// (skips the content-plan success, which the line above already covers).
 		notifyAssistantFinalised(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, out, retErr)
 	}()
@@ -81,7 +81,7 @@ func runCampaignAssistant(
 	tAfterLoad := time.Now()
 
 	// ── Assemble context + load history ──────────────────────────────────────
-	// CON-245: resolve the campaign's brand voice/audience/guardrails into the
+	// Resolve the campaign's brand voice/audience/guardrails into the
 	// context block (falls back to the legacy tone prose). Fails open.
 	brandResolved, brerr := brandresolve.Resolve(ctx, repos.Brands, campaign, nil)
 	if brerr != nil {
@@ -222,7 +222,7 @@ func runCampaignAssistant(
 		cfg.Provider.CallConfig(maxTokens),
 	)
 	genMs := time.Since(genStart).Milliseconds()
-	// A max-tool-iterations abort is recoverable, not fatal (CON-213): any tools
+	// A max-tool-iterations abort is recoverable, not fatal: any tools
 	// that ran committed their side effects and set st.*Result, and the streamed
 	// explanation is already in the scanner. Rather than 502ing and hiding
 	// committed work, fall through to finalise from whatever the turn produced.
@@ -251,7 +251,7 @@ func runCampaignAssistant(
 	}
 	// Record the planner's usage under this flow name; the sub-flows record
 	// their own under content_plan / enrich_brief, so there's no double count.
-	// resp is nil when the turn was cut short at MaxTurns (CON-213) — nothing to
+	// resp is nil when the turn was cut short at MaxTurns — nothing to
 	// record for that final partial turn; the heavy sub-flows already recorded.
 	if resp != nil {
 		cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "campaign_assistant", resp)
@@ -368,7 +368,7 @@ func runCampaignAssistant(
 	// Genuinely unusable — nothing came through.
 	if result.Explanation == "" {
 		raw := scanner.FullText()
-		// Cut short at MaxTurns with nothing committed and no prose (CON-213):
+		// Cut short at MaxTurns with nothing committed and no prose:
 		// the planner kept calling tools without ever answering. Give the user an
 		// actionable nudge instead of the generic parse-failure message.
 		if turnCutShort {
@@ -486,8 +486,7 @@ func runCampaignAssistant(
 // isMaxTurnsExceeded reports whether err is genkit's "exceeded maximum tool
 // call iterations" abort (ai/generate.go). It is matched on the stable message
 // substring — genkit returns it as a core.ABORTED error with no exported
-// sentinel — so a tool-happy planner degrades gracefully instead of 502ing
-// (CON-213).
+// sentinel — so a tool-happy planner degrades gracefully instead of 502ing.
 func isMaxTurnsExceeded(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "maximum tool call iterations")
 }

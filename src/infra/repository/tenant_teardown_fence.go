@@ -10,7 +10,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// TenantTeardownFence serializes a tenant's Zernio profile teardown (CON-203)
+// TenantTeardownFence serializes a tenant's Zernio profile teardown
 // against a concurrent lifecycle change (CON-190 restore). It is a deliberately
 // tiny type — not part of TenantRepository — so adding it doesn't ripple through
 // that interface's many fakes.

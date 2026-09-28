@@ -165,7 +165,7 @@ func TestEmailAdminRoundTrip(t *testing.T) {
 		t.Fatal("a2 has no provider id; body must be unavailable")
 	}
 
-	// Stored-body preference (CON-306): a row with BOTH a persisted body and a
+	// Stored-body preference: a row with BOTH a persisted body and a
 	// live-fetchable provider id must serve the stored body, so it still renders
 	// after the Resend message ages out. Seeded here (after the pagination
 	// assertions) so it doesn't perturb them.

@@ -13,7 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// BrandRepository is the persistence for the Brand module (CON-228): one
+// BrandRepository is the persistence for the Brand module: one
 // aggregate read plus per-section whole-resource writes. Everything is
 // tenant-scoped automatically by the TenantScoped bun hooks on the models —
 // these methods never add a tenant predicate by hand, and inserts never carry a
@@ -36,18 +36,18 @@ type BrandRepository interface {
 	// GetGuardrails returns nil when unset. Facts is the ledger projection.
 	GetGuardrails(ctx context.Context) (*models.BrandGuardrails, error)
 	// SaveGuardrails upserts the row and clears the stance; a non-nil facts
-	// reconciles the ledger by statement (CON-316 FR6).
+	// reconciles the ledger by statement.
 	SaveGuardrails(ctx context.Context, g *models.BrandGuardrails, facts []string, author *string) (FactsReconciled, error)
 	DeleteGuardrails(ctx context.Context) (bool, error) // leaves the ledger alone
 
-	// Facts ledger (CON-316).
+	// Facts ledger.
 	ListFacts(ctx context.Context) ([]models.BrandFact, error)
 	GetFact(ctx context.Context, id string) (*models.BrandFact, error) // nil when not in tenant
 	CreateFact(ctx context.Context, f *models.BrandFact) error         // ErrFactDuplicate, ErrFactLimit
 	UpdateFact(ctx context.Context, f *models.BrandFact) (*models.BrandFact, error)
 	DeleteFact(ctx context.Context, id string) (*models.BrandFact, error) // nil when not in tenant
 
-	// Guardrails stance (CON-316 FR7). nil = undecided.
+	// Guardrails stance. nil = undecided.
 	GetGuardrailsStance(ctx context.Context) (*models.BrandGuardrailsStanceRecord, error)
 	SetGuardrailsStance(ctx context.Context, s *models.BrandGuardrailsStanceRecord) (*models.BrandGuardrailsStanceRecord, error) // ErrGuardrailsExist
 	DeleteGuardrailsStance(ctx context.Context) error
@@ -115,7 +115,7 @@ func (r *brandRepository) GetAll(ctx context.Context) (*models.BrandData, error)
 	if templates == nil {
 		templates = []models.BrandTemplate{}
 	}
-	// CON-245: fill the derived draft/published usage counts from the post refs.
+	// Fill the derived draft/published usage counts from the post refs.
 	if err := r.fillUsage(ctx, voices, audiences); err != nil {
 		return nil, err
 	}
@@ -350,8 +350,8 @@ func (r *brandRepository) GetGuardrails(ctx context.Context) (*models.BrandGuard
 	return g, nil
 }
 
-// getGuardrailsRow reads the row as stored. Its facts column is legacy
-// (CON-316); callers project the ledger over it.
+// getGuardrailsRow reads the row as stored. Its facts column is legacy;
+// callers project the ledger over it.
 func (r *brandRepository) getGuardrailsRow(ctx context.Context) (*models.BrandGuardrails, error) {
 	g := new(models.BrandGuardrails)
 	err := r.db.NewSelect().Model(g).Limit(1).Scan(ctx)

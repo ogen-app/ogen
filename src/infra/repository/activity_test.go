@@ -75,7 +75,7 @@ func TestBackfillPostLogsToActivity_WatermarkTie(t *testing.T) {
 
 // TestBackfillPostLogsToActivity_ExcludesAtOrAfterCutoff proves the `before`
 // upper bound is exclusive: a row at the cutoff is skipped, one just before it is
-// migrated. This is what keeps the boot-time background backfill (CON-301) from
+// migrated. This is what keeps the boot-time background backfill from
 // racing the live post-transition path — which records its own activity event —
 // into a duplicate for the same post_log.
 func TestBackfillPostLogsToActivity_ExcludesAtOrAfterCutoff(t *testing.T) {

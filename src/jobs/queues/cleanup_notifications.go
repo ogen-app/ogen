@@ -13,7 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// CleanupNotificationsQueue reaps faded notifications (CON-242): rows past their
+// CleanupNotificationsQueue reaps faded notifications: rows past their
 // expires_at, plus read/dismissed rows older than the retention window. It
 // mirrors cleanup_post_logs / cleanup_email_logs — a marker payload, self-
 // registering, one attempt per tick.

@@ -19,7 +19,7 @@ import (
 const limitNotifyTTL = 7 * 24 * time.Hour
 
 // limitNotifier adapts near-limit crossings from the entitlement Limiter (CON-295
-// §12) to a durable notification (CON-242). It lives in the wiring layer so the
+// §12) to a durable notification. It lives in the wiring layer so the
 // domain never imports the notification center or the repository: on a crossing
 // it resolves the tenant's workspace owners and fans one spec out to their
 // inboxes. Best-effort throughout — a lookup or emit failure is logged, never

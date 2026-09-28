@@ -58,7 +58,7 @@ func (s *CampaignPlatforms) Scan(src any) error {
 	}
 }
 
-// ThreadSegment is one message in a threaded post (CON-284). A thread post
+// ThreadSegment is one message in a threaded post. A thread post
 // (PlatformPostType == PostTypeThread) is an ordered list of these: index 0 is
 // the root message, 1..N-1 the ordered replies. Only text lives here —
 // per-segment media is expressed by PostAttachment.SegmentIndex — so the array
@@ -107,7 +107,7 @@ func (s ThreadSegments) RootContent() string {
 }
 
 // JSONMap is a free-form map[string]any that serialises as a JSON object in a
-// jsonb column. Used for the tenant_activity_events payload (CON-125), where each
+// jsonb column. Used for the tenant_activity_events payload, where each
 // activity type carries its own small bag of fields.
 type JSONMap map[string]any
 
@@ -165,7 +165,7 @@ func (m *PostTypeMap) Scan(src any) error {
 }
 
 // StringMap is a generic map[string]string that serialises as a JSON object in
-// a jsonb column. Used for the email_templates variables docs (CON-154): key =
+// a jsonb column. Used for the email_templates variables docs: key =
 // the [[ .Var ]] placeholder name, value = a human explanation.
 type StringMap map[string]string
 

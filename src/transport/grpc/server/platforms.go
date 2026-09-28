@@ -1,4 +1,4 @@
-// CON-292: PlatformAdminService — the operator-facing (Harbor) gRPC surface for
+// PlatformAdminService — the operator-facing (Harbor) gRPC surface for
 // the data-driven platform catalog. Mirrors TenantAdminService and shares the
 // same bearer-token gate (see server.go). Generated stubs come from
 // gen/platforms/v1 (the buf.build/ogen-app/proto module; `make proto`).
@@ -25,7 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
-// expvar counters (CON-292 §15). Distinct "ogen_platform_admin_*" namespace.
+// expvar counters. Distinct "ogen_platform_admin_*" namespace.
 var (
 	platformAdminCreated             = expvar.NewInt("ogen_platform_admin_created")
 	platformAdminUpdated             = expvar.NewInt("ogen_platform_admin_updated")

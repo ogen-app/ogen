@@ -1,5 +1,5 @@
-// Package overview computes a read-only "quick overview" of a campaign
-// (CON-113): its brief, phases with per-phase post counts, and content
+// Package overview computes a read-only "quick overview" of a campaign:
+// its brief, phases with per-phase post counts, and content
 // distribution by status, platform, and content type. The same service backs
 // both the Campaign Assistant's getCampaignOverview tool and the
 // GET /api/campaigns/:id/overview REST endpoint.
@@ -32,7 +32,7 @@ type Overview struct {
 	GeneratedAt time.Time     `json:"generatedAt"`
 }
 
-// GoalProgress recaps a campaign's post-rate goal (CON-182): the per-period
+// GoalProgress recaps a campaign's post-rate goal: the per-period
 // target, how many committed posts land in each period, and whether the goal is
 // met per period and overall. "Committed" posts are those scheduled or
 // published, bucketed by their scheduled_at.
@@ -76,7 +76,7 @@ type PhaseInfo struct {
 	Purpose   string `json:"purpose"`
 	PostCount int    `json:"postCount"`
 	// StartDate/EndDate are the phase's effective window (YYYY-MM-DD, inclusive)
-	// from the campaign's phase plan (CON-166); null when the campaign is undated.
+	// from the campaign's phase plan; null when the campaign is undated.
 	StartDate *string `json:"startDate"`
 	EndDate   *string `json:"endDate"`
 }

@@ -1,7 +1,7 @@
 // Package platforms holds the per-platform attachment validator used
 // by both the soft pre-check that surfaces warnings on attachment
 // mutations and the hard validation that runs immediately before a
-// Zernio publish call (CON-73).
+// Zernio publish call.
 //
 // Constraint values themselves live on the `platforms` row — see
 // models.Platform.ImageConstraints. This package consumes those rules;
@@ -17,24 +17,24 @@ const (
 	RuleAllowedFormat       = "allowed_formats"
 	RuleAnimatedGIF         = "animated_gif_supported"
 	RuleMaxAttachmentsCount = "max_attachments_per_post"
-	RuleMaxPages            = "max_pages"             // CON-75: PDF page-count cap
-	RuleAttachmentMix       = "attachment_kind_mix"   // CON-75: image+PDF on the same post
-	RulePDFNotSupported     = "pdf_not_supported"     // CON-75: platform has no PDF rules
-	RuleMaxDuration         = "max_duration_seconds"  // CON-148: video length ceiling
-	RuleMinDuration         = "min_duration_seconds"  // CON-148: video length floor (Reels/Shorts)
-	RuleMaxResolution       = "max_resolution"        // CON-148: video frame-size cap
-	RuleAspectRatio         = "allowed_aspect_ratios" // CON-148: video aspect ratio
-	RuleVideoNotSupported   = "video_not_supported"   // CON-148: platform has no video rules
-	RulePostTypeUnknown     = "post_type_unknown"     // CON-74: slug not in Platform.PostTypes
-	RuleRequiresContent     = "requires_content"      // CON-74: post type needs non-empty content
-	RuleMinAttachments      = "min_attachments"       // CON-74: too few attachments for the type
-	RuleMaxAttachments      = "max_attachments"       // CON-74: too many attachments for the type
-	RuleAttachmentKind      = "attachment_kind"       // CON-74: wrong attachment kind for the type
-	RuleRequiresVideoTitle  = "requires_video_title"  // CON-148: platform needs a title for video (YouTube)
-	RuleMaxContentChars     = "max_content_chars"     // CON-91: body text exceeds the platform/post-type cap
-	RuleMaxTitleChars       = "max_title_chars"       // CON-91: title exceeds the platform cap
-	RuleThreadSegmentCount  = "thread_segment_count"  // CON-284: a thread needs 2..MaxThreadSegments messages
-	RuleThreadSegmentIndex  = "thread_segment_index"  // CON-284: attachment segment_index missing / out of range / set off-thread
+	RuleMaxPages            = "max_pages"             // PDF page-count cap
+	RuleAttachmentMix       = "attachment_kind_mix"   // Image+PDF on the same post
+	RulePDFNotSupported     = "pdf_not_supported"     // Platform has no PDF rules
+	RuleMaxDuration         = "max_duration_seconds"  // Video length ceiling
+	RuleMinDuration         = "min_duration_seconds"  // Video length floor (Reels/Shorts)
+	RuleMaxResolution       = "max_resolution"        // Video frame-size cap
+	RuleAspectRatio         = "allowed_aspect_ratios" // Video aspect ratio
+	RuleVideoNotSupported   = "video_not_supported"   // Platform has no video rules
+	RulePostTypeUnknown     = "post_type_unknown"     // Slug not in Platform.PostTypes
+	RuleRequiresContent     = "requires_content"      // Post type needs non-empty content
+	RuleMinAttachments      = "min_attachments"       // Too few attachments for the type
+	RuleMaxAttachments      = "max_attachments"       // Too many attachments for the type
+	RuleAttachmentKind      = "attachment_kind"       // Wrong attachment kind for the type
+	RuleRequiresVideoTitle  = "requires_video_title"  // Platform needs a title for video (YouTube)
+	RuleMaxContentChars     = "max_content_chars"     // Body text exceeds the platform/post-type cap
+	RuleMaxTitleChars       = "max_title_chars"       // Title exceeds the platform cap
+	RuleThreadSegmentCount  = "thread_segment_count"  // A thread needs 2..MaxThreadSegments messages
+	RuleThreadSegmentIndex  = "thread_segment_index"  // Attachment segment_index missing / out of range / set off-thread
 )
 
 // Attachment kinds, returned by AttachmentKind. PDF, image, and video

@@ -39,7 +39,7 @@ type contextTemplateData struct {
 	TargetPersona     string
 	KeyMessages       string
 	ToneGuidelines    string
-	// BrandBlock is the resolved brand voice/audience/guardrails block (CON-245);
+	// BrandBlock is the resolved brand voice/audience/guardrails block;
 	// supersedes TargetPersona/ToneGuidelines in the template.
 	BrandBlock     string
 	Language       string
@@ -74,7 +74,7 @@ func runDraftPost(
 		"campaign_id", req.CampaignID, "platform_id", req.PlatformID, "count", req.Count,
 		"source_len", len(req.SourceMaterial), "instruction_len", len(req.Instruction))
 
-	// Enforcement gate (CON-86 FR9): block before any provider call when the
+	// Enforcement gate: block before any provider call when the
 	// tenant is already over a cap. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func runDraftPost(
 	if campaign.CampaignType != nil {
 		typeLabel = campaign.CampaignType.Label
 	}
-	// CON-245: resolve the brand voice/audience/guardrails once for the batch;
+	// Resolve the brand voice/audience/guardrails once for the batch;
 	// the block supersedes the legacy tone/persona prose (falling back to it).
 	resolved, rerr := brandresolve.Resolve(ctx, repos.Brands, campaign, nil)
 	if rerr != nil {
@@ -180,7 +180,7 @@ func runDraftPost(
 	var out []DraftedPost
 	var warnings []string
 
-	// appendDraft persists one finished draft content-first (CON-207) and emits
+	// appendDraft persists one finished draft content-first and emits
 	// its post event, capped at the requested count so an over-producing model
 	// can't inflate the result.
 	appendDraft := func(d modelDraft) {
@@ -288,11 +288,11 @@ func runDraftPost(
 		"posts", len(out), "warnings", len(warnings))
 
 	// An empty result is a soft failure (0 posts + warnings), not an error — the
-	// assistant runner surfaces a friendly reply rather than a 502 (CON-207 §9).
+	// assistant runner surfaces a friendly reply rather than a 502.
 	return &DraftPostResponse{Posts: out, Warnings: warnings}, nil
 }
 
-// persistDraft inserts one finished draft as a content-first Post row (CON-207):
+// persistDraft inserts one finished draft as a content-first Post row:
 // the generated copy goes into Post.Content, status=draft, scheduled per CON-181,
 // and the source research is kept as a "Source research" reference note. Returns
 // the DraftedPost view + the new row id.
@@ -314,7 +314,7 @@ func persistDraft(
 		return DraftedPost{}, "", err
 	}
 
-	// CON-181: snap the publish date to an enabled publishing day, place it at
+	// Snap the publish date to an enabled publishing day, place it at
 	// the campaign's publishing time in its timezone, ± deterministic spread —
 	// bounded by the generation window.
 	scheduledAt, effDate, noEnabledDay := scheduling.ComposeScheduledAt(
@@ -326,7 +326,7 @@ func persistDraft(
 			logging.AttrComponent, "genkit.draft_post", "post_id", id, "date", publishDate)
 	}
 
-	// CON-166: a post's phase must belong to its campaign's type (a DB trigger
+	// A post's phase must belong to its campaign's type (a DB trigger
 	// rejects anything else). The calling tool resolves the phase against the
 	// campaign, but drop an unknown id rather than fail the whole draft.
 	var phaseIDPtr *string
@@ -345,7 +345,7 @@ func persistDraft(
 		PlatformID:          platform.ID,
 		PlatformPostType:    platform.PostType,
 		Title:               title,
-		Content:             content, // CON-207: content-first — the finished copy, not ""
+		Content:             content, // Content-first — the finished copy, not ""
 		MediaURLs:           models.StringSlice{},
 		Status:              models.PostStatusDraft,
 		CTAType:             models.CTATypeNone,
@@ -360,8 +360,8 @@ func persistDraft(
 		return DraftedPost{}, "", err
 	}
 
-	// CON-207: keep the source research as a reference note. Best-effort — a
-	// note-write failure must never discard the persisted post (CON-66/CON-188).
+	// Keep the source research as a reference note. Best-effort — a
+	// note-write failure must never discard the persisted post.
 	if repos.Notes != nil {
 		if body := strings.TrimSpace(source); body != "" {
 			if err := createSourceNote(ctx, repos.Notes, id, campaign.CreatedBy, body); err != nil {

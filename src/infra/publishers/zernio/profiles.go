@@ -93,7 +93,7 @@ func (c *Client) CreateProfile(ctx context.Context, name, description string) (*
 // DeleteProfile permanently deletes a profile on Zernio
 // (DELETE /profiles/{id}). Zernio responds 200 on success and 404 when the id
 // is unknown; the 404 surfaces as an *APIError{Status:404} so the caller can
-// treat an already-gone profile as an idempotent no-op (CON-203). Zernio
+// treat an already-gone profile as an idempotent no-op. Zernio
 // returns 400 while the profile still has active connected accounts — the
 // caller must disconnect them (DeleteAccount) first. There is no request body
 // or query parameter; the id is path-escaped defensively.
@@ -109,7 +109,7 @@ func (c *Client) DeleteProfile(ctx context.Context, id string) error {
 // with the platform as a path segment and `profileId` as a query
 // parameter. The response shape is `{"authUrl": "..."}`.
 //
-// CON-217: the request is always headless (`headless=true`) so Zernio renders
+// The request is always headless (`headless=true`) so Zernio renders
 // none of its own hosted selection screens. After OAuth it redirects the
 // browser back to redirectURL with tempToken / connect_token / step so Ogen
 // drives any secondary target selection (LinkedIn org, Facebook page) itself.

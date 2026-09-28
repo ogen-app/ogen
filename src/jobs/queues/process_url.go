@@ -34,7 +34,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// ProcessURLQueue ingests a URL asset (CON-222): scrape the page to Markdown via
+// ProcessURLQueue ingests a URL asset: scrape the page to Markdown via
 // Firecrawl, mirror its images into object storage, persist content + images,
 // then chunk + embed the Markdown — the same shape as process_pdf, with
 // Firecrawl in place of pdf-service. Progress and the terminal result are
@@ -94,12 +94,12 @@ type URLDeps struct {
 	Chunks   chunkUpserter
 	Images   imageReplacer
 	Hub      eventPublisher
-	// Recorder + EmbedModel meter scrape + embedding usage (CON-86/CON-222). A
+	// Recorder + EmbedModel meter scrape + embedding usage. A
 	// nil Recorder is a no-op. EmbedModel is the embed price-map key.
 	Recorder   *usage.Recorder
 	EmbedModel string
 	// Notifier drops an in-app notification to the asset's creator when ingest
-	// reaches a terminal status (CON-242). Nil is a no-op.
+	// reaches a terminal status. Nil is a no-op.
 	Notifier *notify.Service
 }
 
@@ -152,7 +152,7 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 		slog.WarnContext(ctx, "firecrawl not configured", logging.AttrComponent, "jobs.process_url", "asset_id", in.AssetID)
 		return nil
 	}
-	// No gemini_api_key yet (CON-104): fail fast rather than scrape + mirror only
+	// No gemini_api_key yet: fail fast rather than scrape + mirror only
 	// to fail every embed. Retry — a key set via the secrets API takes effect
 	// without a restart; give up only once attempts are exhausted.
 	if !embedopts.Available(p.Deps.Embedder) {
@@ -183,7 +183,7 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 		return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, err.Error())
 	}
 
-	// CON-86/CON-222: one usage event per successful Firecrawl scrape (each call
+	// One usage event per successful Firecrawl scrape (each call
 	// is a real billable credit, so recording here — after a 200 — is accurate
 	// even across retries). Nil recorder = no-op.
 	p.Deps.Recorder.Record(ctx, firecrawl.VendorFirecrawl, "url_scrape", vendors.MeterEvent{
@@ -284,7 +284,7 @@ func (p *ProcessURLProcessor) setStatus(ctx context.Context, assetID, status str
 	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
 		return fmt.Errorf("process_url %s: set status %s: %w", assetID, status, err)
 	}
-	// CON-242: announce terminal outcomes to the asset's creator (no-op for the
+	// Announce terminal outcomes to the asset's creator (no-op for the
 	// intermediate "processing" write).
 	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "link", models.AssetTypeURL)
 	return nil

@@ -14,7 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// Facts ledger and guardrails stance (CON-316). Facts are rows of their own,
+// Facts ledger and guardrails stance. Facts are rows of their own,
 // written one at a time; guardrails.facts on the wire is a projection of them.
 
 // MaxBrandFacts caps the ledger per workspace. Every current fact is read on
@@ -224,8 +224,8 @@ func dateEqual(a, b *models.CalendarDate) bool {
 // author, and facts whose statement is missing are deleted. facts must already
 // be trimmed, non-blank and distinct. A nil facts leaves the ledger alone.
 //
-// The legacy brand_guardrails.facts column is no longer written; reads
-// project the ledger over it.
+// The legacy brand_guardrails.facts column is never written; reads project
+// the ledger over it.
 func (r *brandRepository) SaveGuardrails(ctx context.Context, g *models.BrandGuardrails, facts []string, author *string) (FactsReconciled, error) {
 	var rec FactsReconciled
 	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {

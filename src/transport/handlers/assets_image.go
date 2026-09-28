@@ -20,7 +20,7 @@ import (
 	imageclient "github.com/ogen-app/ogen/src/transport/grpc/client/image"
 )
 
-// AssetsImageHandler serves the content-bank image extraction surface (CON-281):
+// AssetsImageHandler serves the content-bank image extraction surface:
 // trigger/re-run the vision pipeline, read its status + blocks, and regenerate
 // alt text. It is a focused sibling of AssetsHandler (CON-291 split), registered
 // on the same /api/content-bank/assets group. A nil imgJobs (no

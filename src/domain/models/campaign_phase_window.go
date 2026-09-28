@@ -7,7 +7,7 @@ import (
 )
 
 // CampaignPhaseWindow is one phase's calendar-day range in a campaign's manual
-// phase plan (CON-166). Rows exist only for a user-edited plan and are stored
+// phase plan. Rows exist only for a user-edited plan and are stored
 // whole — one per phase of the campaign's type — or not at all; no rows means
 // the plan is derived from the campaign dates (see domain/campaignphase).
 type CampaignPhaseWindow struct {

@@ -1,9 +1,9 @@
-// Package pdfprobe is the PDF sibling to imageprobe (CON-75). It
+// Package pdfprobe is the PDF sibling to imageprobe. It
 // validates a PDF upload by sniffing the magic bytes (never trusting
 // the client's declared Content-Type), checking the size, and computing
 // a SHA-256 checksum.
 //
-// Page counting moved to the pdf-service microservice (CON-103); the
+// Page counting moved to the pdf-service microservice; the
 // upload handler obtains page count (and a thumbnail) from it.
 package pdfprobe
 
@@ -26,7 +26,7 @@ const Extension = ".pdf"
 var pdfMagic = []byte("%PDF-")
 
 // Result mirrors imageprobe.Result for shared call-site shape. Page count is
-// not included — it comes from pdf-service (CON-103).
+// not included — it comes from pdf-service.
 type Result struct {
 	MIME      string
 	Extension string

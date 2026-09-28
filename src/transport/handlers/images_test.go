@@ -213,7 +213,7 @@ var _ = Describe("ImagesHandler", Ordered, Serial, func() {
 				resp, err := app.Test(req)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(Equal(200))
-				// Tenant prefix retained (CON-97); key is server-generated, not the client filename.
+				// Tenant prefix retained; key is server-generated, not the client filename.
 				Expect(stub.lastKey).To(MatchRegexp(`^t/default/[0-9a-f-]{36}\.png$`))
 			})
 

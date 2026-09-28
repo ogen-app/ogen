@@ -20,7 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/activity"
 )
 
-// BrandHandler is the REST surface for the Brand module (CON-228): one aggregate
+// BrandHandler is the REST surface for the Brand module: one aggregate
 // read plus per-section whole-resource writes, all tenant-scoped behind h.auth.
 // The wire shapes match the ui repo's components/brand/types.ts exactly, so the
 // prototype's stubbed services (services/api/brand.ts) each collapse to one
@@ -76,7 +76,7 @@ func (h *BrandHandler) Register(app *fiber.App) {
 	g.Post("/templates", h.auth, h.CreateTemplate)
 	g.Put("/templates/:id", h.auth, h.UpdateTemplate)
 	g.Delete("/templates/:id", h.auth, h.DeleteTemplate)
-	// Facts ledger (CON-316).
+	// Facts ledger.
 	g.Post("/facts", h.auth, h.CreateFact)
 	g.Put("/facts/:id", h.auth, h.UpdateFact)
 	g.Delete("/facts/:id", h.auth, h.DeleteFact)
@@ -221,7 +221,7 @@ func (h *BrandHandler) DeleteAudience(c *fiber.Ctx) error {
 // ── Guardrails (singleton) ──────────────────────────────────────────────────
 
 // guardrailsRequest is the PUT /api/brand/guardrails body. facts is
-// presence-aware (CON-316 FR6): omitted leaves the ledger alone, present
+// presence-aware: omitted leaves the ledger alone, present
 // reconciles the ledger to it by statement.
 type guardrailsRequest struct {
 	Facts       Optional[models.StringSlice] `json:"facts"       swaggertype:"array,string"`
@@ -295,7 +295,7 @@ func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
 }
 
 // DeleteGuardrails removes the rules. The facts ledger is its own section now
-// and is not touched (CON-316 FR6), nor is a previous stance brought back.
+// and is not touched, nor is a previous stance brought back.
 func (h *BrandHandler) DeleteGuardrails(c *fiber.Ctx) error {
 	deleted, err := h.repo.DeleteGuardrails(reqCtx(c))
 	if err != nil {

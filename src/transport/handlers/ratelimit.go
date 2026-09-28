@@ -107,7 +107,7 @@ func (l *keyedRateLimiter) allow(key string) (bool, time.Duration) {
 // retryAfter peeks at key without consuming a token: it returns 0 when a token
 // is available — or when the key is unseen, so a peek never allocates a bucket
 // for the common (successful) path — and the wait until the next token when the
-// key is exhausted. Login (CON-162) charges only on a failed attempt, so it
+// key is exhausted. Login charges only on a failed attempt, so it
 // peeks here to reject an already-exhausted key, then penalizes on failure.
 func (l *keyedRateLimiter) retryAfter(key string) time.Duration {
 	l.mu.Lock()
@@ -127,7 +127,7 @@ func (l *keyedRateLimiter) retryAfter(key string) time.Duration {
 // are clamped at 0 so a run of failures can't drive the wait unboundedly long —
 // that bounds how long an attacker can keep a victim's key throttled (the wait
 // tops out at window/burst). Meant to be called only after a failed attempt, so
-// a success costs nothing (CON-162: count failures only).
+// a success costs nothing (count failures only).
 func (l *keyedRateLimiter) penalize(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -145,7 +145,7 @@ func (l *keyedRateLimiter) penalize(key string) {
 
 // reset refunds key to a full bucket by dropping it (an absent key is treated as
 // full). Login calls this on a successful attempt so a legitimate user's earlier
-// fumbles don't carry over (CON-162: a success resets the counter).
+// fumbles don't carry over (a success resets the counter).
 func (l *keyedRateLimiter) reset(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -142,7 +142,7 @@ func multipartBodyAttachment(filename string, content []byte) (*bytes.Buffer, st
 }
 
 // multipartBodyAttachmentAlt is multipartBodyAttachment plus an alt_text form
-// field (CON-122).
+// field.
 func multipartBodyAttachmentAlt(filename string, content []byte, altText string) (*bytes.Buffer, string) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
@@ -274,7 +274,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		return app.Test(req, 30000)
 	}
 
-	// createThreadPost creates a draft thread post on X (CON-284) so segment
+	// createThreadPost creates a draft thread post on X so segment
 	// media is accepted. A draft skips readiness validation, so no segments are
 	// needed yet.
 	createThreadPost := func() string {
@@ -873,7 +873,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		})
 	})
 
-	// ── alt text on upload (CON-122) ────────────────────────────────────────
+	// ── alt text on upload ────────────────────────────────────────
 
 	Describe("POST with alt_text", func() {
 		It("stores and returns alt_text supplied on upload", func() {

@@ -14,7 +14,7 @@ import (
 )
 
 // TenantTierAssignmentRepository is the append-only tenant -> tier-version
-// history (CON-243). GLOBAL operator table. The tstzrange `valid` column has no
+// history. GLOBAL operator table. The tstzrange `valid` column has no
 // native Go type, so writes go through a raw tstzrange(...) expression and reads
 // project lower()/upper() into the model's scan-only ValidFrom/ValidTo.
 type TenantTierAssignmentRepository interface {

@@ -21,7 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
-// fakeDocumentEnqueuer records process_document enqueues (CON-280) so the upload
+// fakeDocumentEnqueuer records process_document enqueues so the upload
 // path can be asserted without a River worker; the insert tx is real.
 type fakeDocumentEnqueuer struct{ calls []string }
 
@@ -30,7 +30,7 @@ func (f *fakeDocumentEnqueuer) EnqueueProcessDocumentTx(_ context.Context, _ *sq
 	return nil
 }
 
-// CON-312 §7: the document branch of POST /upload (CON-280) had only worker
+// The document branch of POST /upload had only worker
 // tests. These pin routing by extension, the stored original, the atomic
 // enqueue, and the early rejects.
 var _ = Describe("AssetsHandler document upload (CON-280)", Ordered, Serial, func() {

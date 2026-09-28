@@ -11,9 +11,8 @@ import (
 // there is exactly one row ever.
 const PlatformGlobalLimitsID = "global"
 
-// PlatformGlobalLimits holds the cross-platform safety ceilings that used to be
-// Go constants (maxImageUploadBytes / maxPDFUploadBytes / maxVideoUploadBytes /
-// maxAltTextLen / MaxThreadSegments). CON-292 moves them into operator config: a
+// PlatformGlobalLimits holds the cross-platform safety ceilings (image / PDF /
+// video upload bytes, alt-text length, thread segments) as operator config: a
 // single-row table edited via PlatformAdminService. Unlike the per-platform
 // constraint jsonb, these are the hard upload ceilings enforced in the
 // attachment handlers and the thread-segment validator.
@@ -30,8 +29,8 @@ type PlatformGlobalLimits struct {
 }
 
 // DefaultPlatformGlobalLimits returns the built-in ceilings — identical to the
-// seeded row and the former Go constants. It is the safe fallback used when the
-// DB read fails at boot so the app still starts (CON-292 §10.2), and the
+// seeded row. It is the safe fallback used when the
+// DB read fails at boot so the app still starts, and the
 // reference the migration seed must match byte-for-byte.
 func DefaultPlatformGlobalLimits() PlatformGlobalLimits {
 	return PlatformGlobalLimits{

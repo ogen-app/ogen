@@ -1,11 +1,11 @@
-// Package video is a thin gRPC client for the video-service (CON-148).
+// Package video is a thin gRPC client for the video-service.
 // It owns the connection, the raised receive limit, and the per-call deadline,
 // and presents video probing as a single unary Probe call.
 //
 // Unlike pdf — which client-streams the file bytes — video hands
 // video-service a short-lived presigned GET URL and lets ffprobe range-read
 // only what it needs. That keeps the (potentially multi-GB) video out of the
-// API process entirely (CON-148 §5.2).
+// API process entirely.
 //
 // The link to video-service is private-network-only (Railway), so the channel
 // is plaintext h2c — no TLS between the two.
@@ -92,9 +92,9 @@ func New(cfg Config) (*Client, error) {
 	}
 	// The correlation interceptors copy request_id/tenant_id from the call
 	// context into outgoing gRPC metadata so video-service's logs join the
-	// API's, exactly as pdf does (CON-111).
+	// API's, exactly as pdf does.
 	dialOpts := []grpc.DialOption{
-		// CON-303: emit a client span per RPC and propagate the trace to the service.
+		// Emit a client span per RPC and propagate the trace to the service.
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainStreamInterceptor(correlationStreamInterceptor),

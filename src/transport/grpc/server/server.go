@@ -62,14 +62,14 @@ func New(
 	emailEventRepo repository.EmailEventRepository,
 	emailBodyRepo repository.EmailBodyRepository,
 	emailBodies EmailBodyGetter,
-	// CON-229: the admin-registration-notification send path — the users repo for
+	// The admin-registration-notification send path — the users repo for
 	// the owner lookup, the River enqueuer for durable per-recipient sends, and
 	// Harbor's base URL for the "View in Harbor" deep link. All nil/empty-safe.
 	userRepo repository.UserRepository,
 	adminEmailEnqueuer AdminEmailEnqueuer,
 	harborBaseURL string,
 	announcementRepo repository.AnnouncementRepository,
-	// CON-295: shared in-process event hub so an operator tier change publishes an
+	// Shared in-process event hub so an operator tier change publishes an
 	// entitlement-invalidation event onto the tenant's /api/events stream. Nil-safe
 	// (a nil hub simply publishes nothing — the integration test passes nil).
 	hub eventhub.Hub,
@@ -83,11 +83,11 @@ func New(
 		return nil, errors.New("grpcserver: auth token is required")
 	}
 	srv := grpc.NewServer(
-		// CON-303: trace inbound operator RPCs; continues an inbound trace if present.
+		// Trace inbound operator RPCs; continues an inbound trace if present.
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(tokenAuthInterceptor(token)),
 	)
-	// CON-294: the versioned-tier-entitlement layer. Load the engineering-owned
+	// The versioned-tier-entitlement layer. Load the engineering-owned
 	// feature catalog (fails fast on a malformed embed) and build the point-in-time
 	// resolver both PlanAdminService and the CON-294 SetTenantTier stamp use.
 	catalog, err := entitlements.LoadCatalog()
@@ -99,18 +99,18 @@ func New(
 	secretsv1.RegisterSecretsServiceServer(srv, newSecretsService(store))
 	// TenantAdminService also gets the version + assignment repos: SetTenantTier
 	// now stamps a tenant_tier_assignment so tenants.tier_id and the open
-	// assignment never drift (CON-294).
+	// assignment never drift.
 	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo, hub))
 	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
-	// CON-308: ModelConfigAdminService lets Harbor assign a model to each
+	// ModelConfigAdminService lets Harbor assign a model to each
 	// (tier, flow, slot) over the code-owned flow/model catalogs. The prober
 	// (backed by the secrets store) runs TestSlotModel's live compatibility check.
 	registerModelConfigAdmin(srv, flowModelConfigRepo, modelprobe.New(store))
 	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver, hub)
-	// CON-298: EmailAdminService serves a tenant's email history + per-email
+	// EmailAdminService serves a tenant's email history + per-email
 	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
 	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodyRepo, emailBodies, tenantRepo, userRepo, adminEmailEnqueuer, harborBaseURL)
-	// CON-230: AnnouncementAdminService lets Harbor author informational
+	// AnnouncementAdminService lets Harbor author informational
 	// announcements (banners) and read their per-user click/dismiss engagement.
 	registerAnnouncementAdmin(srv, announcementRepo)
 	return srv, nil

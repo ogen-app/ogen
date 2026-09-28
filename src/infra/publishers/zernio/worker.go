@@ -77,10 +77,10 @@ type Worker struct {
 	settings     SettingsStore
 	hub          eventhub.Hub
 	bootstrapper *Bootstrapper
-	recorder     *usage.Recorder // CON-86: account_connect events; nil = no-op
+	recorder     *usage.Recorder // account_connect events; nil = no-op
 
 	// tenantsWithProfile lists the tenant ids that have a Zernio profile
-	// configured (CON-100); the sweep runs one tick per returned tenant. It is
+	// configured; the sweep runs one tick per returned tenant. It is
 	// invoked under a system context so it can read across tenants.
 	tenantsWithProfile func(context.Context) ([]string, error)
 
@@ -193,13 +193,13 @@ func (w *Worker) shouldTick() bool {
 	if time.Now().Before(w.rateLimitUntil) {
 		return false
 	}
-	// Per-tenant profile presence is decided per sweep by tenantsWithProfile
-	// (CON-100); the sweep simply no-ops when no tenant has a profile.
+	// Per-tenant profile presence is decided per sweep by tenantsWithProfile;
+	// the sweep simply no-ops when no tenant has a profile.
 	return true
 }
 
 // syncAllTenants enumerates the tenants that have a Zernio profile and runs one
-// reconciliation tick per tenant, scoped to it (CON-100). The enumeration is
+// reconciliation tick per tenant, scoped to it. The enumeration is
 // cross-tenant (system context); each tick runs under tenantctx.With so account
 // upserts, last_sync_* settings, and SSE events land in the right tenant. A 401
 // propagates (the shared key is bad → disable instance-wide); a 429 sets the
@@ -472,7 +472,7 @@ func (w *Worker) recordAccountConnect(ctx context.Context, account models.Social
 }
 
 // PublishAccountDisconnected fires the account.disconnected eventhub event for
-// a user-initiated disconnect (CON-133), reusing the same topic + payload shape
+// a user-initiated disconnect, reusing the same topic + payload shape
 // the reconciler emits when Zernio drops an account so subscribers can't tell
 // the two apart. The ctx must be tenant-scoped (the hub derives TenantID from
 // it). Best-effort: publish failures are logged, not returned.

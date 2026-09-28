@@ -19,7 +19,7 @@ import (
 )
 
 // httpImagePreparer stands in for image-service in the minio-backed integration
-// suite (CON-281). Unlike the unit fake, it does the real presigned-URL dance:
+// suite. Unlike the unit fake, it does the real presigned-URL dance:
 // GET the staged original, decode true dimensions, PUT the cleaned (pixel-
 // identical) copy back to the destination key, and return metadata. A body that
 // won't decode as any image is reported as Unimplemented so the handler answers

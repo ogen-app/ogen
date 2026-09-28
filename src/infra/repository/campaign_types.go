@@ -14,7 +14,7 @@ import (
 // System types (is_system = true) are seeded by migration; only user-created types
 // support write operations.
 //
-// CON-314: a custom type belongs to one workspace. Reads see the system types
+// A custom type belongs to one workspace. Reads see the system types
 // plus the caller's own custom types; writes reach only the caller's own. Any
 // other id behaves as missing (sql.ErrNoRows / false), so another workspace's
 // ids stay hidden. A system context (no tenant) spans every workspace.

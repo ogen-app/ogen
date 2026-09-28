@@ -17,7 +17,7 @@ type SettingRepository interface {
 	// ListTenantIDsByKey returns the distinct tenant_ids that have a non-empty
 	// value for key. MUST be called with a system context (tenantctx.WithSystem)
 	// so the scoping hook does not restrict it to a single tenant — it is a
-	// cross-tenant enumeration (CON-100: which tenants have a Zernio profile).
+	// cross-tenant enumeration (which tenants have a Zernio profile).
 	ListTenantIDsByKey(ctx context.Context, key string) ([]string, error)
 	Upsert(ctx context.Context, setting *models.Setting) error
 	Delete(ctx context.Context, key string) (bool, error)

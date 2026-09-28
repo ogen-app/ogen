@@ -45,17 +45,17 @@ const (
 	PostLogEventUserCancel   PostLogEventType = "user_cancel"
 	PostLogEventUserRetry    PostLogEventType = "user_retry"
 
-	// Clone (CON-59): recorded on the NEW post; payload carries the
+	// Clone: recorded on the NEW post; payload carries the
 	// source id, target platform, adaptation flag and trigger.
 	PostLogEventPostCloned PostLogEventType = "post_cloned"
 
-	// Restore (CON-68): recorded when a post is rolled back to an earlier
+	// Restore: recorded when a post is rolled back to an earlier
 	// version. Payload carries the restored-from version, the new version
 	// number, whether a pre-restore safety snapshot was taken, and the
 	// trigger (assistant|api).
 	PostLogEventPostRestored PostLogEventType = "post_restored"
 
-	// Quality assessment (CON-85): recorded when the Post quality agent
+	// Quality assessment: recorded when the Post quality agent
 	// finalises an evaluation; payload carries the overall percentage, the
 	// per-dimension scores, and the model used.
 	PostLogEventQualityAssessed PostLogEventType = "quality_assessed"
@@ -65,7 +65,7 @@ const (
 // by automated machinery rather than a User.
 const ActorSystem = "system"
 
-// PostLog is one entry in a Post's audit history (CON-69 §11).
+// PostLog is one entry in a Post's audit history.
 //
 // Payload is a JSON-encoded blob. Writers MUST run it through
 // logs.Capper to enforce the 64 KB ceiling and through
@@ -73,7 +73,7 @@ const ActorSystem = "system"
 // guarantees live in code, not in the schema.
 type PostLog struct {
 	bun.BaseModel `bun:"table:post_logs,alias:pl" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID             string           `bun:"id,pk"                                        json:"id"`
 	PostID         string           `bun:"post_id,notnull"                              json:"post_id"`

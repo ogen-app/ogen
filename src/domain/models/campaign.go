@@ -20,7 +20,7 @@ const (
 
 type Campaign struct {
 	bun.BaseModel `bun:"table:campaigns,alias:c" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID   string `bun:"id,pk"                                        json:"id"`
 	Name string `bun:"name,notnull"                                 json:"name"`
@@ -30,7 +30,7 @@ type Campaign struct {
 	TargetPersona  string `bun:"target_persona,notnull"                       json:"target_persona"`
 	KeyMessages    string `bun:"key_messages,notnull"                         json:"key_messages"`
 	ToneGuidelines string `bun:"tone_guidelines,notnull"                      json:"tone_guidelines"`
-	// Brand bindings (CON-245): the voice/audience this campaign writes in.
+	// Brand bindings: the voice/audience this campaign writes in.
 	// Nullable — resolution falls back to the workspace default voice /
 	// tone_guidelines prose when unset. FK ON DELETE SET NULL.
 	BrandVoiceID       *string           `bun:"brand_voice_id"                               json:"brand_voice_id"`
@@ -44,7 +44,7 @@ type Campaign struct {
 	EstimatedPostCount *int              `bun:"estimated_post_count"                         json:"estimated_post_count"`
 	Language           string            `bun:"language,notnull"                             json:"language"`
 
-	// Scheduling settings (CON-181) — consumed by the content-plan flow to
+	// Scheduling settings — consumed by the content-plan flow to
 	// place each generated draft's scheduled_at. PublishingTime is a local
 	// "HH:MM" wall clock; Timezone is an IANA name ("" = UTC); PublishingDays
 	// is a subset of mon..sun; SpreadMinutes is the ± jitter (0 = exact).
@@ -53,7 +53,7 @@ type Campaign struct {
 	PublishingDays StringSlice `bun:"publishing_days,notnull,type:jsonb"           json:"publishing_days"`
 	SpreadMinutes  int         `bun:"spread_minutes,notnull,default:15"            json:"spread_minutes"`
 
-	// Goal (CON-182). estimated_post_count above is the target number of posts
+	// Goal. estimated_post_count above is the target number of posts
 	// PER goal_cadence period; the content-plan flow multiplies it by the number
 	// of week/month periods the campaign's [start_date, end_date] window spans,
 	// and the campaign overview reports per-period progress against it.
@@ -80,7 +80,7 @@ type Campaign struct {
 	CreatedAt    time.Time      `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt    time.Time      `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 
-	// Phase plan (CON-166). TypeLocked: campaign_type_id can no longer change
+	// Phase plan. TypeLocked: campaign_type_id can no longer change
 	// because posts are planned against the type's phases (PhasedPostCount > 0);
 	// hydrated on reads. PhaseWindows is the stored manual phase plan, hydrated
 	// on GetByID — empty means derived; read it via campaignphase.Resolve.

@@ -11,7 +11,7 @@ import (
 )
 
 // EmailTemplateRepository is the persistence surface for editable email
-// templates (CON-154). The DB is the source of truth; defaults are seeded on
+// templates. The DB is the source of truth; defaults are seeded on
 // boot via InsertIfAbsent so operator edits are never clobbered.
 type EmailTemplateRepository interface {
 	GetByKey(ctx context.Context, key string) (*models.EmailTemplate, error)

@@ -7,8 +7,8 @@ type ContentPlanRequest struct {
 	CampaignID string `json:"campaignId"`
 }
 
-// GeneratePostsRequest is the input to the targeted generation entry point
-// (CON-114): generate exactly Count draft posts for a platform subset, in a
+// GeneratePostsRequest is the input to the targeted generation entry point:
+// generate exactly Count draft posts for a platform subset, in a
 // single phase, with publish dates within [WindowStart, WindowEnd]. All fields
 // are concrete — the assistant tool resolves any natural language before
 // calling, so the engine stays deterministic.
@@ -33,7 +33,7 @@ type DraftPost struct {
 	ToneNotes   string   `json:"toneNotes"               jsonschema:"description=How the campaign tone guidelines apply to this specific post"`
 	PhaseID     string   `json:"phaseId"                 jsonschema:"description=Exact phase ID from the campaign phases list; every post must be assigned to one phase"`
 	AssetRefs   []string `json:"assetRefs,omitempty"     jsonschema:"description=IDs of assets whose facts or ideas were directly used in this post; omit if none"`
-	// BrandVoiceID is the resolved brand voice for this post (CON-245), set
+	// BrandVoiceID is the resolved brand voice for this post, set
 	// server-side after generation. json:"-" keeps it out of the model schema.
 	BrandVoiceID *string `json:"-"`
 }
@@ -45,15 +45,14 @@ type ContentPlanResponse struct {
 	Posts       []DraftPost `json:"posts"`
 	Warnings    []string    `json:"warnings,omitempty"`
 	// UsedAssets lists the campaign assets retrieved into the generation context
-	// and offered to the model for this plan (CON-118). Each post records only
+	// and offered to the model for this plan. Each post records only
 	// the subset it actually drew on (Post.UsedAssetIDs), so this plan-level list
 	// is a superset of any single post's binding. Empty when UseAssets is off or
 	// nothing was retrieved.
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
 }
 
-// AssetRef is the id+title provenance of an asset that informed generation
-// (CON-118).
+// AssetRef is the id+title provenance of an asset that informed generation.
 type AssetRef struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -82,8 +81,8 @@ type resolvedPhase struct {
 	Name     string
 	Purpose  string
 	Sequence int
-	// Window pins the phase's date window from the campaign's manual phase plan
-	// (CON-166); nil = derive it from the campaign dates.
+	// Window pins the phase's date window from the campaign's manual phase plan;
+	// nil = derive it from the campaign dates.
 	Window *dateWindow
 }
 
@@ -104,8 +103,8 @@ type contentPlanTemplateData struct {
 	TargetPersona           string
 	KeyMessages             string
 	ToneGuidelines          string
-	// BrandBlock is the resolved brand voice/audience/guardrails prompt block
-	// (CON-245); supersedes TargetPersona/ToneGuidelines in the template.
+	// BrandBlock is the resolved brand voice/audience/guardrails prompt block;
+	// supersedes TargetPersona/ToneGuidelines in the template.
 	BrandBlock         string
 	Language           string
 	StartDate          string
@@ -116,7 +115,7 @@ type contentPlanTemplateData struct {
 	Assets             []resolvedPiece
 	Batch              *batchSpec
 	// PublishingDays is the comma-separated label list of enabled weekdays
-	// (e.g. "Mon, Wed, Fri"), or "" when every day is enabled (CON-181). The
+	// (e.g. "Mon, Wed, Fri"), or "" when every day is enabled. The
 	// server snaps any stray date to an enabled day regardless; this just
 	// steers the model up front.
 	PublishingDays string
@@ -160,11 +159,11 @@ type StepEventPayload struct {
 // Index is the post's deterministic global slot index assigned by the batch
 // planner — stable across runs and independent of arrival order. Under
 // parallel batching, posts arrive interleaved by completion time, so the
-// stream-arrival order is no longer a reliable identifier; the UI should
-// place posts by Index, not by the order they appear on the wire.
+// stream-arrival order is not a reliable identifier; the UI should place
+// posts by Index, not by the order they appear on the wire.
 //
-// ID is the persisted Post row's primary key. Per CON-66 every post is
-// inserted before its event fires, so the client can reference the row
+// ID is the persisted Post row's primary key. Every post is inserted
+// before its event fires, so the client can reference the row
 // (edit, delete, drag) immediately rather than waiting for the
 // "complete" event.
 type PostEventPayload struct {

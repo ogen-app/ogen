@@ -11,7 +11,7 @@ import (
 )
 
 // TestAssetDelete_ScrubsDanglingReferences verifies that deleting an asset also
-// removes its id from every campaign.asset_ids and post.used_asset_ids (CON-214),
+// removes its id from every campaign.asset_ids and post.used_asset_ids,
 // so a deleted asset can never linger as a dangling reference that later
 // hard-fails content generation ("asset %q not found").
 func TestAssetDelete_ScrubsDanglingReferences(t *testing.T) {
@@ -211,7 +211,7 @@ func TestAssetDelete_SystemContext_ScopesScrubToOwningTenant(t *testing.T) {
 
 // TestAssetSetImageResult_KeepsMidRunEdit: the vision description replaces the
 // content only while it still holds the value from when the run started, so a
-// description the user edited mid-run survives (CON-312).
+// description the user edited mid-run survives.
 func TestAssetSetImageResult_KeepsMidRunEdit(t *testing.T) {
 	db := openMigratedDB(t)
 	ctx := tenantCtx()

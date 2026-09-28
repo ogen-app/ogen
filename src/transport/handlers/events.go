@@ -27,7 +27,7 @@ const defaultHeartbeatInterval = 20 * time.Second
 
 // defaultStreamLifetime is the hard ceiling on how long a single SSE
 // connection is held open before the writer closes it and reclaims its hub
-// subscription (CON-286). The heartbeat write is not a reliable liveness probe:
+// subscription. The heartbeat write is not a reliable liveness probe:
 // a client that vanishes without a clean close (laptop sleep, NAT/idle timeout,
 // a peer advertising a zero window) never surfaces a write error — the tiny
 // heartbeats keep buffering into the kernel — so the writer goroutine, and the
@@ -66,7 +66,7 @@ func NewEventsHandler(
 	}
 }
 
-// SetMaxLifetime overrides the per-connection lifetime ceiling (CON-286).
+// SetMaxLifetime overrides the per-connection lifetime ceiling.
 // A non-positive value is ignored. Primarily for tests, which use a short
 // lifetime to drive the reclamation path deterministically.
 func (h *EventsHandler) SetMaxLifetime(d time.Duration) {
@@ -126,7 +126,7 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 
 	eventCh, unsubscribe, err := h.hub.Subscribe(reqCtx(c), eventhub.SubscribeOpts{
 		UserID:   session.UserID,
-		TenantID: session.TenantID, // CON-97 §10.2: only this tenant's events
+		TenantID: session.TenantID, // Only this tenant's events
 		Topics:   topics,
 	})
 	if err != nil {
@@ -156,7 +156,7 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 	// returns, at which point c.Context() (the *fasthttp.RequestCtx) has been
 	// reset and returned to the pool — reading it then is a use-after-free
 	// that nil-panics inside the slog ContextHandler, on a goroutine the Fiber
-	// recover middleware can't see, taking the whole process down (CON-158).
+	// recover middleware can't see, taking the whole process down.
 	// Detach a logging context now so writer-side logs still correlate with
 	// request_id / tenant_id / user_id without touching the recycled ctx.
 	reqID, _ := logging.RequestIDFrom(reqCtx(c))
@@ -176,7 +176,7 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
 
-		// CON-286: hard lifetime ceiling. Guarantees this goroutine — and the
+		// Hard lifetime ceiling. Guarantees this goroutine — and the
 		// hub slot it holds — is released even if the client vanished without a
 		// detectable close and no write ever fails. The client reconnects.
 		lifetime := time.NewTimer(maxLifetime)

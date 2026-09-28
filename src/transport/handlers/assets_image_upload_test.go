@@ -35,7 +35,7 @@ func pngBytes(w, h int) string {
 }
 
 // fakeImageEnqueuer records process_image enqueues so the async upload path can
-// be asserted without a running River worker (CON-281). It ignores the tx — the
+// be asserted without a running River worker. It ignores the tx — the
 // upload's RunInTx is a real transaction against the test DB; only the enqueue is
 // faked.
 type fakeImageEnqueuer struct{ calls []string }
@@ -149,7 +149,7 @@ var _ = Describe("AssetsHandler image upload (CON-281 async)", Ordered, Serial, 
 
 		asset := results[0]["asset"].(map[string]any)
 		Expect(asset["type"]).To(Equal(models.AssetTypeImage))
-		// Ingestion is async now (CON-281): the asset lands `pending`, and the job
+		// Ingestion is async now: the asset lands `pending`, and the job
 		// fills description/dimensions/alt text later.
 		Expect(asset["status"]).To(Equal(models.AssetStatusPending))
 		Expect(asset["title"]).To(Equal("logo"))
@@ -205,7 +205,7 @@ var _ = Describe("AssetsHandler image upload (CON-281 async)", Ordered, Serial, 
 		results := postUpload([]struct{ Name, Body string }{{"icon.svg", "<svg/>"}})
 		Expect(results[0]["status"]).To(Equal("failed"))
 		Expect(results[0]["error"]).To(ContainSubstring("vector"))
-		// CON-281: a stable code rides beside the prose so the client can key off
+		// A stable code rides beside the prose so the client can key off
 		// it rather than matching the (deletable) English message.
 		Expect(results[0]["code"]).To(Equal(models.UploadCodeVectorRejected))
 		Expect(imgEnq.calls).To(BeEmpty())

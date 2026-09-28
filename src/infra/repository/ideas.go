@@ -19,7 +19,7 @@ type IdeaListFilter struct {
 	Unfiled bool
 }
 
-// IdeaRepository persists the workspace Ideas backlog (CON-315). Every query
+// IdeaRepository persists the workspace Ideas backlog. Every query
 // runs through bun's Model API so the TenantScoped hooks scope tenant_id.
 //
 // Reads resolve campaign_id through a LEFT JOIN on live campaigns: an idea whose

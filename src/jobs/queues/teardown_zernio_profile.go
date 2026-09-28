@@ -16,7 +16,7 @@ import (
 )
 
 // TenantTeardownFence serializes the teardown against a concurrent tenant
-// restore (CON-190). It runs the destructive work while holding the tenant row
+// restore. It runs the destructive work while holding the tenant row
 // lock and hands back the status read under that lock, so SetStatus(active)
 // cannot restore the tenant mid-teardown. repository.TenantTeardownFence
 // implements it; a narrow interface here keeps the worker off the repository
@@ -89,7 +89,7 @@ func (p *TeardownZernioProfileProcessor) Work(ctx context.Context, job *river.Jo
 	ctx = tenantctx.With(ctx, tid)
 
 	// No key / permanently disabled: nothing to call upstream. Leave the profile
-	// orphaned (the pre-CON-203 status quo) rather than burn retries.
+	// orphaned rather than burn retries.
 	if !p.Integration.Enabled() {
 		slog.WarnContext(ctx, "teardown skipped: integration disabled", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid)
 		return nil

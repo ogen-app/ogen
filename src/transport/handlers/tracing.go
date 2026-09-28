@@ -16,11 +16,11 @@ import (
 // context.Background(). This copies the pieces the detached work still needs:
 //
 //   - the tenant, so usage recording + entitlement enforcement attribute
-//     correctly (CON-86);
-//   - the request id, so the detached work's logs stay correlated (CON-107);
+//     correctly;
+//   - the request id, so the detached work's logs stay correlated;
 //   - the request's OpenTelemetry span context, so the detached flow's spans
-//     (Genkit → model → DB) join the SAME trace as the originating request
-//     (CON-303), even though the request's server span has already finished by
+//     (Genkit → model → DB) join the SAME trace as the originating request,
+//     even though the request's server span has already finished by
 //     the time the stream runs.
 //
 // The span context is an immutable value (trace id, span id, sampled flag), so

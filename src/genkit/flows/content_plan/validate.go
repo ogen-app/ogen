@@ -60,7 +60,7 @@ func validateInput(ctx context.Context, campaignID string, campaignRepo reposito
 
 	// NB: we deliberately do NOT hard-check that every id in c.AssetIDs still
 	// exists. An asset can be deleted while its id lingers in a campaign's
-	// asset_ids (CON-214), and resolveAssets → collectReadyCandidateIDs already
+	// asset_ids, and resolveAssets → collectReadyCandidateIDs already
 	// skips missing/unready ids with a warning ("asset %q could not be loaded —
 	// skipped") and proceeds without asset context when all are gone. A strict
 	// check here only turned that recoverable stale reference into a fatal tool

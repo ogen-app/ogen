@@ -16,8 +16,8 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// ReembedImageQueue re-embeds an IMG asset after a user edits its description
-// (CON-312). It rebuilds the chunk set from the edited description plus the
+// ReembedImageQueue re-embeds an IMG asset after a user edits its description.
+// It rebuilds the chunk set from the edited description plus the
 // region blocks the latest settled extraction stored, so the anchored region
 // chunks survive the edit. No vision call and no status change: the asset is
 // already searchable; only its chunks are refreshed.
@@ -84,7 +84,7 @@ func (p *ReembedImageProcessor) process(ctx context.Context, in ReembedImageTask
 		return nil // a failed run left no chunks to refresh
 	default:
 		// A run is in flight and may settle on chunks from before the edit, so
-		// wait for it rather than drop the edit (CON-312). A run idle this long
+		// wait for it rather than drop the edit. A run idle this long
 		// is stuck, not in flight — stop waiting.
 		if time.Since(ext.UpdatedAt) > reembedStaleAfter {
 			slog.WarnContext(ctx, "image re-embed skipped: extraction stuck", logging.AttrComponent, "jobs.reembed_image", "asset_id", in.AssetID, "extraction_status", ext.Status)

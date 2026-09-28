@@ -15,7 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// TenantKey namespaces an object key by the tenant in ctx (CON-97 §10.4):
+// TenantKey namespaces an object key by the tenant in ctx:
 // "t/<tenant_id>/<key>". A key built without a tenant in context (system work)
 // is returned unprefixed, so pre-existing and global objects round-trip
 // unchanged. The prefixed key is what callers must both Upload and persist, so
@@ -40,7 +40,7 @@ type Storage interface {
 	// Upload writes r to the bucket under key and returns the public URL.
 	Upload(ctx context.Context, key string, r io.Reader, size int64, contentType string) (string, error)
 	// Copy duplicates the object at srcKey to dstKey within the same
-	// bucket. Used by post cloning (CON-59) to give a clone its own
+	// bucket. Used by post cloning to give a clone its own
 	// independent copies of its source's attachments, so deleting
 	// either post never removes the other's blobs.
 	Copy(ctx context.Context, srcKey, dstKey string) error
@@ -50,19 +50,19 @@ type Storage interface {
 	PublicURL(key string) string
 	// PresignedGetURL returns a short-lived signed GET URL for the object
 	// at key. Used for serving private images to the browser and for
-	// handing image bytes to Zernio at publish time (CON-73).
+	// handing image bytes to Zernio at publish time.
 	PresignedGetURL(ctx context.Context, key string, ttl time.Duration) (string, error)
 	// PresignedPutURL returns a short-lived signed PUT URL for uploading an
 	// object directly to storage under key, bypassing the API process — the
-	// large-file video ingest path (CON-148). contentType binds the
+	// large-file video ingest path. contentType binds the
 	// Content-Type header the client must send on the PUT.
 	PresignedPutURL(ctx context.Context, key, contentType string, ttl time.Duration) (string, error)
 	// Head returns metadata for the object at key without downloading it.
 	// Used by video finalize to read the authoritative uploaded size before
-	// probing (CON-148).
+	// probing.
 	Head(ctx context.Context, key string) (*ObjectInfo, error)
 	// Download returns a reader over the object at key; the caller must close
-	// it. Used by the PDF ingestion job (CON-103) to re-read original.pdf from
+	// it. Used by the PDF ingestion job to re-read original.pdf from
 	// the bucket on each attempt.
 	Download(ctx context.Context, key string) (io.ReadCloser, error)
 }

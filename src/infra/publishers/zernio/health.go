@@ -36,8 +36,8 @@ type accountHealthEnvelope struct {
 	Accounts []AccountHealth `json:"accounts"`
 }
 
-// GetAccountsHealth returns the health of every account attached to profileID
-// (CON-219). The `profileId` filter is applied server-side; as with
+// GetAccountsHealth returns the health of every account attached to profileID.
+// The `profileId` filter is applied server-side; as with
 // ListAccounts we additionally filter client-side on the echoed profileId so a
 // future multi-profile Ogen instance isn't surprised by a wider remote view.
 // Non-2xx responses surface as *APIError (an add-on 403 carries RequiresAddon).

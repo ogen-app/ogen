@@ -12,7 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// Availability reasons on the graceful insight envelope (CON-153).
+// Availability reasons on the graceful insight envelope.
 const (
 	reasonAddonRequired = "addon_required"
 	reasonNotConfigured = "not_configured"

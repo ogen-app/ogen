@@ -7,7 +7,7 @@ import (
 )
 
 // FollowerSnapshot is one daily follower-count datum for a connected social
-// account, persisted append-only in the isolated analytics DB (CON-153).
+// account, persisted append-only in the isolated analytics DB.
 // Zernio refreshes follower counts once per day; the refresh_zernio_followers
 // job records one row per (account, day) so Ogen keeps a durable follower
 // history beyond Zernio's own window. There is one row per (tenant, account,
@@ -19,7 +19,7 @@ import (
 // PostAnalytics.
 type FollowerSnapshot struct {
 	bun.BaseModel `bun:"table:follower_stats_snapshots,alias:fs" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks (no FK in the analytics DB)
+	TenantScoped  // tenant_id column + central scoping hooks (no FK in the analytics DB)
 
 	ID               string  `bun:"id,notnull"                json:"-"`
 	SocialAccountID  string  `bun:"social_account_id,notnull" json:"account_id"`

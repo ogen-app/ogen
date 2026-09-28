@@ -14,7 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/activity"
 )
 
-// Facts ledger (CON-316): per-row CRUD under /api/brand/facts, and the
+// Facts ledger: per-row CRUD under /api/brand/facts, and the
 // guardrails stance under /api/brand/guardrails/stance. Facts also reach the
 // aggregate GET /api/brand as `facts`, and guardrails.facts is their projection.
 

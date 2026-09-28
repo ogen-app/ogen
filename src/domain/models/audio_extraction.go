@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Audio-extraction lifecycle statuses (CON-282). The extraction row is the
+// Audio-extraction lifecycle statuses. The extraction row is the
 // per-run state machine ogen owns while audio-service does stateless compute:
 // pending -> normalizing -> transcribing -> (complete | partial | failed).
 const (
@@ -21,13 +21,13 @@ const (
 	AudioExtractionStatusFailed   = "failed"
 )
 
-// AudioExtraction is one transcription run of an AUDIO asset (CON-282). It holds
+// AudioExtraction is one transcription run of an AUDIO asset. It holds
 // only processing state — the searchable output lands in assets_chunks. A crash
 // mid-run is resumed from the first incomplete segment; re-extraction mints a
 // fresh row under a new RunKey. Idempotent on (asset_id, run_key).
 type AudioExtraction struct {
 	bun.BaseModel `bun:"table:audio_extractions,alias:ae" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID      string `bun:"id,pk"                json:"id"`
 	AssetID string `bun:"asset_id,notnull"     json:"asset_id"`
@@ -46,15 +46,14 @@ type AudioExtraction struct {
 	// AudioSeconds is the processed source duration (a usage/quota dimension).
 	AudioSeconds int64 `bun:"audio_seconds"        json:"audio_seconds"`
 	// CostMicros is the run's transcription cost, snapshotted at write time from
-	// the versioned gemini price table (CON-86); PriceVersion records which table.
+	// the versioned gemini price table; PriceVersion records which table.
 	CostMicros   int64  `bun:"cost_micros"          json:"cost_micros"`
 	PriceVersion string `bun:"price_version"        json:"price_version,omitempty"`
 	// FailureReason is a tenant-visible reason for a terminal failed/partial run
 	// (over-duration, over-cap, unusable audio).
 	FailureReason string `bun:"failure_reason"      json:"failure_reason,omitempty"`
 	// FailureCode is the stable, machine-readable companion to FailureReason
-	// (models.UploadCode*), so the client can word it without parsing prose
-	// (CON-312).
+	// (models.UploadCode*), so the client can word it without parsing prose.
 	FailureCode string `bun:"failure_code,notnull,default:''" json:"failure_code,omitempty"`
 
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`

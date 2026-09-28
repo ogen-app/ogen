@@ -20,7 +20,7 @@ type priceOverride map[string]map[string]map[string]int64
 const overrideVersion = "env-override"
 
 // ApplyModelPrices parses the USAGE_MODEL_PRICES JSON and merges the rate
-// overrides into the registered vendors (CON-86 FR3, §15). Empty/blank is a
+// overrides into the registered vendors. Empty/blank is a
 // no-op. A malformed payload or an unknown vendor returns an error so the
 // misconfiguration fails fast at boot — mirroring QualityWeightProfiles. Must
 // run before any usage is recorded (boot, single goroutine).

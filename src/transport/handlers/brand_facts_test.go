@@ -22,7 +22,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
-// CON-316: the facts ledger (/api/brand/facts), the guardrails stance and the
+// The facts ledger (/api/brand/facts), the guardrails stance and the
 // guardrails.facts compatibility path.
 var _ = Describe("Brand facts ledger (CON-316)", Ordered, func() {
 	var (

@@ -133,14 +133,14 @@ func TestProcessDocument_InvalidIsTerminal(t *testing.T) {
 	if status.last() != models.AssetStatusFailed {
 		t.Fatalf("status = %q, want failed", status.last())
 	}
-	// CON-312: the client sees why, not just status=failed.
+	// The client sees why, not just status=failed.
 	if status.failCode != models.UploadCodeInvalidFile || status.failReason == "" {
 		t.Fatalf("failure not recorded: code=%q reason=%q", status.failCode, status.failReason)
 	}
 }
 
 // TestProcessDocument_EmbedderOutageFailsWithCode: once retries are exhausted,
-// an embedder outage settles failed with a retriable code (CON-312).
+// an embedder outage settles failed with a retriable code.
 func TestProcessDocument_EmbedderOutageFailsWithCode(t *testing.T) {
 	status := &fakeStatus{}
 	p := newDocProc(DocumentDeps{

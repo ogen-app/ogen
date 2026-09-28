@@ -11,8 +11,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// PostAnalyticsListOptions parameterises the list/overview query
-// (CON-93 §5/§7). Publisher restricts the result to one publisher's
+// PostAnalyticsListOptions parameterises the list/overview query.
+// Publisher restricts the result to one publisher's
 // posts (the analytics overview is "Zernio-published posts" today);
 // empty means no publisher filter. Platform optionally narrows to one
 // platform by name. SortBy/Order are validated/clamped by the caller and
@@ -27,7 +27,7 @@ type PostAnalyticsListOptions struct {
 }
 
 // PostAnalyticsListItem is one row of the overview, read from the current-state
-// table (CON-236: one row per post, no latest-per-post subquery) and shaped to
+// table (one row per post, no latest-per-post subquery) and shaped to
 // the §7 response contract (aggregate metrics nested under `analytics`).
 type PostAnalyticsListItem struct {
 	PostID             string                      `json:"post_id"`
@@ -68,11 +68,11 @@ type PostAnalyticsRepository interface {
 	// than appending. tenant_id is stamped by the TenantScoped hook. Used on the
 	// unchanged path (bump last_checked_at only).
 	Upsert(ctx context.Context, a *models.PostAnalytics) error
-	// AppendSnapshot appends one point to the trend history (CON-236: only when
+	// AppendSnapshot appends one point to the trend history (only when
 	// the metrics changed). ID + OccurredAt are set by the caller.
 	AppendSnapshot(ctx context.Context, s *models.PostAnalyticsSnapshot) error
 	// UpsertWithSnapshot writes the current-state row and appends the trend point
-	// in ONE transaction (CON-236): on a changed refresh both commit together, so
+	// in ONE transaction: on a changed refresh both commit together, so
 	// a snapshot failure can't leave the current row advanced without its history
 	// point (which dedup would then hide forever). Use on the changed path.
 	UpsertWithSnapshot(ctx context.Context, a *models.PostAnalytics, s *models.PostAnalyticsSnapshot) error
@@ -102,7 +102,7 @@ type PostAnalyticsRepository interface {
 	ReachByAgeSamples(ctx context.Context) ([]ReachAgeSample, error)
 	// SnapshotsByPostID returns one post's full deduped trend history (all metric
 	// columns + occurred_at), ascending. The per-post running-total series
-	// (CON-250) is built from these change points carried forward. Tenant-scoped
+	// is built from these change points carried forward. Tenant-scoped
 	// (the snapshot model's hook scopes to the ctx tenant); bounded to one post.
 	SnapshotsByPostID(ctx context.Context, postID string) ([]models.PostAnalyticsSnapshot, error)
 	// LifespanSamples returns per-(post, age-hour) reach observations for the
@@ -362,7 +362,7 @@ func (r *postAnalyticsRepository) List(ctx context.Context, opts PostAnalyticsLi
 	// filtered builds a fresh Model query over the current-state table with the
 	// publisher / platform filters. It stays a Model query so the TenantScoped
 	// hook adds `pa.tenant_id = <ctx tenant>`. One row per post already, so no
-	// latest-per-post subquery is needed (CON-236).
+	// latest-per-post subquery is needed.
 	filtered := func() *bun.SelectQuery {
 		q := r.db.NewSelect().Model((*models.PostAnalytics)(nil))
 		if opts.Publisher != "" {

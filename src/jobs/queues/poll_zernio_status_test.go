@@ -40,7 +40,7 @@ func TestPollTerminalPublishedTransitionsPost(t *testing.T) {
 	if got.PublishedResults == "" {
 		t.Error("published_results should be set with platform outcomes")
 	}
-	// CON-165: the permalink is lifted out of the per-platform blob into a
+	// The permalink is lifted out of the per-platform blob into a
 	// first-class field.
 	if got.PublishedURL != "https://li/x" {
 		t.Errorf("published_url: got %q want %q", got.PublishedURL, "https://li/x")

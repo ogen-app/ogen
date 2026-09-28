@@ -44,7 +44,7 @@ func New(dsn string, debug bool) (*bun.DB, error) {
 
 	db := bun.NewDB(sqldb, pgdialect.New())
 
-	// CON-303: per-query OpenTelemetry spans (operation + table + placeholder SQL,
+	// Per-query OpenTelemetry spans (operation + table + placeholder SQL,
 	// never bound arg values — bunotel's default omits them). A no-op unless a
 	// real TracerProvider is installed (telemetry.Init runs before this), and the
 	// parentless-client sampler drops any query that runs outside a request/job

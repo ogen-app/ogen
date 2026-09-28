@@ -79,7 +79,7 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 
 		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth)
 		postsHandler.SetPostLogRepo(logRepo)
-		// POST /:id/clone now lives on the actions handler (CON-291).
+		// POST /:id/clone now lives on the actions handler.
 		handlers.NewPostActionsHandler(postRepo, clone.New(db, postRepo, versionRepo, postAttRepo, platformRepo, logRepo, store, nil), nil, nil, auth).Register(app)
 		// Same S3-cleanup-on-delete hook the production server wires —
 		// the independence test relies on it.

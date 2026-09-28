@@ -184,7 +184,7 @@ func TestMergePrices(t *testing.T) {
 // TestCostOf_SnapshotIsPure verifies cost is a pure function of (usage,
 // rates): a cost computed against a captured rate set never changes if the
 // vendor's registered prices are later edited. The recorder relies on this
-// to store an immutable cost_micros snapshot (CON-86 FR3, AC3).
+// to store an immutable cost_micros snapshot.
 func TestCostOf_SnapshotIsPure(t *testing.T) {
 	clearRegistry()
 	captured := Rates{KindInput: 3_000_000}

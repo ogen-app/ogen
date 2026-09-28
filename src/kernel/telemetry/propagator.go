@@ -44,7 +44,7 @@ const sentryTraceHeader = "sentry-trace"
 // adopts as the parent of the server span — joining the UI transaction and the
 // API trace under one id in Sentry.
 //
-// Why this exists: the UI (CON-304) propagates with `sentry-trace`/`baggage`, not
+// Why this exists: the UI propagates with `sentry-trace`/`baggage`, not
 // W3C `traceparent`. sentry-go v0.49 removed its built-in OTel propagator
 // (only the error-linking integration remains), so there is otherwise nothing on
 // the API that understands the browser's header and the UI→API traces stay

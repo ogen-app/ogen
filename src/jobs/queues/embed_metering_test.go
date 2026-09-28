@@ -58,7 +58,7 @@ func eventsFor(events []*models.UsageEvent, feature string) []*models.UsageEvent
 }
 
 // TestProcessAudio_MetersEmbedding: transcript-chunk embeddings are recorded on
-// the gemini vendor as audio_embed (CON-312), beside the transcribe events.
+// the gemini vendor as audio_embed, beside the transcribe events.
 func TestProcessAudio_MetersEmbedding(t *testing.T) {
 	client := &fakeAudioClient{
 		probe: &audio.ProbeResult{DurationMs: 60_000},
@@ -87,7 +87,7 @@ func TestProcessAudio_MetersEmbedding(t *testing.T) {
 }
 
 // TestProcessImage_MetersEmbedding: description + region embeddings are
-// recorded as image_embed (CON-312), beside the image_extract vision events.
+// recorded as image_embed, beside the image_extract vision events.
 func TestProcessImage_MetersEmbedding(t *testing.T) {
 	client := &fakeImageClient{res: &imageclient.ExtractResult{
 		Description: "a bar chart of revenue", DescriptionOK: true, ExtractionOK: true,

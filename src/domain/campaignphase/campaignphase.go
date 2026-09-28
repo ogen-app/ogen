@@ -1,9 +1,8 @@
-// Package campaignphase owns a campaign's per-phase date plan (CON-166): which
+// Package campaignphase owns a campaign's per-phase date plan: which
 // calendar days each phase of the campaign's type covers. It is the single
 // implementation of the "split the campaign timeline across its phases" rule
-// that content_plan, the campaign assistant's current-phase lookup and the
-// reschedule action previously each re-implemented, so the API and every
-// consumer agree on the windows.
+// shared by content_plan, the campaign assistant's current-phase lookup and
+// the reschedule action, so the API and every consumer agree on the windows.
 //
 // A plan is either derived (the default: [start_date, end_date] split evenly
 // across the phases, remainder days to the earliest) or manual (a user-edited

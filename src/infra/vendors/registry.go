@@ -128,8 +128,8 @@ func ByFamily(f Family) []Descriptor {
 // CostOf computes the snapshot cost for a usage breakdown under the named
 // vendor's current price table. ok is false when the vendor is unknown or
 // the model/sku has no rate entry; callers should still record the event
-// with cost 0 and bump an "unknown model"/"unknown vendor" counter
-// (CON-86 FR3, §9). The returned version is "" only when the vendor itself
+// with cost 0 and bump an "unknown model"/"unknown vendor" counter.
+// The returned version is "" only when the vendor itself
 // is unknown.
 func CostOf(vendorName, model string, u Usage) (micros int64, version string, ok bool) {
 	d, found := Get(vendorName)
@@ -146,7 +146,7 @@ func CostOf(vendorName, model string, u Usage) (micros int64, version string, ok
 // VendorOf returns the vendor slug that owns the given model id, scanning the
 // registered model vendors (a model belongs to exactly one). ok is false when no
 // registered vendor declares it. Used to build the genkit "vendor/model" ref
-// without a hardcoded provider prefix (CON-308).
+// without a hardcoded provider prefix.
 func VendorOf(model string) (string, bool) {
 	mu.RLock()
 	defer mu.RUnlock()

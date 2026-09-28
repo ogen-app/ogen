@@ -55,7 +55,7 @@ func resolvePlatforms(ctx context.Context, targetPlatforms models.CampaignPlatfo
 	return platforms, nil
 }
 
-// resolvePhaseByID returns the campaign phase with the given id (CON-114).
+// resolvePhaseByID returns the campaign phase with the given id.
 func resolvePhaseByID(campaign *models.Campaign, phaseID string) (resolvedPhase, bool) {
 	if campaign.CampaignType == nil {
 		return resolvedPhase{}, false

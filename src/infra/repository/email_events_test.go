@@ -99,7 +99,7 @@ func TestEmailEventRecordAndRollup(t *testing.T) {
 
 // TestEmailEventNoStatusRegression asserts a terminal-negative state (complaint)
 // is never overwritten by a late positive event, while the positive event's
-// timestamps/counts are still recorded (CON-298).
+// timestamps/counts are still recorded.
 func TestEmailEventNoStatusRegression(t *testing.T) {
 	db := openMigratedDB(t)
 	logs := repository.NewEmailLogRepository(db)
@@ -146,7 +146,7 @@ func TestEmailEventNoStatusRegression(t *testing.T) {
 }
 
 // TestEmailLogListByTenant covers tenant-scoped keyset pagination + filters and
-// NULL-tenant exclusion (CON-298). FKs are disabled by openMigratedDB, so raw
+// NULL-tenant exclusion. FKs are disabled by openMigratedDB, so raw
 // tenant_id strings need no tenants row.
 func TestEmailLogListByTenant(t *testing.T) {
 	db := openMigratedDB(t)

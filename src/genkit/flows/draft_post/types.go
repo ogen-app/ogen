@@ -8,7 +8,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 )
 
-// DraftPostRequest is the input to the draftPost generation flow (CON-207):
+// DraftPostRequest is the input to the draftPost generation flow:
 // rewrite SourceMaterial into Count finished, platform-ready post drafts for a
 // single platform, phase, and publish window. All fields are concrete — the
 // campaign_assistant draftPost tool resolves any natural language (platform,
@@ -37,7 +37,7 @@ type DraftedPost struct {
 }
 
 // DraftPostResponse is returned by the flow. Posts is the persisted set — every
-// element already has a real Post row (CON-66). An empty Posts with warnings is
+// element already has a real Post row. An empty Posts with warnings is
 // a soft failure (the model produced nothing usable), not an error.
 type DraftPostResponse struct {
 	Posts    []DraftedPost `json:"posts"`
@@ -58,20 +58,20 @@ type DraftPostRepos struct {
 	Campaigns repository.CampaignRepository
 	Platforms repository.PlatformRepository
 	Posts     repository.PostRepository
-	// Notes stores the source research as a reference note on each created post
-	// (CON-207). nil skips note creation (the post is still created).
+	// Notes stores the source research as a reference note on each created post.
+	// nil skips note creation (the post is still created).
 	Notes repository.PostNoteRepository
 	// Brands resolves the campaign's brand voice/audience/guardrails into the
-	// prompt (CON-245). nil falls back to the legacy tone_guidelines prose.
+	// prompt. nil falls back to the legacy tone_guidelines prose.
 	Brands repository.BrandRepository
 }
 
 // DraftPostFlowConfig holds static settings for the flow. Unlike content_plan it
 // has no Hub: draftPost is only reached through the campaign assistant, whose
-// runner already publishes the coarse assistant_completed finalisation event
-// (CON-112), so a second per-flow finalisation would be redundant.
+// runner already publishes the coarse assistant_completed finalisation event,
+// so a second per-flow finalisation would be redundant.
 type DraftPostFlowConfig struct {
-	// Provider resolves the model reference + call config by role (CON-86 FR12).
+	// Provider resolves the model reference + call config by role.
 	// Draft copywriting runs on RoleGeneration (Sonnet-tier), like content_plan.
 	Provider *llm.Provider
 	// Recorder captures usage under flow name "draft_post"; nil disables it.
@@ -119,7 +119,7 @@ type StepEventPayload struct {
 }
 
 // PostEventPayload carries one finished draft with its persisted row id, so the
-// client can render it immediately (CON-66). Index is the draft's slot in the
+// client can render it immediately. Index is the draft's slot in the
 // returned order.
 type PostEventPayload struct {
 	Post  DraftedPost `json:"post"`

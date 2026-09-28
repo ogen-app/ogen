@@ -44,12 +44,12 @@ func (c Config) withDefaults() Config {
 
 // Recorder captures usage events and writes them to the analytics DB on a
 // background goroutine, so a model/publisher call never waits on — or fails
-// from — analytics (CON-86 FR5). Cost and tenant are snapshotted at enqueue
+// from — analytics. Cost and tenant are snapshotted at enqueue
 // time; only the DB write is deferred.
 //
 // A nil *Recorder is a valid no-op: when ANALYTICS_DSN is empty the server
 // holds a nil Recorder and every Record call returns immediately, recording
-// nothing (CON-86 FR10).
+// nothing.
 type Recorder struct {
 	writer  Writer
 	metrics *Metrics
@@ -84,7 +84,7 @@ func NewRecorder(w Writer, m *Metrics, cfg Config) *Recorder {
 
 // Record builds a usage event from a vendor MeterEvent and enqueues it for an
 // async write. Tenant is resolved from ctx now; an untenanted call is not
-// attributed and is skipped (CON-86 §9). Cost is snapshotted now from the
+// attributed and is skipped. Cost is snapshotted now from the
 // registry. Enqueue never blocks: a full buffer drops the event (counted),
 // because analytics must never add latency to the caller.
 func (r *Recorder) Record(ctx context.Context, vendorName, feature string, ev vendors.MeterEvent) {
@@ -229,7 +229,7 @@ func (r *Recorder) flush(batch []*models.UsageEvent) {
 // table. An empty price table is "count-only" (e.g. a publisher we count but
 // don't price): cost 0 is expected, not a gap. When the table HAS models but
 // this one is missing, priced is false so the caller counts an unknown-model
-// miss (CON-86 FR3).
+// miss.
 func costFor(d vendors.Descriptor, model string, u vendors.Usage) (micros int64, priced bool) {
 	if len(d.Prices.Models) == 0 {
 		return 0, true

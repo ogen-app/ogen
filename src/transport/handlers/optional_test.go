@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestOptionalUnmarshal locks the three-state decode (CON-245): an omitted key
+// TestOptionalUnmarshal locks the three-state decode: an omitted key
 // stays absent, an explicit null is present-and-nil, and a value is present.
 func TestOptionalUnmarshal(t *testing.T) {
 	type body struct {

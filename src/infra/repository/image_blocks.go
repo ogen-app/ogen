@@ -9,7 +9,7 @@ import (
 )
 
 // ImageBlockRepository persists the structured blocks extracted from a
-// content-bank image (CON-281). Blocks are additive per run and replaced
+// content-bank image. Blocks are additive per run and replaced
 // wholesale when a run is re-driven, so ReplaceForExtraction is the write path.
 type ImageBlockRepository interface {
 	// ReplaceForExtraction deletes any existing blocks for the extraction and

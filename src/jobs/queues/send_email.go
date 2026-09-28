@@ -18,7 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// SendEmailQueue is the single async send path for all mail (CON-154). Welcome
+// SendEmailQueue is the single async send path for all mail. Welcome
 // (transactional, immediate) and the marketing drip (delayed via ScheduledAt)
 // both flow through it; the recipient + suppression are resolved fresh at send
 // time so an unsubscribe or email change is honoured without touching the
@@ -36,14 +36,14 @@ type SendEmailTask struct {
 	EmailKind      models.EmailKind `json:"email_kind"`
 	IdempotencyKey string           `json:"idempotency_key"`
 	// ToEmail / ToName address a recipient who is NOT (yet) a user — e.g. an
-	// invitee (CON-26), who has no users row until they accept. Used only when
+	// invitee, who has no users row until they accept. Used only when
 	// UserID is empty: the worker then sends to ToEmail directly instead of
 	// re-resolving the address from users. Exactly one of UserID / ToEmail is set.
 	ToEmail string `json:"to_email,omitempty"`
 	ToName  string `json:"to_name,omitempty"`
 	// Vars carries per-message template variables that aren't derivable from the
 	// user/tenant/config at send time — e.g. the one-time password-reset URL
-	// (CON-161) or the invitation accept link + inviter + role (CON-26). Empty for
+	// or the invitation accept link + inviter + role. Empty for
 	// templates that render purely from the resolved Data.
 	Vars map[string]string `json:"vars,omitempty"`
 }
@@ -62,7 +62,7 @@ func (SendEmailTask) InsertOpts() river.InsertOpts {
 type SendEmailProcessor struct {
 	river.WorkerDefaults[SendEmailTask]
 	Deps EmailDeps
-	// Tenants skips mail for a suspended/deleted tenant (CON-190) — e.g. a drip
+	// Tenants skips mail for a suspended/deleted tenant — e.g. a drip
 	// step scheduled before the tenant was frozen. Nil = no gate.
 	Tenants TenantStatusReader
 }
@@ -101,7 +101,7 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 	}
 	ctx = tenantctx.With(ctx, t.TenantID)
 
-	// Skip mail for a suspended/deleted tenant (CON-190): a frozen tenant sends no
+	// Skip mail for a suspended/deleted tenant: a frozen tenant sends no
 	// welcome/drip/transactional mail. A DB error retries; otherwise terminal.
 	if active, aerr := tenantIsActive(ctx, p.Tenants, t.TenantID); aerr != nil {
 		return aerr
@@ -112,7 +112,7 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 
 	// Resolve the recipient. The usual path re-resolves it fresh from users (so an
 	// email change since enqueue is honoured and a deleted user is a clean terminal
-	// skip). When the mail targets someone who isn't a user yet — an invitee, CON-26
+	// skip). When the mail targets someone who isn't a user yet — an invitee
 	// — the address is carried on the task itself; the workspace name then rides the
 	// vars, since there's no user/tenant to load.
 	var recipientName, toEmail, workspace string
@@ -154,7 +154,7 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 		return nil
 	}
 
-	// Send-time suppression gate (CON-154 D2).
+	// Send-time suppression gate.
 	if dep.Suppressions != nil {
 		suppressed, err := dep.Suppressions.IsSuppressed(ctx, toEmail, t.EmailKind)
 		if err != nil {
@@ -202,10 +202,10 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 		WorkspaceName:  workspace,
 		AppURL:         dep.AppBaseURL,
 		UnsubscribeURL: unsubURL,
-		// Per-message vars: the password_reset template reads ResetURL (CON-161);
-		// the invitation template reads InviteURL/InviterName/Role (CON-26); the
+		// Per-message vars: the password_reset template reads ResetURL;
+		// the invitation template reads InviteURL/InviterName/Role; the
 		// connection_expiring template reads Platform/AccountName/Stage/Expires*/
-		// ReconnectURL (CON-219); other templates leave them empty.
+		// ReconnectURL; other templates leave them empty.
 		ResetURL:     t.Vars["reset_url"],
 		InviteURL:    t.Vars["invite_url"],
 		InviterName:  t.Vars["inviter_name"],
@@ -216,7 +216,7 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 		ExpiresAt:    t.Vars["expires_at"],
 		ExpiresIn:    t.Vars["expires_in"],
 		ReconnectURL: t.Vars["reconnect_url"],
-		// admin_tenant_registered (CON-229): the operator notification carries the
+		// admin_tenant_registered: the operator notification carries the
 		// newly-registered tenant's details as vars (there's no user/tenant to load
 		// for the operator recipient); other templates leave them empty.
 		TenantID:     t.Vars["tenant_id"],
@@ -256,7 +256,7 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 			slog.WarnContext(ctx, "send_email transient failure; will retry", logging.AttrComponent, comp, "template", t.TemplateKey, logging.AttrError, err)
 			return err
 		}
-		// Post-render terminal failure: persist what we attempted to send (CON-306)
+		// Post-render terminal failure: persist what we attempted to send
 		// so an operator can see the rendered body behind a failed delivery.
 		id := p.writeLog(ctx, logBase, models.EmailLogFailed, "", err.Error())
 		p.writeBody(ctx, id, rendered, dep.From, dep.ReplyTo)
@@ -264,7 +264,7 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 		return nil // terminal
 	}
 
-	// Persist the rendered body alongside the sent log (CON-306) so the operator
+	// Persist the rendered body alongside the sent log so the operator
 	// Emails tab renders it even after the Resend message ages out of retention.
 	id := p.writeLog(ctx, logBase, models.EmailLogSent, msgID, "")
 	p.writeBody(ctx, id, rendered, dep.From, dep.ReplyTo)
@@ -283,10 +283,10 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 //
 // Returns the inserted row id, or "" when no row was written (logs repo unwired,
 // id-gen failure, or insert error). The id lets the caller persist the rendered
-// body against it (CON-306); an empty id must NOT be used for that, since the
+// body against it; an empty id must NOT be used for that, since the
 // email_bodies FK references a committed email_logs row.
 func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog, status models.EmailLogStatus, providerMsgID, errMsg string) string {
-	// Mirror the outcome into tenant_activity_events (CON-125). The Recorder is
+	// Mirror the outcome into tenant_activity_events. The Recorder is
 	// nil-safe and resolves the tenant from ctx (set in Process), so this never
 	// blocks the send and is a no-op when analytics is disabled. Recorded
 	// independently of the email_logs write below so activity is captured even
@@ -314,8 +314,8 @@ func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog,
 }
 
 // writeBody best-effort persists the rendered body against a just-written
-// email_logs row so the operator Emails tab (CON-192) renders it even after the
-// Resend message ages out of retention or the key is unset (CON-306). It is a
+// email_logs row so the operator Emails tab renders it even after the
+// Resend message ages out of retention or the key is unset. It is a
 // no-op when the log row wasn't written (empty id — the FK would fail) or the
 // body store isn't wired. A body-store failure is warned and swallowed: a
 // missing body must never fail or re-send the job. Call it only with an id
@@ -338,7 +338,7 @@ func (p *SendEmailProcessor) writeBody(ctx context.Context, emailLogID string, r
 
 // recordActivity emits one email-category activity event per terminal send
 // outcome so the analytics DB carries a tenant-scoped, append-only trail of mail
-// activity alongside the operational email_logs row (CON-125). The type mirrors
+// activity alongside the operational email_logs row. The type mirrors
 // the email_logs status; the recipient address is deliberately omitted — the
 // event is keyed by user + tenant, keeping raw PII out of analytics. The full
 // error (if any) stays in email_logs; a capped copy rides the payload so failure

@@ -27,7 +27,7 @@ type ownerLister interface {
 
 // DetectManualPublishDueQueue is the recurring sweep that notifies a workspace
 // when a post left for manual publishing reaches its scheduled time and nobody
-// has published it yet (CON-285 FR9). Today nothing tells the user a manual post
+// has published it yet. Today nothing tells the user a manual post
 // has come due; this closes that gap. It mirrors the connection-health sweep: a
 // marker payload, self-registering, gated on a positive interval, and a harmless
 // no-op when there is nothing due.

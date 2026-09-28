@@ -8,7 +8,7 @@ import (
 
 // EmailKind separates essential transactional mail (welcome, password reset)
 // from marketing mail (onboarding drip). It drives suppression semantics and
-// whether an unsubscribe footer is required — see the send_email job (CON-154).
+// whether an unsubscribe footer is required — see the send_email job.
 type EmailKind string
 
 const (

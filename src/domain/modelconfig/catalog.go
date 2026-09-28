@@ -1,5 +1,5 @@
 // Package modelconfig is the code-owned catalog of configurable genkit flows
-// and their model "slots" (CON-308). A slot is one model-selection site: a
+// and their model "slots". A slot is one model-selection site: a
 // single-model flow has one slot; an orchestrated flow declares several (e.g.
 // post_assistant = planner + writer). The catalog is the source of truth for
 // which (flow, slot) pairs exist and what a model must be able to do to fill

@@ -19,12 +19,12 @@ import (
 // posting-frequency / follower-stats, CON-153). Under Zernio's bundled
 // pricing on GET /analytics — analytics is on every tier, re-verified
 // 2026-06-15 — the 402 is never expected; the refresh queue handles it
-// defensively only (CON-93 §2/§9). The 403 IS expected on the CON-153
+// defensively only. The 403 IS expected on the CON-153
 // endpoints for tenants without the add-on and is surfaced gracefully.
 // See IsAddonRequired for the shared status check.
 var ErrAnalyticsUnavailable = errors.New("zernio: analytics unavailable (add-on required)")
 
-// Analytics source filters (CON-93). Ogen only ever requests `late` —
+// Analytics source filters. Ogen only ever requests `late` —
 // posts Zernio itself published, which is the entire CON-93 scope. The
 // `external`/`all` values are listed for completeness; analytics for
 // externally-synced/legacy posts is a separate, future issue.

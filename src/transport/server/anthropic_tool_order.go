@@ -17,35 +17,20 @@ import (
 var installAnthropicToolOrderOnce sync.Once
 
 // InstallAnthropicToolOrderStabilizer wraps http.DefaultTransport so every
-// outgoing Anthropic /v1/messages request has its `tools` array sorted by name
-// before it is sent. This is the CON-112 fix.
+// outgoing Anthropic /v1/messages request has its `tools` array sorted by name.
 //
-// Root cause: the Genkit Anthropic plugin builds the outgoing tool list by
-// ranging a Go map (firebase/genkit go/ai/generate.go), which yields a *random*
-// order on every request, and it forces `strict: true` on every tool
-// (plugins/internal/anthropic). Anthropic compiles strict tool schemas into a
-// constrained-decoding grammar that is cached per exact tool-set, and the cache
-// key is order-sensitive. A fresh random order therefore misses the cache on
-// every call and pays the full server-side compile (~50s) each time — the
-// chronic latency on the campaign_assistant and other tool-using flows.
+// The Genkit Anthropic plugin builds the tool list by ranging a map and marks
+// every tool strict. Anthropic caches the compiled strict-tool grammar per
+// exact, order-sensitive tool set, so a random order pays the full compile
+// (~50s) on every call. A stable order keeps that cache warm.
 //
-// Imposing a deterministic order at the wire makes the cache warm after the
-// first request (per ~24h TTL) and every subsequent request fast. The plugin
-// builds its client from http.DefaultClient (→ http.DefaultTransport), so this
-// intercepts every model call without forking the plugin — same hook point as
-// InstallAnthropicHTTPLogging. Must be installed before the plugin builds its
-// client. Idempotent; non-Anthropic traffic passes through untouched.
+// When cachePrefixModel is non-empty, requests for that model also get an
+// ephemeral cache_control breakpoint on the last system block, caching the
+// tool schemas and system prompt together. Pass "" to disable. Prefixes under
+// the model's caching minimum are silently not cached.
 //
-// cachePrefixModel, when non-empty, additionally gets an ephemeral
-// cache_control breakpoint on `system` (token-level prompt caching, distinct
-// from the strict-tool grammar cache above). Anthropic assembles the prefix as
-// tools→system, so one breakpoint on the last system block caches the tool
-// schemas AND the system prompt together. Scoped to a single model — the cheap
-// planning model behind campaign_assistant (CON-112) — because a flow whose
-// system prompt changes every request with no reads would only pay the ~1.25×
-// cache-write premium. Pass "" to disable. Prompt caching only fires when the
-// cached prefix clears the model's minimum (~4096 tokens on Haiku 4.5);
-// shorter prefixes silently do nothing — verify via cache_read_input_tokens.
+// Must be installed before the plugin builds its client. Idempotent;
+// non-Anthropic traffic passes through untouched.
 func InstallAnthropicToolOrderStabilizer(cachePrefixModel string) {
 	installAnthropicToolOrderOnce.Do(func() {
 		base := http.DefaultTransport

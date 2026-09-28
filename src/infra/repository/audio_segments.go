@@ -10,7 +10,7 @@ import (
 )
 
 // AudioSegmentRepository persists the bounded transcription windows of an
-// extraction (CON-282). Segments are checkpointed so a retry resumes from the
+// extraction. Segments are checkpointed so a retry resumes from the
 // first incomplete one.
 type AudioSegmentRepository interface {
 	// CreateMany inserts the initial (pending) segment set for an extraction.

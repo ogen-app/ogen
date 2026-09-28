@@ -1,10 +1,10 @@
-// Package accountselect is the single source of truth for the CON-150
+// Package accountselect is the single source of truth for the
 // account-selection rule: which connected same-platform account a post publishes
 // to. The rule — an explicit post.social_account_id must be connected and
 // on-platform; otherwise the platform's sole connected account is auto-selected,
-// zero is "none", two-or-more is "ambiguous" — was previously spelled out three
-// times (the schedule pre-flight gate, the submit worker's authoritative
-// resolver, and external-post verification), each free to drift. This package
+// zero is "none", two-or-more is "ambiguous" — is shared by the schedule
+// pre-flight gate, the submit worker's authoritative resolver, and
+// external-post verification, so they cannot drift. This package
 // classifies once; each caller maps the Outcome to its own behaviour (the gate
 // defers the 0/1 cases to the worker, the worker terminal-fails them, the verify
 // endpoint writes an HTTP error).

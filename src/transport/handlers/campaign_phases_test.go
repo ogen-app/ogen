@@ -19,7 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
-// CON-166: campaign phase date plans, the campaign-type lock and post phase
+// Campaign phase date plans, the campaign-type lock and post phase
 // integrity (API checks + the DB trigger backstops).
 var _ = Describe("Campaign phases (CON-166)", Ordered, func() {
 	// Seeded system types: Uk = awareness (phases 98 → xh), Ef = conversion

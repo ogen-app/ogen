@@ -19,9 +19,9 @@ import (
 )
 
 // PostInsightsHandler owns a post's read/derived-insight endpoints — quality
-// assessment (CON-85: POST /:id/assess + GET /:id/assessment) and the per-post
-// analytics snapshot (CON-93: GET /:id/analytics). Split out of the PostsHandler
-// god-object (CON-291): a focused handler carrying only the (optional) deps these
+// assessment (POST /:id/assess + GET /:id/assessment) and the per-post
+// analytics snapshot (GET /:id/analytics). Split out of the PostsHandler
+// god-object: a focused handler carrying only the (optional) deps these
 // read paths need, each nil-disabling its endpoint with a 503.
 type PostInsightsHandler struct {
 	repo             repository.PostRepository
@@ -212,7 +212,7 @@ func (h *PostInsightsHandler) GetAnalytics(c *fiber.Ctx) error {
 		return err
 	}
 	// Analytics is defined only for posts published through a publisher;
-	// today that's Zernio (CON-93 §9). 409 with a machine-readable code so
+	// today that's Zernio. 409 with a machine-readable code so
 	// the client can distinguish "wrong kind of post" from "not found".
 	if post.PublisherPostID == "" {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
@@ -225,7 +225,7 @@ func (h *PostInsightsHandler) GetAnalytics(c *fiber.Ctx) error {
 		return err
 	}
 	// No snapshot yet → the background refresh hasn't covered this post.
-	// Return 200 pending (not 404) so clients can poll (CON-93 §10).
+	// Return 200 pending (not 404) so clients can poll.
 	if snapshot == nil {
 		return c.JSON(fiber.Map{"status": "pending", "post_id": post.ID})
 	}

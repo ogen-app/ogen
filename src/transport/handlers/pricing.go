@@ -20,7 +20,7 @@ type PricingHandler struct {
 	versions repository.TenantTierVersionRepository
 	catalog  *entitlements.Catalog
 	auth     fiber.Handler
-	limiter  *entitlements.Limiter // CON-295: live usage counts for /me/entitlements (nil-safe)
+	limiter  *entitlements.Limiter // Live usage counts for /me/entitlements (nil-safe)
 }
 
 // NewPricingHandler builds the handler over the entitlement resolver, the
@@ -107,7 +107,7 @@ func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
 	if err != nil {
 		return notFound(err, "no entitlements resolved for this workspace")
 	}
-	// CON-295: attach live usage to each numeric feature that has a registered
+	// Attach live usage to each numeric feature that has a registered
 	// counter, so the client can render "N of M" and warn before the 402 rather
 	// than learning the cap only on refusal. Uncounted / boolean features keep
 	// current=nil (omitted). Scope the context to the resolved tenant so the

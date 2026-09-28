@@ -73,7 +73,7 @@ func postFingerprint(post *models.Post) string {
 	var b strings.Builder
 	b.WriteString(post.Content)
 	b.WriteByte('\x1f')
-	// CON-245: the resolved brand block renders the voice's channel note for
+	// The resolved brand block renders the voice's channel note for
 	// post.PlatformID, so a platform change must invalidate the cached context.
 	b.WriteString(post.PlatformID)
 	b.WriteByte('\x1f')
@@ -87,7 +87,7 @@ func postFingerprint(post *models.Post) string {
 
 // brandFingerprint captures the identity (id + updatedAt) of the resolved brand
 // material so the context cache invalidates when a voice/audience/guardrails is
-// edited (CON-245 FR6), not just when the post itself changes.
+// edited, not just when the post itself changes.
 func brandFingerprint(r *brandresolve.Resolved) string {
 	if r == nil {
 		return ""
@@ -108,7 +108,7 @@ func brandFingerprint(r *brandresolve.Resolved) string {
 	if r.Guardrails != nil {
 		b.WriteString(r.Guardrails.UpdatedAt.String())
 	}
-	// CON-316: facts are their own rows. The list is already filtered for
+	// Facts are their own rows. The list is already filtered for
 	// expiry, so a fact going off also changes the fingerprint.
 	for _, f := range r.Facts {
 		b.WriteByte('\x1f')
@@ -138,7 +138,7 @@ func assembleContextCached(
 		}
 		campaign = c
 	}
-	// CON-245: resolve the brand and fold its identity into the fingerprint, so
+	// Resolve the brand and fold its identity into the fingerprint, so
 	// an edited voice/audience/guardrails invalidates the cached context (FR6).
 	// Fails open — resolved is usable even on a repo error.
 	resolved, _ := brandresolve.Resolve(ctx, repos.Brands, campaign, post)
@@ -268,7 +268,7 @@ type contextTemplateData struct {
 	TargetPersona       string
 	KeyMessages         string
 	ToneGuidelines      string
-	// BrandBlock is the resolved brand voice/audience/guardrails block (CON-245),
+	// BrandBlock is the resolved brand voice/audience/guardrails block,
 	// which supersedes TargetPersona/ToneGuidelines in the template.
 	BrandBlock       string
 	Language         string
@@ -295,7 +295,7 @@ const (
 	maxNotesContextRunes = 4000
 )
 
-// noteSummary is a single note surfaced to the model (CON-188). Body is
+// noteSummary is a single note surfaced to the model. Body is
 // included (notes are short) so the assistant can act on the captured thesis or
 // prompt directly.
 type noteSummary struct {
@@ -471,7 +471,7 @@ func buildAssetSummaries(ctx context.Context, assetIDs []string, repos PostAssis
 }
 
 // buildSchedulingContext renders the per-turn scheduling context block
-// (CON-78) injected into the user turn: the current time in both the
+// injected into the user turn: the current time in both the
 // workspace timezone and UTC, the post's status, how its platform routes
 // (auto vs manual publish), and a readiness summary so the model can
 // confirm the right mode and pre-empt a promote-time validation failure
@@ -558,7 +558,7 @@ func schedulingReadinessReasons(ctx context.Context, post *models.Post, repos Po
 			atts = a
 		}
 	}
-	// CON-284: the per-segment gate for threads, whole-post gate otherwise.
+	// The per-segment gate for threads, whole-post gate otherwise.
 	errsByPlatform := platforms.ValidatePublishReadiness(post, platform, atts)
 	var reasons []string
 	for _, errs := range errsByPlatform {

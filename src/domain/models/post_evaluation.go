@@ -10,7 +10,7 @@ import (
 )
 
 // EvaluationDimensionKey identifies one of the four fixed quality
-// dimensions a Post is scored on (CON-85). The set is closed: the rubric,
+// dimensions a Post is scored on. The set is closed: the rubric,
 // the weight profiles, and the structured output all key off these.
 type EvaluationDimensionKey string
 
@@ -32,7 +32,7 @@ const (
 )
 
 // EvaluationSuggestion is one span-anchored, guidance-only improvement
-// note (CON-85). Span is required and must quote/point to actual post
+// note. Span is required and must quote/point to actual post
 // text — it is the primary guard against generic advice ("make it more
 // engaging"). v1 suggestions are guidance, not rewrites.
 type EvaluationSuggestion struct {
@@ -98,7 +98,7 @@ func (r *EvaluationResult) Scan(src any) error {
 	}
 }
 
-// PostEvaluation is the latest quality assessment for a Post (CON-85).
+// PostEvaluation is the latest quality assessment for a Post.
 // Exactly one row per Post: re-evaluation overwrites via upsert on
 // post_id, so this always reflects the most recent run.
 //
@@ -109,7 +109,7 @@ func (r *EvaluationResult) Scan(src any) error {
 // never returned by the model.
 type PostEvaluation struct {
 	bun.BaseModel `bun:"table:post_evaluations,alias:pe" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID               string           `bun:"id,pk"                                        json:"id"`
 	PostID           string           `bun:"post_id,notnull"                              json:"post_id"`
@@ -121,7 +121,7 @@ type PostEvaluation struct {
 	ModelID          string           `bun:"model_id,notnull"                             json:"model_id"`
 	// InputHash fingerprints the assessment inputs (rendered prompt + model)
 	// so the assess flow skips re-running the model when nothing the model
-	// sees has changed (CON-92).
+	// sees has changed.
 	InputHash string    `bun:"input_hash,notnull"                           json:"input_hash"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`

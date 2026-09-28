@@ -23,7 +23,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// ProcessDocumentQueue ingests an uploaded office/text document (CON-280):
+// ProcessDocumentQueue ingests an uploaded office/text document:
 // download original.<ext> from object storage, parse it via document-service
 // over gRPC (text -> source-anchored chunks), embed the chunks with the same
 // Gemini embedder used for PDFs, and persist chunks + file metadata. The direct
@@ -38,7 +38,7 @@ type documentsParser interface {
 }
 
 // documentAssetWriter is the asset status surface plus MarkFailed, which records
-// why a document failed (CON-312). The asset repo satisfies it.
+// why a document failed. The asset repo satisfies it.
 type documentAssetWriter interface {
 	assetStatusUpdater
 	MarkFailed(ctx context.Context, id, code, reason string) error
@@ -54,12 +54,12 @@ type DocumentDeps struct {
 	Assets   documentAssetWriter
 	Chunks   chunkUpserter
 	Files    fileUpserter
-	// Recorder + EmbedModel meter document-ingestion embedding usage (CON-86).
+	// Recorder + EmbedModel meter document-ingestion embedding usage.
 	// nil Recorder = no-op. EmbedModel is the price-map key (cfg.EmbedModel).
 	Recorder   *usage.Recorder
 	EmbedModel string
 	// Notifier drops an in-app notification to the asset's creator when ingest
-	// reaches a terminal status (CON-242). Nil is a no-op.
+	// reaches a terminal status. Nil is a no-op.
 	Notifier *notify.Service
 }
 
@@ -122,7 +122,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 		return fmt.Errorf("process_document %s: storage not configured", in.AssetID)
 	}
 
-	// No gemini_api_key configured yet (CON-104): checked up front so we don't
+	// No gemini_api_key configured yet: checked up front so we don't
 	// download + parse the document only to fail every chunk embed. Retry rather
 	// than fail — a key set via the secrets API takes effect without a restart,
 	// so a later attempt can succeed; give up (failed) only once attempts are
@@ -242,7 +242,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 		return err
 	}
 
-	// CON-86: one usage event per document ingest (sum of embedded-chunk token
+	// One usage event per document ingest (sum of embedded-chunk token
 	// estimates; the Gemini embed response carries no usage). Recorded only AFTER
 	// the durable writes (chunks + file + status) succeed, so a River retry from a
 	// late failure can't double-count. Nil recorder = no-op; skip when nothing
@@ -263,14 +263,14 @@ func (p *ProcessDocumentProcessor) setStatus(ctx context.Context, assetID, statu
 	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
 		return fmt.Errorf("process_document %s: set status %s: %w", assetID, status, err)
 	}
-	// CON-242: announce terminal outcomes to the asset's creator (no-op for the
+	// Announce terminal outcomes to the asset's creator (no-op for the
 	// intermediate "processing" write).
 	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "document", models.AssetTypeDocument)
 	return nil
 }
 
 // fail marks the asset failed with a machine-readable code and a tenant-visible
-// reason (CON-312) and announces it to the creator, like setStatus(failed).
+// reason and announces it to the creator, like setStatus(failed).
 func (p *ProcessDocumentProcessor) fail(ctx context.Context, assetID, code, reason string) error {
 	if p.Deps.Assets == nil {
 		return nil

@@ -12,10 +12,10 @@ import (
 )
 
 // ActivityRepository persists tenant_activity_events in the isolated analytics
-// database (CON-125). It is constructed with the analytics *bun.DB, not the
+// database. It is constructed with the analytics *bun.DB, not the
 // main pool. Writes come from the async activity.Recorder in a system context
-// (tenant pre-set per row). A read/query surface is deferred to the consumers
-// (CON-119 / CON-120); v1 is collection-only.
+// (tenant pre-set per row). A read/query surface is deferred to the consumers;
+// v1 is collection-only.
 type ActivityRepository interface {
 	// Insert writes a batch of events. A nil/empty batch is a no-op.
 	Insert(ctx context.Context, events []*models.ActivityEvent) error
@@ -46,7 +46,7 @@ func (r *activityRepository) Insert(ctx context.Context, events []*models.Activi
 const postLogBackfillPrefix = "plog_"
 
 // postLogActivityMap curates which post_logs event types become activity events
-// and how they map onto the live activity taxonomy (CON-125). Types absent from
+// and how they map onto the live activity taxonomy. Types absent from
 // this map — the internal River task lifecycle (task_*), Zernio polling/retry,
 // and rejected (blocked) transitions — are operational noise and are skipped, so
 // tenant_activity_events stays a clean behavioural stream whose type names match the
@@ -69,8 +69,8 @@ var postLogActivityMap = map[models.PostLogEventType]struct{ category, typ strin
 
 // BackfillPostLogsToActivity migrates the historical post_logs audit trail
 // (main DB) into tenant_activity_events (analytics DB) so the behavioural stream has
-// real history, not just events recorded since the live instrumentation shipped
-// (CON-125). It maps the meaningful event types onto the live activity taxonomy
+// real history, not just events recorded since the live instrumentation shipped.
+// It maps the meaningful event types onto the live activity taxonomy
 // (see postLogActivityMap) and skips operational noise.
 //
 // It is idempotent and restart-safe without rescanning history: it only reads
@@ -85,7 +85,7 @@ var postLogActivityMap = map[models.PostLogEventType]struct{ category, typ strin
 // of rows inserted.
 //
 // The upper bound `before` excludes rows at/after it. The backfill runs in a
-// background goroutine at boot (CON-301), concurrent with live serving, and the
+// background goroutine at boot, concurrent with live serving, and the
 // live post-transition path writes both a post_log AND its own natively-id'd
 // activity event. Bounding the scan to rows that predate this process therefore
 // guarantees the backfill never migrates a post_log the live path is recording

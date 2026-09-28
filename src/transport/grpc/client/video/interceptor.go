@@ -12,8 +12,8 @@ import (
 
 // Correlation metadata keys. They MUST match video-service's request/tenant id
 // header names byte-for-byte (gRPC lowercases metadata keys) so one request
-// traces end-to-end across the gRPC boundary: API request -> video-service
-// (CON-111). Transport-level only — no proto/message change.
+// traces end-to-end across the gRPC boundary: API request -> video-service.
+// Transport-level only — no proto/message change.
 const (
 	requestIDHeader = "x-request-id"
 	tenantIDHeader  = "x-tenant-id"

@@ -12,7 +12,7 @@ import (
 )
 
 // UsageLimitsRepository persists per-tenant spend caps in the control-plane
-// database (CON-86 FR7). One row per tenant (UNIQUE on tenant_id); reads and
+// database. One row per tenant (UNIQUE on tenant_id); reads and
 // writes are auto-scoped by the TenantUsageLimit TenantScoped hooks.
 type UsageLimitsRepository interface {
 	// GetByTenant returns the calling tenant's limit row, or (nil, nil) when

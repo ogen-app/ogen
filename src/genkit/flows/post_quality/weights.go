@@ -1,5 +1,5 @@
-// Package post_quality implements the Post quality assessment agent
-// (CON-85): a platform-aware evaluation that scores a Post across four
+// Package post_quality implements the Post quality assessment agent:
+// a platform-aware evaluation that scores a Post across four
 // dimensions (Correctness, Clarity, Engagement, Delivery) on a configurable
 // Anthropic model (Sonnet 4.5 by default) and deterministically composes an
 // overall percentage from a weight profile keyed by the Post's PlatformPostType.

@@ -11,8 +11,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// PostEvaluationRepository persists the latest Post quality assessment
-// (CON-85). The table is one-to-one with Post via UNIQUE(post_id), so
+// PostEvaluationRepository persists the latest Post quality assessment.
+// The table is one-to-one with Post via UNIQUE(post_id), so
 // Upsert overwrites a prior evaluation rather than appending a new row —
 // the spec stores only the most recent result.
 type PostEvaluationRepository interface {

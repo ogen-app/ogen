@@ -21,7 +21,7 @@ func TestFromAbsent(t *testing.T) {
 }
 
 // An empty tenant id must read back as fail-closed (not present), so the
-// scoped query layer never runs an unscoped query (CON-97 §6).
+// scoped query layer never runs an unscoped query.
 func TestFromEmptyStringIsAbsent(t *testing.T) {
 	ctx := tenantctx.With(t.Context(), "")
 	if id, ok := tenantctx.From(ctx); ok || id != "" {

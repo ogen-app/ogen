@@ -13,7 +13,7 @@ import (
 // analytics endpoints (best-time, content-decay, posting-frequency). A
 // zero-value field is omitted so Zernio's own defaults apply (source=all,
 // all platforms/profiles/accounts). Ogen always sets ProfileID so the
-// aggregate is scoped to the current tenant's profile (CON-153).
+// aggregate is scoped to the current tenant's profile.
 type InsightQuery struct {
 	Platform  string
 	ProfileID string

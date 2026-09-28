@@ -18,7 +18,7 @@ import (
 // secrets.Store in server wiring.
 type SecretResolver func(ctx context.Context) (string, error)
 
-// EmailHandler serves the public marketing-unsubscribe surface (CON-154/CON-155).
+// EmailHandler serves the public marketing-unsubscribe surface.
 // The link (GET) verifies the token and renders a confirmation page but NEVER
 // mutates — so a mail scanner / link prefetcher issuing a GET can't unsubscribe
 // a user. Suppression happens only on a POST: the confirmation form (/confirm)

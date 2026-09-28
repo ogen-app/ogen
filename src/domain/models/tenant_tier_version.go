@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Tier-version lifecycle statuses (CON-243). A version is authored as a draft,
+// Tier-version lifecycle statuses. A version is authored as a draft,
 // published to active, and eventually retired. Only draft rows are mutable — the
 // tenant_tier_versions immutability trigger freezes the rest (see the migration).
 const (
@@ -15,7 +15,7 @@ const (
 	TierVersionStatusRetired = "retired"
 )
 
-// Assignment reasons (CON-243) — why a tenant landed on a tier version. Mirrors
+// Assignment reasons — why a tenant landed on a tier version. Mirrors
 // the reason CHECK on tenant_tier_assignments.
 const (
 	AssignmentReasonSignup            = "signup"
@@ -30,7 +30,7 @@ const (
 )
 
 // TenantTierVersion is an immutable, versioned snapshot of one tier's pricing +
-// entitlements (CON-243). It hangs off the CON-208 tenant_tiers row (the
+// entitlements. It hangs off the CON-208 tenant_tiers row (the
 // "plan"); a tenant is bound to a specific version over time via
 // tenant_tier_assignments. GLOBAL operator table — not TenantScoped.
 //
@@ -54,7 +54,7 @@ type TenantTierVersion struct {
 }
 
 // TenantTierVersionPrice is one net (VAT-exclusive) price for a tier version, in
-// ISO-4217 minor units (CON-243). A nil CountryCode row is the default for its
+// ISO-4217 minor units. A nil CountryCode row is the default for its
 // currency/interval. GLOBAL operator table.
 type TenantTierVersionPrice struct {
 	bun.BaseModel `bun:"table:tenant_tier_version_prices,alias:ttvp" swaggerignore:"true"`
@@ -68,7 +68,7 @@ type TenantTierVersionPrice struct {
 }
 
 // TenantTierAssignment binds a tenant to a specific tier version over a validity
-// range (CON-243). Append-only; a gist exclusion constraint forbids overlapping
+// range. Append-only; a gist exclusion constraint forbids overlapping
 // ranges for one tenant, so point-in-time resolution is unambiguous. The
 // open-ended row (ValidTo nil = upper infinity) is the tenant's current
 // assignment. GLOBAL operator table.
@@ -90,7 +90,7 @@ type TenantTierAssignment struct {
 }
 
 // VersionAssignment is a scan-only projection of one tenant's live (open-ended)
-// assignment on a tier version, joined to the tenant's display name (CON-297).
+// assignment on a tier version, joined to the tenant's display name.
 // It backs the operator's "who is on this version" read used before retiring.
 type VersionAssignment struct {
 	TenantID   string    `bun:"tenant_id"   json:"tenant_id"`

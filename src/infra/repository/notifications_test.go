@@ -15,7 +15,7 @@ import (
 
 // openNotifDB returns a fresh, fully-migrated DB with FK enforcement bypassed
 // so a test can insert notifications with synthetic tenant_id/user_id without
-// seeding the tenants/users graph (CON-242). Mirrors openMigratedDB but without
+// seeding the tenants/users graph. Mirrors openMigratedDB but without
 // the analytics migration set — notifications live in the main DB.
 func openNotifDB(t *testing.T) *bun.DB {
 	t.Helper()

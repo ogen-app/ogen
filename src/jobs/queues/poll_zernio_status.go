@@ -17,7 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 )
 
-// PollZernioStatusQueue is the River queue name (CON-69 §3, §7).
+// PollZernioStatusQueue is the River queue name.
 const PollZernioStatusQueue = "poll_zernio_status"
 
 // PollZernioStatusTask carries the Ogen post id; the worker re-loads
@@ -44,9 +44,9 @@ type PollZernioStatusProcessor struct {
 	river.WorkerDefaults[PollZernioStatusTask]
 	Deps ZernioDeps
 	// Notifier drops a publish-outcome notification when Zernio reports a terminal
-	// status (CON-242). Nil is a no-op.
+	// status. Nil is a no-op.
 	Notifier *notify.Service
-	// Members fans the publish outcome across the workspace (CON-285). Nil falls
+	// Members fans the publish outcome across the workspace. Nil falls
 	// back to the author.
 	Members      memberLister
 	FastInterval time.Duration // default 30s
@@ -57,7 +57,7 @@ type PollZernioStatusProcessor struct {
 // Work is the River entrypoint; it delegates to Process.
 func (p *PollZernioStatusProcessor) Work(ctx context.Context, job *river.Job[PollZernioStatusTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// CON-97: background jobs span tenants (interim until per-tenant, PR4).
+	// Background jobs span tenants (interim until per-tenant, PR4).
 	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
@@ -82,7 +82,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 	if err != nil {
 		return fmt.Errorf("poll: load post %s: %w", task.PostID, err)
 	}
-	// Scope the rest of the job to the owning tenant (CON-97 PR4).
+	// Scope the rest of the job to the owning tenant.
 	ctx = tenantctx.With(ctx, post.TenantID)
 	if post.Status != models.PostStatusScheduled {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, post.Status, post.Status,
@@ -135,7 +135,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 		post.Status = models.PostStatusPublished
 		results, _ := json.Marshal(job.Platforms)
 		post.PublishedResults = string(results)
-		// CON-165: lift the platform permalink out of the per-platform blob
+		// Lift the platform permalink out of the per-platform blob
 		// into a first-class field so the front-end can render "View post"
 		// without parsing published_results. A post targets a single platform,
 		// so the first outcome carrying a URL is the one.
@@ -158,7 +158,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 			activity.WithSource(activity.SourceJob),
 			activity.WithStatus(string(from)+"->"+string(post.Status)),
 		)
-		// CON-242/CON-285: tell the whole workspace it's live.
+		// Tell the whole workspace it's live.
 		emitPublishNotification(ctx, p.Notifier, p.Members, post, true)
 	case zernio.JobStatusFailed, zernio.JobStatusPartial:
 		// `partial` = some platforms succeeded, others failed. Per
@@ -183,7 +183,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 			activity.WithStatus(string(from)+"->"+string(post.Status)),
 			activity.WithPayload(map[string]any{"zernio_status": string(job.Status)}),
 		)
-		// CON-242/CON-285: tell the whole workspace it failed to publish.
+		// Tell the whole workspace it failed to publish.
 		emitPublishNotification(ctx, p.Notifier, p.Members, post, false)
 	default:
 		// Defensive: unknown terminal state.

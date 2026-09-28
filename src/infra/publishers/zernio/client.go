@@ -145,7 +145,7 @@ type APIError struct {
 	Status  int
 	Message string
 	// RequiresAddon mirrors the `"requiresAddon": true` flag Zernio sets on
-	// the analytics add-on paywall body (CON-153). It lets callers tell an
+	// the analytics add-on paywall body. It lets callers tell an
 	// add-on 403 apart from any other 403 (proxy/WAF/gateway) rather than
 	// treating every 403 the same. False for bodies without the flag.
 	RequiresAddon bool
@@ -188,8 +188,8 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 }
 
 // doHeaders is do with extra request headers merged in after the standard
-// bearer/accept/content-type set. It backs the headless connect select step
-// (CON-217), which authenticates the list/finalize calls with a short-lived
+// bearer/accept/content-type set. It backs the headless connect select step,
+// which authenticates the list/finalize calls with a short-lived
 // X-Connect-Token header in addition to the bearer key.
 func (c *Client) doHeaders(ctx context.Context, method, path string, query url.Values, headers map[string]string, body, out any) error {
 	u := c.baseURL + path

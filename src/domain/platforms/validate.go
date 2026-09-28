@@ -19,7 +19,7 @@ type ValidationError struct {
 	Expected     string `json:"expected"`
 	Actual       string `json:"actual"`
 	Message      string `json:"message"`
-	// Segment names the 0-based thread message a failure belongs to (CON-284),
+	// Segment names the 0-based thread message a failure belongs to,
 	// so the composer can highlight the offending message. nil for whole-post
 	// failures and every non-thread post.
 	Segment *int `json:"segment,omitempty"`
@@ -135,7 +135,7 @@ func validatePDFAttachment(att *models.PostAttachment, p *models.Platform) []Val
 	return errs
 }
 
-// validateVideoAttachment runs the per-platform video rule set (CON-148).
+// validateVideoAttachment runs the per-platform video rule set.
 // A platform with no video rules surfaces a single explicit "not
 // supported" warning rather than a cascade of failures from a zero-valued
 // rule set (mirrors the PDF branch). Duration / resolution / aspect checks
@@ -274,7 +274,7 @@ func ValidatePostAttachments(atts []models.PostAttachment, p *models.Platform) [
 	}
 	// A video mixed with a PDF is never a supported combination. Image +
 	// video is deliberately *not* flagged here — the `story` post type
-	// allows it, and the post-type rule owns that decision (CON-148 §10).
+	// allows it, and the post-type rule owns that decision.
 	if len(videos) > 0 && len(pdfs) > 0 {
 		errs = append(errs, ValidationError{
 			Platform:     p.ID,
@@ -325,7 +325,7 @@ func ValidatePostAttachments(atts []models.PostAttachment, p *models.Platform) [
 // ValidateForPublish runs the publish-time hard check across every
 // target platform. The future Zernio publish path uses the returned
 // map to skip platforms whose value is non-empty while still
-// proceeding with platforms whose value is empty (CON-73 §2.4).
+// proceeding with platforms whose value is empty.
 // Platforms with neither image nor PDF rules are absent from the
 // returned map.
 func ValidateForPublish(atts []models.PostAttachment, ps []*models.Platform) map[string][]ValidationError {

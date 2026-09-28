@@ -18,8 +18,8 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// RefreshZernioAnalyticsQueue is the recurring analytics-refresh queue
-// (CON-93 §6 FR3). Each tick batch-pages Zernio's analytics list
+// RefreshZernioAnalyticsQueue is the recurring analytics-refresh queue.
+// Each tick batch-pages Zernio's analytics list
 // (source=late), matches returned items back to local posts by
 // publisher_post_id, and upserts a snapshot per matched post. It mirrors
 // ReconcileScheduledPostsQueue: a marker payload, self-rescheduling at a
@@ -32,10 +32,10 @@ const (
 	defaultAnalyticsPageLimit  = 100
 	// maxAnalyticsPages hard-caps the pages fetched per tick so a large
 	// back-catalog can't make one tick unbounded; the uncovered tail is
-	// picked up on subsequent ticks (CON-93 §10).
+	// picked up on subsequent ticks.
 	maxAnalyticsPages = 20
 
-	// Decay-schedule defaults (CON-236). A post is "due" this tick when it has
+	// Decay-schedule defaults. A post is "due" this tick when it has
 	// gone longer than its age bucket's interval since the last check.
 	defaultDecayFreshWindow = 48 * time.Hour      // age < this → fresh bucket
 	defaultDecayWarmWindow  = 14 * 24 * time.Hour // age < this → warm bucket
@@ -47,7 +47,7 @@ const (
 	decaySlack = time.Minute
 )
 
-// AnalyticsDecay is the age-based refresh cadence (CON-236): the older a post,
+// AnalyticsDecay is the age-based refresh cadence: the older a post,
 // the less often its analytics are re-checked. Zero fields fall back to the
 // defaults above; a zero *Every disables gating for that bucket (always due).
 type AnalyticsDecay struct {
@@ -105,7 +105,7 @@ type RefreshZernioAnalyticsProcessor struct {
 // Work is the River entrypoint; it delegates to Process.
 func (p *RefreshZernioAnalyticsProcessor) Work(ctx context.Context, job *river.Job[RefreshZernioAnalyticsTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// CON-97: background jobs span tenants (interim until per-tenant, PR4).
+	// Background jobs span tenants (interim until per-tenant, PR4).
 	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
@@ -232,7 +232,7 @@ func (p *RefreshZernioAnalyticsProcessor) refreshTenant(ctx context.Context, pos
 
 	// Preload the tenant's current-state rows once: the decay gate reads
 	// last_checked_at from them and dedup compares metric keys, both without a
-	// per-post query (CON-236). A nil map is fine (every post is a first sight).
+	// per-post query. A nil map is fine (every post is a first sight).
 	current, cerr := p.Deps.AnalyticsRepo.CurrentByPostID(ctx)
 	if cerr != nil {
 		return upserts, true, fmt.Errorf("load current analytics: %w", cerr)
@@ -347,7 +347,7 @@ func (p *RefreshZernioAnalyticsProcessor) refreshTenant(ctx context.Context, pos
 }
 
 // due reports whether a post should be re-checked this tick under the decay
-// schedule (CON-236). A post never seen before is always due. Otherwise the
+// schedule. A post never seen before is always due. Otherwise the
 // age bucket (from published_at) picks the interval, and the post is due once
 // that much time (minus a small slack for tick jitter) has passed since the
 // last check. A zero interval for the bucket means gating is explicitly disabled
@@ -434,7 +434,7 @@ func (p *RefreshZernioAnalyticsProcessor) matchPostID(byPublisherID map[string]s
 }
 
 // buildCurrent maps a Zernio analytics item onto the current-state row for a
-// post (CON-236). publisherPostID is the matched key from the local post (kept
+// post. publisherPostID is the matched key from the local post (kept
 // consistent with posts.publisher_post_id); platformName is the resolved display
 // name for the post's platform. The post's publisher/title/published_at are
 // denormalised so the overview read needs no cross-DB join. The first_seen/
@@ -492,8 +492,8 @@ func mapPlatformAnalytics(in []zernio.PlatformAnalytics) models.PlatformAnalytic
 	return out
 }
 
-// publishUpdated emits the optional post.analytics.updated event
-// (CON-93 §8). No-op when no Hub is wired.
+// publishUpdated emits the optional post.analytics.updated event.
+// No-op when no Hub is wired.
 func (p *RefreshZernioAnalyticsProcessor) publishUpdated(ctx context.Context, a *models.PostAnalytics) {
 	if p.Hub == nil {
 		return

@@ -36,7 +36,7 @@ func rejectCoded(c *fiber.Ctx, status int, code, msg string, extra fiber.Map) er
 }
 
 // rejectTypeLocked is the 409 for a campaign-type change on a campaign whose
-// posts are planned against its type's phases (CON-166).
+// posts are planned against its type's phases.
 func rejectTypeLocked(c *fiber.Ctx, phasedPostCount int) error {
 	return rejectCoded(c, fiber.StatusConflict, codeCampaignTypeLocked,
 		"the campaign type can't be changed: posts are planned against its phases",
@@ -44,13 +44,13 @@ func rejectTypeLocked(c *fiber.Ctx, phasedPostCount int) error {
 }
 
 // rejectInvalidPhase is the 400 for a post whose campaign_type_phase_id isn't a
-// phase of its campaign's type (CON-166).
+// phase of its campaign's type.
 func rejectInvalidPhase(c *fiber.Ctx) error {
 	return rejectCoded(c, fiber.StatusBadRequest, codeInvalidCampaignTypePhaseID,
 		"campaign_type_phase_id is not a phase of the campaign's type", nil)
 }
 
-// CampaignPhasesHandler serves a campaign's phase date plan (CON-166): the
+// CampaignPhasesHandler serves a campaign's phase date plan: the
 // per-phase windows, derived from the campaign dates by default and
 // overridable by the user.
 type CampaignPhasesHandler struct {
@@ -266,7 +266,7 @@ func buildPhasePlan(campaign *models.Campaign, counts map[string]int) campaignPh
 }
 
 // maintainPhasePlan keeps a campaign's stored manual phase plan consistent
-// after a whole-record update (CON-166): a type change drops it (the phases are
+// after a whole-record update: a type change drops it (the phases are
 // different), a date change re-anchors its outer bounds or — when a window
 // would empty out — drops it back to derived. Reports whether the plan was
 // dropped. Best-effort: a stale plan is ignored at read time anyway

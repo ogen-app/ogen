@@ -1,4 +1,4 @@
-// CON-308: ModelConfigAdminService — the operator-facing (Harbor) gRPC surface
+// ModelConfigAdminService — the operator-facing (Harbor) gRPC surface
 // for choosing which foundation model each genkit flow uses, keyed by
 // (tier, flow, slot). Mirrors PlatformAdminService and shares the same
 // bearer-token gate (see server.go). Generated stubs come from gen/modelconfig/v1
@@ -34,7 +34,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
-// expvar counters (CON-308 §12). Distinct "ogen_model_config_admin_*" namespace.
+// expvar counters. Distinct "ogen_model_config_admin_*" namespace.
 var (
 	modelConfigAdminSlotSet     = expvar.NewInt("ogen_model_config_admin_slot_set")
 	modelConfigAdminSlotCleared = expvar.NewInt("ogen_model_config_admin_slot_cleared")

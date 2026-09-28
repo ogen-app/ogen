@@ -18,8 +18,8 @@ const DefaultCacheTTL = 30 * time.Second
 // non-Zernio keys pass through directly so this wrapper is safe to
 // install as a drop-in replacement.
 //
-// Entries are namespaced by the tenant in the read/write context
-// (CON-100), so one tenant's zernio.* settings never satisfy another
+// Entries are namespaced by the tenant in the read/write context,
+// so one tenant's zernio.* settings never satisfy another
 // tenant's read.
 //
 // Writes (Set / Delete) on a Zernio-prefixed key invalidate just that
@@ -59,7 +59,7 @@ func NewCachedSettingsStoreTTL(inner SettingsStore, ttl time.Duration) *CachedSe
 }
 
 // cacheKey namespaces a cache entry by the tenant in ctx so one tenant's
-// zernio.* settings never satisfy another tenant's read (CON-100). A read with
+// zernio.* settings never satisfy another tenant's read. A read with
 // no tenant (system context) uses an empty namespace; that's fine because the
 // cache only holds Zernio-prefixed keys, which are read on the per-tenant or
 // request path.

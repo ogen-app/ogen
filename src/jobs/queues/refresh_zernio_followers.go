@@ -16,8 +16,8 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// RefreshZernioFollowersQueue is the recurring follower-stats snapshot queue
-// (CON-153). Each tick sweeps every tenant with active connected accounts,
+// RefreshZernioFollowersQueue is the recurring follower-stats snapshot queue.
+// Each tick sweeps every tenant with active connected accounts,
 // fetches follower counts per Zernio profile, and upserts one daily snapshot
 // per (account, day). It mirrors RefreshZernioAnalyticsQueue: a marker
 // payload, self-rescheduling at a fixed cadence, seeded once at boot.

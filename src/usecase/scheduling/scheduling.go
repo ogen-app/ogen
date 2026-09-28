@@ -1,5 +1,5 @@
 // Package scheduling holds the pure, dependency-free helpers that turn a
-// campaign's scheduling settings (CON-181) — publishing time, timezone,
+// campaign's scheduling settings — publishing time, timezone,
 // publishing days, and spread — into a concrete publish instant. It is shared
 // by the campaigns handler (validation + defaults) and the content-plan flow
 // (composing each generated draft's scheduled_at), so the two never drift.

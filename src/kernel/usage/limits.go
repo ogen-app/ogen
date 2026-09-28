@@ -22,7 +22,7 @@ type SpendReader interface {
 	SpendBetween(ctx context.Context, start, end time.Time) (int64, error)
 }
 
-// Defaults are the operator's global fallback caps (CON-86 FR8), applied to
+// Defaults are the operator's global fallback caps, applied to
 // any tenant without an override row. A zero cap means "no default cap".
 type Defaults struct {
 	DailyCapMicros   int64
@@ -31,7 +31,7 @@ type Defaults struct {
 }
 
 // Effective is a tenant's resolved limits after applying the precedence
-// tenant-row → config-default → unlimited (CON-86 FR7, AC6).
+// tenant-row → config-default → unlimited.
 type Effective struct {
 	DailyCapMicros   *int64 `json:"daily_cap_micros"`
 	MonthlyCapMicros *int64 `json:"monthly_cap_micros"`
@@ -50,7 +50,7 @@ type Decision struct {
 }
 
 // LimitExceededError is returned by Enforce when a synchronous flow is blocked.
-// The HTTP layer maps it to 402 with the embedded fields (CON-86 §9).
+// The HTTP layer maps it to 402 with the embedded fields.
 type LimitExceededError struct {
 	Decision
 }
@@ -61,7 +61,7 @@ func (e *LimitExceededError) Error() string {
 }
 
 // Checker decides whether a synchronous flow may call a provider, from the
-// tenant's effective caps and period-to-date spend (CON-86 FR9). A nil
+// tenant's effective caps and period-to-date spend. A nil
 // *Checker always allows (analytics disabled). Reads are cached per tenant
 // for a short TTL to keep the hot path cheap; staleness is bounded and
 // tolerated ("block once already over").
@@ -115,7 +115,7 @@ func (c *Checker) Enforce(ctx context.Context) error {
 }
 
 // Check resolves the decision without raising an error. On any analytics read
-// failure it fails open (allows) and counts a degraded-mode tick (CON-86 FR10).
+// failure it fails open (allows) and counts a degraded-mode tick.
 func (c *Checker) Check(ctx context.Context) Decision {
 	if c == nil {
 		return Decision{}
@@ -163,7 +163,7 @@ func (c *Checker) Check(ctx context.Context) Decision {
 }
 
 // EffectiveLimits returns the tenant's resolved limits plus period-to-date
-// spend, for GET /api/usage/limits (CON-86 §7). Uses the same cached read as
+// spend, for GET /api/usage/limits. Uses the same cached read as
 // Check.
 func (c *Checker) EffectiveLimits(ctx context.Context) (eff Effective, daySpent, monthSpent int64, err error) {
 	if c == nil {
@@ -226,7 +226,7 @@ func (c *Checker) effective(ctx context.Context) (Effective, error) {
 }
 
 // Resolve applies the effective-limit precedence tenant-row → config-default →
-// unlimited (CON-86 FR7/AC6). Pure (no I/O): the HTTP layer reuses it for
+// unlimited. Pure (no I/O): the HTTP layer reuses it for
 // GET /api/usage/limits, where the spend numbers come separately and the
 // analytics-backed Checker may be absent.
 func Resolve(row *models.TenantUsageLimit, def Defaults) Effective {
@@ -259,7 +259,7 @@ func Resolve(row *models.TenantUsageLimit, def Defaults) Effective {
 }
 
 // PeriodBounds returns the UTC day-start and month-start for now — the windows
-// used for period-to-date spend (CON-86 §10). Exposed so the HTTP summary uses
+// used for period-to-date spend. Exposed so the HTTP summary uses
 // the same boundaries as enforcement.
 func PeriodBounds(now time.Time) (dayStart, monthStart time.Time) {
 	now = now.UTC()

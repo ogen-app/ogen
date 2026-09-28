@@ -17,7 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// WorkspacesHandler serves the account-level workspace surface (CON-147): list
+// WorkspacesHandler serves the account-level workspace surface: list
 // the workspaces an account belongs to, create a new one, and choose the default
 // the next fresh tab/login seeds into. These routes are account-scoped, not
 // workspace-scoped — they act across the account's memberships — so unlike the
@@ -31,7 +31,7 @@ type WorkspacesHandler struct {
 	tenantRepo    repository.TenantRepository
 	sessionRepo   repository.SessionRepository
 	// profileJobs provisions a per-workspace Zernio profile on create (reusing the
-	// signup bootstrap, CON-102) and tears it down on delete (CON-203). nil
+	// signup bootstrap, CON-102) and tears it down on delete. nil
 	// disables both (create/delete still succeed; the profile is left orphaned).
 	profileJobs ProfileLifecycleEnqueuer
 	auth        fiber.Handler
@@ -142,7 +142,7 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	}
 
 	now := time.Now().UTC()
-	// CON-208: tenant.tier_id is required (NOT NULL); a new workspace starts on
+	// tenant.tier_id is required (NOT NULL); a new workspace starts on
 	// the seeded default tier, reassignable later by Harbor.
 	tenant := &models.Tenant{ID: tenantID, Name: req.Name, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now}
 	// The creator owns the new workspace (CON-26 role model).
@@ -156,7 +156,7 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 			return err
 		}
 		// Per-workspace Zernio profile, enqueued in-tx so the job exists iff the
-		// workspace does — same pattern as signup (CON-102). Creation never blocks
+		// workspace does — same pattern as signup. Creation never blocks
 		// on Zernio being reachable.
 		if h.profileJobs != nil {
 			if err := h.profileJobs.EnqueueBootstrapProfileTx(ctx, tx.Tx, tenantID); err != nil {
@@ -200,7 +200,7 @@ func (h *WorkspacesHandler) Switch(c *fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// 404 (not 403) so the endpoint doesn't confirm a workspace the account
-			// can't see even exists (CON-97 §12.3).
+			// can't see even exists.
 			return fiber.NewError(fiber.StatusNotFound, "workspace not found")
 		}
 		return err
@@ -242,7 +242,7 @@ func (h *WorkspacesHandler) Delete(c *fiber.Ctx) error {
 
 	// Resolve the target from the path (like Switch), independent of the active
 	// workspace — an owner can delete any workspace they own. 404 (not 403) hides
-	// the existence of workspaces the account can't see (CON-97 §12.3).
+	// the existence of workspaces the account can't see.
 	membership, err := h.userRepo.GetMembership(reqCtx(c), session.AccountID, targetID)
 	if err != nil {
 		return notFound(err, "workspace not found")
@@ -270,12 +270,12 @@ func (h *WorkspacesHandler) Delete(c *fiber.Ctx) error {
 		if len(remaining) == 0 {
 			return errLastWorkspace
 		}
-		// Tear down the workspace's per-tenant Zernio profile (CON-203). Enqueued
+		// Tear down the workspace's per-tenant Zernio profile. Enqueued
 		// INSIDE this tx (transactional outbox): the job exists iff the soft-delete
 		// commits, so a rolled-back delete — e.g. the last-workspace guard above —
 		// queues nothing. The Zernio deletes happen in the worker, so the delete
 		// response never blocks on Zernio; the worker is idempotent and retries on
-		// Zernio errors. nil enqueuer leaves the profile orphaned (pre-CON-203).
+		// Zernio errors. A nil enqueuer leaves the profile orphaned.
 		if h.profileJobs != nil {
 			if err := h.profileJobs.EnqueueTeardownProfileTx(ctx, tx.Tx, targetID); err != nil {
 				return err

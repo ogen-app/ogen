@@ -9,8 +9,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// EmailEventRepository is the append-only Resend delivery/open/click timeline
-// (CON-298), plus the denormalised rollup it maintains on email_logs.
+// EmailEventRepository is the append-only Resend delivery/open/click timeline,
+// plus the denormalised rollup it maintains on email_logs.
 type EmailEventRepository interface {
 	// Record persists one webhook event and refreshes the parent log's rollup in
 	// a single transaction. Ingestion is idempotent: a redelivery of the same

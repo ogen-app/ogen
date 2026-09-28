@@ -7,7 +7,7 @@ import (
 )
 
 // EmailEventType is one Resend delivery-lifecycle event persisted to the
-// append-only email_events timeline (CON-298).
+// append-only email_events timeline.
 type EmailEventType string
 
 const (
@@ -40,7 +40,7 @@ func StatusForEvent(t EmailEventType) EmailLogStatus {
 	}
 }
 
-// EmailEvent is one persisted Resend webhook event (CON-298). It is append-only
+// EmailEvent is one persisted Resend webhook event. It is append-only
 // and cascade-deleted with its parent email_logs row. SvixID (the svix-id
 // header) is globally unique and stable across a redelivery of the same event,
 // so a UNIQUE index on it makes ingestion idempotent. ProviderMessageID is

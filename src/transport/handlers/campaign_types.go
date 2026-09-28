@@ -50,7 +50,7 @@ type campaignTypePhaseRequest struct {
 }
 
 // codeCampaignTypeNameTaken is the 409 for a custom type named like a system
-// type or like another of the workspace's own types (CON-314). The UI keys a
+// type or like another of the workspace's own types. The UI keys a
 // type's label and icon off its name, so a clash would draw two identical cards.
 const codeCampaignTypeNameTaken = "campaign_type_name_taken"
 
@@ -427,7 +427,7 @@ func (h *CampaignTypesHandler) DeletePhase(c *fiber.Ctx) error {
 
 	deleted, err := h.repo.DeletePhase(reqCtx(c), phase.ID)
 	if err != nil {
-		// CON-166: posts still reference the phase (posts.campaign_type_phase_id
+		// Posts still reference the phase (posts.campaign_type_phase_id
 		// FK) — a client error, not a 500.
 		if repository.IsForeignKeyViolation(err) {
 			return rejectCoded(c, fiber.StatusConflict, codePhaseInUse,

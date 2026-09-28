@@ -23,7 +23,7 @@ func rejectErr(t *testing.T, domain, reason string) error {
 }
 
 // TestRejectedCode covers parsing the ErrorInfo reason image-service attaches to a
-// terminal reject back into the generated image.v1.RejectedCode enum (CON-281).
+// terminal reject back into the generated image.v1.RejectedCode enum.
 func TestRejectedCode(t *testing.T) {
 	cases := []struct {
 		name string
@@ -48,7 +48,7 @@ func TestRejectedCode(t *testing.T) {
 	}
 }
 
-// TestUploadCode covers the typed enum → stable upload-code mapping (CON-281),
+// TestUploadCode covers the typed enum → stable upload-code mapping,
 // including the "" fallback so the caller keeps its coarse bucket.
 func TestUploadCode(t *testing.T) {
 	cases := []struct {

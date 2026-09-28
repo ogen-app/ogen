@@ -1,4 +1,4 @@
-// Package audio is a thin gRPC client for the audio-service (CON-282). It owns
+// Package audio is a thin gRPC client for the audio-service. It owns
 // the connection, the raised receive limit, and per-call deadlines, and presents
 // audio transcoding + transcription as three narrow unary calls: Probe,
 // Normalize, and TranscribeSegment.
@@ -7,7 +7,7 @@
 // audio hands the service short-lived presigned URLs (GET for reads, PUT for the
 // normalized derivative) and lets ffmpeg range-read / stream only what it needs.
 // That keeps the (potentially hour-long, multi-hundred-MB) audio out of the API
-// process entirely (CON-282 §5, §13). The service is stateless: ogen owns the
+// process entirely. The service is stateless: ogen owns the
 // resumable state machine and drives one segment per TranscribeSegment call.
 //
 // The link to audio-service is private-network-only (Railway), so the channel is
@@ -111,7 +111,7 @@ type Utterance struct {
 }
 
 // TranscribeSegmentResult carries a segment's utterances plus the Gemini token
-// usage ogen prices via the existing gemini vendor (CON-86).
+// usage ogen prices via the existing gemini vendor.
 type TranscribeSegmentResult struct {
 	DetectedLanguage string
 	Utterances       []Utterance
@@ -144,9 +144,9 @@ func New(cfg Config) (*Client, error) {
 	}
 	// The correlation interceptors copy request_id/tenant_id from the call
 	// context into outgoing gRPC metadata so audio-service's logs join the
-	// API's (CON-111).
+	// API's.
 	dialOpts := []grpc.DialOption{
-		// CON-303: emit a client span per RPC and propagate the trace to the service.
+		// Emit a client span per RPC and propagate the trace to the service.
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainStreamInterceptor(correlationStreamInterceptor),

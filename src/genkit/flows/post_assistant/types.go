@@ -43,7 +43,7 @@ type PostAssistantResponse struct {
 	// UpdatedContent is empty — scheduling doesn't change content.
 	ScheduleResult *ScheduleResultPayload `json:"scheduleResult,omitempty" jsonschema:"-"`
 	// NotesCreated is populated by the server (not the model) with the notes
-	// the createNote tool persisted this turn (CON-188). Notes are additive:
+	// the createNote tool persisted this turn. Notes are additive:
 	// they may accompany an "edited" turn or stand alone as a "noted" turn.
 	NotesCreated []NotePayload `json:"notesCreated,omitempty" jsonschema:"-"`
 }
@@ -92,7 +92,7 @@ type PostAssistantRepos struct {
 	// model. nil disables cross-platform clone resolution.
 	Platforms repository.PlatformRepository
 	// Settings backs the workspace-timezone lookup the schedulePost flow
-	// uses to resolve and echo times (CON-78). nil → UTC.
+	// uses to resolve and echo times. nil → UTC.
 	Settings repository.SettingRepository
 	// Allowlist lets the scheduling context tell the model whether the
 	// post's platform auto-publishes or is manual (CON-65/78). nil →
@@ -103,19 +103,19 @@ type PostAssistantRepos struct {
 	// readiness summary omits attachment-based rules.
 	Attachments repository.PostAttachmentRepository
 	// Notes surfaces the post's existing notes (draft theses, image prompts,
-	// side notes) to the model as context (CON-188). nil omits the notes
+	// side notes) to the model as context. nil omits the notes
 	// section. Writes go through the shared NoteService, not this repo.
 	Notes repository.PostNoteRepository
 	// Brands resolves the post's brand voice/audience/guardrails into the
-	// editing context (CON-245). nil falls back to the legacy tone prose.
+	// editing context. nil falls back to the legacy tone prose.
 	Brands repository.BrandRepository
 }
 
 // PostAssistantFlowConfig holds settings for the post assistant flow.
 type PostAssistantFlowConfig struct {
-	// Provider resolves the model reference + call config by role (CON-86 FR12).
+	// Provider resolves the model reference + call config by role.
 	Provider *llm.Provider
-	// Recorder captures usage events; nil disables recording (CON-86 FR5/FR10).
+	// Recorder captures usage events; nil disables recording.
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker
@@ -151,23 +151,23 @@ type PostAssistantFlowConfig struct {
 	Hub eventhub.Hub
 	// PrewarmTools, when true, fires one throwaway generation carrying the full
 	// tool set at init so Anthropic compiles + caches the strict-tool grammar
-	// off the user path (CON-112). Only worth it alongside a stable tool order,
+	// off the user path. Only worth it alongside a stable tool order,
 	// so the server sets this from cfg.AnthropicStableToolOrder.
 	PrewarmTools bool
-	// CloneService backs the clonePost tool (CON-59). nil disables the
+	// CloneService backs the clonePost tool. nil disables the
 	// tool — the assistant then has no clone capability.
 	CloneService *clone.Service
-	// RestoreService backs the restoreVersion tool (CON-68). nil disables
+	// RestoreService backs the restoreVersion tool. nil disables
 	// the tool — the assistant then has no restore capability.
 	RestoreService *restore.Service
-	// ScheduleService backs the schedulePost tool (CON-78). nil disables
+	// ScheduleService backs the schedulePost tool. nil disables
 	// the tool — the assistant then has no scheduling capability.
 	ScheduleService *schedule.Service
-	// NoteService backs the createNote tool (CON-188). nil disables the
+	// NoteService backs the createNote tool. nil disables the
 	// tool — the assistant then cannot capture notes.
 	NoteService *notes.Service
 	// Notifier drops a durable "assistant finished / failed" notification to the
-	// post owner (CON-285). nil is a no-op.
+	// post owner. nil is a no-op.
 	Notifier *notify.Service
 }
 
@@ -212,7 +212,7 @@ const (
 )
 
 // NoteCreatedEventPayload is emitted each time the createNote tool persists a
-// note during a turn (CON-188), so the UI can surface it live.
+// note during a turn, so the UI can surface it live.
 type NoteCreatedEventPayload struct {
 	ID    string `json:"id"`
 	Type  string `json:"type"`

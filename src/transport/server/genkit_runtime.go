@@ -168,7 +168,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 			slog.Error("rebuild after anthropic_api_key change failed",
 				logging.AttrComponent, "genkit",
 				logging.AttrError, err)
-			// CON-303: a failed rebuild silently disables all AI flows until the
+			// A failed rebuild silently disables all AI flows until the
 			// next key change — surface it to Sentry, not just the logs.
 			telemetry.CaptureError(context.Background(), err,
 				attribute.String("component", "genkit"),
@@ -306,8 +306,8 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	g := genkit.Init(ctx, genkit.WithPlugins(plugin))
 
 	// The Provider now only builds the Anthropic call config (max tokens) the
-	// flows pass; model SELECTION moved to the DB-backed modelconfig resolver
-	// (CON-308), which each flow consults per (flow, slot). The model-id args are
+	// flows pass; model SELECTION moved to the DB-backed modelconfig resolver,
+	// which each flow consults per (flow, slot). The model-id args are
 	// vestigial and ignored by CallConfig — kept until provider.go is trimmed.
 	provider := llm.NewProvider(r.cfg.ModelID, r.cfg.QualityModelID, r.cfg.PlanningModelID)
 
@@ -327,20 +327,20 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	if err != nil {
 		return fmt.Errorf("init enrich brief: %w", err)
 	}
-	// CON-114: the targeted generation callback shares the content_plan flow
+	// The targeted generation callback shares the content_plan flow
 	// (already registered by initContentPlan above).
 	generatePostsFn := content_plan.NewGeneratePostsCallback()
-	// CON-207: the draftPost generation flow (asset research → content-first drafts).
+	// The draftPost generation flow (asset research → content-first drafts).
 	draftPostFn, err := initDraftPost(g, r.cfg, provider, r.recorder, r.checker, r.draftPostRepos)
 	if err != nil {
 		return fmt.Errorf("init draft post: %w", err)
 	}
-	// CON-116: read-only brief + posts consistency review.
+	// Read-only brief + posts consistency review.
 	checkBriefFn, checkPostsFn, err := initConsistency(g, r.cfg, provider, r.recorder, r.checker, r.hub, r.campaignAssistRepos.Campaigns, r.campaignAssistRepos.Posts)
 	if err != nil {
 		return fmt.Errorf("init consistency: %w", err)
 	}
-	// CON-112: the campaign assistant reuses the content_plan + enrich_brief
+	// The campaign assistant reuses the content_plan + enrich_brief
 	// callbacks (plus the CON-114 generatePosts, CON-207 draftPost, and CON-116
 	// consistency callbacks) as tools, so it is initialised after them.
 	campaignAssistantFn, err := initCampaignAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.campaignAssistRepos, contentPlanFn, enrichBriefFn, r.campaignOverviewSvc, generatePostsFn, draftPostFn, checkBriefFn, checkPostsFn)

@@ -11,7 +11,7 @@ type Config struct {
 	DSN   string `envconfig:"DATABASE_DSN"        default:"postgres://ogen:ogen@localhost:5432/ogen?sslmode=disable"`
 	Debug bool   `envconfig:"DEBUG"               default:"false"`
 
-	// Structured logging (CON-107). LogLevel is the minimum emitted level
+	// Structured logging. LogLevel is the minimum emitted level
 	// (debug|info|warn|error; unknown/empty ⇒ info). LogFormat selects the
 	// slog handler: json|text. LogFormat is intentionally left empty by
 	// default so it can resolve per-environment — empty means "text when
@@ -20,7 +20,7 @@ type Config struct {
 	LogLevel  string `envconfig:"LOG_LEVEL"  default:"info"`
 	LogFormat string `envconfig:"LOG_FORMAT" default:""`
 
-	// Telemetry (CON-303): error monitoring + OpenTelemetry tracing, unified in
+	// Telemetry: error monitoring + OpenTelemetry tracing, unified in
 	// Sentry. SentryDSN is the single on/off switch — empty disables ALL
 	// telemetry (fail-open, mirrors AnalyticsDSN): no SDK init, no exporter, no
 	// spans, and the app behaves exactly as before. When set, errors are
@@ -67,10 +67,10 @@ type Config struct {
 	DBMaxIdleConns    int    `envconfig:"DB_MAX_IDLE_CONNS" default:"5"`
 	SessionCookieName string `envconfig:"SESSION_COOKIE_NAME" default:"c3_session"`
 
-	// Embeddings (CON-101). Generated via the hosted Gemini Embedding 2 API
-	// (google.golang.org/genai through the Genkit googlegenai plugin), replacing
-	// the former self-hosted embedding sidecar. GeminiAPIKey is now a
-	// first-boot seed source only (CON-104): it is migrated into the encrypted
+	// Embeddings. Generated via the hosted Gemini Embedding 2 API
+	// (google.golang.org/genai through the Genkit googlegenai plugin).
+	// GeminiAPIKey is a first-boot seed source only: it is migrated into the
+	// encrypted
 	// `secret` table on startup and thereafter read from — and rotated via — the
 	// gRPC secrets service (secrets.NameGeminiAPIKey), mirroring the Anthropic /
 	// Zernio keys. With no key the embedder is unavailable (asset saves succeed,
@@ -82,7 +82,7 @@ type Config struct {
 	EmbedModel      string `envconfig:"EMBED_MODEL"       default:"gemini-embedding-2"`
 	EmbedDimensions int    `envconfig:"EMBED_DIMENSIONS"  default:"3072"`
 
-	// CORS allowlist for the decoupled UI (CON-98). Comma-separated explicit
+	// CORS allowlist for the decoupled UI. Comma-separated explicit
 	// origins, e.g. "https://app.getogen.com". Empty disables the CORS
 	// middleware entirely (same-origin dev, or a UI that reverse-proxies
 	// /api). Must never be "*" while credentials are sent — the cookie-bearing
@@ -103,21 +103,21 @@ type Config struct {
 	// Anthropic config.
 	// todo: remove from config entirely
 	AnthropicAPIKey string `envconfig:"ANTHROPIC_API_KEY"     default:""`
-	// Deprecated (CON-308): ModelID / PlanningModelID / QualityModelID are now
+	// Deprecated: ModelID / PlanningModelID / QualityModelID are
 	// SEED-ONLY — read once at boot to seed the modelconfig resolver's
 	// global-default rows for any (flow, slot) missing one; the DB (Harbor-edited
 	// via ModelConfigAdminService) is authoritative thereafter. Safe to remove
-	// once every environment has booted once on a build that includes CON-308.
+	// once every environment has seeded its global-default model rows.
 	ModelID          string `envconfig:"MODEL_ID"              default:"claude-sonnet-4-5-20250929"`
 	MaxContextAssets int    `envconfig:"MAX_ASSET_CONTEXT"     default:"15"`
 	MaxContextChars  int    `envconfig:"MAX_CONTEXT_CHARS"     default:"10000"`
 
-	// PlanningModelID (CON-112) backs the cheap/fast "planning" role used by
+	// PlanningModelID backs the cheap/fast "planning" role used by
 	// the Campaign Assistant's orchestration + intent-routing loop. Prose
 	// generation happens inside the content_plan / enrich_brief sub-flows it
 	// invokes as tools, which stay on ModelID (Sonnet-tier) — so the assistant
 	// routes cheaply on Haiku while the heavy writing stays capable.
-	PlanningModelID string `envconfig:"PLANNING_MODEL_ID" default:"claude-haiku-4-5-20251001"` // CON-308: seed-only (see ModelID)
+	PlanningModelID string `envconfig:"PLANNING_MODEL_ID" default:"claude-haiku-4-5-20251001"` // Seed-only (see ModelID)
 
 	// 64K matches Claude 4.x Haiku/Sonnet's max output. Anthropic charges
 	// only for tokens actually emitted, so a generous cap costs nothing on
@@ -125,7 +125,7 @@ type Config struct {
 	// flow with explanation + full post content + tool inputs combined).
 	MaxOutputTokens int64 `envconfig:"MAX_OUTPUT_TOKENS"     default:"64000"`
 
-	// PostAssistantPlanner (CON-128) enables the hybrid model split for the
+	// PostAssistantPlanner enables the hybrid model split for the
 	// Post Assistant: the orchestration/routing loop runs on the cheap
 	// PlanningModelID (Haiku) while the actual copywriting is delegated to a
 	// Sonnet (ModelID) editPost write-tool. Default on. Set to false to force
@@ -135,8 +135,8 @@ type Config struct {
 	// PLANNING_MODEL_ID regardless.
 	PostAssistantPlanner bool `envconfig:"POST_ASSISTANT_PLANNER" default:"true"`
 
-	// PostAssistantPlannerMaxOutputTokens caps the Haiku planner turn's output
-	// (CON-128). The planner only emits a short envelope (explanation + action
+	// PostAssistantPlannerMaxOutputTokens caps the Haiku planner turn's output.
+	// The planner only emits a short envelope (explanation + action
 	// + saveVersion + versionNote) plus tool inputs, so a small cap is plenty;
 	// the full post is produced by the writer sub-call under MaxOutputTokens.
 	// 0 falls back to a sensible default (8192).
@@ -151,20 +151,20 @@ type Config struct {
 	MaxParallelBatches int `envconfig:"MAX_PARALLEL_BATCHES"  default:"5"`
 
 	// GeneratePostsMax caps the Campaign Assistant's targeted "add a few posts"
-	// tool (CON-114) so it stays an incremental add rather than a full re-plan.
+	// tool so it stays an incremental add rather than a full re-plan.
 	GeneratePostsMax int `envconfig:"GENERATE_POSTS_MAX" default:"10"`
 
-	// DraftPostMax caps the Campaign Assistant's draftPost tool (CON-207) — how
+	// DraftPostMax caps the Campaign Assistant's draftPost tool — how
 	// many finished, content-first drafts one "create a post from this research"
 	// call may produce (total across platforms). Smaller than GeneratePostsMax:
 	// each draft is full-length copy, not a terse thesis.
 	DraftPostMax int `envconfig:"DRAFT_POST_MAX" default:"5"`
 
 	// ConsistencyPostsMax caps how many posts the Campaign Assistant's posts-vs-
-	// brief consistency check (CON-116) analyzes in a single model call.
+	// brief consistency check analyzes in a single model call.
 	ConsistencyPostsMax int `envconfig:"CONSISTENCY_POSTS_MAX" default:"20"`
 
-	// Post quality assessment (CON-85). Scoring runs on Sonnet 4.5 by
+	// Post quality assessment. Scoring runs on Sonnet 4.5 by
 	// default — Haiku underdelivered (terse, omitting per-dimension prose) —
 	// specified separately from ModelID so the scoring model can be tuned
 	// independently. QualityWeightProfiles is an optional JSON override for
@@ -172,7 +172,7 @@ type Config struct {
 	// defaults (post_quality.DefaultWeights). Each profile's four weights
 	// must sum to 1.0. Example:
 	//   {"profiles":{"reel":{"correctness":0.2,"clarity":0.15,"engagement":0.4,"delivery":0.25}}}
-	QualityModelID        string `envconfig:"QUALITY_MODEL_ID"        default:"claude-sonnet-4-5-20250929"` // CON-308: seed-only (see ModelID)
+	QualityModelID        string `envconfig:"QUALITY_MODEL_ID"        default:"claude-sonnet-4-5-20250929"` // Seed-only (see ModelID)
 	QualityWeightProfiles string `envconfig:"QUALITY_WEIGHT_PROFILES" default:""`
 
 	// Object storage (S3-compatible: Cloudflare R2, DigitalOcean Spaces, AWS S3).
@@ -184,7 +184,7 @@ type Config struct {
 	StorageBucket    string `envconfig:"STORAGE_BUCKET"     default:""`
 	StoragePublicURL string `envconfig:"STORAGE_PUBLIC_URL" default:""` // CDN/public base URL for returned object URLs
 
-	// PDF parsing microservice (CON-103). The API streams PDF bytes to
+	// PDF parsing microservice. The API streams PDF bytes to
 	// pdf-service over gRPC — exclusively over the Railway private network — and
 	// gets back page-attributed chunks + a thumbnail. Empty PDFServiceAddr
 	// disables PDF ingestion (uploads accepted, parsing skipped), mirroring the
@@ -196,7 +196,7 @@ type Config struct {
 	PDFServiceTimeout      time.Duration `envconfig:"PDF_SERVICE_TIMEOUT"        default:"2m"`
 	PDFServiceMaxRecvBytes int           `envconfig:"PDF_SERVICE_MAX_RECV_BYTES" default:"67108864"`
 
-	// Video probing microservice (CON-148), mirroring pdf-service. The API
+	// Video probing microservice, mirroring pdf-service. The API
 	// hands video-service a short-lived presigned GET URL over gRPC — over the
 	// Railway private network — and gets back duration/codec/resolution + a
 	// poster frame. Empty VideoServiceAddr disables probing (uploads accepted
@@ -208,7 +208,7 @@ type Config struct {
 	VideoServiceTimeout      time.Duration `envconfig:"VIDEO_SERVICE_TIMEOUT"        default:"2m"`
 	VideoServiceMaxRecvBytes int           `envconfig:"VIDEO_SERVICE_MAX_RECV_BYTES" default:"67108864"`
 
-	// Document parsing microservice (CON-280), mirroring pdf-service. The API
+	// Document parsing microservice, mirroring pdf-service. The API
 	// streams office/text document bytes (.docx/.pptx/.xlsx/.odt/... ) to
 	// document-service over gRPC — over the Railway private network — and gets
 	// back embedding-ready, source-anchored chunks. Empty DocumentsServiceAddr
@@ -221,7 +221,7 @@ type Config struct {
 	DocumentsServiceTimeout      time.Duration `envconfig:"DOCUMENTS_SERVICE_TIMEOUT"        default:"5m"`
 	DocumentsServiceMaxRecvBytes int           `envconfig:"DOCUMENTS_SERVICE_MAX_RECV_BYTES" default:"134217728"`
 
-	// Audio transcription microservice (CON-282), mirroring video-service. The
+	// Audio transcription microservice, mirroring video-service. The
 	// API hands audio-service short-lived presigned GET/PUT URLs over gRPC — over
 	// the Railway private network — for three stateless compute calls (Probe /
 	// Normalize / TranscribeSegment); ogen owns the resumable state machine on a
@@ -248,7 +248,7 @@ type Config struct {
 	AudioMaxDurationMs    int64         `envconfig:"AUDIO_MAX_DURATION_MS"    default:"14400000"`
 	TranscribeModel       string        `envconfig:"TRANSCRIBE_MODEL"         default:"gemini-2.5-flash"`
 
-	// Image microservice (CON-281), mirroring audio/document-service. image-service
+	// Image microservice, mirroring audio/document-service. image-service
 	// is the SINGLE image ingress: both content-bank IMG assets and post-attachment
 	// images route through it over gRPC on the Railway private network, handed
 	// short-lived presigned GET/PUT URLs (bytes never traverse gRPC). It owns all
@@ -266,7 +266,7 @@ type Config struct {
 	// (its own IMAGE_MAX_PIXELS env), not here — the current contract has no field to
 	// pass it over, so it is deliberately NOT duplicated as dead ogen config. The
 	// upload byte cap + alt-text storage length live in operator-controlled global
-	// config (CON-292), read via GlobalLimits().
+	// config, read via GlobalLimits().
 	//
 	// ImageJobWorkers sizes the dedicated `image` queue's worker pool (kept small so
 	// heavy vision runs can't starve the default queue); ImageJobTimeout bounds a
@@ -293,12 +293,12 @@ type Config struct {
 	ZernioSyncIntervalFast time.Duration `envconfig:"ZERNIO_SYNC_INTERVAL_FAST" default:"5s"`
 
 	// ZernioEnv namespaces each tenant's Zernio profile name,
-	// "Ogen-<ZernioEnv>-<tenant_id>" (CON-102), so profiles created by dev,
+	// "Ogen-<ZernioEnv>-<tenant_id>", so profiles created by dev,
 	// staging, and prod Ogen instances against the same shared Zernio account
 	// stay distinguishable on the Zernio dashboard. Defaults to "dev".
 	ZernioEnv string `envconfig:"ZERNIO_ENV" default:"dev"`
 
-	// Analytics refresh (CON-93 §6 FR3). The refresh_zernio_analytics
+	// Analytics refresh. The refresh_zernio_analytics
 	// queue batch-fetches engagement analytics on this cadence and only
 	// considers posts published within the lookback window (Zernio caps
 	// the analytics range at 366 days). CON-236 made this the BASE (finest)
@@ -307,7 +307,7 @@ type Config struct {
 	ZernioAnalyticsRefreshInterval time.Duration `envconfig:"ZERNIO_ANALYTICS_REFRESH_INTERVAL" default:"1h"`
 	ZernioAnalyticsWindowDays      int           `envconfig:"ZERNIO_ANALYTICS_WINDOW_DAYS"      default:"90"`
 
-	// Analytics refresh decay schedule (CON-236). A post is re-checked more often
+	// Analytics refresh decay schedule. A post is re-checked more often
 	// while it's young and its numbers still move, then progressively less. The
 	// windows delimit the age buckets (fresh < FreshWindow, warm < WarmWindow,
 	// else cold); each *Every is that bucket's re-check interval. A zero *Every
@@ -319,7 +319,7 @@ type Config struct {
 	ZernioAnalyticsWarmEvery   time.Duration `envconfig:"ZERNIO_ANALYTICS_WARM_EVERY"   default:"24h"`
 	ZernioAnalyticsColdEvery   time.Duration `envconfig:"ZERNIO_ANALYTICS_COLD_EVERY"   default:"168h"`
 
-	// Follower-stats refresh (CON-153). The refresh_zernio_followers queue
+	// Follower-stats refresh. The refresh_zernio_followers queue
 	// snapshots each connected account's follower count on this cadence. Zernio
 	// refreshes follower counts once per day, so a 24h default matches the
 	// upstream granularity. ZernioFollowerRetentionDays carries the retention
@@ -328,7 +328,7 @@ type Config struct {
 	ZernioFollowerRefreshInterval time.Duration `envconfig:"ZERNIO_FOLLOWER_REFRESH_INTERVAL" default:"24h"`
 	ZernioFollowerRetentionDays   int           `envconfig:"ZERNIO_FOLLOWER_RETENTION_DAYS"   default:"365"`
 
-	// Connection-expiry notifications (CON-219). The detect_expiring_connections
+	// Connection-expiry notifications. The detect_expiring_connections
 	// queue reads each connected account's Zernio health on this cadence and
 	// emails workspace owners when a token is within ConnectionExpiryLeadDays of
 	// expiry (or already needs reconnecting). Profile-driven, so it no-ops when
@@ -338,7 +338,7 @@ type Config struct {
 	ZernioHealthCheckInterval time.Duration `envconfig:"ZERNIO_HEALTH_CHECK_INTERVAL" default:"6h"`
 	ConnectionExpiryLeadDays  int           `envconfig:"CONNECTION_EXPIRY_LEAD_DAYS"  default:"7"`
 
-	// Manual-publish-due sweep (CON-285). The detect_manual_publish_due queue
+	// Manual-publish-due sweep. The detect_manual_publish_due queue
 	// notifies workspace owners once a post left for manual publishing reaches its
 	// scheduled time and nobody has published it yet. Per-post dedupe keeps it to
 	// one notification while unread.
@@ -351,7 +351,7 @@ type Config struct {
 	// default success page.
 	ZernioRedirectURL string `envconfig:"ZERNIO_REDIRECT_URL" default:""`
 
-	// Firecrawl web-scrape (CON-222). URL assets are ingested by scraping the
+	// Firecrawl web-scrape. URL assets are ingested by scraping the
 	// page to Markdown via the Firecrawl.dev API (POST /v2/scrape). Like the
 	// Anthropic / Zernio / Resend keys, FirecrawlAPIKey is a first-boot seed
 	// source only: migrated into the encrypted `secret` table on startup and
@@ -364,7 +364,7 @@ type Config struct {
 	FirecrawlBaseURL     string        `envconfig:"FIRECRAWL_BASE_URL"     default:"https://api.firecrawl.dev"`
 	FirecrawlHTTPTimeout time.Duration `envconfig:"FIRECRAWL_HTTP_TIMEOUT" default:"90s"`
 
-	// Email (CON-154). Transactional + marketing mail via Resend. ResendAPIKey,
+	// Email. Transactional + marketing mail via Resend. ResendAPIKey,
 	// ResendWebhookSecret, and EmailLinkSecret are first-boot seed sources only:
 	// migrated into the encrypted `secret` table on startup and thereafter read
 	// from — and rotated via — the gRPC secrets service, mirroring the Anthropic /
@@ -383,7 +383,7 @@ type Config struct {
 	EmailBaseURL     string        `envconfig:"EMAIL_BASE_URL"            default:"https://api.resend.com"`
 	EmailHTTPTimeout time.Duration `envconfig:"EMAIL_HTTP_TIMEOUT"        default:"15s"`
 	AppBaseURL       string        `envconfig:"APP_BASE_URL"              default:"https://app.getogen.com"`
-	// EmailLinkBaseURL (CON-155) is the base for public unsubscribe links; it must
+	// EmailLinkBaseURL is the base for public unsubscribe links; it must
 	// resolve to the API host. Empty falls back to AppBaseURL — fine for
 	// same-origin / reverse-proxied deploys; set explicitly for a split-origin
 	// deploy where the SPA and API live on different hosts.
@@ -416,7 +416,7 @@ type Config struct {
 	GRPCAddr      string `envconfig:"GRPC_ADDR"       default:"127.0.0.1:9091"`
 	GRPCAuthToken string `envconfig:"GRPC_AUTH_TOKEN" default:""`
 
-	// New-tenant admin notification (CON-229). On a committed signup, Ogen
+	// New-tenant admin notification. On a committed signup, Ogen
 	// enqueues a durable River job that POSTs a signed event to Harbor's inbound
 	// webhook; Harbor resolves the operator recipients and calls back the
 	// EmailAdminService send RPC, which renders admin_tenant_registered and links
@@ -441,17 +441,17 @@ type Config struct {
 	// Graceful-shutdown wait for in-flight jobs to finish.
 	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"30s"`
 
-	// Reconciliation grace window (CON-69 §8). A Scheduled post whose
+	// Reconciliation grace window. A Scheduled post whose
 	// scheduled_at + this window has passed without a terminal Zernio
 	// status is forced to Failed with a reason that distinguishes
 	// reconciliation_timeout from a Zernio-reported failure.
 	ReconcileGrace time.Duration `envconfig:"RECONCILE_GRACE" default:"1h"`
 
-	// PostLog retention (CON-69 §11). Older entries are removed by the
+	// PostLog retention. Older entries are removed by the
 	// cleanup_post_logs recurring task. 0 disables cleanup entirely.
 	PostLogRetentionDays int `envconfig:"POSTLOG_RETENTION_DAYS" default:"90"`
 
-	// Usage metering & per-tenant cost limits (CON-86). AnalyticsDSN points at
+	// Usage metering & per-tenant cost limits. AnalyticsDSN points at
 	// the isolated analytics (TimescaleDB) database; empty disables usage
 	// recording + enforcement entirely (calls proceed, nothing recorded) and
 	// is the graceful-disable default, mirroring empty GeminiAPIKey.
@@ -480,13 +480,13 @@ type Config struct {
 	// so tenants cannot lift their own caps.
 	UsageAdminToken string `envconfig:"USAGE_ADMIN_TOKEN" default:""`
 
-	// ActivityRetentionDays mirrors UsageRetentionDays (CON-125): the
+	// ActivityRetentionDays mirrors UsageRetentionDays: the
 	// tenant_activity_events retention policy drops chunks older than this. The current
 	// migration installs a fixed 90-day policy; operators adjust it out of band.
 	// Starts at 90 days, expandable later.
 	ActivityRetentionDays int `envconfig:"ACTIVITY_RETENTION_DAYS" default:"90"`
 
-	// Notification center (CON-242). The cleanup_notifications periodic task
+	// Notification center. The cleanup_notifications periodic task
 	// reaps faded notifications so the inbox and table stay lean:
 	// NotificationsCleanupEvery is the sweep cadence (0 disables the task);
 	// NotificationsRetentionDays drops read/dismissed rows older than this (0

@@ -34,7 +34,7 @@ const (
 )
 
 // NewAnalytics opens the isolated analytics database (TimescaleDB in prod, a
-// plain Postgres in tests/dev) used for vendor_usage_events (CON-86 D4). It is a
+// plain Postgres in tests/dev) used for vendor_usage_events. It is a
 // separate handle from New: the control-plane Postgres stays vanilla, and a
 // failure here must never take down the request path — callers treat an
 // error as "analytics disabled" and proceed (fail-open, CON-86 FR10).
@@ -60,7 +60,7 @@ func NewAnalytics(dsn string, debug bool) (*bun.DB, error) {
 		}
 	}()
 
-	// CON-303: trace analytics-pool queries too, tagged with a distinct db.name
+	// Trace analytics-pool queries too, tagged with a distinct db.name
 	// so they are distinguishable from control-plane queries in a trace.
 	db.AddQueryHook(bunotel.NewQueryHook(bunotel.WithDBName("ogen_analytics")))
 

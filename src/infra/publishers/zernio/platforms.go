@@ -12,10 +12,8 @@ import (
 )
 
 // SupportedPlatform describes one publishable platform as the publish/connect
-// code sees it. It is projected from a `platforms` row (CON-292): the hardcoded
-// Phase-1 allowlist (supportedPlatforms) and Sqid→slug map (sqidToZernioID)
-// that used to live here were deleted — the DB row is now the single source of
-// truth, loaded into a process-wide snapshot by InitCatalog.
+// code sees it. It is projected from a `platforms` row: the DB row is the
+// single source of truth, loaded into a process-wide snapshot by InitCatalog.
 type SupportedPlatform struct {
 	ZernioID string // identifier sent to Zernio (POST body, list filter)
 	Label    string // human label for picker UI (platform.name)
@@ -34,7 +32,7 @@ type SupportedPlatform struct {
 
 // catalog is an immutable snapshot of the platforms table, swapped atomically
 // on refresh. Resolution maps (bySqid / byZernio) index every slugged row;
-// `enabled` / enabledByZernio index only enabled rows (CON-292 §11).
+// `enabled` / enabledByZernio index only enabled rows.
 type catalog struct {
 	all             []SupportedPlatform
 	enabled         []SupportedPlatform
@@ -86,14 +84,13 @@ func buildCatalog(sps []SupportedPlatform) *catalog {
 	return c
 }
 
-// builtinPlatforms is the fallback catalog: the 6 originally-seeded platforms
+// builtinPlatforms is the fallback catalog: the 6 seed-migration platforms
 // with their Sqid ids + Zernio slugs. It is NOT the source of truth — the DB is
-// (loaded by InitCatalog at boot). It serves two purposes (CON-292 §10.1):
+// (loaded by InitCatalog at boot). It serves two purposes:
 //   - boot / DB-outage resilience: the known platforms still resolve if the
 //     initial DB load fails, so the app starts;
 //   - tests: packages that exercise the publish/connect lookups without booting
-//     server.New (jobs, handlers, usecases) see the known platforms, exactly as
-//     they did when this was a compile-time registry.
+//     server.New (jobs, handlers, usecases) see the known platforms.
 //
 // Keep it in sync with the seed migration's 6 backfilled rows. Operator-added
 // platforms and limit edits only ever live in the DB.
@@ -141,7 +138,7 @@ type CatalogSource interface {
 // InitCatalog loads the platform catalog from src at boot and starts a periodic
 // refresh goroutine bound to ctx. Non-fatal: a failed initial load logs and
 // leaves the catalog empty (the ticker retries) so the app still starts —
-// consistent with the gRPC server's non-fatal posture (CON-292 §10.1). Because
+// consistent with the gRPC server's non-fatal posture. Because
 // the row source is mandatory for the whole app, a persistent DB outage is a
 // boot failure elsewhere, not here.
 func InitCatalog(ctx context.Context, src CatalogSource) {
@@ -175,7 +172,7 @@ func LoadCatalog(ctx context.Context, src CatalogSource) error {
 	return RefreshCatalog(ctx)
 }
 
-// RefreshCatalog reloads the snapshot now. PlatformAdminService (CON-292 §6)
+// RefreshCatalog reloads the snapshot now. PlatformAdminService
 // calls it after every write so operator edits take effect without waiting for
 // the periodic tick. A failed reload keeps the previous snapshot.
 func RefreshCatalog(ctx context.Context) error {
@@ -195,7 +192,7 @@ func RefreshCatalog(ctx context.Context) error {
 
 // SupportedPlatforms returns a copy of the ENABLED catalog entries. Its callers
 // are the connect allowlist listing and the /api/platforms publisher
-// enrichment, both of which must hide disabled platforms (CON-292 §11).
+// enrichment, both of which must hide disabled platforms.
 func SupportedPlatforms() []SupportedPlatform {
 	c := activeCatalog.Load()
 	out := make([]SupportedPlatform, len(c.enabled))
@@ -225,7 +222,7 @@ func LookupSupportedPlatform(zernioID string) *SupportedPlatform {
 // LookupSupportedBySqid resolves a platform by its Sqid (platforms.id) across
 // ALL rows — enabled and disabled. The publish path relies on this so a post
 // already scheduled to a now-disabled platform still resolves its slug and goes
-// out (CON-292 §11). Returns nil for an unknown Sqid or a row with no slug.
+// out. Returns nil for an unknown Sqid or a row with no slug.
 func LookupSupportedBySqid(sqid string) *SupportedPlatform {
 	c := activeCatalog.Load()
 	if sp, ok := c.bySqid[sqid]; ok {

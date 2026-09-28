@@ -16,7 +16,7 @@ import (
 // response without paginating a banner feed. Newest-published win.
 const maxActiveAnnouncements = 50
 
-// AnnouncementAudience is the delivery input for ActiveForTenant (CON-230): the
+// AnnouncementAudience is the delivery input for ActiveForTenant: the
 // caller's active workspace resolved to its tier + group ids, plus the user
 // membership whose dismissals hide banners.
 type AnnouncementAudience struct {
@@ -43,7 +43,7 @@ type AnnouncementListFilter struct {
 	CursorID        string
 }
 
-// AnnouncementRepository persists operator-authored announcements (CON-230): the
+// AnnouncementRepository persists operator-authored announcements: the
 // tenant-facing delivery + per-user click/dismiss tracking, and the operator
 // (Harbor gRPC) authoring / history / stats. Announcements are a GLOBAL table
 // (not tenant-scoped), so — like TenantRepository — this repo is NOT routed

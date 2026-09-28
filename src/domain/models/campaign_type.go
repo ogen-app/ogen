@@ -12,7 +12,7 @@ import (
 
 // CampaignType is a campaign's phase plan. System types (seeded, is_system) are
 // shared by every workspace and have no owner; custom types belong to the
-// workspace that created them (CON-314). It is deliberately not TenantScoped —
+// workspace that created them. It is deliberately not TenantScoped —
 // that would hide the system types — so the repository scopes reads to "system
 // or own" and writes to "own" by hand.
 type CampaignType struct {

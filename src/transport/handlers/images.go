@@ -92,7 +92,7 @@ func (h *ImagesHandler) Upload(c *fiber.Ctx) error {
 	}
 
 	// Strip any directory components from the filename for safety, then
-	// namespace the object key by tenant (CON-97). filepath.Base must run on
+	// namespace the object key by tenant. filepath.Base must run on
 	// the filename — running it on the final key would strip the
 	// t/<tenant_id>/ prefix.
 	key := storage.TenantKey(reqCtx(c), filepath.Base(uuid.NewString()+ext))

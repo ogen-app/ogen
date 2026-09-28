@@ -1,6 +1,6 @@
 // Package tenantctx carries the active tenant id through a request- or
 // job-scoped context.Context. It is the single mechanism the tenant-scoped
-// query layer (CON-97 §6) uses to discover which tenant a query belongs to.
+// query layer uses to discover which tenant a query belongs to.
 //
 // On the request path the Fiber auth middleware stores the tenant via
 // c.Locals(tenantctx.Key, id); fasthttp exposes user values through
@@ -23,7 +23,7 @@ type ctxKey struct{}
 // systemKey marks a context as a system (intentionally cross-tenant) context.
 type systemKey struct{}
 
-// tierKey carries the caller's tenant tier id (CON-308) for per-tier model
+// tierKey carries the caller's tenant tier id for per-tier model
 // resolution. Optional: absent means "resolve the global default".
 type tierKey struct{}
 
@@ -33,7 +33,7 @@ type tierKey struct{}
 // still cannot forge the key type.
 var Key = ctxKey{}
 
-// ErrNoTenant is returned by the tenant-scoping query hooks (CON-97 §6/§12.1)
+// ErrNoTenant is returned by the tenant-scoping query hooks
 // when a tenant-owned query runs without a tenant in context and the context
 // is not a system context. The query fails closed rather than touching another
 // tenant's rows.
@@ -60,7 +60,7 @@ func With(ctx context.Context, tenantID string) context.Context {
 
 // From returns the tenant id carried by ctx and whether a non-empty one was
 // present. Callers that enforce isolation must treat (_, false) as fail-closed
-// (CON-97 §6) — never run an unscoped query.
+// — never run an unscoped query.
 func From(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(Key).(string)
 	if !ok || id == "" {
@@ -70,7 +70,7 @@ func From(ctx context.Context) (string, bool) {
 }
 
 // WithTier returns a copy of ctx carrying the caller's tenant tier id, for
-// per-tier model resolution (CON-308). Optional — the model resolver falls back
+// per-tier model resolution. Optional — the model resolver falls back
 // to the global default when no tier is present.
 func WithTier(ctx context.Context, tierID string) context.Context {
 	return context.WithValue(ctx, tierKey{}, tierID)

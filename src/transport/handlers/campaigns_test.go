@@ -61,12 +61,12 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
 		handlers.NewCampaignTypesHandler(campaignTypeRepo, auth).Register(app)
-		// CON-291: overview + summaries live on the read handler. Nil deps here so
+		// Overview + summaries live on the read handler. Nil deps here so
 		// the routes exist (401 unauthenticated, 503 authenticated) for the default-
 		// app route-level specs; registered before CampaignsHandler so /summaries
 		// wins over /:id.
 		handlers.NewCampaignReadHandler(nil, nil, auth).Register(app)
-		// CON-291: generate-posts + brief/posts-review live on the generation
+		// Generate-posts + brief/posts-review live on the generation
 		// handler. Nil deps so the routes exist (401 unauthenticated) for the
 		// default-app route-level specs.
 		handlers.NewCampaignGenerationHandler(campaignRepo, nil, 0, nil, nil, nil, nil, auth).Register(app)
@@ -443,7 +443,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Asset membership (CON-233) ───────────────────────────────────────────
+	// ── Asset membership ───────────────────────────────────────────
 
 	Describe("asset membership on /api/campaigns/:id/assets", func() {
 		// addAssets POSTs a membership add and returns the raw response.
@@ -1228,7 +1228,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Campaign Assistant (CON-112) ───────────────────────────────────────────
+	// ── Campaign Assistant ───────────────────────────────────────────
 
 	Describe("POST /api/campaigns/:id/assistant", func() {
 		errorHandler := func(c *fiber.Ctx, err error) error {
@@ -1556,7 +1556,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Campaign overview (CON-113) ────────────────────────────────────────────
+	// ── Campaign overview ────────────────────────────────────────────
 
 	Describe("GET /api/campaigns/:id/overview", func() {
 		errorHandler := func(c *fiber.Ctx, err error) error {
@@ -1712,7 +1712,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Batched summaries (CON-152) ─────────────────────────────────────────────
+	// ── Batched summaries ─────────────────────────────────────────────
 
 	Describe("GET /api/campaigns/summaries", func() {
 		errorHandler := func(c *fiber.Ctx, err error) error {
@@ -1851,7 +1851,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Targeted generation (CON-114) ──────────────────────────────────────────
+	// ── Targeted generation ──────────────────────────────────────────
 
 	Describe("POST /api/campaigns/:id/generate-posts", func() {
 		errorHandler := func(c *fiber.Ctx, err error) error {
@@ -2001,7 +2001,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Consistency reviews (CON-116) ──────────────────────────────────────────
+	// ── Consistency reviews ──────────────────────────────────────────
 
 	Describe("POST /api/campaigns/:id/brief-review and /posts-review", func() {
 		errorHandler := func(c *fiber.Ctx, err error) error {

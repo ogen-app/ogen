@@ -15,14 +15,14 @@ import (
 type AssetFileRepository interface {
 	GetByAssetID(ctx context.Context, assetID string) (*models.AssetFile, error)
 	// GetByChecksum returns the caller-tenant's file row with this SHA-256, or
-	// sql.ErrNoRows when none exists — the dedupe lookup behind image upload
-	// (CON-246). Tenant scoping comes from the TenantScoped hooks.
+	// sql.ErrNoRows when none exists — the dedupe lookup behind image upload.
+	// Tenant scoping comes from the TenantScoped hooks.
 	GetByChecksum(ctx context.Context, checksum string) (*models.AssetFile, error)
 	Upsert(ctx context.Context, file *models.AssetFile) error
 	DeleteByAssetID(ctx context.Context, assetID string) error
 	ListByAssetIDs(ctx context.Context, assetIDs []string) (map[string]*models.AssetFile, error)
 	// SumSizeBytesInTenant totals the stored originals across the ctx tenant's
-	// content bank — its share of the media_storage_bytes quota (CON-312), beside
+	// content bank — its share of the media_storage_bytes quota, beside
 	// post attachments.
 	SumSizeBytesInTenant(ctx context.Context) (int64, error)
 }

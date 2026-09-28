@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// NotificationListOpts filters a user's inbox read (CON-242). Every read is
+// NotificationListOpts filters a user's inbox read. Every read is
 // scoped to the caller's user_id AND the active tenant (the TenantScoped hook
 // adds the tenant predicate); dismissed rows are always excluded. Because a
 // user_id (membership) maps 1:1 to a tenant, the user_id predicate alone is
@@ -25,7 +25,7 @@ type NotificationListOpts struct {
 	SinceSeq  int64
 }
 
-// NotificationRepository persists the per-user notification inbox (CON-242).
+// NotificationRepository persists the per-user notification inbox.
 // Every query runs through bun's Model API so the TenantScoped hooks scope
 // tenant_id; the explicit user_id predicate narrows to the caller.
 type NotificationRepository interface {
@@ -90,7 +90,7 @@ func (r *notificationRepository) List(ctx context.Context, userID string, opts N
 		Where("n.user_id = ?", userID).
 		Where("n.dismissed_at IS NULL").
 		// Expired notifications fade from the inbox at expires_at, independently
-		// of the (slower) cleanup sweep (CON-242 FR10).
+		// of the (slower) cleanup sweep.
 		Where("(n.expires_at IS NULL OR n.expires_at > now())")
 	if opts.UnreadOnly {
 		q = q.Where("n.read_at IS NULL")

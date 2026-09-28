@@ -26,8 +26,8 @@ import (
 // OnMarkdownSave is always non-nil after Init; it becomes a no-op per call when
 // no gemini_api_key is currently configured (see reloadableEmbedder).
 //
-// PDF ingestion no longer rides a callback here — it goes through the
-// process_pdf River job (CON-103), enqueued by the asset upload handler.
+// PDF ingestion has no callback here — it goes through the process_pdf River
+// job, enqueued by the asset upload handler.
 type Callbacks struct {
 	OnMarkdownSave func(assetID, title, content, tenantID string)
 }
@@ -42,12 +42,12 @@ const embeddingDimensions = 3072
 // ErrEmbeddingUnavailable is returned by the reloadable embedder's Embed when no
 // gemini_api_key is currently configured. Callers treat it as a transient,
 // recoverable state — the key can be set / rotated via the secrets API without a
-// restart (CON-104), so a later call can succeed.
+// restart, so a later call can succeed.
 var ErrEmbeddingUnavailable = errors.New("embedding: no gemini_api_key configured")
 
 // reloadableEmbedder is a stable ai.Embedder whose backing implementation is
-// swapped when gemini_api_key is set / rotated / cleared via the secrets API
-// (CON-104). Consumers — the flow runtime, the process_pdf worker, and the
+// swapped when gemini_api_key is set / rotated / cleared via the secrets API.
+// Consumers — the flow runtime, the process_pdf worker, and the
 // markdown embed scheduler — hold this one reference for the process lifetime
 // and never need rewiring on a key change, mirroring the genkit-rebuild
 // subscription Anthropic uses in server/genkit_runtime.go and the Zernio
@@ -105,10 +105,10 @@ func (e *reloadableEmbedder) swap(inner ai.Embedder) {
 }
 
 // Init builds the embedding subsystem: a dedicated Genkit instance for the embed
-// flows (CON-101), a reloadable embedder whose Gemini key is read from the
+// flows, a reloadable embedder whose Gemini key is read from the
 // secrets store, and the fire-and-forget callbacks. The returned ai.Embedder is
 // the stable reloadable wrapper — always non-nil — so callers can hold it across
-// gemini_api_key rotations (CON-104). It is deliberately separate from the
+// gemini_api_key rotations. It is deliberately separate from the
 // Anthropic flow runtime so an Anthropic key rotation never disturbs the
 // embedder.
 //

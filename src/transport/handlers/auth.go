@@ -55,13 +55,13 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 
 		// The session's stored tenant is the DEFAULT workspace — where a fresh tab
 		// or the next login seeds. Capture it before the active-workspace override
-		// below rewrites session.TenantID, so the switcher can mark it (CON-147).
+		// below rewrites session.TenantID, so the switcher can mark it.
 		storedDefault := session.TenantID
 		c.Locals(DefaultWorkspaceLocal, storedDefault)
 
 		// Resolve — and authorise — the active workspace. An X-Workspace-Id header
 		// selects it; absent, the session default applies. The membership lookup
-		// filters soft-deleted workspaces (CON-147 PR4), so a deleted or non-member
+		// filters soft-deleted workspaces, so a deleted or non-member
 		// workspace resolves to ErrNoRows and is refused, and the resolved
 		// membership rewrites the in-request session view (UserID/TenantID) — which
 		// is what every downstream reader, from tenantctx scoping to CreatedBy
@@ -92,20 +92,20 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 		session.TenantID = membership.TenantID
 
 		c.Locals("session", session)
-		// Carry the tenant so the tenant-scoped query layer (CON-97 §6) can
+		// Carry the tenant so the tenant-scoped query layer can
 		// read it via tenantctx.From(c.Context()) without threading the
 		// context through every handler. fasthttp exposes c.Locals values
 		// through (*RequestCtx).Value, so the same key reads back as a
 		// context value.
 		c.Locals(tenantctx.Key, session.TenantID)
-		// Carry the user id the same way (CON-107) so the slog ContextHandler
+		// Carry the user id the same way so the slog ContextHandler
 		// attaches user_id to every log line made with c.Context().
 		c.Locals(logging.UserIDKey, session.UserID)
 		return c.Next()
 	}
 }
 
-// workspaceHeader is the per-request active-workspace selector (CON-147). A
+// workspaceHeader is the per-request active-workspace selector. A
 // request carrying it acts in that workspace if the account is a member; absent,
 // the session's default workspace applies.
 const workspaceHeader = "X-Workspace-Id"
@@ -137,7 +137,7 @@ func callerUser(c *fiber.Ctx, userRepo repository.UserRepository) (*models.User,
 }
 
 // requireOwner loads the caller and returns it only if they are an owner of the
-// active workspace, otherwise a 403 (CON-26 §7). The team-management endpoints
+// active workspace, otherwise a 403. The team-management endpoints
 // (invitations, member role changes and removals) gate on this. Enforcement
 // reads the live role from the caller's membership of the active workspace
 // (RequireAuth set session.UserID to it), so the same account can be an owner of

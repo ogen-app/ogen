@@ -319,7 +319,7 @@ What's stopped your team from trying it? 👇`
 		})
 	})
 
-	// Ranking eval (CON-85): a cheap model is sufficient if its RANKINGS
+	// Ranking eval: a cheap model is sufficient if its RANKINGS
 	// agree with a stronger model's, even where absolute numbers differ.
 	// Run a clearly-strong and a clearly-weak post through each model and
 	// assert strong outscores weak. Sonnet is only checked when configured.

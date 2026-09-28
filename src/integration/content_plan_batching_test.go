@@ -20,8 +20,8 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// content_plan_batching_test exercises the parallel-batched generation path
-// (CON-67). The existing content_plan_test runs with the default K (30), so
+// content_plan_batching_test exercises the parallel-batched generation path.
+// The existing content_plan_test runs with the default K (30), so
 // any campaign small enough to test cheaply ends up in a single batch and
 // never hits the batched code path. Here we deliberately set
 // MaxPostsPerBatch=5 with EstimatedPostCount=10 to force two batches against
@@ -252,7 +252,7 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 					"duplicate post index %d found in stream — slot allocator should produce unique global indices", idxs[i])
 			}
 
-			// Indices are global slot IDs (CON-67), so the lowest seen
+			// Indices are global slot IDs, so the lowest seen
 			// index must be 0 — batch 0's GlobalStartIndex.
 			Expect(idxs[0]).To(Equal(0),
 				"lowest streamed index must be 0; got %d", idxs[0])

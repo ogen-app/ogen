@@ -10,7 +10,7 @@ import (
 )
 
 // AutoPublishAllowlistHandler exposes the workspace-scoped auto-publish
-// allowlist (CON-65). Any authenticated user can read; any
+// allowlist. Any authenticated user can read; any
 // authenticated user can replace it. Role-based access (Admin/Owner
 // only for writes) is intentionally out of scope for the MVP — when a
 // roles model lands, gate PUT behind it.

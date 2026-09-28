@@ -110,7 +110,7 @@ func buildOverview(campaign *models.Campaign, posts []models.Post, platformNames
 		typeCount[p.PlatformPostType]++
 	}
 
-	// CON-166: each phase's effective window from the campaign's phase plan.
+	// Each phase's effective window from the campaign's phase plan.
 	windows, _ := campaignphase.Resolve(campaign)
 	windowByPhase := make(map[string]campaignphase.Window, len(windows))
 	for _, w := range windows {

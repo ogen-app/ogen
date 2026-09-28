@@ -26,7 +26,7 @@ type emailRuntime struct {
 	Webhook *handlers.ResendWebhookHandler
 }
 
-// initEmail wires the transactional + marketing email subsystem (CON-154). The
+// initEmail wires the transactional + marketing email subsystem. The
 // Resend sender resolves its key per call from the secrets store, so a key
 // set/rotated via the secrets API takes effect with no reboot (an unset key
 // makes send jobs log skipped_disabled). Default templates are seeded on boot
@@ -71,7 +71,7 @@ func initEmail(
 		LinkBaseURL:  cmp.Or(cfg.EmailLinkBaseURL, cfg.AppBaseURL),
 		LinkSecret:   linkSecret,
 		Retention:    time.Duration(cfg.EmailLogRetentionDays) * 24 * time.Hour,
-		// CON-125: mirror every terminal send outcome into tenant_activity_events.
+		// Mirror every terminal send outcome into tenant_activity_events.
 		ActivityRecorder: activityRecorder,
 	}
 

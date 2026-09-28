@@ -8,7 +8,7 @@ import (
 
 type Tag struct {
 	bun.BaseModel `bun:"table:tags,alias:t" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID        string    `bun:"id,pk"                                        json:"id"`
 	Name      string    `bun:"name,notnull"                                 json:"name"`

@@ -1,4 +1,4 @@
-// Package notify is the write-side of the notification center (CON-242): a tiny
+// Package notify is the write-side of the notification center: a tiny
 // service producers call to drop a persistent, per-user notification and wake
 // any live SSE stream. It is the single choke point between domain events
 // (publish outcomes, connection expiry, finished jobs) and the inbox, so

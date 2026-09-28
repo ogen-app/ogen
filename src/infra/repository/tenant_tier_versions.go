@@ -11,21 +11,21 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// Version write-path sentinels (CON-294). The gRPC PlanAdminService maps these to
+// Version write-path sentinels. The gRPC PlanAdminService maps these to
 // FailedPrecondition; the database immutability trigger is the backstop.
 var (
 	ErrVersionNotDraft           = errors.New("tier version is not a draft")
 	ErrVersionNotActive          = errors.New("tier version is not active")
 	ErrVersionHasLiveAssignments = errors.New("tier version has live assignments")
 
-	// Reassignment-target sentinels for the guarded retire path (CON-297).
+	// Reassignment-target sentinels for the guarded retire path.
 	ErrReassignTargetNotFound  = errors.New("reassignment target version not found")
 	ErrReassignTargetNotActive = errors.New("reassignment target version is not active")
 	ErrReassignTargetIsSelf    = errors.New("reassignment target is the version being retired")
 )
 
 // RetireOptions tunes how a retire handles a version that still has live
-// assignments (CON-297). Force and ReassignToVersionID are mutually exclusive —
+// assignments. Force and ReassignToVersionID are mutually exclusive —
 // the caller enforces that. The zero value blocks if any live assignment remains.
 type RetireOptions struct {
 	// Force retires the version and leaves live assignments in place — deliberate
@@ -37,10 +37,10 @@ type RetireOptions struct {
 }
 
 // TenantTierVersionRepository reads the immutable tier-version snapshots + their
-// price rows (CON-243). Versions are a GLOBAL operator table (like tenant_tiers),
+// price rows. Versions are a GLOBAL operator table (like tenant_tiers),
 // so — unlike TenantScoped repositories — this one carries no tenantctx and reads
 // cross-tenant. Writes (draft authoring, publish, retire) live on the Harbor gRPC
-// surface (CON-294); this repository is read-only.
+// surface; this repository is read-only.
 type TenantTierVersionRepository interface {
 	GetByID(ctx context.Context, id string) (*models.TenantTierVersion, error)
 	// LatestActiveByTier returns the highest-versioned active version of a tier,
@@ -52,7 +52,7 @@ type TenantTierVersionRepository interface {
 	PricesByVersion(ctx context.Context, versionID string) ([]models.TenantTierVersionPrice, error)
 	PricesByVersionIDs(ctx context.Context, versionIDs []string) (map[string][]models.TenantTierVersionPrice, error)
 
-	// --- writes: Harbor authoring (CON-294) ---
+	// --- writes: Harbor authoring ---
 
 	// ListByTier returns every version of a tier (all statuses), newest first.
 	ListByTier(ctx context.Context, tierID string) ([]models.TenantTierVersion, error)
@@ -69,7 +69,7 @@ type TenantTierVersionRepository interface {
 	Publish(ctx context.Context, id, changeReason string, at time.Time) error
 	// DeleteDraft hard-deletes a DRAFT version; its price rows cascade. Returns
 	// ErrVersionNotDraft for a published version, sql.ErrNoRows if it does not
-	// exist. The immutability trigger is the backstop (CON-297).
+	// exist. The immutability trigger is the backstop.
 	DeleteDraft(ctx context.Context, id string) error
 	// Retire transitions an active version to retired at `at`, returning the
 	// number of tenants migrated onto opts.ReassignToVersionID (0 unless
@@ -78,7 +78,7 @@ type TenantTierVersionRepository interface {
 	// the same transaction then retires; Force retires and grandfathers them in
 	// place; neither returns ErrVersionHasLiveAssignments. Returns
 	// ErrVersionNotActive if the version is not active, sql.ErrNoRows if missing,
-	// and the ErrReassignTarget* sentinels for a bad reassignment target (CON-297).
+	// and the ErrReassignTarget* sentinels for a bad reassignment target.
 	Retire(ctx context.Context, id string, opts RetireOptions, at time.Time) (int, error)
 	// OpenAssignmentCount returns how many tenants hold an open assignment on the
 	// version.
@@ -87,7 +87,7 @@ type TenantTierVersionRepository interface {
 	OpenAssignmentCounts(ctx context.Context, versionIDs []string) (map[string]int, error)
 	// TenantsOnVersion returns a page of the tenants holding a live (open-ended)
 	// assignment on a version — oldest-validity-first, with the tenant's display
-	// name (CON-297). The total is OpenAssignmentCount.
+	// name. The total is OpenAssignmentCount.
 	TenantsOnVersion(ctx context.Context, versionID string, limit, offset int) ([]models.VersionAssignment, error)
 }
 
@@ -302,8 +302,8 @@ func (r *tenantTierVersionRepository) Retire(ctx context.Context, id string, opt
 }
 
 // migrateOpenAssignmentsTx moves every live (open-ended) assignment on fromID
-// onto targetID inside an open transaction and returns how many it moved
-// (CON-297). It locks and validates the target (different + active), then for
+// onto targetID inside an open transaction and returns how many it moved.
+// It locks and validates the target (different + active), then for
 // each open assignment closes the old range at `at` and opens [at, infinity) on
 // the target, updating the tenant's denormalised tier_id — mirroring the
 // per-tenant Reassign path. Post-condition: fromID has no live assignment.

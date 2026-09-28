@@ -10,7 +10,7 @@ import (
 )
 
 // PostAnalyticsMetrics is the aggregate engagement block surfaced in
-// analytics API responses (CON-93 §7). The same shape is embedded inside
+// analytics API responses. The same shape is embedded inside
 // each per-platform breakdown row. On the stored PostAnalytics row these
 // aggregates live in their own columns (for sortable list/overview
 // queries); this struct is the assembled JSON representation.
@@ -27,7 +27,7 @@ type PostAnalyticsMetrics struct {
 }
 
 // PostPlatformAnalytics is one per-platform row of the breakdown stored
-// in post_analytics_current.platform_analytics (CON-93 §7). SyncStatus /
+// in post_analytics_current.platform_analytics. SyncStatus /
 // ErrorMessage / ReauthorizeURL carry the per-platform scope-gap nuance
 // (412/reauthorizeUrl): a platform connected before analytics scopes
 // were granted surfaces its error here without failing the whole
@@ -100,7 +100,7 @@ func (l *PlatformAnalyticsList) Scan(src any) error {
 // this database.
 type PostAnalytics struct {
 	bun.BaseModel `bun:"table:post_analytics_current,alias:pa" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks (no FK in the analytics DB)
+	TenantScoped  // tenant_id column + central scoping hooks (no FK in the analytics DB)
 
 	PostID             string                `bun:"post_id,notnull"                       json:"post_id"`
 	PublisherPostID    string                `bun:"publisher_post_id,notnull"             json:"publisher_post_id"`
@@ -130,7 +130,7 @@ type PostAnalytics struct {
 }
 
 // Metrics assembles the denormalised aggregate columns into the response
-// block (CON-93 §7).
+// block.
 func (a *PostAnalytics) Metrics() PostAnalyticsMetrics {
 	return PostAnalyticsMetrics{
 		Impressions:    a.Impressions,
@@ -145,7 +145,7 @@ func (a *PostAnalytics) Metrics() PostAnalyticsMetrics {
 	}
 }
 
-// MetricsKey is the change-detection fingerprint (CON-236): two checks whose
+// MetricsKey is the change-detection fingerprint: two checks whose
 // keys are equal represent identical engagement, so no new history snapshot is
 // written. It covers the aggregate metrics plus sync_status (a status
 // transition — e.g. error→synced — is a meaningful change even at equal
@@ -180,7 +180,7 @@ func (a *PostAnalytics) MetricsKey() MetricsKey {
 }
 
 // NewSnapshot builds an append-only history point from the current-state row,
-// copying only the varying metric columns (CON-236). id + occurredAt are set by
+// copying only the varying metric columns. id + occurredAt are set by
 // the caller; tenant_id is stamped by the TenantScoped hook on insert.
 func (a *PostAnalytics) NewSnapshot(id string, occurredAt time.Time) *PostAnalyticsSnapshot {
 	return &PostAnalyticsSnapshot{
@@ -202,7 +202,7 @@ func (a *PostAnalytics) NewSnapshot(id string, occurredAt time.Time) *PostAnalyt
 }
 
 // PostAnalyticsSnapshot is one point in a post's append-only engagement trend
-// history (CON-236). The refresh queue appends a row ONLY when the metrics
+// history. The refresh queue appends a row ONLY when the metrics
 // change (dedup), so the series holds real movement rather than one row per
 // tick. It lives in the isolated analytics DB (hypertable post_analytics_snapshots,
 // partitioned on occurred_at, retention-pruned). No current endpoint reads it;
@@ -210,7 +210,7 @@ func (a *PostAnalytics) NewSnapshot(id string, occurredAt time.Time) *PostAnalyt
 // static post display fields stay on PostAnalytics (one row per post).
 type PostAnalyticsSnapshot struct {
 	bun.BaseModel `bun:"table:post_analytics_snapshots,alias:pas" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks (no FK in the analytics DB)
+	TenantScoped  // tenant_id column + central scoping hooks (no FK in the analytics DB)
 
 	ID                 string     `bun:"id,notnull"`
 	PostID             string     `bun:"post_id,notnull"`

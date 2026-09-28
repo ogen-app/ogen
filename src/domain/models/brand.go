@@ -9,7 +9,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Brand materials (CON-228) — the workspace-level material that makes generated
+// Brand materials — the workspace-level material that makes generated
 // content its own: voices, audiences, guardrails, look and templates. The wire
 // shapes here mirror the ui repo's `components/brand/types.ts` exactly (camelCase
 // json tags included), because the whole prototype was built so that when this
@@ -17,7 +17,7 @@ import (
 // above it changes. See the ui repo's docs/brand-materials.md for the argument.
 //
 // Every model embeds TenantScoped, so tenant isolation is enforced centrally by
-// bun hooks (CON-97 §6) — reads/updates/deletes are scoped and inserts stamped,
+// bun hooks — reads/updates/deletes are scoped and inserts stamped,
 // and no repository method can forget.
 
 // ── jsonb value types ───────────────────────────────────────────────────────
@@ -281,14 +281,14 @@ type BrandData struct {
 	Guardrails *BrandGuardrails `json:"guardrails"`
 	Look       *BrandLook       `json:"look"`
 	Templates  []BrandTemplate  `json:"templates"`
-	// Facts is the ledger (CON-316), all facts including expired ones, ordered
+	// Facts is the ledger, all facts including expired ones, ordered
 	// by created_at then id. Always an array.
 	Facts []BrandFact `json:"facts"`
 	// GuardrailsStance is always present; None=false means undecided.
 	GuardrailsStance GuardrailsStance `json:"guardrailsStance"`
 }
 
-// ── Facts ledger (CON-316) ──────────────────────────────────────────────────
+// ── Facts ledger ──────────────────────────────────────────────────
 
 // FactSubject is what a fact is about. The generator groups facts by it.
 type FactSubject string

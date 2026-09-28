@@ -25,7 +25,7 @@ import (
 // connect link is issued. Per the ticket: 10 minutes.
 const fastPollWindow = 10 * time.Minute
 
-// connectSessionTTL bounds a headless connect session's lifetime (CON-217) and
+// connectSessionTTL bounds a headless connect session's lifetime and
 // is the expiry advertised as connectLinkResponse.ExpiresAt. It matches Zernio's
 // 15-minute connect_token expiry: the whole connect flow (open link → authorize
 // → any in-Ogen pick) must complete within it, since the session row is not
@@ -46,7 +46,7 @@ type ZernioHandler struct {
 	rateLimiter  *zernio.RateLimiter
 	auth         fiber.Handler
 
-	// CON-217: headless connect flow. connectSessions holds the short-lived
+	// Headless connect flow. connectSessions holds the short-lived
 	// per-connect state; cipher seals the Zernio connect_token/tempToken at
 	// rest; appBaseURL builds the absolute backend callback + SPA landing URLs.
 	connectSessions repository.ZernioConnectSessionRepository
@@ -89,7 +89,7 @@ func (h *ZernioHandler) Register(app *fiber.App) {
 	// monitoring agents need to scrape it without holding a session.
 	app.Get("/api/integrations/zernio/health", h.Health)
 
-	// CON-217: the headless OAuth callback is a browser redirect target from
+	// The headless OAuth callback is a browser redirect target from
 	// Zernio, so it sits OUTSIDE the cookie-auth group — the session cookie may
 	// not survive the cross-site redirect. It authenticates via the unguessable
 	// connect-session id (ogen_cn) instead.
@@ -98,7 +98,7 @@ func (h *ZernioHandler) Register(app *fiber.App) {
 	g := app.Group("/api/integrations/zernio", h.auth)
 	g.Get("/platforms", h.ListPlatforms)
 	g.Post("/connect-links", h.CreateConnectLink)
-	// CON-217: in-Ogen picker for multi-target connects (LinkedIn orgs, FB pages).
+	// In-Ogen picker for multi-target connects (LinkedIn orgs, FB pages).
 	g.Get("/connect/pending/:id", h.GetPendingConnection)
 	g.Post("/connect/pending/:id/select", h.SelectPendingConnection)
 	g.Get("/accounts", h.ListAccounts)
@@ -136,8 +136,8 @@ func (h *ZernioHandler) Health(c *fiber.Ctx) error {
 		State:   string(h.integ.State()),
 	}
 	// enabled/state are app-wide — they reflect the shared zernio_api_key, not
-	// any tenant. The profile, last-sync, and account count are per-tenant
-	// (CON-100), so only include them when the caller carries a tenant. This
+	// any tenant. The profile, last-sync, and account count are per-tenant,
+	// so only include them when the caller carries a tenant. This
 	// endpoint is unauthenticated, so it must not run a tenant-scoped query
 	// without one (it would fail closed with ErrNoTenant).
 	if _, ok := tenantctx.From(reqCtx(c)); ok {
@@ -278,7 +278,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 		return err
 	}
 	if !ok || profileID == "" {
-		// CON-100: lazily bootstrap THIS tenant's Zernio profile on its first
+		// Lazily bootstrap THIS tenant's Zernio profile on its first
 		// connect (the request context carries the tenant), then re-read it.
 		if err := h.bootstrapper.Run(reqCtx(c)); err != nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "integration_degraded")
@@ -293,14 +293,14 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 	}
 
 	// Health gate runs *after* the lazy bootstrap above: a missing-profile
-	// bootstrap promotes a transient StateDegraded back to StateOK on success
-	// (CON-100), so a first connect can self-heal instead of being short-
+	// bootstrap promotes a transient StateDegraded back to StateOK on success,
+	// so a first connect can self-heal instead of being short-
 	// circuited to 503 before it ever gets the chance.
 	if h.integ.State() != zernio.StateOK {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "integration_degraded")
 	}
 
-	// CON-217: mint a short-lived connect session so the headless OAuth callback
+	// Mint a short-lived connect session so the headless OAuth callback
 	// can resolve this tenant + profile without relying on the browser session
 	// (which may not survive the cross-site redirect through Zernio), and hold
 	// the pending selection when a platform has 2+ targets. The session id rides
@@ -339,7 +339,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 	// fastPollWindow so the user sees their connected account fast.
 	h.integ.BumpFastUntil(time.Now().Add(fastPollWindow))
 
-	// CON-102: mark this tenant as having initiated a Zernio connection so the
+	// Mark this tenant as having initiated a Zernio connection so the
 	// background sync worker starts sweeping it. With eager provisioning every
 	// tenant has a profile from signup, so the worker keys its sweep on this
 	// marker — not mere profile presence — to avoid polling tenants that never

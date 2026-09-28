@@ -19,7 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// CON-101: embedding integration tests run against the live Gemini Embedding 2
+// Embedding integration tests run against the live Gemini Embedding 2
 // API and skip when GEMINI_API_KEY is unset, so the suite still passes without
 // API credentials.
 const (

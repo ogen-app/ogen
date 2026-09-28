@@ -2,8 +2,8 @@ package platforms
 
 import "testing"
 
-// TestFlattenSocialText mirrors the front end's socialText.test.ts case-for-case
-// (CON-126/CON-284): the Go server is the source of truth, so the two flatteners
+// TestFlattenSocialText mirrors the front end's socialText.test.ts case-for-case:
+// the Go server is the source of truth, so the two flatteners
 // must agree on the plain text — and therefore the length — a caption publishes as.
 func TestFlattenSocialText(t *testing.T) {
 	cases := []struct {

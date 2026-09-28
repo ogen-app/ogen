@@ -248,7 +248,7 @@ func mdValue(md metadata.MD, key string) string {
 
 // TestParsePropagatesCorrelationMetadata asserts the client interceptor copies
 // request_id/tenant_id from the call context into outgoing gRPC metadata under
-// the exact header keys document-service reads (CON-111).
+// the exact header keys document-service reads.
 func TestParsePropagatesCorrelationMetadata(t *testing.T) {
 	stub := &stubServer{resp: &documentsv1.ParseResponse{Format: "txt"}}
 	addr := serveStub(t, stub)

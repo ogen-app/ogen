@@ -27,7 +27,7 @@ const chunkTokenBudget = 3000
 
 // minSearchSimilarity is the cosine-similarity floor a chunk must clear to be
 // returned by the semantic-search tool (searchAssetChunks).
-// CON-101: a conservative starting threshold; revisit against Gemini Embedding
+// A conservative starting threshold; revisit against Gemini Embedding
 // 2's cosine distribution once there is real corpus data.
 const minSearchSimilarity = 0.5
 
@@ -40,7 +40,7 @@ const requestStateKey ctxKey = iota
 type requestState struct {
 	postID string
 	// postStatus is the post's status at the start of the turn, captured so
-	// the editPost write-tool can refuse on a submitted post (CON-251): the
+	// the editPost write-tool can refuse on a submitted post: the
 	// assistant stays present and readable there but must not rewrite content
 	// that already lives outside Ogen. Read-only within a turn.
 	postStatus models.PostStatus
@@ -48,7 +48,7 @@ type requestState struct {
 	repos      PostAssistantRepos
 	embedder   ai.Embedder
 
-	// Clone support (CON-59). cloneSvc/actor drive the clonePost tool;
+	// Clone support. cloneSvc/actor drive the clonePost tool;
 	// platforms lets it resolve a platform name → ID; onEvent lets it
 	// emit a clone_started SSE event mid-generation; cloneResult is set
 	// by the tool and read by the runner after generation to finalise
@@ -59,25 +59,25 @@ type requestState struct {
 	onEvent     OnEventFunc
 	cloneResult *clone.Result
 
-	// Restore support (CON-68). restoreSvc backs the restoreVersion tool;
+	// Restore support. restoreSvc backs the restoreVersion tool;
 	// restoreResult is set by the tool and read by the runner after
 	// generation to finalise the response.
 	restoreSvc    *restore.Service
 	restoreResult *restore.Result
 
-	// Schedule support (CON-78). scheduleSvc backs the schedulePost tool;
+	// Schedule support. scheduleSvc backs the schedulePost tool;
 	// scheduleResult is set by the tool and read by the runner after
 	// generation to finalise the response.
 	scheduleSvc    *schedule.Service
 	scheduleResult *schedule.Result
 
-	// Note support (CON-188). noteSvc backs the createNote tool; noteResults
+	// Note support. noteSvc backs the createNote tool; noteResults
 	// collects every note created this turn, read by the runner after
 	// generation to finalise the response.
 	noteSvc     *notes.Service
 	noteResults []*models.PostNote
 
-	// Writer support (CON-128). In the hybrid path the planner loop runs on
+	// Writer support. In the hybrid path the planner loop runs on
 	// the cheap planning model and delegates all copywriting to the Sonnet
 	// writer via the editPost tool (and clonePost adaptation). g runs the
 	// nested writer generation; provider/recorder resolve the generation model
@@ -93,14 +93,14 @@ type requestState struct {
 	editResult      *editResult
 
 	// retrieved holds the asset excerpts the planner pulled via the
-	// asset-retrieval tools this turn (CON-128). The writer's context block
+	// asset-retrieval tools this turn. The writer's context block
 	// carries only short asset previews, so an asset-grounded edit must be fed
 	// the full retrieved text — captured here and passed to the writer as
 	// source material (see composeWriterInstruction).
 	retrieved []retrievedExcerpt
 }
 
-// editResult is the internal outcome of the editPost write-tool (CON-128): the
+// editResult is the internal outcome of the editPost write-tool: the
 // full post content the Sonnet writer produced this turn.
 type editResult struct {
 	Content string
@@ -137,7 +137,7 @@ func (st *requestState) captureExcerpts(assetID string, out *ChunksOutput) {
 }
 
 // recordScheduled reflects a schedule committed this turn into the per-turn
-// state (CON-251): it stashes the result for the runner to finalise AND
+// state: it stashes the result for the runner to finalise AND
 // advances postStatus to the routed status. The status bump is load-bearing —
 // without it a schedulePost-then-editPost sequence in a single generation would
 // still see the start-of-turn status and rewrite content that just locked at
@@ -176,7 +176,7 @@ type GetChunksInput struct {
 }
 
 // ChunkContent is a single chunk returned by chunk-retrieval tools.
-// SourceLabel/SourceAnchor locate it in the source (CON-312) so the assistant can
+// SourceLabel/SourceAnchor locate it in the source so the assistant can
 // cite "Slide 4" or "1:05–1:40"; both are absent for markdown/URL chunks.
 type ChunkContent struct {
 	ID           string               `json:"id"`
@@ -207,7 +207,7 @@ type ClonePostInput struct {
 	Title          string `json:"title,omitempty"          jsonschema:"description=Title for the clone. Omit to apply the default naming."`
 }
 
-// EditPostInput is the input for the editPost tool (CON-128). The planner
+// EditPostInput is the input for the editPost tool. The planner
 // forwards the user's change request verbatim; the Sonnet writer produces the
 // full updated post from it.
 type EditPostInput struct {
@@ -223,7 +223,7 @@ type EditPostOutput struct {
 	OK    bool `json:"ok"`
 	Chars int  `json:"chars"`
 	// Reason is set (with OK=false) when the edit was refused rather than
-	// failed — e.g. the post is submitted and its content is locked (CON-251).
+	// failed — e.g. the post is submitted and its content is locked.
 	// The planner relays it to the user instead of retrying.
 	Reason string `json:"reason,omitempty"`
 }
@@ -269,7 +269,7 @@ type SchedulePostOutput struct {
 	Promoted    bool   `json:"promoted"`
 }
 
-// CreateNoteInput is the input for the createNote tool (CON-188).
+// CreateNoteInput is the input for the createNote tool.
 type CreateNoteInput struct {
 	Type  string `json:"type"            jsonschema:"description=The kind of note. Use image_prompt for an image-generation prompt (e.g. a Nano Banana prompt); use note for any other side note or idea.,enum=image_prompt,enum=note"`
 	Title string `json:"title,omitempty" jsonschema:"description=Optional short title for the note."`
@@ -293,7 +293,7 @@ type toolSet struct {
 	restoreVersion    ai.ToolRef
 	schedulePost      ai.ToolRef
 	createNote        ai.ToolRef
-	// editPost (CON-128) is the Sonnet write-tool used only in the hybrid
+	// editPost is the Sonnet write-tool used only in the hybrid
 	// planner path; the legacy single-Sonnet loop does not attach it.
 	editPost ai.ToolRef
 }
@@ -495,7 +495,7 @@ func toolClonePost(ctx context.Context, in ClonePostInput) (*ClonePostOutput, er
 	}
 	opts.TargetPostType = in.TargetPostType
 
-	// CON-128: in the hybrid path the planner does not write copy, so a
+	// In the hybrid path the planner does not write copy, so a
 	// cross-platform clone's adapted content is produced by the Sonnet writer
 	// here rather than passed in. An explicit Content override still wins
 	// (legacy path / deliberate override); a verbatim same-platform clone (no
@@ -651,14 +651,14 @@ func toolCreateNote(ctx context.Context, in CreateNoteInput) (*CreateNoteOutput,
 	return &CreateNoteOutput{ID: note.ID, Type: string(note.Type)}, nil
 }
 
-// toolEditPost is the editPost write-tool (CON-128). In the hybrid path the
+// toolEditPost is the editPost write-tool. In the hybrid path the
 // planner (Haiku) calls it for any content change, forwarding the user's
 // instruction verbatim; the Sonnet writer produces the full post, which
 // streams to the client and is stashed on requestState for the runner. Only a
 // compact receipt goes back to the planner.
 func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error) {
 	st := getRequestState(ctx)
-	// CON-251: a submitted post (scheduled or published) holds a copy outside
+	// A submitted post (scheduled or published) holds a copy outside
 	// Ogen, so its content is locked — the assistant can read and advise but
 	// must not write. Refuse via the return value, not a Go error, so the
 	// planner loop continues and relays the reason (a tool error would abort
@@ -686,7 +686,7 @@ func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error
 	return &EditPostOutput{OK: true, Chars: len(content)}, nil
 }
 
-// runWriter executes the Sonnet copywriting sub-call (CON-128). When stream is
+// runWriter executes the Sonnet copywriting sub-call. When stream is
 // true it fans the generated Markdown out to the client as content_delta events
 // (the editPost path, feeding the live editor); for clone adaptation it stays
 // silent (the copy lands in a new draft, not the open editor). It returns the
@@ -743,7 +743,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 
 // composeWriterInstruction assembles the writer's prompt: the user's verbatim
 // instruction, then any asset excerpts the planner retrieved this turn as
-// clearly-delimited source material (CON-128). Appending the excerpts rather
+// clearly-delimited source material. Appending the excerpts rather
 // than folding them into the instruction keeps the instruction unchanged while
 // giving an asset-grounded edit the full retrieved text — not just the short
 // preview in the context block. Returns the instruction untouched when nothing

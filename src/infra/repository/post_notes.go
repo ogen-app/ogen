@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// PostNoteRepository persists per-post Notes (CON-188). Every query runs through
+// PostNoteRepository persists per-post Notes. Every query runs through
 // bun's Model API so the TenantScoped hooks auto-stamp/scope tenant_id — no
 // method has to remember the tenant predicate.
 type PostNoteRepository interface {
@@ -37,8 +37,8 @@ func (r *postNoteRepository) Create(ctx context.Context, note *models.PostNote) 
 	return err
 }
 
-// ListByPostID returns a post's notes with draft_thesis notes pinned to the top
-// (CON-188), everything else following in oldest-first order.
+// ListByPostID returns a post's notes with draft_thesis notes pinned to the top,
+// everything else following in oldest-first order.
 func (r *postNoteRepository) ListByPostID(ctx context.Context, postID string) ([]models.PostNote, error) {
 	var notes []models.PostNote
 	err := r.db.NewSelect().

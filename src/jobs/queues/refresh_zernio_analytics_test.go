@@ -24,7 +24,7 @@ func tctx(tenantID string) context.Context {
 
 // fakeAnalyticsRepo records the current-state upserts and counts the append-only
 // history points, so tests can assert both the latest row (upserted) and that
-// dedup/decay suppress redundant history appends (snapshots) — CON-236.
+// dedup/decay suppress redundant history appends (snapshots)
 type fakeAnalyticsRepo struct {
 	mu        sync.Mutex
 	upserted  map[string]*models.PostAnalytics
@@ -266,7 +266,7 @@ func TestRefreshDedupSuppressesUnchangedHistory(t *testing.T) {
 
 // TestRefreshDecaySkipsRecentlyChecked: a post checked moments ago is skipped on
 // the next tick under the default fresh-bucket cadence — even though the fetch
-// returns different numbers, no upsert and no history point happen (CON-236).
+// returns different numbers, no upsert and no history point happen.
 func TestRefreshDecaySkipsRecentlyChecked(t *testing.T) {
 	stub := newStubZernio()
 	defer stub.Close()

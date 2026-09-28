@@ -16,7 +16,7 @@ import (
 	imageclient "github.com/ogen-app/ogen/src/transport/grpc/client/image"
 )
 
-// fakeImagePreparer stands in for image-service in handler tests (CON-281). It
+// fakeImagePreparer stands in for image-service in handler tests. It
 // resolves the presigned URLs back to stubStorage keys (the stub encodes the key
 // in the URL), reads the staged original, decodes real dimensions, writes the
 // "cleaned" (pixel-identical) copy to the destination key, and returns metadata —

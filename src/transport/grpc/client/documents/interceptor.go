@@ -13,7 +13,7 @@ import (
 // Correlation metadata keys. They MUST match document-service's
 // internal/logging.RequestIDHeader / TenantIDHeader byte-for-byte (gRPC
 // lowercases metadata keys) so one request traces end-to-end across the gRPC
-// boundary: API request -> River job -> document-service (CON-111). This is
+// boundary: API request -> River job -> document-service. This is
 // transport-level only — no proto/message change.
 const (
 	requestIDHeader = "x-request-id"

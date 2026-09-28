@@ -158,7 +158,7 @@ func (f *fakeEmailLogRepo) ExistsByIdempotencyKey(_ context.Context, key string)
 	return false, nil
 }
 
-// fakeEmailBodyRepo is an in-memory EmailBodyRepository (CON-306). Insert is
+// fakeEmailBodyRepo is an in-memory EmailBodyRepository. Insert is
 // last-write-wins here; the real repo is idempotent on the primary key.
 type fakeEmailBodyRepo struct{ rows []*models.EmailBody }
 
@@ -349,7 +349,7 @@ func recordedFor(t *testing.T, p *SendEmailProcessor, tk SendEmailTask) []*model
 }
 
 // TestSendEmailRecordsActivity asserts every terminal send outcome writes one
-// email-category event into the tenant activity log (CON-125), tenant/user
+// email-category event into the tenant activity log, tenant/user
 // scoped, mirroring the email_logs status.
 func TestSendEmailRecordsActivity(t *testing.T) {
 	assertOne := func(t *testing.T, events []*models.ActivityEvent, wantType, wantStatus string) *models.ActivityEvent {

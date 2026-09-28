@@ -3,7 +3,7 @@ package server
 import "expvar"
 
 // Tier-version lifecycle tunables + counters for the guarded retire / delete /
-// assignment-listing surface (CON-297). Counters follow the src/jobs/metrics.go
+// assignment-listing surface. Counters follow the src/jobs/metrics.go
 // idiom (package-level expvar.Int, exposed at /debug/vars) so operators can see
 // how often versions are deleted, retired, and how many tenants get migrated.
 const (
@@ -12,7 +12,7 @@ const (
 	maxAssignmentPageSize     = 200
 	// maxHealthyActiveVersions is the concurrent-active-versions-per-tier ceiling
 	// above which we log a warning — each grandfathered version is a maintenance
-	// cost (CON-243 §10).
+	// cost.
 	maxHealthyActiveVersions = 3
 )
 

@@ -22,7 +22,7 @@ import (
 	"github.com/ogen-app/ogen/src/analytics/insights"
 )
 
-// metricOrder is the fixed six-card order (CON-250 §3).
+// metricOrder is the fixed six-card order.
 var metricOrder = []string{
 	MetricReach, MetricImpressions, MetricInteractions,
 	MetricEngagementRate, MetricSaves, MetricClicks,

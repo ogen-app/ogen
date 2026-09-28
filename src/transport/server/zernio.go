@@ -74,7 +74,7 @@ func initZernio(
 	})
 	integ := zernio.NewIntegration(client)
 	bootstrapper := zernio.NewBootstrapper(integ, store, cfg.ZernioEnv)
-	// CON-102: sweep tenants that have INITIATED a connection, not merely those
+	// Sweep tenants that have INITIATED a connection, not merely those
 	// with a profile. Eager provisioning gives every tenant a zernio.profile_id
 	// at signup, so keying the sweep on profile presence would poll every tenant
 	// each tick — even ones that never connected. The connect_initiated_at marker
@@ -84,10 +84,10 @@ func initZernio(
 	})
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
-	// CON-97: the Zernio bootstrap + sync worker run outside any request and
+	// The Zernio bootstrap + sync worker run outside any request and
 	// legitimately span tenants (reading the profile setting, syncing social
 	// accounts), so they run on a system context. Per-tenant Zernio sync is a
-	// follow-up (CON-97 §10.4).
+	// follow-up.
 	workerCtx = tenantctx.WithSystem(workerCtx)
 
 	// warmupEpoch orders concurrent warmups (boot + each key change). A warmup

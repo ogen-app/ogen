@@ -15,7 +15,7 @@ type PostQualityRequest struct {
 // is the persisted result, with the backend-computed overall percentage
 // and per-dimension contributions already attached. Cached is true when the
 // inputs were unchanged since the last run and the stored evaluation was
-// returned without calling the model (CON-92).
+// returned without calling the model.
 type PostQualityResponse struct {
 	PostID      string                 `json:"postId"`
 	GeneratedAt time.Time              `json:"generatedAt"`

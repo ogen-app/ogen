@@ -54,7 +54,7 @@ func TestCancelHappyPathTransitionsToDraft(t *testing.T) {
 }
 
 func TestCancelConvertsToManualPublishing(t *testing.T) {
-	// CON-130: the convert-to-manual target cancels the Zernio job and
+	// The convert-to-manual target cancels the Zernio job and
 	// lands the post directly on scheduled_for_manual_publishing, keeping
 	// scheduled_at so the intended date still shows.
 	stub := newStubZernio()

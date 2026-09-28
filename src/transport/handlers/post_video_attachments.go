@@ -29,7 +29,7 @@ const presignPutTTL = 30 * time.Minute
 const probeGetTTL = 5 * time.Minute
 
 // VideoProber probes an uploaded video for duration/codec/resolution and a
-// poster frame via video-service (CON-148). Implemented by *video.Client;
+// poster frame via video-service. Implemented by *video.Client;
 // an interface here keeps the handler testable and nil-tolerant (nil disables
 // probing — uploads are accepted unprobed).
 type VideoProber interface {
@@ -208,7 +208,7 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 		CreatedBy: session.UserID,
 	}
 
-	// Probe via video-service (CON-148). Best-effort like pdf-service: a
+	// Probe via video-service. Best-effort like pdf-service: a
 	// terminal "not a readable video" verdict rejects the upload; transient /
 	// unreachable failures degrade to an unprobed attachment.
 	var probe *video.ProbeResult

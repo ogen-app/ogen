@@ -22,7 +22,7 @@ import (
 )
 
 // fakeProfileEnqueuer records the tenant ids signup asks to provision a Zernio
-// profile for (CON-102 FR2). Returning nil lets the signup transaction commit.
+// profile for. Returning nil lets the signup transaction commit.
 type fakeProfileEnqueuer struct {
 	mu        sync.Mutex
 	tenantIDs []string

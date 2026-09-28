@@ -11,7 +11,7 @@ import (
 )
 
 // FollowerAccountSummary is the latest snapshot per account plus that
-// account's data-point count, for the followers overview (CON-153).
+// account's data-point count, for the followers overview.
 type FollowerAccountSummary struct {
 	SocialAccountID  string  `bun:"social_account_id" json:"account_id"`
 	Platform         string  `bun:"platform"          json:"platform"`
@@ -37,7 +37,7 @@ type FollowerSeriesOptions struct {
 }
 
 // FollowerStatsRepository persists and reads the daily follower time series
-// (CON-153) from the isolated analytics DB. Writes upsert one row per
+// from the isolated analytics DB. Writes upsert one row per
 // (account, day); reads are tenant-scoped by the TenantScoped hook.
 type FollowerStatsRepository interface {
 	// InsertMany upserts a batch of daily points, keyed on

@@ -17,7 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
-// CON-245: campaigns and posts can bind a specific brand voice + audience, and a
+// Campaigns and posts can bind a specific brand voice + audience, and a
 // post's own voice/audience is settable via the targeted PUT /:id/brand.
 var _ = Describe("Brand bindings (CON-245)", Ordered, func() {
 	var (
@@ -141,7 +141,7 @@ var _ = Describe("Brand bindings (CON-245)", Ordered, func() {
 			Expect(got.BrandVoiceID).To(Equal(strptr("v-1")))
 			Expect(got.BrandAudienceID).To(Equal(strptr("a-1")))
 
-			// CON-245: usage is now computable (unblocks CON-228 FR7). The draft
+			// Usage is now computable (unblocks CON-228 FR7). The draft
 			// post now counts against voice v-1 and audience a-1.
 			brand, err := brandRepo.GetAll(tenantCtx())
 			Expect(err).NotTo(HaveOccurred())

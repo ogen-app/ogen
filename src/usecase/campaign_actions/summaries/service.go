@@ -10,7 +10,7 @@ import (
 )
 
 // Service builds the batched Campaigns-list summary from a tenant-scoped post
-// repository (CON-152). The repository carries tenant scoping, so Summaries is
+// repository. The repository carries tenant scoping, so Summaries is
 // safe to call in any tenant context.
 type Service struct {
 	posts repository.PostRepository
@@ -22,8 +22,8 @@ func New(posts repository.PostRepository) *Service {
 }
 
 // Summaries loads every post in the caller's tenant as a slim projection and
-// groups it by campaign. One DB read replaces the N per-card
-// GET /campaigns/:id/posts requests the Campaigns list used to fire.
+// groups it by campaign. One DB read serves the whole Campaigns list, so it
+// needs no per-card GET /campaigns/:id/posts request.
 func (s *Service) Summaries(ctx context.Context) (*Summaries, error) {
 	posts, err := s.posts.ListSummaryProjections(ctx)
 	if err != nil {

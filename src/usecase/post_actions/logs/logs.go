@@ -1,6 +1,6 @@
 // Package logs provides the helpers Post Log writers use to produce
 // safe payloads — capping size and stripping secrets — before they
-// land in the post_logs table (CON-69 §11).
+// land in the post_logs table.
 //
 // The schema (post_logs.payload) is plain TEXT; the 64 KB ceiling and
 // the secret-redaction guarantees live in code, not in the database.

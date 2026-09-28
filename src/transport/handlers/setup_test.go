@@ -8,7 +8,7 @@ import (
 )
 
 // TestMain swaps the production argon2id cost profile for the
-// fast-test one before any spec runs (CON-70).
+// fast-test one before any spec runs.
 //
 // Production password hashing is intentionally heavy (64 MiB / 3
 // iterations); under `-procs=2 -race` a single hash can take >1s,

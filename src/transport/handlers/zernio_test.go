@@ -289,7 +289,7 @@ var _ = Describe("ZernioHandler", Ordered, func() {
 		It("POST /connect-links recovers a degraded integration by bootstrapping on first connect", func() {
 			// Simulate a transient boot-time degradation with no profile yet
 			// (e.g. the warmup ping blipped). The state guard must not short
-			// circuit before the lazy bootstrap gets to heal it (CON-100).
+			// circuit before the lazy bootstrap gets to heal it.
 			ctx := tenantCtx()
 			Expect(store.Delete(ctx, zernio.SettingProfileID)).To(Succeed())
 			integ.SetState(zernio.StateDegraded)

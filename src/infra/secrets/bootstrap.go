@@ -103,7 +103,7 @@ func MigrateFromEnv(ctx context.Context, store Store, sources []EnvSource) (Boot
 // EnsureGenerated makes sure an app-managed secret exists, generating a random
 // 32-byte value (hex-encoded) and storing it when absent. Unlike MigrateFromEnv
 // there is no operator-provided source: it is for secrets the app owns end to
-// end, e.g. the HMAC key that signs unsubscribe links (CON-154). Idempotent —
+// end, e.g. the HMAC key that signs unsubscribe links. Idempotent —
 // an existing value (seeded from env or a prior boot) is left untouched, so the
 // signing key stays stable across restarts.
 func EnsureGenerated(ctx context.Context, store Store, name string) error {

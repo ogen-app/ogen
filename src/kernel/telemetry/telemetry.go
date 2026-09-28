@@ -1,5 +1,5 @@
 // Package telemetry wires error monitoring and OpenTelemetry tracing, unified in
-// Sentry (CON-303). Instrumentation across the codebase is vendor-neutral
+// Sentry. Instrumentation across the codebase is vendor-neutral
 // OpenTelemetry; this package owns the single place that decides where those
 // signals go:
 //

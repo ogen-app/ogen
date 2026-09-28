@@ -10,7 +10,7 @@ import (
 )
 
 // TestListTenantIDsByKey covers the cross-tenant enumeration the per-tenant
-// Zernio sync worker uses (CON-100): under a system context it returns the
+// Zernio sync worker uses: under a system context it returns the
 // distinct tenants that have a non-empty value for the key, ignoring empty
 // values and other keys. openMigratedDB bypasses FK enforcement, so synthetic
 // tenant_ids need no tenants rows.

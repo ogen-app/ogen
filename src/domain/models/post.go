@@ -8,7 +8,7 @@ import (
 )
 
 // PublisherZernio is the posts.publisher marker stamped on posts
-// published through the Zernio adapter (CON-93 §14). It is the canonical
+// published through the Zernio adapter. It is the canonical
 // source for the marker value; publishers/zernio.PublisherID aliases it.
 // Lives in models so the repository layer can filter on it without an
 // import cycle (the zernio package imports repository, not vice-versa).
@@ -30,24 +30,24 @@ const (
 // ValidPostTransitions defines the allowed state-machine edges.
 // The key is the current status; the value lists statuses it may move to.
 //
-// Scheduled → ReadyForPublish and Scheduled → Draft were added for
-// CON-69 §9 to support user-initiated cancellation of a scheduled post
-// before Zernio publishes it.
+// Scheduled → ReadyForPublish and Scheduled → Draft support
+// user-initiated cancellation of a scheduled post before Zernio publishes
+// it.
 //
-// Scheduled → ScheduledForManualPublish and ScheduledForManualPublish →
-// Draft were added for CON-130. The first is the direct edge the
+// Scheduled → ScheduledForManualPublish is the direct edge the
 // convert-to-manual flow lands on after cancelling the Zernio job, so
-// turning off a platform's auto-publish allowlist no longer detours a
+// turning off a platform's auto-publish allowlist never detours a
 // scheduled post through ready_for_publish (leaving it unscheduled) to
-// reach manual publishing. The second lets a manually-scheduled post be
-// moved straight to drafts (channel removal / post-type switch-off)
-// without writing a misleading → not_published row to the audit log.
+// reach manual publishing. ScheduledForManualPublish → Draft lets a
+// manually-scheduled post be moved straight to drafts (channel removal /
+// post-type switch-off) without writing a misleading → not_published row
+// to the audit log.
 //
-// Failed → Draft and NotPublished → Draft were added for CON-251. Neither
-// status holds a live copy outside Ogen anymore (the submission failed, or
-// never left), so both reopen for editing — and going back to draft, not
-// just ready_for_publish, is the point: these are precisely the states a
-// post reaches because its content needed changing.
+// Failed → Draft and NotPublished → Draft reopen a post for editing:
+// neither status holds a live copy outside Ogen (the submission failed, or
+// never left), and going back to draft, not just ready_for_publish, is the
+// point: these are precisely the states a post reaches because its content
+// needed changing.
 var ValidPostTransitions = map[PostStatus][]PostStatus{
 	PostStatusDraft:                     {PostStatusReadyForPublish},
 	PostStatusReadyForPublish:           {PostStatusScheduled, PostStatusScheduledForManualPublish, PostStatusDraft},
@@ -84,7 +84,7 @@ func (s PostStatus) CanTransition(next PostStatus) bool {
 
 // PostTypeThread is the platform_post_type slug that marks a post as a native
 // thread — an ordered chain of messages (root + replies) published as one unit
-// on X or Threads (CON-284). It is the single trigger for the thread path;
+// on X or Threads. It is the single trigger for the thread path;
 // there is no separate boolean. Defined here (not in the platforms package) so
 // models, handlers, and the submit worker can key off one constant without an
 // import cycle.
@@ -101,12 +101,12 @@ const (
 
 type Post struct {
 	bun.BaseModel `bun:"table:posts,alias:po" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID         string `bun:"id,pk"                                        json:"id"`
 	CampaignID string `bun:"campaign_id,notnull"                          json:"campaign_id"`
 	// platform_id and platform_post_type are nullable so draft posts can
-	// exist without a platform chosen up front (CON-60). They become
+	// exist without a platform chosen up front. They become
 	// required when the post moves out of "draft" — enforced by the
 	// posts handler, not by the schema.
 	//
@@ -116,14 +116,14 @@ type Post struct {
 	PlatformID       string `bun:"platform_id,nullzero"                         json:"platform_id"`
 	PlatformPostType string `bun:"platform_post_type,nullzero"                  json:"platform_post_type"`
 	// SocialAccountID names which same-platform account this post
-	// publishes to (CON-150). NULL when unspecified — the submit worker
+	// publishes to. NULL when unspecified — the submit worker
 	// then auto-selects the platform's single account, or fails
 	// `account_selection_required` when the platform has more than one.
 	// `nullzero` sends NULL (not "") so the FK to social_accounts holds.
 	SocialAccountID string `bun:"social_account_id,nullzero" json:"social_account_id"`
 	Title           string `bun:"title"                                        json:"title"`
 	Content         string `bun:"content,notnull"                              json:"content"`
-	// ThreadSegments holds the ordered messages of a threaded post (CON-284),
+	// ThreadSegments holds the ordered messages of a threaded post,
 	// used only when PlatformPostType == PostTypeThread: index 0 is the root,
 	// 1..N-1 the ordered replies. Empty [] for every other post. Content
 	// mirrors segment 0 so thread-unaware readers (quality CON-184, listings,
@@ -142,7 +142,7 @@ type Post struct {
 	// post is published through a publisher.
 	// PublisherPostID is the id the publisher assigns when a Post is
 	// submitted; the UNIQUE index in the migration prevents accidental
-	// double-submit and is the join key into publisher analytics (CON-93).
+	// double-submit and is the join key into publisher analytics.
 	// PublisherStatus mirrors the publisher's enum verbatim so the polling
 	// task can short-circuit on already-handled terminal states.
 	// PublishedResults carries the publisher's per-platform outcomes (URLs,
@@ -153,9 +153,9 @@ type Post struct {
 	PublisherPostID  string `bun:"publisher_post_id,nullzero"                  json:"publisher_post_id,omitempty"`
 	PublisherStatus  string `bun:"publisher_status,notnull,default:''"         json:"publisher_status,omitempty"`
 	PublishedResults string `bun:"published_results,notnull,default:''"        json:"published_results,omitempty"`
-	// PublishedURL is the platform permalink for the live post (CON-165), kept
+	// PublishedURL is the platform permalink for the live post, kept
 	// as a first-class field so the front-end can render "View post" off the
-	// post it already has, without an analytics round-trip (CON-149). Set from
+	// post it already has, without an analytics round-trip. Set from
 	// the publisher's canonical URL on publish/verify, or accepted on PUT for
 	// the Zernio skip path. `nullzero` sends NULL (not "") when unset; a URL
 	// with an empty PublisherPostID is a user-supplied (unverified) link.
@@ -164,7 +164,7 @@ type Post struct {
 	CTAType             PostCTAType `bun:"cta_type,notnull"                             json:"cta_type"`
 	CTAUrl              string      `bun:"cta_url,notnull"                              json:"cta_url"`
 	TargetAudienceNotes string      `bun:"target_audience_notes,notnull"                json:"target_audience_notes"`
-	// Brand bindings (CON-245): this post's own voice/audience. Nullable —
+	// Brand bindings: this post's own voice/audience. Nullable —
 	// resolution falls back to the campaign's, then the workspace default /
 	// legacy prose. content_plan/draft_post stamp the voice; both are overridable
 	// via PUT /api/posts/:id or the targeted /:id/brand. FK ON DELETE SET NULL.
@@ -176,7 +176,7 @@ type Post struct {
 	CreatedAt           time.Time   `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt           time.Time   `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 	// ClonedFromPostID links a clone back to the Post it was duplicated
-	// from (CON-59). Nil for posts created directly. `nullzero` sends
+	// from. Nil for posts created directly. `nullzero` sends
 	// NULL (not "") so the lineage is a clean "has a source / does not".
 	ClonedFromPostID *string `bun:"cloned_from_post_id,nullzero" json:"cloned_from_post_id,omitempty"`
 
@@ -189,7 +189,7 @@ type Post struct {
 }
 
 // IsThread reports whether this post publishes as a native thread — an ordered
-// chain of messages rather than a single one (CON-284). Keyed off the post type
+// chain of messages rather than a single one. Keyed off the post type
 // alone; there is no separate boolean.
 func (p *Post) IsThread() bool {
 	return p.PlatformPostType == PostTypeThread

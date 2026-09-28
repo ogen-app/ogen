@@ -15,7 +15,7 @@ import (
 )
 
 // Middleware returns the River worker middleware Ogen installs on its job
-// client (CON-303). Currently just tracing; kept as a slice so more can be added
+// client. Currently just tracing; kept as a slice so more can be added
 // without touching the call site.
 func Middleware() []rivertype.Middleware {
 	return []rivertype.Middleware{newTracingMiddleware()}

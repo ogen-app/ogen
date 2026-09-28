@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// sampleAnalyticsItem is the documented per-post response object shape
-// (CON-93 §2), returned inside the list envelope's `analytics` array.
+// sampleAnalyticsItem is the documented per-post response object shape,
+// returned inside the list envelope's `analytics` array.
 const sampleAnalyticsItem = `{
   "postId": "665f-abc",
   "latePostId": "late-665f",

@@ -18,7 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// Password-reset rate-limit budget (CON-161): the request endpoint sends mail on
+// Password-reset rate-limit budget: the request endpoint sends mail on
 // demand, so it is throttled both per address (so we can't be used to flood one
 // inbox) and per client IP (so one caller can't spray many addresses). Both are
 // generous enough for a human retrying, tight enough to stop abuse.
@@ -31,7 +31,7 @@ const (
 // resetTokenInvalidMsg is returned for every unusable token — unknown, expired,
 // or already spent — as one indistinguishable message, so confirm is not an
 // oracle. It reads like a sentence because the UI shows it verbatim next to a
-// "Request a new link" affordance (CON-161).
+// "Request a new link" affordance.
 const resetTokenInvalidMsg = "This password reset link is invalid or has expired. Request a new one."
 
 // errResetInvalid is the internal sentinel the confirm transaction returns for
@@ -39,15 +39,15 @@ const resetTokenInvalidMsg = "This password reset link is invalid or has expired
 var errResetInvalid = errors.New("password reset token invalid")
 
 // PasswordResetEnqueuer enqueues the transactional password-reset email inside
-// the token-minting transaction, so the mail exists iff the token row does
-// (CON-161). Implemented by *queues.Enqueuer; a narrow interface keeps this
+// the token-minting transaction, so the mail exists iff the token row does.
+// Implemented by *queues.Enqueuer; a narrow interface keeps this
 // handler out of the jobs package and unit-testable.
 type PasswordResetEnqueuer interface {
 	EnqueuePasswordResetTx(ctx context.Context, tx *sql.Tx, userID, tenantID, tokenID, resetURL string) error
 }
 
 // PasswordResetHandler serves the two public, unauthenticated password-reset
-// endpoints (CON-161). The whole point is that the caller can't log in, so the
+// endpoints. The whole point is that the caller can't log in, so the
 // emailed token is the only capability.
 type PasswordResetHandler struct {
 	db          *bun.DB
@@ -141,7 +141,7 @@ func (h *PasswordResetHandler) Request(c *fiber.Ctx) error {
 
 // dispatchReset mints a single-use token, stores its hash, and enqueues the
 // reset email — all off the request's response path so a hit and a miss are
-// indistinguishable by latency (CON-161). It runs on a detached context (the
+// indistinguishable by latency. It runs on a detached context (the
 // fiber request context is recycled once Request returns) that still carries the
 // user's tenant + id for the tenant-scoped activity event. Best-effort: a
 // failure is logged, never surfaced (surfacing it would itself be an oracle).
@@ -264,8 +264,8 @@ func (h *PasswordResetHandler) Confirm(c *fiber.Ctx) error {
 		}
 		userID, tenantID = row.UserID, row.TenantID
 
-		// The token is tied to a membership, but the credential lives on the account
-		// (CON-147). Resolve the account so the rotation and session revocation act
+		// The token is tied to a membership, but the credential lives on the account.
+		// Resolve the account so the rotation and session revocation act
 		// on the identity, not the membership row.
 		membership := new(models.User)
 		if err := tx.NewSelect().Model(membership).Column("account_id").
@@ -325,7 +325,7 @@ func (h *PasswordResetHandler) Confirm(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// tooManyResetRequests writes the reset endpoint's 429 (CON-161) through the
+// tooManyResetRequests writes the reset endpoint's 429 through the
 // shared tooManyRequests helper (Retry-After + user-facing body).
 func tooManyResetRequests(c *fiber.Ctx, retry time.Duration) error {
 	return tooManyRequests(c, retry, "too many password reset requests; try again later")

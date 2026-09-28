@@ -372,7 +372,7 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Tagging (CON-279) ─────────────────────────────────────────────────────
+	// ── Tagging ─────────────────────────────────────────────────────
 
 	Describe("asset tagging (CON-279)", func() {
 		createTag := func(name string) string {
@@ -458,7 +458,7 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 			})
 		})
 
-		// CON-312: alt_text_edited_by_user locks the text against re-extraction,
+		// alt_text_edited_by_user locks the text against re-extraction,
 		// so it may only flip on a real edit.
 		Context("alt_text_edited_by_user", func() {
 			It("stays false when the PUT echoes the stored alt text back", func() {
@@ -776,7 +776,7 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 		Expect(waitForSave()).To(BeFalse(), "onSave must not fire for a tag-only change")
 	})
 
-	// CON-312: service-ingested assets keep their anchored chunks. The markdown
+	// Service-ingested assets keep their anchored chunks. The markdown
 	// re-embed (onSave) must never run for them, and their content is read-only
 	// except for an image's description.
 	Context("service-ingested assets (CON-312)", func() {
@@ -866,7 +866,7 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 	})
 })
 
-// ── chunk view (CON-312) ────────────────────────────────────────────────────
+// ── chunk view ────────────────────────────────────────────────────
 
 var _ = Describe("AssetsHandler GET /:id/chunks (CON-312)", Ordered, func() {
 	var (
@@ -989,7 +989,7 @@ var _ = Describe("AssetsHandler GET /:id/chunks (CON-312)", Ordered, func() {
 	})
 })
 
-// fakeImageReembedder records image re-embed enqueues (CON-312).
+// fakeImageReembedder records image re-embed enqueues.
 type fakeImageReembedder struct{ ch chan string }
 
 func (f *fakeImageReembedder) EnqueueReembedImage(_ context.Context, assetID, _ string) error {

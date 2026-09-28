@@ -15,7 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
 
-// IdeasHandler is the REST surface for the workspace Ideas backlog (CON-315).
+// IdeasHandler is the REST surface for the workspace Ideas backlog.
 // The wire contract is the header comment in the ui repo's
 // services/api/ideas.ts. Every endpoint is open to any workspace member; the
 // verdict has its own endpoint so a decision can never ride along with an edit.

@@ -52,7 +52,7 @@ type Publisher interface {
 // the platform — distinct from OgenPlatformID for backends whose
 // vocabulary differs from Ogen's (e.g. Zernio's "twitter" vs Ogen's
 // "x-twitter"). The platforms handler joins it against the
-// auto-publish allowlist (CON-65) to populate auto_publish_allowed.
+// auto-publish allowlist to populate auto_publish_allowed.
 //
 // SupportedPostTypes references keys in the matched platform's
 // PostTypes map. Keys the platform doesn't define are tolerated by

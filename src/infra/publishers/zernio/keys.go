@@ -13,18 +13,18 @@ const (
 	SettingLastSyncAt       = "zernio.last_sync_at"
 	SettingLastSyncStatus   = "zernio.last_sync_status"
 	// SettingConnectInitiatedAt (RFC3339) records the first time a tenant
-	// issued a Zernio connect-link (CON-102). Eager profile provisioning means
+	// issued a Zernio connect-link. Eager profile provisioning means
 	// every tenant has a zernio.profile_id from signup, so profile presence no
 	// longer marks "this tenant uses Zernio". The sync worker enumerates tenants
 	// to sweep by THIS key instead, so freshly-signed-up tenants that never
 	// connected aren't swept.
 	SettingConnectInitiatedAt = "zernio.connect_initiated_at"
-	// Analytics refresh health (CON-93 §11). These live in the Zernio
+	// Analytics refresh health. These live in the Zernio
 	// adapter namespace, so they stay `zernio.`-prefixed even though the
 	// post-side columns are publisher-agnostic.
 	SettingAnalyticsLastRefreshAt     = "zernio.analytics.last_refresh_at"
 	SettingAnalyticsLastRefreshStatus = "zernio.analytics.last_refresh_status"
-	// Follower-stats refresh health (CON-153), mirroring the analytics
+	// Follower-stats refresh health, mirroring the analytics
 	// keys above for the daily follower snapshot sweep.
 	SettingFollowersLastRefreshAt     = "zernio.followers.last_refresh_at"
 	SettingFollowersLastRefreshStatus = "zernio.followers.last_refresh_status"
@@ -50,7 +50,7 @@ const (
 const defaultProfileEnv = "dev"
 
 // ManagedProfileNameFor returns a tenant's Zernio profile name,
-// "Ogen-<env>-<tenant_id>" (CON-102), where env is ZERNIO_ENV (e.g. "dev",
+// "Ogen-<env>-<tenant_id>", where env is ZERNIO_ENV (e.g. "dev",
 // "prod"). Profiles created under an older naming scheme are resolved by their
 // stored zernio.profile_id and are deliberately left unrenamed.
 func ManagedProfileNameFor(env, tenantID string) string {

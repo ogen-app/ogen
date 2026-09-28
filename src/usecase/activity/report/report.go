@@ -1,10 +1,9 @@
-// Package report computes the Activity daily report (CON-285): deterministic,
+// Package report computes the Activity daily report: deterministic,
 // stateless per-local-day counts of what happened in a workspace — posts
-// published, posts that failed, posts created, and campaigns created. It is the
-// server-side counterpart the Activity UI (CON-225) renders instead of the
-// browser-computed function CON-225 §5 originally specified; computing it here
-// is why the endpoints require an explicit IANA tz (the server has no other way
-// to know the caller's local midnight).
+// published, posts that failed, posts created, and campaigns created. The
+// Activity UI renders it rather than computing the counts in the browser;
+// computing it here is why the endpoints require an explicit IANA tz (the
+// server has no other way to know the caller's local midnight).
 //
 // The heavy lifting — bucketing timestamps into local days across midnight and
 // DST boundaries — lives in the pure functions below (no I/O, injected window /
@@ -35,7 +34,7 @@ var (
 // dateLayout is the wire format for a local calendar day.
 const dateLayout = "2006-01-02"
 
-// expvar counters (CON-285 §11), surfaced at /debug/vars.
+// expvar counters, surfaced at /debug/vars.
 var (
 	// Requests counts every served report/report-list computation.
 	Requests = expvar.NewInt("ogen_activity_report_requests")
@@ -98,7 +97,7 @@ func (w Window) contains(t time.Time) bool {
 
 // dayWindow returns the [00:00 local, next-00:00 local) span of the calendar day
 // `date` in loc. AddDate(0,0,1) — not a fixed 24h — so a 23- or 25-hour DST day
-// is spanned correctly (CON-285 FR2/§10).
+// is spanned correctly.
 func dayWindow(date string, loc *time.Location) (Window, error) {
 	d, err := time.ParseInLocation(dateLayout, date, loc)
 	if err != nil {
@@ -179,7 +178,7 @@ type ReportList struct {
 }
 
 // computeReport aggregates the inputs falling in window w into a single-day
-// report. Pure: same inputs ⇒ same output (CON-285 FR1). Empty buckets serialise
+// report. Pure: same inputs ⇒ same output. Empty buckets serialise
 // as [] not null, and orderings are deterministic (platform/author/id ascending)
 // so the shape is stable for the client and for tests.
 func computeReport(in Inputs, date, tz string, w Window) Report {
@@ -242,8 +241,7 @@ func computeReport(in Inputs, date, tz string, w Window) Report {
 // against a truncated load: when the Service capped a stream it can only vouch
 // for rows at/after `floor`, so any day starting before it may be undercounted
 // and is dropped (the client keeps paging with `before`). A zero floor keeps
-// everything. Days-with-nothing never appear — they are simply never keyed
-// (CON-225 §5, CON-285 FR4).
+// everything. Days-with-nothing never appear — they are simply never keyed.
 func bucketReports(in Inputs, loc *time.Location, limit int, floor time.Time) []ListItem {
 	type agg struct{ pub, fail, created, camp int }
 	days := map[string]*agg{}

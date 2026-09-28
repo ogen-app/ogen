@@ -10,7 +10,7 @@ import (
 )
 
 // TenantScoped is embedded (anonymously) by every tenant-owned model to enforce
-// tenant isolation centrally (CON-97 §6). bun fires these query hooks on the
+// tenant isolation centrally. bun fires these query hooks on the
 // model, so the tenant predicate is added in ONE place — no repository method
 // can forget to scope, which is the whole point of app-level enforcement:
 //
@@ -27,7 +27,7 @@ import (
 // Note: users and sessions are NOT TenantScoped. The auth path looks them up
 // by email/token BEFORE a tenant is known (that lookup is how the tenant is
 // discovered), so auto-scoping them would deadlock the login flow. They carry a
-// plain tenant_id column instead (CON-97 PR2).
+// plain tenant_id column instead.
 type TenantScoped struct {
 	TenantID string `bun:"tenant_id,notnull" json:"-"`
 }

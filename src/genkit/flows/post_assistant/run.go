@@ -48,7 +48,7 @@ func runPostAssistant(
 	start := time.Now()
 	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "instruction_len", len(req.Instruction))
 
-	// Enforcement gate (CON-86 FR9): block before any provider call when the
+	// Enforcement gate: block before any provider call when the
 	// tenant is already over a cap in enforce mode. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func runPostAssistant(
 			return
 		}
 		publishAssistantFinalised(cfg.Hub, req.PostID, finaliseOwnerID, out, retErr)
-		// CON-285: a durable assistant finished/failed row for the initiator.
+		// A durable assistant finished/failed row for the initiator.
 		notifyAssistantFinalised(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.PostID, out, retErr)
 	}()
 
@@ -170,7 +170,7 @@ func runPostAssistant(
 		actor:       post.CreatedBy,
 		platforms:   platforms,
 		onEvent:     onEvent,
-		// Writer support (CON-128): the editPost tool + clonePost adaptation
+		// Writer support: the editPost tool + clonePost adaptation
 		// run a nested Sonnet generation off this state.
 		g:               g,
 		provider:        cfg.Provider,
@@ -187,7 +187,7 @@ func runPostAssistant(
 	}
 	ctx = withRequestState(ctx, st)
 
-	// CON-78: the scheduling context (current time + workspace timezone,
+	// The scheduling context (current time + workspace timezone,
 	// the post's status, its auto/manual routing, and a readiness summary)
 	// changes every turn — current time most of all — so it is injected
 	// fresh into the user turn rather than the cached system/context block,
@@ -200,7 +200,7 @@ func runPostAssistant(
 	}
 
 	// ── Call model ───────────────────────────────────────────────────────────
-	// CON-128: in the hybrid path the orchestration loop routes on the cheap
+	// In the hybrid path the orchestration loop routes on the cheap
 	// planning model and delegates all copywriting to the Sonnet editPost
 	// write-tool; the loop itself only emits a short envelope, so it takes a
 	// small output cap. The legacy path keeps the single generation-model call
@@ -374,7 +374,7 @@ func runPostAssistant(
 		result.VersionNote = s
 	}
 
-	// ── Clone handling (CON-59) ──────────────────────────────────────────────
+	// ── Clone handling ──────────────────────────────────────────────
 	// If the clonePost tool ran this turn, it is the authoritative outcome:
 	// the source post is untouched, action is "cloned", and we attach the
 	// new draft's id. Done before the "no usable fields" guard below so a
@@ -394,7 +394,7 @@ func runPostAssistant(
 		}
 	}
 
-	// ── Restore handling (CON-68) ────────────────────────────────────────────
+	// ── Restore handling ────────────────────────────────────────────
 	// If the restoreVersion tool ran this turn, it is the authoritative
 	// outcome: the service has already swapped the post content and
 	// appended the version(s), so action is "restored" and we surface the
@@ -418,7 +418,7 @@ func runPostAssistant(
 		}
 	}
 
-	// ── Schedule handling (CON-78) ───────────────────────────────────────────
+	// ── Schedule handling ───────────────────────────────────────────
 	// If the schedulePost tool committed this turn, it is the authoritative
 	// outcome: the post's status + scheduled_at are persisted by the shared
 	// service, action is "scheduled", and content is untouched.
@@ -443,7 +443,7 @@ func runPostAssistant(
 		}
 	}
 
-	// ── Edit handling (CON-128) ──────────────────────────────────────────────
+	// ── Edit handling ──────────────────────────────────────────────
 	// In the hybrid path the editPost tool ran the Sonnet writer this turn; its
 	// content is authoritative and the planner never emits it. The planner
 	// supplies the metadata (action / saveVersion / versionNote) in its JSON
@@ -454,7 +454,7 @@ func runPostAssistant(
 		result.UpdatedContent = st.editResult.Content
 	}
 
-	// ── Note handling (CON-188) ──────────────────────────────────────────────
+	// ── Note handling ──────────────────────────────────────────────
 	// The createNote tool persisted its notes at call time (origin=assistant).
 	// Notes are additive: a turn may create notes on their own or alongside an
 	// edit, so this never clears an edit's updatedContent. When notes are the
@@ -490,7 +490,7 @@ func runPostAssistant(
 		}
 	}
 
-	// Hybrid safety (CON-128): only the editPost writer may produce post copy,
+	// Hybrid safety: only the editPost writer may produce post copy,
 	// so an "edited" turn is legitimate ONLY when the writer actually ran
 	// (st.editResult set). Without it the planner either applied no edit, or
 	// emitted its own inline content in violation of the split — either way we

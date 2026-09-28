@@ -21,7 +21,7 @@ import (
 // isolates tenants end-to-end: one tenant can never read, update, delete, or
 // even see the existence of another tenant's rows. Because scoping is enforced
 // by a single shared mixin, campaigns + tags here are representative of every
-// tenant-owned entity (CON-97 §6, §12).
+// tenant-owned entity.
 var _ = Describe("Multi-tenant isolation (CON-97)", Ordered, func() {
 	var (
 		app *fiber.App

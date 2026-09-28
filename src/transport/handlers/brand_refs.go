@@ -9,7 +9,7 @@ import (
 )
 
 // validateBrandRefs checks that a brand_voice_id / brand_audience_id belong to
-// the caller's tenant (CON-245 FR2). nil ids are allowed (clearing the ref). A
+// the caller's tenant. nil ids are allowed (clearing the ref). A
 // nil repo skips validation (unwired in tests). The getters are tenant-scoped,
 // so a foreign or unknown id resolves to nil → 422.
 func validateBrandRefs(ctx context.Context, repo repository.BrandRepository, voiceID, audienceID *string) error {

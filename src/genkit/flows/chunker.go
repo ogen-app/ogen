@@ -3,8 +3,8 @@ package flows
 import "strings"
 
 const (
-	// MaxEmbedChars caps the characters fed to Gemini Embedding 2 per chunk
-	// (CON-101). At ~3.5 chars/token this is ~1,700 tokens — comfortably inside
+	// MaxEmbedChars caps the characters fed to Gemini Embedding 2 per chunk.
+	// At ~3.5 chars/token this is ~1,700 tokens — comfortably inside
 	// Gemini's 8192-token input limit, so chunks never need truncation while
 	// staying small enough for sharp, well-scoped embeddings.
 	MaxEmbedChars = 6000

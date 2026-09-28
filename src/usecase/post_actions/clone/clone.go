@@ -1,5 +1,5 @@
-// Package clone implements the shared "clone a Post" operation
-// (CON-59). It is the single source of truth used by both the REST
+// Package clone implements the shared "clone a Post" operation.
+// It is the single source of truth used by both the REST
 // endpoint (POST /api/posts/:id/clone) and the Post Assistant's
 // clonePost tool, so the two entry points can never drift.
 //
@@ -228,7 +228,7 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 		UpdatedAt:        now,
 		UsedAssets:       []models.Asset{},
 	}
-	// CON-284: keep the thread's ordered segments only when the clone remains a
+	// Keep the thread's ordered segments only when the clone remains a
 	// thread and the content wasn't adapted (an adapted body would diverge from
 	// the stored segments). A retarget to a single-message type demotes the
 	// clone — segments stay empty, matching the PUT demotion path.
@@ -378,7 +378,7 @@ func (s *Service) copyAttachments(
 			}
 		}
 
-		// CON-284: carry which thread segment the media belonged to only when
+		// Carry which thread segment the media belonged to only when
 		// the clone stays a thread; otherwise it becomes an ordinary (NULL)
 		// attachment.
 		var segIdx *int
@@ -426,7 +426,7 @@ func (s *Service) publishCloned(srcID, newID, actor string, adapted bool) {
 	_ = s.hub.Publish(context.Background(), eventhub.Event{
 		ID:    evID,
 		Topic: "entity:post:" + newID,
-		// Dotted bus wire type (CON-285). Distinct from the post_logs.event_type
+		// Dotted bus wire type. Distinct from the post_logs.event_type
 		// and tenant_activity_events taxonomy constants, which stay "post_cloned"
 		// (persisted history + stability contract — do not rename those).
 		Type:   "post.cloned",

@@ -10,7 +10,7 @@ import (
 )
 
 // ZernioConnectSessionRepository persists the short-lived headless-connect
-// state (CON-217). It is intentionally NOT tenant-scoped at the query layer:
+// state. It is intentionally NOT tenant-scoped at the query layer:
 // the OAuth callback reads a row by id BEFORE a tenant is in context and
 // resolves the tenant from it; the authenticated picker handlers then assert
 // the row's tenant matches the caller. All point reads exclude expired rows.

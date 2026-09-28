@@ -11,9 +11,9 @@ import (
 )
 
 // EmailBodyRepository persists and serves the rendered body captured at send
-// time (CON-306). It is a 1:1 side table of email_logs; the body is written
+// time. It is a 1:1 side table of email_logs; the body is written
 // best-effort after the parent log row and served in preference to the live
-// Resend fetch by the operator Emails tab (CON-192 / CON-298).
+// Resend fetch by the operator Emails tab.
 type EmailBodyRepository interface {
 	// Insert stores one rendered body. It is idempotent on the primary key
 	// (email_log_id): a redundant write — e.g. a retried job that already logged

@@ -30,7 +30,7 @@ type EmbedAssetInput struct {
 	// TenantID carries the saver's tenant into the background embed goroutine,
 	// which runs without a request context. The scheduler's status writes and
 	// chunk upserts are tenant-scoped and would otherwise fail closed with
-	// ErrNoTenant (CON-97).
+	// ErrNoTenant.
 	TenantID string `json:"tenant_id"`
 }
 
@@ -49,7 +49,7 @@ type embedScheduler struct {
 	pending   map[string]EmbedAssetInput
 	running   map[string]bool
 	assetRepo repository.AssetRepository // optional; when set, used to flip asset.status
-	embedder  ai.Embedder                // set by Init; used to skip when no key (CON-104)
+	embedder  ai.Embedder                // set by Init; used to skip when no key
 }
 
 func newEmbedScheduler() *embedScheduler {
@@ -86,7 +86,7 @@ func (s *embedScheduler) run(assetID string) {
 		delete(s.pending, assetID)
 		s.mu.Unlock()
 
-		// Skip when no gemini_api_key is configured (CON-104): leave the asset's
+		// Skip when no gemini_api_key is configured: leave the asset's
 		// status untouched (a later save re-triggers once a key is set via the
 		// secrets API) rather than marking it failed. Unlike the process_pdf River
 		// job, the markdown embed is fire-and-forget with no retry, so skip is the
@@ -98,7 +98,7 @@ func (s *embedScheduler) run(assetID string) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		// Rebuild the tenant context the request goroutine carried, so the
-		// status writes and chunk upserts run against the right tenant (CON-97).
+		// status writes and chunk upserts run against the right tenant.
 		ctx = tenantctx.With(ctx, in.TenantID)
 		s.setStatus(ctx, in.AssetID, models.AssetStatusProcessing)
 		_, err := EmbedAssetFlow.Run(ctx, in)
@@ -210,7 +210,7 @@ func embedAsset(ctx context.Context, embedder ai.Embedder, repo repository.Asset
 		return fmt.Errorf("store chunks for asset %s: %w", in.AssetID, err)
 	}
 
-	// CON-86: one usage event per asset embed. The Gemini embed response carries
+	// One usage event per asset embed. The Gemini embed response carries
 	// no token usage, so we meter the chunker's estimate. Nil recorder = no-op.
 	recorder.RecordResp(ctx, llm.VendorGemini, embedModel, "asset_embed", llm.EmbedUsage{Tokens: totalTokens})
 

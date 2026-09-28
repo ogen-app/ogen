@@ -31,9 +31,9 @@ const defaultSuggestionCap = 3
 // PostQualityFlowConfig holds the settings for the assessPostQuality flow.
 type PostQualityFlowConfig struct {
 	// Provider resolves the model reference + call config by role; post_quality
-	// uses the quality role (cfg.QualityModelID) (CON-86 FR12).
+	// uses the quality role (cfg.QualityModelID).
 	Provider *llm.Provider
-	// Recorder captures usage events; nil disables recording (CON-86 FR5/FR10).
+	// Recorder captures usage events; nil disables recording.
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker
@@ -54,7 +54,7 @@ type PostQualityFlowConfig struct {
 	// nil = silent.
 	Hub eventhub.Hub
 	// Notifier drops a durable "assessment finished / failed" notification to the
-	// post owner (CON-285). nil is a no-op.
+	// post owner. nil is a no-op.
 	Notifier *notify.Service
 
 	tmpl *templates
@@ -69,9 +69,9 @@ type PostQualityRepos struct {
 	Platforms   repository.PlatformRepository
 	Evaluations repository.PostEvaluationRepository
 	PostLogs    repository.PostLogRepository
-	// Versions resolves the latest committed content snapshot to assess
-	// (CON-184). Nil disables version resolution — the flow then scores the
-	// live posts.content, preserving the pre-CON-184 behaviour.
+	// Versions resolves the latest committed content snapshot to assess.
+	// Nil disables version resolution — the flow then scores the
+	// live posts.content.
 	Versions repository.PostVersionRepository
 }
 
@@ -139,7 +139,7 @@ func runPostQuality(
 			return
 		}
 		publishAssessmentFinalised(cfg.Hub, req.PostID, ownerID, out, retErr)
-		// CON-285: a durable assessment finished/failed row for the initiator.
+		// A durable assessment finished/failed row for the initiator.
 		notifyAssessmentFinalised(cfg.Notifier, tenantID, ownerID, req.PostID, out, retErr)
 	}()
 
@@ -152,8 +152,8 @@ func runPostQuality(
 		return nil, fmt.Errorf("load post: %w", err)
 	}
 
-	// Assess the latest committed version rather than the live editor HEAD
-	// (CON-184). Runs before validateInput so the body precondition is
+	// Assess the latest committed version rather than the live editor HEAD.
+	// Runs before validateInput so the body precondition is
 	// checked against the content that is actually scored.
 	if err := resolveAssessedContent(ctx, repos, post); err != nil {
 		return nil, err
@@ -173,7 +173,7 @@ func runPostQuality(
 	}
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "buildContext", Status: "done"})
 
-	// ── Change detection (CON-92): the rendered prompt encodes everything
+	// ── Change detection: the rendered prompt encodes everything
 	// the model sees (post body, platform, type, campaign brief, phase,
 	// asset previews); the model id and the resolved weight profile cover
 	// the rest of what determines the score. If all of them are unchanged
@@ -193,7 +193,7 @@ func runPostQuality(
 		return resp, nil
 	}
 
-	// Enforcement gate (CON-86 FR9): placed AFTER the cache short-circuit so a
+	// Enforcement gate: placed AFTER the cache short-circuit so a
 	// cached assessment (no provider call) is never blocked. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func runPostQuality(
 }
 
 // resolveAssessedContent overrides post.Content with the latest committed
-// version's content when one exists (CON-184).
+// version's content when one exists.
 //
 // posts.content is the live working copy: the editor autosaves keystrokes
 // into it without snapshotting, so it is treated as uncommitted
@@ -243,8 +243,8 @@ func runPostQuality(
 // should reflect. Only Content is touched — platform, type, media, and
 // campaign context all come from the live post.
 //
-// It is a no-op when version resolution is disabled (repos.Versions == nil,
-// preserving pre-CON-184 behaviour) or when the post has no saved version yet
+// It is a no-op when version resolution is disabled (repos.Versions == nil)
+// or when the post has no saved version yet
 // (never opened in the assistant, never manually snapshotted), so a fresh
 // post is still assessable against its posts.content.
 func resolveAssessedContent(ctx context.Context, repos PostQualityRepos, post *models.Post) error {
@@ -266,7 +266,7 @@ func resolveAssessedContent(ctx context.Context, repos PostQualityRepos, post *m
 // model sees), and the resolved weight profile (which ComposeScore folds
 // into OverallPct and each dimension's Weight/Contribution — values the
 // model never produces). The assess flow compares it against the stored
-// hash to decide whether to re-run (CON-92); including the profile means a
+// hash to decide whether to re-run; including the profile means a
 // weights config change invalidates the cache rather than serving a stale
 // score. A unit-separator between parts prevents one field's content from
 // bleeding into the next.
@@ -388,7 +388,7 @@ func publishAssessmentFinalised(
 }
 
 // notifyAssessmentFinalised drops a durable "assessment finished / failed"
-// notification to the post owner (CON-285): the initiator, who may have walked
+// notification to the post owner: the initiator, who may have walked
 // away while the assessment ran. The client suppresses the live echo for the tab
 // that started it; this row is for other devices and a later return. The
 // dedupe_key collapses repeats for the same post while still unread. Uses a

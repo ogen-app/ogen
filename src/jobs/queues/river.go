@@ -41,61 +41,61 @@ type Deps struct {
 	AnalyticsSettings   zernio.SettingsStore
 	AnalyticsHub        eventhub.Hub
 	AnalyticsWindowDays int
-	// CON-236: age-based refresh-decay schedule. Zero fields fall back to the
+	// Age-based refresh-decay schedule. Zero fields fall back to the
 	// processor defaults (fresh<48h→hourly, warm<14d→daily, else weekly).
 	AnalyticsDecay AnalyticsDecay
-	// CON-102: eager per-tenant Zernio profile provisioning. The bootstrap job
+	// Eager per-tenant Zernio profile provisioning. The bootstrap job
 	// reuses the connect-link handler's Bootstrapper (tenant-scoped profile
 	// create/adopt + settings write) and Integration (enabled/state gating).
 	ProfileBootstrapper *zernio.Bootstrapper
 	Integration         *zernio.Integration
 
-	// CON-203: fences the Zernio profile teardown against a concurrent CON-190
+	// Fences the Zernio profile teardown against a concurrent CON-190
 	// restore via the tenant row lock. nil disables teardown (fail-closed).
 	TenantFence TenantTeardownFence
 
-	// CON-103: the process_pdf worker's dependencies (pdf-service client,
+	// The process_pdf worker's dependencies (pdf-service client,
 	// embedder, storage, asset repos). A nil Client (no PDF_SERVICE_ADDR) makes
 	// the job a no-op.
 	PDF PDFDeps
 
-	// CON-280: the process_document worker's dependencies (document-service
+	// The process_document worker's dependencies (document-service
 	// client, embedder, storage, asset repos). A nil Client (no
 	// DOCUMENTS_SERVICE_ADDR) makes the job a no-op.
 	Document DocumentDeps
 
-	// CON-282: the process_audio worker's dependencies (audio-service client,
+	// The process_audio worker's dependencies (audio-service client,
 	// embedder, storage, extraction/segment/utterance repos, cost gate). A nil
 	// Client (no AUDIO_SERVICE_ADDR) makes the job a no-op. Runs on the dedicated
 	// `audio` queue.
 	Audio AudioDeps
 
-	// CON-281: the process_image worker's dependencies (image-service client,
+	// The process_image worker's dependencies (image-service client,
 	// embedder, storage, extraction/block/asset/file repos, cost gate). A nil
 	// Client (no IMAGE_SERVICE_ADDR) makes the job a no-op. Runs on the dedicated
 	// `image` queue.
 	Image ImageDeps
 
-	// CON-222: the process_url worker's dependencies (Firecrawl scrape client,
+	// The process_url worker's dependencies (Firecrawl scrape client,
 	// embedder, storage, asset/image repos, eventhub). A nil Scraper (no
 	// firecrawl_api_key) makes the job a no-op.
 	URL URLDeps
 
-	// CON-154: the send_email + cleanup_email_logs workers' dependencies
+	// The send_email + cleanup_email_logs workers' dependencies
 	// (Resend sender, template/suppression/log repos, addressing config). A nil
 	// Sender (no RESEND_API_KEY) makes send_email log skipped_disabled.
 	Email EmailDeps
 
-	// CON-217: the cleanup_zernio_connect_sessions worker's repo (sweeps expired
+	// The cleanup_zernio_connect_sessions worker's repo (sweeps expired
 	// headless-connect sessions). A nil repo makes the sweep a no-op.
 	ConnectSessionRepo repository.ZernioConnectSessionRepository
 
-	// CON-190: reads a tenant's lifecycle status so per-tenant jobs (publish,
+	// Reads a tenant's lifecycle status so per-tenant jobs (publish,
 	// bootstrap, email) skip suspended/deleted tenants. repository.TenantRepository
 	// satisfies it. A nil reader makes the guards no-ops (auth stays the gate).
 	Tenants TenantStatusReader
 
-	// CON-219: the detect_expiring_connections sweep's extra deps. Users resolves
+	// The detect_expiring_connections sweep's extra deps. Users resolves
 	// the owner recipients; AppBaseURL builds the reconnect deep link;
 	// ExpiryLeadDays is the heads-up window (days before token expiry). The
 	// sweep's client/account repo come from Zernio and its email log repo from
@@ -104,7 +104,7 @@ type Deps struct {
 	AppBaseURL     string
 	ExpiryLeadDays int
 
-	// CON-242: notification center. Notifier lets producers (e.g. the
+	// Notification center. Notifier lets producers (e.g. the
 	// connection-expiry sweep) drop a persistent per-user notification;
 	// NotificationRepo + NotificationRetention back the cleanup_notifications
 	// sweep. A nil Notifier is a no-op; a nil repo makes cleanup a no-op.
@@ -112,7 +112,7 @@ type Deps struct {
 	NotificationRepo      repository.NotificationRepository
 	NotificationRetention time.Duration
 
-	// CON-229: the notify_harbor_tenant_registered worker's config — the outbound
+	// The notify_harbor_tenant_registered worker's config — the outbound
 	// webhook URL Harbor exposes + the HMAC signing secret. An empty URL makes the
 	// worker a no-op (feature off); an empty secret sends the body unsigned.
 	HarborNotify HarborNotifyDeps
@@ -128,10 +128,10 @@ func register(fn func(*river.Workers, Deps)) {
 }
 
 // QueueConfigs is the River client's queue set: the default queue plus the
-// dedicated audio and image queues (CON-282/CON-281), each with its own worker
+// dedicated audio and image queues, each with its own worker
 // pool so heavy runs can't starve short jobs. A job inserted into a queue
 // missing here is never worked, so every InsertOpts Queue must appear —
-// TestEveryInsertQueueIsConfigured guards it (CON-312).
+// TestEveryInsertQueueIsConfigured guards it.
 func QueueConfigs(defaultWorkers, audioWorkers, imageWorkers int) map[string]river.QueueConfig {
 	return map[string]river.QueueConfig{
 		river.QueueDefault: {MaxWorkers: defaultWorkers},
@@ -175,17 +175,17 @@ type PeriodicConfig struct {
 	AnalyticsEvery    time.Duration
 	IncludeAnalytics  bool // only when the Zernio integration is configured
 	FollowerEvery     time.Duration
-	IncludeFollowers  bool // CON-153: only when the Zernio integration is configured
-	// CON-217: expired headless-connect-session sweep. Gated on a configured
+	IncludeFollowers  bool // Only when the Zernio integration is configured
+	// Expired headless-connect-session sweep. Gated on a configured
 	// interval so a zero value (e.g. in tests) can't create an invalid job.
 	ConnectSessionCleanupEvery time.Duration
-	// CON-219: connection-health / expiry-notification sweep.
+	// Connection-health / expiry-notification sweep.
 	HealthCheckEvery        time.Duration
 	IncludeConnectionExpiry bool // only when the Zernio integration is configured
-	// CON-242: notification retention/expiry sweep. Gated on a positive interval
+	// Notification retention/expiry sweep. Gated on a positive interval
 	// so a zero value (e.g. in tests) can't create an invalid periodic job.
 	NotificationCleanupEvery time.Duration
-	// CON-285: manual-publish-due sweep. Positive-interval gated like the others.
+	// Manual-publish-due sweep. Positive-interval gated like the others.
 	ManualPublishDueEvery time.Duration
 }
 
@@ -209,7 +209,7 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 			return ReconcileScheduledPostsTask{}, nil
 		}, runOnStart),
 	}
-	// CON-154: email_logs retention sweep, gated on a configured interval so a
+	// email_logs retention sweep, gated on a configured interval so a
 	// zero value (e.g. in tests) can't create an invalid periodic job.
 	if cfg.EmailCleanupEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.EmailCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
@@ -231,7 +231,7 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 			return CleanupZernioConnectSessionsTask{}, nil
 		}, runOnStart))
 	}
-	// CON-219: connection-health / expiry sweep. Also requires a positive
+	// Connection-health / expiry sweep. Also requires a positive
 	// interval — River doesn't validate it and PeriodicInterval(0).Next(t)==t, so
 	// a zero HealthCheckEvery would spin the periodic enqueuer (mirrors the
 	// EmailCleanup/ConnectSessionCleanup guards above).
@@ -240,14 +240,14 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 			return DetectExpiringConnectionsTask{}, nil
 		}, runOnStart))
 	}
-	// CON-242: notification retention/expiry sweep. Positive-interval guard like
+	// Notification retention/expiry sweep. Positive-interval guard like
 	// the EmailCleanup/ConnectSessionCleanup sweeps above.
 	if cfg.NotificationCleanupEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.NotificationCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return CleanupNotificationsTask{}, nil
 		}, runOnStart))
 	}
-	// CON-285: manual-publish-due sweep. Positive-interval guard like above.
+	// Manual-publish-due sweep. Positive-interval guard like above.
 	if cfg.ManualPublishDueEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.ManualPublishDueEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return DetectManualPublishDueTask{}, nil
@@ -268,7 +268,7 @@ type Enqueuer struct {
 // NewInsertOnlyEnqueuer builds an Enqueuer over a fresh insert-only River client
 // (no queues/workers, never Started) on the shared DB pool. It exists for
 // callers that must enqueue jobs yet live OUTSIDE the main app's River client —
-// namely the internal gRPC server (CON-229), which cmd/server constructs
+// namely the internal gRPC server, which cmd/server constructs
 // independently of the HTTP app that owns the processing client. Jobs inserted
 // here are worked by that processing client; both share one river_job table.
 // Requires the River schema to already exist (MigrateRiver runs in server.New,
@@ -282,7 +282,7 @@ func NewInsertOnlyEnqueuer(db *bun.DB) (*Enqueuer, error) {
 }
 
 // requestIDMetadata returns River job metadata carrying the originating request
-// id (CON-107) when one is present on ctx, so a job's logs correlate back to the
+// id when one is present on ctx, so a job's logs correlate back to the
 // HTTP request that enqueued it. Returns nil for system/periodic enqueues that
 // have no request id (River treats nil as empty metadata).
 func requestIDMetadata(ctx context.Context) []byte {
@@ -333,7 +333,7 @@ func WithJobRequestID(ctx context.Context, jr *rivertype.JobRow) context.Context
 }
 
 // EnqueueSubmitTx enqueues a submit task inside the given transaction, so
-// the enqueue commits atomically with the post status change (CON-78 §9).
+// the enqueue commits atomically with the post status change.
 func (e *Enqueuer) EnqueueSubmitTx(ctx context.Context, tx *sql.Tx, postID string) error {
 	if e == nil || e.Client == nil {
 		return nil
@@ -343,8 +343,8 @@ func (e *Enqueuer) EnqueueSubmitTx(ctx context.Context, tx *sql.Tx, postID strin
 }
 
 // EnqueueBootstrapProfileTx enqueues an eager Zernio profile-provisioning task
-// inside the given transaction, so it commits atomically with the tenant insert
-// (CON-102 §6 FR2): a rolled-back signup creates no job, a committed one
+// inside the given transaction, so it commits atomically with the tenant insert:
+// a rolled-back signup creates no job, a committed one
 // durably queues exactly one. A nil enqueuer (Zernio queue unwired) is a no-op —
 // the lazy on-connect bootstrap remains the fallback.
 func (e *Enqueuer) EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
@@ -370,7 +370,7 @@ func (e *Enqueuer) EnqueueTeardownProfileTx(ctx context.Context, tx *sql.Tx, ten
 	return err
 }
 
-// dripSchedule is the marketing onboarding drip cadence (CON-154 FR5): one
+// dripSchedule is the marketing onboarding drip cadence: one
 // in-code table, so rescheduling the whole sequence is a single edit. Offsets
 // are relative to signup.
 var dripSchedule = []struct {
@@ -383,7 +383,7 @@ var dripSchedule = []struct {
 }
 
 // EnqueueWelcomeEmailTx enqueues the transactional welcome email inside the
-// signup transaction, so the job exists iff the tenant/user do (CON-154 FR4).
+// signup transaction, so the job exists iff the tenant/user do.
 // The enqueue is a local DB insert — the Resend call happens later in the
 // worker — so signup never blocks on Resend reachability. A nil enqueuer (email
 // queue unwired) is a no-op.
@@ -402,7 +402,7 @@ func (e *Enqueuer) EnqueueWelcomeEmailTx(ctx context.Context, tx *sql.Tx, userID
 }
 
 // EnqueueAdminTenantRegisteredEmail enqueues one admin_tenant_registered
-// operator-notification send to a single admin recipient (CON-229). Unlike the
+// operator-notification send to a single admin recipient. Unlike the
 // *Tx enqueuers this runs OUTSIDE any transaction — it is driven by Harbor's
 // gRPC callback after a tenant has already committed — so it is a plain (non-tx)
 // Insert. The tenant's details ride the job args as vars because the operator
@@ -437,8 +437,8 @@ func (e *Enqueuer) EnqueueNotifyHarborTenantRegisteredTx(ctx context.Context, tx
 }
 
 // EnqueuePasswordResetTx enqueues the transactional password-reset email inside
-// the token-minting transaction, so the mail exists iff the token row does
-// (CON-161). resetURL is the one-time link; it rides the job args as a template
+// the token-minting transaction, so the mail exists iff the token row does.
+// resetURL is the one-time link; it rides the job args as a template
 // var because the worker cannot rebuild it — only the token's hash is stored.
 // The enqueue is a local DB insert (the Resend call happens later in the
 // worker), so the request never blocks on Resend reachability. tokenID keys the
@@ -461,7 +461,7 @@ func (e *Enqueuer) EnqueuePasswordResetTx(ctx context.Context, tx *sql.Tx, userI
 
 // EnqueueInvitationEmailTx enqueues the transactional workspace-invitation email
 // inside the invite-minting transaction, so the mail exists iff the invitation
-// row does (CON-26). The invitee has no users row yet, so the recipient address
+// row does. The invitee has no users row yet, so the recipient address
 // rides the task directly (ToEmail) rather than being re-resolved from users;
 // inviteURL / inviterName / workspaceName / role ride the args as template vars
 // because the worker cannot rebuild them (only the token's hash is stored). The
@@ -490,7 +490,7 @@ func (e *Enqueuer) EnqueueInvitationEmailTx(ctx context.Context, tx *sql.Tx, ten
 }
 
 // EnqueueDripTx enqueues the marketing onboarding drip (day 2/5/7) as delayed
-// jobs inside the signup transaction (CON-154 FR5). Each step fires at its
+// jobs inside the signup transaction. Each step fires at its
 // ScheduledAt; unsubscribes are honoured at send time, so no scheduled job ever
 // needs cancelling. A nil enqueuer is a no-op.
 func (e *Enqueuer) EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error {
@@ -514,7 +514,7 @@ func (e *Enqueuer) EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenant
 }
 
 // EnqueueProcessPDFTx enqueues a PDF-ingestion task inside the given
-// transaction, so it commits atomically with the asset insert (CON-103): a
+// transaction, so it commits atomically with the asset insert: a
 // committed upload always has a job, a rolled-back one never does. The worker
 // re-reads original.pdf from storage, so the bytes are not in the args. Takes
 // primitives so the handler can depend on a narrow interface, not this package.
@@ -532,7 +532,7 @@ func (e *Enqueuer) EnqueueProcessPDFTx(ctx context.Context, tx *sql.Tx, assetID,
 }
 
 // EnqueueProcessDocumentTx enqueues a document-ingestion task inside the given
-// transaction, so it commits atomically with the asset insert (CON-280): a
+// transaction, so it commits atomically with the asset insert: a
 // committed upload always has a job, a rolled-back one never does. The worker
 // re-reads the original from storage (storageKey is the tenant-relative object
 // path), so the bytes are not in the args. Takes primitives so the handler can
@@ -552,7 +552,7 @@ func (e *Enqueuer) EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, ass
 }
 
 // EnqueueProcessAudioTx enqueues an audio-ingestion task inside the given
-// transaction, so it commits atomically with the asset insert/reset (CON-282):
+// transaction, so it commits atomically with the asset insert/reset:
 // a committed upload always has a job, a rolled-back one never does. The worker
 // hands audio-service presigned URLs (storageKey is the tenant-relative object
 // path), so the bytes are not in the args. runKey makes the run idempotent; an
@@ -576,7 +576,7 @@ func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetI
 }
 
 // EnqueueProcessImageTx enqueues an image-ingestion task inside the given
-// transaction, so it commits atomically with the asset insert/reset (CON-281): a
+// transaction, so it commits atomically with the asset insert/reset: a
 // committed upload always has a job, a rolled-back one never does. The worker
 // hands image-service presigned URLs (storageKey is the tenant-relative object
 // path), so the bytes are not in the args. runKey makes the run idempotent; an
@@ -600,7 +600,7 @@ func (e *Enqueuer) EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetI
 }
 
 // EnqueueReembedImage enqueues a re-embed of an image asset's edited description
-// plus its stored region blocks (CON-312). Not transactional: the description is
+// plus its stored region blocks. Not transactional: the description is
 // already saved, and the worker re-reads it, so a lost enqueue only leaves the
 // previous chunks in place until the next edit or re-extract.
 func (e *Enqueuer) EnqueueReembedImage(ctx context.Context, assetID, tenantID string) error {
@@ -612,7 +612,7 @@ func (e *Enqueuer) EnqueueReembedImage(ctx context.Context, assetID, tenantID st
 }
 
 // EnqueueProcessURLTx enqueues a URL-scrape task inside the given transaction,
-// so it commits atomically with the asset insert/reset (CON-222): a committed
+// so it commits atomically with the asset insert/reset: a committed
 // submit always has a job, a rolled-back one never does. Refresh flips
 // Firecrawl's cache off for a re-submit of an existing URL. Takes primitives so
 // the handler depends on a narrow interface, not this package.

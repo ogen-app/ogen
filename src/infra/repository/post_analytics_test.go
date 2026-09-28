@@ -247,7 +247,7 @@ func TestListWithPublisherPostID(t *testing.T) {
 
 	// A Zernio post that ended up `failed` (a partial publish maps to failed)
 	// must STILL be included — it has real per-platform analytics Zernio can
-	// return (CON-93 §10). Status is intentionally not a filter.
+	// return. Status is intentionally not a filter.
 	if _, err := db.NewInsert().Model(&models.Post{
 		ID:              "p4",
 		CampaignID:      "camp-1",
@@ -263,7 +263,7 @@ func TestListWithPublisherPostID(t *testing.T) {
 		t.Fatalf("seed failed post: %v", err)
 	}
 
-	// CON-190: a Zernio post owned by a suspended tenant is excluded from the
+	// A Zernio post owned by a suspended tenant is excluded from the
 	// cross-tenant sweep (the query joins tenants and requires status='active').
 	// The posts above are in the seeded 'default' tenant, which is active.
 	if _, err := db.NewInsert().Model(&models.Tenant{

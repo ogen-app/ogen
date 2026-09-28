@@ -124,7 +124,7 @@ func TestSpread_Evenness(t *testing.T) {
 	}
 }
 
-// CON-166: a manual phase plan moves each phase's slice of the timeline.
+// A manual phase plan moves each phase's slice of the timeline.
 func TestPlan_HonoursManualPhasePlan(t *testing.T) {
 	c := threePhaseCampaign()
 	c.PhaseWindows = []models.CampaignPhaseWindow{

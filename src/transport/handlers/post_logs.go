@@ -12,8 +12,8 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// PostLogsHandler exposes the read API over the Post Log table
-// (CON-69 §11). Writes happen wherever the originating event lives —
+// PostLogsHandler exposes the read API over the Post Log table.
+// Writes happen wherever the originating event lives —
 // the handler does not expose an Append endpoint.
 type PostLogsHandler struct {
 	repo     repository.PostLogRepository

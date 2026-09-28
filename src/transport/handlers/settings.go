@@ -20,10 +20,9 @@ func NewSettingsHandler(repo repository.SettingRepository, auth fiber.Handler) *
 func (h *SettingsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/settings")
 	g.Get("/", h.auth, h.List)
-	// CON-97: GET /:key is always authenticated. The old setup_complete bootstrap
-	// gate (unauthenticated reads while first-run setup was incomplete) was
-	// removed once self-service signup via POST /api/tenants became the sole
-	// onboarding path — the UI no longer probes settings before a session exists.
+	// GET /:key is always authenticated: self-service signup via POST
+	// /api/tenants is the sole onboarding path, so the UI never probes
+	// settings before a session exists.
 	g.Get("/:key", h.auth, h.Get)
 	g.Put("/:key", h.auth, h.Upsert)
 	g.Delete("/:key", h.auth, h.Delete)
@@ -89,7 +88,7 @@ func (h *SettingsHandler) Upsert(c *fiber.Ctx) error {
 	}
 
 	key := c.Params("key")
-	// CON-78: the workspace timezone must be a valid IANA zone name so
+	// The workspace timezone must be a valid IANA zone name so
 	// scheduling can resolve relative times against it. Reject unknown
 	// zones up front rather than letting a bad value silently fall back
 	// to UTC at schedule time.

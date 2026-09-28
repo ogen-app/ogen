@@ -1,4 +1,4 @@
-// Package pdf is a thin gRPC client for the pdf-service (CON-103). It owns
+// Package pdf is a thin gRPC client for the pdf-service. It owns
 // the connection, the raised receive limit, and the per-call deadline, and
 // presents PDF parsing as a single Parse call that client-streams the bytes.
 //
@@ -92,10 +92,9 @@ func New(cfg Config) (*Client, error) {
 		return nil, nil
 	}
 	// The correlation interceptors copy request_id/tenant_id from the call
-	// context into outgoing gRPC metadata so pdf-service's logs join the API's
-	// (CON-111).
+	// context into outgoing gRPC metadata so pdf-service's logs join the API's.
 	dialOpts := []grpc.DialOption{
-		// CON-303: emit a client span per RPC and propagate the trace to the service.
+		// Emit a client span per RPC and propagate the trace to the service.
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainStreamInterceptor(correlationStreamInterceptor),

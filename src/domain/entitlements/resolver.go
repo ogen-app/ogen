@@ -36,7 +36,7 @@ type EntitlementValue struct {
 	Feature
 	Value any `json:"value"`
 	// Current is the tenant's live usage for a numeric feature that has a
-	// registered counter (CON-295), attached by the authenticated /me/entitlements
+	// registered counter, attached by the authenticated /me/entitlements
 	// read so the client can render "N of M". Omitted (nil) for an uncounted or
 	// boolean feature and for the public pricing catalog (no tenant) — the client
 	// treats absent as "unknown", distinct from a real 0.
@@ -87,7 +87,7 @@ type versionBundle struct {
 }
 
 // Resolver answers "which tier version, and what entitlements, is a tenant on at
-// time T" (CON-243 §8). Version content is immutable, so a version bundle is
+// time T". Version content is immutable, so a version bundle is
 // cached forever once loaded; the per-tenant assignment is read fresh each call,
 // so a reassignment is picked up with no cache invalidation.
 type Resolver struct {

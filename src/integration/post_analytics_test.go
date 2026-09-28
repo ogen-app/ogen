@@ -130,7 +130,7 @@ var _ = Describe("Post analytics — CON-93", Ordered, func() {
 		postsHandler := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db),
 			platformRepo, repository.NewPostAttachmentRepository(db), auth)
 		postsHandler.Register(app)
-		// GET /:id/analytics now lives on the insights handler (CON-291).
+		// GET /:id/analytics now lives on the insights handler.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, analyticsRepo, nil, nil, auth).Register(app)
 		handlers.NewAnalyticsHandler(analyticsRepo, nil, nil, nil, nil, auth).Register(app)
 

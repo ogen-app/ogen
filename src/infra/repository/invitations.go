@@ -11,8 +11,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// InvitationRepository is the persistence surface for workspace invitations
-// (CON-26). The token-minting insert and the accept flow run inside the calling
+// InvitationRepository is the persistence surface for workspace invitations.
+// The token-minting insert and the accept flow run inside the calling
 // handler's transaction (mirroring password reset), so they are not here; this
 // interface covers the plain reads + the revoke used by the management endpoints
 // and the public preview. Invitations are not TenantScoped — the accept/preview
@@ -25,8 +25,8 @@ type InvitationRepository interface {
 	// CreateReplacingPendingTx clears any pending invite for the same (tenant,
 	// email) — live or expired, since either occupies the partial-unique pending
 	// slot — then inserts inv, all on the provided bun.IDB so it joins the caller's
-	// tx (which also enqueues the email). Re-inviting an address is idempotent
-	// (CON-147 §7.3): it returns replaced=true when an existing pending invite was
+	// tx (which also enqueues the email). Re-inviting an address is idempotent:
+	// it returns replaced=true when an existing pending invite was
 	// cleared, so the handler can answer 200 (re-issue) vs 201 (new). It first takes
 	// a transaction-scoped advisory lock keyed on (tenant, email) so concurrent
 	// re-issues serialize rather than racing the delete+insert — the partial-unique
@@ -75,7 +75,7 @@ func (r *invitationRepository) CreateReplacingPendingTx(ctx context.Context, tx 
 	// Serialize re-issues for the same (tenant, email): a transaction-scoped
 	// advisory lock (released on commit/rollback) makes a concurrent second invite
 	// wait for the first to commit, then see its row and replace it — so both
-	// re-issue idempotently (CON-147 §7.3) instead of one hitting the partial-unique
+	// re-issue idempotently instead of one hitting the partial-unique
 	// pending index and 409ing. hashtext maps each key to an int4; a collision only
 	// costs unnecessary serialization, never correctness.
 	if _, err := db.NewRaw("SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?))", inv.TenantID, inv.Email).Exec(ctx); err != nil {

@@ -17,7 +17,7 @@ import (
 
 const sessionTTL = 7 * 24 * time.Hour
 
-// Login throttle budget (CON-162). POST /api/sessions is unauthenticated and
+// Login throttle budget. POST /api/sessions is unauthenticated and
 // globally addressable (email is unique across tenants), so it is the prime
 // credential-stuffing target. It is charged per client IP (stops one caller
 // spraying many addresses) and per address (stops a targeted brute force).
@@ -36,8 +36,8 @@ const (
 // whether or not the address exists, so a 429 never signals account existence.
 const loginThrottledMsg = "Too many login attempts. Please wait a minute and try again."
 
-// maxConcurrentThrottleRecords bounds the best-effort login_throttled recorder
-// (CON-162). Every throttled login that might target an account spends one slot
+// maxConcurrentThrottleRecords bounds the best-effort login_throttled recorder.
+// Every throttled login that might target an account spends one slot
 // on a detached GetByEmail + activity write; when the slots are all busy the
 // event is dropped without starting another lookup, so a flood on the throttle
 // path can't spawn unbounded goroutines or DB queries. A handful is ample — the
@@ -52,12 +52,12 @@ type SessionsHandler struct {
 	cookieName   string
 	secureCookie bool
 	// ipLimiter / emailLimiter throttle failed logins per client IP and per
-	// address (CON-162). Both are charged only on failure and the address bucket
+	// address. Both are charged only on failure and the address bucket
 	// is refunded on success, so only credential-guessing accrues against them.
 	ipLimiter    *keyedRateLimiter
 	emailLimiter *keyedRateLimiter
 	// throttleRecordSem is a counting semaphore bounding in-flight login_throttled
-	// recordings (CON-162), so the async recorder can't be amplified into an
+	// recordings, so the async recorder can't be amplified into an
 	// unbounded goroutine/DB-lookup fan-out under a login flood.
 	throttleRecordSem chan struct{}
 	// activity records CON-125 authentication events (login, logout). Both run
@@ -119,7 +119,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 
 	// Throttle before any credential work. The IP budget is checked first so a
 	// caller spraying many addresses doesn't also spend the target address's
-	// budget (CON-162). Both are only peeked here — a token is charged just on a
+	// budget. Both are only peeked here — a token is charged just on a
 	// failed attempt (loginFailed), so a legitimate login never accrues. A 429
 	// reveals only that a limit was hit, never whether the address has an account.
 	// Either dimension records the throttle for a known account (off-path, so it
@@ -163,7 +163,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 
 	// The address proved control of the credential, so refund its bucket — a user
 	// who fumbled their password a few times before getting it right starts clean
-	// (CON-162: a success resets the counter). The IP bucket is left as-is: it
+	// (a success resets the counter). The IP bucket is left as-is: it
 	// guards against spraying, which one success doesn't clear (and clearing it
 	// would let an attacker holding one valid login reset their own IP budget).
 	h.emailLimiter.reset(req.Email)
@@ -201,7 +201,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 }
 
 // loginFailed charges the failed attempt against both the per-IP and per-address
-// budgets and returns the generic 401 (CON-162). The body is identical whether
+// budgets and returns the generic 401. The body is identical whether
 // the address is unknown or the password is wrong, so login is not an
 // account-existence oracle.
 func (h *SessionsHandler) loginFailed(c *fiber.Ctx, email string) error {

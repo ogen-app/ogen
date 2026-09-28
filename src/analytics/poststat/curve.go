@@ -11,7 +11,7 @@ import (
 // over fewer than this many posts would rest on one or two observations.
 const baselineMinPosts = 3
 
-// Metric keys — the fixed six-card order (CON-250 §3). `views` is not surfaced.
+// Metric keys — the fixed six-card order. `views` is not surfaced.
 const (
 	MetricReach          = "reach"
 	MetricImpressions    = "impressions"

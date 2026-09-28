@@ -20,7 +20,7 @@ import (
 
 // PostAssistantHandler owns the post AI-assistant surface — the streaming
 // assistant turn (POST /:id/assistant, CON-128) and the conversation history
-// read (GET /:id/messages). Split out of the PostsHandler god-object (CON-291):
+// read (GET /:id/messages). Split out of the PostsHandler god-object:
 // a focused handler over the assistant runner + message repo, each nil-disabling
 // its endpoint.
 type PostAssistantHandler struct {
@@ -117,7 +117,7 @@ func (h *PostAssistantHandler) Assistant(c *fiber.Ctx) error {
 	assistant := h.assistant
 	// Carry the tenant into the detached flow context (the StreamWriter runs
 	// after this handler returns) so usage recording + enforcement attribute
-	// to the right tenant (CON-86).
+	// to the right tenant.
 	tenantID, _ := c.Locals(tenantctx.Key).(string)
 	flowCtx := detachedContext(c, tenantID)
 

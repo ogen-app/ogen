@@ -206,8 +206,8 @@ var _ = Describe("AssetsHandler upload", Ordered, Serial, func() {
 	It("creates a PDF asset: stores original.pdf and enqueues ingestion (status=pending)", func() {
 		// Minimal valid PDF magic header followed by a plausible body. The handler
 		// checks the `%PDF` prefix and size, stores original.pdf to object storage,
-		// then inserts the asset and enqueues the ingestion job in one transaction
-		// (CON-103). Real processing runs async in the worker.
+		// then inserts the asset and enqueues the ingestion job in one transaction.
+		// Real processing runs async in the worker.
 		const pdfBody = "%PDF-1.4\n%...dummy body..."
 		body, ct := buildMultipart([]struct{ Name, Body string }{
 			{"report.pdf", pdfBody},

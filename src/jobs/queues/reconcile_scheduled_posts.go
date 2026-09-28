@@ -16,8 +16,8 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 )
 
-// ReconcileScheduledPostsQueue is the recurring sweeper queue
-// (CON-69 §8). Runs every Every duration; finds Posts in Scheduled
+// ReconcileScheduledPostsQueue is the recurring sweeper queue.
+// Runs every Every duration; finds Posts in Scheduled
 // whose scheduled_at + Grace has passed without a terminal Zernio
 // status, and forces them to Failed with a reason that distinguishes
 // reconciliation_timeout from a Zernio-reported failure.
@@ -61,7 +61,7 @@ type ReconcileScheduledPostsProcessor struct {
 // Work is the River entrypoint; it delegates to Process.
 func (p *ReconcileScheduledPostsProcessor) Work(ctx context.Context, job *river.Job[ReconcileScheduledPostsTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// CON-97: background jobs span tenants (interim until per-tenant, PR4).
+	// Background jobs span tenants (interim until per-tenant, PR4).
 	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
@@ -112,7 +112,7 @@ func (p *ReconcileScheduledPostsProcessor) Process(ctx context.Context, _ Reconc
 
 	for i := range stuck {
 		post := &stuck[i]
-		// Reconcile each stuck post within its own tenant (CON-97 PR4); the
+		// Reconcile each stuck post within its own tenant; the
 		// list above ran cross-tenant under the job's system context.
 		pctx := tenantctx.With(ctx, post.TenantID)
 		reason := fmt.Sprintf("%s: scheduled_at=%s elapsed=%s last_publisher_status=%q",

@@ -14,7 +14,7 @@ import (
 
 // prewarmToolCache fires one throwaway generation carrying the flow's full tool
 // set so Anthropic compiles the strict-tool constrained-decoding grammar and
-// caches it (CON-112). Without it, the first *real* request per ~24h cache TTL
+// caches it. Without it, the first *real* request per ~24h cache TTL
 // pays the ~50s compile; warming it in the background at init moves that cost
 // off the user path.
 //

@@ -17,7 +17,7 @@ import (
 )
 
 // retryBackoff is the pause before the single retry on a failed or
-// invalid evaluation (CON-85: "1-retry / 2s-backoff convention").
+// invalid evaluation ("1-retry / 2s-backoff convention").
 const retryBackoff = 2 * time.Second
 
 // defaultMaxOutputTokens caps the scoring response when the config leaves
@@ -146,7 +146,7 @@ func evaluateDimension(
 			continue
 		}
 		// Record every completed call (one per dimension, plus any empty-rationale
-		// retry that still consumed tokens) (CON-86 FR1). Nil recorder = no-op.
+		// retry that still consumed tokens). Nil recorder = no-op.
 		cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_quality", resp)
 		if strings.TrimSpace(out.Rationale) == "" {
 			lastErr = fmt.Errorf("empty rationale")

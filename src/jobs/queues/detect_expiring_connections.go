@@ -22,8 +22,8 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// DetectExpiringConnectionsQueue is the recurring connection-health sweep
-// (CON-219). Each tick reads every connected account's Zernio health, persists
+// DetectExpiringConnectionsQueue is the recurring connection-health sweep.
+// Each tick reads every connected account's Zernio health, persists
 // the token-expiry snapshot, and emails workspace owners when a token is within
 // the lead window of expiry (or already needs reconnecting). It mirrors the
 // follower-refresh sweep: a marker payload, self-registering, gated on the
@@ -61,7 +61,7 @@ type DetectExpiringConnectionsProcessor struct {
 	EmailLogs  repository.EmailLogRepository
 	AppBaseURL string
 	LeadDays   int
-	// Notifier drops an in-app notification alongside the email (CON-242). Nil
+	// Notifier drops an in-app notification alongside the email. Nil
 	// (notification center unwired) is a no-op.
 	Notifier *notify.Service
 }
@@ -268,7 +268,7 @@ func (p *DetectExpiringConnectionsProcessor) notifyOwners(ctx context.Context, t
 				continue // already notified this owner for this (account, stage, expiry)
 			}
 		}
-		// CON-242: drop an in-app notification alongside the email, gated by the
+		// Drop an in-app notification alongside the email, gated by the
 		// same once-per-(account,stage,expiry,owner) email dedupe above. Best-
 		// effort — a notify failure never blocks the email or the sweep.
 		p.emitNotification(ctx, owner.ID, h, local, stage)
@@ -284,7 +284,7 @@ func (p *DetectExpiringConnectionsProcessor) notifyOwners(ctx context.Context, t
 }
 
 // emitNotification drops one in-app notification for an owner whose account is
-// entering a notify stage (CON-242). It rides the same tenant-scoped ctx as the
+// entering a notify stage. It rides the same tenant-scoped ctx as the
 // email enqueue, so the row lands in the right tenant; a nil Notifier is a
 // no-op. The dedupe_key collapses repeats while the prior one is still unread,
 // backing up the email-log dedupe the caller already applied.

@@ -25,12 +25,12 @@ type PostRepository interface {
 	// from the write so a PUT that omits the presence-aware source set
 	// (used_asset_ids) doesn't clobber a concurrent membership write.
 	Update(ctx context.Context, post *models.Post, excludeColumns ...string) error
-	// AddUsedAssetIDs / RemoveUsedAssetID are the CON-233 membership write path
-	// for a post's sources: they mutate only posts.used_asset_ids, in one atomic
-	// UPDATE, so attaching or detaching one source no longer round-trips the whole
+	// AddUsedAssetIDs / RemoveUsedAssetID are the membership write path for a
+	// post's sources: they mutate only posts.used_asset_ids, in one atomic
+	// UPDATE, so attaching or detaching one source never round-trips the whole
 	// record and concurrent adds of different ids don't clobber each other. Both
 	// return the hydrated post, or sql.ErrNoRows if it doesn't exist (in this
-	// tenant). The CON-251 submitted-post content-lock is enforced here too, under
+	// tenant). The submitted-post content-lock is enforced here too, under
 	// a row lock (SELECT ... FOR UPDATE): a real source change to a submitted post
 	// is refused with *PostSubmittedError even if a concurrent schedule/publish
 	// wins the race against the handler's optimistic pre-check.
@@ -48,17 +48,17 @@ type PostRepository interface {
 	// post that is overdue but not yet published would still auto-publish,
 	// so it must be converted too.
 	ListScheduledByPlatform(ctx context.Context, platformID string) ([]models.Post, error)
-	// CON-69 §8: reconciliation sweeper helpers.
+	// Reconciliation sweeper helpers.
 	ListStuckScheduled(ctx context.Context, cutoff time.Time, limit int) ([]models.Post, error)
 	UpdateStatusAndReason(ctx context.Context, postID string, status models.PostStatus, reason string) error
-	// CON-93 §6 FR2: build the publisher_post_id → post_id match map the
+	// Build the publisher_post_id → post_id match map the
 	// analytics refresh keys off. Returns id + publisher_post_id only,
 	// for Zernio-published posts that actually carry a publisher post id.
 	ListWithPublisherPostID(ctx context.Context) ([]models.Post, error)
 	// ListSummaryProjections returns a slim projection of every post in the
-	// tenant — only the columns the Campaigns-list readiness rules read
-	// (CON-152), with no relation hydration. One batched read replaces the N
-	// per-card GET /campaigns/:id/posts requests the list used to fire.
+	// tenant — only the columns the Campaigns-list readiness rules read,
+	// with no relation hydration. One batched read serves the whole list, so
+	// it needs no per-card GET /campaigns/:id/posts request.
 	ListSummaryProjections(ctx context.Context) ([]models.Post, error)
 	// ListManualPublishDue returns posts in status scheduled_for_manual_publishing
 	// whose scheduled_at has passed (<= now), oldest-due first. Cross-tenant when
@@ -86,12 +86,12 @@ type PostRepository interface {
 	// PublishedProjectionBetween returns id + platform_id + published_at for the
 	// tenant's posts published in [from, to) — a zero from means unbounded-low —
 	// newest first, optionally narrowed to one campaign. limit 0 = no cap. Feeds
-	// the Activity daily report's "published" bucket (CON-285).
+	// the Activity daily report's "published" bucket.
 	PublishedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error)
 	// CreatedProjectionBetween returns id + created_by + scheduled_at + created_at
 	// for the tenant's posts created in [from, to) — a zero from means
 	// unbounded-low — newest first, optionally one campaign. limit 0 = no cap.
-	// Feeds the Activity report's "created" bucket (CON-285).
+	// Feeds the Activity report's "created" bucket.
 	CreatedProjectionBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Post, error)
 }
 
@@ -267,7 +267,7 @@ func (r *postRepository) Update(ctx context.Context, post *models.Post, excludeC
 
 // PostSubmittedError reports that a CON-233 source-membership write was refused
 // because the post is in a submitted state (scheduled/published) and its sources
-// are frozen (CON-251). The membership repo methods verify the status and apply
+// are frozen. The membership repo methods verify the status and apply
 // the write atomically under a row lock, so a concurrent schedule/publish that
 // slips in after a handler's optimistic pre-check is still caught here and
 // surfaced as a lock (HTTP 409) rather than silently mutating a frozen post. The
@@ -280,11 +280,11 @@ func (e *PostSubmittedError) Error() string {
 	return "post is submitted (" + string(e.Status) + "); its sources are locked"
 }
 
-// AddUsedAssetIDs unions assetIDs into posts.used_asset_ids atomically (CON-233),
+// AddUsedAssetIDs unions assetIDs into posts.used_asset_ids atomically,
 // mirroring campaignRepository.AddAssetIDs. An empty input is a no-op read that
 // still validates existence. The TenantScoped hook scopes the UPDATE, so an
 // unknown or foreign id surfaces as sql.ErrNoRows. A real change to a submitted
-// post is refused with *PostSubmittedError (CON-251); see mutateUsedAssets.
+// post is refused with *PostSubmittedError; see mutateUsedAssets.
 func (r *postRepository) AddUsedAssetIDs(ctx context.Context, id string, assetIDs []string) (*models.Post, error) {
 	if len(assetIDs) == 0 {
 		return r.GetByID(ctx, id)
@@ -309,10 +309,10 @@ func (r *postRepository) AddUsedAssetIDs(ctx context.Context, id string, assetID
 	return r.GetByID(ctx, id)
 }
 
-// RemoveUsedAssetID drops assetID from posts.used_asset_ids atomically (CON-233).
+// RemoveUsedAssetID drops assetID from posts.used_asset_ids atomically.
 // Removal is idempotent — an absent id still matches the row and changes nothing.
-// A real change to a submitted post is refused with *PostSubmittedError
-// (CON-251); see mutateUsedAssets.
+// A real change to a submitted post is refused with *PostSubmittedError;
+// see mutateUsedAssets.
 func (r *postRepository) RemoveUsedAssetID(ctx context.Context, id, assetID string) (*models.Post, error) {
 	changes := func(current models.StringSlice) bool {
 		return slices.Contains(current, assetID)
@@ -418,7 +418,7 @@ func (r *postRepository) Delete(ctx context.Context, id string) (bool, error) {
 
 // ListStuckScheduled returns Posts in status='scheduled' whose
 // scheduled_at is older than cutoff, capped at limit. Used by the
-// reconciliation sweeper (CON-69 §8). NULL scheduled_at rows are
+// reconciliation sweeper. NULL scheduled_at rows are
 // skipped — a Scheduled post without a scheduled_at is a data
 // integrity bug, not a reconciliation candidate.
 func (r *postRepository) ListStuckScheduled(ctx context.Context, cutoff time.Time, limit int) ([]models.Post, error) {
@@ -428,7 +428,7 @@ func (r *postRepository) ListStuckScheduled(ctx context.Context, cutoff time.Tim
 	var posts []models.Post
 	err := r.db.NewSelect().
 		Model(&posts).
-		// Only sweep posts owned by active tenants (CON-190): a suspended or
+		// Only sweep posts owned by active tenants: a suspended or
 		// deleted tenant's scheduled posts are left untouched, not forced Failed.
 		Join("JOIN tenants AS t ON t.id = po.tenant_id").
 		Where("t.status = ?", models.TenantStatusActive).
@@ -447,7 +447,7 @@ func (r *postRepository) ListStuckScheduled(ctx context.Context, cutoff time.Tim
 // ListScheduledByPlatform returns the tenant's posts in
 // status='scheduled' for platformID (a platform Sqid), oldest
 // scheduled_at first. See the interface doc for why scheduled_at is not
-// filtered (CON-130).
+// filtered.
 func (r *postRepository) ListScheduledByPlatform(ctx context.Context, platformID string) ([]models.Post, error) {
 	var posts []models.Post
 	err := r.db.NewSelect().
@@ -485,7 +485,7 @@ func (r *postRepository) UpdateStatusAndReason(ctx context.Context, postID strin
 // Zernio's own source=late filter is what gates which posts actually have
 // analytics. The analytics refresh queue turns this into a
 // publisher_post_id → post_id map to match the batch Zernio returns back to
-// local posts (CON-93 §6 FR2). No relation hydration — only the two columns
+// local posts. No relation hydration — only the two columns
 // are needed.
 func (r *postRepository) ListWithPublisherPostID(ctx context.Context) ([]models.Post, error) {
 	var posts []models.Post
@@ -495,7 +495,7 @@ func (r *postRepository) ListWithPublisherPostID(ctx context.Context) ([]models.
 		// the analytics snapshot at refresh time (CON-125 Track B), so the
 		// overview read needs no cross-DB join back to posts/platforms.
 		Column("id", "tenant_id", "publisher_post_id", "title", "published_at", "platform_id", "publisher").
-		// Only refresh analytics for active tenants (CON-190): a suspended or
+		// Only refresh analytics for active tenants: a suspended or
 		// deleted tenant's posts are excluded from the cross-tenant sweep.
 		Join("JOIN tenants AS t ON t.id = po.tenant_id").
 		Where("t.status = ?", models.TenantStatusActive).
@@ -511,7 +511,7 @@ func (r *postRepository) ListWithPublisherPostID(ctx context.Context) ([]models.
 
 // ListSummaryProjections returns a lightweight projection of every post in the
 // caller's tenant — only the columns lib/campaignReadiness reads to score a
-// campaign on the Campaigns list (CON-152): status + schedule/publish times +
+// campaign on the Campaigns list: status + schedule/publish times +
 // platform, post-type, and phase ids + media presence. It deliberately skips
 // relation hydration and the heavy title/content columns, so one batched read
 // replaces the N per-card GET /campaigns/:id/posts requests without shipping
@@ -560,7 +560,7 @@ func (r *postRepository) hydrateRelations(ctx context.Context, posts []models.Po
 		return err
 	}
 
-	// CON-150: hydrate the chosen same-platform account. Soft-deleted
+	// Hydrate the chosen same-platform account. Soft-deleted
 	// (disconnected) rows are still fetched so the UI can show which
 	// account a historical post targeted.
 	socialAccountByID, err := fetchByIDs[models.SocialAccount](ctx, r.db, socialAccountIDs, func(a *models.SocialAccount) string { return a.ID })

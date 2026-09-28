@@ -29,7 +29,7 @@ type subscriber struct {
 }
 
 // matches returns true when the subscriber should receive ev. Combines the
-// hard tenant boundary (CON-97 §10.2) with per-user authz and topic glob match.
+// hard tenant boundary with per-user authz and topic glob match.
 func (s *subscriber) matches(ev Event) bool {
 	// A tenant-tagged event never crosses into another tenant. Events carry a
 	// tenant whenever they are published from a tenant context (Publish derives
@@ -60,7 +60,7 @@ type inProcHub struct {
 // are collected and disconnected after RUnlock.
 func (h *inProcHub) Publish(ctx context.Context, ev Event) error {
 	// Stamp the tenant from the publishing context so most publishers don't
-	// have to set it explicitly (CON-97 §10.2). An explicit ev.TenantID wins.
+	// have to set it explicitly. An explicit ev.TenantID wins.
 	if ev.TenantID == "" {
 		if tid, ok := tenantctx.From(ctx); ok {
 			ev.TenantID = tid
@@ -107,8 +107,8 @@ func (h *inProcHub) disconnect(ids []uint64, reason string) {
 // must hold h.mu. Closing the channel is also what unblocks a subscriber's
 // reader: an SSE writer goroutine parked in `select { case <-eventCh }` wakes
 // with a closed channel, returns, and runs its deferred unsubscribe — so this
-// is how the Hub reclaims a slot whose writer would otherwise never exit
-// (CON-286). Idempotent: an already-removed id is skipped.
+// is how the Hub reclaims a slot whose writer would otherwise never exit.
+// Idempotent: an already-removed id is skipped.
 func (h *inProcHub) removeLocked(id uint64, reason string) {
 	sub, ok := h.subs[id]
 	if !ok {
@@ -162,7 +162,7 @@ func (h *inProcHub) Subscribe(_ context.Context, opts SubscribeOpts) (<-chan Eve
 	h.mu.Lock()
 	// Per-user subscription cap. At the cap we evict the user's OLDEST
 	// subscriber (lowest id, since ids are monotonic) rather than reject the
-	// incoming one (CON-286). Rejecting the newest is the wrong failure mode:
+	// incoming one. Rejecting the newest is the wrong failure mode:
 	// an SSE slot leaks whenever a writer goroutine can't observe its client
 	// going away (a vanished peer whose tiny heartbeat writes keep buffering
 	// never surfaces an error), and once the cap is full of such zombies every
