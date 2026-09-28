@@ -1,4 +1,4 @@
-.PHONY: build run test test-integration coverage _ginkgo _air _pg-test-up tidy docker docker-genkit clean openapi genkit proto
+.PHONY: build run lint test test-integration coverage _ginkgo _air _pg-test-up tidy docker docker-genkit clean openapi genkit proto
 
 GINKGO_FLAGS = --github-output -r -randomize-all -randomize-suites -race -trace -procs=2 -poll-progress-after=10s -poll-progress-interval=10s
 
@@ -68,6 +68,11 @@ test-integration:
 
 tidy:
 	go mod tidy
+
+# Lints new and changed code against main (see .golangci.yml). Install the
+# binary per https://golangci-lint.run/welcome/install/ (v2.6+).
+lint:
+	golangci-lint run ./...
 
 # ── Protobuf / gRPC ──────────────────────────────────────────────────────────
 # All seven contracts (tenants, secrets, pdf, video, documents, audio, image)
