@@ -260,8 +260,8 @@ func TestProcessPDF_AllEmbedsFail_RetriesThenFailsOnLastAttempt(t *testing.T) {
 	if err := p2.process(t.Context(), ProcessPDFTask{AssetID: "a3"}, true); err != nil {
 		t.Fatalf("last attempt should not return an error: %v", err)
 	}
-	if st2.last() != models.AssetStatusFailed {
-		t.Fatalf("status = %q, want failed", st2.last())
+	if st2.last() != models.AssetStatusFailed || st2.failCode != models.UploadCodeServiceUnavailable || st2.failReason == "" {
+		t.Fatalf("status = %q code %q reason %q, want failed with service_unavailable", st2.last(), st2.failCode, st2.failReason)
 	}
 }
 
@@ -275,8 +275,8 @@ func TestProcessPDF_TerminalParseErrorFailsNoRetry(t *testing.T) {
 	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a4"}, false); err != nil {
 		t.Fatalf("terminal parse error must not be retried (want nil err): %v", err)
 	}
-	if status.last() != models.AssetStatusFailed {
-		t.Fatalf("status = %q, want failed", status.last())
+	if status.last() != models.AssetStatusFailed || status.failCode != models.UploadCodeInvalidFile {
+		t.Fatalf("status = %q code %q, want failed with invalid_file", status.last(), status.failCode)
 	}
 }
 

@@ -135,10 +135,12 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	status := p.statusWriter()
 	if p.Deps.Storage == nil {
 		// Best-effort status write; the returned error is more descriptive.
-		_ = status.set(ctx, in.AssetID, models.AssetStatusFailed)
+		_ = status.fail(ctx, in.AssetID, models.UploadCodeInternalError, status.notConfiguredReason())
 		return fmt.Errorf("process_pdf %s: storage not configured", in.AssetID)
 	}
-	giveUp := func() error { return status.set(ctx, in.AssetID, models.AssetStatusFailed) }
+	giveUp := func() error {
+		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, status.unavailableReason())
+	}
 	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_pdf", in.AssetID, lastAttempt, giveUp); !ok {
 		return err
 	}
@@ -160,18 +162,15 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	if err != nil {
 		if isTerminalParseErr(err) {
 			slog.WarnContext(ctx, "unparseable pdf", logging.AttrComponent, "jobs.process_pdf", "asset_id", in.AssetID, logging.AttrError, err)
-			return status.set(ctx, in.AssetID, models.AssetStatusFailed)
+			return status.fail(ctx, in.AssetID, models.UploadCodeInvalidFile, "the PDF could not be read (corrupt, encrypted, or unsupported)")
 		}
 		return fmt.Errorf("process_pdf %s: parse: %w", in.AssetID, err)
 	}
 
 	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, pdfChunkSources(res.Chunks))
-	if err := storeChunks(ctx, p.Deps.Chunks, "process_pdf", in.AssetID, chunks, false); err != nil {
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_pdf", in.AssetID, chunks, stats, false); err != nil {
 		return err
 	}
-	// One usage event per ingest; the Gemini embed response carries no usage,
-	// so the tokens are the embedded chunks' estimates.
-	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "pdf_extract", llm.EmbedUsage{Tokens: stats.Tokens})
 
 	// The thumbnail is non-fatal; the file row is retried so the asset never
 	// lands "ready" without its file row, page count or thumbnail.
@@ -184,7 +183,19 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	if err != nil {
 		return fmt.Errorf("process_pdf %s: %w", in.AssetID, err)
 	}
-	return status.set(ctx, in.AssetID, final)
+	if final == models.AssetStatusFailed {
+		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, status.unavailableReason())
+	}
+	if err := status.set(ctx, in.AssetID, final); err != nil {
+		return err
+	}
+	// One usage event per ingest, after the durable writes so a retry from a
+	// late failure can't double-count. The Gemini embed response carries no
+	// usage, so the tokens are the embedded chunks' estimates.
+	if stats.Tokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "pdf_extract", llm.EmbedUsage{Tokens: stats.Tokens})
+	}
+	return nil
 }
 
 // pdfChunkSources yields the parsed chunks with their page bounds. pdfium pages

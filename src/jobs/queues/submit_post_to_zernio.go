@@ -172,8 +172,7 @@ func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Po
 	if zernio.IsTerminalAPIError(err) {
 		return p.terminal(ctx, post, "zernio_retry_rejected", err.Error())
 	}
-	p.logRetried(ctx, post, "transient Zernio retry error; River will retry", err)
-	return err
+	return p.transient(ctx, post, "transient Zernio retry error; River will retry", err)
 }
 
 // buildVariant uploads the post's attachments to Zernio and returns the

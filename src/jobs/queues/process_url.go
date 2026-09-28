@@ -150,7 +150,7 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 		slog.WarnContext(ctx, "firecrawl not configured", logging.AttrComponent, "jobs.process_url", "asset_id", in.AssetID)
 		return nil
 	}
-	giveUp := func() error { return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, "embedder unavailable") }
+	giveUp := func() error { return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, urlEmbedderUnavailable) }
 	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_url", in.AssetID, lastAttempt, giveUp); !ok {
 		return err
 	}
@@ -176,10 +176,9 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 
 	// The title is prepended for context, like embed_asset.
 	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, textChunkSources(flows.ChunkText(title+"\n\n"+markdown)))
-	if err := storeChunks(ctx, p.Deps.Chunks, "process_url", in.AssetID, chunks, true); err != nil {
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_url", in.AssetID, chunks, stats, true); err != nil {
 		return err
 	}
-	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "url_embed", llm.EmbedUsage{Tokens: stats.Tokens})
 
 	final, err := stats.settle(lastAttempt)
 	if err != nil {
@@ -187,11 +186,19 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 	}
 	switch {
 	case final == models.AssetStatusFailed:
-		return p.finish(ctx, in, final, title, len(images), 0, imgFailed, "all chunks failed to embed")
+		return p.finish(ctx, in, final, title, len(images), 0, imgFailed, urlAllChunksFailed)
 	case final == models.AssetStatusReady && imgFailed > 0:
 		final = models.AssetStatusPartial
 	}
-	return p.finish(ctx, in, final, title, len(images), len(chunks), imgFailed, "")
+	if err := p.finish(ctx, in, final, title, len(images), len(chunks), imgFailed, ""); err != nil {
+		return err
+	}
+	// After the durable status write, so a retry from a late failure can't
+	// double-count.
+	if stats.Tokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "url_embed", llm.EmbedUsage{Tokens: stats.Tokens})
+	}
+	return nil
 }
 
 // scrape fetches the page as Markdown and meters the call. On refresh it
@@ -245,12 +252,35 @@ func textChunkSources(texts []string) iter.Seq[chunkSource] {
 // status write error is propagated so the worker retries rather than reporting
 // success with an unpersisted status.
 func (p *ProcessURLProcessor) finish(ctx context.Context, in ProcessURLTask, status, title string, imageCount, chunkCount, failedImages int, errMsg string) error {
-	if err := p.statusWriter().set(ctx, in.AssetID, status); err != nil {
+	w := p.statusWriter()
+	var err error
+	if status == models.AssetStatusFailed {
+		err = w.fail(ctx, in.AssetID, urlFailureCode(errMsg), cmp.Or(errMsg, w.unavailableReason()))
+	} else {
+		err = w.set(ctx, in.AssetID, status)
+	}
+	if err != nil {
 		return err
 	}
 	p.publish(ctx, in, status, title, imageCount, chunkCount, failedImages, errMsg)
 	return nil
 }
+
+// urlFailureCode classifies a URL ingest failure: embedding problems are a
+// service outage, anything else is a page that could not be scraped.
+func urlFailureCode(errMsg string) string {
+	switch errMsg {
+	case urlEmbedderUnavailable, urlAllChunksFailed:
+		return models.UploadCodeServiceUnavailable
+	default:
+		return models.UploadCodeInvalidFile
+	}
+}
+
+const (
+	urlEmbedderUnavailable = "embedder unavailable"
+	urlAllChunksFailed     = "all chunks failed to embed"
+)
 
 func (p *ProcessURLProcessor) statusWriter() assetStatusWriter {
 	return assetStatusWriter{op: "process_url", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "link", kind: models.AssetTypeURL}

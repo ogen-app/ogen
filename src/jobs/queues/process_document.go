@@ -150,7 +150,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 	}
 
 	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, documentChunkSources(res.Chunks))
-	if err := storeChunks(ctx, p.Deps.Chunks, "process_document", in.AssetID, chunks, false); err != nil {
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_document", in.AssetID, chunks, stats, false); err != nil {
 		return err
 	}
 	// The file row is retried so the asset never lands "ready" without it.

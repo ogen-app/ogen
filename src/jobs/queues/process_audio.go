@@ -194,10 +194,12 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 	}
 	status := p.statusWriter()
 	if p.Deps.Storage == nil || p.Deps.Extractions == nil || p.Deps.Segments == nil || p.Deps.Utterances == nil {
-		_ = status.set(ctx, in.AssetID, models.AssetStatusFailed)
+		_ = status.fail(ctx, in.AssetID, models.UploadCodeInternalError, status.notConfiguredReason())
 		return fmt.Errorf("process_audio %s: storage/repos not configured", in.AssetID)
 	}
-	giveUp := func() error { return status.set(ctx, in.AssetID, models.AssetStatusFailed) }
+	giveUp := func() error {
+		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, status.unavailableReason())
+	}
 	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_audio", in.AssetID, lastAttempt, giveUp); !ok {
 		return err
 	}
@@ -230,7 +232,7 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 	if err := p.transcribeAll(ctx, in, ext, segments, lastAttempt); err != nil {
 		return err
 	}
-	return p.finalize(ctx, in, ext)
+	return p.finalize(ctx, in, ext, lastAttempt)
 }
 
 // loadSegments returns the run's segments, computing and persisting the
@@ -493,7 +495,7 @@ func segmentCost(model string, inputTokens, outputTokens int64) int64 {
 // finalize settles a run whose segments are all terminal: all done → assemble,
 // embed and store the transcript and mark ready; any failed → partial
 // (queryable, not searchable — no chunks written, awaiting retry).
-func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction) error {
+func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction, lastAttempt bool) error {
 	segments, err := p.Deps.Segments.ListByExtraction(ctx, ext.ID)
 	if err != nil {
 		return fmt.Errorf("process_audio %s: reload segments: %w", in.AssetID, err)
@@ -523,10 +525,15 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 	assembled := assembleAudioChunks(utts)
 	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, audioChunkSources(assembled))
 	// A silent/no-speech transcript is ready with 0 chunks; every embed failing
-	// retries, even on the last attempt.
-	status, err := stats.settle(false)
+	// retries until the last attempt, then fails. The extraction stays
+	// incomplete, so a later reprocess resumes from the stored transcript.
+	status, err := stats.settle(lastAttempt)
 	if err != nil {
 		return fmt.Errorf("process_audio %s: %w", in.AssetID, err)
+	}
+	if status == models.AssetStatusFailed {
+		w := p.statusWriter()
+		return w.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, w.unavailableReason())
 	}
 	if err := p.writeTranscript(ctx, in, assembled, chunks); err != nil {
 		return err
@@ -600,7 +607,7 @@ func audioChunkSources(assembled []assembledAudioChunk) iter.Seq[chunkSource] {
 // asset.Content (read-only to PUT): the same de-overlapped text the chunks
 // hold, one paragraph per chunk.
 func (p *ProcessAudioProcessor) writeTranscript(ctx context.Context, in ProcessAudioTask, assembled []assembledAudioChunk, chunks []models.AssetChunk) error {
-	if err := storeChunks(ctx, p.Deps.Chunks, "process_audio", in.AssetID, chunks, false); err != nil {
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_audio", in.AssetID, chunks, embedStats{}, false); err != nil {
 		return err
 	}
 	if p.Deps.Content == nil {
@@ -647,7 +654,7 @@ func (p *ProcessAudioProcessor) terminalReject(ctx context.Context, in ProcessAu
 		return fmt.Errorf("process_audio %s: mark extraction failed: %w", in.AssetID, err)
 	}
 	slog.WarnContext(ctx, "audio ingestion rejected", logging.AttrComponent, "jobs.process_audio", "asset_id", in.AssetID, "reason", reason)
-	return p.statusWriter().set(ctx, in.AssetID, models.AssetStatusFailed)
+	return p.statusWriter().fail(ctx, in.AssetID, code, reason)
 }
 
 func (p *ProcessAudioProcessor) failSegment(ctx context.Context, seg *models.AudioSegment, reason string) error {
