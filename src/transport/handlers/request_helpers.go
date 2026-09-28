@@ -86,6 +86,25 @@ func (q quotaHold) dispatch(ctx context.Context) {
 	}
 }
 
+// columnPresence pairs a presence-aware column with whether the request
+// carried its field.
+type columnPresence struct {
+	column  string
+	present bool
+}
+
+// omitAbsent returns the columns whose field the request omitted, for a
+// whole-record UPDATE that must leave them untouched.
+func omitAbsent(cols ...columnPresence) []string {
+	var omit []string
+	for _, c := range cols {
+		if !c.present {
+			omit = append(omit, c.column)
+		}
+	}
+	return omit
+}
+
 // errPostSubmittedAttachments is the 409 for an attachment mutation on a post
 // that is already scheduled or published.
 const errPostSubmittedAttachments = "post has been submitted (scheduled or published) and its attachments are locked"

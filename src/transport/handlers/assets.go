@@ -1,11 +1,8 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/ingest"
 )
 
 const (
@@ -531,6 +529,38 @@ func detectUploadKind(filename string) uploadKind {
 	return uploadKindUnknown
 }
 
+// created stamps a successful per-file outcome.
+func (r *uploadResult) created(a *models.Asset) uploadResult {
+	r.AssetID = a.ID
+	r.Status = "created"
+	r.Asset = a
+	return *r
+}
+
+// ingester builds the asset-creation use case over the handler's repositories.
+func (h *AssetsHandler) ingester() *ingest.Service {
+	return &ingest.Service{DB: h.db, Assets: h.repo, Files: h.fileRepo, Images: h.imageRepo}
+}
+
+// newUploadAsset builds a pending asset of typ titled after the uploaded
+// file's base name.
+func newUploadAsset(filename, typ, content, createdBy string) (*models.Asset, error) {
+	id, err := models.NewID()
+	if err != nil {
+		return nil, err
+	}
+	return &models.Asset{
+		ID:        id,
+		Title:     strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename)),
+		Content:   content,
+		Status:    models.AssetStatusPending,
+		Type:      &typ,
+		TagIDs:    models.StringSlice{},
+		Tags:      []models.Tag{},
+		CreatedBy: createdBy,
+	}, nil
+}
+
 func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
@@ -543,23 +573,9 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 		return res.fail(models.UploadCodeInternalError, "could not read file")
 	}
 
-	content := string(raw)
-	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
-
-	id, err := models.NewID()
+	asset, err := newUploadAsset(fh.Filename, models.AssetTypeMarkdown, string(raw), session.UserID)
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
-	}
-	mdType := models.AssetTypeMarkdown
-	asset := &models.Asset{
-		ID:        id,
-		Title:     title,
-		Content:   content,
-		Status:    models.AssetStatusPending,
-		Type:      &mdType,
-		TagIDs:    models.StringSlice{},
-		Tags:      []models.Tag{},
-		CreatedBy: session.UserID,
 	}
 	if err := h.repo.Create(reqCtx(c), asset); err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not create asset")
@@ -569,11 +585,7 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 		tid, _ := tenantctx.From(reqCtx(c))
 		backgroundTasks.Go("assets.on_save", func() { h.onSave(asset.ID, asset.Title, asset.Content, tid) })
 	}
-
-	res.AssetID = asset.ID
-	res.Status = "created"
-	res.Asset = asset
-	return res
+	return res.created(asset)
 }
 
 func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
@@ -591,21 +603,9 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 		return res.fail(models.UploadCodeInvalidFile, "file is not a valid PDF")
 	}
 
-	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
-	id, err := models.NewID()
+	asset, err := newUploadAsset(fh.Filename, models.AssetTypePDF, "[]", session.UserID)
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
-	}
-	pdfType := models.AssetTypePDF
-	asset := &models.Asset{
-		ID:        id,
-		Title:     title,
-		Content:   "[]",
-		Status:    models.AssetStatusPending,
-		Type:      &pdfType,
-		TagIDs:    models.StringSlice{},
-		Tags:      []models.Tag{},
-		CreatedBy: session.UserID,
 	}
 
 	ctx := reqCtx(c)
@@ -617,47 +617,33 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 		if err := h.repo.Create(ctx, asset); err != nil {
 			return res.fail(models.UploadCodeInternalError, "could not create asset")
 		}
-		slog.WarnContext(reqCtx(c), "pdf ingestion disabled; asset left pending", logging.AttrComponent, "assets", "asset_id", asset.ID)
-		res.AssetID = asset.ID
-		res.Status = "created"
-		res.Asset = asset
-		return res
+		slog.WarnContext(ctx, "pdf ingestion disabled; asset left pending", logging.AttrComponent, "assets", "asset_id", asset.ID)
+		return res.created(asset)
 	}
 
-	// 1. Store original.pdf BEFORE enqueue so the worker can re-read it on each
-	//    attempt (the 50 MB bytes can't ride in the River job args).
-	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original.pdf", asset.ID))
-	if _, err := h.storage.Upload(ctx, key, bytes.NewReader(raw), int64(len(raw)), "application/pdf"); err != nil {
+	// The original is stored before the enqueue so the worker can re-read it
+	// on each attempt (the bytes can't ride in the River job args).
+	blob, err := ingest.PutBlob(ctx, h.storage, storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original.pdf", asset.ID)), raw, "application/pdf")
+	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not store pdf")
 	}
-
-	// 2. Insert the asset and enqueue the ingestion job atomically (transactional
-	//    outbox): a committed asset always has a job, a rolled-back one never does.
-	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
-			return err
-		}
-		return h.pdfJobs.EnqueueProcessPDFTx(ctx, tx.Tx, asset.ID, session.TenantID, fh.Filename, "application/pdf")
+	if _, err := h.ingester().Create(ctx, ingest.NewAsset{
+		Asset: asset,
+		Blob:  blob,
+		Enqueue: func(ctx context.Context, tx *sql.Tx) error {
+			return h.pdfJobs.EnqueueProcessPDFTx(ctx, tx, asset.ID, session.TenantID, fh.Filename, "application/pdf")
+		},
 	}); err != nil {
-		// The transaction rolled back, so the asset/job never persisted — delete
-		// the original.pdf uploaded above (same key) so it isn't left orphaned in
-		// the bucket. Best-effort: the failed upload is what the caller acts on.
-		_ = h.storage.Delete(ctx, key)
 		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
-
-	res.AssetID = asset.ID
-	res.Status = "created"
-	res.Asset = asset
-	return res
+	return res.created(asset)
 }
 
 // processDocumentUpload ingests an office/text document: store the
 // original in object storage, then insert the asset and enqueue the extraction
-// job atomically. Mirrors processPDFUpload. document-service does the
-// authoritative format detection, so the handler only does a light OLE2 reject
-// (the common legacy-.doc / encrypted-container case) for fast, clear feedback;
-// everything else is sniffed by the service. Bytes land at
+// job atomically. document-service does the authoritative format detection,
+// so the handler only does a light OLE2 reject (the common legacy-.doc /
+// encrypted-container case) for fast, clear feedback. Bytes land at
 // assets/{id}/original.<ext>.
 func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
@@ -673,11 +659,10 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 		return res.fail(models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxDocumentUploadSize>>20))
 	}
 
-	// Document ingestion needs object storage (the worker re-reads the
-	// file on each attempt), the job enqueuer, and the DB. server.go leaves
-	// docJobs nil when DOCUMENTS_SERVICE_ADDR is empty, so a doc upload then fails
-	// fast with a clear message — before reading the body into memory — instead of
-	// stranding a pending asset (AC6).
+	// Document ingestion needs object storage (the worker re-reads the file on
+	// each attempt), the job enqueuer, and the DB. docJobs is nil when
+	// DOCUMENTS_SERVICE_ADDR is empty, so a doc upload fails fast — before
+	// reading the body — instead of stranding a pending asset.
 	if h.storage == nil || h.docJobs == nil || h.db == nil {
 		return res.fail(models.UploadCodeServiceUnavailable, "document ingestion is not configured")
 	}
@@ -689,59 +674,35 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 	if len(raw) == 0 {
 		return res.fail(models.UploadCodeEmptyFile, "file is empty")
 	}
-	// Light early reject: OLE2 is both the legacy binary container (.doc/.xls/.ppt)
-	// and the wrapper for password-protected OOXML — neither is supported.
-	// document-service would reject it too, but catching it here is faster and
-	// clearer.
+	// OLE2 is both the legacy binary container (.doc/.xls/.ppt) and the
+	// wrapper for password-protected OOXML — neither is supported.
 	if isOLE2(raw) {
 		return res.fail(models.UploadCodeUnsupportedMediaType, "legacy binary or password-protected Office files are not supported — save as unprotected .docx/.xlsx/.pptx and re-upload")
 	}
 
-	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
-	id, err := models.NewID()
+	asset, err := newUploadAsset(fh.Filename, models.AssetTypeDocument, "[]", session.UserID)
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
-	docType := models.AssetTypeDocument
-	asset := &models.Asset{
-		ID:        id,
-		Title:     title,
-		Content:   "[]",
-		Status:    models.AssetStatusPending,
-		Type:      &docType,
-		TagIDs:    models.StringSlice{},
-		Tags:      []models.Tag{},
-		CreatedBy: session.UserID,
-	}
 
 	ctx := reqCtx(c)
-
-	// 1. Store original.<ext> BEFORE enqueue so the worker can re-read it on each
-	//    attempt (the bytes can't ride in the River job args). storageKey is the
-	//    tenant-relative path the worker resolves via storage.TenantKey.
+	// storageKey is the tenant-relative path the worker resolves via
+	// storage.TenantKey.
 	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, ext)
-	fullKey := storage.TenantKey(ctx, storageKey)
-	if _, err := h.storage.Upload(ctx, fullKey, bytes.NewReader(raw), int64(len(raw)), mimeType); err != nil {
+	blob, err := ingest.PutBlob(ctx, h.storage, storage.TenantKey(ctx, storageKey), raw, mimeType)
+	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not store document")
 	}
-
-	// 2. Insert the asset and enqueue ingestion atomically (transactional outbox):
-	//    a committed asset always has a job, a rolled-back one never does.
-	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
-			return err
-		}
-		return h.docJobs.EnqueueProcessDocumentTx(ctx, tx.Tx, asset.ID, session.TenantID, fh.Filename, mimeType, storageKey)
+	if _, err := h.ingester().Create(ctx, ingest.NewAsset{
+		Asset: asset,
+		Blob:  blob,
+		Enqueue: func(ctx context.Context, tx *sql.Tx) error {
+			return h.docJobs.EnqueueProcessDocumentTx(ctx, tx, asset.ID, session.TenantID, fh.Filename, mimeType, storageKey)
+		},
 	}); err != nil {
-		// Rolled back — delete the orphaned original uploaded above. Best-effort.
-		_ = h.storage.Delete(ctx, fullKey)
 		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
-
-	res.AssetID = asset.ID
-	res.Status = "created"
-	res.Asset = asset
-	return res
+	return res.created(asset)
 }
 
 // isOLE2 reports whether b starts with the OLE2 compound-file magic
@@ -752,69 +713,33 @@ func isOLE2(b []byte) bool {
 	return len(b) >= len(sig) && string(b[:len(sig)]) == sig
 }
 
-// processImageUpload ingests a content-bank image asset. image-service
-// is the single image authority, so ingestion is ASYNC (mirroring PDF/audio/
-// document): the handler stores the original, creates a `pending` IMG asset +
-// file row, and enqueues a `process_image` job that normalizes, classifies,
-// extracts, describes, alt-texts, and embeds it. There is no pure-Go fallback,
-// so an unwired service (imgJobs nil) fails the upload with a clear message
-// rather than degrading. ogen computes the SHA-256 itself (a plain hash of
-// bytes, not image logic) so upload-time dedupe works despite the async
-// processing. Bytes land at
-// assets/{id}/original.<ext>.
+// processImageUpload ingests a content-bank image asset. image-service is the
+// single image authority, so ingestion is async: the handler stores the
+// original, creates a pending IMG asset + file row, and enqueues a
+// process_image job that normalizes, classifies, extracts, describes,
+// alt-texts, and embeds it. There is no pure-Go fallback, so an unwired
+// service (imgJobs nil) fails the upload. The SHA-256 of the original bytes is
+// computed here so upload-time dedupe works despite the async processing.
+// Bytes land at assets/{id}/original.<ext>.
 func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
-	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	// SVG / vector is a terminal reject with a specific message.
-	if ext == ".svg" {
-		return res.fail(models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)")
-	}
-	mimeType, ok := imageUploadMIMEs[ext]
-	if !ok {
-		// detectUploadKind already gated this; stay defensive.
-		return res.fail(models.UploadCodeUnsupportedMediaType, "unsupported image type")
-	}
-
-	// Image ingestion needs object storage, the DB, and the job enqueuer. D6: with
-	// imageprobe deleted, an empty IMAGE_SERVICE_ADDR (imgJobs nil) means uploads
-	// are rejected — there is no local validation fallback.
-	if h.storage == nil || h.db == nil || h.imgJobs == nil {
-		return res.fail(models.UploadCodeServiceUnavailable, "image processing is not configured")
-	}
-	if fh.Size > maxImageUploadBytes() {
-		return res.fail(models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadBytes()>>20))
-	}
-
-	raw, err := readFormFile(fh, maxImageUploadBytes())
-	if err != nil {
-		return res.fail(models.UploadCodeInternalError, "could not read file")
-	}
-	if len(raw) == 0 {
-		return res.fail(models.UploadCodeEmptyFile, "file is empty")
+	mimeType, raw, fail := h.readImageUpload(fh)
+	if fail != nil {
+		return res.fail(fail.code, fail.msg)
 	}
 
 	ctx := reqCtx(c)
-
-	// Dedupe within the tenant by original-bytes checksum (R-Dedup): the same image
-	// uploaded twice returns the first asset instead of a near-duplicate. The hash
-	// is over the ORIGINAL bytes so it is stable regardless of later normalization.
-	sum := sha256.Sum256(raw)
-	checksum := hex.EncodeToString(sum[:])
-	if h.fileRepo != nil {
-		if existing, derr := h.fileRepo.GetByChecksum(ctx, checksum); derr == nil && existing != nil {
-			if a, aerr := h.repo.GetByID(ctx, existing.AssetID); aerr == nil && a != nil {
-				h.decorateFile(a)
-				res.AssetID = a.ID
-				res.Status = "created"
-				res.Asset = a
-				return res
-			}
-		}
+	svc := h.ingester()
+	// Dedupe within the tenant: the same image uploaded twice returns the
+	// first asset instead of a near-duplicate.
+	checksum := ingest.Checksum(raw)
+	if a := svc.FindByChecksum(ctx, checksum); a != nil {
+		h.decorateFile(a)
+		return res.created(a)
 	}
 
-	title := strings.TrimSuffix(filepath.Base(fh.Filename), filepath.Ext(fh.Filename))
-	id, err := models.NewID()
+	asset, err := newUploadAsset(fh.Filename, models.AssetTypeImage, "", session.UserID) // description filled by the job
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
@@ -822,75 +747,70 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
-
-	imgType := models.AssetTypeImage
-	asset := &models.Asset{
-		ID:        id,
-		Title:     title,
-		Content:   "", // the image's description; filled by the job (empty is valid)
-		Status:    models.AssetStatusPending,
-		Type:      &imgType,
-		TagIDs:    models.StringSlice{},
-		Tags:      []models.Tag{},
-		CreatedBy: session.UserID,
-	}
-	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, ext)
-	fullKey := storage.TenantKey(ctx, storageKey)
-	// Width/Height/IsAnimated are stamped by the job from image-service; the
-	// checksum (computed here) backs dedupe and is stable across normalization.
+	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, strings.ToLower(filepath.Ext(fh.Filename)))
+	// Width/Height/IsAnimated are stamped by the job from image-service.
 	file := &models.AssetFile{
 		ID:             fileID,
 		AssetID:        asset.ID,
 		OriginalName:   fh.Filename,
 		MimeType:       mimeType,
 		SizeBytes:      int64(len(raw)),
-		S3Key:          fullKey,
+		S3Key:          storage.TenantKey(ctx, storageKey),
 		ChecksumSHA256: checksum,
 	}
-
-	// Store the original before the rows exist so a failed upload never leaves a
-	// row pointing at missing bytes.
-	if _, err := h.storage.Upload(ctx, fullKey, bytes.NewReader(raw), int64(len(raw)), mimeType); err != nil {
+	blob, err := ingest.PutBlob(ctx, h.storage, file.S3Key, raw, mimeType)
+	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not store image")
 	}
-
-	// Insert the asset + file row and enqueue the ingestion job atomically
-	// (transactional outbox): a committed asset always has its file and a job, a
-	// rolled-back one leaves neither. On rollback, delete the blob so it isn't
-	// orphaned.
-	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
-			return err
-		}
-		if _, err := tx.NewInsert().Model(file).Exec(ctx); err != nil {
-			return err
-		}
-		return h.imgJobs.EnqueueProcessImageTx(ctx, tx.Tx, asset.ID, session.TenantID, fh.Filename, mimeType, storageKey, "run-1", "")
-	}); err != nil {
-		_ = h.storage.Delete(ctx, fullKey)
-		// Concurrent identical upload: the pre-check missed but the unique checksum
-		// index rejected this second insert. Treat it as dedupe so the upload stays
-		// idempotent instead of returning a spurious failure.
-		if isUniqueViolationOn(err, "idx_asset_files_tenant_checksum") && h.fileRepo != nil {
-			if existing, derr := h.fileRepo.GetByChecksum(ctx, checksum); derr == nil && existing != nil {
-				if a, aerr := h.repo.GetByID(ctx, existing.AssetID); aerr == nil && a != nil {
-					h.decorateFile(a)
-					res.AssetID = a.ID
-					res.Status = "created"
-					res.Asset = a
-					return res
-				}
-			}
-		}
+	stored, err := svc.Create(ctx, ingest.NewAsset{
+		Asset: asset,
+		File:  file,
+		Blob:  blob,
+		Enqueue: func(ctx context.Context, tx *sql.Tx) error {
+			return h.imgJobs.EnqueueProcessImageTx(ctx, tx, asset.ID, session.TenantID, fh.Filename, mimeType, storageKey, "run-1", "")
+		},
+	})
+	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not create asset")
 	}
+	if stored == asset {
+		asset.File = file
+	}
+	h.decorateFile(stored)
+	return res.created(stored)
+}
 
-	asset.File = file
-	h.decorateFile(asset)
-	res.AssetID = asset.ID
-	res.Status = "created"
-	res.Asset = asset
-	return res
+// uploadFailure is a per-file reject: a stable code and its message.
+type uploadFailure struct{ code, msg string }
+
+// readImageUpload validates an image upload's type, the service wiring and its
+// size, then reads the original bytes, returning the MIME stored for it.
+func (h *AssetsHandler) readImageUpload(fh *multipart.FileHeader) (string, []byte, *uploadFailure) {
+	ext := strings.ToLower(filepath.Ext(fh.Filename))
+	if ext == ".svg" {
+		return "", nil, &uploadFailure{models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)"}
+	}
+	mimeType, ok := imageUploadMIMEs[ext]
+	if !ok {
+		// detectUploadKind already gated this; stay defensive.
+		return "", nil, &uploadFailure{models.UploadCodeUnsupportedMediaType, "unsupported image type"}
+	}
+	// image-service is a hard dependency: with imgJobs nil there is no local
+	// validation fallback.
+	if h.storage == nil || h.db == nil || h.imgJobs == nil {
+		return "", nil, &uploadFailure{models.UploadCodeServiceUnavailable, "image processing is not configured"}
+	}
+	if fh.Size > maxImageUploadBytes() {
+		return "", nil, &uploadFailure{models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadBytes()>>20)}
+	}
+	raw, err := readFormFile(fh, maxImageUploadBytes())
+	if err != nil {
+		return "", nil, &uploadFailure{models.UploadCodeInternalError, "could not read file"}
+	}
+	if len(raw) == 0 {
+		return "", nil, &uploadFailure{models.UploadCodeEmptyFile, "file is empty"}
+	}
+	return mimeType, raw, nil
 }
 
 func readFormFile(fh *multipart.FileHeader, limit int64) ([]byte, error) {
@@ -925,24 +845,15 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 	if err := bindAndValidate(c, &req); err != nil {
 		return err
 	}
-	normalized, host, err := normalizeSourceURL(req.URL)
+	normalized, err := allowedSourceURL(reqCtx(c), req.URL)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
-	}
-	// SSRF pre-flight (defense in depth; the worker's image fetcher is the
-	// authoritative connect-time guard). Reject a submission whose host resolves
-	// to a private/loopback/link-local/metadata address. Bounded so a slow
-	// resolver can't stall the request.
-	lookupCtx, cancel := context.WithTimeout(reqCtx(c), 3*time.Second)
-	defer cancel()
-	if err := netguard.ResolveAllowed(lookupCtx, host); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "url host is not allowed")
+		return err
 	}
 
 	// URL ingestion needs the enqueuer, the DB (transactional outbox), and a
 	// configured Firecrawl key; otherwise fail fast so the caller isn't left
 	// polling a pending asset that will never process.
-	if h.urlJobs == nil || h.db == nil || h.scrapeGate == nil || !h.scrapeGate.HasKey(reqCtx(c)) {
+	if !h.urlScrapeConfigured(reqCtx(c)) {
 		return fiber.NewError(fiber.StatusConflict, "url scraping is not configured")
 	}
 
@@ -975,28 +886,17 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 		return err
 	}
 
-	id, err := models.NewID()
+	asset, err := newUploadAsset("", models.AssetTypeURL, "", session.UserID)
 	if err != nil {
 		return err
 	}
-	urlType := models.AssetTypeURL
-	src := normalized
-	asset := &models.Asset{
-		ID:        id,
-		Title:     normalized, // provisional; the worker sets the page title
-		Content:   "",
-		Status:    models.AssetStatusPending,
-		Type:      &urlType,
-		SourceURL: &src,
-		TagIDs:    models.StringSlice{},
-		Tags:      []models.Tag{},
-		CreatedBy: session.UserID,
-	}
-	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
-			return err
-		}
-		return h.urlJobs.EnqueueProcessURLTx(ctx, tx.Tx, asset.ID, session.TenantID, normalized, false)
+	asset.Title = normalized // provisional; the worker sets the page title
+	asset.SourceURL = new(normalized)
+	if _, err := h.ingester().Create(ctx, ingest.NewAsset{
+		Asset: asset,
+		Enqueue: func(ctx context.Context, tx *sql.Tx) error {
+			return h.urlJobs.EnqueueProcessURLTx(ctx, tx, asset.ID, session.TenantID, normalized, false)
+		},
 	}); err != nil {
 		// Concurrent submit of the same new URL: the partial unique index rejects
 		// the second insert. Treat it as "already exists" and refresh in place so
@@ -1012,6 +912,30 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 	urlQuota.dispatch(ctx)
 
 	return c.Status(fiber.StatusCreated).JSON(asset)
+}
+
+// urlScrapeConfigured reports whether URL ingestion can run: it needs the
+// enqueuer, the DB (transactional outbox), and a configured Firecrawl key.
+func (h *AssetsHandler) urlScrapeConfigured(ctx context.Context) bool {
+	return h.urlJobs != nil && h.db != nil && h.scrapeGate != nil && h.scrapeGate.HasKey(ctx)
+}
+
+// allowedSourceURL normalizes a submitted URL and runs the SSRF pre-flight
+// (defense in depth; the worker's image fetcher is the authoritative
+// connect-time guard): a host resolving to a private/loopback/link-local/
+// metadata address is rejected. The lookup is bounded so a slow resolver
+// can't stall the request.
+func allowedSourceURL(ctx context.Context, raw string) (string, error) {
+	normalized, host, err := normalizeSourceURL(raw)
+	if err != nil {
+		return "", fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := netguard.ResolveAllowed(lookupCtx, host); err != nil {
+		return "", fiber.NewError(fiber.StatusBadRequest, "url host is not allowed")
+	}
+	return normalized, nil
 }
 
 // refreshURLAsset resets an existing URL asset to pending and re-enqueues a
@@ -1112,29 +1036,17 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return notFound(err, "asset not found")
 	}
 
-	// Content rules depend on the type, which is only known now, after the load —
-	// which is why this isn't a struct-tag validation:
-	//   - IMG: the description may be empty and is editable.
-	//   - PDF/DOC/AUDIO: content is the ingestion service's output and read-only.
-	//     Empty or unchanged content means "keep it", so a title/tag-only save
-	//     works; a different value is a 409 (re-extract instead).
-	//   - everything else (MD/URL/plain): content is required.
-	isImage := asset.Type != nil && *asset.Type == models.AssetTypeImage
-	ingested := models.IsServiceIngestedAssetType(asset.Type)
+	content, err := ingest.EditContent(asset, req.Content)
 	switch {
-	case isImage:
-	case ingested:
-		if strings.TrimSpace(req.Content) == "" {
-			req.Content = asset.Content
-		} else if req.Content != asset.Content {
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-				"code":  models.AssetCodeContentLocked,
-				"error": "content of an ingested asset can't be edited — re-extract it instead",
-			})
-		}
-	case strings.TrimSpace(req.Content) == "":
-		return fiber.NewError(fiber.StatusBadRequest, "content is required")
+	case errors.Is(err, ingest.ErrContentLocked):
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"code":  models.AssetCodeContentLocked,
+			"error": err.Error(),
+		})
+	case errors.Is(err, ingest.ErrContentRequired):
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
+	req.Content = content
 
 	// alt_text and tag_ids are optional on the PUT: a nil pointer means
 	// the caller didn't send the field, so its stored value is kept; a present
@@ -1148,10 +1060,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		}
 	}
 
-	// Detect whether the embedding inputs (title or content) actually changed,
-	// so we don't re-embed an asset when only a tag or the alt text was toggled.
-	embedInputChanged := asset.Title != req.Title || asset.Content != req.Content
-	descriptionChanged := asset.Content != req.Content
+	reembed := ingest.ReembedAfterEdit(asset, req.Title, req.Content)
 
 	// An alt_text edit marks the text hand-written so a later image
 	// re-extraction never overwrites it. Only a real change counts: a
@@ -1171,26 +1080,25 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	// Service-ingested chunks (PDF/DOC/AUDIO/IMG) carry source anchors and don't
-	// embed the title, so the markdown re-embed must never run for them — it
-	// would replace them with plain title+content chunks. An edited
-	// image description is re-embedded by the image pipeline instead, which
-	// keeps the region chunks.
-	tid, _ := tenantctx.From(reqCtx(c))
-	switch {
-	case isImage:
-		if descriptionChanged && h.imgReembed != nil {
-			if err := h.imgReembed.EnqueueReembedImage(reqCtx(c), asset.ID, tid); err != nil {
-				slog.ErrorContext(reqCtx(c), "enqueue image re-embed failed", logging.AttrComponent, "handlers.assets", "asset_id", asset.ID, logging.AttrError, err)
-			}
-		}
-	case ingested:
-	case h.onSave != nil && embedInputChanged:
-		backgroundTasks.Go("assets.on_save", func() { h.onSave(asset.ID, asset.Title, asset.Content, tid) })
-	}
+	h.reembed(c, asset, reembed)
 
 	h.decorateFile(asset)
 	return c.JSON(asset)
+}
+
+// reembed refreshes an edited asset's embeddings as decided by
+// ingest.ReembedAfterEdit: an image description goes through the image
+// pipeline (keeping region chunks), an authored asset through onSave.
+func (h *AssetsHandler) reembed(c *fiber.Ctx, asset *models.Asset, how ingest.Reembed) {
+	tid, _ := tenantctx.From(reqCtx(c))
+	switch {
+	case how == ingest.ReembedImage && h.imgReembed != nil:
+		if err := h.imgReembed.EnqueueReembedImage(reqCtx(c), asset.ID, tid); err != nil {
+			slog.ErrorContext(reqCtx(c), "enqueue image re-embed failed", logging.AttrComponent, "handlers.assets", "asset_id", asset.ID, logging.AttrError, err)
+		}
+	case how == ingest.ReembedText && h.onSave != nil:
+		backgroundTasks.Go("assets.on_save", func() { h.onSave(asset.ID, asset.Title, asset.Content, tid) })
+	}
 }
 
 // bulkTagRequest is the payload for the bulk tag operation: the assets to touch
@@ -1262,40 +1170,12 @@ func (h *AssetsHandler) BulkTag(c *fiber.Ctx) error {
 func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	// Collect S3 keys to clean up before deleting the row; DB cascade will
-	// drop the asset_files row when we delete the asset, so capture now.
-	var keysToDelete []string
-	if h.fileRepo != nil {
-		if f, err := h.fileRepo.GetByAssetID(reqCtx(c), id); err == nil && f != nil {
-			if f.S3Key != "" {
-				keysToDelete = append(keysToDelete, f.S3Key)
-			}
-			if f.ThumbnailS3Key != nil && *f.ThumbnailS3Key != "" {
-				keysToDelete = append(keysToDelete, *f.ThumbnailS3Key)
-			}
-		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
+	// Capture the object keys before the row goes: the cascade drops the file
+	// and image rows that name them.
+	keysToDelete, err := h.ingester().ObjectKeys(reqCtx(c), id)
+	if err != nil {
+		return err
 	}
-	// Mirrored image blobs (the DB cascade drops asset_images rows).
-	if h.imageRepo != nil {
-		if imgs, err := h.imageRepo.GetByAssetID(reqCtx(c), id); err == nil {
-			for i := range imgs {
-				if imgs[i].S3Key != "" {
-					keysToDelete = append(keysToDelete, imgs[i].S3Key)
-				}
-			}
-		}
-	}
-	// The audio normalized derivative lives at a deterministic key
-	// alongside the original (evicted with the asset, D5). It has no DB row of
-	// its own, so add it unconditionally — the best-effort Delete below is a
-	// no-op when the object doesn't exist (non-audio assets).
-	keysToDelete = append(keysToDelete, storage.TenantKey(reqCtx(c), fmt.Sprintf("assets/%s/normalized.opus", id)))
-	// The image normalized.png derivative also lives at a deterministic
-	// key alongside the original with no DB row of its own; evict it with the
-	// asset. The best-effort Delete below is a no-op for non-image assets.
-	keysToDelete = append(keysToDelete, storage.TenantKey(reqCtx(c), fmt.Sprintf("assets/%s/normalized.png", id)))
 
 	deleted, err := h.repo.Delete(reqCtx(c), id)
 	if err != nil {

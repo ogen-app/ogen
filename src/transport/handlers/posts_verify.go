@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -12,9 +10,9 @@ import (
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/accountselect"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/verify"
 )
 
 // PostVerificationHandler owns POST /api/posts/:id/verify-external:
@@ -96,25 +94,16 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-
-	profileID := ""
-	if h.profileID != nil {
-		if profileID, err = h.profileID(reqCtx(c)); err != nil {
-			return err
-		}
+	profileID, err := h.resolveProfileID(c)
+	if err != nil {
+		return err
 	}
-	if profileID == "" {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "zernio integration is not configured")
-	}
-
 	// Resolve the connected account whose token reads the platform.
 	supported := zernio.LookupSupportedBySqid(post.PlatformID)
 	if supported == nil {
 		return fiber.NewError(fiber.StatusConflict, "post has no supported platform")
 	}
-	zernioPlatform := supported.ZernioID
-
-	accountID, handled, err := h.resolveExternalAccountID(c, post, profileID, zernioPlatform)
+	accountID, handled, err := h.resolveExternalAccountID(c, post, profileID, supported.ZernioID)
 	if handled {
 		return err
 	}
@@ -124,83 +113,21 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 		URL:       body.URL,
 		PostID:    body.PostID,
 	})
-	if err != nil {
-		// A 404 means the platform has no such post — a normal "not found",
-		// not a server error.
-		if zernio.IsStatus(err, fiber.StatusNotFound) {
-			jobs.ZernioExternalVerifyNotFound.Add(1)
-			return c.JSON(fiber.Map{"found": false})
-		}
+	if err != nil && !zernio.IsStatus(err, fiber.StatusNotFound) {
 		jobs.ZernioExternalVerifyFailed.Add(1)
 		return fiber.NewError(fiber.StatusBadGateway, "sync-external upstream error")
 	}
-	if !result.Found || result.Post == nil {
+	// A 404 means the platform has no such post — a normal "not found".
+	if err != nil || !result.Found || result.Post == nil {
 		jobs.ZernioExternalVerifyNotFound.Add(1)
 		return c.JSON(fiber.Map{"found": false})
 	}
 	ext := result.Post
 
-	// Back-fill the publisher linkage so per-post analytics resolve, and mark
-	// the post published-external.
-	if post.PublisherPostID == "" {
-		post.PublisherPostID = ext.PlatformPostID
-	}
-	if post.Publisher == "" {
-		post.Publisher = models.PublisherZernio
-	}
-	if post.PublishedAt == nil {
-		if pa := ext.PublishedAtTime(); pa != nil {
-			post.PublishedAt = pa
-		}
-	}
-	// Persist the canonical, platform-normalised permalink. Verification
-	// is authoritative, so a confirmed URL overwrites any user-pasted one.
-	if ext.PlatformPostURL != "" {
-		post.PublishedURL = ext.PlatformPostURL
-	}
-	post.Status = models.PostStatusPublished
-	post.UpdatedAt = time.Now().UTC()
-	if err := h.repo.Update(reqCtx(c), post); err != nil {
+	svc := &verify.Service{Posts: h.repo, Versions: h.versionRepo, Analytics: h.analyticsRepo, Hub: h.analyticsHub}
+	if err := svc.Confirm(reqCtx(c), post, ext); err != nil {
 		jobs.ZernioExternalVerifyFailed.Add(1)
 		return err
-	}
-	// The post is now confirmed published — snapshot the content as a
-	// durable record of what went out (best-effort, deduped against the head).
-	h.snapshotPublished(reqCtx(c), post)
-
-	// Refresh the current-state analytics row (best-effort) and emit the update
-	// event so open analytics streams refresh. The response carries the fetched
-	// metrics regardless of whether persistence is available. Mirrors the refresh
-	// job's dedup discipline: preserve first_seen_at, always bump
-	// last_checked_at, and append a trend point / publish only on a real change —
-	// so re-verifying an already-tracked post doesn't clobber its history.
-	metrics := externalMetrics(ext.Analytics)
-	if h.analyticsRepo != nil {
-		now := time.Now().UTC()
-		built := h.buildExternalCurrent(post, ext)
-		prev, _ := h.analyticsRepo.GetByPostID(reqCtx(c), post.ID)
-		changed := prev == nil || prev.MetricsKey() != built.MetricsKey()
-		built.LastCheckedAt = now
-		if prev == nil {
-			built.FirstSeenAt = now
-			built.LastChangedAt = now
-		} else {
-			built.FirstSeenAt = prev.FirstSeenAt
-			if changed {
-				built.LastChangedAt = now
-			} else {
-				built.LastChangedAt = prev.LastChangedAt
-			}
-		}
-		if changed {
-			if id, ierr := models.NewID(); ierr == nil {
-				if werr := h.analyticsRepo.UpsertWithSnapshot(reqCtx(c), built, built.NewSnapshot(id, now)); werr == nil {
-					h.publishAnalyticsUpdated(reqCtx(c), built)
-				}
-			}
-		} else {
-			_ = h.analyticsRepo.Upsert(reqCtx(c), built)
-		}
 	}
 
 	jobs.ZernioExternalVerifySucceeded.Add(1)
@@ -211,13 +138,30 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 			// The confirmed external post's own id — the one ext.Analytics
 			// belong to (post.PublisherPostID is left as-is when already set).
 			"publisher_post_id": ext.PlatformPostID,
-			// Echo the persisted permalink so the FE can render
-			// "View post" straight after verify, without a re-fetch.
+			// The persisted permalink, so the FE can render "View post"
+			// without a re-fetch.
 			"published_url": post.PublishedURL,
 			"sync_status":   "synced",
 		},
-		"analytics": metrics,
+		// The fetched metrics, whether or not analytics persistence is wired.
+		"analytics": verify.ExternalMetrics(ext.Analytics),
 	})
+}
+
+// resolveProfileID returns the tenant's Zernio profile, or a 503 when the
+// integration isn't configured.
+func (h *PostVerificationHandler) resolveProfileID(c *fiber.Ctx) (string, error) {
+	profileID := ""
+	if h.profileID != nil {
+		var err error
+		if profileID, err = h.profileID(reqCtx(c)); err != nil {
+			return "", err
+		}
+	}
+	if profileID == "" {
+		return "", fiber.NewError(fiber.StatusServiceUnavailable, "zernio integration is not configured")
+	}
+	return profileID, nil
 }
 
 // resolveExternalAccountID resolves the Zernio account id to read the platform
@@ -252,117 +196,4 @@ func (h *PostVerificationHandler) resolveExternalAccountID(c *fiber.Ctx, post *m
 		}
 		return "", true, writeAccountSelectionError(c, &schedule.AccountSelectionError{Reason: "account_selection_required", Platform: zernioPlatform, Candidates: candidates})
 	}
-}
-
-// externalMetrics maps a synced external post's analytics onto the shared
-// metrics block.
-func externalMetrics(a zernio.ExternalPostAnalytics) models.PostAnalyticsMetrics {
-	return models.PostAnalyticsMetrics{
-		Impressions:    a.Impressions,
-		Reach:          a.Reach,
-		Likes:          a.Likes,
-		Comments:       a.Comments,
-		Shares:         a.Shares,
-		Saves:          a.Saves,
-		Clicks:         a.Clicks,
-		Views:          a.Views,
-		EngagementRate: a.EngagementRate,
-	}
-}
-
-// buildExternalCurrent builds the current-state analytics row from a synced
-// external post, denormalising the post's display fields exactly like the
-// refresh job. The first_seen/last_changed/last_checked timestamps are
-// stamped by the caller (they depend on the dedup comparison against any
-// existing current row).
-func (h *PostVerificationHandler) buildExternalCurrent(post *models.Post, ext *zernio.ExternalPost) *models.PostAnalytics {
-	m := externalMetrics(ext.Analytics)
-	platformName := ext.Platform
-	if post.Platform != nil && post.Platform.Name != "" {
-		platformName = post.Platform.Name
-	}
-	return &models.PostAnalytics{
-		PostID: post.ID,
-		// The synced external post's id — kept consistent with the metrics
-		// below (ext.Analytics), not the post's possibly-preexisting linkage.
-		PublisherPostID: ext.PlatformPostID,
-		Publisher:       models.PublisherZernio,
-		Platform:        platformName,
-		Title:           post.Title,
-		PublishedAt:     post.PublishedAt,
-		Impressions:     m.Impressions,
-		Reach:           m.Reach,
-		Likes:           m.Likes,
-		Comments:        m.Comments,
-		Shares:          m.Shares,
-		Saves:           m.Saves,
-		Clicks:          m.Clicks,
-		Views:           m.Views,
-		EngagementRate:  m.EngagementRate,
-		PlatformAnalytics: models.PlatformAnalyticsList{{
-			Platform:        ext.Platform,
-			PlatformPostID:  ext.PlatformPostID,
-			PlatformPostURL: ext.PlatformPostURL,
-			SyncStatus:      "synced",
-			Analytics:       m,
-		}},
-		SyncStatus:         "synced",
-		MetricsLastUpdated: ext.Analytics.LastUpdatedTime(),
-	}
-}
-
-// publishAnalyticsUpdated emits the post.analytics.updated event
-// after a verify-external snapshot. No-op when no Hub is wired.
-func (h *PostVerificationHandler) publishAnalyticsUpdated(ctx context.Context, a *models.PostAnalytics) {
-	if h.analyticsHub == nil {
-		return
-	}
-	tid, _ := tenantctx.From(ctx)
-	_ = h.analyticsHub.Publish(ctx, eventhub.Event{
-		Topic:    fmt.Sprintf("entity:post:%s", a.PostID),
-		TenantID: tid,
-		Type:     "post.analytics.updated",
-		Payload: map[string]any{
-			"post_id":     a.PostID,
-			"sync_status": a.SyncStatus,
-			"analytics":   a.Metrics(),
-		},
-	})
-}
-
-// snapshotPublished records a system-authored version of a post's content at
-// the moment it is confirmed published, so "what actually went out"
-// becomes a durable record rather than an assumption. Deduped only against a
-// prior "Published" system snapshot of identical content, so re-verifying an
-// already-published post adds nothing — but a matching-content user/assistant
-// edit (or the schedule-time "Submitted" snapshot) at the head does NOT
-// suppress it, so the publish is always recorded once. Best-effort: a nil repo
-// or any error is swallowed — the publish has already committed, mirroring the
-// surrounding analytics writes.
-func (h *PostVerificationHandler) snapshotPublished(ctx context.Context, post *models.Post) {
-	if h.versionRepo == nil {
-		return
-	}
-	latest, err := h.versionRepo.GetLatestByPostID(ctx, post.ID)
-	if err != nil {
-		return
-	}
-	// Content is the canonical full thread body, so SnapshotContent is
-	// simply post.Content for every post type.
-	content := post.SnapshotContent()
-	if latest != nil && latest.IsSystemSnapshot() &&
-		latest.Note == models.PostVersionNotePublished && latest.Content == content {
-		return
-	}
-	id, err := models.NewID()
-	if err != nil {
-		return
-	}
-	_ = h.versionRepo.CreateNext(ctx, &models.PostVersion{
-		ID:      id,
-		PostID:  post.ID,
-		Content: content,
-		Note:    models.PostVersionNotePublished,
-		Creator: models.PostVersionCreatorSystem,
-	})
 }

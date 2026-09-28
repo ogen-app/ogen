@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/update"
 )
 
 // mutatesLockedContent is the pure comparison behind the submitted-
@@ -115,13 +116,13 @@ func TestMutatesLockedContentThread(t *testing.T) {
 	}
 }
 
-// applyThreadSegments derives the segment list from the canonical
+// update.ApplyThreadSegments derives the segment list from the canonical
 // body for a thread (WITHOUT restamping the body) and clears it for any other
 // type. Pure — the caller supplies the per-segment limit.
 func TestApplyThreadSegments(t *testing.T) {
 	// Manual delimiter: two segments, body preserved verbatim.
 	post := &models.Post{PlatformPostType: models.PostTypeThread, Content: "root\n\n---\n\nreply"}
-	applyThreadSegments(post, 280)
+	update.ApplyThreadSegments(post, 280)
 	if len(post.ThreadSegments) != 2 || post.ThreadSegments[0].Content != "root" || post.ThreadSegments[1].Content != "reply" {
 		t.Errorf("manual thread: segments = %+v, want [root reply]", post.ThreadSegments)
 	}
@@ -131,7 +132,7 @@ func TestApplyThreadSegments(t *testing.T) {
 
 	// Auto-split: a delimiter-free body over the limit splits by the limit.
 	auto := &models.Post{PlatformPostType: models.PostTypeThread, Content: "aaaaa\n\nbbbbb"}
-	applyThreadSegments(auto, 5)
+	update.ApplyThreadSegments(auto, 5)
 	if len(auto.ThreadSegments) != 2 {
 		t.Errorf("auto thread: segments = %d, want 2", len(auto.ThreadSegments))
 	}
@@ -142,7 +143,7 @@ func TestApplyThreadSegments(t *testing.T) {
 		Content:          "just this",
 		ThreadSegments:   models.ThreadSegments{{Content: "old"}, {Content: "seg"}},
 	}
-	applyThreadSegments(demote, 280)
+	update.ApplyThreadSegments(demote, 280)
 	if len(demote.ThreadSegments) != 0 {
 		t.Errorf("demote: segments = %d, want 0", len(demote.ThreadSegments))
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/update"
 )
 
 var validPostStatuses = map[models.PostStatus]bool{
@@ -97,10 +98,7 @@ func (h *PostsHandler) SetCampaignRepo(r repository.CampaignRepository) {
 // phase of its campaign's type. Without a wired campaign repo it
 // passes and the DB trigger decides.
 func (h *PostsHandler) checkPhase(ctx context.Context, campaignID string, phaseID *string) (bool, error) {
-	if phaseID == nil || h.campaignRepo == nil {
-		return true, nil
-	}
-	return h.campaignRepo.PhaseBelongsToCampaign(ctx, campaignID, *phaseID)
+	return h.updater().PhaseBelongs(ctx, campaignID, phaseID)
 }
 
 // SetOnBeforeDelete registers a hook that runs before a post is
@@ -174,124 +172,26 @@ func (h *PostsHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity
 // an audit entry is best-effort by design — losing one log line
 // matters less than failing the operation it describes.
 func (h *PostsHandler) logEvent(c *fiber.Ctx, postID string, eventType models.PostLogEventType, fromStatus, toStatus *models.PostStatus, summary, payload string) {
-	if h.postLogRepo == nil {
-		return
-	}
-	id, err := models.NewID()
-	if err != nil {
-		return
-	}
-	actor := cmp.Or(actorID(c), models.ActorSystem)
-	_ = h.postLogRepo.Append(reqCtx(c), &models.PostLog{
-		ID:         id,
-		PostID:     postID,
-		EventType:  eventType,
-		Actor:      actor,
-		FromStatus: fromStatus,
-		ToStatus:   toStatus,
-		Summary:    summary,
-		Payload:    logs.SanitizeAndCap(payload),
-	})
+	h.updater().LogEvent(reqCtx(c), cmp.Or(actorID(c), models.ActorSystem), postID, eventType, fromStatus, toStatus, summary, payload)
 }
 
-// hasAnyErrors reports whether the platform→errors map has at least
-// one non-empty error list. ValidateForPublish always populates an
-// entry per platform with rules; an empty list means "passes".
-func hasAnyErrors(m map[string][]platforms.ValidationError) bool {
-	for _, v := range m {
-		if len(v) > 0 {
-			return true
-		}
+// updater builds the post update use case over the handler's wired
+// dependencies (several are set after construction, so it is built per call).
+func (h *PostsHandler) updater() *update.Service {
+	return &update.Service{
+		Posts:       h.repo,
+		Platforms:   h.platformRepo,
+		Attachments: h.attachmentRepo,
+		Campaigns:   h.campaignRepo,
+		Logs:        h.postLogRepo,
+		Schedule:    h.scheduleSvc,
+		Activity:    h.activity,
 	}
-	return false
 }
 
-// validateReadyForPublish runs the CON-69 §4 attachment gate when a
-// Draft is moving to ReadyForPublish. Returns done=true when the gate
-// has already written the 422 response and the caller must stop. A
-// non-nil error means a transient repository failure — the caller
-// should bubble it up. done=false, err=nil means the gate passed (or
-// did not apply) and the caller should continue.
-func (h *PostsHandler) validateReadyForPublish(c *fiber.Ctx, post *models.Post, req *postRequest, status models.PostStatus) (done bool, err error) {
-	if post.Status != models.PostStatusDraft || status != models.PostStatusReadyForPublish || h.attachmentRepo == nil {
-		return false, nil
-	}
-	atts, err := h.attachmentRepo.ListByPostID(reqCtx(c), post.ID)
-	if err != nil {
-		return false, err
-	}
-	// Validate against the new (incoming) platform, not the prior one,
-	// since a Draft can switch platforms in the same Update call. The
-	// post row hasn't been written yet, so refetching via repo.GetByID
-	// would just return the stale platform — go straight to the
-	// platform repository when the request changed it.
-	platform := post.Platform
-	if req.PlatformID != "" && (platform == nil || platform.ID != req.PlatformID) && h.platformRepo != nil {
-		fresh, perr := h.platformRepo.GetByID(reqCtx(c), req.PlatformID)
-		if perr == nil {
-			platform = fresh
-		}
-	}
-	// Validate against the incoming request's content/post_type
-	// so the gate sees what's about to be persisted, not the prior draft. For a
-	// thread the segments are DERIVED from the single authored body (content is the
-	// canonical source; thread_segments is materialised by splitting it) using the
-	// freshly-resolved platform's per-segment limit, so the per-segment gate sees
-	// exactly what submit will publish.
-	incoming := *post
-	incoming.PlatformPostType = req.PlatformPostType
-	incoming.Content = req.Content
-	applyThreadSegments(&incoming, threadLimitOf(platform))
-	errsByPlatform := platforms.ValidatePublishReadiness(&incoming, platform, atts)
-	from := post.Status
-	if hasAnyErrors(errsByPlatform) {
-		h.logEvent(c, post.ID, models.PostLogEventValidationFailed, &from, &status,
-			"draft → ready_for_publish blocked by platform validation",
-			logs.MarshalCapped(map[string]any{"platform_validation": errsByPlatform}),
-		)
-		h.recordActivity(c, "post_validation_failed",
-			activity.WithEntity("post", post.ID),
-			activity.WithStatus("failed"),
-		)
-		if err := c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
-			"error":               "post is not ready for publish",
-			"platform_validation": errsByPlatform,
-		}); err != nil {
-			return true, err
-		}
-		return true, nil
-	}
-	h.logEvent(c, post.ID, models.PostLogEventValidationPassed, &from, &status,
-		"draft → ready_for_publish passed platform validation",
-		logs.MarshalCapped(map[string]any{"platform_validation": errsByPlatform}),
-	)
-	return false, nil
-}
-
-// logTransition writes the §11 state-transition entry (and the §10
-// manual-retry entry, when applicable) for a successful Update. A
-// status that didn't actually change is not a state-machine event and
-// produces no log lines.
-func (h *PostsHandler) logTransition(c *fiber.Ctx, post *models.Post, prev, next models.PostStatus) {
-	if prev == next {
-		return
-	}
-	h.logEvent(c, post.ID, models.PostLogEventStateTransition, &prev, &next,
-		"status changed via PUT /api/posts/:id", "{}",
-	)
-	h.recordActivity(c, "post_state_transition",
-		activity.WithEntity("post", post.ID),
-		activity.WithStatus(string(prev)+"->"+string(next)),
-	)
-	if prev == models.PostStatusFailed && next == models.PostStatusReadyForPublish {
-		h.logEvent(c, post.ID, models.PostLogEventUserRetry, &prev, &next,
-			"manual retry: user moved Failed → ReadyForPublish",
-			logs.MarshalCapped(map[string]any{
-				"prior_failure_reason":    post.FailureReason,
-				"prior_publisher_post_id": post.PublisherPostID,
-			}),
-		)
-	}
+// deriveThreadSegments materialises post.ThreadSegments from the canonical body.
+func (h *PostsHandler) deriveThreadSegments(ctx context.Context, post *models.Post) {
+	h.updater().DeriveThreadSegments(ctx, post)
 }
 
 // writeAccountSelectionError renders a CON-150 account-selection failure as a
@@ -814,7 +714,7 @@ func (h *PostsHandler) Register(app *fiber.App) {
 type postRequest struct {
 	CampaignID string `json:"campaign_id"             validate:"required"`
 	// PlatformID + PlatformPostType are required only when status is not
-	// "draft" — see requirePlatformIfNotDraft below. Drafts can be saved
+	// "draft" — see update.RequirePlatformIfNotDraft. Drafts can be saved
 	// before the user has picked a platform.
 	PlatformID       string `json:"platform_id"`
 	PlatformPostType string `json:"platform_post_type"`
@@ -932,68 +832,12 @@ func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 		(r.UsedAssetIDs.Present && !slices.Equal(nullSlice(r.UsedAssetIDs.orZero()), post.UsedAssetIDs))
 }
 
-// deriveThreadSegments materialises post.ThreadSegments from the canonical body.
-// For a non-thread post it clears the list (also covering demotion);
-// for a thread it resolves the platform's per-segment char limit first, so a
-// delimiter-free body auto-splits to the right size.
-func (h *PostsHandler) deriveThreadSegments(ctx context.Context, post *models.Post) {
-	limit := 0
-	if post.IsThread() {
-		limit = h.threadLimit(ctx, post.PlatformID)
-	}
-	applyThreadSegments(post, limit)
-}
-
-// threadLimit resolves a platform's per-segment thread char limit (X 280 /
-// Threads 500), or 0 ("unknown") when the platform can't be loaded — e.g. a draft
-// saved before a platform is picked. A 0 limit still honours manual "---" splits.
-func (h *PostsHandler) threadLimit(ctx context.Context, platformID string) int {
-	if platformID == "" || h.platformRepo == nil {
-		return 0
-	}
-	p, err := h.platformRepo.GetByID(ctx, platformID)
-	if err != nil {
-		return 0
-	}
-	return threadLimitOf(p)
-}
-
-// threadLimitOf is the pure per-segment limit lookup for an already-loaded
-// platform (nil ⇒ 0, "unknown").
-func threadLimitOf(p *models.Platform) int {
-	if p == nil {
-		return 0
-	}
-	return p.TextConstraints.ContentLimitFor(models.PostTypeThread)
-}
-
-// applyThreadSegments sets post.ThreadSegments to the segments split out of the
-// canonical body for a thread, or an empty list for any other type. Pure — the
-// caller supplies the per-segment limit (0 = unknown, manual "---" only).
-func applyThreadSegments(post *models.Post, segmentLimit int) {
-	if post.PlatformPostType == models.PostTypeThread {
-		post.ThreadSegments = platforms.SplitThread(post.Content, segmentLimit)
-		return
-	}
-	post.ThreadSegments = models.ThreadSegments{}
-}
-
-// requirePlatformIfNotDraft enforces that platform fields are populated
-// for any status other than draft. Drafts can sit without a platform
-// chosen so the user can write content first and pick a platform later;
-// once they're moving the post toward publication, both fields are
-// mandatory.
-func requirePlatformIfNotDraft(status models.PostStatus, platformID, platformPostType string) error {
-	if status == models.PostStatusDraft {
-		return nil
-	}
-	if platformID == "" {
-		return fmt.Errorf("platform_id is required when status is %q", status)
-	}
-	if platformPostType == "" {
-		return fmt.Errorf("platform_post_type is required when status is %q", status)
-	}
-	return nil
+// omitColumns lists the presence-aware columns an omitted field must keep out
+// of the whole-record UPDATE: apply already left the hydrated value in place,
+// but writing it back would clobber a concurrent membership write
+// (AddUsedAssetIDs/RemoveUsedAssetID) that landed after the read.
+func (r *postRequest) omitColumns() []string {
+	return omitAbsent(columnPresence{"used_asset_ids", r.UsedAssetIDs.Present})
 }
 
 // validateForCreate runs the publish gate (CON-69 §4 attachment rules
@@ -1017,7 +861,7 @@ func (h *PostsHandler) validateForCreate(c *fiber.Ctx, post *models.Post) (done 
 	// including the per-segment thread checks (a create-as-thread with < 2
 	// segments is rejected). CON-284.
 	errsByPlatform := platforms.ValidatePublishReadiness(post, platform, nil)
-	if !hasAnyErrors(errsByPlatform) {
+	if !update.HasValidationErrors(errsByPlatform) {
 		return false, nil
 	}
 	h.recordActivity(c, "post_validation_failed",
@@ -1123,7 +967,7 @@ func (h *PostsHandler) PreviewThread(c *fiber.Ctx) error {
 		platform = p
 	}
 
-	limit := threadLimitOf(platform)
+	limit := update.ThreadLimitOf(platform)
 	segs := platforms.SplitThread(req.Content, limit)
 
 	out := make([]previewSegment, len(segs))
@@ -1184,7 +1028,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	if !validCTATypes[ctaType] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cta_type")
 	}
-	if err := requirePlatformIfNotDraft(status, req.PlatformID, req.PlatformPostType); err != nil {
+	if err := update.RequirePlatformIfNotDraft(status, req.PlatformID, req.PlatformPostType); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
@@ -1286,11 +1130,8 @@ func (h *PostsHandler) Get(c *fiber.Ctx) error {
 // @Router       /api/posts/{id} [put]
 func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	var req postRequest
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
-	}
-	if err := validate.Struct(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, validationError(err).Error())
+	if err := bindAndValidate(c, &req); err != nil {
+		return err
 	}
 	status := req.toStatus()
 	if !validPostStatuses[status] {
@@ -1310,101 +1151,56 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 
-	if !post.Status.CanTransition(status) {
-		from := post.Status
-		h.logEvent(c, post.ID, models.PostLogEventStateTransitionBlocked, &from, &status,
-			"transition rejected by state machine",
-			logs.MarshalCapped(map[string]any{"reason": "invalid_transition"}),
-		)
-		return fiber.NewError(fiber.StatusBadRequest, "invalid status transition from "+string(post.Status)+" to "+string(status))
+	res, err := h.updater().Update(reqCtx(c), update.Input{
+		Post:                 post,
+		Status:               status,
+		Apply:                func(p *models.Post) { req.apply(p, status, ctaType) },
+		CampaignID:           req.CampaignID,
+		PhaseID:              req.CampaignTypePhaseID,
+		PlatformID:           req.PlatformID,
+		PlatformPostType:     req.PlatformPostType,
+		Content:              req.Content,
+		MutatesLockedContent: req.mutatesLockedContent(post),
+		Omit:                 req.omitColumns(),
+		Actor:                cmp.Or(actorID(c), models.ActorSystem),
+	})
+	if res.AutoPublishDecision != "" {
+		c.Set("X-Auto-Publish-Decision", res.AutoPublishDecision)
 	}
-	// Once a post is submitted (scheduled or published) a copy of it
-	// exists outside Ogen — Zernio holds the scheduled submission (content
-	// snapshotted at schedule time), the network holds the published post.
-	// Editing the body/title/media/platform/post-type/sources here would
-	// silently rewrite Ogen's record of what goes, or went, out, so those
-	// fields are frozen — the server backstop to the FE lock, mirroring the
-	// attachment freeze. A status-only transition (unschedule to edit) still
-	// passes, as does a no-op save; only a real content change is rejected.
-	if post.Status.IsSubmitted() && req.mutatesLockedContent(post) {
-		return submittedLockError(post.Status)
-	}
-	if err := requirePlatformIfNotDraft(status, req.PlatformID, req.PlatformPostType); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
-	}
-	// A (re)assigned phase — or a move to another campaign keeping one
-	// — must be a phase of the target campaign's type.
-	if req.CampaignTypePhaseID != nil &&
-		(req.CampaignID != post.CampaignID || post.CampaignTypePhaseID == nil || *req.CampaignTypePhaseID != *post.CampaignTypePhaseID) {
-		if ok, err := h.checkPhase(reqCtx(c), req.CampaignID, req.CampaignTypePhaseID); err != nil {
-			return err
-		} else if !ok {
-			return rejectInvalidPhase(c)
-		}
-	}
-
-	if done, err := h.validateReadyForPublish(c, post, &req, status); err != nil {
-		return err
-	} else if done {
-		return nil
-	}
-
-	prevStatus := post.Status
-
-	// ReadyForPublish→Scheduled consults the
-	// auto-publish allowlist and persists status, PostLog, and the submit
-	// River task transactionally — now via the shared schedule
-	// service so the REST/assistant/PUT paths can't drift. Falls through
-	// to the default save when the schedule service isn't wired (test
-	// fixtures).
-	if prevStatus == models.PostStatusReadyForPublish && status == models.PostStatusScheduled && h.scheduleSvc != nil {
-		req.apply(post, status, ctaType)
-		h.deriveThreadSegments(reqCtx(c), post) // Materialise segments from the body before persist
-		actor := cmp.Or(actorID(c), models.ActorSystem)
-		routed, err := h.scheduleSvc.RouteAndPersist(reqCtx(c), post, prevStatus, actor)
-		if err != nil {
-			if aerr, ok := errors.AsType[*schedule.AccountSelectionError](err); ok {
-				return writeAccountSelectionError(c, aerr)
-			}
-			if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
-				return rejectInvalidPhase(c)
-			}
-			return err
-		}
-		if routed != "" {
-			c.Set("X-Auto-Publish-Decision", routed)
-		}
-	} else {
-		req.apply(post, status, ctaType)
-		h.deriveThreadSegments(reqCtx(c), post) // Materialise segments from the body before persist
-		// Presence-aware sources: apply already left an omitted
-		// used_asset_ids at its hydrated value, but the whole-record UPDATE would
-		// still write that stale value back and clobber a concurrent membership
-		// write (AddUsedAssetIDs/RemoveUsedAssetID) that landed after GetByID. Drop
-		// the omitted column from the write so "leave alone" holds at the DB.
-		var omit []string
-		if !req.UsedAssetIDs.Present {
-			omit = append(omit, "used_asset_ids")
-		}
-		if err := h.repo.Update(reqCtx(c), post, omit...); err != nil {
-			if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
-				return rejectInvalidPhase(c)
-			}
-			return err
-		}
-		h.logTransition(c, post, prevStatus, status)
-	}
-
-	// Re-fetch to return fully hydrated response.
-	updated, err := h.repo.GetByID(reqCtx(c), post.ID)
 	if err != nil {
-		return err
+		return postUpdateError(c, err)
 	}
 	h.recordActivity(c, "post_updated",
 		activity.WithEntity("post", post.ID),
-		activity.WithStatus(string(updated.Status)),
+		activity.WithStatus(string(res.Post.Status)),
 	)
-	return c.JSON(updated)
+	return c.JSON(res.Post)
+}
+
+// postUpdateError maps a post update use-case error onto its HTTP response.
+func postUpdateError(c *fiber.Ctx, err error) error {
+	if e, ok := errors.AsType[*update.TransitionError](err); ok {
+		return fiber.NewError(fiber.StatusBadRequest, e.Error())
+	}
+	if e, ok := errors.AsType[*update.ContentLockedError](err); ok {
+		return submittedLockError(e.Status)
+	}
+	if e, ok := errors.AsType[*update.ValidationError](err); ok {
+		return fiber.NewError(fiber.StatusBadRequest, e.Msg)
+	}
+	if errors.Is(err, update.ErrInvalidPhase) {
+		return rejectInvalidPhase(c)
+	}
+	if e, ok := errors.AsType[*update.NotReadyError](err); ok {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"error":               e.Error(),
+			"platform_validation": e.PlatformValidation,
+		})
+	}
+	if e, ok := errors.AsType[*schedule.AccountSelectionError](err); ok {
+		return writeAccountSelectionError(c, e)
+	}
+	return err
 }
 
 // Delete godoc
