@@ -17,6 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
 	"github.com/ogen-app/ogen/src/infra/crypto/envelope"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
+	"github.com/ogen-app/ogen/src/infra/geoip"
 	pubzernio "github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/infra/storage"
@@ -28,6 +29,7 @@ import (
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
+	"github.com/ogen-app/ogen/src/usecase/loginsecurity"
 	"github.com/ogen-app/ogen/src/usecase/notes"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
@@ -75,6 +77,7 @@ type services struct {
 	schedule          *schedule.Service
 	notes             *notes.Service
 	signup            *signup.Service
+	loginSecurity     *loginsecurity.Service
 }
 
 func newDeps(db, analyticsDB *bun.DB, cfg *config.Config, secretStore secrets.Store, cipher *envelope.Cipher, hub eventhub.Hub, plan *shutdownPlan) *deps {
@@ -230,6 +233,23 @@ func (d *deps) initServices(context.Context) error {
 	if d.cfg.HarborWebhookURL != "" {
 		d.svc.signup.SetHarborEnqueuer(d.enqueuer)
 	}
+
+	// Only request handlers look up locations, so the database closes with the
+	// other handler-only clients.
+	geo := geoip.Open(d.cfg.GeoIPDBPath)
+	d.shutdown.add(stageIntegrations, geo.Close)
+	d.svc.loginSecurity = loginsecurity.New(loginsecurity.Deps{
+		DB:         d.db,
+		Devices:    r.knownDeviceRepo,
+		Alerts:     r.loginAlertTokenRepo,
+		Sessions:   r.sessionRepo,
+		Users:      r.userRepo,
+		Accounts:   r.accountRepo,
+		Geo:        geo,
+		Emails:     d.enqueuer,
+		Activity:   d.activity.recorder,
+		AppBaseURL: d.cfg.AppBaseURL,
+	})
 	return nil
 }
 

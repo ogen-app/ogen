@@ -23,6 +23,8 @@ type repos struct {
 	workspaceRepo            repository.WorkspaceRepository
 	tenantRepo               repository.TenantRepository
 	sessionRepo              repository.SessionRepository
+	knownDeviceRepo          repository.KnownDeviceRepository
+	loginAlertTokenRepo      repository.LoginAlertTokenRepository
 	settingRepo              repository.SettingRepository
 	tagRepo                  repository.TagRepository
 	chunksRepo               repository.AssetChunksRepository
@@ -124,6 +126,8 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		notificationRepo:         repository.NewNotificationRepository(db),
 		announcementRepo:         repository.NewAnnouncementRepository(db),
 		invitationRepo:           repository.NewInvitationRepository(db),
+		knownDeviceRepo:          repository.NewKnownDeviceRepository(db),
+		loginAlertTokenRepo:      repository.NewLoginAlertTokenRepository(db),
 		tierVersionRepo:          repository.NewTenantTierVersionRepository(db),
 		tierAssignmentRepo:       repository.NewTenantTierAssignmentRepository(db),
 	}

@@ -1,0 +1,23 @@
+@baseUrl = http://localhost:9001
+
+# New-device login alerts. Every login sets the long-lived `ogen_device`
+# cookie. The account's first device is enrolled silently; a later login
+# without that cookie (another browser, or a cleared cookie jar) queues the
+# `new_device_login` email, whose "This wasn't me" link carries the token below.
+#
+# To get a token locally: log in once (sessions/sessions.http), clear the
+# ogen_device cookie, log in again, then take `token=` from the secure_url in
+# the queued send_email job's args (river_job.args->'vars'->>'secure_url').
+@alertToken = paste-token-here
+
+### Preview the alert — read-only, safe for mail scanners (expects 200; status pending|used|expired)
+GET {{baseUrl}}/api/security/login-alerts/{{alertToken}}
+
+### Secure the account — revokes every session, forgets devices, returns reset_url (expects 200)
+POST {{baseUrl}}/api/security/login-alerts/{{alertToken}}/secure
+
+### Secure again — the link is single-use (expects 410 {"error":"token_used"})
+POST {{baseUrl}}/api/security/login-alerts/{{alertToken}}/secure
+
+### Unknown or malformed token (expects 404 {"error":"not_found"})
+GET {{baseUrl}}/api/security/login-alerts/not-a-token

@@ -64,21 +64,30 @@ func registerSystemRoutes(app *fiber.App, d *deps) {
 }
 
 // registerAuthRoutes serves users, sessions, signup, workspaces, password
-// reset and invitations.
+// reset, invitations and the new-device login alert links.
 func registerAuthRoutes(app *fiber.App, d *deps) {
 	cfg, r, rec, lim := d.cfg, d.r, d.activity.recorder, d.entitlements.limiter
 	// Secure cookies everywhere but debug mode, so localhost over plain HTTP
 	// still works.
 	secure := !cfg.Debug
 	handlers.NewUsersHandler(d.db, r.userRepo, r.accountRepo, r.settingRepo, d.auth, rec, lim).Register(app)
-	handlers.NewSessionsHandler(r.userRepo, r.accountRepo, r.sessionRepo, cfg.SessionCookieName, secure, rec).Register(app)
-	handlers.NewTenantsHandler(d.svc.signup, r.tenantRepo, cfg.SessionCookieName, secure, d.auth, rec).Register(app)
+
+	sessions := handlers.NewSessionsHandler(r.userRepo, r.accountRepo, r.sessionRepo, cfg.SessionCookieName, secure, rec)
+	sessions.SetLoginSecurity(d.svc.loginSecurity, cfg.DeviceCookieName)
+	sessions.Register(app)
+	tenants := handlers.NewTenantsHandler(d.svc.signup, r.tenantRepo, cfg.SessionCookieName, secure, d.auth, rec)
+	tenants.SetLoginSecurity(d.svc.loginSecurity, cfg.DeviceCookieName)
+	tenants.Register(app)
+	handlers.NewLoginAlertsHandler(d.svc.loginSecurity).Register(app)
+
 	handlers.NewWorkspacesHandler(d.db, r.workspaceRepo, r.userRepo, r.accountRepo, r.tenantRepo, r.sessionRepo, d.enqueuer, d.auth, rec).Register(app)
 	handlers.NewPasswordResetHandler(d.db, r.userRepo, r.accountRepo, cfg.AppBaseURL, d.enqueuer, rec).Register(app)
 	handlers.NewInvitationsHandler(d.db, r.userRepo, r.accountRepo, r.tenantRepo, r.invitationRepo, r.sessionRepo, cfg.AppBaseURL, cfg.SessionCookieName, secure, d.auth, handlers.InvitationsOptions{
-		EmailJobs: d.enqueuer,
-		Limiter:   lim,
-		Activity:  rec,
+		EmailJobs:        d.enqueuer,
+		Limiter:          lim,
+		Activity:         rec,
+		LoginSecurity:    d.svc.loginSecurity,
+		DeviceCookieName: cfg.DeviceCookieName,
 	}).Register(app)
 }
 
