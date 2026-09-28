@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// WorkspaceListItem is one row of the workspace switcher (CON-147): a workspace
+// WorkspaceListItem is one row of the workspace switcher: a workspace
 // the account belongs to, with the caller's role and the workspace's size. role
 // and is_default are caller-relative (they come from the membership / session),
 // so this can't be a plain SELECT over tenants — it's a join over memberships.
@@ -65,7 +65,7 @@ func (r *workspaceRepository) ListForAccountTx(ctx context.Context, tx bun.IDB, 
 		ColumnExpr("u.role AS role").
 		ColumnExpr("(SELECT count(*) FROM users m WHERE m.tenant_id = t.id) AS member_count").
 		Where("u.account_id = ?", accountID).
-		Where("t.deleted_at IS NULL"). // a soft-deleted workspace leaves every member's list (CON-147 PR4)
+		Where("t.deleted_at IS NULL"). // a soft-deleted workspace leaves every member's list
 		OrderExpr("t.created_at ASC").
 		Scan(ctx, &items)
 	if err != nil {

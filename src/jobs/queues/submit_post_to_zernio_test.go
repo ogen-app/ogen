@@ -428,7 +428,7 @@ func TestSubmitNoAccountConnectedFails(t *testing.T) {
 	}
 }
 
-// CON-150: two LinkedIn accounts, no explicit choice → terminal
+// Two LinkedIn accounts, no explicit choice → terminal
 // account_selection_required (never submitted, so the stub is never hit).
 func TestSubmitMultipleAccountsRequiresSelection(t *testing.T) {
 	stub := newStubZernio()
@@ -454,7 +454,7 @@ func TestSubmitMultipleAccountsRequiresSelection(t *testing.T) {
 	}
 }
 
-// CON-150: an explicit account choice is sent to Zernio verbatim, even when
+// An explicit account choice is sent to Zernio verbatim, even when
 // the platform has several connected accounts.
 func TestSubmitExplicitAccountSelectionIsUsed(t *testing.T) {
 	stub := newStubZernio()
@@ -491,7 +491,7 @@ func TestSubmitExplicitAccountSelectionIsUsed(t *testing.T) {
 	}
 }
 
-// CON-150: an explicit choice on the wrong platform is a terminal mismatch.
+// An explicit choice on the wrong platform is a terminal mismatch.
 func TestSubmitExplicitAccountPlatformMismatchFails(t *testing.T) {
 	stub := newStubZernio()
 	defer stub.Close()
@@ -518,7 +518,7 @@ func TestSubmitExplicitAccountPlatformMismatchFails(t *testing.T) {
 	}
 }
 
-// CON-150: an explicit choice that is no longer connected is a terminal
+// An explicit choice that is no longer connected is a terminal
 // account_unavailable.
 func TestSubmitExplicitAccountUnavailableFails(t *testing.T) {
 	stub := newStubZernio()

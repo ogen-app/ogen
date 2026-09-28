@@ -16,14 +16,14 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 )
 
-// CancelZernioJobQueue is the River queue name (CON-69 §3, §9).
+// CancelZernioJobQueue is the River queue name.
 const CancelZernioJobQueue = "cancel_zernio_job"
 
 // CancelTarget is what the user wants the Post moved to once
 // cancellation succeeds — back to the editing state (ReadyForPublish),
 // all the way to Draft, or converted to manual publishing
 // (ScheduledForManualPublish) which keeps scheduled_at but stops the
-// auto-publish (CON-130).
+// auto-publish.
 type CancelTarget string
 
 const (
@@ -33,8 +33,8 @@ const (
 )
 
 // landingStatus maps a CancelTarget to the Post status the worker lands
-// the post on after a successful cancel. Unknown targets fall back to
-// ReadyForPublish, matching the pre-CON-130 default.
+// the post on after a successful cancel. Unknown or empty targets fall back
+// to ReadyForPublish.
 func (t CancelTarget) landingStatus() models.PostStatus {
 	switch t {
 	case CancelTargetDraft:
@@ -75,7 +75,7 @@ type CancelZernioJobProcessor struct {
 // Work is the River entrypoint; it delegates to Process.
 func (p *CancelZernioJobProcessor) Work(ctx context.Context, job *river.Job[CancelZernioJobTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// CON-97: background jobs span tenants (interim until per-tenant, PR4).
+	// Background jobs span tenants (interim until per-tenant, PR4).
 	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
@@ -107,7 +107,7 @@ func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZerni
 	if err != nil {
 		return fmt.Errorf("cancel: load post %s: %w", task.PostID, err)
 	}
-	// Scope the rest of the job to the owning tenant (CON-97 PR4).
+	// Scope the rest of the job to the owning tenant.
 	ctx = tenantctx.With(ctx, post.TenantID)
 	if post.Status != models.PostStatusScheduled {
 		// User raced themselves, or the poller landed Published first.
@@ -161,7 +161,7 @@ func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.
 	// Converting to manual publishing keeps scheduled_at so the intended
 	// publish date still shows against the post — we only stop the
 	// auto-dispatch. transition() never touches scheduled_at, so this is
-	// automatic; the comment records the intent (CON-130).
+	// automatic; the comment records the intent.
 	post.Status = to
 	if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
 		return fmt.Errorf("cancel: persist new status: %w", err)

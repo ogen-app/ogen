@@ -32,7 +32,7 @@ import (
 const (
 	maxMarkdownUploadSize = 10 << 20 // 10 MB
 	maxPDFUploadSize      = 50 << 20 // 50 MB
-	// maxDocumentUploadSize caps office/text document uploads (CON-280). Larger
+	// maxDocumentUploadSize caps office/text document uploads. Larger
 	// than markdown because a real .pptx/.xlsx carries embedded media we discard
 	// but still receive.
 	maxDocumentUploadSize = 50 << 20 // 50 MB
@@ -91,28 +91,28 @@ var documentUploadMIMEs = map[string]string{
 	".log":   "text/plain",
 }
 
-// PDFIngestEnqueuer enqueues a PDF-ingestion job in the caller's transaction
-// (CON-103). Implemented by *queues.Enqueuer; a narrow interface here keeps the
+// PDFIngestEnqueuer enqueues a PDF-ingestion job in the caller's transaction.
+// Implemented by *queues.Enqueuer; a narrow interface here keeps the
 // handler off the jobs package.
 type PDFIngestEnqueuer interface {
 	EnqueueProcessPDFTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType string) error
 }
 
-// URLIngestEnqueuer enqueues a URL-scrape job in the caller's transaction
-// (CON-222). Implemented by *queues.Enqueuer.
+// URLIngestEnqueuer enqueues a URL-scrape job in the caller's transaction.
+// Implemented by *queues.Enqueuer.
 type URLIngestEnqueuer interface {
 	EnqueueProcessURLTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, sourceURL string, refresh bool) error
 }
 
 // DocumentIngestEnqueuer enqueues a document-ingestion job in the caller's
-// transaction (CON-280). Implemented by *queues.Enqueuer; a narrow interface
+// transaction. Implemented by *queues.Enqueuer; a narrow interface
 // here keeps the handler off the jobs package.
 type DocumentIngestEnqueuer interface {
 	EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey string) error
 }
 
 // ImageIngestEnqueuer enqueues an image-ingestion job in the caller's
-// transaction (CON-281). Implemented by *queues.Enqueuer; a narrow interface
+// transaction. Implemented by *queues.Enqueuer; a narrow interface
 // here keeps the handler off the jobs package. Nil (no IMAGE_SERVICE_ADDR) makes
 // image uploads fail fast — image-service is a hard dependency (D6).
 type ImageIngestEnqueuer interface {
@@ -120,7 +120,7 @@ type ImageIngestEnqueuer interface {
 }
 
 // ImageReembedEnqueuer enqueues a re-embed of an image asset's edited
-// description + its stored region blocks (CON-312), without re-running vision.
+// description + its stored region blocks, without re-running vision.
 // Implemented by *queues.Enqueuer.
 type ImageReembedEnqueuer interface {
 	EnqueueReembedImage(ctx context.Context, assetID, tenantID string) error
@@ -143,23 +143,23 @@ type AssetsHandler struct {
 
 	// onSave triggers async embedding for text-based Asset saves (JSON create/update + MD upload).
 	onSave func(assetID, title, content, tenantID string)
-	// pdfJobs enqueues PDF ingestion (CON-103). Nil disables it (the asset is
+	// pdfJobs enqueues PDF ingestion. Nil disables it (the asset is
 	// created but left pending).
 	pdfJobs PDFIngestEnqueuer
-	// urlJobs enqueues URL scraping (CON-222); scrapeGate reports key presence.
+	// urlJobs enqueues URL scraping; scrapeGate reports key presence.
 	// Nil urlJobs / scrapeGate makes the URL endpoint return 409.
 	urlJobs    URLIngestEnqueuer
 	scrapeGate URLScrapeGate
-	// docJobs enqueues document ingestion (CON-280). Nil makes document uploads
+	// docJobs enqueues document ingestion. Nil makes document uploads
 	// fail fast with a "not configured" message.
 	docJobs DocumentIngestEnqueuer
-	// imgJobs enqueues image ingestion (CON-281). Nil makes image uploads fail
+	// imgJobs enqueues image ingestion. Nil makes image uploads fail
 	// fast — image-service is a hard dependency (imageprobe was deleted, D6).
 	imgJobs ImageIngestEnqueuer
-	// imgReembed re-embeds an image asset after its description is edited
-	// (CON-312). Nil skips the re-embed (image ingestion not configured).
+	// imgReembed re-embeds an image asset after its description is edited.
+	// Nil skips the re-embed (image ingestion not configured).
 	imgReembed ImageReembedEnqueuer
-	// chunks backs GET /:id/chunks (CON-312). Nil answers 409.
+	// chunks backs GET /:id/chunks. Nil answers 409.
 	chunks AssetChunkLister
 }
 
@@ -196,7 +196,7 @@ func NewAssetsHandler(
 // SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
 func (h *AssetsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
-// SetImageReembedder wires the image description re-embed (CON-312). Nil-safe.
+// SetImageReembedder wires the image description re-embed. Nil-safe.
 func (h *AssetsHandler) SetImageReembedder(e ImageReembedEnqueuer) { h.imgReembed = e }
 
 func (h *AssetsHandler) Register(app *fiber.App) {
@@ -221,7 +221,7 @@ type createAssetRequest struct {
 
 // updateAssetRequest carries a whole-resource write. Content is not
 // `validate:"required"` because an image asset's description may legitimately be
-// empty (CON-246 R9); Update enforces it for the document types that still need
+// empty; Update enforces it for the document types that still need
 // it once the asset's type is known.
 //
 // AltText and TagIDs are pointers so the handler can tell an omitted field from
@@ -257,8 +257,8 @@ func (h *AssetsHandler) List(c *fiber.Ctx) error {
 	return c.JSON(assets)
 }
 
-// decorateImagesBatch hydrates mirrored images for a list of assets in one query
-// (CON-222), URL-decorating each. No-op when the image repo is unwired.
+// decorateImagesBatch hydrates mirrored images for a list of assets in one query,
+// URL-decorating each. No-op when the image repo is unwired.
 func (h *AssetsHandler) decorateImagesBatch(ctx context.Context, assets []models.Asset) {
 	if h.imageRepo == nil || len(assets) == 0 {
 		return
@@ -288,9 +288,9 @@ func (h *AssetsHandler) decorateImagesBatch(ctx context.Context, assets []models
 
 // decorateFile fills File.URL (the original), File.ThumbnailURL and
 // File.NormalizedURL from their s3 keys using the public storage URL, when
-// present. URL is the original bytes an image viewer downloads (CON-246);
+// present. URL is the original bytes an image viewer downloads;
 // NormalizedURL is the browser-drawable derivative — what the asset screen shows
-// for HEIC/TIFF, which no browser decodes (CON-299); ThumbnailURL is the
+// for HEIC/TIFF, which no browser decodes; ThumbnailURL is the
 // PDF/first-page preview and the image grid thumbnail.
 func (h *AssetsHandler) decorateFile(asset *models.Asset) {
 	if asset == nil || asset.File == nil || h.storage == nil {
@@ -310,7 +310,7 @@ func (h *AssetsHandler) decorateFile(asset *models.Asset) {
 	}
 }
 
-// decorateImages hydrates a URL asset's mirrored images (CON-222) and fills each
+// decorateImages hydrates a URL asset's mirrored images and fills each
 // image's public URL from its s3_key. No-op when the image repo/storage are
 // unwired or the asset has no images.
 func (h *AssetsHandler) decorateImages(ctx context.Context, asset *models.Asset) {
@@ -348,7 +348,7 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 
-	// CON-295: the content_bank_assets quota gates a new asset.
+	// The content_bank_assets quota gates a new asset.
 	var assetQuota entitlements.Decision
 	tenantID, hasTenant := tenantctx.From(reqCtx(c))
 	if hasTenant {
@@ -384,7 +384,7 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 	if err := h.repo.Create(reqCtx(c), asset); err != nil {
 		return err
 	}
-	// CON-295: the asset now exists — fire any near-limit crossing.
+	// The asset now exists — fire any near-limit crossing.
 	if hasTenant {
 		h.limiter.DispatchCrossing(reqCtx(c), tenantID, assetQuota)
 	}
@@ -402,15 +402,15 @@ type uploadResult struct {
 	AssetID  string `json:"asset_id,omitempty"`
 	Status   string `json:"status"` // "created" | "failed"
 	Error    string `json:"error,omitempty"`
-	// Code is a stable, machine-readable companion to Error on a failed result
-	// (CON-281): the client matches the code and falls back to the prose when it
+	// Code is a stable, machine-readable companion to Error on a failed result:
+	// the client matches the code and falls back to the prose when it
 	// is unknown. Empty on a created result. See models.UploadCode*.
 	Code  string        `json:"code,omitempty"`
 	Asset *models.Asset `json:"asset,omitempty"`
 }
 
 // fail stamps a terminal per-file outcome with a machine-readable code and its
-// human-readable message (CON-281), keeping the two in lockstep at every
+// human-readable message, keeping the two in lockstep at every
 // rejection site.
 func (r *uploadResult) fail(code, msg string) uploadResult {
 	r.Status = "failed"
@@ -459,7 +459,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 	for _, fh := range files {
 		res := uploadResult{Filename: fh.Filename}
 
-		// CON-295: each file becomes a content_bank_assets row, so gate every one.
+		// Each file becomes a content_bank_assets row, so gate every one.
 		// The processors below Create the asset synchronously, so the next
 		// iteration's count reflects the ones already stored.
 		var fileQuota entitlements.Decision
@@ -471,7 +471,7 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 			}
 			fileQuota = dec
 		}
-		// CON-312: the file's bytes join media_storage_bytes ("all uploaded
+		// The file's bytes join media_storage_bytes ("all uploaded
 		// media"). Checked before storage so a denied file leaves no object.
 		var mediaQuota entitlements.Decision
 		if hasTenant {
@@ -525,15 +525,15 @@ func detectUploadKind(filename string) uploadKind {
 		return uploadKindPDF
 	case ".svg":
 		// Route SVG to the image branch so processImageUpload emits the specific
-		// "vector not supported" reject (CON-281) rather than a generic message.
+		// "vector not supported" reject rather than a generic message.
 		return uploadKindImage
 	}
-	// Raster images (CON-281) — advisory extension routing only; image-service
+	// Raster images — advisory extension routing only; image-service
 	// sniffs the body's magic bytes authoritatively.
 	if _, ok := imageUploadMIMEs[ext]; ok {
 		return uploadKindImage
 	}
-	// Office/text documents (CON-280) — advisory extension routing only;
+	// Office/text documents — advisory extension routing only;
 	// document-service sniffs the body authoritatively.
 	if _, ok := documentUploadMIMEs[ext]; ok {
 		return uploadKindDocument
@@ -620,7 +620,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 
 	ctx := reqCtx(c)
 
-	// PDF ingestion (CON-103) needs object storage — the worker re-reads the PDF
+	// PDF ingestion needs object storage — the worker re-reads the PDF
 	// from it on each attempt — plus the job enqueuer. Without them, create the
 	// asset but skip processing (it stays pending).
 	if h.storage == nil || h.pdfJobs == nil || h.db == nil {
@@ -662,7 +662,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 	return res
 }
 
-// processDocumentUpload ingests an office/text document (CON-280): store the
+// processDocumentUpload ingests an office/text document: store the
 // original in object storage, then insert the asset and enqueue the extraction
 // job atomically. Mirrors processPDFUpload. document-service does the
 // authoritative format detection, so the handler only does a light OLE2 reject
@@ -683,7 +683,7 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 		return res.fail(models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxDocumentUploadSize>>20))
 	}
 
-	// Document ingestion (CON-280) needs object storage (the worker re-reads the
+	// Document ingestion needs object storage (the worker re-reads the
 	// file on each attempt), the job enqueuer, and the DB. server.go leaves
 	// docJobs nil when DOCUMENTS_SERVICE_ADDR is empty, so a doc upload then fails
 	// fast with a clear message — before reading the body into memory — instead of
@@ -756,27 +756,27 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 
 // isOLE2 reports whether b starts with the OLE2 compound-file magic
 // (D0 CF 11 E0 A1 B1 1A E1) used by legacy binary Office files (.doc/.xls/.ppt)
-// and by the encrypted-OOXML container — neither is supported (CON-280).
+// and by the encrypted-OOXML container — neither is supported.
 func isOLE2(b []byte) bool {
 	const sig = "\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 	return len(b) >= len(sig) && string(b[:len(sig)]) == sig
 }
 
-// processImageUpload ingests a content-bank image asset (CON-281). image-service
-// is the single image authority, so ingestion is now ASYNC (mirroring PDF/audio/
+// processImageUpload ingests a content-bank image asset. image-service
+// is the single image authority, so ingestion is ASYNC (mirroring PDF/audio/
 // document): the handler stores the original, creates a `pending` IMG asset +
 // file row, and enqueues a `process_image` job that normalizes, classifies,
-// extracts, describes, alt-texts, and embeds it. The old synchronous imageprobe
-// path is gone (D6) — with imageprobe deleted there is no pure-Go fallback, so an
-// unwired service (imgJobs nil) fails the upload with a clear message rather than
-// degrading. ogen still computes the SHA-256 itself (a plain hash of bytes, not
-// image logic) so upload-time dedupe survives the move to async. Bytes land at
+// extracts, describes, alt-texts, and embeds it. There is no pure-Go fallback,
+// so an unwired service (imgJobs nil) fails the upload with a clear message
+// rather than degrading. ogen computes the SHA-256 itself (a plain hash of
+// bytes, not image logic) so upload-time dedupe works despite the async
+// processing. Bytes land at
 // assets/{id}/original.<ext>.
 func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
 	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	// SVG / vector is a terminal reject with a specific message (CON-281 §18).
+	// SVG / vector is a terminal reject with a specific message.
 	if ext == ".svg" {
 		return res.fail(models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)")
 	}
@@ -968,7 +968,7 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 		return h.refreshURLAsset(c, existing, normalized, session.TenantID)
 	}
 
-	// CON-295: a genuinely new URL asset counts against BOTH the total bank
+	// A genuinely new URL asset counts against BOTH the total bank
 	// (content_bank_assets) and the stricter URL-only sub-cap (web_page_imports);
 	// a refresh of an existing one (handled above) does not. The URL sub-cap is
 	// checked first, so a workspace with bank room left but out of URL imports is
@@ -1019,7 +1019,7 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 		}
 		return err
 	}
-	// CON-295: the URL asset now exists — fire any near-limit crossing on both
+	// The URL asset now exists — fire any near-limit crossing on both
 	// the URL sub-cap and the total bank.
 	if hasTenant {
 		h.limiter.DispatchCrossing(ctx, tenantID, importQuota)
@@ -1128,8 +1128,8 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	}
 
 	// Content rules depend on the type, which is only known now, after the load —
-	// which is why this isn't a struct-tag validation (CON-312):
-	//   - IMG: the description may be empty (CON-246 R9) and is editable.
+	// which is why this isn't a struct-tag validation:
+	//   - IMG: the description may be empty and is editable.
 	//   - PDF/DOC/AUDIO: content is the ingestion service's output and read-only.
 	//     Empty or unchanged content means "keep it", so a title/tag-only save
 	//     works; a different value is a 409 (re-extract instead).
@@ -1151,7 +1151,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "content is required")
 	}
 
-	// alt_text and tag_ids are optional on the PUT (CON-279): a nil pointer means
+	// alt_text and tag_ids are optional on the PUT: a nil pointer means
 	// the caller didn't send the field, so its stored value is kept; a present
 	// value — including "" or [] — replaces it. This is what stops a
 	// title/content-only save from clearing tags or alt text.
@@ -1168,8 +1168,8 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	embedInputChanged := asset.Title != req.Title || asset.Content != req.Content
 	descriptionChanged := asset.Content != req.Content
 
-	// CON-281 D5: an alt_text edit marks the text hand-written so a later image
-	// re-extraction never overwrites it. Only a real change counts (CON-312): a
+	// An alt_text edit marks the text hand-written so a later image
+	// re-extraction never overwrites it. Only a real change counts: a
 	// client echoing the stored value back must not lock generated text.
 	if altText != asset.AltText {
 		asset.AltTextEditedByUser = true
@@ -1188,7 +1188,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 
 	// Service-ingested chunks (PDF/DOC/AUDIO/IMG) carry source anchors and don't
 	// embed the title, so the markdown re-embed must never run for them — it
-	// would replace them with plain title+content chunks (CON-312). An edited
+	// would replace them with plain title+content chunks. An edited
 	// image description is re-embedded by the image pipeline instead, which
 	// keeps the region chunks.
 	tid, _ := tenantctx.From(reqCtx(c))
@@ -1292,7 +1292,7 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 			return err
 		}
 	}
-	// CON-222: mirrored image blobs (the DB cascade drops asset_images rows).
+	// Mirrored image blobs (the DB cascade drops asset_images rows).
 	if h.imageRepo != nil {
 		if imgs, err := h.imageRepo.GetByAssetID(reqCtx(c), id); err == nil {
 			for i := range imgs {
@@ -1302,12 +1302,12 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 			}
 		}
 	}
-	// CON-282: the audio normalized derivative lives at a deterministic key
+	// The audio normalized derivative lives at a deterministic key
 	// alongside the original (evicted with the asset, D5). It has no DB row of
 	// its own, so add it unconditionally — the best-effort Delete below is a
 	// no-op when the object doesn't exist (non-audio assets).
 	keysToDelete = append(keysToDelete, storage.TenantKey(reqCtx(c), fmt.Sprintf("assets/%s/normalized.opus", id)))
-	// CON-281: the image normalized.png derivative also lives at a deterministic
+	// The image normalized.png derivative also lives at a deterministic
 	// key alongside the original with no DB row of its own; evict it with the
 	// asset. The best-effort Delete below is a no-op for non-image assets.
 	keysToDelete = append(keysToDelete, storage.TenantKey(reqCtx(c), fmt.Sprintf("assets/%s/normalized.png", id)))

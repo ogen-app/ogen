@@ -10,7 +10,7 @@ import (
 )
 
 // UsageRepository persists and reads vendor_usage_events in the isolated analytics
-// database (CON-86). It is constructed with the analytics *bun.DB, not the
+// database. It is constructed with the analytics *bun.DB, not the
 // main pool. Writes come from the async usage.Recorder in a system context
 // (tenant pre-set per row); reads run in the caller's tenant context and are
 // auto-scoped by the UsageEvent TenantScoped hooks.

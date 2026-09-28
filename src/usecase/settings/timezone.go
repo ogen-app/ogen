@@ -2,7 +2,7 @@
 // `settings` table that encode workspace-level configuration semantics
 // (defaults, validation) the raw repository deliberately stays out of.
 //
-// The workspace timezone (CON-78) lives here: a single instance-level
+// The workspace timezone lives here: a single instance-level
 // IANA zone name used to resolve relative scheduling expressions, echo
 // times back to the user, and stamp the Zernio submit. The instant
 // persisted on a post is always absolute UTC — the timezone only ever

@@ -10,7 +10,7 @@ import (
 )
 
 // publishEntitlementChange fans a tenant-scoped invalidation event onto the
-// in-process hub after an operator changes a tenant's tier/version (CON-295 §4).
+// in-process hub after an operator changes a tenant's tier/version.
 // A client subscribed to /api/events treats it as a pure refetch hint for
 // GET /api/me/entitlements, so an open tab drops controls a downgrade removed
 // (or gains ones an upgrade granted) without waiting for a query to remount.

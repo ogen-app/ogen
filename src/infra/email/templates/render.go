@@ -1,5 +1,5 @@
 // Package templates renders Ogen's DB-stored email templates and seeds the
-// built-in defaults on boot (CON-154). Bodies are authored in Maizzle
+// built-in defaults on boot. Bodies are authored in Maizzle
 // (build-time, outside this app) and stored as compiled HTML; this package only
 // interpolates variables into them at send time.
 package templates
@@ -15,7 +15,7 @@ import (
 // Delimiters are deliberately NOT the Go default {{ }} — Maizzle/Tailwind output
 // uses {{ }} too, so template variables use [[ ]] and any stray {{ }} in the
 // compiled HTML passes through untouched. Every stored body + its data struct
-// must follow this one convention (CON-154 §11).
+// must follow this one convention.
 const (
 	LeftDelim  = "[["
 	RightDelim = "]]"

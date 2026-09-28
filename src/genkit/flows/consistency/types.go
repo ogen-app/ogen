@@ -1,5 +1,5 @@
 // Package consistency implements the read-only Campaign Assistant consistency
-// review (CON-116): checkBrief critiques the campaign brief's internal
+// review: checkBrief critiques the campaign brief's internal
 // consistency, and checkPosts checks whether the campaign's non-published posts
 // follow the brief. Both return structured findings and never mutate anything.
 package consistency

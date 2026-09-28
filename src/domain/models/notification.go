@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// NotificationLevel is the severity of a notification (CON-242): a stable,
+// NotificationLevel is the severity of a notification: a stable,
 // closed set enforced by a DB CHECK and validated in Go, so the UI can map each
 // level to an icon/colour. Distinct from Type, which is the open-ended machine
 // key describing WHAT happened.
@@ -29,7 +29,7 @@ func (l NotificationLevel) Valid() bool {
 	}
 }
 
-// Notification is one persistent, per-user inbox item (CON-242). Every event
+// Notification is one persistent, per-user inbox item. Every event
 // that concerns several people (e.g. all workspace owners) writes one row per
 // recipient — fan-out on write — so read/unread is a plain column and reads are
 // a trivial `WHERE user_id = me`.
@@ -43,7 +43,7 @@ func (l NotificationLevel) Valid() bool {
 // back seq=0, breaking replay cursors and mark-all-read's `before` bound.
 type Notification struct {
 	bun.BaseModel `bun:"table:notifications,alias:n" swaggerignore:"true"`
-	TenantScoped  // tenant_id column + central scoping hooks (CON-97)
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID          string            `bun:"id,pk"                                        json:"id"`
 	Seq         int64             `bun:"seq,nullzero,autoincrement"                   json:"seq"`

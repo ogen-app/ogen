@@ -242,7 +242,7 @@ func TestSubscribeRejectsEmptyTopics(t *testing.T) {
 }
 
 func TestMaxSubscribersPerUserEvictsOldest(t *testing.T) {
-	// CON-286: at the cap the Hub evicts the user's OLDEST subscriber and admits
+	// At the cap the Hub evicts the user's OLDEST subscriber and admits
 	// the newcomer, rather than rejecting the newcomer. This keeps a reload from
 	// being locked out when older connections have leaked.
 	h := New(Config{MaxSubscribersPerUser: 2})

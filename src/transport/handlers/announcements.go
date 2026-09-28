@@ -9,7 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// AnnouncementsHandler serves the tenant-facing announcements surface (CON-230):
+// AnnouncementsHandler serves the tenant-facing announcements surface:
 // the read-only banner feed plus per-user click / dismiss tracking. Operators
 // author announcements over the internal gRPC surface (Harbor); this handler
 // only delivers the currently-active ones and records engagement.

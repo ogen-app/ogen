@@ -9,7 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// CON-114: the streaming persist path stops at the batch's requested count, so
+// The streaming persist path stops at the batch's requested count, so
 // an over-producing model can't turn "generate exactly 1" into 3 persisted
 // posts. expectedCount <= 0 is the uncapped fallback (model decides the count).
 func TestWithinCount(t *testing.T) {
@@ -54,7 +54,7 @@ func (s *stubNoteRepo) Create(_ context.Context, n *models.PostNote) error {
 	return nil
 }
 
-// CON-188: content-plan no longer writes the thesis into the post body — the
+// Content-plan no longer writes the thesis into the post body — the
 // post is created with an empty body and the thesis is captured as a
 // draft_thesis note (origin content_plan, authored by the campaign owner).
 func TestPersistOne_DraftThesisNote(t *testing.T) {
@@ -115,7 +115,7 @@ func TestPersistOne_EmptyThesisNoNote(t *testing.T) {
 	}
 }
 
-// CON-181: persistOne composes scheduled_at from the campaign's scheduling
+// persistOne composes scheduled_at from the campaign's scheduling
 // settings — the model's date placed at the publishing time in the campaign
 // timezone — and reflects the (unchanged, enabled-day) date back onto dp.
 func TestPersistOne_ComposesScheduledAt(t *testing.T) {
@@ -159,7 +159,7 @@ func TestPersistOne_NilNoteRepo(t *testing.T) {
 	}
 }
 
-// CON-114: day-snapping is bounded by the window passed to persistOne (the
+// Day-snapping is bounded by the window passed to persistOne (the
 // targeting window), not the full campaign window — so a targeted run can't snap
 // a post onto an enabled day outside the requested window.
 func TestPersistOne_SnapsWithinWindow(t *testing.T) {

@@ -21,7 +21,7 @@ import (
 
 // ProfileLifecycleEnqueuer enqueues the Zernio profile lifecycle jobs in the
 // caller's transaction, so each commits atomically with the workspace it tracks:
-// provisioning at create (CON-102 §6 FR2) and teardown at delete (CON-203). Both
+// provisioning at create and teardown at delete. Both
 // are local DB inserts — the Zernio calls happen later in the workers — so the
 // request never blocks on Zernio reachability. Implemented by *queues.Enqueuer;
 // kept as a narrow interface here so the handler doesn't import the jobs package
@@ -40,7 +40,7 @@ type EmailEnqueuer interface {
 	EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error
 }
 
-// Signup throttle budget (CON-162). POST /api/tenants is open and unauthenticated,
+// Signup throttle budget. POST /api/tenants is open and unauthenticated,
 // so it is throttled per client IP to blunt automated mass account creation.
 // Unlike login, every attempt is charged (a successful signup is exactly the
 // abuse being limited), and there is no per-address dimension — each signup uses
@@ -56,14 +56,14 @@ const signupThrottledMsg = "Too many signup attempts. Please wait a minute and t
 
 // TenantsHandler owns tenant provisioning (public self-service signup) and the
 // tenant CRU surface (no delete). Tenants are the isolation boundary, so the
-// read/update endpoints only ever operate on the caller's own tenant (CON-97).
+// read/update endpoints only ever operate on the caller's own tenant.
 type TenantsHandler struct {
 	signup       *signup.Service
 	tenantRepo   repository.TenantRepository
 	cookieName   string
 	secureCookie bool
 	auth         fiber.Handler
-	// ipLimiter throttles signup per client IP (CON-162).
+	// ipLimiter throttles signup per client IP.
 	ipLimiter *keyedRateLimiter
 	// activity records CON-125 authentication events (signup, tenant_updated).
 	// Signup runs outside tenant scope, so it builds an explicit context. nil is
@@ -128,7 +128,7 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 		return err
 	}
 
-	// Throttle mass signup per client IP (CON-162). Every well-formed attempt is
+	// Throttle mass signup per client IP. Every well-formed attempt is
 	// charged — a successful signup is the abuse being limited — so a spike from
 	// one source answers 429 with a Retry-After once the budget is spent.
 	if ok, retry := h.ipLimiter.allow(c.IP()); !ok {

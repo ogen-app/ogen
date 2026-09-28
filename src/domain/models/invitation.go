@@ -11,7 +11,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// InvitationTTL is how long a workspace invitation stays acceptable (CON-26).
+// InvitationTTL is how long a workspace invitation stays acceptable.
 // Longer than a password reset (an hour) because accepting an invite is a
 // slower, more deliberate human action — the invitee often isn't watching their
 // inbox. Expiry is derived from ExpiresAt, not a stored status.
@@ -19,7 +19,7 @@ const InvitationTTL = 7 * 24 * time.Hour
 
 // InvitationStatus is the lifecycle of an invite. Expiry is NOT a status — an
 // invite is "expired" iff it is still pending and ExpiresAt is in the past — so
-// no sweeper is needed for correctness (CON-26 §6.2).
+// no sweeper is needed for correctness.
 type InvitationStatus = string
 
 const (
@@ -29,7 +29,7 @@ const (
 )
 
 // Invitation is a single-use capability to join a workspace (tenant) with a
-// preset role (CON-26). Only the token's hash is persisted (TokenHash); the
+// preset role. Only the token's hash is persisted (TokenHash); the
 // plaintext lives only in the emailed link, so a DB leak can't hand over live
 // invites. Accepting it creates a new users row in TenantID — Ogen stays
 // one-user-one-tenant (the multi-workspace account split is CON-147). The
@@ -53,7 +53,7 @@ type Invitation struct {
 // NewInvitationToken returns a cryptographically random, URL-safe invitation
 // token (32 bytes of entropy) together with its hash for storage. The plaintext
 // is returned once — for the emailed link — and never persisted. Mirrors
-// NewResetToken (CON-161).
+// NewResetToken.
 func NewInvitationToken() (token, hash string, err error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

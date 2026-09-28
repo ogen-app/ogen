@@ -10,7 +10,7 @@ import (
 )
 
 // ConnectTarget is one selectable posting destination surfaced by the headless
-// connect list step (CON-217): a Facebook Page, a LinkedIn organization (or the
+// connect list step: a Facebook Page, a LinkedIn organization (or the
 // personal profile), an Instagram account, etc. Only display fields are kept —
 // the in-Ogen picker never needs Zernio's per-target access tokens.
 type ConnectTarget struct {
@@ -44,7 +44,7 @@ type connectSelectSpec struct {
 var connectSelectSpecs = map[string]connectSelectSpec{
 	"facebook":  {segment: "select-page", idField: "pageId", kind: "page"},
 	"instagram": {segment: "select-page", idField: "pageId", kind: "page"},
-	// TODO(CON-217): confirm LinkedIn's headless org list/select segment + id
+	// TODO: confirm LinkedIn's headless org list/select segment + id
 	// field against Zernio's API reference / OpenAPI. Best-known shape below;
 	// the tolerant decode below already copes with the response variance.
 	"linkedin": {segment: "select-organization", idField: "organizationId", kind: "organization"},
@@ -58,8 +58,8 @@ func SupportsConnectSelect(platform string) bool {
 	return ok
 }
 
-// ListConnectTargets lists the selectable targets after a headless OAuth
-// (CON-217). It authenticates with the bearer key AND the short-lived
+// ListConnectTargets lists the selectable targets after a headless OAuth.
+// It authenticates with the bearer key AND the short-lived
 // X-Connect-Token from the callback. Decode is tolerant: Zernio wraps the array
 // under a platform-specific key (`pages`, `organizations`, …), so we take the
 // first array-valued field and read each element's id/name/username/avatar from
@@ -93,8 +93,8 @@ func (c *Client) ListConnectTargets(ctx context.Context, platform, profileID, te
 	return out, nil
 }
 
-// SelectConnectTarget finalizes the connection by choosing one target
-// (CON-217). userProfile is the opaque JSON Zernio handed back on the callback;
+// SelectConnectTarget finalizes the connection by choosing one target.
+// userProfile is the opaque JSON Zernio handed back on the callback;
 // it is forwarded verbatim. On success the account is created upstream and
 // surfaces locally via the existing account sync.
 func (c *Client) SelectConnectTarget(ctx context.Context, platform, profileID, tempToken, connectToken, targetID string, userProfile json.RawMessage) error {

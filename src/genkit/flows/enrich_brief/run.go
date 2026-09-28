@@ -35,7 +35,7 @@ func runEnrichBrief(
 	// free text and has no place in operational logs.
 	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "instruction_len", len(req.Instruction))
 
-	// Enforcement gate (CON-86 FR9): in enforce mode, block before any provider
+	// Enforcement gate: in enforce mode, block before any provider
 	// call when the tenant is already over a cap. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err

@@ -9,8 +9,8 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
-// Mode controls how the Limiter reacts to an over-cap create or a closed gate
-// (CON-295). warn-first is the shipping default; flip to enforce via config.
+// Mode controls how the Limiter reacts to an over-cap create or a closed gate.
+// warn-first is the shipping default; flip to enforce via config.
 type Mode string
 
 const (
@@ -58,7 +58,7 @@ type Decision struct {
 	// event is the near-limit crossing this (allowed) create would trigger, or
 	// nil. It is NOT dispatched during the check — the caller passes the Decision
 	// to DispatchCrossing after the resource commits, so a create that fails
-	// post-check raises no notification (CON-295 §12).
+	// post-check raises no notification.
 	event *LimitEvent
 }
 
@@ -102,7 +102,7 @@ const (
 
 // LimitEvent describes a numeric entitlement that an allowed create just pushed
 // across the near-limit band (or filled). It is handed to a Notifier so the
-// wiring layer can raise a durable warning (CON-295 §12); the domain never
+// wiring layer can raise a durable warning; the domain never
 // touches the notification center directly.
 type LimitEvent struct {
 	Feature string     // feature key
@@ -115,7 +115,7 @@ type LimitEvent struct {
 
 // Notifier receives near-limit crossings. It is optional and best-effort: a nil
 // Notifier disables near-limit notifications, and an implementation must never
-// block or fail the create path (CON-295 §12).
+// block or fail the create path.
 type Notifier interface {
 	NotifyLimit(ctx context.Context, tenantID string, ev LimitEvent)
 }
@@ -126,8 +126,8 @@ type currentResolver interface {
 	ResolveCurrent(ctx context.Context, tenantID string) (*Resolution, error)
 }
 
-// Limiter enforces per-tenant entitlement quotas at resource-creation time
-// (CON-295). Numeric features are capped via registered Counters; boolean
+// Limiter enforces per-tenant entitlement quotas at resource-creation time.
+// Numeric features are capped via registered Counters; boolean
 // features are gates; multiplier features scale a downstream budget. All methods
 // are nil-safe so a handler can call them whether or not a Limiter is wired.
 type Limiter struct {
@@ -151,7 +151,7 @@ func (l *Limiter) Register(featureKey string, c Counter) *Limiter {
 }
 
 // WithNotifier attaches a near-limit Notifier and the warn-band threshold
-// percent (CON-295 §12), clamped to 1..100 (out-of-range ⇒ 90). Chainable; a nil
+// percent, clamped to 1..100 (out-of-range ⇒ 90). Chainable; a nil
 // receiver or notifier leaves near-limit notifications disabled.
 func (l *Limiter) WithNotifier(n Notifier, pct int) *Limiter {
 	if l == nil {
@@ -190,7 +190,7 @@ func (l *Limiter) RequireAmount(ctx context.Context, tenantID, featureKey string
 // DispatchCrossing delivers the near-limit notification a Require/Allow decision
 // computed, and MUST be called only after the caller has committed the resource
 // — so a create that fails after the check raises no false notification, and its
-// dedupe key never suppresses a later genuine crossing (CON-295 §12). Nil-safe;
+// dedupe key never suppresses a later genuine crossing. Nil-safe;
 // a no-op when there was no crossing or no notifier. The Notifier is responsible
 // for keeping delivery off the request path.
 func (l *Limiter) DispatchCrossing(ctx context.Context, tenantID string, dec Decision) {
@@ -317,7 +317,7 @@ func (l *Limiter) Multiplier(ctx context.Context, tenantID, featureKey string) f
 // CurrentUsage returns the tenant's live count for a numeric feature that has a
 // registered counter, and true; (0, false) when no counter is registered for the
 // key. It is the read-only counterpart to Allow used by the /me/entitlements
-// endpoint (CON-295) to surface "N of M". A counter error degrades to (0, false)
+// endpoint to surface "N of M". A counter error degrades to (0, false)
 // + a warn log rather than failing the read. Nil-safe.
 func (l *Limiter) CurrentUsage(ctx context.Context, tenantID, featureKey string) (int64, bool) {
 	if l == nil {

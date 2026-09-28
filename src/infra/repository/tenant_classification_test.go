@@ -123,7 +123,7 @@ func TestTenantTierRepositoryCRUD(t *testing.T) {
 	}
 
 	// A tier with only leftover DRAFT versions (no tenants) still deletes: the
-	// draft versions are removed with the tier (CON-243).
+	// draft versions are removed with the tier.
 	drafty := &models.TenantTier{ID: mintID(t), Name: "Drafty", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := repo.Create(ctx, drafty); err != nil {
 		t.Fatalf("create drafty: %v", err)
@@ -231,7 +231,7 @@ func TestTenantGroupRepositoryAndMembership(t *testing.T) {
 
 // TestTenantClassificationHydrationAndFilters covers the tenant admin read/write
 // paths: hydration of tier+groups, tier/group filtering, paging + total, tier
-// reassignment, and (CON-190) all-status reads with an optional status filter.
+// reassignment, and all-status reads with an optional status filter.
 func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 	db := openClassificationDB(t)
 	ctx := t.Context()
@@ -240,7 +240,7 @@ func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 	groupRepo := repository.NewTenantGroupRepository(db)
 
 	// "Growth" (not "Pro"/"Max"/"Trial") — those names are now seeded product
-	// tiers (CON-243) and tenant_tiers.name is UNIQUE.
+	// tiers and tenant_tiers.name is UNIQUE.
 	pro := &models.TenantTier{ID: mintID(t), Name: "Growth", Color: "#00b3a4", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	if err := tierRepo.Create(ctx, pro); err != nil {
 		t.Fatalf("create pro tier: %v", err)
@@ -343,7 +343,7 @@ func TestTenantClassificationHydrationAndFilters(t *testing.T) {
 		t.Fatalf("set unknown tier: err = %v (state %q), want 23503", err, sqlState(err))
 	}
 
-	// CON-190: soft-deleting sets status='deleted' alongside deleted_at. The
+	// Soft-deleting sets status='deleted' alongside deleted_at. The
 	// operator admin reads now surface tenants of ANY status (so a deleted tenant
 	// stays inspectable and restorable); the status filter is how a caller narrows.
 	if _, err := db.NewUpdate().Model((*models.Tenant)(nil)).

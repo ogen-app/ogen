@@ -12,7 +12,7 @@ import (
 // (key omitted) apart from "clear this" (key set to null).
 //
 // That distinction only matters for fields the server writes on its own, with
-// no client in the loop: the brand refs (CON-245) are stamped by content_plan /
+// no client in the loop: the brand refs are stamped by content_plan /
 // draft_post, so an ordinary save that omits them would otherwise null a value
 // the client may never have seen. Optional keeps absent and null apart so those
 // fields survive omission. Use it sparingly — client-authored fields are
@@ -82,8 +82,8 @@ func present[T any](v T) Optional[T] {
 }
 
 // applyOptionalSlice applies a presence-aware id-list to *dst: an omitted key
-// leaves the stored slice untouched, so a whole-record save no longer restates —
-// and clobbers — a set that now has its own membership endpoints (CON-233); a
+// leaves the stored slice untouched, so a whole-record save never restates —
+// and clobbers — a set that has its own membership endpoints; a
 // present array replaces it and an explicit null clears it. Stored values are
 // normalised to a non-null empty slice (nullSlice).
 func applyOptionalSlice(o Optional[models.StringSlice], dst *models.StringSlice) {

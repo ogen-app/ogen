@@ -19,7 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
-// CON-312 §3: audio presign/finalize skipped the CON-295 quota gate that the
+// Audio presign/finalize skipped the CON-295 quota gate that the
 // multipart /upload applies. The caller's workspace runs on the seeded Trial
 // tier (content_bank_assets = 10, media_storage_bytes = 100 MiB); the counters
 // are stubbed so each spec pins usage exactly at or under the cap.

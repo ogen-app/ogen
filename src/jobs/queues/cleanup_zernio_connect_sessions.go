@@ -14,7 +14,7 @@ import (
 )
 
 // CleanupZernioConnectSessionsQueue is the recurring sweep that drops expired
-// headless-connect sessions (CON-217). Correctness never depends on it —
+// headless-connect sessions. Correctness never depends on it —
 // readers already treat expires_at in the past as gone — it just reclaims rows.
 // Cadence is a River PeriodicJob (see PeriodicConfig); the marker is unique
 // across active states so overlapping ticks can't stack.

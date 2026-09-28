@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Utterance is one transcribed span returned by audio-service (CON-282) and
+// Utterance is one transcribed span returned by audio-service and
 // persisted as the raw transcript. It is the source for both chunk assembly
 // (into assets_chunks) and the transcript API. [StartMs, EndMs) are on the
 // ORIGINAL asset timeline (model-reported, approximate under Gemini). IsSpeech

@@ -68,16 +68,16 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 		repository.NewTenantRepository(db),
 		repository.NewPlatformRepository(db),
 		repository.NewPlatformGlobalLimitsRepository(db),
-		repository.NewFlowModelConfigRepository(db), // CON-308: ModelConfigAdminService
+		repository.NewFlowModelConfigRepository(db), // ModelConfigAdminService
 		repository.NewTenantTierVersionRepository(db),
 		repository.NewTenantTierAssignmentRepository(db),
 		repository.NewEmailLogRepository(db),
 		repository.NewEmailEventRepository(db),
 		nil,
 		nil,
-		nil, nil, "", // CON-229: no admin-notification path needed for the secrets rig
+		nil, nil, "", // No admin-notification path needed for the secrets rig
 		repository.NewAnnouncementRepository(db),
-		nil, // CON-295: no event hub needed for the secrets rig
+		nil, // No event hub needed for the secrets rig
 	)
 	Expect(err).NotTo(HaveOccurred())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

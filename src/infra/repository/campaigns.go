@@ -30,21 +30,21 @@ type CampaignRepository interface {
 	Delete(ctx context.Context, id string) (bool, error)
 	Archive(ctx context.Context, id string) (bool, error)
 	Unarchive(ctx context.Context, id string) (bool, error)
-	// AddAssetIDs / RemoveAssetID are the CON-233 membership write path: they
-	// mutate campaigns.asset_ids (and keep use_assets derived from it), in one
-	// atomic UPDATE, so attaching or detaching one document no longer round-trips
-	// the whole record and concurrent adds of different ids don't clobber each
+	// AddAssetIDs / RemoveAssetID are the membership write path: they mutate
+	// campaigns.asset_ids (and keep use_assets derived from it), in one atomic
+	// UPDATE, so attaching or detaching one document never round-trips the
+	// whole record and concurrent adds of different ids don't clobber each
 	// other. Both return the hydrated campaign, or sql.ErrNoRows if it doesn't
 	// exist (in this tenant).
 	AddAssetIDs(ctx context.Context, id string, assetIDs []string) (*models.Campaign, error)
 	RemoveAssetID(ctx context.Context, id, assetID string) (*models.Campaign, error)
 	// CountActive counts the tenant's live campaigns — neither soft-deleted nor
-	// archived (mirrors List) — the active_campaigns quota (CON-295).
+	// archived (mirrors List) — the active_campaigns quota.
 	CountActive(ctx context.Context) (int64, error)
 	// CreatedBetween returns id + created_at for the tenant's non-deleted
 	// campaigns created in [from, to) — a zero from means unbounded-low — newest
 	// first, optionally one campaign. limit 0 = no cap. Feeds the Activity daily
-	// report's "campaigns_created" bucket (CON-285). Archived campaigns are
+	// report's "campaigns_created" bucket. Archived campaigns are
 	// included (they were still created that day); soft-deleted ones drop out, so
 	// a deleted campaign simply leaves future recomputations.
 	CreatedBetween(ctx context.Context, from, to time.Time, campaignID string, limit int) ([]models.Campaign, error)
@@ -201,7 +201,7 @@ func (r *campaignRepository) Update(ctx context.Context, campaign *models.Campai
 	return err
 }
 
-// AddAssetIDs unions assetIDs into campaigns.asset_ids atomically (CON-233).
+// AddAssetIDs unions assetIDs into campaigns.asset_ids atomically.
 // An empty input is a no-op read: it still validates existence and returns the
 // current campaign, so the caller gets a 404 for a missing id without a
 // pointless write. The TenantScoped hook scopes the UPDATE to the caller's
@@ -218,7 +218,7 @@ func (r *campaignRepository) AddAssetIDs(ctx context.Context, id string, assetID
 	res, err := r.db.NewUpdate().
 		Model((*models.Campaign)(nil)).
 		Set(jsonbIDUnionSet("asset_ids"), string(payload)).
-		// CON-233: keep use_assets in lockstep with the set. The content-bank set
+		// Keep use_assets in lockstep with the set. The content-bank set
 		// is the FE's only source of truth for this flag since CON-210 retired the
 		// three-mode picker, and resolveAssets returns early when use_assets is
 		// false — so without this a first attach to a brief-only campaign is
@@ -238,7 +238,7 @@ func (r *campaignRepository) AddAssetIDs(ctx context.Context, id string, assetID
 	return r.GetByID(ctx, id)
 }
 
-// RemoveAssetID drops assetID from campaigns.asset_ids atomically (CON-233).
+// RemoveAssetID drops assetID from campaigns.asset_ids atomically.
 // Removal is idempotent — an absent id still matches the row (so it is not a
 // 404) and leaves the set unchanged. use_assets is re-derived from the set (see
 // AddAssetIDs), so detaching the last source turns generation off rather than

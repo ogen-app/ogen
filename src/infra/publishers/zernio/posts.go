@@ -41,7 +41,7 @@ type PlatformVariant struct {
 	Platform  string `json:"platform"`
 	AccountID string `json:"accountId"`
 	// PlatformSpecificData carries per-platform extras — today only a native
-	// thread's ordered messages (CON-284). A pointer so it (and its
+	// thread's ordered messages. A pointer so it (and its
 	// platformSpecificData key) is omitted entirely for ordinary posts, keeping
 	// their payload byte-identical to before.
 	PlatformSpecificData *PlatformSpecificData `json:"platformSpecificData,omitempty"`
@@ -53,7 +53,7 @@ type PlatformSpecificData struct {
 	ThreadItems []ThreadItem `json:"threadItems,omitempty"`
 }
 
-// ThreadItem is one message of a native thread (CON-284). Item 0 is the root;
+// ThreadItem is one message of a native thread. Item 0 is the root;
 // the rest become ordered replies — Zernio owns the reply-chaining, so Ogen
 // sends the whole chain in one submit. Content is the message text; MediaItems
 // carries that message's media in the same {url,type,altText?} shape as the
@@ -120,7 +120,7 @@ type SubmitRequest struct {
 	// PostAttachment rows.
 	MediaItems []map[string]any `json:"mediaItems,omitempty"`
 	// Title carries the post title for platforms that need one explicitly —
-	// principally YouTube video (CON-148 §6.6). Omitted when empty; platforms
+	// principally YouTube video. Omitted when empty; platforms
 	// that derive a title from the caption ignore it. SPIKE-PENDING: the exact
 	// Zernio shape (top-level vs per-PlatformVariant, plus description/tags/
 	// privacy/thumbnail) is unconfirmed against docs.zernio.com — this is the
@@ -259,7 +259,7 @@ func (c *Client) Cancel(ctx context.Context, jobID string) error {
 }
 
 // Retry asks Zernio to reattempt a failed publish. Used by the manual
-// retry path (CON-69 §10) when an Ogen Post is being re-promoted out
+// retry path when an Ogen Post is being re-promoted out
 // of Failed state and a Zernio job already exists for it.
 func (c *Client) Retry(ctx context.Context, jobID string) (*Job, error) {
 	if c == nil {
@@ -282,14 +282,14 @@ func (c *Client) Retry(ctx context.Context, jobID string) (*Job, error) {
 // It does NOT filter by status: Zernio dedupes identical content across the
 // window regardless of what became of the earlier job (scheduled, published,
 // failed, cancelled), so the recovery search must span every status too —
-// otherwise a post whose earlier job has left `scheduled` dead-ends
-// (CON-129). The returned Job carries its Status so the caller can decide
+// otherwise a post whose earlier job has left `scheduled` dead-ends.
+// The returned Job carries its Status so the caller can decide
 // whether to adopt (still pending) or report (already terminal). It paginates
 // so a busy workspace's older match isn't missed past the first page.
 //
 // Returns (nil, nil) if no match is found within the lookback window. Callers
 // should pass the exact content they submitted — which is the Markdown-flattened
-// body (CON-126); this function matches it verbatim, so both sides compare the
+// body; this function matches it verbatim, so both sides compare the
 // same string.
 func (c *Client) FindByContent(ctx context.Context, content string, lookback time.Duration) (*Job, error) {
 	if c == nil {

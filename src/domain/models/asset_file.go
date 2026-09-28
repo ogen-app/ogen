@@ -10,7 +10,7 @@ import (
 // One-to-one with Asset via UNIQUE(asset_id).
 type AssetFile struct {
 	bun.BaseModel `bun:"table:asset_files,alias:af" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID             string  `bun:"id,pk"                                        json:"id"`
 	AssetID        string  `bun:"asset_id,notnull"                             json:"asset_id"`
@@ -21,12 +21,12 @@ type AssetFile struct {
 	ThumbnailS3Key *string `bun:"thumbnail_s3_key"                             json:"thumbnail_s3_key"`
 	// NormalizedS3Key points at the browser-drawable derivative image-service
 	// writes for every image (assets/{id}/normalized.png). It exists precisely so
-	// formats a browser can't decode — HEIC/HEIF, TIFF (CON-281/CON-299) — can
+	// formats a browser can't decode — HEIC/HEIF, TIFF — can
 	// still be shown: url is the original bytes, this is the copy an <img> renders.
 	// Null for PDFs and for images whose extraction failed or is still pending.
 	NormalizedS3Key *string `bun:"normalized_s3_key"                           json:"normalized_s3_key"`
 	PageCount       *int    `bun:"page_count"                                   json:"page_count"`
-	// Width, Height, IsAnimated and ChecksumSHA256 describe image files (CON-246).
+	// Width, Height, IsAnimated and ChecksumSHA256 describe image files.
 	// Same names/types as post_attachments so the attach-to-post bridge is a
 	// field copy. Zero/empty for PDFs. ChecksumSHA256 also backs upload dedupe.
 	Width          int       `bun:"width,notnull,default:0"                      json:"width"`
@@ -38,8 +38,8 @@ type AssetFile struct {
 
 	// URL, ThumbnailURL and NormalizedURL are transient public URLs rendered from
 	// S3Key / ThumbnailS3Key / NormalizedS3Key by the handler layer before
-	// serialization. URL is the original bytes (CON-246); NormalizedURL is the copy
-	// a browser can draw (CON-299) — the full-size asset screen renders it for
+	// serialization. URL is the original bytes; NormalizedURL is the copy
+	// a browser can draw — the full-size asset screen renders it for
 	// HEIC/TIFF; ThumbnailURL is the small preview. Not persisted; minted per
 	// response so a signed/public URL is never stored or cached client-side.
 	URL           *string `bun:"-" json:"url,omitempty"`

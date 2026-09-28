@@ -9,7 +9,7 @@ import (
 )
 
 // AutoPublishAllowlistRepository is the persistence surface for the
-// workspace-scoped auto-publish allowlist (CON-65). Set is a
+// workspace-scoped auto-publish allowlist. Set is a
 // transactional full-replace — callers send the desired final set, not
 // a diff. Contains is the predicate the future scheduler will call
 // when deciding whether to auto-dispatch a Scheduled post.

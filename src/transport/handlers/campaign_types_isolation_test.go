@@ -17,7 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
-// CON-314: a custom campaign type belongs to the workspace that created it.
+// A custom campaign type belongs to the workspace that created it.
 // Another workspace can't see it, touch it or its phases, or build a campaign
 // on it; system types stay shared and read-only.
 var _ = Describe("Campaign type workspace isolation (CON-314)", Ordered, func() {

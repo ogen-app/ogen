@@ -62,7 +62,7 @@ type Event struct {
 	// receive this event.
 	UserID string `json:"-"`
 
-	// TenantID is the hard tenant-isolation boundary (CON-97 §10.2). When set,
+	// TenantID is the hard tenant-isolation boundary. When set,
 	// only subscribers in the same tenant can receive the event. Publish
 	// derives it from the context's tenant when left empty, so most publishers
 	// need not set it explicitly.
@@ -77,7 +77,7 @@ type SubscribeOpts struct {
 	// verified source like a session, never from query params or headers.
 	UserID string
 
-	// TenantID scopes the subscriber to its tenant (CON-97 §10.2). The HTTP
+	// TenantID scopes the subscriber to its tenant. The HTTP
 	// handler sets it from the session; a subscriber only ever receives events
 	// carrying the same TenantID.
 	TenantID string
@@ -114,8 +114,8 @@ var (
 	ErrNoTopics = errors.New("eventhub: at least one topic is required")
 
 	// ErrTooManySubscribers signals that a user is at Config.MaxSubscribersPerUser.
-	// The in-process Hub no longer returns it — at the cap it evicts the user's
-	// oldest subscriber and admits the newcomer (CON-286), so a reload can never
+	// The in-process Hub never returns it — at the cap it evicts the user's
+	// oldest subscriber and admits the newcomer, so a reload can never
 	// be locked out. The sentinel and the HTTP handlers' 429 mapping are retained
 	// for a future out-of-process backend that may not be able to evict cheaply
 	// and would reject instead.

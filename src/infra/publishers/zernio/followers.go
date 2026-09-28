@@ -14,7 +14,7 @@ import (
 // FollowerQuery holds the documented GET /accounts/follower-stats params.
 // A zero-value field is omitted so Zernio's defaults apply (all accounts,
 // last 30 days, daily granularity). Ogen sets ProfileID to scope to the
-// current tenant's profile (CON-153).
+// current tenant's profile.
 type FollowerQuery struct {
 	AccountIDs  []string // joined into accountIds (csv); empty = all accounts
 	ProfileID   string

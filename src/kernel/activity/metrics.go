@@ -1,5 +1,5 @@
 // Package activity is the centralised user-activity collection layer for
-// CON-125: an async Recorder that captures meaningful user/tenant actions and
+// An async Recorder that captures meaningful user/tenant actions and
 // writes them to tenant_activity_events in the isolated analytics DB, without adding
 // latency to — or ever failing — the calling flow. It mirrors the CON-86 usage
 // Recorder but is behaviour-oriented (category/type/entity), not cost-oriented.

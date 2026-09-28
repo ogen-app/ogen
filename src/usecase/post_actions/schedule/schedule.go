@@ -1,5 +1,5 @@
 // Package schedule implements the shared "schedule a Post for
-// publishing" operation (CON-78). It is the single source of truth used
+// publishing" operation. It is the single source of truth used
 // by the REST endpoint (POST /api/posts/:id/schedule), the Post
 // Assistant's schedulePost tool, AND the existing PUT /api/posts/:id
 // scheduling path — so all three can never drift on the rule that
@@ -7,7 +7,7 @@
 // decision is persisted transactionally with the Zernio enqueue.
 //
 // The instant a post is scheduled for is always stored as an absolute
-// UTC time; the workspace timezone (CON-78) only affects how relative
+// UTC time; the workspace timezone only affects how relative
 // expressions are resolved and how the time is echoed — both of which
 // happen in the caller, before this service runs, keeping the service
 // deterministic (mirrors the CON-59 clone pattern).
@@ -68,7 +68,7 @@ func (e *ValidationError) Error() string {
 }
 
 // AccountCandidate identifies one connected same-platform account the user
-// may choose between (CON-150). Serialised into the 422 body so the client
+// may choose between. Serialised into the 422 body so the client
 // can render an account picker.
 type AccountCandidate struct {
 	ID          string `json:"id"`
@@ -126,7 +126,7 @@ type Result struct {
 
 // SubmitEnqueuer enqueues a Zernio submit task inside the caller's
 // transaction, so the enqueue commits atomically with the post status
-// change (CON-78 §9). Implemented by *queues.Enqueuer; kept as a narrow
+// change. Implemented by *queues.Enqueuer; kept as a narrow
 // interface here so this package doesn't depend on the queue runtime.
 type SubmitEnqueuer interface {
 	EnqueueSubmitTx(ctx context.Context, tx *sql.Tx, postID string) error
@@ -151,7 +151,7 @@ type Service struct {
 
 	// versions snapshots the content Ogen submits to Zernio at schedule time,
 	// so a published post keeps a durable record of "what actually went out"
-	// instead of an assumption (CON-251). nil disables it; wired via
+	// instead of an assumption. nil disables it; wired via
 	// SetVersionSnapshot.
 	versions repository.PostVersionRepository
 
@@ -216,7 +216,7 @@ func (s *Service) clock() time.Time {
 
 // Schedule schedules the post identified by postID for opts.ScheduledAt.
 // It validates the post's state and the future time, optionally
-// auto-promotes a draft (CON-74), routes to auto- vs manual-publish via
+// auto-promotes a draft, routes to auto- vs manual-publish via
 // the allowlist, and persists the status change, scheduled_at, audit
 // entries, and (for auto-publish) the Zernio submit enqueue in a single
 // transaction. Relative-time resolution is the caller's job — opts.
@@ -277,7 +277,7 @@ func (s *Service) Schedule(ctx context.Context, postID string, opts Options) (*R
 		return nil, err
 	}
 
-	// CON-150: only auto-publish posts submit through Zernio, so only they
+	// Only auto-publish posts submit through Zernio, so only they
 	// need an unambiguous account. Runs before we mutate/persist the post.
 	if autoPublish {
 		if err := s.checkAccountSelection(ctx, post, supported.ZernioID); err != nil {
@@ -345,7 +345,7 @@ func (s *Service) RouteAndPersist(ctx context.Context, post *models.Post, prevSt
 }
 
 // snapshotSubmitted records a system-authored version of the content just
-// submitted to Zernio (CON-251), so a published post keeps a durable record
+// submitted to Zernio, so a published post keeps a durable record
 // of what actually went out rather than an assumption. Deduped only against a
 // prior submit snapshot of identical content, so re-scheduling unchanged
 // content adds no noise — but a matching-content user/assistant edit at the
@@ -361,7 +361,7 @@ func (s *Service) snapshotSubmitted(ctx context.Context, post *models.Post) {
 			logging.AttrComponent, "schedule", "post_id", post.ID, logging.AttrError, err)
 		return
 	}
-	// CON-284 R2: content is the canonical full thread body, so SnapshotContent is
+	// Content is the canonical full thread body, so SnapshotContent is
 	// simply post.Content for every post type — the snapshot captures the whole
 	// chain by construction.
 	content := post.SnapshotContent()
@@ -448,7 +448,7 @@ func (s *Service) checkAccountSelection(ctx context.Context, post *models.Post, 
 // persist writes the post row, every supplied log entry, and (when
 // autoPublish) the Zernio submit enqueue in one transaction so a failure
 // in any of them rolls the whole schedule back — no half-scheduled post,
-// no enqueue without a status change (CON-78 §9).
+// no enqueue without a status change.
 func (s *Service) persist(ctx context.Context, post *models.Post, autoPublish bool, logs []*models.PostLog) error {
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewUpdate().Model(post).WherePK().Exec(ctx); err != nil {
@@ -473,7 +473,7 @@ func (s *Service) persist(ctx context.Context, post *models.Post, autoPublish bo
 	}); err != nil {
 		return err
 	}
-	// CON-251: an auto-publish post's content is now committed for submission to
+	// An auto-publish post's content is now committed for submission to
 	// Zernio (which snapshots it at schedule time) and locked in Ogen — record
 	// what goes out so the published post carries a durable version rather than
 	// an assumption. Runs for every scheduling entry point (POST /schedule, the
@@ -518,7 +518,7 @@ func (s *Service) loadForValidation(ctx context.Context, post *models.Post) (*mo
 // per-post-type rules) for the promote gate. Returns nil when the post
 // passes, or the populated per-platform error map when it does not.
 func (s *Service) validateForPublish(post *models.Post, platform *models.Platform, atts []models.PostAttachment) map[string][]platforms.ValidationError {
-	// CON-284: ValidatePublishReadiness runs the per-segment gate for thread
+	// ValidatePublishReadiness runs the per-segment gate for thread
 	// posts and the whole-post gate otherwise, so the schedule path never
 	// double-counts a thread's media against the per-post cap.
 	errsByPlatform := platforms.ValidatePublishReadiness(post, platform, atts)

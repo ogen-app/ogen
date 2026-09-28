@@ -59,7 +59,7 @@ import (
 
 // TODO: refactor this function
 func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secretStore secrets.Store, hub eventhub.Hub) (*fiber.App, error) {
-	// Opt-in pprof for perf diagnostics (CON-112). Container-internal only.
+	// Opt-in pprof for perf diagnostics. Container-internal only.
 	if cfg.EnablePprof {
 		startPprof("localhost:6060")
 	}
@@ -75,14 +75,14 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 
 	// API routes: the full data-access layer is built once by wireRepositories.
 	r := wireRepositories(db, analyticsDB)
-	// CON-292: load the operator-controlled platform catalog into the Zernio
+	// Load the operator-controlled platform catalog into the Zernio
 	// resolver (it replaced the deleted hardcoded registry) and keep it fresh.
 	// Non-fatal if the initial load fails — a background tick retries.
 	pubzernio.InitCatalog(ctx, r.platformRepo)
-	// CON-292: load the operator-controlled global upload/thread ceilings into
+	// Load the operator-controlled global upload/thread ceilings into
 	// the cached config the attachment handlers and thread validator read.
 	platforms.InitGlobalLimits(ctx, r.platformGlobalLimitsRepo)
-	// CON-308: load the per-flow/per-tier model configuration into the cached
+	// Load the per-flow/per-tier model configuration into the cached
 	// resolver the genkit flows read (Phase 4). Seeds any missing global-default
 	// row from the legacy config fields so day-one behaviour is byte-identical,
 	// then keeps the snapshot fresh. tierOf prefers a ctx-stamped tier and falls
@@ -124,20 +124,20 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		slog.InfoContext(ctx, "model catalog loaded", logging.AttrComponent, "modelconfig",
 			"count", len(modelIDs), "models", modelIDs)
 	}
-	// CON-113: one overview service, shared by the REST endpoint and the
+	// One overview service, shared by the REST endpoint and the
 	// Campaign Assistant's getCampaignOverview tool. Not gated by the Anthropic
 	// key — it's a plain tenant-scoped DB read.
 	campaignOverviewSvc := overview.New(r.campaignRepo, r.postRepo, r.platformRepo)
-	// CON-152: batched Campaigns-list summaries — one tenant-scoped read that
-	// replaces the per-card GET /:id/posts N+1 (CON-127).
+	// Batched Campaigns-list summaries — one tenant-scoped read that
+	// replaces the per-card GET /:id/posts N+1.
 	campaignSummariesSvc := summaries.New(r.postRepo)
-	// CON-285: Activity daily report — server-side per-local-day counts over live
+	// Activity daily report — server-side per-local-day counts over live
 	// post/campaign/post_logs data (tenant-scoped repos).
 	activityReportSvc := activityreport.New(r.postRepo, r.postLogRepo, r.campaignRepo)
 
 	auth := handlers.RequireAuth(r.sessionRepo, r.userRepo, cfg.SessionCookieName)
 
-	// CON-243: versioned tier entitlements. Load the engineering-owned feature
+	// Versioned tier entitlements. Load the engineering-owned feature
 	// catalog (boot fails if the embedded JSON is malformed), build the
 	// point-in-time resolver, and serve the public pricing catalog + the in-app
 	// entitlement view.
@@ -147,7 +147,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	entitlementResolver := entitlements.NewResolver(r.tierVersionRepo, r.tierAssignmentRepo, r.tenantRepo, entitlementCatalog)
 	pricingHandler := handlers.NewPricingHandler(entitlementResolver, r.tierVersionRepo, entitlementCatalog, auth)
-	// CON-295: entitlement quota limiter over the resolver, wired to the
+	// Entitlement quota limiter over the resolver, wired to the
 	// control-plane counters for each capped feature. warn-first via config; the
 	// counters ignore the explicit tenant arg because the request ctx already
 	// carries it (tenant-scoped reads).
@@ -155,14 +155,14 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Register("team_seats", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.userRepo.CountInTenant(ctx) })).
 		Register("active_campaigns", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.campaignRepo.CountActive(ctx) })).
 		Register("content_bank_assets", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) { return r.pieceRepo.Count(ctx) })).
-		// CON-295: web_page_imports is a stricter sub-cap on the total bank —
-		// it counts only URL-type assets (CON-222). Without its own counter the
+		// web_page_imports is a stricter sub-cap on the total bank —
+		// it counts only URL-type assets. Without its own counter the
 		// pricing page sold an allowance nothing measured.
 		Register("web_page_imports", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
 			return r.pieceRepo.CountByType(ctx, models.AssetTypeURL)
 		})).
 		// media_storage_bytes is "all uploaded media" (catalog): post attachments
-		// plus content-bank originals (CON-312 — before, only attachments counted,
+		// plus content-bank originals (before, only attachments counted,
 		// so a multi-GB audio upload was invisible to the cap).
 		Register("media_storage_bytes", entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
 			att, err := r.postAttachmentRepo.SumSizeBytesInTenant(ctx)
@@ -175,11 +175,11 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 			}
 			return att + bank, nil
 		}))
-	// CON-295: the same counters back the "N of M" usage on GET /api/me/entitlements.
+	// The same counters back the "N of M" usage on GET /api/me/entitlements.
 	pricingHandler.SetLimiter(entitlementLimiter)
 	pricingHandler.Register(app)
 
-	// CON-86: apply any operator price-map override (USAGE_MODEL_PRICES) before
+	// Apply any operator price-map override (USAGE_MODEL_PRICES) before
 	// metering starts; a malformed payload or unknown vendor fails boot.
 	if err := usage.ApplyModelPrices(cfg.UsageModelPrices); err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	usageWiring := initUsage(cfg, db, analyticsDB)
 	handlers.NewUsageHandler(usageWiring.events, usageWiring.limits, usageWiring.defaults, auth, cfg.UsageAdminToken).Register(app)
 
-	// CON-125: centralised user-activity collection. Shares the analytics pool;
+	// Centralised user-activity collection. Shares the analytics pool;
 	// the recorder is nil (a no-op) when analytics is disabled. Call-sites emit
 	// via activityWiring.recorder.Record(...). Drained on shutdown below, after
 	// the job producers stop.
@@ -198,10 +198,10 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// In-process event hub: backend code publishes; the SSE endpoint fans events
 	// out to authenticated clients. Created by the caller (cmd/server) and shared
 	// with the internal gRPC server, so an operator tier change over gRPC can
-	// invalidate a tenant's open tabs on the same bus (CON-295).
+	// invalidate a tenant's open tabs on the same bus.
 	handlers.NewEventsHandler(hub, r.sessionRepo, auth, 0).Register(app)
 
-	// CON-242: notification center. A persistent per-user inbox (REST + durable
+	// Notification center. A persistent per-user inbox (REST + durable
 	// SSE), fed by the notify service that producers call. Distinct from the
 	// ephemeral events bus above (which loses everything on disconnect) and the
 	// email channel below. The notifier is threaded into the job Deps so
@@ -210,14 +210,14 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	notifier := notify.New(r.notificationRepo, hub)
 	handlers.NewNotificationsHandler(r.notificationRepo, hub, r.sessionRepo, auth, 0).Register(app)
 
-	// CON-230: operator-authored informational announcements (banners). The
+	// Operator-authored informational announcements (banners). The
 	// tenant-facing delivery + per-user click/dismiss tracking; announcements are
 	// authored by Harbor over the internal gRPC surface (AnnouncementAdminService).
 	// Delivery resolves the caller's active workspace to its tier + groups to
 	// evaluate targeting, so it needs the tenant classification read.
 	handlers.NewAnnouncementsHandler(r.announcementRepo, r.tenantRepo, auth).Register(app)
 
-	// CON-295 §12: warn workspace owners via the durable inbox as a tenant nears a
+	// Warn workspace owners via the durable inbox as a tenant nears a
 	// numeric cap. The Limiter fires crossing-only LimitEvents; this adapter turns
 	// them into notifications. Best-effort — it never affects the create path.
 	entitlementLimiter.WithNotifier(&limitNotifier{notify: notifier, users: r.userRepo}, cfg.EntitlementWarnThresholdPct)
@@ -247,7 +247,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// Zernio reachability. The shutdown hook waits up to 2s for the
 	// worker to exit cleanly.
 	zernioRT := initZernio(ctx, cfg, secretStore, r.settingRepo, r.socialAccountRepo, hub, usageWiring.recorder)
-	// CON-217: the headless connect callback seals Zernio's short-lived
+	// The headless connect callback seals Zernio's short-lived
 	// connect_token/tempToken at rest. Rebuild the envelope cipher from the same
 	// KEK the secret store uses (idempotent — LoadOrCreateKEK reads the existing
 	// file), avoiding a server.New signature change.
@@ -296,7 +296,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		return nil, err
 	}
 
-	// CON-103: gRPC client for the PDF parsing microservice over the Railway
+	// gRPC client for the PDF parsing microservice over the Railway
 	// private network. nil when PDF_SERVICE_ADDR is unset; closed on shutdown.
 	pdfClient, err := pdf.New(pdf.Config{
 		Addr:         cfg.PDFServiceAddr,
@@ -310,7 +310,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		app.Hooks().OnShutdown(func() error { return pdfClient.Close() })
 	}
 
-	// CON-148: gRPC client for the video probing microservice over the Railway
+	// gRPC client for the video probing microservice over the Railway
 	// private network. nil when VIDEO_SERVICE_ADDR is unset; closed on shutdown.
 	videoClient, err := video.New(video.Config{
 		Addr:         cfg.VideoServiceAddr,
@@ -324,7 +324,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		app.Hooks().OnShutdown(func() error { return videoClient.Close() })
 	}
 
-	// CON-280: gRPC client for the document parsing microservice over the Railway
+	// gRPC client for the document parsing microservice over the Railway
 	// private network. nil when DOCUMENTS_SERVICE_ADDR is unset; closed on shutdown.
 	documentsClient, err := documents.New(documents.Config{
 		Addr:         cfg.DocumentsServiceAddr,
@@ -338,7 +338,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		app.Hooks().OnShutdown(func() error { return documentsClient.Close() })
 	}
 
-	// CON-282: gRPC client for the audio transcription microservice over the
+	// gRPC client for the audio transcription microservice over the
 	// Railway private network. nil when AUDIO_SERVICE_ADDR is unset. Its Close
 	// hook is registered LATER — after riverClient.Stop — so draining audio jobs
 	// don't have their in-flight TranscribeSegment RPCs killed by an early
@@ -352,7 +352,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		return nil, err
 	}
 
-	// CON-281: gRPC client for the image microservice over the Railway private
+	// gRPC client for the image microservice over the Railway private
 	// network. nil when IMAGE_SERVICE_ADDR is unset. Like audio, its Close hook is
 	// registered LATER — after riverClient.Stop — so a draining process_image job's
 	// in-flight Extract RPC isn't killed by an early connection close.
@@ -366,10 +366,10 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 
 	// Embedding (Gemini) is initialised here — before the River registry —
-	// because the process_pdf worker (CON-103) needs the embedder in its deps.
+	// because the process_pdf worker needs the embedder in its deps.
 	// The returned embedder is a stable reloadable wrapper (always non-nil): when
 	// gemini_api_key is unset it reports unavailable, so PDF ingestion + semantic
-	// search are dormant until a key is added via the secrets API (CON-104), with
+	// search are dormant until a key is added via the secrets API, with
 	// no restart; markdown/JSON saves still succeed meanwhile.
 	slog.Info("genkit initialising", logging.AttrComponent, "genkit", "genkit_env", os.Getenv("GENKIT_ENV"))
 	embedCallbacks, embedder, err := initEmbedding(ctx, cfg, r.chunksRepo, r.pieceRepo, r.assetFileRepo, store, secretStore, usageWiring.recorder)
@@ -390,13 +390,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Files:      r.assetFileRepo,
 		Recorder:   usageWiring.recorder,
 		EmbedModel: cfg.EmbedModel,
-		Notifier:   notifier, // CON-242: asset-ingest-done producer
+		Notifier:   notifier, // Asset-ingest-done producer
 	}
 	if pdfIngestEnabled {
 		pdfDeps.Client = pdfClient
 	}
 
-	// CON-280: document ingestion mirrors PDF — live when the parser and storage
+	// Document ingestion mirrors PDF — live when the parser and storage
 	// are present; embedder availability is checked per-run by the worker. Client
 	// left nil otherwise so the worker no-ops.
 	documentIngestEnabled := documentsClient != nil && store != nil
@@ -408,13 +408,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Files:      r.assetFileRepo,
 		Recorder:   usageWiring.recorder,
 		EmbedModel: cfg.EmbedModel,
-		Notifier:   notifier, // CON-242: asset-ingest-done producer
+		Notifier:   notifier, // Asset-ingest-done producer
 	}
 	if documentIngestEnabled {
 		documentDeps.Client = documentsClient
 	}
 
-	// CON-282: audio ingestion mirrors document/PDF — live when the audio-service
+	// Audio ingestion mirrors document/PDF — live when the audio-service
 	// client and storage are present; embedder availability is checked per-run by
 	// the worker. Client left nil otherwise so the worker no-ops. Runs on the
 	// dedicated `audio` River queue; the cost gate reuses the usage Checker.
@@ -436,13 +436,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		SegmentOverlapMs: cfg.AudioSegmentOverlapMs,
 		MaxDurationMs:    cfg.AudioMaxDurationMs,
 		JobTimeout:       cfg.AudioJobTimeout,
-		Notifier:         notifier, // CON-242: asset-ingest-done producer
+		Notifier:         notifier, // Asset-ingest-done producer
 	}
 	if audioIngestEnabled {
 		audioDeps.Client = audioClient
 	}
 
-	// CON-281: image ingestion mirrors audio — live when the image-service client
+	// Image ingestion mirrors audio — live when the image-service client
 	// and storage are present; embedder availability is checked per-run by the
 	// worker. Client left nil otherwise so the worker no-ops. Runs on the dedicated
 	// `image` River queue; the cost gate reuses the usage Checker.
@@ -464,13 +464,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		ConfidenceThreshold: cfg.VisionConfidenceThreshold,
 		AltTextMaxChars:     cfg.AltTextGenMaxChars,
 		JobTimeout:          cfg.ImageJobTimeout,
-		Notifier:            notifier, // CON-242: asset-ingest-done producer
+		Notifier:            notifier, // Asset-ingest-done producer
 	}
 	if imageIngestEnabled {
 		imageDeps.Client = imageClient
 	}
 
-	// CON-222: URL assets. The Firecrawl scrape client resolves firecrawl_api_key
+	// URL assets. The Firecrawl scrape client resolves firecrawl_api_key
 	// per request (hot-reload without restart, like Resend), so a key added via
 	// the secrets API enables the process_url worker + the /url endpoint with no
 	// reboot; an unset key leaves both dormant (the endpoint returns 409). Storage
@@ -489,12 +489,12 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		Hub:        hub,
 		Recorder:   usageWiring.recorder,
 		EmbedModel: cfg.EmbedModel,
-		Notifier:   notifier, // CON-242: asset-ingest-done producer
+		Notifier:   notifier, // Asset-ingest-done producer
 	}
 
-	// CON-87 WS3: River background-job queue. Runs on the same
+	// River background-job queue. Runs on the same
 	// database/sql pool as bun (db.DB), so a submit enqueue can join the
-	// schedule transaction (CON-78 §9). The worker pool starts below and
+	// schedule transaction. The worker pool starts below and
 	// is drained on shutdown via the Fiber hook.
 	//
 	// ProfileID resolves lazily so this wiring runs before the
@@ -528,7 +528,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// job is always scheduled; it is profile-driven, so when Zernio is disabled
 	// (no key / no profiles) each tick is a harmless no-op, and it starts
 	// producing once a key is set via the secrets API — no reboot.
-	// CON-154: transactional + marketing email. Seeds default templates and
+	// Transactional + marketing email. Seeds default templates and
 	// builds the Resend sender (per-call key resolution, so a key set/rotated via
 	// the secrets API takes effect with no reboot; an unset key = skipped_disabled).
 	emailRT, err := initEmail(ctx, cfg, secretStore, r.emailTemplateRepo, r.emailSuppressionRepo, r.emailLogRepo, r.emailEventRepo, r.emailBodyRepo, r.userRepo, activityWiring.recorder)
@@ -546,7 +546,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		AnalyticsSettings:   zernioRT.Settings,
 		AnalyticsHub:        hub,
 		AnalyticsWindowDays: cfg.ZernioAnalyticsWindowDays,
-		// CON-236: age-based refresh-decay schedule (new posts checked often,
+		// Age-based refresh-decay schedule (new posts checked often,
 		// settled posts rarely) so the trend history and current-state writes
 		// stay proportional to how fast a post's numbers still move.
 		AnalyticsDecay: queues.AnalyticsDecay{
@@ -556,38 +556,38 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 			WarmEvery:   cfg.ZernioAnalyticsWarmEvery,
 			ColdEvery:   cfg.ZernioAnalyticsColdEvery,
 		},
-		// CON-102: eager per-tenant profile provisioning at signup.
+		// Eager per-tenant profile provisioning at signup.
 		ProfileBootstrapper: zernioRT.Bootstrapper,
 		Integration:         zernioRT.Integration,
-		// CON-203: fence the profile teardown against a concurrent CON-190 restore.
+		// Fence the profile teardown against a concurrent CON-190 restore.
 		TenantFence: r.tenantFence,
-		// CON-103: PDF ingestion worker deps.
+		// PDF ingestion worker deps.
 		PDF: pdfDeps,
-		// CON-280: document ingestion worker deps.
+		// Document ingestion worker deps.
 		Document: documentDeps,
-		// CON-282: audio ingestion worker deps (runs on the dedicated audio queue).
+		// Audio ingestion worker deps (runs on the dedicated audio queue).
 		Audio: audioDeps,
-		// CON-281: image ingestion worker deps (runs on the dedicated image queue).
+		// Image ingestion worker deps (runs on the dedicated image queue).
 		Image: imageDeps,
-		// CON-222: URL scrape ingestion worker deps.
+		// URL scrape ingestion worker deps.
 		URL: urlDeps,
-		// CON-154: email send + cleanup worker deps.
+		// Email send + cleanup worker deps.
 		Email: emailRT.Deps,
-		// CON-217: expired headless-connect-session sweep.
+		// Expired headless-connect-session sweep.
 		ConnectSessionRepo: r.zernioConnectSessionRepo,
-		// CON-190: gate per-tenant jobs (publish/bootstrap/email) on tenant status.
+		// Gate per-tenant jobs (publish/bootstrap/email) on tenant status.
 		Tenants: r.tenantRepo,
-		// CON-219: connection-expiry sweep deps (owner recipients + reconnect link
+		// Connection-expiry sweep deps (owner recipients + reconnect link
 		// base + lead window). Its client/account repo ride Zernio, its email log
 		// repo rides Email.Logs.
 		Users:          r.userRepo,
 		AppBaseURL:     cfg.AppBaseURL,
 		ExpiryLeadDays: cfg.ConnectionExpiryLeadDays,
-		// CON-242: notification center — producer service + cleanup sweep deps.
+		// Notification center — producer service + cleanup sweep deps.
 		Notifier:              notifier,
 		NotificationRepo:      r.notificationRepo,
 		NotificationRetention: time.Duration(cfg.NotificationsRetentionDays) * 24 * time.Hour,
-		// CON-229: outbound new-tenant webhook to Harbor (signed). Empty URL ⇒ no-op.
+		// Outbound new-tenant webhook to Harbor (signed). Empty URL ⇒ no-op.
 		HarborNotify: queues.HarborNotifyDeps{URL: cfg.HarborWebhookURL, Secret: cfg.HarborWebhookSecret},
 	})
 
@@ -596,12 +596,12 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	riverClient, err := river.NewClient[*sql.Tx](riverdatabasesql.New(db.DB), &river.Config{
 		// Route River's internal logging through the shared structured logger
-		// (CON-107) so job-queue lines join the same stream and format.
+		// so job-queue lines join the same stream and format.
 		Logger: slog.Default(),
-		// CON-303: wrap every job in a root tracing span (so its DB/gRPC work is a
+		// Wrap every job in a root tracing span (so its DB/gRPC work is a
 		// coherent trace) and report exhausted-retry failures to Sentry.
 		Middleware: jobs.Middleware(),
-		// CON-282/CON-281: dedicated `audio` and `image` queues isolate long
+		// Dedicated `audio` and `image` queues isolate long
 		// transcription/vision runs from short jobs on the default queue (their
 		// pools are sized separately). Jobs are routed by each task's InsertOpts.
 		Queues:  queues.QueueConfigs(cfg.JobWorkers, cfg.AudioJobWorkers, cfg.ImageJobWorkers),
@@ -612,22 +612,22 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 			ReconcileEvery:    reconcileEvery,
 			AnalyticsEvery:    cfg.ZernioAnalyticsRefreshInterval,
 			IncludeAnalytics:  true,
-			// CON-153: daily follower-stats snapshot sweep. Like analytics, it is
+			// Daily follower-stats snapshot sweep. Like analytics, it is
 			// profile-driven, so it no-ops when Zernio is unconfigured.
 			FollowerEvery:    cfg.ZernioFollowerRefreshInterval,
 			IncludeFollowers: true,
-			// CON-217: reclaim expired headless-connect sessions. Correctness
+			// Reclaim expired headless-connect sessions. Correctness
 			// doesn't depend on it (readers treat past-expiry as gone); this just
 			// keeps the table tidy.
 			ConnectSessionCleanupEvery: 15 * time.Minute,
-			// CON-219: connection-health / expiry-notification sweep. Like analytics
+			// Connection-health / expiry-notification sweep. Like analytics
 			// and followers it is profile-driven, so it no-ops when Zernio is
 			// unconfigured.
 			HealthCheckEvery:        cfg.ZernioHealthCheckInterval,
 			IncludeConnectionExpiry: true,
-			// CON-242: notification retention/expiry sweep.
+			// Notification retention/expiry sweep.
 			NotificationCleanupEvery: cfg.NotificationsCleanupEvery,
-			// CON-285: manual-publish-due sweep.
+			// Manual-publish-due sweep.
 			ManualPublishDueEvery: cfg.ManualPublishDueSweepEvery,
 		}.PeriodicJobs(),
 	})
@@ -636,13 +636,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	enqueuer := &queues.Enqueuer{Client: riverClient}
 
-	// CON-97: public self-service signup (POST /api/tenants) + tenant CRU. The
+	// Public self-service signup (POST /api/tenants) + tenant CRU. The
 	// transactional signup use case (CON-102 profile bootstrap + CON-154 welcome/
 	// drip mail enqueued in its tx) lives in the signup service; both enqueues go
 	// through the River enqueuer, so this waits until the River client exists.
 	signupSvc := signup.New(db, r.accountRepo, r.tenantRepo, enqueuer)
 	signupSvc.SetEmailEnqueuer(enqueuer)
-	// CON-229: notify operators on a new registration. Only wired when the Harbor
+	// Notify operators on a new registration. Only wired when the Harbor
 	// webhook URL is configured, so an unconfigured deploy queues no webhook jobs.
 	if cfg.HarborWebhookURL != "" {
 		signupSvc.SetHarborEnqueuer(enqueuer)
@@ -651,14 +651,14 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	tenantsHandler.SetActivityRecorder(activityWiring.recorder)
 	tenantsHandler.Register(app)
 
-	// CON-147: authenticated workspace surface (list / create / switch). Create
+	// Authenticated workspace surface (list / create / switch). Create
 	// provisions a per-workspace Zernio profile through the same River enqueuer as
 	// signup, so it registers here alongside the tenants handler.
 	workspacesHandler := handlers.NewWorkspacesHandler(db, r.workspaceRepo, r.userRepo, r.accountRepo, r.tenantRepo, r.sessionRepo, enqueuer, auth)
 	workspacesHandler.SetActivityRecorder(activityWiring.recorder)
 	workspacesHandler.Register(app)
 
-	// CON-161: public password-reset request + confirm (both unauthenticated —
+	// Public password-reset request + confirm (both unauthenticated —
 	// the emailed token is the capability). The request endpoint enqueues the
 	// reset email in its token-minting tx, so registration waits until the River
 	// enqueuer exists.
@@ -667,22 +667,22 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	passwordResetHandler.SetEmailEnqueuer(enqueuer)
 	passwordResetHandler.Register(app)
 
-	// CON-26: workspace invitations (owner-gated create/list/revoke + public
+	// Workspace invitations (owner-gated create/list/revoke + public
 	// preview/accept). Creating an invite enqueues its email in the minting tx —
 	// like password reset — so registration waits until the River enqueuer exists.
 	invitationsHandler := handlers.NewInvitationsHandler(db, r.userRepo, r.accountRepo, r.tenantRepo, r.invitationRepo, r.sessionRepo, cfg.AppBaseURL, cfg.SessionCookieName, !cfg.Debug, auth)
 	invitationsHandler.SetActivityRecorder(activityWiring.recorder)
 	invitationsHandler.SetEmailEnqueuer(enqueuer)
-	invitationsHandler.SetLimiter(entitlementLimiter) // CON-295: seat cap on the accept path
+	invitationsHandler.SetLimiter(entitlementLimiter) // Seat cap on the accept path
 	invitationsHandler.Register(app)
 
-	// CON-154: public unsubscribe (token-gated) + Resend delivery webhook
+	// Public unsubscribe (token-gated) + Resend delivery webhook
 	// (signature-gated). Registered unconditionally; both degrade safely when
 	// the relevant secret is unset.
 	emailRT.Handler.Register(app)
 	emailRT.Webhook.Register(app)
 
-	// Expose expvar counters for ops health dashboards (CON-69 §13).
+	// Expose expvar counters for ops health dashboards.
 	// Gated by the same auth as the rest of the app so internal
 	// counters aren't anonymous. (A River monitoring UI is a follow-up;
 	// the old /admin/backlite mount is removed with backlite.)
@@ -697,14 +697,14 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		_ = riverClient.Stop(sctx)
 		return nil
 	})
-	// CON-282: close the audio-service gRPC connection AFTER River has drained
+	// Close the audio-service gRPC connection AFTER River has drained
 	// (hook registered here, post-Stop, so it runs after it in Fiber's ordered
 	// shutdown). Closing earlier would abort a still-running process_audio job's
 	// in-flight TranscribeSegment RPC. Runs before the recorder drain below.
 	if audioClient != nil {
 		app.Hooks().OnShutdown(func() error { return audioClient.Close() })
 	}
-	// CON-281: same ordering for the image-service connection — close it after
+	// Same ordering for the image-service connection — close it after
 	// River drains so a running process_image job's Extract RPC isn't aborted.
 	if imageClient != nil {
 		app.Hooks().OnShutdown(func() error { return imageClient.Close() })
@@ -733,7 +733,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		})
 	}
 
-	// CON-103: PDF ingestion goes through the process_pdf River job — the handler
+	// PDF ingestion goes through the process_pdf River job — the handler
 	// stores original.pdf and enqueues in its transaction. The enqueuer is wired
 	// only when ingestion is live; otherwise PDF uploads create a pending asset
 	// and skip processing. Markdown/JSON embedding still uses OnMarkdownSave.
@@ -741,10 +741,10 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if pdfIngestEnabled {
 		pdfJobs = enqueuer
 	}
-	// CON-222: URL ingestion enqueues through the same River client; the /url
+	// URL ingestion enqueues through the same River client; the /url
 	// endpoint gates on firecrawlClient.HasKey (409 when no key configured).
 	var urlJobs handlers.URLIngestEnqueuer = enqueuer
-	// CON-280: document ingestion enqueues through the same River client, gated on
+	// Document ingestion enqueues through the same River client, gated on
 	// document-service being configured. Left nil otherwise so a doc upload fails
 	// fast ("document ingestion is not configured") instead of stranding a pending
 	// asset.
@@ -752,7 +752,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if documentIngestEnabled {
 		docJobs = enqueuer
 	}
-	// CON-281: image ingestion enqueues through the same River client, gated on
+	// Image ingestion enqueues through the same River client, gated on
 	// image-service being configured. Left nil otherwise so an image upload fails
 	// fast ("image processing is not configured") — imageprobe was deleted, so
 	// there is no local fallback (D6).
@@ -775,7 +775,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 	assetsHandler.Register(app)
 
-	// CON-282: audio asset lifecycle (presigned upload + extraction status/
+	// Audio asset lifecycle (presigned upload + extraction status/
 	// transcript/retry). audioJobs is wired only when audio ingestion is live;
 	// otherwise the write endpoints return 409 ("audio ingestion not configured").
 	var audioJobs handlers.AudioIngestEnqueuer
@@ -786,7 +786,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	audioAssetsHandler.SetLimiter(entitlementLimiter)
 	audioAssetsHandler.Register(app)
 
-	// CON-281: content-bank image extraction surface (status/blocks + extract/
+	// Content-bank image extraction surface (status/blocks + extract/
 	// reextract/regenerate-alt-text). imgJobs is wired only when image ingestion is
 	// live; imageClient (nil-safe) backs alt-text regeneration.
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, store, db, imgJobs, imagePreparer, usageWiring.recorder, cfg.VisionClassifyModel, cfg.AltTextGenMaxChars, auth).Register(app)
@@ -796,28 +796,28 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	// 503 via the handler's IsAnthropicAvailable check); rotating
 	// anthropic_api_key via the gRPC secrets service triggers a rebuild
 	// on the next call.
-	// CON-59: one clone service, shared by the REST endpoint and the
+	// One clone service, shared by the REST endpoint and the
 	// assistant's clonePost tool. Deep-copies attachments in object
 	// storage so clone and source have independent blob lifecycles.
 	cloneSvc := clone.New(db, r.postRepo, r.postVersionRepo, r.postAttachmentRepo, r.platformRepo, r.postLogRepo, store, hub)
-	// CON-68: one restore service, shared by the REST endpoint and the
+	// One restore service, shared by the REST endpoint and the
 	// assistant's restoreVersion tool. Non-destructive append-only roll-back.
 	restoreSvc := restore.New(db, r.postRepo, r.postVersionRepo, r.postLogRepo, hub)
-	// CON-78: one schedule service, shared by POST /:id/schedule, the
+	// One schedule service, shared by POST /:id/schedule, the
 	// assistant's schedulePost tool, and the PUT scheduling branch. Owns
 	// allowlist routing + transactional persist + Zernio submit enqueue.
 	scheduleSvc := schedule.New(db, r.postRepo, r.platformRepo, r.postAttachmentRepo, r.autoPublishAllowlistRepo, r.postLogRepo, enqueuer, hub)
-	// CON-150: reject ambiguous / invalid same-platform account selections at
+	// Reject ambiguous / invalid same-platform account selections at
 	// schedule time (auto-publish posts only). Reuses the Zernio profile-id
 	// resolver so it degrades to the submit-worker backstop before bootstrap.
 	scheduleSvc.SetAccountGate(r.socialAccountRepo, func(ctx context.Context) (string, error) {
 		id, _, err := zernioRT.Settings.Get(ctx, pubzernio.SettingProfileID)
 		return id, err
 	})
-	// CON-251: snapshot the content submitted to Zernio at schedule time so a
+	// Snapshot the content submitted to Zernio at schedule time so a
 	// published post keeps a durable record of "what actually went out".
 	scheduleSvc.SetVersionSnapshot(r.postVersionRepo)
-	// CON-188: one note service, shared by the REST CRUD and the assistant's
+	// One note service, shared by the REST CRUD and the assistant's
 	// createNote tool, so validation + origin stamping never drift.
 	noteSvc := notes.New(r.postNoteRepo)
 
@@ -884,7 +884,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 		noteSvc:             noteSvc,
 		recorder:            usageWiring.recorder,
 		checker:             usageWiring.checker,
-		notifier:            notifier, // CON-242: campaign content-plan-ready producer
+		notifier:            notifier, // Campaign content-plan-ready producer
 	}, secretStore)
 	if err != nil {
 		return nil, err
@@ -892,68 +892,68 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	slog.Info("genkit flows registered", logging.AttrComponent, "genkit")
 
 	handlers.NewCampaignTypesHandler(r.campaignTypeRepo, auth).Register(app)
-	// CON-113/CON-152: the campaign read projections (GET /:id/overview + GET
+	// The campaign read projections (GET /:id/overview + GET
 	// /summaries) are a focused handler (CON-291 split out of CampaignsHandler),
 	// registered BEFORE it so the static /summaries route wins over /:id.
 	handlers.NewCampaignReadHandler(campaignOverviewSvc, campaignSummariesSvc, auth).Register(app)
-	// CON-285: Activity daily-report endpoints (GET /api/activity/report/:date +
+	// Activity daily-report endpoints (GET /api/activity/report/:date +
 	// /reports). The live feed itself rides the CON-242 notification stream.
 	handlers.NewActivityHandler(activityReportSvc, auth).Register(app)
 	campaignsHandler := handlers.NewCampaignsHandler(r.campaignRepo, r.campaignTypeRepo, auth, gkRuntime.GenerateDraft, gkRuntime.IsAnthropicAvailable, gkRuntime.EnrichBrief, r.campaignMessageRepo, gkRuntime.RunCampaignAssistant)
 	campaignsHandler.SetLimiter(entitlementLimiter)
-	// CON-114/CON-116: targeted generation + consistency reviews are a focused
+	// Targeted generation + consistency reviews are a focused
 	// handler (CON-291 split out of CampaignsHandler), sharing the Anthropic-key
 	// readiness gate and the same flow callbacks the assistant uses.
 	handlers.NewCampaignGenerationHandler(r.campaignRepo, gkRuntime.GeneratePosts, cfg.GeneratePostsMax, gkRuntime.CheckBrief, gkRuntime.CheckPosts, gkRuntime.IsAnthropicAvailable, activityWiring.recorder, auth).Register(app)
 	campaignsHandler.SetActivityRecorder(activityWiring.recorder)
-	// CON-245: validate campaign brand_voice_id/brand_audience_id against the tenant.
+	// Validate campaign brand_voice_id/brand_audience_id against the tenant.
 	campaignsHandler.SetBrandRepo(r.brandRepo)
 	campaignsHandler.Register(app)
-	// CON-166: a campaign's phase date plan (GET/PUT/DELETE /:id/phases).
+	// A campaign's phase date plan (GET/PUT/DELETE /:id/phases).
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, activityWiring.recorder, auth).Register(app)
-	// CON-228: Brand materials — tenant-scoped voices/audiences/guardrails/look/
+	// Brand materials — tenant-scoped voices/audiences/guardrails/look/
 	// templates behind /api/brand. The ui repo built its /brand screens against a
-	// stub whose shapes this endpoint answers verbatim (CON-227).
+	// stub whose shapes this endpoint answers verbatim.
 	brandHandler := handlers.NewBrandHandler(r.brandRepo, store, auth)
 	brandHandler.SetActivityRecorder(activityWiring.recorder)
 	brandHandler.Register(app)
 	handlers.NewPlatformsHandler(r.platformRepo, pubs, r.autoPublishAllowlistRepo, auth).Register(app)
 	handlers.NewTagsHandler(r.tagRepo, auth).Register(app)
 	postsHandler := handlers.NewPostsHandler(r.postRepo, r.postVersionRepo, r.platformRepo, r.postAttachmentRepo, auth)
-	// CON-128: the AI assistant surface (POST /:id/assistant SSE + GET /:id/messages)
+	// The AI assistant surface (POST /:id/assistant SSE + GET /:id/messages)
 	// is a focused handler (CON-291 split out of PostsHandler).
 	handlers.NewPostAssistantHandler(gkRuntime.RunPostAssistant, gkRuntime.IsAnthropicAvailable, r.postMessageRepo, activityWiring.recorder, auth).Register(app)
-	// CON-245: validate a post's brand_voice_id/brand_audience_id against the tenant.
+	// Validate a post's brand_voice_id/brand_audience_id against the tenant.
 	postsHandler.SetBrandRepo(r.brandRepo)
-	// CON-166: a post's campaign_type_phase_id must be a phase of its campaign's type.
+	// A post's campaign_type_phase_id must be a phase of its campaign's type.
 	postsHandler.SetCampaignRepo(r.campaignRepo)
-	// CON-69 §11: every transition (success/blocked) and validation
+	// Every transition (success/blocked) and validation
 	// outcome lands in the Post Log.
 	postsHandler.SetPostLogRepo(r.postLogRepo)
-	// CON-69 §5: ReadyForPublish→Scheduled consults the auto-publish
+	// ReadyForPublish→Scheduled consults the auto-publish
 	// allowlist and (for allowlisted platforms) enqueues a submit task
 	// transactionally with the status change + log write.
 	postsHandler.SetSchedulingDeps(r.autoPublishAllowlistRepo, enqueuer, db)
-	// CON-59/CON-68: clone + restore actions (POST /:id/clone, /:id/restore) are a
+	// Clone + restore actions (POST /:id/clone, /:id/restore) are a
 	// focused actions handler (CON-291 split out of PostsHandler), sharing the same
 	// services the assistant tools use.
 	handlers.NewPostActionsHandler(r.postRepo, cloneSvc, restoreSvc, activityWiring.recorder, auth).Register(app)
-	// CON-78: same schedule service the assistant uses, behind the REST
+	// Same schedule service the assistant uses, behind the REST
 	// endpoint POST /api/posts/:id/schedule and the PUT scheduling branch.
 	postsHandler.SetScheduleService(scheduleSvc)
-	// CON-85/CON-92/CON-93: post quality assessment (POST /:id/assess + GET
+	// Post quality assessment (POST /:id/assess + GET
 	// /:id/assessment) and the per-post analytics snapshot read (GET
 	// /:id/analytics) are a focused insights handler (CON-291 split out of
 	// PostsHandler), registered on the same /api/posts group.
 	handlers.NewPostInsightsHandler(r.postRepo, gkRuntime.AssessPostQuality, r.postEvaluationRepo, r.postAnalyticsRepo, gkRuntime.IsAnthropicAvailable, activityWiring.recorder, auth).Register(app)
-	// CON-153: POST /api/posts/:id/verify-external — confirm a manually
+	// POST /api/posts/:id/verify-external — confirm a manually
 	// published post via Zernio's sync-external, back-fill publisher_post_id +
 	// a first analytics snapshot, and emit post.analytics.updated.
 	// CON-153 external-post verification is its own focused handler (CON-291 split
 	// out of PostsHandler), registered on the same /api/posts group.
 	handlers.NewPostVerificationHandler(r.postRepo, zernioRT.Integration.Client, r.socialAccountRepo, profileIDResolver, r.postAnalyticsRepo, r.postVersionRepo, hub, auth).Register(app)
 	postsHandler.SetActivityRecorder(activityWiring.recorder)
-	// Cascade post-attachment S3 cleanup on post delete (CON-73 §2.7).
+	// Cascade post-attachment S3 cleanup on post delete.
 	// FK CASCADE handles the DB rows; this hook handles the bucket.
 	postsHandler.SetOnBeforeDelete(func(ctx context.Context, postID string) error {
 		if store == nil {
@@ -975,20 +975,20 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	})
 	postsHandler.Register(app)
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, auth).Register(app)
-	// CON-93 FR5 + CON-153: analytics surface under its own /api/analytics group
+	// Analytics surface under its own /api/analytics group
 	// (avoids the /api/posts/:id route collision). The post overview + follower
 	// series are served from the DB; the insight aggregates live-proxy to Zernio.
 	handlers.NewAnalyticsHandler(r.postAnalyticsRepo, r.followerStatsRepo, r.postRepo, zernioRT.Integration.Client, profileIDResolver, auth).Register(app)
 
 	handlers.NewImagesHandler(store, auth).Register(app)
-	// CON-103: PDF attachment page-count + thumbnail now come from pdf-service.
+	// PDF attachment page-count + thumbnail now come from pdf-service.
 	// nil pdfClient (PDF_SERVICE_ADDR unset) degrades gracefully (no page count
 	// / thumbnail), so it's wired only when present.
 	var attachmentRenderer handlers.PDFRenderer
 	if pdfClient != nil {
 		attachmentRenderer = pdfClient
 	}
-	// CON-148: video attachment probing (duration/codec/resolution + poster)
+	// Video attachment probing (duration/codec/resolution + poster)
 	// comes from video-service. nil videoClient (VIDEO_SERVICE_ADDR unset)
 	// degrades gracefully (uploads accepted unprobed), so it's wired only when
 	// present.
@@ -996,7 +996,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	if videoClient != nil {
 		attachmentProber = videoClient
 	}
-	// CON-281: image attachments route through image-service (EXIF-strip + metadata
+	// Image attachments route through image-service (EXIF-strip + metadata
 	// + async alt text). imagePreparer is nil when the service is unwired, so image
 	// attachment uploads fail fast (503) — imageprobe was deleted (D6). Alt-text
 	// generation is metered on the gemini vendor and targets AltTextGenMaxChars.
@@ -1004,23 +1004,23 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	postAttachmentsHandler.SetLimiter(entitlementLimiter)
 	postAttachmentsHandler.Register(app)
 
-	// CON-188: per-post notes CRUD, nested under a post.
+	// Per-post notes CRUD, nested under a post.
 	postNotesHandler := handlers.NewPostNotesHandler(noteSvc, r.postRepo, auth)
 	postNotesHandler.SetActivityRecorder(activityWiring.recorder)
 	postNotesHandler.Register(app)
 
-	// CON-315: the workspace Ideas backlog (capture + triage verdicts).
+	// The workspace Ideas backlog (capture + triage verdicts).
 	ideasHandler := handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), auth)
 	ideasHandler.SetActivityRecorder(activityWiring.recorder)
 	ideasHandler.Register(app)
 
-	// The React SPA is deployed separately (CON-98) — the API serves only
+	// The React SPA is deployed separately — the API serves only
 	// /api/* (plus SSE). Non-API routes fall through to a 404.
 	return app, nil
 }
 
 func defaultErrorHandler(c *fiber.Ctx, err error) error {
-	// CON-295: render entitlement denials as structured bodies.
+	// Render entitlement denials as structured bodies.
 	if qe, ok := errors.AsType[*entitlements.QuotaExceededError](err); ok {
 		return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
 			"error": "entitlement_exceeded", "feature": qe.Key, "limit": qe.Limit, "current": qe.Current,
@@ -1033,9 +1033,8 @@ func defaultErrorHandler(c *fiber.Ctx, err error) error {
 	if e, ok := errors.AsType[*fiber.Error](err); ok {
 		code = e.Code
 	}
-	// Server errors were previously swallowed — only a JSON body reached the
-	// client, nothing was logged (CON-107). Log 5xx at ERROR with request
-	// context; 4xx is a client problem, not a server fault, so it is not logged
+	// Log 5xx at ERROR with request context so server errors are never
+	// swallowed behind the JSON body the client gets; 4xx is a client problem, not a server fault, so it is not logged
 	// as an error here (it still appears in the access log).
 	if code >= 500 {
 		slog.ErrorContext(c.Context(), "request failed",
@@ -1044,7 +1043,7 @@ func defaultErrorHandler(c *fiber.Ctx, err error) error {
 			"path", c.Path(),
 			"status", code,
 			logging.AttrError, err)
-		// CON-303: report the server fault to Sentry, linked to the request trace.
+		// Report the server fault to Sentry, linked to the request trace.
 		// A no-op when telemetry is disabled; skips panics already captured at
 		// recovery time.
 		reportServerError(c, err, code)
@@ -1053,7 +1052,7 @@ func defaultErrorHandler(c *fiber.Ctx, err error) error {
 }
 
 // accessLog emits exactly one structured line per request, replacing Fiber's
-// default text logger (CON-107). It runs after the handler so the request,
+// default text logger. It runs after the handler so the request,
 // tenant, and user ids set by downstream middleware are attached by the slog
 // ContextHandler via c.Context(). Like Fiber's own logger middleware it invokes
 // the app ErrorHandler when the chain returns an error, so the logged status

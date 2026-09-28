@@ -128,7 +128,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		tierAssignmentRepo:       repository.NewTenantTierAssignmentRepository(db),
 	}
 
-	// CON-125/CON-153: analytics snapshots + follower stats live on the isolated
+	// Analytics snapshots + follower stats live on the isolated
 	// analytics pool. Left nil when it is disabled — reads fail-open to 503 and
 	// the refresh jobs no-op.
 	if analyticsDB != nil {
@@ -139,8 +139,8 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 }
 
 // newFiberApp builds the API's fiber.App with its base middleware stack:
-// panic-recovery, per-request correlation id (CON-107), access logging, and —
-// when a cross-origin UI is configured — credentialed CORS (CON-98).
+// panic-recovery, per-request correlation id, access logging, and —
+// when a cross-origin UI is configured — credentialed CORS.
 func newFiberApp(cfg *config.Config) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ErrorHandler: defaultErrorHandler,
@@ -151,18 +151,18 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 		BodyLimit: 100 << 20,
 	})
 
-	// CON-303: tracing + panic/error capture, outermost. Replaces the bare
-	// recover middleware that used to sit here. See useObservability.
+	// Tracing, panic recovery and error capture, outermost. See
+	// useObservability.
 	useObservability(app)
 
-	// Per-request correlation id (CON-107): honours an inbound X-Request-ID,
+	// Per-request correlation id: honours an inbound X-Request-ID,
 	// otherwise generates one, echoes it on the response, and stores it under
 	// logging.RequestIDKey so the slog ContextHandler attaches it to every line
 	// made with c.Context().
 	app.Use(requestid.New(requestid.Config{ContextKey: logging.RequestIDKey}))
 	app.Use(accessLog())
 
-	// CORS for the decoupled UI (CON-98). When the SPA is served from a
+	// CORS for the decoupled UI. When the SPA is served from a
 	// different origin, the configured UI origin(s) must be allowed to call
 	// the API with credentials so the c3_session cookie is accepted. Empty
 	// CORSAllowedOrigins (same-origin dev, or a UI that reverse-proxies /api)
@@ -173,7 +173,7 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 			AllowCredentials: true,
 			AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 			// sentry-trace/baggage (Sentry browser SDK) + traceparent/tracestate
-			// (W3C) let the UI's trace continue into the API server span (CON-303).
+			// (W3C) let the UI's trace continue into the API server span.
 			AllowHeaders: "Content-Type,sentry-trace,baggage,traceparent,tracestate",
 		}))
 	}

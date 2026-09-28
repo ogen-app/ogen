@@ -23,24 +23,23 @@ const (
 // IsValidRole reports whether r is one of the roles CON-26 recognises.
 func IsValidRole(r string) bool { return r == RoleOwner || r == RoleMember }
 
-// User is a per-(account, workspace) MEMBERSHIP since CON-147 PR1 — one row per
-// account per tenant, carrying that account's role in that tenant. Before the
-// split a users row was the identity itself; now the credential lives on Account
-// (AccountID) and this row is what `user_id` FKs (sessions, authorship,
-// activity) resolve to: "this account, in this workspace." Email/Name stay,
-// denormalised from the account for existing responses; email is no longer
-// unique (one account can be a member of several workspaces).
+// User is a per-(account, workspace) MEMBERSHIP — one row per account per
+// tenant, carrying that account's role in that tenant. The credential lives on
+// Account (AccountID); this row is what `user_id` FKs (sessions, authorship,
+// activity) resolve to: "this account, in this workspace." Email/Name are
+// denormalised from the account for existing responses; email is not unique
+// (one account can be a member of several workspaces).
 type User struct {
 	bun.BaseModel `bun:"table:users,alias:u" swaggerignore:"true"`
 
 	ID string `bun:"id,pk"             json:"id"`
-	// AccountID is the login identity this membership belongs to (CON-147).
+	// AccountID is the login identity this membership belongs to.
 	AccountID string `bun:"account_id,notnull" json:"-"`
 	TenantID  string `bun:"tenant_id,notnull"  json:"-"`
 	Name      string `bun:"name,notnull"       json:"name"`
 	Email     string `bun:"email,notnull"      json:"email"`
-	// Role is the account's authority in this tenant (CON-26). Backfilled to
-	// 'owner' for every pre-CON-26 user (each was the sole member of its tenant).
+	// Role is the account's authority in this tenant. Users that predate
+	// invitations are 'owner' (each was the sole member of its tenant).
 	Role      string    `bun:"role,notnull,default:'member'" json:"role"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`

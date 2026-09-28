@@ -25,7 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// ProcessAudioKind is the River worker kind for audio ingestion (CON-282):
+// ProcessAudioKind is the River worker kind for audio ingestion:
 // download the original, probe + tier-gate, normalize once, segment, transcribe
 // each segment via audio-service (Gemini multimodal), then — on full completion
 // — assemble time-anchored transcript chunks, embed them, and store them in the
@@ -36,7 +36,7 @@ const ProcessAudioKind = "process_audio"
 
 // AudioQueue is the dedicated River queue audio jobs run on, isolated from the
 // default queue so a backlog of hour-long assets can't starve short ingestion
-// for other tenants (CON-282 §5, §13). Its MaxWorkers + job timeout are sized
+// for other tenants. Its MaxWorkers + job timeout are sized
 // separately in server.go.
 const AudioQueue = "audio"
 
@@ -46,7 +46,7 @@ const (
 	// ≈1k tokens per chunk — in the same ballpark as pdf/document chunks.
 	audioChunkTargetChars = 4000
 	// audioMinChunkChars: a trailing chunk below this is merged into the previous
-	// one rather than emitted standalone (CON-282 §8).
+	// one rather than emitted standalone.
 	audioMinChunkChars = 200
 	// audioPresignTTL bounds the presigned GET/PUT URLs handed to audio-service.
 	// Generous so a long per-segment transcription can't outlive its URL.
@@ -108,15 +108,15 @@ type AudioDeps struct {
 	Embedder chunkEmbedder
 	Storage  audioBlobStore
 	Assets   assetStatusUpdater
-	// Content writes the assembled transcript onto asset.Content on completion
-	// (CON-312), so previews and the assistant's asset-content tools see it. Nil
+	// Content writes the assembled transcript onto asset.Content on completion,
+	// so previews and the assistant's asset-content tools see it. Nil
 	// skips the write.
 	Content     assetContentSetter
 	Chunks      chunkUpserter
 	Extractions audioExtractionStore
 	Segments    audioSegmentStore
 	Utterances  utteranceStore
-	// Recorder meters transcription usage on the existing gemini vendor (CON-86);
+	// Recorder meters transcription usage on the existing gemini vendor;
 	// Checker gates the run against the tenant's cost cap before spend. Both
 	// nil-safe.
 	Recorder *usage.Recorder
@@ -132,7 +132,7 @@ type AudioDeps struct {
 	MaxDurationMs    int64
 	JobTimeout       time.Duration
 	// Notifier drops an in-app notification to the asset's creator on a terminal
-	// status (CON-242). Nil is a no-op.
+	// status. Nil is a no-op.
 	Notifier *notify.Service
 }
 
@@ -200,7 +200,7 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 		_ = p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
 		return fmt.Errorf("process_audio %s: storage/repos not configured", in.AssetID)
 	}
-	// Transcription AND embedding both need gemini_api_key (CON-104): checked up
+	// Transcription AND embedding both need gemini_api_key: checked up
 	// front so we don't normalize + transcribe only to fail every chunk embed.
 	// Retry rather than fail — a key set via the secrets API takes effect without
 	// a restart; give up (failed) only once attempts are exhausted.
@@ -448,7 +448,7 @@ func (p *ProcessAudioProcessor) transcribeSegment(ctx context.Context, in Proces
 	}
 
 	// Compute this segment's cost and persist it ON THE SEGMENT in the SAME write
-	// that marks it done, so cost and completion commit atomically (CON-282): a
+	// that marks it done, so cost and completion commit atomically: a
 	// crash between the two can never leave a done segment whose cost is then lost
 	// on the resume that skips it. finalize sums the per-segment costs.
 	var segCost int64
@@ -472,10 +472,10 @@ func (p *ProcessAudioProcessor) transcribeSegment(ctx context.Context, in Proces
 		return fmt.Errorf("process_audio %s: checkpoint segment done: %w", in.AssetID, err)
 	}
 
-	// Best-effort AFTER the durable segment write: a usage event (CON-86) and an
+	// Best-effort AFTER the durable segment write: a usage event and an
 	// early detected-language hint. A crash here loses only an analytics event or
 	// a cosmetic hint (re-derived at finalize) — never the authoritative cost,
-	// which now rides the segment row.
+	// which is stored on the segment row.
 	if res.InputTokens > 0 || res.OutputTokens > 0 {
 		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, model, "transcribe", llm.TranscribeUsage{
 			InputTokens:  res.InputTokens,
@@ -512,7 +512,7 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 		costSum += segments[i].CostMicros
 	}
 	// The run cost is the sum of the per-segment costs each done segment persisted
-	// atomically, so it's exact no matter how many attempts the run took (CON-282).
+	// atomically, so it's exact no matter how many attempts the run took.
 	ext.CostMicros = costSum
 	if desc, ok := vendors.Get(llm.VendorGemini); ok {
 		ext.PriceVersion = desc.Prices.Version
@@ -608,8 +608,8 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 		}
 	}
 
-	// Persist the ASSET terminal status BEFORE marking the extraction complete
-	// (CON-282): the completed-run guard in process() short-circuits a retry, so
+	// Persist the ASSET terminal status BEFORE marking the extraction complete:
+	// the completed-run guard in process() short-circuits a retry, so
 	// flipping the extraction to complete first and then failing the asset-status
 	// write would strand the asset in "processing" forever. This order lets a
 	// retry re-run finalize (idempotent — chunks upsert-replace) and re-attempt
@@ -623,7 +623,7 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 		return err
 	}
 	// Meter the transcript-chunk embeddings on the gemini vendor, like
-	// document_extract (CON-312): only after the durable writes (chunks +
+	// document_extract: only after the durable writes (chunks +
 	// transcript + status), so a retry from a late failure can't double-count.
 	if totalEmbedTokens > 0 {
 		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "audio_embed", llm.EmbedUsage{Tokens: totalEmbedTokens})
@@ -635,7 +635,7 @@ func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTas
 }
 
 // terminalReject marks the extraction + asset failed with a tenant-visible
-// reason and its machine-readable code (CON-312), and does NOT return an error
+// reason and its machine-readable code, and does NOT return an error
 // (no retry). Leaves ext.Status == failed.
 func (p *ProcessAudioProcessor) terminalReject(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction, code, reason string) error {
 	ext.Status = models.AudioExtractionStatusFailed
@@ -655,7 +655,7 @@ func (p *ProcessAudioProcessor) failSegment(ctx context.Context, seg *models.Aud
 }
 
 // setAssetStatus persists the asset status and announces terminal outcomes to
-// the creator (CON-242). A nil Assets dep is a no-op.
+// the creator. A nil Assets dep is a no-op.
 func (p *ProcessAudioProcessor) setAssetStatus(ctx context.Context, assetID, status string) error {
 	if p.Deps.Assets == nil {
 		return nil
@@ -730,7 +730,7 @@ type assembledAudioChunk struct {
 func (a assembledAudioChunk) text() string { return strings.Join(a.parts, " ") }
 
 // assembleAudioChunks turns the raw, possibly-overlapping utterance stream into
-// embed-ready chunks (CON-282 §8): drop no-speech + overlap duplicates
+// embed-ready chunks: drop no-speech + overlap duplicates
 // (midpoint inside an already-kept span), never split an utterance, pack to a
 // char/token budget on utterance boundaries, and merge a sub-minimum tail into
 // the previous chunk.

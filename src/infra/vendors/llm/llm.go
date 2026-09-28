@@ -2,7 +2,7 @@
 // generation) and Gemini (embeddings) — into the vendor registry, and exposes
 // a Provider that resolves model references by logical role. Flows depend on a
 // role ("generation"/"quality") and this package, not on a hardcoded
-// "anthropic/" prefix or the Anthropic SDK config type (CON-86 D8/FR12).
+// "anthropic/" prefix or the Anthropic SDK config type.
 //
 // Importing this package registers the vendors via init(), mirroring the River
 // job self-registration idiom — adding a model vendor is one file.
@@ -23,12 +23,12 @@ const (
 )
 
 // priceVersion tags the rate set below so historical cost is never recomputed
-// from edited prices (CON-86 FR3). Bump on any rate change. Rates verified
+// from edited prices. Bump on any rate change. Rates verified
 // 2026-09-11 against platform.claude.com (Sonnet 4.5 $3/$15, Haiku 4.5 $1/$5;
 // cache-read 0.1×, cache-write-5m 1.25×) and ai.google.dev (Gemini Embedding
 // $0.15/1M input; Gemini 2.5 Flash: audio input $1.00/1M, output $2.50/1M —
 // transcription input is audio, so KindInput carries the audio rate, CON-282).
-// Expanded 2026-09-23 (CON-308): added the current Anthropic chat catalog —
+// Expanded 2026-09-23: added the current Anthropic chat catalog —
 // Opus 4.6/4.7/4.8 ($5/$25), Sonnet 4.6 ($3/$15), Fable 5 ($10/$50) — from the
 // Claude API model catalog, so operators can assign any of them per flow.
 // Re-verify against platform.claude.com/pricing before trusting for billing.
@@ -105,14 +105,14 @@ func init() {
 	vendors.Register(vendors.Descriptor{
 		Name:      VendorGemini,
 		Family:    vendors.FamilyModel,
-		SecretKey: "gemini_api_key", // must match secrets.NameGeminiAPIKey (CON-104)
+		SecretKey: "gemini_api_key", // must match secrets.NameGeminiAPIKey
 		Metered:   true,
 		Meter:     geminiMeter{},
 		Prices: vendors.PriceTable{
 			Version: priceVersion,
 			Models: map[string]vendors.Rates{
 				"gemini-embedding-2": {vendors.KindEmbedInput: 150_000},
-				// CON-282: audio transcription reuses the gemini vendor with a new
+				// Audio transcription reuses the gemini vendor with a new
 				// model id + input/output token rates (no new vendor). The model id
 				// is config (TRANSCRIBE_MODEL); keep this key in sync so runs are
 				// priced rather than counted as unknown-model (cost stays 0). Input
@@ -122,7 +122,7 @@ func init() {
 					vendors.KindInput:  1_000_000,
 					vendors.KindOutput: 2_500_000,
 				},
-				// CON-281: image-service vision runs on the same gemini vendor. The
+				// Image-service vision runs on the same gemini vendor. The
 				// service returns per-call token usage; ogen prices it here. classify
 				// uses 2.5-flash (already priced above; its input rate is the audio
 				// rate, a small over-estimate for image input — acceptable v1, cost is
@@ -140,7 +140,7 @@ func init() {
 			"gemini-embedding-2": {Capability: modelconfig.CapabilityEmbed, EmbedDims: 3072},
 			// Chat-capable Gemini models (used today by the vision/transcription
 			// microservices, CON-310). Listed so ListModels can surface them; chat
-			// slots reject non-Anthropic models in v1 (CON-308 §4).
+			// slots reject non-Anthropic models in v1.
 			"gemini-2.5-flash": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576},
 			"gemini-2.5-pro":   {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576},
 		},
@@ -154,7 +154,7 @@ func init() {
 // genkit's normalized usage exposes cache_read (as CachedContentTokens) but
 // NOT cache_creation (the Anthropic plugin drops it), so cache_creation is
 // left unset (0) and understates cached-write cost until a raw-response path
-// lands (CON-86 FR2, §10).
+// lands.
 type genkitGenerateMeter struct{}
 
 func (genkitGenerateMeter) Extract(resp any) (string, vendors.Usage, bool) {
@@ -175,13 +175,13 @@ func (genkitGenerateMeter) Extract(resp any) (string, vendors.Usage, bool) {
 
 // EmbedUsage is what an embedding call site hands to the Gemini meter: the
 // embed response carries no token count, so the caller computes it (from
-// assets_chunks.token_count) and passes it here (CON-86 FR2).
+// assets_chunks.token_count) and passes it here.
 type EmbedUsage struct {
 	Tokens int64
 }
 
 // TranscribeUsage is what an audio-transcription call site hands to the Gemini
-// meter (CON-282): audio-service returns Gemini's own input/output token counts
+// meter: audio-service returns Gemini's own input/output token counts
 // per segment, which ogen sums and prices via the gemini vendor's input/output
 // rates — the same vendor the embedder uses, no new vendor.
 type TranscribeUsage struct {
@@ -189,8 +189,8 @@ type TranscribeUsage struct {
 	OutputTokens int64
 }
 
-// VisionUsage is what an image-vision call site hands to the Gemini meter
-// (CON-281): image-service returns Gemini's own input/output token counts per
+// VisionUsage is what an image-vision call site hands to the Gemini meter:
+// image-service returns Gemini's own input/output token counts per
 // vision call, tagged with the pipeline Step (vision_classify / vision_extract /
 // alt_text / describe) which becomes the usage event's Operation. Priced via the
 // gemini vendor's input/output rates — the same vendor the embedder + transcriber

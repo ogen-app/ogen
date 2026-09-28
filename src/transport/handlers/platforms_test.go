@@ -18,7 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
-// The tenant platforms surface is read-only (CON-292): platform lifecycle moved
+// The tenant platforms surface is read-only: platform lifecycle moved
 // to the operator-only PlatformAdminService gRPC, so the former POST/PUT/DELETE
 // specs were removed with those endpoints. GET filters to enabled platforms.
 var _ = Describe("PlatformsHandler", Ordered, func() {
@@ -99,7 +99,7 @@ var _ = Describe("PlatformsHandler", Ordered, func() {
 				var platforms []models.Platform
 				Expect(json.NewDecoder(resp.Body).Decode(&platforms)).To(Succeed())
 				// The six seeded platforms are enabled; any disabled catalog rows
-				// (e.g. TikTok/Pinterest/Reddit) are filtered out (CON-292 §11).
+				// (e.g. TikTok/Pinterest/Reddit) are filtered out.
 				Expect(platforms).To(HaveLen(6))
 				for _, p := range platforms {
 					Expect(p.Enabled).To(BeTrue())

@@ -14,7 +14,7 @@ import (
 )
 
 // CleanupPostLogsQueue is the recurring sweep that drops Post Log entries
-// older than the configured retention window (CON-69 §11). Its cadence is a
+// older than the configured retention window. Its cadence is a
 // River PeriodicJob (see PeriodicConfig); the marker is unique across active
 // states so overlapping ticks can't stack.
 const CleanupPostLogsQueue = "cleanup_post_logs"
@@ -47,7 +47,7 @@ type CleanupPostLogsProcessor struct {
 // Work is the River entrypoint; it delegates to Process.
 func (p *CleanupPostLogsProcessor) Work(ctx context.Context, job *river.Job[CleanupPostLogsTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// CON-97: background jobs span tenants (interim until per-tenant, PR4).
+	// Background jobs span tenants (interim until per-tenant, PR4).
 	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }

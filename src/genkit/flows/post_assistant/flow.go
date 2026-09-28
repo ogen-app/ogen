@@ -49,7 +49,7 @@ func InitPostAssistant(g *genkit.Genkit, cfg PostAssistantFlowConfig, repos Post
 		return fmt.Errorf("post_assistant.tmpl must define \"system\", \"planner\", \"writer\", and \"context\" blocks")
 	}
 
-	// CON-128: in the hybrid path the orchestration loop runs on the planner
+	// In the hybrid path the orchestration loop runs on the planner
 	// system prompt (routing + the editPost tool) and delegates copywriting to
 	// the Sonnet writer; the legacy path keeps the single system prompt that
 	// writes content inline. Resolve which system prompt the loop uses, and
@@ -67,7 +67,7 @@ func InitPostAssistant(g *genkit.Genkit, cfg PostAssistantFlowConfig, repos Post
 
 	tools := defineTools(g)
 
-	// CON-112: warm Anthropic's strict-tool grammar cache in the background so
+	// Warm Anthropic's strict-tool grammar cache in the background so
 	// the first real request doesn't pay the ~50s compile. Non-blocking.
 	if cfg.PrewarmTools {
 		go prewarmToolCache(g, cfg, tools)
@@ -154,7 +154,7 @@ func publishAssistantFinalised(
 }
 
 // notifyAssistantFinalised drops a durable "assistant finished / failed"
-// notification to the post owner (CON-285): the initiator, who may have walked
+// notification to the post owner: the initiator, who may have walked
 // away while the run continued. The client suppresses the live echo for the tab
 // that started it (lib/localRuns) — this row is for other devices and a later
 // return. The dedupe_key collapses repeats for the same post while still unread,

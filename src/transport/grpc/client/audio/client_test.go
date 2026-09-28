@@ -250,7 +250,7 @@ func mdValue(md metadata.MD, key string) string {
 
 // TestCallsPropagateCorrelationMetadata asserts the unary interceptor copies
 // request_id/tenant_id from the call context into outgoing gRPC metadata under
-// the exact header keys audio-service reads (CON-111), on every RPC.
+// the exact header keys audio-service reads, on every RPC.
 func TestCallsPropagateCorrelationMetadata(t *testing.T) {
 	stub := &stubServer{
 		probeResp:     &audiov1.ProbeResponse{},

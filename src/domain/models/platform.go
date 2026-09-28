@@ -10,7 +10,7 @@ import (
 )
 
 // ImageConstraints is the structured rule set carried per platform row
-// for post-attachment validation (CON-73). It serialises as JSON in a
+// for post-attachment validation. It serialises as JSON in a
 // jsonb column.
 //
 // Storing this on the platform row (rather than a Go-side map keyed by
@@ -61,8 +61,8 @@ func (c ImageConstraints) IsZero() bool {
 		c.MaxAttachmentsPerPost == 0
 }
 
-// PDFConstraints is the sibling rule set for PDF post attachments
-// (CON-75). A zero value means "this platform does not accept PDFs",
+// PDFConstraints is the sibling rule set for PDF post attachments.
+// A zero value means "this platform does not accept PDFs",
 // which the validator surfaces as a soft warning.
 type PDFConstraints struct {
 	MaxFileSizeBytes      int64    `json:"max_file_size_bytes"`
@@ -105,8 +105,8 @@ func (c PDFConstraints) IsZero() bool {
 		c.MaxAttachmentsPerPost == 0
 }
 
-// VideoConstraints is the sibling rule set for video post attachments
-// (CON-148). A zero value means "this platform does not accept video",
+// VideoConstraints is the sibling rule set for video post attachments.
+// A zero value means "this platform does not accept video",
 // which the validator surfaces as a soft warning — mirroring the PDF
 // branch. Duration/resolution/aspect fields are only enforced when
 // non-zero, so a platform can opt into just the checks it cares about.
@@ -119,8 +119,8 @@ type VideoConstraints struct {
 	MaxHeight             int      `json:"max_height"`           // 0 = unbounded
 	AllowedAspectRatios   []string `json:"allowed_aspect_ratios"`
 	MaxAttachmentsPerPost int      `json:"max_attachments_per_post"` // usually 1
-	// RequiresVideoTitle blocks publishing a video post whose title is empty
-	// (CON-148 §9). YouTube requires a title; most feed/Reel platforms derive
+	// RequiresVideoTitle blocks publishing a video post whose title is empty.
+	// YouTube requires a title; most feed/Reel platforms derive
 	// one from the caption, so this stays false for them.
 	RequiresVideoTitle bool `json:"requires_video_title"`
 }
@@ -164,7 +164,7 @@ func (c VideoConstraints) IsZero() bool {
 		!c.RequiresVideoTitle
 }
 
-// TextConstraints is the sibling rule set for post text length (CON-91).
+// TextConstraints is the sibling rule set for post text length.
 // The opaque `constraints` prose column still feeds the model prompt; this
 // carries the machine-readable limits the composer's Validations panel (and
 // the publish gate) check against.
@@ -239,11 +239,11 @@ type Platform struct {
 	ID   string `bun:"id,pk"        json:"id"`
 	Name string `bun:"name,notnull" json:"name"`
 	// ZernioID is the Zernio wire slug ("twitter", "linkedin", …). It replaces
-	// the retired Go registry's sqidToZernioID map (CON-292): the publish path
+	// the retired Go registry's sqidToZernioID map: the publish path
 	// and connect flow resolve this off the row. "" means the operator has not
 	// yet assigned a slug (the row is not publishable until they do).
 	ZernioID string `bun:"zernio_id,notnull,default:''" json:"zernio_id"`
-	// Enabled is the operator soft on/off switch (CON-292). A disabled platform
+	// Enabled is the operator soft on/off switch. A disabled platform
 	// drops from GET /api/platforms and blocks new connects, but already-scheduled
 	// posts still publish (the publish path resolves zernio_id regardless).
 	Enabled bool `bun:"enabled,notnull,default:false" json:"enabled"`
@@ -253,7 +253,7 @@ type Platform struct {
 	ConnectSupported bool        `bun:"connect_supported,notnull,default:true" json:"connect_supported"`
 	PostTypes        PostTypeMap `bun:"post_types,notnull,type:jsonb"          json:"post_types"`
 	// SupportedPostTypes is the Zernio-publishable subset of PostTypes' slugs
-	// (CON-292) — replaces SupportedPlatform.SupportedPostTypes. PostTypes carries
+	// — replaces SupportedPlatform.SupportedPostTypes. PostTypes carries
 	// every slug for display; this array marks which ones actually publish.
 	SupportedPostTypes StringSlice      `bun:"supported_post_types,notnull,type:jsonb"      json:"supported_post_types"`
 	Cadence            string           `bun:"cadence,notnull"                              json:"cadence"`
@@ -262,7 +262,7 @@ type Platform struct {
 	PDFConstraints     PDFConstraints   `bun:"pdf_constraints,notnull,type:jsonb"           json:"pdf_constraints"`
 	VideoConstraints   VideoConstraints `bun:"video_constraints,notnull,type:jsonb"         json:"video_constraints"`
 	TextConstraints    TextConstraints  `bun:"text_constraints,notnull,type:jsonb"          json:"text_constraints"`
-	// SortOrder drives composer/picker ordering (CON-292).
+	// SortOrder drives composer/picker ordering.
 	SortOrder int       `bun:"sort_order,notnull,default:0"                 json:"sort_order"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`

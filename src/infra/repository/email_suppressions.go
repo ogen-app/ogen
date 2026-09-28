@@ -9,7 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// EmailSuppressionRepository is the "do not mail" list (CON-154 §7). Entries
+// EmailSuppressionRepository is the "do not mail" list. Entries
 // are keyed by lower-cased email address; the repository normalises on both
 // write and read so callers don't have to.
 type EmailSuppressionRepository interface {

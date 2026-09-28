@@ -11,8 +11,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// AudioExtractionRepository persists the per-run audio transcription state
-// (CON-282). Tenant scoping comes from the TenantScoped hooks on the model.
+// AudioExtractionRepository persists the per-run audio transcription state.
+// Tenant scoping comes from the TenantScoped hooks on the model.
 type AudioExtractionRepository interface {
 	// Create inserts a new extraction row. A duplicate (asset_id, run_key) hits
 	// the unique index and returns an error the caller treats as "already

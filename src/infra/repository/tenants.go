@@ -14,23 +14,23 @@ import (
 // TenantRepository defines all persistence operations for the Tenant domain.
 //
 // Tenants are the isolation boundary itself, so this repository is
-// intentionally NOT routed through the tenant-scoped query layer (CON-97 §6) —
+// intentionally NOT routed through the tenant-scoped query layer —
 // it operates on the global tenants table directly.
 type TenantRepository interface {
 	Create(ctx context.Context, tenant *models.Tenant) error
 	GetByID(ctx context.Context, id string) (*models.Tenant, error)
 	GetBySlug(ctx context.Context, slug string) (*models.Tenant, error)
 	Update(ctx context.Context, tenant *models.Tenant) error
-	// SoftDeleteTx marks a workspace deleted (CON-147 PR4) on the provided bun.IDB
+	// SoftDeleteTx marks a workspace deleted on the provided bun.IDB
 	// so it can join the delete handler's transaction (which also, later, enqueues
 	// the Zernio teardown). It stamps status='deleted' alongside deleted_at
-	// (CON-190) to keep the two in lockstep. Idempotent: a second call while
+	// to keep the two in lockstep. Idempotent: a second call while
 	// already deleted is a no-op. Passing nil uses the default DB.
 	SoftDeleteTx(ctx context.Context, tx bun.IDB, id string, at time.Time) error
 
 	// --- CON-208 operator/admin classification read + write (Harbor gRPC) ---
 
-	// GetByIDWithClassification loads a tenant of ANY status (CON-190: operators
+	// GetByIDWithClassification loads a tenant of ANY status (operators
 	// inspect suspended/deleted tenants too) and hydrates its Tier and Groups.
 	// Returns sql.ErrNoRows only for an unknown id.
 	GetByIDWithClassification(ctx context.Context, id string) (*models.Tenant, error)
@@ -44,13 +44,13 @@ type TenantRepository interface {
 
 	// --- CON-190 operator/admin lifecycle status (Harbor gRPC) ---
 
-	// SetStatus sets a tenant's lifecycle status + reason (CON-190). It reaches a
+	// SetStatus sets a tenant's lifecycle status + reason. It reaches a
 	// tenant in ANY status (so it can restore a deleted one) and keeps deleted_at
 	// in lockstep: set to `at` for status='deleted', cleared to NULL otherwise.
 	// reason is stored as-is (the service clears it for non-suspended targets).
 	// Returns false if no such tenant id exists.
 	SetStatus(ctx context.Context, tenantID, status, reason string, at time.Time) (bool, error)
-	// GetStatus returns a tenant's lifecycle status (CON-190), for background-job
+	// GetStatus returns a tenant's lifecycle status, for background-job
 	// active-tenant guards. Returns sql.ErrNoRows for an unknown id.
 	GetStatus(ctx context.Context, id string) (string, error)
 }
@@ -126,8 +126,8 @@ func (r *tenantRepository) SoftDeleteTx(ctx context.Context, tx bun.IDB, id stri
 
 func (r *tenantRepository) GetByIDWithClassification(ctx context.Context, id string) (*models.Tenant, error) {
 	tenant := new(models.Tenant)
-	// Any status: operators inspect (and restore) suspended/deleted tenants too
-	// (CON-190). Unknown id → ErrNoRows.
+	// Any status: operators inspect (and restore) suspended/deleted tenants too.
+	// Unknown id → ErrNoRows.
 	err := r.db.NewSelect().Model(tenant).
 		Where("tn.id = ?", id).
 		Scan(ctx)
@@ -155,7 +155,7 @@ func (r *tenantRepository) ListWithClassification(ctx context.Context, f TenantL
 	offset := max(f.Offset, 0)
 
 	var tenants []models.Tenant
-	// Any status by default (CON-190): the operator console lists all tenants and
+	// Any status by default: the operator console lists all tenants and
 	// badges them by status; pass f.Status to narrow (e.g. only 'suspended').
 	q := r.db.NewSelect().Model(&tenants)
 	if f.Status != "" {
@@ -201,7 +201,7 @@ func (r *tenantRepository) SetTier(ctx context.Context, tenantID, tierID string)
 }
 
 func (r *tenantRepository) SetStatus(ctx context.Context, tenantID, status, reason string, at time.Time) (bool, error) {
-	// Atomic read-modify-write (CON-190): lock the row, and only write when the
+	// Atomic read-modify-write: lock the row, and only write when the
 	// status actually changes. Setting a tenant to the status it already has is a
 	// success no-op that leaves deleted_at, status_reason and updated_at untouched
 	// — so, e.g., a repeated delete keeps the ORIGINAL deletion timestamp rather

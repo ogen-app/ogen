@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Limit modes (CON-86 D1/FR7): enforce blocks a synchronous call once the
+// Limit modes: enforce blocks a synchronous call once the
 // tenant is already over a cap; warn records + counts but proceeds.
 const (
 	LimitModeEnforce = "enforce"
@@ -14,7 +14,7 @@ const (
 )
 
 // TenantUsageLimit is a tenant's per-day / per-month spend cap and mode,
-// stored in the control-plane database (CON-86 FR7). One row per tenant
+// stored in the control-plane database. One row per tenant
 // (UNIQUE on tenant_id); an absent row means "fall back to the config
 // defaults, else unlimited". Nullable caps mean "no cap for that period".
 type TenantUsageLimit struct {

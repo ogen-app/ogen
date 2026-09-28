@@ -14,7 +14,7 @@ import (
 
 // prewarmToolCache fires one throwaway generation carrying the flow's full tool
 // set so Anthropic compiles the strict-tool constrained-decoding grammar and
-// caches it (CON-112). Without it, the first *real* request per ~24h cache TTL
+// caches it. Without it, the first *real* request per ~24h cache TTL
 // pays the ~50s compile; warming it in the background at init moves that cost
 // off the user path.
 //
@@ -28,7 +28,7 @@ func prewarmToolCache(g *genkit.Genkit, cfg PostAssistantFlowConfig, t *toolSet)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// CON-128: warm the grammar the real loop uses — in the hybrid path that's
+	// Warm the grammar the real loop uses — in the hybrid path that's
 	// the planner tool set (incl. editPost) on the planning model; in the legacy
 	// path it's the base tool set on the generation model. The writer sub-call
 	// carries no tools, so there is no separate grammar to warm for it.

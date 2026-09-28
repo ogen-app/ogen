@@ -19,7 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// maxAudioUploadBytes caps a direct-to-storage audio upload (CON-282). Audio is
+// maxAudioUploadBytes caps a direct-to-storage audio upload. Audio is
 // large (an hour of speech is hundreds of MB), so the bytes never pass through
 // the API — the client PUTs to a presigned URL and the size is enforced at
 // finalize via Head against the authoritative object.
@@ -48,7 +48,7 @@ var audioUploadMIMEs = map[string]string{
 }
 
 // AudioIngestEnqueuer enqueues an audio-ingestion job in the caller's
-// transaction (CON-282). Implemented by *queues.Enqueuer; a narrow interface
+// transaction. Implemented by *queues.Enqueuer; a narrow interface
 // here keeps the handler off the jobs package.
 type AudioIngestEnqueuer interface {
 	EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error
@@ -58,7 +58,7 @@ type AudioIngestEnqueuer interface {
 // re-drive, so the reset/update roll back and the handler answers 409.
 var errNoFailedSegments = errors.New("no failed segments to retry")
 
-// AudioAssetsHandler serves the audio asset lifecycle (CON-282): presigned
+// AudioAssetsHandler serves the audio asset lifecycle: presigned
 // direct upload, ingestion trigger, and the extraction status/transcript/retry
 // surface. It is a focused sibling of AssetsHandler (CON-291 split), registered
 // on the same /api/content-bank/assets group. A nil audioJobs (no
@@ -73,12 +73,12 @@ type AudioAssetsHandler struct {
 	db          *bun.DB
 	audioJobs   AudioIngestEnqueuer
 	auth        fiber.Handler
-	limiter     *entitlements.Limiter // CON-295 quota gate (nil-safe), CON-312
+	limiter     *entitlements.Limiter // CON-295 quota gate (nil-safe)
 }
 
 // SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op): presign
 // gates content_bank_assets, finalize gates media_storage_bytes on the real
-// uploaded size (CON-312).
+// uploaded size.
 func (h *AudioAssetsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func NewAudioAssetsHandler(
@@ -163,7 +163,7 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "unsupported audio type — accepted: mp3, wav, m4a, aac, ogg, opus, flac, webm, aiff")
 	}
 
-	// CON-295/CON-312: presign mints a content_bank_assets row, so gate it like
+	// Presign mints a content_bank_assets row, so gate it like
 	// /upload does. The bytes aren't known yet — finalize gates storage.
 	var assetQuota entitlements.Decision
 	tenantID, hasTenant := tenantctx.From(reqCtx(c))
@@ -551,7 +551,7 @@ func (h *AudioAssetsHandler) prepareAndEnqueue(c *fiber.Ctx, asset *models.Asset
 	if ferr != nil {
 		return ferr
 	}
-	// CON-295/CON-312: the uploaded bytes join the tenant's media_storage_bytes.
+	// The uploaded bytes join the tenant's media_storage_bytes.
 	// Only the growth over what the file row already records is new (0 on a
 	// retry/reextract, whose size was stamped by the first finalize).
 	var mediaQuota entitlements.Decision

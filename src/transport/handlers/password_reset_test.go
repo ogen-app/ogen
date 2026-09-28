@@ -57,7 +57,7 @@ var _ = Describe("PasswordResetHandler", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("users").Where("1 = 1").Exec(ctx)
 		Expect(err).NotTo(HaveOccurred())
-		// The credential now lives on accounts (CON-147); each seedTenantUser
+		// The credential now lives on accounts; each seedTenantUser
 		// inserts one, and specs reuse the same emails, so clear it too or the
 		// unique-email constraint collides across specs.
 		_, err = db.NewDelete().TableExpr("accounts").Where("1 = 1").Exec(ctx)

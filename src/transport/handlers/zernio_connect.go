@@ -38,7 +38,7 @@ type connectSecrets struct {
 	UserProfile  json.RawMessage `json:"userProfile,omitempty"`
 }
 
-// ConnectCallback is Zernio's headless post-OAuth redirect target (CON-217).
+// ConnectCallback is Zernio's headless post-OAuth redirect target.
 // It is unauthenticated at the cookie layer — the browser may drop the session
 // cookie across the cross-site redirect — and instead authenticates via the
 // unguessable connect-session id (ogen_cn), from which it resolves the tenant.
@@ -184,7 +184,7 @@ type pendingConnectionResponse struct {
 }
 
 // GetPendingConnection returns the selectable targets for an awaiting-selection
-// connect session, scoped to the caller's tenant (CON-217). It never returns
+// connect session, scoped to the caller's tenant. It never returns
 // the sealed Zernio tokens.
 //
 // GetPendingConnection godoc
@@ -222,7 +222,7 @@ type selectConnectionRequest struct {
 }
 
 // SelectPendingConnection finalizes a multi-target connect by attaching the
-// chosen target (CON-217). It decrypts the stored Zernio tokens server-side,
+// chosen target. It decrypts the stored Zernio tokens server-side,
 // calls Zernio's select endpoint, then deletes the session and nudges the sync
 // worker so the account mirrors quickly.
 //

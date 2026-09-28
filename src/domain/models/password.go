@@ -35,7 +35,7 @@ var ProductionArgon2Params = Argon2Params{
 // FastTestArgon2Params is a deliberately low-cost profile for test
 // runs. Production's 64 MiB + 3-iter argon2id can take >1s under
 // `-procs=2 -race` — well beyond fiber's default 1000ms `app.Test`
-// timeout — and produces hard-to-diagnose flakes (see CON-70). Tests
+// timeout — and produces hard-to-diagnose flakes. Tests
 // that exercise auth code may assign this to DefaultArgon2Params in
 // a TestMain (or an init in a *_test.go file) to keep hash latency
 // in single-digit milliseconds without changing the production

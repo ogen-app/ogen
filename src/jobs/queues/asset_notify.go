@@ -9,22 +9,22 @@ import (
 
 // assetCreatorLookup resolves an asset's creator — the recipient for its
 // ingest-completion notification. Both the URL and PDF worker's asset deps
-// satisfy it (CON-242).
+// satisfy it.
 type assetCreatorLookup interface {
 	CreatorOf(ctx context.Context, id string) (string, error)
 }
 
 // notifyAssetStatus drops a notification to an asset's creator when ingestion
-// reaches a TERMINAL status (CON-242). Non-terminal statuses (processing) are
+// reaches a TERMINAL status. Non-terminal statuses (processing) are
 // ignored, so one call inside each worker's setStatus covers every terminal
 // path with no per-call-site wiring. Best-effort: a nil notifier or a
 // creator-lookup miss is a silent no-op — ingestion never depends on it. The
 // ctx is already tenant-scoped by the worker, so the row lands in the right
 // tenant and the creator lookup is correctly isolated.
 //
-// kind is the asset's models.AssetType*: a URL asset (CON-222) emits the
+// kind is the asset's models.AssetType*: a URL asset emits the
 // distinct url_asset.crawled/url_asset.failed types the feed renders with link
-// wording (CON-285 FR10); every other kind keeps asset.ready/asset.ingest_failed.
+// wording; every other kind keeps asset.ready/asset.ingest_failed.
 func notifyAssetStatus(ctx context.Context, n *notify.Service, creators assetCreatorLookup, assetID, status, label, kind string) {
 	if n == nil {
 		return

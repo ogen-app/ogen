@@ -1,4 +1,4 @@
-// Package documents is a thin gRPC client for the document-service (CON-280). It
+// Package documents is a thin gRPC client for the document-service. It
 // owns the connection, the raised receive limit, and the per-call deadline, and
 // presents office/text-document parsing as a single Parse call that
 // client-streams the bytes and returns embedding-ready, source-anchored chunks.
@@ -129,9 +129,9 @@ func New(cfg Config) (*Client, error) {
 	}
 	// The correlation interceptors copy request_id/tenant_id from the call
 	// context into outgoing gRPC metadata so document-service's logs join the
-	// API's (CON-111).
+	// API's.
 	dialOpts := []grpc.DialOption{
-		// CON-303: emit a client span per RPC and propagate the trace to the service.
+		// Emit a client span per RPC and propagate the trace to the service.
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainStreamInterceptor(correlationStreamInterceptor),

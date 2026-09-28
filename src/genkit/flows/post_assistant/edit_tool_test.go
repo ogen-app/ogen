@@ -21,7 +21,7 @@ func TestToolEditPost_RequiresInstruction(t *testing.T) {
 	}
 }
 
-// CON-251: a schedule committed earlier in the same generation must lock the
+// A schedule committed earlier in the same generation must lock the
 // content against a later editPost. The editPost guard reads postStatus, so
 // schedulePost has to advance it — otherwise edit-after-schedule in one turn
 // would rewrite a post whose content just locked at schedule time. Exercise the
@@ -96,7 +96,7 @@ func TestToolEditPost_WriterUnavailable(t *testing.T) {
 
 // The writer must receive the full retrieved excerpts as source material —
 // alongside the unchanged, verbatim instruction — so an asset-grounded edit
-// grounds on the retrieved text rather than the short preview (CON-128).
+// grounds on the retrieved text rather than the short preview.
 func TestComposeWriterInstruction_IncludesRetrievedExcerpts(t *testing.T) {
 	instruction := "Add a section on goroutine scheduling from the whitepaper."
 	excerpts := []retrievedExcerpt{

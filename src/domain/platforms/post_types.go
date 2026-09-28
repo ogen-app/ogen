@@ -58,7 +58,7 @@ func RuleFor(slug string) (PostTypeRule, bool) {
 }
 
 // ValidatePostType enforces the whitelist plus per-type structural
-// rules used by the Draft → ReadyForPublish gate (CON-74). A nil
+// rules used by the Draft → ReadyForPublish gate. A nil
 // platform, or an empty post type, short-circuits to nil; callers
 // rely on the upstream required-field check to surface those.
 func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostAttachment) []ValidationError {
@@ -81,7 +81,7 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 		return nil
 	}
 
-	// CON-284: a threaded post is validated per segment (count + per-segment
+	// A threaded post is validated per segment (count + per-segment
 	// char limit + per-segment media + segment_index integrity), not as one
 	// whole message. Its structure lives in ThreadSegments + the attachments'
 	// segment_index, which the single-message checks below can't express — so
@@ -93,7 +93,7 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 	var errs []ValidationError
 
 	// Measure the flattened body: a post whose content is only Markdown syntax
-	// (e.g. a lone "---") publishes as empty once we flatten at egress (CON-126),
+	// (e.g. a lone "---") publishes as empty once we flatten at egress,
 	// so it must fail requires_content rather than slip through as "non-empty".
 	if rule.RequiresContent && strings.TrimSpace(FlattenSocialText(post.Content)) == "" {
 		errs = append(errs, ValidationError{
@@ -141,7 +141,7 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 		}
 	}
 
-	// CON-148: a video post type on a platform that requires a title (YouTube)
+	// A video post type on a platform that requires a title (YouTube)
 	// can't publish untitled. Only fires for video post types so image/text
 	// posts are unaffected.
 	if slices.Contains(rule.AllowedKinds, KindVideo) && p.VideoConstraints.RequiresVideoTitle && strings.TrimSpace(post.Title) == "" {
@@ -154,10 +154,10 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 		})
 	}
 
-	// CON-91: enforce the same char limits the composer surfaces client-side, so a
+	// Enforce the same char limits the composer surfaces client-side, so a
 	// client bug can't slip an over-length post past the publish gate. Count the
 	// flattened, visible length (VisibleLen) — the text that actually publishes now
-	// that we flatten Markdown at egress (CON-126) — so **bold** and [text](url)
+	// that we flatten Markdown at egress — so **bold** and [text](url)
 	// don't spend budget on syntax the reader never sees. A zero limit means
 	// unbounded → skip.
 	if limit := p.TextConstraints.ContentLimitFor(post.PlatformPostType); limit > 0 {
@@ -187,7 +187,7 @@ func ValidatePostType(post *models.Post, p *models.Platform, atts []models.PostA
 }
 
 // MaxThreadSegments is the built-in default cap on how many messages one thread
-// post may carry (CON-284 §6.5). CON-292 made it operator-controllable via
+// post may carry. CON-292 made it operator-controllable via
 // platform_global_limits — validateThread reads the live GlobalLimits() value;
 // this const is the fallback default, mirrored by
 // models.DefaultPlatformGlobalLimits().MaxThreadSegments and the migration seed.
@@ -206,7 +206,7 @@ func validateThread(post *models.Post, p *models.Platform, atts []models.PostAtt
 	var errs []ValidationError
 	segs := post.ThreadSegments
 	n := len(segs)
-	// Operator-controlled ceiling (CON-292); defaults to MaxThreadSegments.
+	// Operator-controlled ceiling; defaults to MaxThreadSegments.
 	maxSeg := GlobalLimits().MaxThreadSegments
 
 	switch {
@@ -244,7 +244,7 @@ func validateThread(post *models.Post, p *models.Platform, atts []models.PostAtt
 		}
 		if limit > 0 {
 			// Count what publishes, not the Markdown syntax around it: the
-			// per-message ceiling governs the flattened caption (CON-284 R2), and
+			// per-message ceiling governs the flattened caption, and
 			// this must match the composer's counter, which reads the preview
 			// endpoint's char_count — both go through VisibleLen.
 			if c := VisibleLen(segs[i].Content); c > limit {
@@ -273,7 +273,7 @@ func validateThreadAttachments(p *models.Platform, atts []models.PostAttachment,
 	bySegment := map[int][]models.PostAttachment{}
 	for i := range atts {
 		att := atts[i]
-		// CON-284 R2: segment_index is optional. The delimited-body authoring flow
+		// segment_index is optional. The delimited-body authoring flow
 		// does not pin media per segment, so a NULL index means "attach to the root
 		// message" (segment 0) — the whole-post default. An explicit index is still
 		// range-checked (the advanced per-segment pinning path sets it).
@@ -314,7 +314,7 @@ func validateThreadAttachments(p *models.Platform, atts []models.PostAttachment,
 // REST create/update paths, the schedule service, and the assistant's readiness
 // advisor. For an ordinary post it runs the whole-post media rules
 // (ValidateForPublish) plus the per-post-type rules (ValidatePostType); for a
-// thread post (CON-284) it runs ONLY the per-segment gate, because the
+// thread post it runs ONLY the per-segment gate, because the
 // whole-post media caps would wrongly count every segment's media against one
 // per-post limit. Returns the per-platform error map (keyed by platform.ID);
 // empty when the post passes or platform is nil.
@@ -358,10 +358,10 @@ type ResolvedPostTypeRule struct {
 	// MaxContentChars is the body-text ceiling for this post type, resolved
 	// from the platform's TextConstraints (per-post-type override, else the
 	// platform default). nil means unbounded — the UI shows no counter cap.
-	// Counts are Unicode code points, matching the server-side check (CON-91).
+	// Counts are Unicode code points, matching the server-side check.
 	MaxContentChars *int `json:"max_content_chars"`
 	// Segmented marks a post type whose composer authors an ordered list of
-	// messages rather than one body (CON-284: the "thread" type). MaxContentChars
+	// messages rather than one body (the "thread" type). MaxContentChars
 	// then carries the PER-SEGMENT limit (X 280 / Threads 500), and the UI renders
 	// the segmented composer with a counter per message. false for every other type.
 	Segmented bool `json:"segmented"`

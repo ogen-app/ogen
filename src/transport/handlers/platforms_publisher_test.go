@@ -19,7 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
-// PlatformsHandler enrichment tests (CON-63). Sibling file to
+// PlatformsHandler enrichment tests. Sibling file to
 // platforms_test.go so the original tests stay focused on CRUD.
 var _ = Describe("PlatformsHandler publishers enrichment", Ordered, func() {
 	var (
@@ -79,7 +79,7 @@ var _ = Describe("PlatformsHandler publishers enrichment", Ordered, func() {
 		_, err := db.NewInsert().Model(&models.Platform{
 			ID:      "linkedin",
 			Name:    "LinkedIn",
-			Enabled: true, // CON-292: enabled defaults to false; this row must be live to enrich.
+			Enabled: true, // Enabled defaults to false; this row must be live to enrich.
 			PostTypes: models.PostTypeMap{
 				"text-post":  "Text post",
 				"image-post": "Image post",
@@ -186,7 +186,7 @@ var _ = Describe("PlatformsHandler publishers enrichment", Ordered, func() {
 			_, err := db.NewInsert().Model(&models.Platform{
 				ID:      "rzgpTkARLH0L",
 				Name:    "Instagram",
-				Enabled: true, // CON-292: explicit since enabled now defaults to false.
+				Enabled: true, // Explicit since enabled now defaults to false.
 				PostTypes: models.PostTypeMap{
 					"image-post": "Image post",
 					"reel":       "Reel",
@@ -262,7 +262,7 @@ var _ = Describe("PlatformsHandler publishers enrichment", Ordered, func() {
 		})
 	})
 
-	// ── auto_publish_allowed (CON-65) ───────────────────────────────
+	// ── auto_publish_allowed ───────────────────────────────
 
 	Describe("auto_publish_allowed", func() {
 		// Initialise the package-level repos directly so this Describe

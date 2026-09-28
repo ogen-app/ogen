@@ -178,7 +178,7 @@ func TestFindByContentRecoversAfterDedupe(t *testing.T) {
 			t.Error("dateFrom should be present")
 		}
 		// The status filter must be dropped so the search spans every status
-		// the earlier job could be in (CON-129).
+		// the earlier job could be in.
 		if got := r.URL.Query().Get("status"); got != "" {
 			t.Errorf("status filter should be dropped, got %q", got)
 		}

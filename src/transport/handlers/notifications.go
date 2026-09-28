@@ -28,7 +28,7 @@ import (
 // rows onto the stream at once.
 const maxReplayNotifications = 200
 
-// NotificationsHandler serves the per-user notification inbox (CON-242): the
+// NotificationsHandler serves the per-user notification inbox: the
 // REST read/write API plus the durable SSE stream. The stream reuses the shared
 // eventhub for live push and the notifications table for reconnect replay.
 type NotificationsHandler struct {
@@ -62,7 +62,7 @@ func NewNotificationsHandler(
 	}
 }
 
-// SetMaxLifetime overrides the per-connection lifetime ceiling (CON-286).
+// SetMaxLifetime overrides the per-connection lifetime ceiling.
 // A non-positive value is ignored. Primarily for tests.
 func (h *NotificationsHandler) SetMaxLifetime(d time.Duration) {
 	if d > 0 {
@@ -72,7 +72,7 @@ func (h *NotificationsHandler) SetMaxLifetime(d time.Duration) {
 
 func (h *NotificationsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/notifications", h.auth)
-	// Static routes before the parametric ones (CON-130) so /unread-count etc.
+	// Static routes before the parametric ones so /unread-count etc.
 	// aren't shadowed by /:id.
 	g.Get("/", h.List)
 	g.Get("/unread-count", h.UnreadCount)
@@ -300,7 +300,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 	c.Set("X-Accel-Buffering", "no")
 
 	// Capture before the writer goroutine runs — the fiber ctx is recycled the
-	// moment this handler returns (CON-158), so nothing below may touch
+	// moment this handler returns, so nothing below may touch
 	// c.Context(). Build a detached, tenant-scoped ctx for the replay query.
 	userID := session.UserID
 	sessionID := session.ID
@@ -318,8 +318,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		defer unsubscribe()
 		// Track *active* connections: increment and decrement in the same
-		// goroutine so the gauge can never grow without a matching release
-		// (CON-286 — previously it only ever counted up).
+		// goroutine so the gauge can never grow without a matching release.
 		notify.StreamConnections.Add(1)
 		defer notify.StreamConnections.Add(-1)
 
@@ -351,7 +350,7 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 		ticker := time.NewTicker(heartbeat)
 		defer ticker.Stop()
 
-		// CON-286: hard lifetime ceiling. Guarantees this goroutine — and the
+		// Hard lifetime ceiling. Guarantees this goroutine — and the
 		// hub slot it holds — is released even if the client vanished without a
 		// detectable close and no write ever fails. The client reconnects and
 		// replays anything missed via Last-Event-ID (the seq on the id: line).
@@ -446,7 +445,7 @@ func seqParam(c *fiber.Ctx, name string) (int64, error) {
 
 // limitParam parses the page size in [1,100]; empty ⇒ 30. An over-max limit is
 // rejected with 400 rather than silently clamped, so the spec and the server
-// agree on the page size the caller asked for (CON-242 §9).
+// agree on the page size the caller asked for.
 func limitParam(c *fiber.Ctx) (int, error) {
 	raw := c.Query("limit")
 	if raw == "" {

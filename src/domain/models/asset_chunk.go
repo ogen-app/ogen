@@ -13,23 +13,23 @@ import (
 // Longer assets are split into multiple overlapping chunks.
 type AssetChunk struct {
 	bun.BaseModel `bun:"table:assets_chunks,alias:ac" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID         string `bun:"id,pk"                                        json:"id"`
 	AssetID    string `bun:"asset_id,notnull"                             json:"asset_id"`
 	ChunkIndex int    `bun:"chunk_index,notnull"                          json:"chunk_index"`
 	PageStart  *int   `bun:"page_start"                                   json:"page_start"`
 	PageEnd    *int   `bun:"page_end"                                     json:"page_end"`
-	// SourceLabel is a human-readable citation for the chunk's origin (CON-280),
+	// SourceLabel is a human-readable citation for the chunk's origin,
 	// e.g. "Slide 4", "Sheet 'Q3 Pipeline' rows 10-24", or a heading breadcrumb.
 	// nil for chunks that predate document ingestion (PDF/URL/MD).
 	SourceLabel *string `bun:"source_label"                              json:"source_label,omitempty"`
-	// SourceAnchor is the structured location backing SourceLabel (CON-280),
+	// SourceAnchor is the structured location backing SourceLabel,
 	// stored as jsonb. nil for non-document chunks.
 	SourceAnchor *SourceAnchor `bun:"source_anchor,type:jsonb"          json:"source_anchor,omitempty"`
 	Content      string        `bun:"content,notnull"                    json:"content"`
 	TokenCount   int           `bun:"token_count,notnull"                json:"token_count"`
-	// Embedding is the chunk's 3072-dim Gemini Embedding 2 vector (CON-101),
+	// Embedding is the chunk's 3072-dim Gemini Embedding 2 vector,
 	// stored in a pgvector halfvec(3072) column. halfvec (16-bit floats) is
 	// required because pgvector's full-precision vector HNSW index caps at 2000
 	// dimensions. Similarity search runs in-database via the `<=>`
@@ -39,11 +39,11 @@ type AssetChunk struct {
 	CreatedAt time.Time           `bun:"created_at,notnull,default:current_timestamp" json:"-"`
 }
 
-// SourceAnchor is the structured source location of a document chunk (CON-280),
+// SourceAnchor is the structured source location of a document chunk,
 // persisted as jsonb in assets_chunks.source_anchor. Which fields are populated
 // depends on Kind: page for prose flow, slide for decks, sheet+CellRange for
 // spreadsheets, HeadingPath for structured prose, headers-as-metadata for
-// email, StartMs/EndMs for audio transcript time-ranges (CON-282), and Bbox for
+// email, StartMs/EndMs for audio transcript time-ranges, and Bbox for
 // image-region extractions (CON-281, Kind == "image"). Zero-valued fields are
 // omitted from the stored JSON.
 type SourceAnchor struct {
@@ -54,19 +54,19 @@ type SourceAnchor struct {
 	CellRange   string   `json:"cell_range,omitempty"`
 	HeadingPath []string `json:"heading_path,omitempty"`
 	// StartMs/EndMs bound an audio transcript chunk on the ORIGINAL asset
-	// timeline (CON-282), Kind == "time". Provenance marks how the anchor was
+	// timeline, Kind == "time". Provenance marks how the anchor was
 	// derived (e.g. "transcript", "image_extraction"). Empty for non-audio,
 	// non-image anchors.
 	StartMs int64 `json:"start_ms,omitempty"`
 	EndMs   int64 `json:"end_ms,omitempty"`
-	// Bbox is the normalized image region a block was extracted from (CON-281),
+	// Bbox is the normalized image region a block was extracted from,
 	// Kind == "image". A pointer so a nil bbox is omitted while a present one is
 	// always serialized in full (all four coords, incl. legitimate 0 origins).
 	Bbox       *Bbox  `json:"bbox,omitempty"`
 	Provenance string `json:"provenance,omitempty"`
 }
 
-// Bbox is a normalized rectangle [0,1] on a source image (CON-281): the portion
+// Bbox is a normalized rectangle [0,1] on a source image: the portion
 // of the image an extracted block came from.
 type Bbox struct {
 	X float64 `json:"x"`
@@ -77,7 +77,7 @@ type Bbox struct {
 
 // MarshalJSON keeps start_ms/end_ms present for time anchors even at 0 ms: the
 // first audio chunk legitimately starts at 0, and the struct's `omitempty` tag
-// would drop it, leaving consumers unable to tell "0" from "absent" (CON-282).
+// would drop it, leaving consumers unable to tell "0" from "absent".
 // Non-time anchors keep their omitempty semantics, so page/slide/sheet chunks
 // never gain empty time fields. The embedded alias avoids infinite recursion;
 // the shallower explicit fields shadow its omitempty ones for time anchors.

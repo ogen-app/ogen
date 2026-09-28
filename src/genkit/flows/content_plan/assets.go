@@ -18,14 +18,13 @@ import (
 
 // minAssetSimilarity is the minimum cosine similarity a chunk must score
 // against the campaign query to be included in the prompt context.
-// CON-101: a conservative starting threshold; revisit against Gemini Embedding
+// A conservative starting threshold; revisit against Gemini Embedding
 // 2's cosine distribution once there is real corpus data.
 const minAssetSimilarity = 0.7
 
 // assetIDsOf returns the distinct IDs of the assets actually retrieved into the
 // generation context. These become each generated post's UsedAssetIDs — a
-// binding grounded on what the model was given, not its self-reported claims
-// (CON-118).
+// binding grounded on what the model was given, not its self-reported claims.
 func assetIDsOf(assets []resolvedPiece) []string {
 	if len(assets) == 0 {
 		return nil
@@ -46,7 +45,7 @@ func assetIDsOf(assets []resolvedPiece) []string {
 }
 
 // idSet builds a lookup set from a slice of asset IDs — the retrieved-context
-// grounding set used to validate each post's self-reported assetRefs (CON-118).
+// grounding set used to validate each post's self-reported assetRefs.
 func idSet(ids []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
@@ -57,7 +56,7 @@ func idSet(ids []string) map[string]struct{} {
 
 // groundedRefs filters a post's model-reported assetRefs (DraftPost.AssetRefs)
 // down to the ids actually retrieved into the generation context, deduped and in
-// the model's order. This is each post's UsedAssetIDs binding (CON-118): only
+// the model's order. This is each post's UsedAssetIDs binding: only
 // the assets the model said it drew on for that specific post, and only those we
 // can confirm were placed in its prompt — a hallucinated id is dropped, and a
 // post that cited nothing records an empty list rather than inheriting the whole
@@ -82,7 +81,7 @@ func groundedRefs(refs []string, grounded map[string]struct{}) []string {
 }
 
 // assetRefsOf projects the retrieved pieces into the deduped id+title provenance
-// surfaced on ContentPlanResponse.UsedAssets (CON-118).
+// surfaced on ContentPlanResponse.UsedAssets.
 func assetRefsOf(assets []resolvedPiece) []AssetRef {
 	if len(assets) == 0 {
 		return nil
@@ -128,7 +127,7 @@ func resolveAssets(ctx context.Context, campaign *models.Campaign, cfg ContentPl
 	}
 
 	// With an available embedder: rank chunks by semantic similarity and greedily
-	// pack. When gemini_api_key is unset (CON-104) the embedder is unavailable —
+	// pack. When gemini_api_key is unset the embedder is unavailable —
 	// fall through to creation order rather than failing every embed.
 	if embedopts.Available(cfg.Embedder) {
 		candidateSet := make(map[string]bool, len(candidateIDs))

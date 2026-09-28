@@ -28,7 +28,7 @@ func userMsg(content string) models.CampaignAssistantMessage {
 	return models.CampaignAssistantMessage{Role: "user", Content: content}
 }
 
-// CON-207 FR2: the source material is the latest *answer* in the chat, pulled
+// The source material is the latest *answer* in the chat, pulled
 // from the stored JSON envelope's "explanation" field — an override wins, an
 // action-confirmation turn (e.g. post_drafted) is skipped, and legacy plain-text
 // model messages are used as-is.
@@ -96,7 +96,7 @@ func newDraftState(msgs []models.CampaignAssistantMessage, calls *[]draft_post.D
 }
 
 // No research in the chat and no override → the tool declines without running
-// the flow (CON-207 §9).
+// the flow.
 func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
 	st := newDraftState([]models.CampaignAssistantMessage{userMsg("hi")}, &calls)
@@ -115,7 +115,7 @@ func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {
 	if st.draftPostResult != nil {
 		t.Fatal("draftPostResult must stay nil on decline")
 	}
-	// The decline must NOT consume the turn's heavy-action slot (CON-213): a later
+	// The decline must NOT consume the turn's heavy-action slot: a later
 	// valid heavy tool call must still be able to reserve and run.
 	if !st.reserveHeavyAction() {
 		t.Fatal("a no-source decline must leave the heavy-action slot available")
@@ -123,7 +123,7 @@ func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {
 }
 
 // The per-call cap is a TOTAL budget across platforms: count=3 over two
-// platforms with max 5 yields 3 + 2 and reports clamped (CON-207 §10).
+// platforms with max 5 yields 3 + 2 and reports clamped.
 func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
 	st := newDraftState([]models.CampaignAssistantMessage{
@@ -204,7 +204,7 @@ func TestToolDraftPost_SourceOverride(t *testing.T) {
 	}
 }
 
-// CON-213: once a heavy action ran this turn, draftPost yields the skip note and
+// Once a heavy action ran this turn, draftPost yields the skip note and
 // never runs the flow.
 func TestToolDraftPost_HeavyLatch(t *testing.T) {
 	var calls []draft_post.DraftPostRequest

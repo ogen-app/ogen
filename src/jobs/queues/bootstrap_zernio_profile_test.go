@@ -17,7 +17,7 @@ import (
 
 // profileStub is a minimal Zernio /profiles server for the bootstrap job tests.
 // listStatus/createStatus drive the failure cases; createNames captures the
-// names POSTed so the rename (CON-102 FR6) can be asserted.
+// names POSTed so the rename can be asserted.
 type profileStub struct {
 	mu           sync.Mutex
 	requests     int

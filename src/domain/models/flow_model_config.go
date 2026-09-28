@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// FlowModelConfig is one (tier, flow, slot) -> model assignment (CON-308). It
+// FlowModelConfig is one (tier, flow, slot) -> model assignment. It
 // decides which foundation model a genkit flow slot uses, replacing the coarse
 // 3-role provider built from env config.
 //

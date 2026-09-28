@@ -10,7 +10,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// PostAttachmentRepository persists image attachments bound to a Post (CON-73).
+// PostAttachmentRepository persists image attachments bound to a Post.
 type PostAttachmentRepository interface {
 	ListByPostID(ctx context.Context, postID string) ([]models.PostAttachment, error)
 	ListS3KeysByPostID(ctx context.Context, postID string) ([]string, error)
@@ -25,17 +25,17 @@ type PostAttachmentRepository interface {
 	// either lands completely or not at all.
 	Patch(ctx context.Context, id string, p AttachmentPatch) error
 	// SetGeneratedAltText sets auto-generated alt text but ONLY where the user has
-	// not edited it (alt_text_edited_by_user = false), and does not flip the flag
-	// (CON-281). The async attachment alt-text generator uses it.
+	// not edited it (alt_text_edited_by_user = false), and does not flip the flag.
+	// The async attachment alt-text generator uses it.
 	SetGeneratedAltText(ctx context.Context, id string, altText string) error
 	// ReorderPositions renumbers the post's attachments to 0..n-1 to match
-	// orderedIDs, in one transaction, without tripping UNIQUE(post_id, position)
-	// (CON-124). Callers must pass every current attachment of the post exactly
+	// orderedIDs, in one transaction, without tripping UNIQUE(post_id, position).
+	// Callers must pass every current attachment of the post exactly
 	// once.
 	ReorderPositions(ctx context.Context, postID string, orderedIDs []string) error
 	Delete(ctx context.Context, id string) (bool, error)
 	// SumSizeBytesInTenant totals size_bytes across every attachment in the ctx
-	// tenant — the live usage behind the media_storage_bytes quota (CON-295).
+	// tenant — the live usage behind the media_storage_bytes quota.
 	SumSizeBytesInTenant(ctx context.Context) (int64, error)
 }
 
@@ -99,7 +99,7 @@ func (r *postAttachmentRepository) GetByID(ctx context.Context, id string) (*mod
 
 func (r *postAttachmentRepository) ListS3KeysByPostID(ctx context.Context, postID string) ([]string, error) {
 	// Returns both the primary blob key and any non-empty thumbnail key
-	// (CON-75) so the cascade-delete hook clears every object owned by
+	// so the cascade-delete hook clears every object owned by
 	// the post in one pass.
 	var rows []struct {
 		S3Key          string `bun:"s3_key"`
@@ -127,7 +127,7 @@ func (r *postAttachmentRepository) ListS3KeysByPostID(ctx context.Context, postI
 
 func (r *postAttachmentRepository) CreateAtNextPosition(ctx context.Context, att *models.PostAttachment) error {
 	// This INSERT is raw SQL, so the TenantScoped hooks don't fire — stamp and
-	// scope tenant_id by hand (CON-97).
+	// scope tenant_id by hand.
 	tid, err := writeTenantID(ctx, att.TenantID)
 	if err != nil {
 		return err
@@ -151,7 +151,7 @@ func (r *postAttachmentRepository) CreateAtNextPosition(ctx context.Context, att
 		if err := tx.NewRaw(`SELECT 1 FROM posts WHERE id = ? AND tenant_id = ? FOR UPDATE`, att.PostID, tid).Scan(ctx, &locked); err != nil {
 			return err
 		}
-		// segment_index (CON-284) is NULL for non-thread attachments; a nil
+		// segment_index is NULL for non-thread attachments; a nil
 		// *int binds as NULL, a non-nil pointer as the 0-based segment.
 		const q = `INSERT INTO post_attachments
 			(id, post_id, tenant_id, position, segment_index, mime_type, size_bytes, width, height,

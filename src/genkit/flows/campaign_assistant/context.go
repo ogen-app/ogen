@@ -26,13 +26,13 @@ type contextTemplateData struct {
 	TargetPersona  string
 	KeyMessages    string
 	ToneGuidelines string
-	// BrandBlock is the resolved brand voice/audience/guardrails block (CON-245),
+	// BrandBlock is the resolved brand voice/audience/guardrails block,
 	// which supersedes TargetPersona/ToneGuidelines in the template.
 	BrandBlock string
 	// Today is the current date (YYYY-MM-DD), so the planner can resolve
-	// relative timeframes like "upcoming weeks" into concrete dates (CON-114).
+	// relative timeframes like "upcoming weeks" into concrete dates.
 	Today string
-	// Phases lists the campaign type's phases (CON-113). Already hydrated on
+	// Phases lists the campaign type's phases. Already hydrated on
 	// the campaign, so surfacing them here costs no extra query.
 	Phases []phaseContext
 }

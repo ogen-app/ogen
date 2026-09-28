@@ -36,9 +36,9 @@ type EnrichBriefRepos struct {
 
 // EnrichBriefFlowConfig holds static settings for the flow.
 type EnrichBriefFlowConfig struct {
-	// Provider resolves the model reference + call config by role (CON-86 FR12).
+	// Provider resolves the model reference + call config by role.
 	Provider *llm.Provider
-	// Recorder captures usage events; nil disables recording (CON-86 FR5/FR10).
+	// Recorder captures usage events; nil disables recording.
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker

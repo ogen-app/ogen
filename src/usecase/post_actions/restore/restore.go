@@ -1,5 +1,5 @@
 // Package restore implements the shared "restore a Post to an earlier
-// version" operation (CON-68). It is the single source of truth used by
+// version" operation. It is the single source of truth used by
 // both the REST endpoint (POST /api/posts/:id/restore) and the Post
 // Assistant's restoreVersion tool, so the two entry points can never
 // drift.
@@ -49,7 +49,7 @@ const (
 // editableStatuses are the post statuses whose content may be restored.
 // Scheduled / ScheduledForManualPublish / Published are excluded: their
 // content is in-flight or already out, so a bulk swap to an old version
-// is blocked (CON-68 §9). Failed / NotPublished are editable again per
+// is blocked. Failed / NotPublished are editable again per
 // the state machine, so a restore there is allowed.
 var editableStatuses = map[models.PostStatus]bool{
 	models.PostStatusDraft:           true,
@@ -294,7 +294,7 @@ func (s *Service) publishRestored(postID string, opts Options, newVersion int) {
 	_ = s.hub.Publish(context.Background(), eventhub.Event{
 		ID:    evID,
 		Topic: "entity:post:" + postID,
-		// Dotted bus wire type (CON-285). The post_logs.event_type and
+		// Dotted bus wire type. The post_logs.event_type and
 		// tenant_activity_events taxonomy constants stay "post_restored".
 		Type:   "post.restored",
 		UserID: opts.Actor,

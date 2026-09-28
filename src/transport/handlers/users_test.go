@@ -66,7 +66,7 @@ var _ = Describe("UsersHandler", Ordered, func() {
 	// ── helpers ──────────────────────────────────────────────────────────────
 
 	// createUser seeds a user directly in the default tenant. POST /api/users
-	// now requires auth (CON-97), so bootstrap users are inserted via the DB;
+	// now requires auth, so bootstrap users are inserted via the DB;
 	// loginAs below still authenticates them over HTTP.
 	createUser := func(name, email, password string) *models.User {
 		return seedTenantUser(db, name, email, password)
@@ -695,7 +695,7 @@ var _ = Describe("UsersHandler", Ordered, func() {
 })
 
 // mustOpenTestDBWithMigrations returns a fresh, isolated, fully-migrated
-// Postgres database (CON-87 WS5). Each call gets its own database, so
+// Postgres database. Each call gets its own database, so
 // Describes never leak rows into each other. The Postgres instance is
 // provisioned by the Makefile (TEST_DATABASE_DSN); pgtest.MustDB creates
 // and migrates a unique database per call.

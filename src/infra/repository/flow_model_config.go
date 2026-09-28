@@ -9,8 +9,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// FlowModelConfigRepository persists the (tier, flow, slot) -> model assignments
-// (CON-308). A nil tierID addresses the GLOBAL-DEFAULT scope; a non-nil tierID
+// FlowModelConfigRepository persists the (tier, flow, slot) -> model assignments.
+// A nil tierID addresses the GLOBAL-DEFAULT scope; a non-nil tierID
 // addresses that tier's override. The resolver loads the full set via List and
 // serves it from an in-memory snapshot; GetByScope/Upsert/Delete back the gRPC
 // admin writes.

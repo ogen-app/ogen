@@ -1,6 +1,6 @@
 // Package firecrawl is a thin HTTP client for the Firecrawl.dev scrape API
-// (https://firecrawl.dev), used to turn a URL into Markdown for URL assets
-// (CON-222). It mirrors the Zernio/Resend client conventions: the API key is
+// (https://firecrawl.dev), used to turn a URL into Markdown for URL assets.
+// It mirrors the Zernio/Resend client conventions: the API key is
 // resolved per request via a KeyResolver (so a rotated key is picked up with no
 // restart and is never held on the struct), non-2xx responses become a
 // classified *APIError (transient vs terminal), and the key never appears in

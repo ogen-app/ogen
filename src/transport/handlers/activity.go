@@ -8,10 +8,10 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/activity/report"
 )
 
-// ActivityHandler owns the Activity daily-report read endpoints (CON-285): a
+// ActivityHandler owns the Activity daily-report read endpoints: a
 // full single-day report and a keyset list of non-empty days, both computed
 // server-side from live post/campaign data for the caller's local day. It is the
-// backend the Activity UI (CON-225) renders instead of the browser-side
+// backend the Activity UI renders instead of the browser-side
 // computation CON-225 §5 first specified — hence the required tz. A nil service
 // leaves both endpoints at 503.
 type ActivityHandler struct {

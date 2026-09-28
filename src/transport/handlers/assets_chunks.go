@@ -13,13 +13,13 @@ const (
 	maxChunkPageSize     = 500
 )
 
-// AssetChunkLister pages an asset's chunks without their embeddings (CON-312).
+// AssetChunkLister pages an asset's chunks without their embeddings.
 // Implemented by repository.AssetChunksRepository.
 type AssetChunkLister interface {
 	ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error)
 }
 
-// SetChunkLister wires the chunk view (CON-312). Nil leaves GET /:id/chunks
+// SetChunkLister wires the chunk view. Nil leaves GET /:id/chunks
 // answering 409.
 func (h *AssetsHandler) SetChunkLister(l AssetChunkLister) { h.chunks = l }
 

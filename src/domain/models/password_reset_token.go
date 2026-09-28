@@ -11,12 +11,12 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// PasswordResetTokenTTL is the single-use reset token's lifetime (CON-161). The
+// PasswordResetTokenTTL is the single-use reset token's lifetime. The
 // UI's success copy states "It expires in an hour" — change one, change both.
 const PasswordResetTokenTTL = time.Hour
 
 // PasswordResetToken is a single-use capability to set a new password without
-// logging in (CON-161). Only the token's hash is persisted (TokenHash); the
+// logging in. Only the token's hash is persisted (TokenHash); the
 // plaintext lives only in the emailed link, so a DB leak can't hand over live
 // reset links. ConsumedAt NULL means unspent — the confirm path flips it
 // atomically so a double-submitted form can't spend it twice.

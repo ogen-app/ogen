@@ -9,7 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// PostLogRepository persists Post Log entries (CON-69 §11). Writers
+// PostLogRepository persists Post Log entries. Writers
 // are expected to have already passed Payload through logs.Capper
 // + logs.Sanitize — the repository performs no transformation,
 // only persistence and querying.
@@ -21,7 +21,7 @@ type PostLogRepository interface {
 	Append(ctx context.Context, entry *models.PostLog) error
 
 	// AppendTx is the same as Append but uses the provided bun.IDB so
-	// the write can join an outer transaction (CON-69 §11 — log entries
+	// the write can join an outer transaction (log entries
 	// are written in the same transaction as the operation they
 	// describe wherever possible). Passing nil falls back to the
 	// repository's default DB.
@@ -54,7 +54,7 @@ type PostLogRepository interface {
 
 // TerminalTransition is one post's move into a terminal non-publish state, as
 // recorded in post_logs and joined to the post's current channel + failure
-// reason (CON-285). failure_reason is the post's current value (best-effort for
+// reason. failure_reason is the post's current value (best-effort for
 // a historical transition); status is the transition's to_status.
 type TerminalTransition struct {
 	PostID        string    `bun:"post_id"`

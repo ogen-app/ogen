@@ -17,11 +17,11 @@ import (
 
 type UsersHandler struct {
 	// db backs the password-change path, which must update the credential and
-	// revoke the user's other sessions in one transaction (CON-193). Every other
+	// revoke the user's other sessions in one transaction. Every other
 	// operation goes through repo.
 	db   *bun.DB
 	repo repository.UserRepository
-	// accountRepo backs the identity side of user management (CON-147): creating a
+	// accountRepo backs the identity side of user management: creating a
 	// member creates their account, and password changes rotate the credential on
 	// the account rather than the membership row.
 	accountRepo repository.AccountRepository
@@ -55,8 +55,8 @@ func (h *UsersHandler) Register(app *fiber.App) {
 	g.Get("/", h.auth, h.List)              // always protected
 	g.Get("/:id", h.auth, h.Get)            // always protected
 	g.Put("/:id", h.auth, h.Update)         // always protected
-	g.Patch("/:id/role", h.auth, h.SetRole) // owner-only role change (CON-26)
-	g.Delete("/:id", h.auth, h.Delete)      // self or owner (CON-26)
+	g.Patch("/:id/role", h.auth, h.SetRole) // owner-only role change
+	g.Delete("/:id", h.auth, h.Delete)      // self or owner
 }
 
 // requireSelf returns 403 unless the authenticated session belongs to the user
@@ -77,19 +77,19 @@ type createUserRequest struct {
 	Name     string `json:"name"     validate:"required"`
 	Email    string `json:"email"    validate:"required,email"`
 	Password string `json:"password" validate:"required,min=8"`
-	// Role is optional; it defaults to member. Only an owner may create users
-	// (CON-26), so an owner can also mint a co-owner by passing "owner".
+	// Role is optional; it defaults to member. Only an owner may create users,
+	// so an owner can also mint a co-owner by passing "owner".
 	Role string `json:"role" validate:"omitempty,oneof=owner member"`
 }
 
-// setRoleRequest is the body of PATCH /api/users/:id/role (CON-26).
+// setRoleRequest is the body of PATCH /api/users/:id/role.
 type setRoleRequest struct {
 	Role string `json:"role" validate:"required,oneof=owner member"`
 }
 
 // errCurrentPasswordMismatch is returned from inside the password-change
 // transaction when the supplied current password fails re-verification, so the
-// tx rolls back and the handler can map it to a 403 (CON-193 §1). Mirrors
+// tx rolls back and the handler can map it to a 403. Mirrors
 // errResetInvalid in password_reset.go.
 var errCurrentPasswordMismatch = errors.New("current password is incorrect")
 
@@ -98,7 +98,7 @@ type updateUserRequest struct {
 	Email string `json:"email"    validate:"required,email"`
 	// Password is optional on update; when provided it must be at least 8 characters.
 	Password string `json:"password" validate:"omitempty,min=8"`
-	// CurrentPassword re-authenticates a credential change (CON-193 §1): it is
+	// CurrentPassword re-authenticates a credential change: it is
 	// required only when Password is present and is verified against the stored
 	// hash, so it carries no min-length rule of its own. A plain name/email edit
 	// leaves it empty and unchecked.
@@ -157,14 +157,14 @@ func (h *UsersHandler) List(c *fiber.Ctx) error {
 // @Failure      403   {object}  map[string]string
 // @Router       /api/users [post]
 func (h *UsersHandler) Create(c *fiber.Ctx) error {
-	// Only an owner may add users directly (CON-26). Their tenant is the target;
-	// a tenant_id in the request body is never trusted (CON-97 §7.2, §12.2).
+	// Only an owner may add users directly. Their tenant is the target;
+	// a tenant_id in the request body is never trusted.
 	caller, err := requireOwner(c, h.repo)
 	if err != nil {
 		return err
 	}
 
-	// CON-295: the team_seats quota gates adding a member.
+	// The team_seats quota gates adding a member.
 	seatDec, err := h.limiter.Require(reqCtx(c), caller.TenantID, "team_seats")
 	if err != nil {
 		return err
@@ -196,7 +196,7 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 
 	now := time.Now().UTC()
 	// Directly adding a member creates their identity (account) and their
-	// membership of the caller's workspace together (CON-147). PR3 replaces this
+	// membership of the caller's workspace together. PR3 replaces this
 	// with invitations that can attach an existing account; here the email must be
 	// new, enforced by accounts.email — a clash surfaces as 409.
 	account := &models.Account{ID: accountID, Email: req.Email, PasswordHash: hash, Name: req.Name, CreatedAt: now, UpdatedAt: now}
@@ -224,7 +224,7 @@ func (h *UsersHandler) Create(c *fiber.Ctx) error {
 
 	h.activity.Record(reqCtx(c), activity.CategoryAuthentication, "user_created",
 		activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI))
-	// CON-295: the member now exists — fire any near-limit crossing.
+	// The member now exists — fire any near-limit crossing.
 	h.limiter.DispatchCrossing(reqCtx(c), caller.TenantID, seatDec)
 	return c.Status(fiber.StatusCreated).JSON(user)
 }
@@ -257,7 +257,7 @@ func (h *UsersHandler) SetRole(c *fiber.Ctx) error {
 	}
 
 	// SetRoleGuarded scopes to the caller's tenant (404 for an outsider) and
-	// enforces the >=1-owner invariant in one transaction (CON-26 §7/§11).
+	// enforces the >=1-owner invariant in one transaction.
 	updated, err := h.repo.SetRoleGuarded(reqCtx(c), c.Params("id"), caller.TenantID, req.Role)
 	if err != nil {
 		switch {
@@ -315,7 +315,7 @@ func (h *UsersHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 	// requireSelf guarantees an authenticated session; hold on to it so a password
-	// change can spare the caller's own session while revoking the rest (CON-193 §2).
+	// change can spare the caller's own session while revoking the rest.
 	session := c.Locals("session").(*models.Session)
 
 	var req updateUserRequest
@@ -332,7 +332,7 @@ func (h *UsersHandler) Update(c *fiber.Ctx) error {
 		// Name/email-only edit: no re-authentication and no session revocation. The
 		// membership row carries a denormalised copy, but email/name also live on
 		// the account (identity) and login is by account email, so both are updated
-		// together — a clash on the account email surfaces as 409 (CON-147).
+		// together — a clash on the account email surfaces as 409.
 		now := time.Now().UTC()
 		if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 			user.Name = req.Name
@@ -363,7 +363,7 @@ func (h *UsersHandler) Update(c *fiber.Ctx) error {
 		// account's other sessions — all in one transaction. FOR UPDATE serializes
 		// concurrent changes, so an in-flight request carrying the old (possibly
 		// compromised) credential can't verify against a stale hash and slip through
-		// after a rotation has already committed (CON-193 §1/§2). Mirrors
+		// after a rotation has already committed. Mirrors
 		// POST /api/password-reset/confirm, which likewise holds the row lock across
 		// argon2 — password changes are rare, so hashing under the lock is fine. The
 		// caller's own session (session.ID) is preserved so they aren't logged out of
@@ -448,7 +448,7 @@ func (h *UsersHandler) Delete(c *fiber.Ctx) error {
 
 	// RemoveMemberGuarded scopes to the caller's tenant (404 for an outsider) and
 	// enforces the >=1-owner invariant, so the last owner can't be removed —
-	// including self-removal (CON-26 §7).
+	// including self-removal.
 	if err := h.repo.RemoveMemberGuarded(reqCtx(c), targetID, caller.TenantID); err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -460,7 +460,7 @@ func (h *UsersHandler) Delete(c *fiber.Ctx) error {
 		}
 	}
 
-	// Distinguish self-removal from an owner removing a teammate (CON-26 §13).
+	// Distinguish self-removal from an owner removing a teammate.
 	event := "user_deleted"
 	if caller.ID != targetID {
 		event = "member_removed"

@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// TenantTierRepository is the persistence for the tier catalog (CON-208).
+// TenantTierRepository is the persistence for the tier catalog.
 //
 // Tiers are a GLOBAL operator table (like tenants), so — unlike TenantScoped
 // repositories — this one carries no tenantctx and reads/writes cross-tenant.
@@ -84,7 +84,7 @@ func (r *tenantTierRepository) Update(ctx context.Context, tier *models.TenantTi
 }
 
 func (r *tenantTierRepository) Delete(ctx context.Context, id string) (bool, error) {
-	// A tier accrues immutable versions (CON-243), each a tenant_tier_versions row
+	// A tier accrues immutable versions, each a tenant_tier_versions row
 	// with an ON DELETE RESTRICT FK back to the tier. Leftover DRAFT versions (e.g.
 	// authored then abandoned) must not wedge deletion of a tier that has no
 	// tenants, so drop them first in the same transaction — their price rows

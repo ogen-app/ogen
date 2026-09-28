@@ -81,7 +81,7 @@ func (s *jsonPostScanner) push(chunk string) []string {
 }
 
 // targeting overrides the count, phases, and publish-date window a generation
-// run uses (CON-114). nil = the full-campaign plan (count from
+// run uses. nil = the full-campaign plan (count from
 // EstimatedPostCount, all phases, the campaign date range). The platform subset
 // is applied by the caller via the platforms argument.
 type targeting struct {
@@ -102,7 +102,7 @@ func generatePosts(
 	onEvent OnEventFunc,
 	tgt *targeting,
 ) ([]DraftPost, []string, error) {
-	// CON-182: the full-campaign plan generates estimated_post_count posts PER
+	// The full-campaign plan generates estimated_post_count posts PER
 	// goal_cadence period × the number of periods the campaign spans (0 when no
 	// per-period count is set → the model decides the count, as before). The
 	// targeting path below overrides this with its explicit count.
@@ -113,7 +113,7 @@ func generatePosts(
 	)
 	startDate, endDate := *campaign.StartDate, *campaign.EndDate
 
-	// CON-166: a stored manual phase plan pins each phase's window; otherwise
+	// A stored manual phase plan pins each phase's window; otherwise
 	// planBatches derives them from the campaign dates (the same split).
 	pinned := map[string]*dateWindow{}
 	if windows, src := campaignphase.Resolve(campaign); src == campaignphase.SourceManual {
@@ -142,7 +142,7 @@ func generatePosts(
 
 	dayCount := int(endDate.Sub(startDate).Hours() / 24)
 
-	// CON-245: resolve the campaign's brand voice/audience/guardrails and inject
+	// Resolve the campaign's brand voice/audience/guardrails and inject
 	// them as one block; it supersedes the legacy tone/persona prose (and falls
 	// back to that prose when no brand material is set). Fails open on error.
 	resolved, rerr := brandresolve.Resolve(ctx, repos.Brands, campaign, nil)
@@ -224,26 +224,25 @@ func generatePosts(
 		validPhaseIDs[ph.ID] = true
 	}
 	validate := newPostValidator(platforms, validPhaseIDs, data.StartDate, data.EndDate)
-	// CON-118: bind each post to the subset of retrieved assets the model
+	// Bind each post to the subset of retrieved assets the model
 	// reported drawing on for that post (dp.AssetRefs), filtered to the ids
 	// actually retrieved into context so a hallucinated id never persists. Posts
-	// no longer all inherit the full retrieved set — a post that cited no asset
-	// records an empty list.
+	// do not inherit the full retrieved set — a post that cited no asset records
+	// an empty list.
 	grounded := idSet(assetIDsOf(assets))
 	// startDate/endDate are the active generation window — the campaign window, or
 	// the CON-114 targeting window when tgt != nil. persistOne snaps each post's
 	// publishing day within these bounds so a targeted run stays inside its window.
 	persistFn := func(ctx context.Context, dp *DraftPost) (string, error) {
-		dp.BrandVoiceID = brandVoiceID // CON-245: stamp the resolved voice on the post
+		dp.BrandVoiceID = brandVoiceID // Stamp the resolved voice on the post
 		return persistOne(ctx, dp, campaign, &startDate, &endDate, repos.Posts, repos.Notes, groundedRefs(dp.AssetRefs, grounded))
 	}
 
-	// Fill the parallel budget (CON-112 perf): a plan that fits in one batch is
-	// a single long Sonnet call that ignores maxParallel entirely — e.g. 30
-	// posts generated as one 9.5k-token call runs ~170s while 4 of the 5 worker
-	// slots sit idle. Shrink the effective batch size so the plan splits into
-	// ~maxParallel batches that run concurrently (30 posts → 5×6 ≈ 5× faster).
-	// MaxPostsPerBatch stays the upper cap; this only ever makes batches smaller.
+	// Fill the parallel budget: a plan that fits in one batch is a single long
+	// Sonnet call that leaves the other worker slots idle. Shrink the effective
+	// batch size so the plan splits into ~maxParallel batches that run
+	// concurrently. MaxPostsPerBatch stays the upper cap; this only ever makes
+	// batches smaller.
 	if estCount > 0 && maxParallel > 1 {
 		if perBatch := (estCount + maxParallel - 1) / maxParallel; perBatch >= 1 && perBatch < maxPostsPerBatch {
 			maxPostsPerBatch = perBatch
@@ -255,16 +254,15 @@ func generatePosts(
 	// a single batch covering everything.
 	batches := planBatches(estCount, phases, platforms, startDate, endDate, maxPostsPerBatch)
 	if len(batches) == 0 {
-		// EstimatedPostCount is 0 or otherwise unplannable — preserve the
-		// pre-CON-67 behaviour of asking the model to decide the count
-		// from campaign context.
+		// EstimatedPostCount is 0 or otherwise unplannable — ask the model to
+		// decide the count from campaign context.
 		userPrompt, err := renderTemplate(cfg.userTmpl, data)
 		if err != nil {
 			return nil, nil, fmt.Errorf("render user prompt: %w", err)
 		}
 		slog.DebugContext(ctx, "user prompt (no batch plan)", logging.AttrComponent, "genkit.content_plan", "prompt", userPrompt)
 		// expectedCount 0 = uncapped: no batch plan, so the model decides how
-		// many posts the campaign warrants (pre-CON-67 behaviour).
+		// many posts the campaign warrants.
 		posts, genErr := generatePostsStreaming(ctx, g, modelName, systemPrompt, userPrompt, modelCfg, recordUsage, 0, 0, validate, persistFn, onEvent)
 		if genErr != nil {
 			// Even on hard failure, return what was persisted so the
@@ -285,7 +283,7 @@ func generatePosts(
 		}
 		slog.DebugContext(ctx, "batch user prompt", logging.AttrComponent, "genkit.content_plan", "batch", spec.Index+1, "total", len(batches), "posts", spec.PostCount, "window_start", spec.DateWindow.Start, "window_end", spec.DateWindow.End, "prompt", userPrompt)
 		// Cap persistence at the batch's planned size so an over-producing model
-		// can't inflate the count (CON-114).
+		// can't inflate the count.
 		return generatePostsStreaming(ctx, g, modelName, systemPrompt, userPrompt, modelCfg, recordUsage, spec.GlobalStartIndex, spec.PostCount, validate, persistFn, emit)
 	}
 	return runBatchesParallel(ctx, batches, maxParallel, gen, onEvent)
@@ -298,9 +296,8 @@ func generatePosts(
 // order. When every batch fails the function returns an AIError so the
 // caller can surface a hard "error" SSE event.
 //
-// Extracted for unit-testability — the production gen calls into Anthropic;
-// tests pass a stub that simulates timing, partial failures, and emit
-// concurrency without touching the network.
+// gen is injected so tests can pass a stub that simulates timing, partial
+// failures, and emit concurrency without calling Anthropic.
 func runBatchesParallel(
 	ctx context.Context,
 	batches []batchSpec,
@@ -360,7 +357,7 @@ func runBatchesParallel(
 	var warnings []string
 	failures := 0
 	for i, r := range results {
-		// Always include persisted posts (CON-66) — even from a batch
+		// Always include persisted posts — even from a batch
 		// that ultimately errored, the DB has the rows and the response
 		// must reflect that.
 		allPosts = append(allPosts, r.posts...)
@@ -428,7 +425,7 @@ func generatePostsStreaming(
 	var totalBytes int
 
 	tryPersist := func(post DraftPost, position int) {
-		// CON-114: never persist more than this batch asked for. The generation
+		// Never persist more than this batch asked for. The generation
 		// model can over-produce (e.g. stream 3 posts for a "generate exactly 1"
 		// batch); without this cap every extra valid post is persisted, so a
 		// request for 1 post yielded 3. expectedCount <= 0 = uncapped (the
@@ -582,14 +579,14 @@ func withinCount(persisted, expectedCount int) bool {
 }
 
 // persistOne inserts a single DraftPost as a new Post row and returns the
-// generated row ID. Per CON-66 the streaming path calls this for each
+// generated row ID. The streaming path calls this for each
 // parsed-and-validated post immediately rather than aggregating to a final
-// CreateBatch — a client disconnect mid-stream now leaves whatever was
-// already persisted in the database, and a hard *AIError from one batch
-// no longer rolls back the surviving batches' rows.
+// CreateBatch — a client disconnect mid-stream leaves whatever was already
+// persisted in the database, and a hard *AIError from one batch never rolls
+// back the surviving batches' rows.
 //
-// CON-188: the model's bullet-point thesis (dp.Body) is no longer written into
-// the post body. The post is created with an empty body and the thesis is
+// The model's bullet-point thesis (dp.Body) is not written into the post
+// body. The post is created with an empty body and the thesis is
 // stored as a draft_thesis note, so the assistant can later expand it into copy.
 func persistOne(ctx context.Context, dp *DraftPost, campaign *models.Campaign, windowStart, windowEnd *time.Time, postRepo repository.PostRepository, noteRepo repository.PostNoteRepository, usedAssetIDs []string) (string, error) {
 	id, err := models.NewID()
@@ -597,7 +594,7 @@ func persistOne(ctx context.Context, dp *DraftPost, campaign *models.Campaign, w
 		return "", err
 	}
 
-	// CON-181: compose scheduled_at from the campaign's scheduling settings —
+	// Compose scheduled_at from the campaign's scheduling settings —
 	// snap the model's date to an enabled publishing day, place it at the
 	// publishing time in the campaign timezone, ± deterministic spread. The
 	// (possibly snapped) date is written back onto dp so the streamed preview
@@ -635,15 +632,15 @@ func persistOne(ctx context.Context, dp *DraftPost, campaign *models.Campaign, w
 		UsedAssetIDs:        models.StringSlice(usedAssetIDs),
 		CampaignTypePhaseID: phaseID,
 		ScheduledAt:         scheduledAt,
-		BrandVoiceID:        dp.BrandVoiceID, // CON-245: provenance of the voice it was written in
+		BrandVoiceID:        dp.BrandVoiceID, // Provenance of the voice it was written in
 		CreatedBy:           campaign.CreatedBy,
 	}
 	if err := postRepo.Create(ctx, row); err != nil {
 		return "", err
 	}
 
-	// Capture the thesis as a draft_thesis note (CON-188). Best-effort: a
-	// note-write failure must not discard the already-persisted post (CON-66),
+	// Capture the thesis as a draft_thesis note. Best-effort: a
+	// note-write failure must not discard the already-persisted post,
 	// so it is logged and swallowed rather than returned. An empty thesis
 	// creates no note.
 	if noteRepo != nil {

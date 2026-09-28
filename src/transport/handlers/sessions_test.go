@@ -175,7 +175,7 @@ var _ = Describe("SessionsHandler", Ordered, func() {
 			)
 		})
 
-		// ── rate limiting (CON-162) ──────────────────────────────────────────
+		// ── rate limiting ──────────────────────────────────────────
 		Context("when login attempts are abused (CON-162)", func() {
 			// attempt performs a raw login and returns the response (no assertions),
 			// so specs can drive it to 401/429 deliberately.

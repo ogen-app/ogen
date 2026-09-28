@@ -14,7 +14,7 @@ import (
 )
 
 // BootstrapZernioProfileQueue eagerly provisions a tenant's Zernio profile at
-// registration time (CON-102 §6.1). Signup enqueues one task per new tenant
+// registration time. Signup enqueues one task per new tenant
 // inside its transaction (transactional outbox), so the profile is created in
 // the background without ever blocking the signup request on Zernio. The lazy
 // on-connect bootstrap (handlers/zernio.go) remains the guaranteed fallback, so
@@ -46,7 +46,7 @@ type BootstrapZernioProfileProcessor struct {
 	river.WorkerDefaults[BootstrapZernioProfileTask]
 	Integration  *zernio.Integration
 	Bootstrapper *zernio.Bootstrapper
-	// Tenants skips provisioning for a suspended/deleted tenant (CON-190) — e.g.
+	// Tenants skips provisioning for a suspended/deleted tenant — e.g.
 	// one suspended between the signup enqueue and this run. Nil = no gate.
 	Tenants TenantStatusReader
 }
@@ -69,7 +69,7 @@ func (p *BootstrapZernioProfileProcessor) Work(ctx context.Context, job *river.J
 
 	ctx = tenantctx.With(ctx, tid)
 
-	// Skip a tenant suspended/deleted between the signup enqueue and now (CON-190):
+	// Skip a tenant suspended/deleted between the signup enqueue and now:
 	// don't provision a profile for a frozen tenant. Terminal (no retry).
 	if active, aerr := tenantIsActive(ctx, p.Tenants, tid); aerr != nil {
 		return fmt.Errorf("zernio: bootstrap tenant status (tenant=%s): %w", tid, aerr)

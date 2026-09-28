@@ -25,7 +25,7 @@ const resendWebhookTolerance = 5 * time.Minute
 
 var errInvalidSignature = errors.New("resend webhook: invalid signature")
 
-// ResendWebhookHandler ingests Resend delivery events (CON-154 FR8, CON-298).
+// ResendWebhookHandler ingests Resend delivery events.
 // Resend signs webhooks with Svix, so every request is signature-verified before
 // any side effect. Hard bounces and complaints auto-suppress the address (scope
 // all); every delivery/open/click/delay/bounce/complaint event is also persisted
@@ -174,8 +174,8 @@ func (h *ResendWebhookHandler) suppressAll(ctx context.Context, addrs []string, 
 	return firstErr
 }
 
-// recordEvent persists one delivery event and refreshes the parent log's rollup
-// (CON-298). It resolves the log by the Resend message id first: an unknown id is
+// recordEvent persists one delivery event and refreshes the parent log's rollup.
+// It resolves the log by the Resend message id first: an unknown id is
 // not an error (returns nil, so a webhook for a pruned/foreign message can't
 // cause a retry storm); only a real persistence failure is returned, blocking
 // the ack so Resend retries. Ingestion is idempotent on svix_id.

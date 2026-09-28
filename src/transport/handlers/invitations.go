@@ -18,7 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// Invitation rate-limit budget (CON-26). Creating an invite sends mail on
+// Invitation rate-limit budget. Creating an invite sends mail on
 // demand, so it is throttled per workspace (so one workspace can't be used to
 // blast mail) and per client IP (so one caller can't spray across workspaces).
 // Accept is public and does argon2 work, so it is throttled per IP to blunt
@@ -44,19 +44,19 @@ const (
 var errInvitationInvalid = errors.New("invitation invalid")
 
 // InvitationEmailEnqueuer enqueues the transactional invitation email inside the
-// invite-minting transaction, so the mail exists iff the invitation row does
-// (CON-26). Implemented by *queues.Enqueuer; a narrow interface keeps this
+// invite-minting transaction, so the mail exists iff the invitation row does.
+// Implemented by *queues.Enqueuer; a narrow interface keeps this
 // handler out of the jobs package and unit-testable.
 type InvitationEmailEnqueuer interface {
 	EnqueueInvitationEmailTx(ctx context.Context, tx *sql.Tx, tenantID, invitationID, toEmail, inviteURL, inviterName, workspaceName, role string) error
 }
 
-// InvitationsHandler serves workspace invitations (CON-26/CON-147): owner-gated
+// InvitationsHandler serves workspace invitations: owner-gated
 // create/list/revoke, and the public preview/accept the invitee uses. Accepting
 // adds a membership of the invite's workspace — creating the account + a session
 // for a brand-new email, or attaching to an existing account (signed in as it)
 // with no new credentials. Owners invite into the ACTIVE workspace, resolved
-// per request from the X-Workspace-Id header (CON-147 PR2).
+// per request from the X-Workspace-Id header.
 type InvitationsHandler struct {
 	db           *bun.DB
 	userRepo     repository.UserRepository
@@ -80,7 +80,7 @@ type InvitationsHandler struct {
 
 // SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op). Invites are
 // the preferred way to add teammates, so the team_seats cap must gate the accept
-// path as well as the direct-create path in users.go (CON-295 §5).
+// path as well as the direct-create path in users.go.
 func (h *InvitationsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 // seatQuota checks the team_seats entitlement for the workspace an invite joins.
@@ -184,11 +184,11 @@ func (h *InvitationsHandler) Create(c *fiber.Ctx) error {
 		return tooManyRequests(c, retry, inviteThrottledMsg)
 	}
 
-	// An existing Ogen account CAN be invited into another workspace (CON-147 PR3:
+	// An existing Ogen account CAN be invited into another workspace (
 	// accept attaches a membership to it). The only thing barred is inviting
 	// someone who is already a member of THIS workspace — that is the 409, scoped
 	// to the tenant rather than to "has an account anywhere." Resolved against
-	// accounts (identity) since users.email is no longer unique. The caller is an
+	// accounts (identity) since users.email is not unique. The caller is an
 	// authenticated owner, so surfacing membership state is acceptable.
 	if acct, err := h.accountRepo.GetByEmail(reqCtx(c), email); err == nil {
 		if _, merr := h.userRepo.GetMembership(reqCtx(c), acct.ID, tenantID); merr == nil {
@@ -233,7 +233,7 @@ func (h *InvitationsHandler) Create(c *fiber.Ctx) error {
 	// a committed one queues exactly one link resolving to a stored hash (mirrors
 	// password-reset dispatch, CON-161). CreateReplacingPendingTx clears any
 	// pending invite (live or expired) that holds the partial-unique slot and
-	// reports whether it replaced one, so re-inviting is idempotent (CON-147 §7.3).
+	// reports whether it replaced one, so re-inviting is idempotent.
 	var reissued bool
 	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		replaced, err := h.inviteRepo.CreateReplacingPendingTx(ctx, tx, inv)
@@ -332,7 +332,7 @@ type invitationPreviewResponse struct {
 	// <email>" (no password field) and accept; false → collect name + password to
 	// create the account. The invitee already holds the capability token and sees
 	// their own email here, so disclosing whether that one address is registered
-	// adds no meaningful enumeration surface (CON-147).
+	// adds no meaningful enumeration surface.
 	HasAccount bool      `json:"has_account"`
 	ExpiresAt  time.Time `json:"expires_at"`
 }
@@ -385,7 +385,7 @@ func (h *InvitationsHandler) Preview(c *fiber.Ctx) error {
 
 // acceptInvitationRequest carries the new-account credentials. They are required
 // only when the invited email has no Ogen account yet; an existing account
-// accepts while logged in and supplies neither (CON-147 PR3), so both are
+// accepts while logged in and supplies neither, so both are
 // optional at the schema level and enforced per path.
 type acceptInvitationRequest struct {
 	Name     string `json:"name"     validate:"omitempty"`
@@ -454,7 +454,7 @@ func (h *InvitationsHandler) Accept(c *fiber.Ctx) error {
 }
 
 // acceptExisting attaches a membership to an account that already owns the
-// invited address — no new credentials, no new session (CON-147 PR3). The caller
+// invited address — no new credentials, no new session. The caller
 // must be signed in as that account, so a stray link can't graft a workspace
 // onto someone else's identity; if they aren't, the invite is left unconsumed so
 // they can log in and retry.
@@ -470,7 +470,7 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 		return err
 	}
 
-	// CON-295: attaching an existing account is still a new seat, so the
+	// Attaching an existing account is still a new seat, so the
 	// team_seats quota gates it exactly as acceptNew, before the token is consumed.
 	seatDec, err := h.seatQuota(reqCtx(c), inv.TenantID)
 	if err != nil {
@@ -507,7 +507,7 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 		activity.CategoryAuthentication, "invitation_accepted",
 		activity.WithEntity("user", uid), activity.WithSource(activity.SourceAPI),
 	)
-	// CON-295 §12: the seat is now taken — fire any near-limit crossing.
+	// The seat is now taken — fire any near-limit crossing.
 	h.limiter.DispatchCrossing(tenantctx.With(c.Context(), inv.TenantID), inv.TenantID, seatDec)
 
 	// No cookie: the caller stays in whatever workspace their session is on; the
@@ -527,7 +527,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 	if req.Name == "" || len(req.Password) < 8 {
 		return fiber.NewError(fiber.StatusBadRequest, "name and a password of at least 8 characters are required")
 	}
-	// CON-295: the team_seats quota gates the workspace gaining a member. Require
+	// The team_seats quota gates the workspace gaining a member. Require
 	// returns a *QuotaExceededError (→ 402) when at cap in enforce mode. Checked
 	// before the token is consumed so an over-cap workspace leaves the invite
 	// valid (the owner can free a seat or upgrade, then the invitee retries).
@@ -604,7 +604,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 		activity.CategoryAuthentication, "invitation_accepted",
 		activity.WithEntity("user", newUser.ID), activity.WithSource(activity.SourceAPI),
 	)
-	// CON-295 §12: the member now exists — fire any near-limit crossing to the
+	// The member now exists — fire any near-limit crossing to the
 	// workspace owners (tenant-scoped ctx so the notifier resolves the invite's
 	// tenant, not the acceptor's absent one).
 	h.limiter.DispatchCrossing(tenantctx.With(c.Context(), inv.TenantID), inv.TenantID, seatDec)

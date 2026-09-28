@@ -114,7 +114,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			modelID = "claude-haiku-4-5-20251001"
 		}
 		provider := llm.NewProvider(modelID, modelID, modelID)
-		// CON-308: seed the modelconfig resolver so every flow slot (orchestrator
+		// Seed the modelconfig resolver so every flow slot (orchestrator
 		// + the content_plan/enrich_brief/draft_post sub-flows) resolves a model.
 		initModelConfig(ctx, modelID, modelID)
 
@@ -134,7 +134,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		enrichBriefCb := enrich_brief.NewEnrichBriefCallback()
 		generatePostsCb := content_plan.NewGeneratePostsCallback()
 
-		// CON-207: register the draftPost generation flow as an assistant tool.
+		// Register the draftPost generation flow as an assistant tool.
 		Expect(draft_post.InitDraftPost(g, draft_post.DraftPostFlowConfig{Provider: provider}, draft_post.DraftPostRepos{
 			Campaigns: campaignRepo,
 			Platforms: platformRepo,
@@ -166,7 +166,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	AfterEach(func() {
 		// Reset conversation + posts (and their notes) between specs; the campaign
-		// persists. Notes are deleted first — they FK the posts (CON-188/CON-207).
+		// persists. Notes are deleted first — they FK the posts.
 		_, _ = db.NewDelete().TableExpr("campaign_assistant_messages").Where("1 = 1").Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_notes").Where("post_id IN (SELECT id FROM posts WHERE campaign_id = ?)", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
@@ -485,7 +485,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			})).To(Succeed())
 
 			// Attach the asset but leave UseAssets OFF — the assistant should turn
-			// it on because the campaign has ready attached assets (CON-118).
+			// it on because the campaign has ready attached assets.
 			full, err := campaignRepo.GetByID(ctx, campaignID)
 			Expect(err).NotTo(HaveOccurred())
 			full.UseAssets = false
@@ -527,7 +527,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			// Provenance: the assets_used event names the attached asset.
 			Expect(assetsUsed).To(ContainElement(campaign_assistant.AssetRef{ID: assetID, Title: assetTitle}))
 
-			// Per-post grounding (CON-118): a post records only the assets the
+			// Per-post grounding: a post records only the assets the
 			// model drew on for it, never an id outside the retrieved set — and
 			// since the single attached asset is highly relevant to this campaign,
 			// at least one post should cite it.
@@ -546,7 +546,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 		It("handles an asset question without failing the turn", func() {
 			// No embedder is wired in the harness, so askCampaignAssets degrades to
-			// unavailable — the turn must still complete cleanly (CON-118 §9).
+			// unavailable — the turn must still complete cleanly.
 			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
 				CampaignID:  campaignID,
 				Instruction: "What do the attached assets say about concurrency benchmarks?",

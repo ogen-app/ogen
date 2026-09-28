@@ -1,5 +1,5 @@
 // Package email defines the provider-agnostic mail contract for Ogen's
-// transactional + marketing email subsystem (CON-154): the Sender interface,
+// transactional + marketing email subsystem: the Sender interface,
 // the fully-rendered Message it transmits, and the retry classification the
 // send job relies on. The Resend implementation lives in the resend subpackage;
 // template rendering + boot seeding live in the templates subpackage; the

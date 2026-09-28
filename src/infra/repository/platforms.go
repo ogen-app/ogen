@@ -18,11 +18,11 @@ type PlatformRepository interface {
 	// ListPlatforms both need disabled rows, so filtering is the caller's job.
 	List(ctx context.Context) ([]models.Platform, error)
 	// ListEnabled returns only enabled platforms in the same order — the
-	// composer-facing GET /api/platforms view (CON-292 §7).
+	// composer-facing GET /api/platforms view.
 	ListEnabled(ctx context.Context) ([]models.Platform, error)
 	Create(ctx context.Context, platform *models.Platform) error
 	GetByID(ctx context.Context, id string) (*models.Platform, error)
-	// GetByZernioID resolves a platform by its Zernio wire slug (CON-292).
+	// GetByZernioID resolves a platform by its Zernio wire slug.
 	GetByZernioID(ctx context.Context, zernioID string) (*models.Platform, error)
 	Update(ctx context.Context, platform *models.Platform) error
 	// SetEnabled flips the soft on/off switch and returns the updated row.

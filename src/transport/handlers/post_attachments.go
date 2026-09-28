@@ -31,13 +31,13 @@ import (
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 )
 
-// The upload ceilings (image/pdf/video bytes, alt-text length) are no longer
-// constants: CON-292 moved them into operator-controlled global config. They
-// are read through the accessors in global_limits.go.
+// The upload ceilings (image/pdf/video bytes, alt-text length) are not
+// constants: they live in operator-controlled global config and are read
+// through the accessors in global_limits.go.
 const (
 	// postAttachmentsPositionConstraint is the name Postgres gives the inline
 	// UNIQUE (post_id, position) on post_attachments (baseline schema). Used to
-	// scope the reorder 409 to that specific collision (CON-124).
+	// scope the reorder 409 to that specific collision.
 	postAttachmentsPositionConstraint = "post_attachments_post_id_position_key"
 
 	// pdfThumbnailDPI is the resolution used when rendering the first-page
@@ -57,13 +57,13 @@ const (
 )
 
 // PDFRenderer renders an attachment PDF to a page count + first-page thumbnail
-// via pdf-service (CON-103). Implemented by *pdf.Client; an interface here
+// via pdf-service. Implemented by *pdf.Client; an interface here
 // keeps the handler testable and nil-tolerant (nil disables it).
 type PDFRenderer interface {
 	Render(ctx context.Context, r io.Reader, opts pdf.RenderOptions) (*pdf.RenderResult, error)
 }
 
-// ImagePreparer runs the image-service light path (CON-281): validate + metadata
+// ImagePreparer runs the image-service light path: validate + metadata
 // + EXIF-strip with pixels preserved (PrepareAttachment), and async alt-text
 // (GenerateAltText). Implemented by *imageclient.Client; a nil preparer disables
 // image attachments — image-service is a hard dependency (imageprobe deleted, D6).
@@ -80,9 +80,9 @@ type ImagePreparer interface {
 var PresignedURLTTL = 15 * time.Minute
 
 // PostAttachmentsHandler exposes the upload/list/reorder/delete API
-// for post attachments — images (CON-73) and PDFs (CON-75). All
+// for post attachments — images and PDFs. All
 // mutations are blocked once the parent post is submitted — scheduled or
-// published (CON-251); see lockedForMutations.
+// published; see lockedForMutations.
 type PostAttachmentsHandler struct {
 	repo     repository.PostAttachmentRepository
 	postRepo repository.PostRepository
@@ -134,13 +134,13 @@ func (h *PostAttachmentsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/posts/:post_id/attachments", h.auth)
 	g.Get("/", h.List)
 	g.Post("/", h.Upload)
-	// Large-file video ingest (CON-148): presign a direct-to-S3 PUT, then
+	// Large-file video ingest: presign a direct-to-S3 PUT, then
 	// finalize (probe + validate + persist). Static paths are registered
 	// before the /:id param route so they aren't captured as id="presign".
 	g.Post("/presign", h.PresignVideo)
 	g.Post("/finalize", h.FinalizeVideo)
-	// Static /reorder is registered before the /:id param route so a PATCH to
-	// .../attachments/reorder isn't captured as id="reorder" (CON-124).
+	// Static /reorder is registered before the /:id param route so a PATCH to.
+	// ../attachments/reorder isn't captured as id="reorder".
 	g.Patch("/reorder", h.ReorderAll)
 	g.Get("/:id", h.Get)
 	g.Patch("/:id", h.Update)
@@ -178,9 +178,8 @@ func (h *PostAttachmentsHandler) loadPostOrErr(c *fiber.Ctx) (*models.Post, erro
 }
 
 // lockedForMutations reports whether the post is in a state that freezes
-// its attachments. Originally published-only (CON-73 §2.1 / §2.7); CON-251
-// generalises it to every submitted state via IsSubmitted, so a scheduled
-// post's media freezes too — Zernio snapshots the attachments at schedule
+// its attachments: every submitted state (IsSubmitted), not just published,
+// so a scheduled post's media freezes too — Zernio snapshots the attachments at schedule
 // time, so a later change here would silently diverge from what publishes.
 func lockedForMutations(s models.PostStatus) bool {
 	return s.IsSubmitted()
@@ -278,7 +277,7 @@ func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
 }
 
 // rejectAttachment writes a terminal per-request attachment rejection carrying a
-// stable, machine-readable code beside the human message (CON-281). It mirrors
+// stable, machine-readable code beside the human message. It mirrors
 // the batch content-bank upload's {code,error} shape so the front-end can match
 // on the code across both surfaces and fall back to the prose when it is
 // unknown. It returns nil because the response is already written — the central
@@ -360,7 +359,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
 			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20))
 	}
-	// CON-295: this upload adds fh.Size bytes to the tenant's media_storage_bytes
+	// This upload adds fh.Size bytes to the tenant's media_storage_bytes
 	// budget. Check before touching storage so a denied upload never leaves an
 	// orphaned object behind.
 	var mediaQuota entitlements.Decision
@@ -402,7 +401,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		return err
 	}
 
-	// CON-284: on a thread post the client names which segment this media
+	// On a thread post the client names which segment this media
 	// belongs to (0-based). Omitted/blank ⇒ NULL (whole-post attachment,
 	// today's behaviour). Range against thread_segments is enforced at the
 	// publish gate, not here — media may be uploaded before segments are set.
@@ -411,7 +410,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		return err
 	}
 	// A segment only exists on a thread post; refuse to stamp one on an ordinary
-	// post so a meaningless index is never stored or returned (CON-284 §9).
+	// post so a meaningless index is never stored or returned.
 	if segIdx != nil && !post.IsThread() {
 		return fiber.NewError(fiber.StatusUnprocessableEntity, "segment_index is only valid on a thread post")
 	}
@@ -422,7 +421,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		AltText:      altText,
 		SegmentIndex: segIdx,
 		CreatedBy:    session.UserID,
-		// A user-supplied alt text on upload is a manual edit (CON-281 D5): mark it
+		// A user-supplied alt text on upload is a manual edit: mark it
 		// so the async auto-generator never overwrites it.
 		AltTextEditedByUser: altText != "",
 	}
@@ -451,7 +450,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		data = raw
 		keyExt = probe.Extension
 
-		// Page count + first-page thumbnail come from pdf-service (CON-103).
+		// Page count + first-page thumbnail come from pdf-service.
 		// Best-effort: a render failure leaves page_count 0 / no thumbnail
 		// rather than failing the upload. page_count is set here, before the
 		// platform soft-validation below, so the max_pages check still works.
@@ -509,7 +508,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		// Stage the EXIF-bearing original at a temp key, hand image-service presigned
 		// GET/PUT, and let it write the cleaned (metadata-stripped, pixel-identical)
 		// copy to the final key. The original is discarded after — its EXIF /
-		// geolocation must never persist or publish (CON-281 §7, §17).
+		// geolocation must never persist or publish.
 		cleanKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+ext)
 		origKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+".orig"+ext)
 		if _, err := h.storage.Upload(reqCtx(c), origKey, bytes.NewReader(raw), int64(len(raw)), mime); err != nil {
@@ -599,13 +598,13 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		}
 		return err
 	}
-	// CON-295: the attachment (and its bytes) now exist — fire any near-limit crossing.
+	// The attachment (and its bytes) now exist — fire any near-limit crossing.
 	if hasTenant {
 		h.limiter.DispatchCrossing(reqCtx(c), tenantID, mediaQuota)
 	}
 
-	// Auto-generate alt text asynchronously for an image with no user-supplied one
-	// (CON-281 §10): the synchronous upload stays fast, and the generator writes
+	// Auto-generate alt text asynchronously for an image with no user-supplied one:
+	// the synchronous upload stays fast, and the generator writes
 	// only where alt text is still un-edited.
 	if imagePrepared && att.AltText == "" && h.image != nil {
 		altCtx := detachedContext(c, session.TenantID)
@@ -622,9 +621,9 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 }
 
 // generateAttachmentAltText runs image-service's GenerateAltText for a freshly
-// uploaded image attachment and stores the result (CON-281 §10). Fire-and-forget:
-// it runs in its own goroutine off a detached context, meters the vision call
-// (CON-86), and persists only where the user hasn't edited the alt text (D5).
+// uploaded image attachment and stores the result. Fire-and-forget:
+// it runs in its own goroutine off a detached context, meters the vision call,
+// and persists only where the user hasn't edited the alt text (D5).
 // Best-effort throughout — a failure just leaves the attachment without alt text
 // (regeneration is a separate, explicit action).
 func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, tenantID, attID, s3Key string) {
@@ -634,7 +633,7 @@ func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	// Rebuild the tenant context the request carried, so the presign + repo write
-	// run against the right tenant (CON-97).
+	// run against the right tenant.
 	ctx = tenantctx.With(ctx, tenantID)
 
 	getURL, err := h.storage.PresignedGetURL(ctx, s3Key, PresignedURLTTL)
@@ -650,7 +649,7 @@ func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, 
 		slog.WarnContext(ctx, "attachment alt-text generation failed", logging.AttrComponent, "post_attachments", "attachment_id", attID, logging.AttrError, err)
 		return
 	}
-	// Meter the vision call on the gemini vendor (CON-86); RecordResp is nil-safe.
+	// Meter the vision call on the gemini vendor; RecordResp is nil-safe.
 	for _, u := range res.Usage {
 		h.recorder.RecordResp(ctx, llm.VendorGemini, u.Model, "alt_text", llm.VisionUsage{Step: u.Step, InputTokens: u.Input, OutputTokens: u.Output})
 	}
@@ -668,7 +667,7 @@ func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, 
 }
 
 // parseSegmentIndex parses the optional segment_index form/JSON value for a
-// thread attachment (CON-284). A blank value yields nil (NULL — a whole-post
+// thread attachment. A blank value yields nil (NULL — a whole-post
 // attachment); a non-negative integer yields a pointer to it. A negative or
 // non-numeric value is a 400.
 func parseSegmentIndex(s string) (*int, error) {
@@ -683,7 +682,7 @@ func parseSegmentIndex(s string) (*int, error) {
 	return &n, nil
 }
 
-// normalizeAltText trims and length-bounds accessibility alt text (CON-122).
+// normalizeAltText trims and length-bounds accessibility alt text.
 // The cap is in characters (runes), so multibyte alt text isn't rejected early.
 func normalizeAltText(s string) (string, error) {
 	s = strings.TrimSpace(s)
@@ -695,12 +694,12 @@ func normalizeAltText(s string) (string, error) {
 }
 
 // updateAttachmentRequest is the PATCH body. Both fields are optional; at least
-// one must be present. position reorders (CON-73); alt_text sets accessibility
-// text (CON-122).
+// one must be present. position reorders; alt_text sets accessibility
+// text.
 type updateAttachmentRequest struct {
 	Position *int    `json:"position"`
 	AltText  *string `json:"alt_text"`
-	// SegmentIndex reassigns which thread segment the media belongs to (CON-284).
+	// SegmentIndex reassigns which thread segment the media belongs to.
 	// Presence-aware so the three JSON states stay distinct: absent ⇒ leave as-is,
 	// a number ⇒ move to that segment, explicit null ⇒ detach (back to a
 	// whole-post attachment).

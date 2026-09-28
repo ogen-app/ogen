@@ -267,7 +267,7 @@ func equalWindows(a, b []dateWindow) bool {
 	return true
 }
 
-// CON-166: a manual phase plan pins each phase's window, but only when every
+// A manual phase plan pins each phase's window, but only when every
 // phase carries one (the plan is stored whole).
 func TestPlanBatchesHonoursManualWindows(t *testing.T) {
 	platforms := []resolvedPlatform{{ID: "x", Name: "X"}}

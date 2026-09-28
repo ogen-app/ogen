@@ -22,7 +22,7 @@ import (
 )
 
 // tenantAdminService adapts the tenant/tier/group repositories to the generated
-// TenantAdminServiceServer (CON-208). It is the operator-facing surface Harbor
+// TenantAdminServiceServer. It is the operator-facing surface Harbor
 // uses to read and manage tenant classification. All three repositories operate
 // on global tables, so no tenantctx is threaded here — the work is cross-tenant
 // by design and gated only by the shared bearer token (see server.go).
@@ -33,7 +33,7 @@ type tenantAdminService struct {
 	tenantRepo     repository.TenantRepository
 	versionRepo    repository.TenantTierVersionRepository
 	assignmentRepo repository.TenantTierAssignmentRepository
-	hub            eventhub.Hub // CON-295: entitlement-invalidation events (nil-safe)
+	hub            eventhub.Hub // Entitlement-invalidation events (nil-safe)
 }
 
 func newTenantAdminService(
@@ -325,7 +325,7 @@ func (s *tenantAdminService) SetTenantTier(ctx context.Context, req *tenantsv1.S
 	if tenantID == "" || tierID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and tier_id are required")
 	}
-	// CON-294: stamp an assignment to the tier's latest active version (nil when
+	// Stamp an assignment to the tier's latest active version (nil when
 	// the tier has none yet, e.g. a freshly created unpublished tier) so
 	// tenants.tier_id and the tenant's open assignment stay consistent. Reassign
 	// updates tier_id, closes the old open assignment, and opens the new one in
@@ -349,7 +349,7 @@ func (s *tenantAdminService) SetTenantTier(ctx context.Context, req *tenantsv1.S
 	if !ok {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
-	// CON-295 §4: nudge the tenant's open tabs to refetch their entitlements.
+	// Nudge the tenant's open tabs to refetch their entitlements.
 	publishEntitlementChange(ctx, s.hub, tenantID)
 	tenant, err := s.tenantRepo.GetByIDWithClassification(ctx, tenantID)
 	if err != nil {
@@ -359,7 +359,7 @@ func (s *tenantAdminService) SetTenantTier(ctx context.Context, req *tenantsv1.S
 	return &tenantsv1.SetTenantTierResponse{Tenant: toTenantProto(tenant)}, nil
 }
 
-// --- tenant lifecycle status (CON-190) ---
+// --- tenant lifecycle status ---
 
 func (s *tenantAdminService) SetTenantStatus(ctx context.Context, req *tenantsv1.SetTenantStatusRequest) (*tenantsv1.SetTenantStatusResponse, error) {
 	tenantID := strings.TrimSpace(req.GetTenantId())
@@ -370,9 +370,9 @@ func (s *tenantAdminService) SetTenantStatus(ctx context.Context, req *tenantsv1
 	if !validTenantStatus(newStatus) {
 		return nil, status.Error(codes.InvalidArgument, "status must be one of active, suspended, deleted")
 	}
-	// The default tenant holds pre-CON-97 backfilled data and is the platform
-	// fallback; it may not be suspended or deleted (mirrors the default-tier
-	// delete protection in CON-208).
+	// The default tenant holds backfilled pre-multi-tenant data and is the
+	// platform fallback; it may not be suspended or deleted (mirrors the
+	// default-tier delete protection).
 	if tenantID == models.DefaultTenantID && newStatus != models.TenantStatusActive {
 		return nil, status.Error(codes.FailedPrecondition, "the default tenant cannot be suspended or deleted")
 	}

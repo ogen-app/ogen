@@ -49,7 +49,7 @@ func (f *fakeImageAssets) GetByID(_ context.Context, id string) (*models.Asset, 
 }
 func (f *fakeImageAssets) SetImageResult(_ context.Context, _, prevContent, content, altText string, setAlt bool) error {
 	f.wrote = true
-	if f.content == prevContent { // compare-and-set, like the repo (CON-312)
+	if f.content == prevContent { // compare-and-set, like the repo
 		f.content = content
 	}
 	f.alt = altText
@@ -187,7 +187,7 @@ func TestProcessImage_Success(t *testing.T) {
 		t.Fatalf("asset description/alt not written: %+v", assets)
 	}
 	// stampFile records the browser-drawable normalized key so decorateFile can
-	// mint normalized_url (CON-299), and — since images arrive with no thumbnail —
+	// mint normalized_url, and — since images arrive with no thumbnail —
 	// fills the empty thumbnail slot with the same key so the preview cell draws a
 	// picture. No tenant in ctx, so the key is unprefixed. Dimensions are stamped too.
 	ff := deps.Files.(*fakeImageFiles)
@@ -219,7 +219,7 @@ func TestProcessImage_Success(t *testing.T) {
 // TestExposeNormalizedDerivative_KeepsExistingThumbnail: the thumbnail slot is
 // filled only when empty. A file that already has one — a real downscaled
 // thumbnail, or a PDF's first-page preview — keeps it, while the normalized key is
-// still recorded so normalized_url is available (CON-299).
+// still recorded so normalized_url is available.
 func TestExposeNormalizedDerivative_KeepsExistingThumbnail(t *testing.T) {
 	existing := "assets/i9/thumb.png"
 	files := &fakeImageFiles{file: &models.AssetFile{ThumbnailS3Key: &existing}}
@@ -257,7 +257,7 @@ func TestProcessImage_ExtractionFailedIsPartial(t *testing.T) {
 		t.Fatalf("extraction status = %q, want partial", exts.ext.Status)
 	}
 	// A partial run carries the machine-readable code so the client can word it
-	// as searchable-but-incomplete rather than broken (CON-281).
+	// as searchable-but-incomplete rather than broken.
 	if exts.ext.FailureCode != models.UploadCodeExtractionPartial {
 		t.Fatalf("failure_code = %q, want %q", exts.ext.FailureCode, models.UploadCodeExtractionPartial)
 	}

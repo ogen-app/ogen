@@ -14,7 +14,7 @@ func TestNormalizeAltText(t *testing.T) {
 	// The cap is in characters (runes), not bytes: exactly maxAltTextLen()
 	// multibyte runes must be accepted even though it far exceeds
 	// maxAltTextLen() bytes (byte-counting would wrongly reject this). The cap
-	// is now operator config (CON-292); absent InitGlobalLimits it is the
+	// is now operator config; absent InitGlobalLimits it is the
 	// built-in default.
 	limit := maxAltTextLen()
 	atLimit := strings.Repeat("é", limit) // 2 bytes per rune

@@ -29,8 +29,7 @@ type VendorFunc func(model string) (vendor string, ok bool)
 type TierFunc func(ctx context.Context) (tierID string, ok bool)
 
 // Defaults are the boot-reconcile seed models for the global-default rows,
-// sourced from the legacy config fields so day-one behaviour is unchanged
-// (CON-308 §10.2).
+// sourced from the legacy config fields so day-one behaviour is unchanged.
 type Defaults struct {
 	Generation string // chat generation flows (incl. post_assistant writer)
 	Quality    string // post_quality
@@ -95,7 +94,7 @@ func scopeKey(tier, flow, slot string) string {
 // Init reconciles missing global defaults from def, loads the assignment
 // snapshot from src, and starts a periodic refresh bound to ctx. Non-fatal: a
 // failed load logs and the resolver serves capability defaults so the app still
-// starts (CON-308 §10.4).
+// starts.
 func Init(ctx context.Context, src Source, def Defaults, vendorOf VendorFunc, tierOf TierFunc) {
 	cfgSource = src
 	cfgVendor = vendorOf
@@ -129,7 +128,7 @@ func Init(ctx context.Context, src Source, def Defaults, vendorOf VendorFunc, ti
 
 // reconcile inserts a global-default row for any catalog slot that lacks one,
 // seeded from def. It NEVER overwrites an existing row, so an operator's Harbor
-// edit (or a prior env-derived seed) survives every redeploy (CON-308 §14).
+// edit (or a prior env-derived seed) survives every redeploy.
 func reconcile(ctx context.Context, src Source, def Defaults) error {
 	rows, err := src.List(ctx)
 	if err != nil {

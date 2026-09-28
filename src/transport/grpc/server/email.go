@@ -28,13 +28,13 @@ const (
 
 // EmailBodyGetter fetches one email's rendered body live from Resend.
 // *resend.Client satisfies it; a nil getter (no Resend key configured) makes
-// GetTenantEmail fall through to the stored body / marks it unavailable (CON-298).
+// GetTenantEmail fall through to the stored body / marks it unavailable.
 type EmailBodyGetter interface {
 	Get(ctx context.Context, id string) (*resend.EmailDetail, error)
 }
 
-// AdminEmailEnqueuer enqueues one admin_tenant_registered operator notification
-// (CON-229). *queues.Enqueuer satisfies it; it is kept as a local interface so
+// AdminEmailEnqueuer enqueues one admin_tenant_registered operator notification.
+// *queues.Enqueuer satisfies it; it is kept as a local interface so
 // this transport package doesn't import the jobs/queues package.
 type AdminEmailEnqueuer interface {
 	EnqueueAdminTenantRegisteredEmail(ctx context.Context, tenantID, recipient string, vars map[string]string) error
@@ -42,16 +42,16 @@ type AdminEmailEnqueuer interface {
 
 // emailAdminService adapts the email_logs + email_events repositories (plus the
 // persisted body store and a live Resend body fetch) to the generated
-// EmailAdminServiceServer (CON-298) — the operator-facing surface Harbor's
-// per-tenant Emails tab (CON-192) consumes. tenant_id is authoritative
+// EmailAdminServiceServer — the operator-facing surface Harbor's
+// per-tenant Emails tab consumes. tenant_id is authoritative
 // server-side scoping on every call; the caller's value is never trusted for a
 // cross-tenant read.
 type emailAdminService struct {
 	emailv1.UnimplementedEmailAdminServiceServer
 	logs      repository.EmailLogRepository
 	events    repository.EmailEventRepository
-	bodyStore repository.EmailBodyRepository // CON-306: body persisted at send (preferred)
-	liveBody  EmailBodyGetter                // CON-298: live Resend fetch (fallback)
+	bodyStore repository.EmailBodyRepository // Body persisted at send (preferred)
+	liveBody  EmailBodyGetter                // Live Resend fetch (fallback)
 	// CON-229 admin-notification send path. tenants/users hydrate the newly-
 	// registered tenant's details; enqueuer fans out one durable send per operator
 	// recipient; harborBaseURL builds the "View in Harbor" deep link (empty ⇒ no
@@ -166,7 +166,7 @@ func (s *emailAdminService) GetTenantEmail(ctx context.Context, req *emailv1.Get
 		})
 	}
 
-	// Prefer the body persisted at send (CON-306): it renders even after the
+	// Prefer the body persisted at send: it renders even after the
 	// Resend message ages out of retention or the key is unset. Fall back to the
 	// live Resend fetch only for rows sent before CON-306 shipped (no stored body).
 	// Either way, degrade to body_available = false — summary + timeline are still
@@ -180,7 +180,7 @@ func (s *emailAdminService) GetTenantEmail(ctx context.Context, req *emailv1.Get
 }
 
 // NotifyOperatorsTenantRegistered fans out the admin_tenant_registered
-// operator-notification email to the given recipients (CON-229). It re-loads the
+// operator-notification email to the given recipients. It re-loads the
 // tenant by id (authoritative) and enqueues one durable send per recipient;
 // idempotency by (tenant, recipient) means a retried Harbor callback never
 // double-sends. Recipients are trimmed, lower-cased, and de-duplicated; an empty
@@ -268,7 +268,7 @@ func (s *emailAdminService) tenantRegisteredVars(ctx context.Context, t *models.
 	}
 }
 
-// serveStoredBody fills detail from the persisted body (CON-306) and reports
+// serveStoredBody fills detail from the persisted body and reports
 // whether it did. A lookup error is logged and treated as "no stored body" so
 // the caller falls back to the live Resend fetch.
 func (s *emailAdminService) serveStoredBody(ctx context.Context, detail *emailv1.EmailDetail, emailLogID string) bool {

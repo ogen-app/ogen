@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Account is the login identity (CON-147). It holds the email + password and
+// Account is the login identity. It holds the email + password and
 // spans workspaces: one account can hold a membership (a users row) in many
 // tenants and switch between them without re-authenticating.
 //

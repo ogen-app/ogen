@@ -11,8 +11,8 @@ import (
 
 // Template keys. Each maps to a typed data struct + a defaults/<key>.{html,txt}.tmpl
 // pair embedded below. verify_email is reserved for its follow-up consumer issue
-// (CON-154 §13) and is intentionally not seeded here; password_reset is seeded
-// by its consumer (CON-161).
+// and is intentionally not seeded here; password_reset is seeded
+// by its consumer.
 const (
 	KeyWelcome            = "welcome"
 	KeyPasswordReset      = "password_reset"
@@ -22,12 +22,12 @@ const (
 	KeyDripDay7           = "drip_day7"
 	KeyConnectionExpiring = "connection_expiring"
 	// KeyAdminTenantRegistered is the internal operator notification sent to
-	// admins when a new tenant registers (CON-229). Unlike the templates above it
+	// admins when a new tenant registers. Unlike the templates above it
 	// is not customer-facing, so it is hand-authored rather than Maizzle-compiled.
 	KeyAdminTenantRegistered = "admin_tenant_registered"
 )
 
-// Connection-expiry notification stages (CON-219). The connection_expiring
+// Connection-expiry notification stages. The connection_expiring
 // template branches on Data.Stage: a heads-up before the token lapses, and an
 // action-required notice once it has (or Zernio flags a reconnect).
 const (
@@ -44,17 +44,17 @@ type Data struct {
 	WorkspaceName  string
 	AppURL         string
 	UnsubscribeURL string
-	// ResetURL is the one-time password-reset link (CON-161). Set only for the
+	// ResetURL is the one-time password-reset link. Set only for the
 	// password_reset template; empty and ignored for every other.
 	ResetURL string
-	// InviteURL / InviterName / Role feed the invitation template (CON-26): the
+	// InviteURL / InviterName / Role feed the invitation template: the
 	// single-use accept link, who sent it, and the role the invitee will hold.
 	// Empty and ignored for every other template.
 	InviteURL   string
 	InviterName string
 	Role        string
 	// Platform / AccountName / Stage / ExpiresAt / ExpiresIn / ReconnectURL feed
-	// the connection_expiring template (CON-219). Platform is the display label
+	// the connection_expiring template. Platform is the display label
 	// (e.g. "LinkedIn"); AccountName the account's handle/name; Stage one of
 	// StageExpiringSoon / StageActionRequired; ExpiresAt / ExpiresIn the formatted
 	// expiry (both empty when Zernio can't date it); ReconnectURL the app deep
@@ -68,7 +68,7 @@ type Data struct {
 	ReconnectURL string
 	// TenantID / TenantSlug / OwnerName / OwnerEmail / Tier / Status /
 	// RegisteredAt / TenantURL feed the admin_tenant_registered operator
-	// notification (CON-229): the newly-registered tenant's details plus a deep
+	// notification: the newly-registered tenant's details plus a deep
 	// link into Harbor. WorkspaceName carries the tenant name; the recipient is an
 	// operator, not a tenant user, so Name is unset. Empty and ignored for every
 	// other template.
@@ -130,14 +130,14 @@ func marketingVars() models.StringMap {
 }
 
 // passwordResetVars documents the password_reset template's placeholders: the
-// standard transactional set plus the one-time ResetURL (CON-161).
+// standard transactional set plus the one-time ResetURL.
 func passwordResetVars() models.StringMap {
 	m := transactionalVars()
 	m["ResetURL"] = varResetURL
 	return m
 }
 
-// invitationVars documents the invitation template's placeholders (CON-26): the
+// invitationVars documents the invitation template's placeholders: the
 // standard transactional set plus the accept link, inviter, and target role. The
 // invitee has no user record yet, so Name is unset — the template greets without
 // a name.
@@ -150,7 +150,7 @@ func invitationVars() models.StringMap {
 }
 
 // connectionExpiringVars documents the connection_expiring template's
-// placeholders (CON-219): the standard transactional set plus the account /
+// placeholders: the standard transactional set plus the account /
 // platform / stage / expiry details and the reconnect deep link.
 func connectionExpiringVars() models.StringMap {
 	m := transactionalVars()
@@ -164,7 +164,7 @@ func connectionExpiringVars() models.StringMap {
 }
 
 // adminTenantRegisteredVars documents the admin_tenant_registered template's
-// placeholders (CON-229). This is internal operator mail: WorkspaceName carries
+// placeholders. This is internal operator mail: WorkspaceName carries
 // the new tenant's name, the rest are the registration details + Harbor deep
 // link. The recipient is an admin, not a tenant user, so Name is unset.
 func adminTenantRegisteredVars() models.StringMap {
@@ -232,8 +232,8 @@ func Defaults() ([]models.EmailTemplate, error) {
 	return out, nil
 }
 
-// SeedDefaults upserts-if-absent the embedded default templates into the store
-// (CON-154 FR10). Idempotent: existing (operator-edited) rows are left
+// SeedDefaults upserts-if-absent the embedded default templates into the store.
+// Idempotent: existing (operator-edited) rows are left
 // untouched, so copy edits survive redeploys. Returns the count newly seeded.
 func SeedDefaults(ctx context.Context, repo repository.EmailTemplateRepository) (int, error) {
 	defs, err := Defaults()

@@ -9,8 +9,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// AssetImageRepository persists the page images mirrored for URL-scraped assets
-// (CON-222). One asset has many images, keyed by (asset_id, idx).
+// AssetImageRepository persists the page images mirrored for URL-scraped assets.
+// One asset has many images, keyed by (asset_id, idx).
 type AssetImageRepository interface {
 	// ReplaceForAsset atomically replaces all images for the given asset
 	// (delete-then-insert), so a refresh re-mirror leaves no stale rows.

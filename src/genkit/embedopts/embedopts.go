@@ -1,5 +1,5 @@
 // Package embedopts centralises the per-request options passed to the Gemini
-// Embedding 2 model (CON-101). It is a leaf package importing only the genai
+// Embedding 2 model. It is a leaf package importing only the genai
 // SDK so every embed call site — the document-side flows (embed_asset,
 // process_pdf) and the query-side consumers (content_plan, post_assistant) —
 // can share the same config without import cycles.
@@ -12,7 +12,7 @@ import "google.golang.org/genai"
 // assets_chunks.embedding halfvec(N) column. Defaults to Gemini's native 3072.
 var Dimensions int32 = 3072
 
-// Availabler is implemented by the reloadable Gemini embedder (CON-104), whose
+// Availabler is implemented by the reloadable Gemini embedder, whose
 // backing key can be set / rotated / cleared at runtime via the secrets API.
 // Available reports whether it can currently serve embed requests.
 type Availabler interface{ Available() bool }

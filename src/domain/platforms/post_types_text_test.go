@@ -103,7 +103,7 @@ func TestValidatePostType_CharsAreRunesNotBytes(t *testing.T) {
 }
 
 func TestValidatePostType_ContentLimitCountsVisibleLength(t *testing.T) {
-	// CON-126: the char limit governs the flattened caption, not the Markdown
+	// The char limit governs the flattened caption, not the Markdown
 	// source, since we flatten before publishing. Platform capped at 4 chars.
 	p := &models.Platform{
 		ID:              "vis",

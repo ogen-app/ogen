@@ -6,8 +6,8 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// AnnouncementStatus is the lifecycle of an operator-authored announcement
-// (CON-230): a stable, closed set enforced by a DB CHECK and validated in Go.
+// AnnouncementStatus is the lifecycle of an operator-authored announcement:
+// a stable, closed set enforced by a DB CHECK and validated in Go.
 //
 //	draft     — authored, not yet delivered to any tenant.
 //	published — live: delivered to matching tenants within its showing window.
@@ -30,7 +30,7 @@ func (s AnnouncementStatus) Valid() bool {
 	}
 }
 
-// Announcement is one operator-authored informational banner (CON-230), shown to
+// Announcement is one operator-authored informational banner, shown to
 // tenants over /api/announcements and authored by Harbor over the internal gRPC
 // surface. Like Tenant / TenantTier / TenantGroup it is a GLOBAL operator table —
 // NOT TenantScoped: a single row is shown to many tenants, so it carries no
@@ -66,8 +66,8 @@ type Announcement struct {
 	TargetTierIDs  []string `bun:"-" json:"target_tier_ids,omitempty"`
 }
 
-// AnnouncementTargetGroup binds an announcement to a tenant group it targets
-// (CON-230). Composite PK (announcement_id, group_id). Global table.
+// AnnouncementTargetGroup binds an announcement to a tenant group it targets.
+// Composite PK (announcement_id, group_id). Global table.
 type AnnouncementTargetGroup struct {
 	bun.BaseModel `bun:"table:announcement_target_groups,alias:atg" swaggerignore:"true"`
 
@@ -75,8 +75,8 @@ type AnnouncementTargetGroup struct {
 	GroupID        string `bun:"group_id,pk"        json:"group_id"`
 }
 
-// AnnouncementTargetTier binds an announcement to a tenant tier it targets
-// (CON-230). Composite PK (announcement_id, tier_id). Global table.
+// AnnouncementTargetTier binds an announcement to a tenant tier it targets.
+// Composite PK (announcement_id, tier_id). Global table.
 type AnnouncementTargetTier struct {
 	bun.BaseModel `bun:"table:announcement_target_tiers,alias:att" swaggerignore:"true"`
 
@@ -84,8 +84,8 @@ type AnnouncementTargetTier struct {
 	TierID         string `bun:"tier_id,pk"         json:"tier_id"`
 }
 
-// AnnouncementInteraction is one user's engagement with one announcement
-// (CON-230): a single row per (announcement, user), upserted on first click /
+// AnnouncementInteraction is one user's engagement with one announcement:
+// a single row per (announcement, user), upserted on first click /
 // dismiss. It carries a denormalised tenant_id so the operator stats roll up to
 // per-tenant counts. NOT TenantScoped — the operator stats reads are
 // cross-tenant aggregates, so it carries explicit user_id + tenant_id columns
@@ -104,7 +104,7 @@ type AnnouncementInteraction struct {
 }
 
 // AnnouncementStats is the operator-facing engagement rollup for one
-// announcement (CON-230), computed over announcement_interactions plus the
+// announcement, computed over announcement_interactions plus the
 // eligible-audience denominator from the targeting predicate. Because
 // impressions are not tracked, the denominator is the ELIGIBLE audience (tenants
 // / users the announcement targets among active tenants), not the viewed set.

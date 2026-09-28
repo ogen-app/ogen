@@ -9,7 +9,7 @@ import (
 // EmailSuppressionScope bounds what an entry blocks. `marketing` (an
 // unsubscribe) blocks only marketing mail; `all` (a hard bounce or spam
 // complaint) blocks every kind, transactional included — the address is
-// dead or hostile (CON-154 §7).
+// dead or hostile.
 type EmailSuppressionScope string
 
 const (
@@ -38,8 +38,7 @@ const (
 
 // EmailSuppression is one "do not mail" entry, keyed by email address (the
 // global identifier — email is unique across tenants) plus scope. Unique on
-// (email, scope) so an unsubscribe and a later hard bounce coexist as two rows
-// (CON-154 §7).
+// (email, scope) so an unsubscribe and a later hard bounce coexist as two rows.
 type EmailSuppression struct {
 	bun.BaseModel `bun:"table:email_suppressions,alias:es" swaggerignore:"true"`
 

@@ -1,5 +1,5 @@
 // Package netguard provides SSRF defenses for outbound HTTP to untrusted URLs
-// (CON-222: the URL-asset scraper mirrors images referenced by arbitrary scraped
+// (the URL-asset scraper mirrors images referenced by arbitrary scraped
 // pages). The authoritative control is SafeClient, whose dialer rejects any
 // connection whose *resolved* address is private/loopback/link-local — this
 // closes the TOCTOU window between a name lookup and the actual dial (DNS

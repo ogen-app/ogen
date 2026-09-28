@@ -73,7 +73,7 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 			repository.NewPlatformRepository(db),
 			repository.NewPostAttachmentRepository(db), auth)
 		ph.Register(app)
-		// GET /:id/analytics now lives on the insights handler (CON-291).
+		// GET /:id/analytics now lives on the insights handler.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, analyticsRepo, nil, nil, auth).Register(app)
 		handlers.NewAnalyticsHandler(analyticsRepo, nil, nil, nil, nil, auth).Register(app)
 
@@ -318,7 +318,7 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 			Expect(p["publisher_post_id"]).To(Equal("LI-999"))
 			Expect(p["published_url"]).To(Equal("https://li/999"))
 
-			// CON-165: the canonical permalink is persisted as a first-class
+			// The canonical permalink is persisted as a first-class
 			// field on the post, readable without an analytics round-trip.
 			pResp := get("/api/posts/p-manual")
 			Expect(pResp.StatusCode).To(Equal(200))

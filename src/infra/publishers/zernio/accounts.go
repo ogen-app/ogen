@@ -69,7 +69,7 @@ func (c *Client) ListAccounts(ctx context.Context, profileID string) ([]Account,
 // DeleteAccount disconnects and removes a connected social account on Zernio
 // (DELETE /accounts/{id}). Zernio responds 200 on success and 404 when the id
 // is unknown; the 404 surfaces as an *APIError{Status:404} so the caller can
-// treat an already-gone account as an idempotent no-op (CON-133). There is no
+// treat an already-gone account as an idempotent no-op. There is no
 // request body or query parameter. The id is a Zernio account id (= the local
 // social_accounts primary key) and is path-escaped defensively.
 func (c *Client) DeleteAccount(ctx context.Context, id string) error {

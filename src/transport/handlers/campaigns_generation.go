@@ -22,7 +22,7 @@ import (
 // CampaignGenerationHandler owns the campaign AI generation/review SSE endpoints
 // — targeted post generation (POST /:id/generate-posts, CON-114) and the
 // read-only consistency reviews (POST /:id/brief-review + /:id/posts-review,
-// CON-116). Split out of the CampaignsHandler god-object (CON-291): a focused
+// CON-116). Split out of the CampaignsHandler god-object: a focused
 // handler over the generate/review flow callbacks, each nil-disabling its
 // endpoint. isContentPlanReady is the shared Anthropic-key readiness gate.
 type CampaignGenerationHandler struct {

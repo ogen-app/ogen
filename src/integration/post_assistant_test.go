@@ -109,13 +109,13 @@ var _ = Describe("Post assistant flow", Ordered, func() {
 		if planningModelID == "" {
 			planningModelID = "claude-haiku-4-5-20251001"
 		}
-		// CON-128: the flow resolves its loop model (and the editPost writer
+		// The flow resolves its loop model (and the editPost writer
 		// model) through the Provider — without one, cfg.Provider.Ref would
 		// panic. Exercise the hybrid planner path by default (the shipped
 		// default); set POST_ASSISTANT_PLANNER=false to run the legacy
 		// single-Sonnet path instead, so the same suite covers both.
 		provider := llm.NewProvider(modelID, modelID, planningModelID)
-		// CON-308: the flow resolves its loop + writer models through the
+		// The flow resolves its loop + writer models through the
 		// modelconfig resolver; seed it so Ref returns real model ids.
 		initModelConfig(ctx, modelID, planningModelID)
 		flowCfg := post_assistant.PostAssistantFlowConfig{
@@ -302,7 +302,7 @@ A concise post about Go.`)
 			Expect(gotExplanationDelta).To(BeTrue(), "explanation_delta should fire as the model writes the explanation")
 			// content_delta must stream the edited copy: in the hybrid path this
 			// proves the editPost writer sub-call streams through to the client;
-			// in the legacy path it is the inline updatedContent stream (CON-128).
+			// in the legacy path it is the inline updatedContent stream.
 			Expect(gotContentDelta).To(BeTrue(), "content_delta should stream the rewritten post content on an edit")
 			Expect(gotComplete).To(BeTrue(), "complete event signals the canonical final response")
 

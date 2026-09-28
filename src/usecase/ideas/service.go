@@ -1,4 +1,4 @@
-// Package ideas implements the workspace Ideas backlog (CON-315): capture,
+// Package ideas implements the workspace Ideas backlog: capture,
 // presence-aware edits, and the triage verdict. It owns the invariants the UI
 // relies on — remind_at exists only for `later`, a decision stamps
 // decided_at/decided_by, returning to the inbox clears all of them, and the
@@ -17,13 +17,13 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// Length bounds guard the unbounded TEXT columns (CON-315 §9).
+// Length bounds guard the unbounded TEXT columns.
 const (
 	MaxTitleLen = 500
 	MaxNoteLen  = 10000
 )
 
-// remind_at bounds (CON-315 §9): a minute of clock-skew tolerance in the past,
+// remind_at bounds: a minute of clock-skew tolerance in the past,
 // at most a year ahead.
 const (
 	remindSkew   = time.Minute
@@ -31,7 +31,7 @@ const (
 )
 
 // largeBacklog is the per-tenant size above which List logs a warning — the
-// signal to add pagination and server-side counts (CON-315 §10).
+// signal to add pagination and server-side counts.
 const largeBacklog = 2000
 
 // Validation errors. The handler maps these to HTTP 400.
@@ -191,7 +191,7 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (*model
 	return idea, columns, nil
 }
 
-// SetVerdict records a triage decision (CON-315 FR4) and returns the idea plus
+// SetVerdict records a triage decision and returns the idea plus
 // the verdict it replaced. A nil verdict returns the idea to the inbox and
 // clears every decision field. A non-nil verdict — including re-deciding with
 // the same one — stamps decided_at/decided_by afresh.

@@ -12,7 +12,7 @@ import (
 // CampaignReadHandler owns the campaign read/projection endpoints — the
 // per-campaign overview (GET /:id/overview, CON-113) and the batched
 // Campaigns-list summaries (GET /summaries, CON-152). Split out of the
-// CampaignsHandler god-object (CON-291): a focused handler over the two plain
+// CampaignsHandler god-object: a focused handler over the two plain
 // tenant-scoped DB-read services, each nil-disabling its endpoint with a 503.
 //
 // It must be registered BEFORE CampaignsHandler so the static /summaries route

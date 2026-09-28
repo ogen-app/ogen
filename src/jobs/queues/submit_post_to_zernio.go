@@ -26,7 +26,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
 
-// SubmitPostToZernioQueue is the River queue name (CON-69 §3).
+// SubmitPostToZernioQueue is the River queue name.
 const SubmitPostToZernioQueue = "submit_post_to_zernio"
 
 // SubmitPostTask carries the Ogen post id; the worker re-loads the
@@ -51,13 +51,13 @@ func (SubmitPostTask) InsertOpts() river.InsertOpts {
 type SubmitPostProcessor struct {
 	river.WorkerDefaults[SubmitPostTask]
 	Deps ZernioDeps
-	// Tenants gates publishing on the owning tenant's lifecycle status (CON-190):
+	// Tenants gates publishing on the owning tenant's lifecycle status:
 	// a suspended/deleted tenant's scheduled posts are not published. Nil = no gate.
 	Tenants TenantStatusReader
 	// Notifier drops a "post failed to publish" notification on a terminal
-	// submit failure (CON-242). Nil is a no-op.
+	// submit failure. Nil is a no-op.
 	Notifier *notify.Service
-	// Members lists the workspace to fan a publish outcome across (CON-285: a
+	// Members lists the workspace to fan a publish outcome across (a
 	// failure is workspace business, not the author's private problem). Nil falls
 	// back to notifying just the author.
 	Members memberLister
@@ -69,7 +69,7 @@ type SubmitPostProcessor struct {
 // Work is the River entrypoint; it delegates to Process.
 func (p *SubmitPostProcessor) Work(ctx context.Context, job *river.Job[SubmitPostTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// CON-97: background jobs span tenants (interim until per-tenant, PR4).
+	// Background jobs span tenants (interim until per-tenant, PR4).
 	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
@@ -94,7 +94,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	if err != nil {
 		return fmt.Errorf("submit: load post %s: %w", task.PostID, err)
 	}
-	// Scope the rest of the job to the owning tenant (CON-97 PR4).
+	// Scope the rest of the job to the owning tenant.
 	ctx = tenantctx.With(ctx, post.TenantID)
 	if post.Status != models.PostStatusScheduled {
 		// User cancelled or reconciliation moved this post; abort
@@ -103,7 +103,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 			"submit aborted: post no longer Scheduled", `{"reason":"status_changed"}`)
 		return nil
 	}
-	// Don't publish for a suspended/deleted tenant (CON-190). The post stays
+	// Don't publish for a suspended/deleted tenant. The post stays
 	// Scheduled, so it resumes if the tenant is reactivated (or the reconcile
 	// sweep — also tenant-gated — leaves it alone).
 	if active, aerr := tenantIsActive(ctx, p.Tenants, post.TenantID); aerr != nil {
@@ -113,7 +113,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 			"submit aborted: tenant not active", `{"reason":"tenant_not_active"}`)
 		return nil
 	}
-	// Idempotency / manual retry path (CON-69 §10):
+	// Idempotency / manual retry path:
 	//   - On a fresh submit, PublisherPostID is empty and we POST /posts.
 	//   - On a manual retry of a previously-failed Post (the user
 	//     moved Failed→ReadyForPublish, then ReadyForPublish→Scheduled),
@@ -147,7 +147,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 			fmt.Sprintf("platform %s (%s) is not Zernio-supported", platform.Name, platform.ID))
 	}
 
-	// CON-150: resolve which same-platform account this post publishes to.
+	// Resolve which same-platform account this post publishes to.
 	// An explicit selection (post.SocialAccountID) is validated and used
 	// verbatim; otherwise auto-select when the platform has exactly one
 	// active account, and require an explicit choice when it has more.
@@ -171,11 +171,11 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 		when = post.ScheduledAt.UTC()
 	}
 	// The instant (ScheduledFor) is the source of truth and stays UTC;
-	// the workspace timezone (CON-78) is echoed so Zernio renders the
+	// the workspace timezone is echoed so Zernio renders the
 	// schedule in the operator's zone. Defaults to UTC when unset.
 	_, tzName := settings.WorkspaceTimezone(ctx, p.Deps.SettingRepo)
 
-	// CON-122/CON-284: upload the post's attachments to Zernio and reference
+	// Upload the post's attachments to Zernio and reference
 	// them as mediaItems. A thread carries its media inside per-segment
 	// threadItems (built below); an ordinary post carries a flat top-level
 	// mediaItems array. Either upload failure is transient (network / Zernio
@@ -203,14 +203,14 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 		mediaItems = items
 	}
 
-	// CON-284 R2: post.Content is the full thread body; Zernio's top-level content
+	// post.Content is the full thread body; Zernio's top-level content
 	// must be just the root message. Derive it from the segments, falling back to
 	// the body for a non-thread post (or the defensive empty-segment case).
 	topContent := post.Content
 	if post.IsThread() && len(post.ThreadSegments) > 0 {
 		topContent = post.ThreadSegments.RootContent()
 	}
-	// CON-126: none of the networks render Markdown — Zernio publishes the content
+	// None of the networks render Markdown — Zernio publishes the content
 	// string verbatim — so flatten it to the plain text a caption actually shows
 	// before it leaves Ogen, otherwise `**bold**` and `[text](url)` land literally
 	// on X/Threads. The editor's Markdown source (posts.content) is untouched; only
@@ -234,7 +234,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 		ScheduledFor: when,
 		Timezone:     tzName,
 		MediaItems:   mediaItems,
-		// CON-148 §6.6: pass the title through for platforms that need it
+		// Pass the title through for platforms that need it
 		// explicitly (YouTube video). omitempty drops it for the common case.
 		Title: post.Title,
 	}
@@ -246,9 +246,9 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	job, submitErr := p.Deps.Client.Submit(ctx, req)
 	jobs.ObserveZernioCall(time.Since(apiStart))
 	if submitErr != nil {
-		// 24h dedupe recovery (CON-129). Search the whole dedupe window across all
+		// 24h dedupe recovery. Search the whole dedupe window across all
 		// statuses, matching on the content we actually submitted — req.Content is
-		// the flattened body (CON-126), and FindByContent matches it verbatim, so
+		// the flattened body, and FindByContent matches it verbatim, so
 		// both sides compare the same string.
 		if errors.Is(submitErr, zernio.ErrDuplicateContent) {
 			recovered, ferr := p.Deps.Client.FindByContent(ctx, req.Content, 24*time.Hour)
@@ -299,8 +299,8 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	return p.persistSuccess(ctx, post, job, accountID)
 }
 
-// resolveAccountID picks the Zernio accountId this post publishes to
-// (CON-150). It returns a non-empty id on success. On failure it returns
+// resolveAccountID picks the Zernio accountId this post publishes to.
+// It returns a non-empty id on success. On failure it returns
 // "" plus either nil — a terminal PostLog was written and River must not
 // retry — or a transient error River should retry. That distinction rides
 // the error value, mirroring terminal()'s "always nil" contract, so the
@@ -356,7 +356,7 @@ func (p *SubmitPostProcessor) persistSuccess(ctx context.Context, post *models.P
 
 // buildMediaItems uploads each of the post's attachments to Zernio (presign →
 // PUT bytes → publicUrl) and returns the mediaItems array for the submit
-// request, in position order, carrying altText (CON-122). Nil deps
+// request, in position order, carrying altText. Nil deps
 // (Storage/PostAttachmentRepo) or no attachments ⇒ nil (a text-only post).
 // Attachments whose MIME type Zernio doesn't accept are skipped, not fatal.
 func (p *SubmitPostProcessor) buildMediaItems(ctx context.Context, post *models.Post) ([]map[string]any, error) {
@@ -388,20 +388,20 @@ func (p *SubmitPostProcessor) buildMediaItems(ctx context.Context, post *models.
 	return items, nil
 }
 
-// buildThreadItems builds the ordered per-segment payload for a native thread
-// (CON-284): one ThreadItem per thread_segment (item 0 = root), each carrying
+// buildThreadItems builds the ordered per-segment payload for a native thread:
+// one ThreadItem per thread_segment (item 0 = root), each carrying
 // its own text and its own media. Attachments are grouped by segment_index and
 // uploaded to Zernio (presign → PUT) exactly like buildMediaItems, preserving
 // position order within a segment. Nil storage/repo ⇒ a text-only thread.
 //
-// CON-284 R2: segment_index is optional — a NULL index means the attachment
+// segment_index is optional — a NULL index means the attachment
 // belongs to the root message (segment 0), the whole-post default of the
 // delimited-body flow. Only a non-NULL, out-of-range index can't be placed, so it
 // is skipped with a warning (defence in depth; the gate range-checks it first).
 func (p *SubmitPostProcessor) buildThreadItems(ctx context.Context, post *models.Post) ([]zernio.ThreadItem, error) {
 	items := make([]zernio.ThreadItem, len(post.ThreadSegments))
 	for i := range post.ThreadSegments {
-		// CON-126: flatten Markdown per segment so each message publishes as plain
+		// Flatten Markdown per segment so each message publishes as plain
 		// text (Zernio ships the content verbatim). VisibleLen counts this same
 		// flattened form, so a segment that passed the per-message gate fits here.
 		items[i] = zernio.ThreadItem{Content: platforms.FlattenSocialText(post.ThreadSegments[i].Content)}
@@ -525,7 +525,7 @@ func (p *SubmitPostProcessor) terminal(ctx context.Context, post *models.Post, r
 			"reason":  reason,
 			"message": msg,
 		}))
-	// CON-242/CON-285: tell the whole workspace it failed to publish.
+	// Tell the whole workspace it failed to publish.
 	emitPublishNotification(ctx, p.Notifier, p.Members, post, false)
 	return nil
 }

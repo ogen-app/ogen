@@ -8,7 +8,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// CON-316 FR5: the generator reads the facts ledger, drops expired facts,
+// The generator reads the facts ledger, drops expired facts,
 // groups the rest by subject and hints judgement / commitment kinds.
 
 func day(s string) *models.CalendarDate {

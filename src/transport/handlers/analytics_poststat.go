@@ -20,7 +20,7 @@ import (
 // snapshot trajectory and the shared per-platform baseline / lifespan curves;
 // there is no window parameter (the series spans [published_at, now]).
 //
-// It is distinct from GET /api/posts/:id/analytics (CON-93), which stays the lean
+// It is distinct from GET /api/posts/:id/analytics, which stays the lean
 // raw-snapshot/pending endpoint. A post the refresh hasn't recorded yet returns
 // available:true with an awaiting_platform overview rather than a pending stub.
 //

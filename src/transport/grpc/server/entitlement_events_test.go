@@ -8,7 +8,7 @@ import (
 )
 
 // spyHub records published events and is a no-op subscriber — enough to assert
-// what an operator tier change fans out (CON-295 §4) without the in-process Hub.
+// what an operator tier change fans out without the in-process Hub.
 type spyHub struct{ events []eventhub.Event }
 
 func (s *spyHub) Publish(_ context.Context, ev eventhub.Event) error {

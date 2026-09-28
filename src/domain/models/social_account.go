@@ -6,8 +6,8 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// SocialAccount is the local view of a Zernio-connected account
-// (CON-62). The primary key matches Zernio's accountId so reconciler
+// SocialAccount is the local view of a Zernio-connected account.
+// The primary key matches Zernio's accountId so reconciler
 // upserts can key off it directly.
 //
 // Soft-delete is the default disconnect path: DeletedAt set to a
@@ -16,7 +16,7 @@ import (
 // keep their FK integrity.
 type SocialAccount struct {
 	bun.BaseModel `bun:"table:social_accounts,alias:sa" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID           string     `bun:"id,pk"                 json:"id"`
 	Platform     string     `bun:"platform,notnull"      json:"platform"`
@@ -30,7 +30,7 @@ type SocialAccount struct {
 	LastSyncedAt time.Time  `bun:"last_synced_at,notnull" json:"last_synced_at"`
 	DeletedAt    *time.Time `bun:"deleted_at,nullzero"   json:"deleted_at,omitempty"`
 
-	// Health snapshot (CON-219). Populated by the detect_expiring_connections
+	// Health snapshot. Populated by the detect_expiring_connections
 	// sweep from Zernio's GET /v1/accounts/health; all nullable and NULL until
 	// the first sweep. TokenExpiresAt is the forward-looking token expiry that
 	// drives the "connection expiring" owner notification; HealthStatus is

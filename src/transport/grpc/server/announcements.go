@@ -26,7 +26,7 @@ const (
 )
 
 // announcementAdminService adapts the AnnouncementRepository to the generated
-// AnnouncementAdminServiceServer (CON-230) — the operator-facing surface Harbor
+// AnnouncementAdminServiceServer — the operator-facing surface Harbor
 // uses to author informational announcements (banners) and read their
 // engagement. Announcements are global (not tenant-scoped); targeting reuses the
 // CON-208 tenant tiers/groups the Harbor audience picker reads from

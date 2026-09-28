@@ -1,4 +1,4 @@
-// Package jobs hosts Ogen's background-job machinery (CON-69). The typed
+// Package jobs hosts Ogen's background-job machinery. The typed
 // queues live in the queues sub-package and are registered against a single
 // River (riverqueue/river) client at boot.
 //

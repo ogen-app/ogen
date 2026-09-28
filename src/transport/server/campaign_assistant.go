@@ -22,8 +22,8 @@ import (
 
 // initCampaignAssistant registers the campaign assistant flow on the shared
 // Genkit instance and returns a callback for the campaigns handler. It reuses
-// the already-registered content_plan and enrich_brief callbacks as tools
-// (CON-112), so it must be initialised after those two.
+// the already-registered content_plan and enrich_brief callbacks as tools,
+// so it must be initialised after those two.
 func initCampaignAssistant(
 	g *genkit.Genkit,
 	cfg *config.Config,
@@ -48,23 +48,22 @@ func initCampaignAssistant(
 		Checker:  checker,
 		Embedder: embedder,
 		ModelID:  cfg.PlanningModelID,
-		// Router slimming (CON-112 perf): the planner only emits a short JSON
-		// envelope (explanation + action) plus tool calls, so 2048 is ample and
-		// bounds worst-case streaming.
+		// Router slimming: the planner only emits a short JSON envelope
+		// (explanation + action) plus tool calls, so 2048 is ample and bounds
+		// worst-case streaming.
 		//
-		// MaxTurns bounds tool-use round-trips. It was 2 (CON-112), but that
-		// double-counted "turns" and heavy sub-flow cost: the cheap Haiku planner
-		// legitimately chains a couple of read tools (getCampaignOverview →
-		// listCampaignPosts → act) and blew the budget, surfacing a hard
-		// "exceeded maximum tool call iterations" 502 (CON-213). We now give the
-		// read chain room (4) and keep the real cost guard — "at most one heavy
-		// Sonnet sub-flow per turn" — enforced precisely inside the tools
+		// MaxTurns bounds tool-use round-trips only, not heavy sub-flow cost:
+		// the cheap Haiku planner legitimately chains a couple of read tools
+		// (getCampaignOverview → listCampaignPosts → act), and a tighter cap
+		// surfaces a hard "exceeded maximum tool call iterations" 502. 4 gives
+		// the read chain room; the real cost guard — "at most one heavy Sonnet
+		// sub-flow per turn" — is enforced precisely inside the tools
 		// themselves (see requestState.reserveHeavyAction), not via a blunt turn cap.
 		MaxOutputTokens: 2048,
 		MaxTurns:        4,
 		Hub:             hub,
 		Notifier:        notifier,
-		// CON-112: pre-warm the strict-tool grammar cache at boot when we're also
+		// Pre-warm the strict-tool grammar cache at boot when we're also
 		// stabilizing tool order (otherwise the warmed key wouldn't match).
 		PrewarmTools:     cfg.AnthropicStableToolOrder,
 		ContentPlan:      contentPlanFn,

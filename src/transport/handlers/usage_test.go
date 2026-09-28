@@ -7,8 +7,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// TestRequireOperator verifies the PUT /api/usage/limits operator gate
-// (CON-86 §9): it fails closed when no token is configured, rejects a wrong or
+// TestRequireOperator verifies the PUT /api/usage/limits operator gate:
+// it fails closed when no token is configured, rejects a wrong or
 // missing X-Admin-Token, and only lets a matching token through — so tenant
 // users can never raise their own caps or disable enforcement.
 func TestRequireOperator(t *testing.T) {

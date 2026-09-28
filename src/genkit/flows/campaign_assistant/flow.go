@@ -50,7 +50,7 @@ func InitCampaignAssistant(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, re
 
 	tools := defineTools(g)
 
-	// CON-112: warm Anthropic's strict-tool grammar cache in the background so
+	// Warm Anthropic's strict-tool grammar cache in the background so
 	// the first real request doesn't pay the ~50s compile. Non-blocking.
 	if cfg.PrewarmTools {
 		go prewarmToolCache(g, cfg, tools)
@@ -131,7 +131,7 @@ func publishAssistantFinalised(
 }
 
 // notifyContentPlanReady drops a persistent "content plan ready" notification to
-// the campaign owner (CON-242) — but ONLY when this run generated a content plan
+// the campaign owner — but ONLY when this run generated a content plan
 // (resp.Action == "content_plan_generated"), so an ordinary chat turn never
 // spams the inbox. Best-effort: a nil notifier, a run error, or a non-plan turn
 // is a silent no-op. Uses a fresh tenant-scoped background context because the
@@ -162,7 +162,7 @@ func notifyContentPlanReady(n *notify.Service, tenantID, ownerID, campaignID str
 }
 
 // notifyAssistantFinalised drops a durable "assistant finished / failed"
-// notification to the campaign owner (CON-285): the initiator, who may have
+// notification to the campaign owner: the initiator, who may have
 // walked away while the run continued. The client suppresses the live echo for
 // the tab that started it (lib/localRuns) — this row is for other devices and a
 // later return. The dedupe_key collapses repeats for the same campaign while

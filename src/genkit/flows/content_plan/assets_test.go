@@ -61,7 +61,7 @@ func TestJoinPagedChunks_Empty(t *testing.T) {
 	}
 }
 
-// CON-118: the grounded-binding helpers dedupe by id, preserve order, and skip
+// The grounded-binding helpers dedupe by id, preserve order, and skip
 // empty ids.
 func TestAssetIDsOf(t *testing.T) {
 	got := assetIDsOf([]resolvedPiece{
@@ -79,7 +79,7 @@ func TestAssetIDsOf(t *testing.T) {
 	}
 }
 
-// CON-118: a post's UsedAssetIDs is its self-reported assetRefs, filtered to the
+// A post's UsedAssetIDs is its self-reported assetRefs, filtered to the
 // retrieved-context set — hallucinated ids dropped, dups removed, order kept, and
 // an empty (non-nil) slice when nothing valid remains so the jsonb column stores
 // [] rather than null.

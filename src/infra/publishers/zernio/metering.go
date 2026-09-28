@@ -21,7 +21,7 @@ const (
 // init registers the Zernio publisher vendor. It is count-only for now (empty
 // price table → every event costs 0, treated as intentional rather than an
 // unknown-model gap); a per-tier Zernio price map can be supplied later via
-// USAGE_MODEL_PRICES (CON-86 §15).
+// USAGE_MODEL_PRICES.
 func init() {
 	vendors.Register(vendors.Descriptor{
 		Name:      VendorZernio,

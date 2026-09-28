@@ -24,9 +24,9 @@ import (
 )
 
 // planAdminService adapts the tier-version + assignment repositories to the
-// generated PlanAdminServiceServer (CON-294): the operator-facing surface Harbor
-// uses to author, publish, retire and assign versioned tier entitlements
-// (CON-243). All tables are global, so no tenantctx is threaded here — the work
+// generated PlanAdminServiceServer: the operator-facing surface Harbor
+// uses to author, publish, retire and assign versioned tier entitlements.
+// All tables are global, so no tenantctx is threaded here — the work
 // is cross-tenant by design and gated only by the shared bearer token.
 type planAdminService struct {
 	plansv1.UnimplementedPlanAdminServiceServer
@@ -34,7 +34,7 @@ type planAdminService struct {
 	assignments repository.TenantTierAssignmentRepository
 	catalog     *entitlements.Catalog
 	resolver    *entitlements.Resolver
-	hub         eventhub.Hub // CON-295: entitlement-invalidation events (nil-safe)
+	hub         eventhub.Hub // Entitlement-invalidation events (nil-safe)
 }
 
 func newPlanAdminService(
@@ -394,7 +394,7 @@ func (s *planAdminService) liveAssignmentError(ctx context.Context, versionID st
 }
 
 // warnIfManyActiveVersions logs when a tier carries more than a few concurrent
-// active versions — grandfathering each carries a maintenance cost (CON-243 §10).
+// active versions — grandfathering each carries a maintenance cost.
 // Best-effort; a read error is swallowed.
 func (s *planAdminService) warnIfManyActiveVersions(ctx context.Context, tierID string) {
 	if tierID == "" {
@@ -452,7 +452,7 @@ func (s *planAdminService) SetTenantTierVersion(ctx context.Context, req *plansv
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 	slog.InfoContext(ctx, "tenant tier version set", logging.AttrComponent, "grpcserver", "tenant_id", tenantID, "version_id", versionID, "reason", reason)
-	// CON-295 §4: nudge the tenant's open tabs to refetch their entitlements.
+	// Nudge the tenant's open tabs to refetch their entitlements.
 	publishEntitlementChange(ctx, s.hub, tenantID)
 	tv, err := s.versionProto(ctx, versionID)
 	if err != nil {

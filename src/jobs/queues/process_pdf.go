@@ -26,11 +26,11 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// ProcessPDFQueue ingests an uploaded PDF (CON-103): download original.pdf from
+// ProcessPDFQueue ingests an uploaded PDF: download original.pdf from
 // object storage, parse it via pdf-service over gRPC (text -> page-aware chunks
-// + thumbnail), embed the chunks, and persist chunks + file metadata. Replaces
-// the old fire-and-forget goroutine with a durable, retried River job, so a
-// crash or transient failure no longer strands an asset in "processing".
+// + thumbnail), embed the chunks, and persist chunks + file metadata. It is a
+// durable, retried River job, so a crash or transient failure never strands
+// an asset in "processing".
 const ProcessPDFQueue = "process_pdf"
 
 // thumbnailDPIDefault is used when PDFDeps.ThumbnailDPI is 0.
@@ -76,12 +76,12 @@ type PDFDeps struct {
 	Chunks       chunkUpserter
 	Files        fileUpserter
 	ThumbnailDPI int
-	// Recorder + EmbedModel meter PDF-ingestion embedding usage (CON-86). nil
+	// Recorder + EmbedModel meter PDF-ingestion embedding usage. nil
 	// Recorder = no-op. EmbedModel is the price-map key (cfg.EmbedModel).
 	Recorder   *usage.Recorder
 	EmbedModel string
 	// Notifier drops an in-app notification to the asset's creator when ingest
-	// reaches a terminal status (CON-242). Nil is a no-op.
+	// reaches a terminal status. Nil is a no-op.
 	Notifier *notify.Service
 }
 
@@ -140,7 +140,7 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 		return fmt.Errorf("process_pdf %s: storage not configured", in.AssetID)
 	}
 
-	// No gemini_api_key configured yet (CON-104): checked up front so we don't
+	// No gemini_api_key configured yet: checked up front so we don't
 	// download + parse the PDF only to fail every chunk embed. Retry rather than
 	// fail — a key set via the secrets API takes effect without a restart, so a
 	// later attempt can succeed; give up (failed) only once attempts are
@@ -232,7 +232,7 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 		}
 	}
 
-	// CON-86: one usage event per PDF ingest (sum of embedded-chunk token
+	// One usage event per PDF ingest (sum of embedded-chunk token
 	// estimates; the Gemini embed response carries no usage). Nil recorder = no-op.
 	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "pdf_extract", llm.EmbedUsage{Tokens: totalEmbedTokens})
 
@@ -281,7 +281,7 @@ func (p *ProcessPDFProcessor) setStatus(ctx context.Context, assetID, status str
 	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
 		return fmt.Errorf("process_pdf %s: set status %s: %w", assetID, status, err)
 	}
-	// CON-242: announce terminal outcomes to the asset's creator (no-op for the
+	// Announce terminal outcomes to the asset's creator (no-op for the
 	// intermediate "processing" write).
 	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "document", models.AssetTypePDF)
 	return nil

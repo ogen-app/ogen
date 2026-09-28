@@ -108,7 +108,7 @@ var _ = Describe("SettingsHandler", Ordered, func() {
 	// ── Get ──────────────────────────────────────────────────────────────────
 
 	Describe("GET /api/settings/:key", func() {
-		// CON-97: GET /:key is always authenticated. The setup_complete bootstrap
+		// GET /:key is always authenticated. The setup_complete bootstrap
 		// gate (unauthenticated reads while first-run setup was incomplete) was
 		// removed once signup via POST /api/tenants became the sole onboarding path.
 		Context("when not authenticated", func() {
@@ -206,7 +206,7 @@ var _ = Describe("SettingsHandler", Ordered, func() {
 				Expect(resp.StatusCode).To(Equal(400))
 			})
 
-			// CON-78: the workspace timezone must be a valid IANA zone.
+			// The workspace timezone must be a valid IANA zone.
 			It("accepts a valid IANA timezone", func() {
 				body, _ := json.Marshal(fiber.Map{"value": "Europe/Kyiv"})
 				req := httptest.NewRequest("PUT", "/api/settings/timezone", bytes.NewReader(body))

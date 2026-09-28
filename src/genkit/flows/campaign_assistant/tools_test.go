@@ -117,7 +117,7 @@ func TestResolveTargetPlatforms(t *testing.T) {
 // abort the turn (return a Go error) for user-correctable input — a past date,
 // a non-target platform, or an unknown phase. Instead it returns a zero-post
 // result carrying the reason as a warning, so the assistant can relay it and
-// suggest a valid alternative (CON-215). A Go error here would surface to the
+// suggest a valid alternative. A Go error here would surface to the
 // user as a raw "model call failed".
 func TestGeneratePosts_SoftFailsUserInput(t *testing.T) {
 	newState := func() *requestState {
@@ -237,7 +237,7 @@ func TestResolveWindow(t *testing.T) {
 		t.Fatalf("passthrough = %s..%s err=%v", s, e, err)
 	}
 
-	// Past start is rejected, not clamped (CON-114: never date drafts in the past).
+	// Past start is rejected, not clamped (never date drafts in the past).
 	if _, _, err := resolveWindow("2026-01-01", "2026-02-28", today); err == nil {
 		t.Fatal("expected error for a past windowStart")
 	}
@@ -274,7 +274,7 @@ func TestResolveWindow(t *testing.T) {
 	}
 }
 
-// CON-118: page citation rendering for asset Q&A excerpts.
+// Page citation rendering for asset Q&A excerpts.
 func TestPageRef(t *testing.T) {
 	p := func(i int) *int { return &i }
 	cases := []struct {
@@ -293,7 +293,7 @@ func TestPageRef(t *testing.T) {
 	}
 }
 
-// CON-114: a count the user names is honored exactly; an omitted/zero count
+// A count the user names is honored exactly; an omitted/zero count
 // defaults to 1 (the safe minimum) so an omitting planner can't over-produce.
 // Guards the "generate 1 post" -> 3 regression.
 func TestResolveGenerateCount(t *testing.T) {
@@ -321,7 +321,7 @@ func TestResolveGenerateCount(t *testing.T) {
 	}
 }
 
-// CON-213: the per-turn heavy-action latch. Exactly one reservation succeeds
+// The per-turn heavy-action latch. Exactly one reservation succeeds
 // per requestState; every later caller is turned away and skips its sub-flow.
 func TestReserveHeavyAction_Sequential(t *testing.T) {
 	st := &requestState{}
@@ -335,7 +335,7 @@ func TestReserveHeavyAction_Sequential(t *testing.T) {
 	}
 }
 
-// CON-213: genkit dispatches a turn's tool calls in parallel goroutines, so the
+// Genkit dispatches a turn's tool calls in parallel goroutines, so the
 // reservation must admit exactly one winner even under simultaneous contention
 // (guards against the TOCTOU/data race a completion-based check had). Run under
 // -race to also catch unsynchronised access.
@@ -369,7 +369,7 @@ func TestReserveHeavyAction_Concurrent(t *testing.T) {
 	}
 }
 
-// CON-213: the max-tool-iterations abort is detected by its stable message
+// The max-tool-iterations abort is detected by its stable message
 // substring so the turn degrades gracefully instead of 502ing.
 func TestIsMaxTurnsExceeded(t *testing.T) {
 	if isMaxTurnsExceeded(nil) {
@@ -389,7 +389,7 @@ func TestIsMaxTurnsExceeded(t *testing.T) {
 
 func fmtWrap(err error) error { return errors.Join(errors.New("model call failed"), err) }
 
-// CON-114: a single post with only a start date is pinned to that day, so
+// A single post with only a start date is pinned to that day, so
 // "generate 1 for Jul 22" lands on Jul 22 instead of the midpoint of the
 // derived 14-day window. Explicit ends and multi-post requests keep their range.
 func TestSinglePostWindowEnd(t *testing.T) {

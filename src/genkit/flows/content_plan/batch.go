@@ -16,7 +16,7 @@ import (
 // campaign-wide slot ordering. Combined with the within-batch parse order it
 // gives every post a stable global Index that the SSE stream surfaces — under
 // parallel batching, posts arrive interleaved by completion order, so the
-// stream-arrival index is no longer meaningful as a stable identifier.
+// stream-arrival index is not meaningful as a stable identifier.
 type batchSpec struct {
 	Index            int
 	GlobalStartIndex int
@@ -87,7 +87,7 @@ func planBatches(
 
 	phasePosts := evenSplit(totalPosts, len(sortedPhases))
 	phaseWindows := computeDateWindows(startDate, endDate, len(sortedPhases))
-	// CON-166: a campaign's manual phase plan pins each phase's window; it is
+	// A campaign's manual phase plan pins each phase's window; it is
 	// all-or-nothing (the plan is stored whole), so only apply it when every
 	// phase carries one.
 	if manual := manualWindows(sortedPhases); manual != nil {
@@ -198,7 +198,7 @@ func evenSplit(total, n int) []int {
 
 // computeDateWindows partitions the closed inclusive interval [start, end]
 // into n contiguous windows in chronological order — the shared
-// campaignphase.Split rule (CON-166), so these derived windows are exactly the
+// campaignphase.Split rule, so these derived windows are exactly the
 // ones GET /api/campaigns/:id/phases reports. When n exceeds the day count
 // (rare: e.g. 1-day campaign with multiple phases) all windows collapse to the
 // full range — the alternative (zero-day windows) would produce invalid

@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// ImageExtractionRepository persists the per-run image vision state (CON-281).
+// ImageExtractionRepository persists the per-run image vision state.
 // Tenant scoping comes from the TenantScoped hooks on the model.
 type ImageExtractionRepository interface {
 	// Create inserts a new extraction row. A duplicate (asset_id, run_key) hits

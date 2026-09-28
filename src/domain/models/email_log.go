@@ -8,7 +8,7 @@ import (
 
 // EmailLogStatus is the terminal (or terminal-ish) outcome recorded for one
 // send attempt. Delivery events arriving later via the Resend webhook update
-// the same row in place by provider_message_id (CON-154 FR8).
+// the same row in place by provider_message_id.
 type EmailLogStatus string
 
 const (
@@ -18,7 +18,7 @@ const (
 	EmailLogSkippedSuppressed EmailLogStatus = "skipped_suppressed"
 	EmailLogSkippedDisabled   EmailLogStatus = "skipped_disabled"
 	// EmailLogDelivered / EmailLogOpened / EmailLogClicked are the positive
-	// delivery-lifecycle states written by the Resend webhook (CON-298) as
+	// delivery-lifecycle states written by the Resend webhook as
 	// email.delivered / email.opened / email.clicked events arrive.
 	EmailLogDelivered EmailLogStatus = "delivered"
 	EmailLogOpened    EmailLogStatus = "opened"
@@ -30,7 +30,7 @@ const (
 )
 
 // Rank orders the send lifecycle so an out-of-order or redelivered webhook can
-// never regress a row to a less-advanced state (CON-298). The positive
+// never regress a row to a less-advanced state. The positive
 // progression is queued < sent < delivered < opened < clicked. The skipped_*
 // and terminal-negative states (failed/bounced/complained) rank ABOVE the
 // positive progression so they stick — e.g. a spam complaint that arrives after
@@ -59,11 +59,11 @@ func (s EmailLogStatus) Rank() int {
 	}
 }
 
-// ProviderResend is the only mail provider today (CON-154). Recorded on every
+// ProviderResend is the only mail provider today. Recorded on every
 // row so a future second provider stays distinguishable in the audit trail.
 const ProviderResend = "resend"
 
-// EmailLog is one entry in the append-only send audit (CON-154 §7), mirroring
+// EmailLog is one entry in the append-only send audit, mirroring
 // PostLog. tenant_id / user_id are nullable because some mail (future
 // system/ops notices) has no owning tenant or user. idempotency_key is nullable
 // so the partial unique index only constrains rows that carry one.

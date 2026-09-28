@@ -13,13 +13,13 @@ import (
 
 // ErrLastOwner is returned by the role-change / removal operations when they
 // would leave a workspace with no owner. Handlers map it to 409 — a workspace
-// must always keep at least one owner (CON-26 §7).
+// must always keep at least one owner.
 var ErrLastOwner = errors.New("cannot remove or demote the last owner")
 
 // UserRepository defines all persistence operations for the User domain.
 type UserRepository interface {
 	List(ctx context.Context) ([]models.User, error)
-	// CountInTenant counts the tenant's members — the team_seats quota (CON-295).
+	// CountInTenant counts the tenant's members — the team_seats quota.
 	CountInTenant(ctx context.Context) (int64, error)
 	Create(ctx context.Context, user *models.User) error
 	// CreateTx inserts a user on the provided bun.IDB so it can join an outer
@@ -28,7 +28,7 @@ type UserRepository interface {
 	CreateTx(ctx context.Context, tx bun.IDB, user *models.User) error
 	GetByID(ctx context.Context, id string) (*models.User, error)
 	// GetByIDWithTenant is GetByID with the Tenant relation eager-loaded, for
-	// GET /api/current_user (CON-97).
+	// GET /api/current_user.
 	GetByIDWithTenant(ctx context.Context, id string) (*models.User, error)
 	GetByEmail(ctx context.Context, email string) (*models.User, error)
 	// GetByAccountID resolves the membership a login lands on. In CON-147 PR1 an
@@ -39,7 +39,7 @@ type UserRepository interface {
 	GetByAccountID(ctx context.Context, accountID string) (*models.User, error)
 	// GetMembership resolves the membership of accountID in a specific workspace,
 	// which is how the auth middleware validates an X-Workspace-Id header before
-	// scoping a request to it (CON-147 PR2). Runs unscoped — it IS the check that
+	// scoping a request to it. Runs unscoped — it IS the check that
 	// decides the tenant. sql.ErrNoRows when the account isn't a member there.
 	GetMembership(ctx context.Context, accountID, tenantID string) (*models.User, error)
 	Update(ctx context.Context, user *models.User) error
@@ -48,15 +48,15 @@ type UserRepository interface {
 	// >=1-owner invariant in one transaction (it locks the tenant's owner rows so
 	// concurrent demotions can't race the workspace to zero owners). Returns the
 	// updated user, sql.ErrNoRows if the user isn't in the tenant, or ErrLastOwner
-	// when demoting the sole owner (CON-26 §7).
+	// when demoting the sole owner.
 	SetRoleGuarded(ctx context.Context, id, tenantID, newRole string) (*models.User, error)
 	// RemoveMemberGuarded deletes a member within tenantID under the same
 	// >=1-owner invariant. Returns sql.ErrNoRows if the user isn't in the tenant,
-	// or ErrLastOwner when removing the sole owner (CON-26 §7).
+	// or ErrLastOwner when removing the sole owner.
 	RemoveMemberGuarded(ctx context.Context, id, tenantID string) error
 
 	// ListOwnersByTenant returns every owner (role = owner) membership in
-	// tenantID, oldest-joined first (CON-219). Takes the tenant id explicitly
+	// tenantID, oldest-joined first. Takes the tenant id explicitly
 	// because User is not TenantScoped — the caller is a cross-tenant background
 	// sweep that names each tenant in turn. Backs the connection-expiry
 	// notification's recipient resolution. Never returns sql.ErrNoRows (an empty
@@ -77,7 +77,7 @@ func NewUserRepository(db *bun.DB) UserRepository {
 func (r *userRepository) List(ctx context.Context) ([]models.User, error) {
 	// Users are not TenantScoped (the auth path looks them up before a tenant is
 	// known), so the tenant filter is applied by hand here — otherwise List would
-	// return every tenant's users (CON-97).
+	// return every tenant's users.
 	tid, scoped, err := scopeTenantRead(ctx)
 	if err != nil {
 		return nil, err
@@ -121,7 +121,7 @@ func (r *userRepository) CreateTx(ctx context.Context, tx bun.IDB, user *models.
 
 func (r *userRepository) GetByID(ctx context.Context, id string) (*models.User, error) {
 	// Tenant-scoped by hand (User is not TenantScoped) so one tenant can't read
-	// another tenant's user by id — e.g. GET /api/users/:id (CON-97).
+	// another tenant's user by id — e.g. GET /api/users/:id.
 	tid, scoped, err := scopeTenantRead(ctx)
 	if err != nil {
 		return nil, err
@@ -300,7 +300,7 @@ func (r *userRepository) RemoveMemberGuarded(ctx context.Context, id, tenantID s
 // ensureNotLastOwnerTx returns ErrLastOwner unless tenantID would still have an
 // owner after the caller demotes or removes one. It locks the tenant's owner
 // rows (FOR UPDATE) so concurrent demotions/removals serialize and can't race
-// the workspace down to zero owners (CON-26 §7). Must be called inside a tx.
+// the workspace down to zero owners. Must be called inside a tx.
 func ensureNotLastOwnerTx(ctx context.Context, tx bun.Tx, tenantID string) error {
 	var owners []models.User
 	if err := tx.NewSelect().Model(&owners).Column("id").

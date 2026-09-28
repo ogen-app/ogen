@@ -39,7 +39,7 @@ func TestCanTransitionCON130Edges(t *testing.T) {
 	}
 }
 
-// CON-251: failed and not_published reopen straight to draft (the copy
+// Failed and not_published reopen straight to draft (the copy
 // outside Ogen is gone, or never left, so an edit is the point). The
 // pre-existing → ready_for_publish edges still hold, and neither
 // submitted state gains a → draft shortcut here.
@@ -70,7 +70,7 @@ func TestCanTransitionCON251ReopenEdges(t *testing.T) {
 	}
 }
 
-// CON-251: IsSubmitted is true exactly for the two states that hold a copy
+// IsSubmitted is true exactly for the two states that hold a copy
 // outside Ogen — scheduled (Zernio) and published (the network) — and
 // false for every editable state, including scheduled_for_manual_publishing
 // (nobody holds it yet).
@@ -91,7 +91,7 @@ func TestIsSubmitted(t *testing.T) {
 	}
 }
 
-// CON-284: IsThread keys off the post-type slug alone.
+// IsThread keys off the post-type slug alone.
 func TestIsThread(t *testing.T) {
 	if (&Post{PlatformPostType: PostTypeThread}).IsThread() != true {
 		t.Error("thread post: want IsThread=true")
@@ -104,7 +104,7 @@ func TestIsThread(t *testing.T) {
 	}
 }
 
-// CON-284: ThreadSegments round-trips through the jsonb Value/Scan pair, a nil
+// ThreadSegments round-trips through the jsonb Value/Scan pair, a nil
 // slice serialises as an empty array (not JSON null, so the NOT NULL column
 // holds), and RootContent returns index 0.
 func TestThreadSegmentsValueScan(t *testing.T) {
@@ -141,7 +141,7 @@ func TestThreadSegmentsValueScan(t *testing.T) {
 	}
 }
 
-// CON-284 R2: SnapshotContent is just Content for every post type — a thread's
+// SnapshotContent is just Content for every post type — a thread's
 // Content is now the canonical full body (with "---" delimiters), so it already
 // records the whole chain and is injective on its own.
 func TestSnapshotContent(t *testing.T) {

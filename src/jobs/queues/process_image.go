@@ -24,7 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// ProcessImageQueue ingests a content-bank IMG asset (CON-281): presign the
+// ProcessImageQueue ingests a content-bank IMG asset: presign the
 // original + a normalized-derivative slot, run the full image-service pipeline
 // (normalize + EXIF-strip + classify + per-shape structured extraction +
 // description + alt text) in one Extract RPC, then persist the extraction +
@@ -74,7 +74,7 @@ type imageFileStore interface {
 type imageExtractionStore interface {
 	Create(ctx context.Context, e *models.ImageExtraction) error
 	GetByAssetAndRunKey(ctx context.Context, assetID, runKey string) (*models.ImageExtraction, error)
-	// GetLatestByAsset backs the description re-embed (CON-312); sql.ErrNoRows
+	// GetLatestByAsset backs the description re-embed; sql.ErrNoRows
 	// when the asset was never extracted.
 	GetLatestByAsset(ctx context.Context, assetID string) (*models.ImageExtraction, error)
 	Update(ctx context.Context, e *models.ImageExtraction) error
@@ -98,7 +98,7 @@ type ImageDeps struct {
 	Files       imageFileStore
 	Extractions imageExtractionStore
 	Blocks      imageBlockStore
-	// Recorder meters vision usage on the existing gemini vendor (CON-86); Checker
+	// Recorder meters vision usage on the existing gemini vendor; Checker
 	// gates the run against the tenant's cost cap BEFORE the vision spend. Both
 	// nil-safe.
 	Recorder *usage.Recorder
@@ -115,7 +115,7 @@ type ImageDeps struct {
 	AltTextMaxChars     int
 	JobTimeout          time.Duration
 	// Notifier drops an in-app notification to the asset's creator on a terminal
-	// status (CON-242). Nil is a no-op.
+	// status. Nil is a no-op.
 	Notifier *notify.Service
 }
 
@@ -177,7 +177,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		_ = p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
 		return fmt.Errorf("process_image %s: storage/repos not configured", in.AssetID)
 	}
-	// The description embed needs gemini_api_key (CON-104): checked up front so we
+	// The description embed needs gemini_api_key: checked up front so we
 	// don't run the (paid) vision pipeline only to fail every embed. Retry rather
 	// than fail — a key set via the secrets API takes effect without a restart;
 	// give up (failed) only once attempts are exhausted.
@@ -321,7 +321,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	}
 
 	// Embed from the persisted state, not res: the description may have been
-	// edited mid-run and kept by the compare-and-set above (CON-312).
+	// edited mid-run and kept by the compare-and-set above.
 	return p.resumeFromCheckpoint(ctx, in, ext, lastAttempt)
 }
 
@@ -403,7 +403,7 @@ func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessIm
 		// Partial is not a hard failure: the description landed and the asset is
 		// searchable, but structured extraction (or a chunk embed) did not fully
 		// complete. Carry a code so the client can word it as retriable rather
-		// than broken (CON-281).
+		// than broken.
 		failureCode = models.UploadCodeExtractionPartial
 		failureReason = "the image was described and is searchable, but structured extraction did not fully complete"
 	}
@@ -523,7 +523,7 @@ func (p *ProcessImageProcessor) stampFile(ctx context.Context, in ProcessImageTa
 
 // exposeNormalizedDerivative records the browser-drawable normalized.png key on the
 // asset_file so decorateFile can mint normalized_url — the copy an <img> renders for
-// HEIC/TIFF, which no browser decodes (CON-299). It runs ONLY after a run settles
+// HEIC/TIFF, which no browser decodes. It runs ONLY after a run settles
 // searchable (partial|complete): the key is deterministic and the derivative already
 // exists in storage (image-service wrote it before the checkpoint), so a pending
 // (describing) or failed run never publishes a URL (AC4). It also fills a missing
@@ -597,7 +597,7 @@ func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, 
 		}
 	}
 	// Meter the description/region embeddings on the gemini vendor, like
-	// document_extract (CON-312), once the chunks are stored — a retry after a
+	// document_extract, once the chunks are stored — a retry after a
 	// failed store doesn't double-count. Covers ingestion and the re-embed.
 	if totalEmbedTokens > 0 {
 		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "image_embed", llm.EmbedUsage{Tokens: totalEmbedTokens})
@@ -607,7 +607,7 @@ func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, 
 
 // accrueCost prices each vision call's token usage via the gemini vendor,
 // snapshots the run total onto the extraction, and records a per-call usage
-// event (CON-86). Best-effort recording; the authoritative cost rides the
+// event. Best-effort recording; the authoritative cost rides the
 // extraction row updated by the caller.
 func (p *ProcessImageProcessor) accrueCost(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, usageList []imageclient.TokenUsage) {
 	var costSum, inTok, outTok int64
@@ -642,7 +642,7 @@ func (p *ProcessImageProcessor) accrueCost(ctx context.Context, in ProcessImageT
 }
 
 // terminalReject marks the extraction + asset failed with a tenant-visible
-// reason and its stable machine-readable code (CON-281), and does NOT return an
+// reason and its stable machine-readable code, and does NOT return an
 // error (no retry).
 func (p *ProcessImageProcessor) terminalReject(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, code, reason string) error {
 	ext.Status = models.ImageExtractionStatusFailed
@@ -656,7 +656,7 @@ func (p *ProcessImageProcessor) terminalReject(ctx context.Context, in ProcessIm
 }
 
 // setAssetStatus persists the asset status and announces terminal outcomes to
-// the creator (CON-242). A nil Assets dep is a no-op.
+// the creator. A nil Assets dep is a no-op.
 func (p *ProcessImageProcessor) setAssetStatus(ctx context.Context, assetID, status string) error {
 	if p.Deps.Assets == nil {
 		return nil

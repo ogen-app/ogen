@@ -1,7 +1,7 @@
 // Package vendor is the single registry of external service vendors Ogen
 // calls — foundation-model providers (Anthropic, Gemini) and content
 // publishers (Zernio) — together with the vendor-neutral metering
-// primitives the usage-accounting layer (CON-86) is built on.
+// primitives the usage-accounting layer is built on.
 //
 // Adding a vendor means dropping one file that calls Register() from an
 // init(); there is no central list to edit. This mirrors the River job
@@ -11,7 +11,7 @@
 // (Layer 0) and the optional metering cross-cut — the Meter interface plus
 // Cost (Layer 2). Each family keeps its own behavioural contract — model
 // providers generate/embed, publishers discover/publish — so there is
-// deliberately NO single "Vendor" behavioural interface (CON-86 D5).
+// deliberately NO single "Vendor" behavioural interface.
 package vendors
 
 // Family groups vendors by their behavioural contract.
@@ -21,7 +21,7 @@ const (
 	FamilyModel     Family = "model"
 	FamilyPublisher Family = "publisher"
 	// FamilyIngest groups content-ingestion vendors — web scrapers, file
-	// extractors — metered by count of ingested items (CON-222). Kept separate
+	// extractors — metered by count of ingested items. Kept separate
 	// from FamilyPublisher so scrape volume rolls up on its own axis.
 	FamilyIngest Family = "ingest"
 )
@@ -29,7 +29,7 @@ const (
 // Kind is an open category of billable unit. Model vendors report token
 // kinds; publishers report action kinds. The set is intentionally open: a
 // new kind never touches the cost math, because Cost ranges over whatever
-// kinds appear in the Usage map (CON-86 D6).
+// kinds appear in the Usage map.
 type Kind string
 
 const (
@@ -47,7 +47,7 @@ const (
 	KindAccount Kind = "account"  // one connected social account
 
 	// Ingest action kinds.
-	KindURLScrape Kind = "url_scrape" // one Firecrawl URL scrape (CON-222)
+	KindURLScrape Kind = "url_scrape" // one Firecrawl URL scrape
 )
 
 // Usage is the vendor-neutral unit breakdown for a single call. A model
@@ -64,7 +64,7 @@ type Rates map[Kind]int64
 
 // PriceTable is a versioned set of per-model (or per-sku) rate tables.
 // Version snapshots which rate set produced a cost so historical cost is
-// never recomputed from edited prices (CON-86 FR3). The zero value (empty
+// never recomputed from edited prices. The zero value (empty
 // Models) prices everything at 0 — the count-only default for vendors whose
 // per-unit cost we do not yet track.
 type PriceTable struct {
@@ -79,8 +79,8 @@ const perMillion = 1_000_000
 //
 //	cost_micros = Σ over kinds: units[kind] * rates[kind] / 1_000_000
 //
-// using integer (truncating) math — analytics-grade, not billing-grade
-// (CON-86 D3). A kind present in usage but missing from rates contributes 0;
+// using integer (truncating) math — analytics-grade, not billing-grade.
+// A kind present in usage but missing from rates contributes 0;
 // that gap is the caller's signal to widen the rate table.
 func Cost(u Usage, r Rates) int64 {
 	var micros int64

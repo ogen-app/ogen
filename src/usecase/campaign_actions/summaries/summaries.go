@@ -1,9 +1,9 @@
-// Package summaries computes the batched Campaigns-list payload (CON-152): a
+// Package summaries computes the batched Campaigns-list payload: a
 // slim per-post projection for every campaign in the tenant, grouped by
 // campaign, in one response. It exists to kill the N+1 the revamped list
 // created — one CampaignCard per campaign, each firing its own
 // GET /api/campaigns/:id/posts just to derive a badge, a few stat tiles, and a
-// stage line (CON-127).
+// stage line.
 //
 // The projection carries only the fields the client's lib/campaignReadiness
 // rules read, so the list keeps running the exact same rules as the Campaign

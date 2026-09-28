@@ -13,7 +13,7 @@ import (
 )
 
 // TestEveryInsertQueueIsConfigured guards against a job that routes itself to a
-// queue the River client doesn't run (CON-312): such a job is inserted fine and
+// queue the River client doesn't run: such a job is inserted fine and
 // then never worked. It parses this package's sources, resolves the Queue of
 // every river.InsertOpts literal, and checks each is in QueueConfigs.
 func TestEveryInsertQueueIsConfigured(t *testing.T) {

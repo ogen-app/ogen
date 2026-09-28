@@ -58,7 +58,7 @@ func TestRenderDripHasUnsubscribe(t *testing.T) {
 
 // TestRenderCustomDelimsPassThroughBraces pins the Maizzle-compatibility
 // decision: only [[ ]] interpolates; any {{ }} in the compiled HTML passes
-// through untouched (CON-154 §11).
+// through untouched.
 func TestRenderCustomDelimsPassThroughBraces(t *testing.T) {
 	tmpl := &models.EmailTemplate{Key: "x", Subject: "s", HTML: "Hi [[ .Name ]] {{ keep-me }}", Text: "Hi [[ .Name ]]"}
 	r, err := Render(tmpl, Data{Name: "Zed"})

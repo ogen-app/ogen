@@ -21,7 +21,7 @@ type AssetChunksRepository interface {
 	GetByAssetID(ctx context.Context, assetID string) ([]models.AssetChunk, error)
 	// ListPageByAssetID returns one page of an asset's chunks ordered by
 	// chunk_index, without the embedding vector, plus the asset's total chunk
-	// count — the REST chunk view (CON-312).
+	// count — the REST chunk view.
 	ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error)
 	// SearchSimilar returns embedded chunks ordered by cosine similarity to
 	// query (closest first), keeping only those scoring >= minScore. When

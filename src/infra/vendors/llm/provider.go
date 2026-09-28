@@ -7,7 +7,7 @@ import (
 
 // Role selects which configured model a flow wants. content_plan,
 // post_assistant, and enrich_brief use generation; post_quality uses quality;
-// the campaign_assistant orchestration/routing loop uses planning (CON-112) —
+// the campaign_assistant orchestration/routing loop uses planning —
 // a cheap fast model, while the prose-writing sub-flows it invokes as tools
 // stay on generation.
 type Role string
@@ -20,7 +20,7 @@ const (
 
 // Provider resolves foundation-model references by role so flows don't
 // hardcode the "anthropic/" prefix or carry the configured model ids
-// themselves (CON-86 FR12). Constructed once from config and shared.
+// themselves. Constructed once from config and shared.
 type Provider struct {
 	generationModel string
 	qualityModel    string
@@ -63,7 +63,7 @@ func (p *Provider) Vendor() string {
 }
 
 // CallConfig builds the genkit config option carrying the max-tokens setting,
-// so flows pass it without importing the Anthropic SDK (CON-86 FR12). The
+// so flows pass it without importing the Anthropic SDK. The
 // returned ConfigOption satisfies ai.GenerateOption and is accepted by
 // genkit.Generate, GenerateStream, and GenerateData alike. WithConfig rejects
 // being set twice, so a flow must pass exactly one CallConfig per call.

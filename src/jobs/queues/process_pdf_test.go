@@ -78,7 +78,7 @@ func (f *fakeBlob) Upload(_ context.Context, key string, r io.Reader, _ int64, _
 type fakeStatus struct {
 	all    []string
 	failOn string // when set, UpdateStatus fails for this status value
-	// failCode/failReason capture the last MarkFailed (CON-312).
+	// failCode/failReason capture the last MarkFailed.
 	failCode, failReason string
 }
 

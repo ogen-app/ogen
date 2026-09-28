@@ -7,7 +7,7 @@ import (
 )
 
 // TenantGroupAssignment is the join row realising the many-to-many relation
-// between tenants and tenant_groups (CON-208): a tenant belongs to many groups
+// between tenants and tenant_groups: a tenant belongs to many groups
 // and a group holds many tenants. The (tenant_id, group_id) pair is the primary
 // key, so a tenant is at most once in a given group (assignment is idempotent).
 //

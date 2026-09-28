@@ -13,7 +13,7 @@ import (
 // Correlation metadata keys. They MUST match image-service's
 // internal/logging.RequestIDHeader / TenantIDHeader byte-for-byte (gRPC
 // lowercases metadata keys) so one request traces end-to-end across the gRPC
-// boundary: API request -> River job -> image-service (CON-111). Transport-level
+// boundary: API request -> River job -> image-service. Transport-level
 // only — no proto/message change.
 const (
 	requestIDHeader = "x-request-id"

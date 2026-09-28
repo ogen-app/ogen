@@ -1,9 +1,9 @@
 package repository
 
-// CON-233: membership of an asset in a campaign (campaigns.asset_ids) or a post
+// Membership of an asset in a campaign (campaigns.asset_ids) or a post
 // (posts.used_asset_ids) lives in one jsonb string-array column. These helpers
 // build the SET expressions that mutate that set in a single atomic UPDATE, so a
-// one-id change no longer costs a full-record write and two concurrent adds of
+// one-id change never costs a full-record write and two concurrent adds of
 // different ids both survive: each is one UPDATE that reads and rewrites the
 // column, serialized on the row lock rather than a lost-update Go read-modify-
 // write. The column name is a trusted in-code constant, never user input, so

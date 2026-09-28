@@ -10,7 +10,7 @@ import (
 )
 
 // SocialAccountRepository is the persistence surface for the Zernio
-// integration's local account mirror (CON-62). The reconciler uses
+// integration's local account mirror. The reconciler uses
 // the batch operations under a single transaction (ApplyPlan) so each
 // sync tick is atomic.
 type SocialAccountRepository interface {
@@ -57,7 +57,7 @@ type SocialAccountRepository interface {
 	ApplyPlan(ctx context.Context, upserts []models.SocialAccount, softDeleteIDs []string, now time.Time) error
 
 	// UpdateHealth writes a Zernio account-health snapshot onto the active row
-	// with the given id (CON-219). Scoped to the caller's tenant by the
+	// with the given id. Scoped to the caller's tenant by the
 	// TenantScoped hook and to rows still active (deleted_at IS NULL), so it is a
 	// no-op for an id belonging to another tenant or already disconnected. Only
 	// the health columns are touched — the reconciler's mirror fields are left
@@ -66,7 +66,7 @@ type SocialAccountRepository interface {
 }
 
 // SocialAccountHealth is the mutable health snapshot UpdateHealth persists,
-// projected from Zernio's per-account health (CON-219). Pointer fields carry the
+// projected from Zernio's per-account health. Pointer fields carry the
 // tri-state (unknown → NULL) that a bare bool can't.
 type SocialAccountHealth struct {
 	TokenExpiresAt      *time.Time
@@ -77,7 +77,7 @@ type SocialAccountHealth struct {
 }
 
 // TenantProfile pairs a tenant with its Zernio profile, derived from the
-// social_accounts that tenant owns. Used by cross-tenant sweeps (CON-153) to
+// social_accounts that tenant owns. Used by cross-tenant sweeps to
 // enumerate which tenants/profiles to act on without a per-tenant settings
 // read.
 type TenantProfile struct {

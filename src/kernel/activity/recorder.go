@@ -43,7 +43,7 @@ func (c Config) withDefaults() Config {
 
 // Recorder captures activity events and writes them to the analytics DB on a
 // background goroutine, so a request/flow never waits on — or fails from —
-// activity collection (CON-125). Tenant + user are snapshotted at enqueue time;
+// activity collection. Tenant + user are snapshotted at enqueue time;
 // only the DB write is deferred.
 //
 // A nil *Recorder is a valid no-op: when ANALYTICS_DSN is empty the server

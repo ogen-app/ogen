@@ -7,7 +7,7 @@ import (
 )
 
 // UsageEvent is one durable record of a metered vendor call — a model
-// generation/embedding or a publisher action (CON-86 FR1/FR4). It lives in
+// generation/embedding or a publisher action. It lives in
 // the isolated analytics database, not the control-plane Postgres, so it
 // carries a plain tenant_id with NO foreign key to tenants (that table is in
 // the other database). Cross-tenant isolation is still enforced app-side by
@@ -18,7 +18,7 @@ import (
 // The four common token kinds are broken out as columns so the TimescaleDB
 // daily rollup can sum them cheaply; rarer kinds (reasoning, and the
 // publisher kinds post/api_call/account) live in the ExtraUnits jsonb so a
-// new vendor never needs a schema change (CON-86 D6/FR2).
+// new vendor never needs a schema change.
 type UsageEvent struct {
 	bun.BaseModel `bun:"table:vendor_usage_events,alias:ue" swaggerignore:"true"`
 	TenantScoped  // tenant_id column + central scoping hooks (no FK in the analytics DB)
@@ -45,7 +45,7 @@ type UsageEvent struct {
 
 	// CostMicros is the snapshot cost computed from the price map at write
 	// time (USD-millionths). PriceVersion records which rate set produced it,
-	// so historical cost is never recomputed (CON-86 FR3).
+	// so historical cost is never recomputed.
 	CostMicros   int64  `bun:"cost_micros,notnull"    json:"cost_micros"`
 	PriceVersion string `bun:"price_version,nullzero" json:"price_version,omitempty"`
 

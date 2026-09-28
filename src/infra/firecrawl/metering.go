@@ -13,7 +13,7 @@ const OpScrape = "scrape"
 // init registers the Firecrawl ingest vendor. It is count-only for now (empty
 // price table → every event costs 0, treated as intentional rather than an
 // unknown-model gap); a per-scrape Firecrawl price can be supplied later via
-// USAGE_MODEL_PRICES (CON-86 §15).
+// USAGE_MODEL_PRICES.
 func init() {
 	vendors.Register(vendors.Descriptor{
 		Name:      VendorFirecrawl,

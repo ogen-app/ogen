@@ -32,7 +32,7 @@ import (
 )
 
 // ztSharedKey is the single, app-wide Zernio API key every tenant authenticates
-// with (CON-102 FR11): the secret table is deliberately not tenant-scoped.
+// with: the secret table is deliberately not tenant-scoped.
 const ztSharedKey = "zk-shared-CON102-doNotLeak"
 
 // ztSettingStore adapts repository.SettingRepository to zernio.SettingsStore,

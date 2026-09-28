@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
-// GlobalLimitsSource supplies the single platform_global_limits row (CON-292).
+// GlobalLimitsSource supplies the single platform_global_limits row.
 // It is satisfied by repository.PlatformGlobalLimitsRepository; declaring the
 // interface here keeps the domain layer free of an infra import while letting
 // boot inject the repo.
@@ -51,7 +51,7 @@ func GlobalLimits() models.PlatformGlobalLimits {
 
 // InitGlobalLimits loads the ceilings from src at boot and starts a periodic
 // refresh bound to ctx. Non-fatal: a failed initial load logs and keeps the
-// built-in defaults so the app still starts (CON-292 §10.2).
+// built-in defaults so the app still starts.
 func InitGlobalLimits(ctx context.Context, src GlobalLimitsSource) {
 	limitsSource = src
 	if err := RefreshGlobalLimits(ctx); err != nil {

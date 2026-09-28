@@ -17,48 +17,48 @@ import (
 type AssetRepository interface {
 	List(ctx context.Context) ([]models.Asset, error)
 	// Count counts the tenant's content-bank assets — the content_bank_assets
-	// quota (CON-295).
+	// quota.
 	Count(ctx context.Context) (int64, error)
 	// CountByType counts the tenant's content-bank assets of one coarse type —
 	// backs the web_page_imports quota (type "URL"), a stricter sub-cap on the
-	// total bank (CON-295, CON-222). Tenant scoping comes from the TenantScoped
+	// total bank. Tenant scoping comes from the TenantScoped
 	// hooks.
 	CountByType(ctx context.Context, assetType string) (int64, error)
 	Create(ctx context.Context, asset *models.Asset) error
 	GetByID(ctx context.Context, id string) (*models.Asset, error)
 	// GetBySourceURL returns the caller-tenant's URL asset with this source_url,
 	// or sql.ErrNoRows when none exists — the dedupe lookup behind create-or-
-	// refresh (CON-222). Tenant scoping comes from the TenantScoped hooks.
+	// refresh. Tenant scoping comes from the TenantScoped hooks.
 	GetBySourceURL(ctx context.Context, sourceURL string) (*models.Asset, error)
 	Update(ctx context.Context, asset *models.Asset) error
 	UpdateStatus(ctx context.Context, id, status string) error
 	// MarkFailed sets status=failed with a machine-readable code
-	// (models.UploadCode*) and a tenant-visible reason (CON-312).
+	// (models.UploadCode*) and a tenant-visible reason.
 	MarkFailed(ctx context.Context, id, code, reason string) error
 	// CreatorOf returns an asset's created_by (its owner), tenant-scoped — used
-	// to address ingest-completion notifications (CON-242). sql.ErrNoRows when
+	// to address ingest-completion notifications. sql.ErrNoRows when
 	// the asset is gone.
 	CreatorOf(ctx context.Context, id string) (string, error)
 	// UpdateContent sets title + content (and bumps updated_at) without touching
-	// status/source_url — the process_url worker's write after a scrape (CON-222).
+	// status/source_url — the process_url worker's write after a scrape.
 	UpdateContent(ctx context.Context, id, title, content string) error
 	// SetContent sets content only (title/status untouched) — the process_audio
-	// worker's transcript write on completion (CON-312).
+	// worker's transcript write on completion.
 	SetContent(ctx context.Context, id, content string) error
 	// SetImageResult writes the vision description (content) of an IMG asset and,
 	// when setAlt is true, its generated alt text — but the alt write is guarded in
-	// SQL so it NEVER overwrites a user's edit (CON-281 D5): alt_text is set only
+	// SQL so it NEVER overwrites a user's edit: alt_text is set only
 	// where alt_text_edited_by_user is false. content is written only while it
-	// still equals prevContent, so a mid-run user edit survives (CON-312). Title
+	// still equals prevContent, so a mid-run user edit survives. Title
 	// is left untouched (the upload filename stays the title).
 	SetImageResult(ctx context.Context, id, prevContent, content, altText string, setAlt bool) error
-	// SetAltText sets an image asset's alt text unconditionally (CON-281) — the
+	// SetAltText sets an image asset's alt text unconditionally — the
 	// explicit "regenerate alt text" action, which overwrites even a prior
 	// generated value. It does NOT flip alt_text_edited_by_user (a regeneration is
 	// not a manual edit); only a user PUT marks the text hand-edited.
 	SetAltText(ctx context.Context, id, altText string) error
 	// ApplyTags adds and removes tag IDs across many assets in one transaction —
-	// the Content Bank's bulk-filing operation (CON-279). Each asset keeps its
+	// the Content Bank's bulk-filing operation. Each asset keeps its
 	// existing tags minus `remove` plus `add`, deduped and order-preserving. The
 	// load and the writes are tenant-scoped by the TenantScoped hooks, so asset
 	// IDs outside the caller's tenant are silently skipped. Every `add` id must
@@ -158,7 +158,7 @@ func (r *assetRepository) Update(ctx context.Context, asset *models.Asset) error
 }
 
 // UpdateStatus also clears the failure code/reason: they describe a failed run
-// and are stale under any status write that isn't MarkFailed (CON-312).
+// and are stale under any status write that isn't MarkFailed.
 func (r *assetRepository) UpdateStatus(ctx context.Context, id, status string) error {
 	_, err := r.db.NewUpdate().
 		Model((*models.Asset)(nil)).
@@ -206,9 +206,9 @@ func (r *assetRepository) UpdateContent(ctx context.Context, id, title, content 
 }
 
 // SetImageResult writes an IMG asset's vision description and (optionally) its
-// generated alt text (CON-281). The alt write uses a CASE guard so a user's
+// generated alt text. The alt write uses a CASE guard so a user's
 // edited alt text (alt_text_edited_by_user = true) is preserved even across a
-// re-extraction. The description is a compare-and-set (CON-312): it replaces
+// re-extraction. The description is a compare-and-set: it replaces
 // content only while content still equals prevContent (its value when the run
 // started), so a description the user edited mid-run is kept.
 func (r *assetRepository) SetImageResult(ctx context.Context, id, prevContent, content, altText string, setAlt bool) error {
@@ -234,7 +234,7 @@ func (r *assetRepository) SetContent(ctx context.Context, id, content string) er
 	return err
 }
 
-// SetAltText sets an image asset's alt text unconditionally (CON-281).
+// SetAltText sets an image asset's alt text unconditionally.
 func (r *assetRepository) SetAltText(ctx context.Context, id, altText string) error {
 	_, err := r.db.NewUpdate().
 		Model((*models.Asset)(nil)).
@@ -350,7 +350,7 @@ func mergeTagIDs(existing models.StringSlice, add, remove []string) models.Strin
 }
 
 // Delete removes the asset and, in the same transaction, scrubs its id from
-// every campaign.asset_ids and post.used_asset_ids (CON-214). Without the
+// every campaign.asset_ids and post.used_asset_ids. Without the
 // scrub a deleted asset lingers as a dangling reference that later hard-fails
 // content generation ("asset %q not found").
 //

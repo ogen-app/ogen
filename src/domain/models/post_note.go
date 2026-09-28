@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// PostNoteType is the closed vocabulary of note kinds (CON-188). The set is
+// PostNoteType is the closed vocabulary of note kinds. The set is
 // expected to grow, so it is validated in Go against these consts rather than a
 // DB CHECK constraint (mirroring how PostStatus is enforced in app code) — a new
 // type is a code-only change, no migration.
@@ -14,7 +14,7 @@ type PostNoteType string
 
 const (
 	// PostNoteTypeDraftThesis is the bullet-point thesis the content-plan flow
-	// captures instead of writing it into the post body (CON-188). Pinned to
+	// captures instead of writing it into the post body. Pinned to
 	// the top of a post's note list.
 	PostNoteTypeDraftThesis PostNoteType = "draft_thesis"
 	// PostNoteTypeImagePrompt is an image-generation prompt (e.g. a Nano Banana
@@ -36,7 +36,7 @@ func (t PostNoteType) Valid() bool {
 }
 
 // PostNoteOrigin records how a note came to exist, so the UI can distinguish
-// AI-authored notes from hand-written ones (CON-188). CreatedBy always points
+// AI-authored notes from hand-written ones. CreatedBy always points
 // at a real user regardless of origin.
 type PostNoteOrigin string
 
@@ -61,12 +61,12 @@ func (o PostNoteOrigin) Valid() bool {
 	}
 }
 
-// PostNote is a small standalone record attached to a Post (CON-188): a draft
+// PostNote is a small standalone record attached to a Post: a draft
 // thesis, an image prompt, or a free-form note. Ancillary content lives here
 // instead of in the post body.
 type PostNote struct {
 	bun.BaseModel `bun:"table:post_notes,alias:pn" swaggerignore:"true"`
-	TenantScoped  // tenant_id column + central scoping hooks (CON-97)
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID        string         `bun:"id,pk"                                        json:"id"`
 	PostID    string         `bun:"post_id,notnull"                              json:"post_id"`

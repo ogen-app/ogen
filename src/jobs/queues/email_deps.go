@@ -11,8 +11,8 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/activity"
 )
 
-// EmailDeps bundles everything the send_email + cleanup_email_logs workers need
-// (CON-154). Constructed once at boot in server.go. A nil Sender means no
+// EmailDeps bundles everything the send_email + cleanup_email_logs workers need.
+// Constructed once at boot in server.go. A nil Sender means no
 // Resend key is wired, so the send job degrades to skipped_disabled rather than
 // erroring — mirroring the nil-client pattern used for PDF/Zernio.
 type EmailDeps struct {
@@ -23,8 +23,8 @@ type EmailDeps struct {
 	Users        repository.UserRepository
 
 	// Bodies persists the rendered body at send so the operator Emails tab
-	// (CON-192) renders it even after the Resend message ages out of retention
-	// (CON-306). nil = bodies not stored; the live Resend fetch still applies.
+	// renders it even after the Resend message ages out of retention.
+	// nil = bodies not stored; the live Resend fetch still applies.
 	Bodies repository.EmailBodyRepository
 
 	// From / ReplyTo are the message envelope; AppBaseURL builds absolute CTA

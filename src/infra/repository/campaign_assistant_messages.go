@@ -9,7 +9,7 @@ import (
 )
 
 // CampaignAssistantMessageRepository handles persistence of per-campaign
-// conversation history between the user and the Campaign Assistant (CON-112).
+// conversation history between the user and the Campaign Assistant.
 type CampaignAssistantMessageRepository interface {
 	Create(ctx context.Context, msg *models.CampaignAssistantMessage) error
 	// CreateBatch inserts several messages atomically (all-or-nothing) within a

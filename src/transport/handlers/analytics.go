@@ -50,7 +50,7 @@ func newPostAnalyticsResponse(post *models.Post, a *models.PostAnalytics) postAn
 		MetricsLastUpdated: a.MetricsLastUpdated,
 		// LastCheckedAt is when the refresh last looked; exposed as
 		// last_refreshed_at for API compatibility. It is bumped every check, so
-		// this stays accurate even when dedup writes no new history row (CON-236).
+		// this stays accurate even when dedup writes no new history row.
 		LastRefreshedAt:   a.LastCheckedAt,
 		Analytics:         a.Metrics(),
 		PlatformAnalytics: platforms,
@@ -62,8 +62,8 @@ func newPostAnalyticsResponse(post *models.Post, a *models.PostAnalytics) postAn
 // no profile (integration not configured for them).
 type ProfileIDResolver func(ctx context.Context) (string, error)
 
-// AnalyticsHandler serves the analytics surface under /api/analytics
-// (CON-93 FR5 + CON-153). The post overview (/posts) and follower series
+// AnalyticsHandler serves the analytics surface under /api/analytics.
+// The post overview (/posts) and follower series
 // (/followers) are served entirely from the database; the three insight
 // aggregates (best-times/content-decay/posting-frequency) are live
 // read-through proxies to Zernio, scoped to the tenant's profile. It lives
@@ -100,7 +100,7 @@ func (h *AnalyticsHandler) Register(app *fiber.App) {
 	g.Get("/followers", h.auth, h.Followers)
 }
 
-// validAnalyticsSorts is the closed set of sort_by values (CON-93 §5).
+// validAnalyticsSorts is the closed set of sort_by values.
 var validAnalyticsSorts = map[string]bool{
 	"engagement": true, "impressions": true, "reach": true, "likes": true,
 	"comments": true, "shares": true, "saves": true, "clicks": true,
@@ -173,7 +173,7 @@ func (h *AnalyticsHandler) ListPosts(c *fiber.Ctx) error {
 	}
 
 	items, overview, err := h.repo.List(reqCtx(c), repository.PostAnalyticsListOptions{
-		// Restricted to Zernio-published posts (CON-93 §5/§6). The marker
+		// Restricted to Zernio-published posts. The marker
 		// lives in models so this stays decoupled from the zernio adapter.
 		Publisher: models.PublisherZernio,
 		Platform:  c.Query("platform"),

@@ -1,5 +1,5 @@
 // Package resend is a thin HTTP client for the Resend email API
-// (https://resend.com), implementing email.Sender (CON-154). It mirrors the
+// (https://resend.com), implementing email.Sender. It mirrors the
 // Zernio client's conventions: the API key is resolved per request via a
 // KeyResolver (so a rotated key is picked up with no restart and is never held
 // on the struct), non-2xx responses become a classified *email.SendError, and
@@ -152,7 +152,7 @@ func (c *Client) Send(ctx context.Context, msg email.Message) (string, error) {
 
 // ErrDisabled is returned by Get when no Resend key is configured (a nil client
 // or an empty key). The caller degrades to "body unavailable" — returning the
-// summary + persisted timeline — rather than failing the request (CON-298).
+// summary + persisted timeline — rather than failing the request.
 var ErrDisabled = errors.New("resend: client disabled")
 
 // ErrNotFound is returned by Get on an HTTP 404 — Resend has no such message
@@ -162,7 +162,7 @@ var ErrDisabled = errors.New("resend: client disabled")
 var ErrNotFound = errors.New("resend: email not found")
 
 // EmailDetail is the subset of Resend's GET /emails/{id} response the operator
-// console needs (CON-298): the rendered body + envelope. Fetched live so the
+// console needs: the rendered body + envelope. Fetched live so the
 // large HTML never has to be duplicated into the control-plane DB.
 type EmailDetail struct {
 	ID        string

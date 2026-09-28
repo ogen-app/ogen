@@ -9,8 +9,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// UtteranceRepository persists the raw transcript spans of an extraction
-// (CON-282): the source for both chunk assembly and the transcript API.
+// UtteranceRepository persists the raw transcript spans of an extraction:
+// the source for both chunk assembly and the transcript API.
 type UtteranceRepository interface {
 	// ReplaceForSegment atomically replaces a segment's utterances, so a
 	// segment retry is idempotent (old spans dropped, fresh ones written).

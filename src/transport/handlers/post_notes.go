@@ -12,7 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notes"
 )
 
-// PostNotesHandler exposes the CRUD API for per-post Notes (CON-188), nested
+// PostNotesHandler exposes the CRUD API for per-post Notes, nested
 // under a post so a UI can manage draft theses, image prompts, and free-form
 // notes by hand. Writes go through the shared notes.Service the assistant also
 // uses.

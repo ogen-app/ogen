@@ -44,7 +44,7 @@ type panicReportedKey struct{}
 // injectTraceIDs copies the active OpenTelemetry span's trace/span ids (set on
 // c.UserContext() by the otelfiber middleware) into the request Locals, so the
 // logging ContextHandler attaches them to every line logged with c.Context()
-// without any span threading through the handler→repo chain (CON-303). It must
+// without any span threading through the handler→repo chain. It must
 // run immediately after otelfiber.
 func injectTraceIDs(c *fiber.Ctx) error {
 	if sc := trace.SpanContextFromContext(c.UserContext()); sc.IsValid() {

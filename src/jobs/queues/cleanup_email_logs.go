@@ -12,8 +12,8 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// CleanupEmailLogsQueue drops email_logs rows older than the retention window
-// (CON-154 §7). Cadence is a River PeriodicJob; mirrors cleanup_post_logs.
+// CleanupEmailLogsQueue drops email_logs rows older than the retention window.
+// Cadence is a River PeriodicJob; mirrors cleanup_post_logs.
 const CleanupEmailLogsQueue = "cleanup_email_logs"
 
 // CleanupEmailLogsTask is the marker payload — the worker only reads the cutoff.

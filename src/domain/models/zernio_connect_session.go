@@ -7,7 +7,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Connect-session status values (CON-217). A row is created pending_auth when a
+// Connect-session status values. A row is created pending_auth when a
 // connect link is issued; the OAuth callback either finalizes it (row deleted)
 // or transitions it to awaiting_selection when 2+ targets need an in-Ogen pick.
 const (
@@ -16,15 +16,15 @@ const (
 )
 
 // ZernioConnectSession is the short-lived, server-side state for a headless
-// Zernio account connection (CON-217 — hide Zernio's hosted account selector).
+// Zernio account connection (hide Zernio's hosted account selector).
 // It is created when a connect link is issued and consumed by the OAuth
 // callback / picker; completed rows are deleted, expired rows swept.
 //
 // Deliberately NOT TenantScoped: the OAuth callback lands WITHOUT a tenant in
 // context (the browser round-trips through Zernio), and resolves the tenant
 // FROM this row via the opaque id. It carries a plain tenant_id column and is
-// scoped explicitly at the authenticated picker boundary — mirroring Session
-// (CON-97 PR2), which is likewise looked up before a tenant is known.
+// scoped explicitly at the authenticated picker boundary — mirroring Session,
+// which is likewise looked up before a tenant is known.
 //
 // The short-lived Zernio secrets (connect_token, tempToken, userProfile) are
 // stored encrypted in SealedSecrets (envelope-encrypted JSON); Options holds

@@ -28,7 +28,7 @@ import (
 
 // fakeCancelEnqueuer records EnqueueCancel calls so the convert-to-manual
 // tests can assert which posts were handed to the cancel queue and with
-// which target, without a running River (CON-130).
+// which target, without a running River.
 type fakeCancelEnqueuer struct {
 	mu    sync.Mutex
 	calls []queues.CancelZernioJobTask
@@ -93,10 +93,10 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, nil, nil, auth, nil).Register(app)
 		postLogRepo := repository.NewPostLogRepository(db)
 		ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth)
-		// CON-69 §11: wire the audit log so transition tests can read it back.
+		// Wire the audit log so transition tests can read it back.
 		ph.SetPostLogRepo(postLogRepo)
 		ph.Register(app)
-		// CON-291: assess/assessment/analytics live on the insights handler. Wired
+		// Assess/assessment/analytics live on the insights handler. Wired
 		// with nil deps here (matching the old shared PostsHandler) so the routes
 		// exist — 401 unauthenticated, 503 when authenticated — for the route-level
 		// specs; the assessor/eval/analytics behaviour is covered by dedicated apps.
@@ -870,7 +870,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Asset membership (CON-233) ───────────────────────────────────────────
+	// ── Asset membership ───────────────────────────────────────────
 
 	Describe("source membership on /api/posts/:id/assets", func() {
 		addAssets := func(id string, assetIDs []string) *http.Response {
@@ -1042,7 +1042,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Publish gate (CON-74) ────────────────────────────────────────────────
+	// ── Publish gate ────────────────────────────────────────────────
 
 	Describe("Draft → ready_for_publish gate", func() {
 		// LinkedIn — supports text-post / image-post / carousel / video /
@@ -1225,7 +1225,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		})
 
 		Context("thread (X)", func() {
-			// CON-284 R2: a thread is authored as ONE body in `content`, with "---"
+			// A thread is authored as ONE body in `content`, with "---"
 			// delimiter lines between messages; the server derives the segment list
 			// and validates it per segment (2..25 messages, each within X's 280).
 			threadReady := func(id string, segments ...string) *http.Response {
@@ -1439,7 +1439,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(stubApp)
 				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(stubApp)
 				handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth).Register(stubApp)
-				// POST /:id/assistant now lives on the assistant handler (CON-291).
+				// POST /:id/assistant now lives on the assistant handler.
 				handlers.NewPostAssistantHandler(stub, nil, postMessageRepo, nil, auth).Register(stubApp)
 
 				seedTenantUser(db, "SSE", "sse-assist@example.com", "sse-password")
@@ -1565,7 +1565,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Quality assessment (CON-85) ───────────────────────────────────────────
+	// ── Quality assessment ───────────────────────────────────────────
 
 	Describe("POST /api/posts/:id/assess", func() {
 		Context("when not authenticated", func() {
@@ -1618,7 +1618,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(stubApp)
 				ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth)
 				ph.Register(stubApp)
-				// POST /:id/assess now lives on the insights handler (CON-291).
+				// POST /:id/assess now lives on the insights handler.
 				handlers.NewPostInsightsHandler(postRepo, stub, nil, nil, nil, nil, auth).Register(stubApp)
 
 				seedTenantUser(db, "Assess", "sse-assess@example.com", "sse-password")
@@ -1770,7 +1770,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Stored assessment read (CON-92) ───────────────────────────────────────
+	// ── Stored assessment read ───────────────────────────────────────
 
 	Describe("GET /api/posts/:id/assessment", func() {
 		Context("when not authenticated", func() {
@@ -1824,7 +1824,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(readApp)
 				ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth)
 				ph.Register(readApp)
-				// GET /:id/assessment now lives on the insights handler (CON-291).
+				// GET /:id/assessment now lives on the insights handler.
 				handlers.NewPostInsightsHandler(postRepo, nil, evalRepo, nil, nil, nil, auth).Register(readApp)
 
 				seedTenantUser(db, "Reader", "assessment-read@example.com", "read-password")

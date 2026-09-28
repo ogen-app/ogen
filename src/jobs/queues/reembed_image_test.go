@@ -13,7 +13,7 @@ import (
 
 // TestReembedImage_KeepsRegionChunks: an edited description is re-embedded
 // together with the stored region blocks, so the anchored region chunks survive
-// the edit (CON-312).
+// the edit.
 func TestReembedImage_KeepsRegionChunks(t *testing.T) {
 	d, assets, chunks, blocks, exts := baseImageDeps(&fakeImageClient{})
 	assets.content = "a bar chart of Q3 revenue"
@@ -57,7 +57,7 @@ func TestReembedImage_ClearedDescriptionDropsStaleChunks(t *testing.T) {
 
 // TestReembedImage_WaitsForInFlightRun: a run still in flight may settle on
 // pre-edit chunks, so the re-embed snoozes until it settles instead of dropping
-// the edit (CON-312).
+// the edit.
 func TestReembedImage_WaitsForInFlightRun(t *testing.T) {
 	d, assets, chunks, _, exts := baseImageDeps(&fakeImageClient{})
 	assets.content = "edited"
@@ -91,7 +91,7 @@ func TestReembedImage_GivesUpOnStuckOrFailedRun(t *testing.T) {
 
 // TestProcessImage_KeepsDescriptionEditedMidRun: a description edited while the
 // vision call runs is neither overwritten by the result nor left out of the
-// chunks (CON-312).
+// chunks.
 func TestProcessImage_KeepsDescriptionEditedMidRun(t *testing.T) {
 	client := &fakeImageClient{res: &imageclient.ExtractResult{
 		Description: "generated description", DescriptionOK: true, ExtractionOK: true,

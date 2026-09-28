@@ -29,7 +29,7 @@ type renderedPrompts struct {
 // Post and renders both prompt blocks. The Post is expected to come from
 // PostRepository.GetByID, which hydrates Campaign, Platform,
 // CampaignTypePhase, and UsedAssets. Its Content has already been resolved
-// by the caller to the latest committed version when one exists (CON-184),
+// by the caller to the latest committed version when one exists,
 // so PostBody below is the assessed snapshot rather than the live HEAD.
 func buildContext(
 	ctx context.Context,

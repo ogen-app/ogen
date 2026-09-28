@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// AccountRepository persists the login identity (CON-147). Accounts are not
+// AccountRepository persists the login identity. Accounts are not
 // TenantScoped — authentication resolves an account before any tenant is known,
 // exactly like the users/sessions lookups in the auth path.
 type AccountRepository interface {

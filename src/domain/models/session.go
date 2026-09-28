@@ -13,7 +13,7 @@ type Session struct {
 	bun.BaseModel `bun:"table:sessions,alias:s" swaggerignore:"true"`
 
 	ID string `bun:"id,pk" json:"id"`
-	// AccountID is the login identity this session authenticates (CON-147). The
+	// AccountID is the login identity this session authenticates. The
 	// session belongs to the account; UserID + TenantID are the active membership
 	// / default workspace it currently resolves to.
 	AccountID string    `bun:"account_id,notnull"                           json:"account_id"`

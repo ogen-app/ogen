@@ -6,7 +6,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// CON-251: mutatesLockedContent is the pure comparison behind the submitted-
+// mutatesLockedContent is the pure comparison behind the submitted-
 // post 409 content lock. It must flag a change to any content-identity field
 // (body/title/media/platform/post-type/sources) and ignore everything else,
 // so a no-op save or a status-only transition off a submitted post still
@@ -23,7 +23,7 @@ func TestMutatesLockedContent(t *testing.T) {
 		}
 	}
 	// reqFor builds a request that mirrors the post exactly (a no-op save). Sources
-	// are presence-aware (CON-233), so a faithful mirror sends them present.
+	// are presence-aware, so a faithful mirror sends them present.
 	reqFor := func(p *models.Post) postRequest {
 		return postRequest{
 			Content:          p.Content,
@@ -62,7 +62,7 @@ func TestMutatesLockedContent(t *testing.T) {
 		}
 	}
 
-	// CON-233: a save that OMITS used_asset_ids preserves the set (the membership
+	// A save that OMITS used_asset_ids preserves the set (the membership
 	// endpoints own it), so it must not count as touching the locked sources —
 	// even though the post has sources the request doesn't restate.
 	omitsSources := reqFor(p)
@@ -84,7 +84,7 @@ func TestMutatesLockedContent(t *testing.T) {
 	}
 }
 
-// CON-284 R2: a thread's content lock rides on the canonical body — the whole
+// A thread's content lock rides on the canonical body — the whole
 // thread lives in Content, so editing it trips the lock while the derived (and
 // ignored) thread_segments field does not. Pure logic — no DB.
 func TestMutatesLockedContentThread(t *testing.T) {
@@ -115,7 +115,7 @@ func TestMutatesLockedContentThread(t *testing.T) {
 	}
 }
 
-// CON-284 R2: applyThreadSegments derives the segment list from the canonical
+// applyThreadSegments derives the segment list from the canonical
 // body for a thread (WITHOUT restamping the body) and clears it for any other
 // type. Pure — the caller supplies the per-segment limit.
 func TestApplyThreadSegments(t *testing.T) {

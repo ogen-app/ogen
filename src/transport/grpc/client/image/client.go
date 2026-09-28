@@ -1,4 +1,4 @@
-// Package image is a thin gRPC client for the image-service (CON-281): the
+// Package image is a thin gRPC client for the image-service: the
 // single authority for every image in the platform. It owns the connection, the
 // raised receive limit, and per-call deadlines, and presents image compute as
 // three narrow unary calls: Extract (full content-bank pipeline), PrepareAttachment
@@ -74,7 +74,7 @@ func IsUnsupportedImage(err error) bool {
 }
 
 // RejectedCode extracts the image.v1.RejectedCode that image-service attaches to a
-// terminal reject as a google.rpc.ErrorInfo detail (CON-281). The Reason on the
+// terminal reject as a google.rpc.ErrorInfo detail. The Reason on the
 // detail is the enum value's NAME (e.g. "REJECTED_CODE_VECTOR"), which this maps
 // back to the generated enum via imagev1.RejectedCode_value. Returns
 // REJECTED_CODE_UNSPECIFIED when err carries no such detail — an older service, a
@@ -100,7 +100,7 @@ func RejectedCode(err error) imagev1.RejectedCode {
 }
 
 // UploadCode maps a terminal image reject to the stable upload code the client
-// keys on (CON-281), refining the coarse gRPC-code bucket ogen assigns from the
+// keys on, refining the coarse gRPC-code bucket ogen assigns from the
 // status code alone. It returns "" when err carries no recognised RejectedCode,
 // so the caller keeps that coarse fallback. Keyed off the generated
 // imagev1.RejectedCode enum, so a proto rename is a compile error here.
@@ -122,7 +122,7 @@ func UploadCode(err error) string {
 }
 
 // TokenUsage is one Gemini vision call's token count, priced by ogen via the
-// existing gemini vendor (CON-86). Step is the pipeline stage.
+// existing gemini vendor. Step is the pipeline stage.
 type TokenUsage struct {
 	Model  string
 	Step   string
@@ -262,7 +262,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, nil
 	}
 	dialOpts := []grpc.DialOption{
-		// CON-303: emit a client span per RPC and propagate the trace to the service.
+		// Emit a client span per RPC and propagate the trace to the service.
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainStreamInterceptor(correlationStreamInterceptor),

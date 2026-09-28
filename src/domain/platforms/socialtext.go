@@ -11,7 +11,7 @@ import (
 // platform actually shows. The post editor stores Markdown (BlockNote's
 // blocksToMarkdownLossy), but none of the networks we publish to render it —
 // captions are plain text with newlines. posts.content stays Markdown all the way
-// to Zernio, which flattens it at the publish boundary (CON-126); the author's
+// to Zernio, which flattens it at the publish boundary; the author's
 // source is never rewritten.
 //
 // We need the flattened form for measurement, not egress: a thread's per-message

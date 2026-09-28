@@ -15,8 +15,8 @@ import (
 // so every returned day is exact and the client pages on with `before`.
 const listRowCap = 5000
 
-// Service computes the Activity daily report from tenant-scoped repositories
-// (CON-285). All reads inherit tenant scoping from the repositories' models, so
+// Service computes the Activity daily report from tenant-scoped repositories.
+// All reads inherit tenant scoping from the repositories' models, so
 // it is safe to call in any tenant request context; an optional campaign_id
 // narrows the same computation to one campaign.
 type Service struct {
@@ -32,8 +32,8 @@ func New(posts repository.PostRepository, postLogs repository.PostLogRepository,
 }
 
 // Report computes the full single-day report for `date` in `tz`, optionally for
-// one campaign. A future or empty day returns a zeroed report, not an error
-// (CON-285 FR5). tz must be a loadable IANA zone; a foreign campaign_id is a
+// one campaign. A future or empty day returns a zeroed report, not an error.
+// tz must be a loadable IANA zone; a foreign campaign_id is a
 // 404-mapped ErrCampaignNotFound.
 func (s *Service) Report(ctx context.Context, date, tz, campaignID string) (*Report, error) {
 	defer track(s.now())
@@ -61,7 +61,7 @@ func (s *Service) Report(ctx context.Context, date, tz, campaignID string) (*Rep
 
 // Reports lists the non-empty local days newest-first, at most `limit`, older
 // than `before` (exclusive; empty = up to now). Keyset-paginated by date via
-// `before` (CON-285 FR4).
+// `before`.
 func (s *Service) Reports(ctx context.Context, tz, campaignID, before string, limit int) (*ReportList, error) {
 	defer track(s.now())
 	Requests.Add(1)

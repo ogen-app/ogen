@@ -1,4 +1,4 @@
-// Package logging is Ogen's single structured-logging foundation (CON-107).
+// Package logging is Ogen's single structured-logging foundation.
 // It builds a configured *slog.Logger (JSON or text, level-controlled),
 // installs it as slog's default, and enriches every record with the
 // request/tenant/user ids carried by the log call's context.
@@ -26,8 +26,8 @@ const (
 	AttrTenantID  = "tenant_id"
 	AttrUserID    = "user_id"
 	AttrError     = "err"
-	// AttrTraceID / AttrSpanID correlate a log line with its distributed trace
-	// (CON-303). The values are the active OpenTelemetry span's ids, injected
+	// AttrTraceID / AttrSpanID correlate a log line with its distributed trace.
+	// The values are the active OpenTelemetry span's ids, injected
 	// into the request Locals by the tracing middleware so — like the ids above —
 	// call sites keep passing c.Context() with no span threading.
 	AttrTraceID = "trace_id"
@@ -45,7 +45,7 @@ type spanIDKey struct{}
 // RequestIDKey and UserIDKey are the context (and Fiber Locals) keys under
 // which the request id and user id are stored. Exported as values of
 // unexported types so callers can set/read them without being able to forge the
-// key type. TraceIDKey / SpanIDKey hold the active trace/span ids (CON-303).
+// key type. TraceIDKey / SpanIDKey hold the active trace/span ids.
 var (
 	RequestIDKey = requestIDKey{}
 	UserIDKey    = userIDKey{}

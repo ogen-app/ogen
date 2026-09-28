@@ -39,7 +39,7 @@ type CampaignsHandler struct {
 	campaignTypeRepo repository.CampaignTypeRepository
 	limiter          *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 	// brandRepo validates campaign brand_voice_id/brand_audience_id belong to
-	// the tenant (CON-245). Optional (SetBrandRepo); nil skips validation.
+	// the tenant. Optional (SetBrandRepo); nil skips validation.
 	brandRepo     repository.BrandRepository
 	auth          fiber.Handler
 	generateDraft func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
@@ -51,13 +51,13 @@ type CampaignsHandler struct {
 	// existing fixture wiring keeps working. The same readiness gate
 	// covers enrichBrief — both flows live behind the one Anthropic key.
 	isContentPlanReady func() bool
-	// enrichBrief streams an AI-generated campaign brief (CON-56). nil
+	// enrichBrief streams an AI-generated campaign brief. nil
 	// when the feature is unwired (e.g. tests) → the handler returns 503.
 	enrichBrief func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
-	// messageRepo persists the Campaign Assistant conversation (CON-112). nil
+	// messageRepo persists the Campaign Assistant conversation. nil
 	// in tests that don't exercise the assistant.
 	messageRepo repository.CampaignAssistantMessageRepository
-	// assistant is the Campaign Assistant flow callback (CON-112). nil when
+	// assistant is the Campaign Assistant flow callback. nil when
 	// unwired (e.g. tests) → the assistant/messages endpoints return 503.
 	// Readiness is gated by isContentPlanReady, the same Anthropic-key gate.
 	assistant func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
@@ -77,7 +77,7 @@ func (h *CampaignsHandler) SetBrandRepo(r repository.BrandRepository) {
 func (h *CampaignsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 // baselineCampaignTypeSlug is the one system campaign type every tier can use;
-// the other system types are gated by all_campaign_types (CON-295).
+// the other system types are gated by all_campaign_types.
 const baselineCampaignTypeSlug = "evergreen"
 
 // gateCampaignType enforces the campaign-type entitlement gates for the selected
@@ -154,14 +154,14 @@ func (h *CampaignsHandler) Register(app *fiber.App) {
 	// active list (reversible); unarchive returns it. Both tenant-scoped.
 	g.Post("/:id/archive", h.auth, h.Archive)
 	g.Post("/:id/unarchive", h.auth, h.Unarchive)
-	// CON-233: targeted membership writes for the content-bank set, so attaching
+	// Targeted membership writes for the content-bank set, so attaching
 	// or detaching one document touches only asset_ids (no full-record PUT, no
 	// omitted-field reset, atomic under concurrent adds).
 	g.Post("/:id/assets", h.auth, h.AddAssets)
 	g.Delete("/:id/assets/:assetId", h.auth, h.RemoveAsset)
 	g.Post("/:id/generate-draft", h.auth, h.GenerateDraft)
 	g.Post("/:id/enrich-brief", h.auth, h.EnrichBrief)
-	// CON-112: Campaign Assistant chat. Tenant-scoped only — any user who can
+	// Campaign Assistant chat. Tenant-scoped only — any user who can
 	// see the campaign can use the assistant (no owner-only guard).
 	g.Post("/:id/assistant", h.auth, h.Assistant)
 	g.Get("/:id/messages", h.auth, h.ListMessages)
@@ -173,11 +173,11 @@ type campaignRequest struct {
 	TargetPersona  string `json:"target_persona"`
 	KeyMessages    string `json:"key_messages"`
 	ToneGuidelines string `json:"tone_guidelines"`
-	// Presence-aware (CON-245): omitting a brand ref on a full-replace save
+	// Presence-aware: omitting a brand ref on a full-replace save
 	// leaves the stored value alone; an explicit null clears it. See Optional.
 	BrandVoiceID    Optional[string] `json:"brand_voice_id"`
 	BrandAudienceID Optional[string] `json:"brand_audience_id"`
-	// UseAssets / AssetIDs are presence-aware (CON-233): the content-bank set has
+	// UseAssets / AssetIDs are presence-aware: the content-bank set has
 	// its own membership endpoints (POST/DELETE /campaigns/:id/assets) that keep
 	// use_assets derived from it, so an ordinary whole-record save that omits
 	// these must leave them alone rather than restate the set (and reset the flag)
@@ -195,13 +195,13 @@ type campaignRequest struct {
 	Currency           string                       `json:"currency"`
 	Language           string                       `json:"language"`
 	TagIDs             models.StringSlice           `json:"tag_ids"`
-	// Scheduling settings (CON-181). All optional; omitted fields fall back to
+	// Scheduling settings. All optional; omitted fields fall back to
 	// defaults (09:00 / UTC / every day / ±15 min) via normalizeScheduling.
 	PublishingTime string             `json:"publishing_time"`
 	Timezone       string             `json:"timezone"`
 	PublishingDays models.StringSlice `json:"publishing_days"`
 	SpreadMinutes  *int               `json:"spread_minutes"`
-	// Goal cadence (CON-182): "week" | "month". Empty falls back to "month".
+	// Goal cadence: "week" | "month". Empty falls back to "month".
 	// estimated_post_count is the target posts per one of these periods.
 	GoalCadence string `json:"goal_cadence"`
 }
@@ -306,7 +306,7 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	if !validStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
-	// CON-295: the active_campaigns quota gates a new campaign.
+	// The active_campaigns quota gates a new campaign.
 	var campaignQuota entitlements.Decision
 	tenantID, hasTenant := tenantctx.From(reqCtx(c))
 	if hasTenant {
@@ -320,7 +320,7 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
 	}
-	// CON-295: custom / non-baseline campaign types are entitlement-gated.
+	// Custom / non-baseline campaign types are entitlement-gated.
 	if err := h.gateCampaignType(c, campaignType); err != nil {
 		return err
 	}
@@ -376,7 +376,7 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	if err := h.repo.Create(reqCtx(c), campaign); err != nil {
 		return err
 	}
-	// CON-295: the campaign now exists — fire any near-limit crossing.
+	// The campaign now exists — fire any near-limit crossing.
 	if hasTenant {
 		h.limiter.DispatchCrossing(reqCtx(c), tenantID, campaignQuota)
 	}
@@ -456,13 +456,13 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	}
 
 	typeChanged := req.CampaignTypeID != campaign.CampaignTypeID
-	// CON-166: once posts are planned against the type's phases, the type is
+	// Once posts are planned against the type's phases, the type is
 	// locked — switching would orphan their phase references. (A DB trigger
 	// backstops this against a concurrent phase assignment.)
 	if typeChanged && campaign.TypeLocked {
 		return rejectTypeLocked(c, campaign.PhasedPostCount)
 	}
-	// CON-295: only gate when the caller is switching to a gated campaign type,
+	// Only gate when the caller is switching to a gated campaign type,
 	// so an unrelated edit of a campaign that already uses one is never blocked.
 	if typeChanged {
 		if err := h.gateCampaignType(c, campaignType); err != nil {
@@ -479,10 +479,10 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	campaign.TargetPersona = req.TargetPersona
 	campaign.KeyMessages = req.KeyMessages
 	campaign.ToneGuidelines = req.ToneGuidelines
-	// Presence-aware (CON-245): omit to leave alone, explicit null to clear.
+	// Presence-aware: omit to leave alone, explicit null to clear.
 	req.BrandVoiceID.applyTo(&campaign.BrandVoiceID)
 	req.BrandAudienceID.applyTo(&campaign.BrandAudienceID)
-	// Presence-aware (CON-233): omit to leave the content-bank set + derived flag
+	// Presence-aware: omit to leave the content-bank set + derived flag
 	// alone (the membership endpoints own them), present to replace, explicit null
 	// on asset_ids to clear.
 	req.UseAssets.applyToValue(&campaign.UseAssets)
@@ -504,7 +504,7 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	campaign.GoalCadence = goalCadence
 	campaign.UpdatedAt = time.Now().UTC()
 
-	// Presence-aware content-bank fields (CON-233): the in-memory apply above
+	// Presence-aware content-bank fields: the in-memory apply above
 	// already left an omitted field at its hydrated value, but the whole-record
 	// UPDATE would still write that stale value back and clobber a concurrent
 	// membership write (AddAssetIDs/RemoveAssetID) that landed after GetByID.
@@ -525,7 +525,7 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 	datesChanged := !timePtrEqual(prevStart, campaign.StartDate) || !timePtrEqual(prevEnd, campaign.EndDate)
-	// CON-166: keep a stored manual phase plan consistent with the new type/dates.
+	// Keep a stored manual phase plan consistent with the new type/dates.
 	if maintainPhasePlan(c, h.repo, campaign, typeChanged, datesChanged) {
 		campaign.PhaseWindows = nil
 		campaign.PhasePlanReset = true
@@ -741,7 +741,7 @@ func (h *CampaignsHandler) GenerateDraft(c *fiber.Ctx) error {
 	generateDraft := h.generateDraft
 	// Carry the tenant into the detached flow context (the StreamWriter runs
 	// after this handler returns) so usage recording + enforcement attribute
-	// to the right tenant (CON-86).
+	// to the right tenant.
 	flowCtx := detachedContext(c, session.TenantID)
 
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {

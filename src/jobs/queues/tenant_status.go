@@ -8,15 +8,15 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// TenantStatusReader reads a tenant's lifecycle status (CON-190) so per-tenant
+// TenantStatusReader reads a tenant's lifecycle status so per-tenant
 // jobs can skip work for suspended or deleted tenants. repository.TenantRepository
 // satisfies it via GetStatus; a narrow interface keeps the workers test-friendly.
 type TenantStatusReader interface {
 	GetStatus(ctx context.Context, id string) (string, error)
 }
 
-// tenantIsActive reports whether the tenant may have background work run for it
-// (CON-190). It is the job-side companion to the auth chokepoint: the auth path
+// tenantIsActive reports whether the tenant may have background work run for it.
+// It is the job-side companion to the auth chokepoint: the auth path
 // already blocks a suspended/deleted tenant's users, and this stops their
 // already-enqueued automated work (publish, bootstrap, email) from running.
 //

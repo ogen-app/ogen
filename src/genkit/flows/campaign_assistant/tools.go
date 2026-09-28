@@ -42,26 +42,26 @@ type requestState struct {
 	repos      CampaignAssistantRepos
 	onEvent    OnEventFunc
 	// instruction is the current user turn, passed to draftPost as steering for
-	// the Sonnet drafter (CON-207 FR2).
+	// the Sonnet drafter.
 	instruction string
-	// embedder backs the askCampaignAssets read tool (CON-118); nil / unavailable
+	// embedder backs the askCampaignAssets read tool; nil / unavailable
 	// degrades that tool to "search unavailable".
 	embedder ai.Embedder
 
 	// Injected sub-flow callbacks, invoked as tools.
 	contentPlan func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	enrichBrief func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
-	// overview backs the getCampaignOverview read tool (CON-113).
+	// overview backs the getCampaignOverview read tool.
 	overview *overview.Service
-	// generatePosts backs the generatePosts targeted-generation tool (CON-114);
+	// generatePosts backs the generatePosts targeted-generation tool;
 	// maxGeneratePosts caps a single call.
 	generatePosts    func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	maxGeneratePosts int
-	// draftPost backs the draftPost tool (CON-207): rewrite chat research into
+	// draftPost backs the draftPost tool: rewrite chat research into
 	// extended, content-first post drafts; maxDraftPosts caps a single call.
 	draftPost     func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
 	maxDraftPosts int
-	// checkBrief / checkPosts back the read-only consistency review tools (CON-116).
+	// checkBrief / checkPosts back the read-only consistency review tools.
 	checkBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 
@@ -69,7 +69,7 @@ type requestState struct {
 	// goroutines, so the one-heavy-action-per-turn latch must be a synchronised
 	// reservation, not a read of the *Result fields below (which are written only
 	// after a sub-flow completes — a TOCTOU race + data race). See
-	// reserveHeavyAction (CON-213).
+	// reserveHeavyAction.
 	mu            sync.Mutex
 	heavyReserved bool
 
@@ -89,7 +89,7 @@ type requestState struct {
 // reserveHeavyAction atomically claims the single heavy-action slot for this
 // turn. It returns true to the first caller and false to every caller after —
 // so at most one expensive LLM sub-flow tool (content plan, targeted posts,
-// brief enrich, or a consistency review) runs per chat turn (CON-213). This is
+// brief enrich, or a consistency review) runs per chat turn. This is
 // the precise cost guard CON-112 wanted — "don't chain several heavy Sonnet
 // sub-flows in one turn" — decoupled from the tool-call turn budget so cheap
 // read tools can still iterate. It must reserve up front, not check the *Result
@@ -136,7 +136,7 @@ type EnrichBriefOutput struct {
 	ToneGuidelines string `json:"toneGuidelines"`
 	Applied        bool   `json:"applied"`
 	// Note carries a status when the tool short-circuited without running — e.g.
-	// a heavy action already ran this turn (CON-213). Empty on a normal run.
+	// a heavy action already ran this turn. Empty on a normal run.
 	Note string `json:"note,omitempty"`
 }
 
@@ -144,8 +144,8 @@ type EnrichBriefOutput struct {
 type RunContentPlanOutput struct {
 	PostCount    int        `json:"postCount"`
 	WarningCount int        `json:"warningCount"`
-	UsedAssets   []AssetRef `json:"usedAssets,omitempty"` // CON-118: assets that informed the plan
-	// Note carries a status when the tool short-circuited without running (CON-213).
+	UsedAssets   []AssetRef `json:"usedAssets,omitempty"` // Assets that informed the plan
+	// Note carries a status when the tool short-circuited without running.
 	Note string `json:"note,omitempty"`
 }
 
@@ -157,7 +157,7 @@ type CampaignPostInfo struct {
 	Status     string `json:"status"`
 }
 
-// GeneratePostsInput is the input for the generatePosts tool (CON-114). The
+// GeneratePostsInput is the input for the generatePosts tool. The
 // model resolves the timeframe against today's date (shown in context) into an
 // ISO window before calling.
 type GeneratePostsInput struct {
@@ -177,14 +177,14 @@ type GeneratePostsOutput struct {
 	PhaseID        string     `json:"phaseId"`
 	PhaseName      string     `json:"phaseName"`
 	Platforms      []string   `json:"platforms"`       // resolved platform names
-	Dates          []string   `json:"dates,omitempty"` // CON-114: actual publish dates of the created posts, so the model reports them instead of inventing dates
+	Dates          []string   `json:"dates,omitempty"` // Actual publish dates of the created posts, so the model reports them instead of inventing dates
 	Warnings       []string   `json:"warnings,omitempty"`
-	UsedAssets     []AssetRef `json:"usedAssets,omitempty"` // CON-118: assets that informed the posts
-	// Note carries a status when the tool short-circuited without running (CON-213).
+	UsedAssets     []AssetRef `json:"usedAssets,omitempty"` // Assets that informed the posts
+	// Note carries a status when the tool short-circuited without running.
 	Note string `json:"note,omitempty"`
 }
 
-// DraftPostInput is the input for the draftPost tool (CON-207). The model
+// DraftPostInput is the input for the draftPost tool. The model
 // resolves the platform, count, and publish date from the conversation before
 // calling; the source material (the research to rewrite) is loaded server-side
 // from the chat unless SourceMaterial overrides it.
@@ -209,12 +209,12 @@ type DraftPostOutput struct {
 	Warnings       []string   `json:"warnings,omitempty"`
 	UsedAssets     []AssetRef `json:"usedAssets,omitempty"`
 	// Note carries a status when the tool short-circuited without running — a
-	// heavy action already ran this turn (CON-213), or there's no research to
-	// draft from (CON-207).
+	// heavy action already ran this turn, or there's no research to
+	// draft from.
 	Note string `json:"note,omitempty"`
 }
 
-// SetCampaignDatesInput is the input for the setCampaignDates tool (CON-115).
+// SetCampaignDatesInput is the input for the setCampaignDates tool.
 // The model resolves relative phrasing ("beginning of July") against today.
 type SetCampaignDatesInput struct {
 	StartDate string `json:"startDate,omitempty" jsonschema:"description=New campaign start date (ISO YYYY-MM-DD); omit to leave it unchanged."`
@@ -234,18 +234,18 @@ type RedistributePostsOutput struct {
 	PhaseCount   int `json:"phaseCount"`
 }
 
-// CheckPostsInput is the input for the checkPostsConsistency tool (CON-116).
+// CheckPostsInput is the input for the checkPostsConsistency tool.
 type CheckPostsInput struct {
 	Max int `json:"max,omitempty" jsonschema:"description=Optional cap on how many posts to review; omit for the default."`
 }
 
-// AskCampaignAssetsInput is the input for the askCampaignAssets read tool (CON-118).
+// AskCampaignAssetsInput is the input for the askCampaignAssets read tool.
 type AskCampaignAssetsInput struct {
 	Query string `json:"query" jsonschema:"description=The question to answer from the campaign's attached assets, e.g. 'what does the pricing PDF say about enterprise tiers?'"`
 }
 
 // AskCampaignAssetsOutput returns the asset excerpts most relevant to the query
-// for the planner to answer from (CON-118).
+// for the planner to answer from.
 type AskCampaignAssetsOutput struct {
 	Excerpts  []AssetExcerpt `json:"excerpts"`
 	Available bool           `json:"available"`      // false when asset search could not run
@@ -398,7 +398,7 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 		return nil, fmt.Errorf("content plan generation is not available")
 	}
 
-	// CON-118: generate from the campaign's attached assets when it has any.
+	// Generate from the campaign's attached assets when it has any.
 	ensureCampaignAssetUse(ctx, st)
 
 	emit(st.onEvent, SSEEventContentPlanStarted, ContentPlanStartedEventPayload{})
@@ -422,7 +422,7 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 		return nil, err
 	}
 
-	// CON-118: report which attached assets informed the plan.
+	// Report which attached assets informed the plan.
 	used := toAssetRefs(resp.UsedAssets)
 	if len(used) > 0 {
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
@@ -434,7 +434,7 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 }
 
 // toAssetRefs maps the content_plan provenance list into the assistant's local
-// AssetRef type for SSE events + tool output (CON-118).
+// AssetRef type for SSE events + tool output.
 func toAssetRefs(in []content_plan.AssetRef) []AssetRef {
 	if len(in) == 0 {
 		return nil
@@ -478,7 +478,7 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 		return nil, err
 	}
 
-	// Auto-apply (CON-112): write the enriched brief straight to the campaign.
+	// Auto-apply: write the enriched brief straight to the campaign.
 	// The four fields map 1:1 to EnrichBriefResponse. Update is tenant-scoped
 	// via the TenantScoped BeforeUpdate hook.
 	c := st.campaign
@@ -537,7 +537,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 
 	// Resolve platform names/ids against the campaign's target platforms
 	// (CON-114 "stay in scope"). A non-target platform is user-correctable, so it
-	// fails soft (CON-215) rather than aborting the whole turn. Resolved BEFORE the
+	// fails soft rather than aborting the whole turn. Resolved BEFORE the
 	// heavy-action reservation so a user-correctable decline never burns the slot.
 	platformIDs, platformNames, err := resolveTargetPlatforms(campaign, in.Platforms)
 	if err != nil {
@@ -558,7 +558,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 	// Window: default to the next 14 days when omitted; validate otherwise.
 	// resolveWindow only rejects model-supplied window problems (a past date, a
 	// bad range, malformed ISO) — all user-correctable — so it fails soft
-	// (CON-215) instead of aborting the turn with a raw "model call failed".
+	// instead of aborting the turn with a raw "model call failed".
 	windowStart, windowEnd, err := resolveWindow(in.WindowStart, in.WindowEnd, now)
 	if err != nil {
 		return softGenerateFailure(err)
@@ -566,7 +566,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 	// A lone post has nothing to spread across a 14-day window, so "generate 1
 	// for Jul 22" must land ON Jul 22 — not the window's midpoint. When the model
 	// gave only a start for a single post, collapse the derived range to that day
-	// so validation pins the publish date exactly (CON-114).
+	// so validation pins the publish date exactly.
 	windowEnd = singlePostWindowEnd(windowStart, windowEnd, in.WindowEnd, count)
 
 	// Reserve the turn's single heavy-action slot only now — after every
@@ -579,7 +579,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 		return &GeneratePostsOutput{Note: heavySkipNote}, nil
 	}
 
-	// CON-118: generate from the campaign's attached assets when it has any. After
+	// Generate from the campaign's attached assets when it has any. After
 	// the reservation so a soft-failed or slot-skipped turn never flips UseAssets
 	// in the DB for work that isn't going to run.
 	ensureCampaignAssetUse(ctx, st)
@@ -615,7 +615,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 		return nil, err
 	}
 
-	// CON-118: report which attached assets informed the generated posts.
+	// Report which attached assets informed the generated posts.
 	used := toAssetRefs(resp.UsedAssets)
 	if len(used) > 0 {
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
@@ -642,11 +642,11 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 }
 
 // noDraftSourceNote steers the planner to ask the user to research first when
-// there's no source material to draft from (CON-207).
+// there's no source material to draft from.
 const noDraftSourceNote = "There's no research in this chat to turn into a post yet. Ask me a question about the campaign's assets first (or paste the material into your message), then I'll draft a post from it."
 
 // toolDraftPost turns research already discussed in the chat into finished,
-// content-first post drafts (CON-207). It loads the source material server-side
+// content-first post drafts. It loads the source material server-side
 // (the latest assistant answer, or a paste-in override), resolves the platform /
 // phase / count / date with the same helpers as generatePosts, then runs the
 // Sonnet draft_post flow once per platform and persists each draft content-first.
@@ -670,9 +670,9 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 		return &DraftPostOutput{Note: noDraftSourceNote}, nil
 	}
 
-	// Reuse the generatePosts resolvers verbatim (CON-114). A non-target platform,
+	// Reuse the generatePosts resolvers verbatim. A non-target platform,
 	// unknown phase, or past/invalid date is user-correctable, so it fails soft
-	// (CON-215) — a zero-post warning the planner relays — rather than aborting the
+	// — a zero-post warning the planner relays — rather than aborting the
 	// turn; these run before the heavy-action reservation, so they never burn the slot.
 	platformIDs, platformNames, err := resolveTargetPlatforms(campaign, in.Platforms)
 	if err != nil {
@@ -693,7 +693,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 
 	// Reserve the turn's single heavy-action slot only now — after source and
 	// input validation succeed — so a no-source or invalid-input decline above
-	// never burns the slot for a later heavy tool (CON-213). The reservation still
+	// never burns the slot for a later heavy tool. The reservation still
 	// precedes every st.draftPost flow call, so two heavy tools dispatched in
 	// parallel can never both generate.
 	if !st.reserveHeavyAction() {
@@ -724,7 +724,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 	})
 
 	// One flow call per platform, with a shared budget so the total across all
-	// platforms never exceeds the per-call cap (CON-207 §10).
+	// platforms never exceeds the per-call cap.
 	var (
 		total    int
 		allDates []string
@@ -753,7 +753,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 			PhaseID:        phaseID,
 			// UsedAssetIDs is intentionally left empty in v1: which assets the prior
 			// research cited isn't tracked, and over-stamping would pollute
-			// asset-usage provenance (cf. CON-214). The "Source research" note on
+			// asset-usage provenance. The "Source research" note on
 			// each post carries the exact source instead.
 		}, nested)
 		if err != nil {
@@ -836,7 +836,7 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 // softGenerateFailure turns a user-correctable generatePosts problem — a
 // non-target platform, an unknown phase, or a past/invalid publish window — into
 // a zero-post result the planner relays to the user, rather than a Go error.
-// Returning a Go error from a tool aborts the whole Generate turn (CON-213) and
+// Returning a Go error from a tool aborts the whole Generate turn and
 // surfaces to the user as a raw "model call failed: ..."; returning a value lets
 // the assistant recover and suggest a valid alternative (e.g. today or a later
 // date). It leaves generatedPostsResult unset, so run.go keeps the turn
@@ -845,7 +845,7 @@ func softGenerateFailure(err error) (*GeneratePostsOutput, error) {
 	return &GeneratePostsOutput{PostCount: 0, Warnings: []string{err.Error()}}, nil
 }
 
-// softDraftFailure is the draftPost analogue of softGenerateFailure (CON-215):
+// softDraftFailure is the draftPost analogue of softGenerateFailure:
 // a user-correctable problem (non-target platform, unknown phase, past/invalid
 // date) becomes a zero-post warning the planner relays, not a turn-aborting Go
 // error. It leaves draftPostResult unset, so the turn stays conversational.
@@ -889,7 +889,7 @@ func singlePostWindowEnd(resolvedStart, resolvedEnd, rawEnd string, count int) s
 }
 
 // publishDatesOf extracts the actual publish dates of the created posts, so the
-// model reports the real dates in its reply instead of inventing them (CON-114).
+// model reports the real dates in its reply instead of inventing them.
 func publishDatesOf(posts []content_plan.DraftPost) []string {
 	out := make([]string, 0, len(posts))
 	for _, p := range posts {
@@ -902,14 +902,14 @@ func publishDatesOf(posts []content_plan.DraftPost) []string {
 
 // minAskAssetsSimilarity is the cosine-similarity floor for asset Q&A. Lower
 // than content_plan's generation threshold: a specific question benefits from
-// recall, and the planner filters the returned excerpts (CON-118).
+// recall, and the planner filters the returned excerpts.
 const minAskAssetsSimilarity = 0.5
 
 // askAssetsChunkLimit caps how many chunks the Q&A tool returns to the planner.
 const askAssetsChunkLimit = 8
 
 // toolAskCampaignAssets answers a question grounded in the campaign's attached
-// assets by embedding the query and searching the assets' chunks (CON-118). It
+// assets by embedding the query and searching the assets' chunks. It
 // is read-only and degrades cleanly (available:false / a note) rather than
 // failing the turn when the embedder is unavailable or nothing matches.
 func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*AskCampaignAssetsOutput, error) {
@@ -968,7 +968,7 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 
 // readyCampaignAssetIDs resolves the campaign's attached, ready asset IDs — the
 // explicit AssetIDs list when set, otherwise all tenant-ready assets — excluding
-// failed/partial. Mirrors content_plan's candidate resolution (CON-118). It does
+// failed/partial. Mirrors content_plan's candidate resolution. It does
 // NOT require campaign.UseAssets: that flag governs automatic inclusion during
 // generation, whereas Q&A is an explicit request to consult the assets.
 func readyCampaignAssetIDs(ctx context.Context, campaign *models.Campaign, assets repository.AssetRepository) ([]string, error) {
@@ -1001,7 +1001,7 @@ func readyCampaignAssetIDs(ctx context.Context, campaign *models.Campaign, asset
 
 // ensureCampaignAssetUse turns on asset-sourced content generation when the
 // campaign has ready attached assets but UseAssets is still off, and persists
-// the flag so it sticks for later turns and the UI (CON-118). content_plan
+// the flag so it sticks for later turns and the UI. content_plan
 // injects the attached assets into the generation prompt whenever UseAssets is
 // true, so flipping it here is all that's needed. Best-effort: if the flag
 // can't be persisted, generation just proceeds without assets, as before.
@@ -1025,7 +1025,7 @@ func ensureCampaignAssetUse(ctx context.Context, st *requestState) {
 	}
 }
 
-// pageRef renders an asset chunk's page span for citation (CON-118).
+// pageRef renders an asset chunk's page span for citation.
 func pageRef(start, end *int) string {
 	if start == nil {
 		return ""
@@ -1102,7 +1102,7 @@ func resolvePhase(campaign *models.Campaign, phase string, today time.Time) (id,
 }
 
 // currentPhase returns the phase whose window contains today — the campaign's
-// effective phase plan (CON-166: its manual plan when set, else the even split
+// effective phase plan (its manual plan when set, else the even split
 // of [StartDate, EndDate]). Before the campaign starts it's the first phase,
 // after it ends the last; an undated campaign falls back to the first phase.
 // Callers guarantee the type has phases.
@@ -1153,7 +1153,7 @@ func resolveWindow(startStr, endStr string, today time.Time) (string, string, er
 		return "", "", fmt.Errorf("the timeframe's end is before its start")
 	}
 	// Reject an explicitly-requested past date rather than silently clamping it
-	// to today (CON-114). Derived bounds default to today, so only a user-supplied
+	// to today. Derived bounds default to today, so only a user-supplied
 	// start/end can be in the past here; the planner is told to catch this first
 	// and reply conversationally, and this is the backstop.
 	if haveStart && s.Before(todayDate) {

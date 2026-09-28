@@ -20,7 +20,7 @@ const (
 )
 
 // reset semantics for a numeric feature — how its counter behaves. Consumed by
-// the limitations engine (CON-295); "" for boolean features.
+// the limitations engine; "" for boolean features.
 const (
 	ResetStanding = "standing" // a live ceiling (seats, storage, connected accounts)
 	ResetMonthly  = "monthly"  // resets each calendar month (plan runs)
@@ -30,7 +30,7 @@ const (
 
 // Feature is one catalog entry: the definition of an entitlement key, its type,
 // and metadata. Engineering-owned (this package's JSON), never edited by
-// operators — they edit per-version *values* via Harbor (CON-294).
+// operators — they edit per-version *values* via Harbor.
 type Feature struct {
 	Key         string `json:"key"`
 	Name        string `json:"name"`

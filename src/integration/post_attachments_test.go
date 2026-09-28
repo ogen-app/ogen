@@ -399,7 +399,7 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 	It("#7 multi-megabyte upload completes and the bytes round-trip", func() {
 		// Noisy 1024×1024 RGBA PNG → ~4 MB encoded (deflate can't
 		// compress noise). Catches a regression if the upload path
-		// stops streaming and starts buffering naively. (CON-73 §5.)
+		// stops streaming and starts buffering naively.
 		content := makeNoisyPNG(1024)
 		Expect(len(content)).To(BeNumerically(">", 1<<20))
 

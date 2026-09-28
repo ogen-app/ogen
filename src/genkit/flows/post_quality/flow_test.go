@@ -2,7 +2,7 @@ package post_quality
 
 import "testing"
 
-// inputHash is the change-detection fingerprint (CON-92): the assess flow
+// inputHash is the change-detection fingerprint: the assess flow
 // re-runs the model only when this value differs from the stored one. These
 // tests pin the properties cache correctness depends on — it is
 // deterministic for identical inputs, and it changes whenever anything that

@@ -7,13 +7,13 @@ import (
 )
 
 // EmailBody is the rendered content of one sent email, persisted at send time so
-// the operator Emails tab (CON-192) can show the body even after the Resend
-// message ages out of retention or the Resend key is unset (CON-306). It is a
+// the operator Emails tab can show the body even after the Resend
+// message ages out of retention or the Resend key is unset. It is a
 // 1:1 side table of email_logs — kept out of the hot ListTenantEmails query —
 // and cascade-deleted with its parent log, so the existing email_logs retention
 // sweep ages it out on OUR schedule (EMAIL_LOG_RETENTION_DAYS), decoupled from
-// Resend's retention. Reverses CON-298's live-fetch-only decision; the live
-// Resend fetch remains a fallback for rows sent before this shipped.
+// Resend's retention. The live Resend fetch is a fallback for logs that have
+// no stored body.
 //
 // cc/bcc are omitted deliberately: the send path only sets a single To, so
 // they'd always be empty; the live-fetch fallback still fills them when Resend

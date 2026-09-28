@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// CON-166: campaign phase plan persistence + the phase-integrity helpers. These
+// Campaign phase plan persistence + the phase-integrity helpers. These
 // hang off campaignRepository (the plan is campaign-owned state); every query
 // goes through bun's Model API so the TenantScoped hooks scope it.
 

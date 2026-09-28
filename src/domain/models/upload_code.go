@@ -1,7 +1,7 @@
 package models
 
 // Stable, machine-readable rejection codes carried BESIDE the human-readable
-// message on every upload / image-processing outcome (CON-281). The client
+// message on every upload / image-processing outcome. The client
 // matches on the code and falls back to the prose message when the code is
 // unknown, so a code added here costs nothing until the client reads it — new
 // verdicts can ship without a coordinated front-end release.
@@ -45,8 +45,8 @@ const (
 	// UploadCodeDimensionsExceeded: over the pixel-area / dimension ceiling.
 	UploadCodeDimensionsExceeded = "dimensions_exceeded"
 
-	// UploadCodeDurationExceeded: audio longer than the plan's max duration
-	// (CON-312). The limit stays in the message.
+	// UploadCodeDurationExceeded: audio longer than the plan's max duration.
+	// The limit stays in the message.
 	UploadCodeDurationExceeded = "duration_exceeded"
 
 	// UploadCodeQuotaExceeded: the tenant's usage / cost cap was hit before the

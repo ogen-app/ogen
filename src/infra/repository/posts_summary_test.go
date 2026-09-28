@@ -101,7 +101,7 @@ func TestListSummaryProjections_TenantScoped(t *testing.T) {
 		t.Fatalf("tenant leak: expected only [mine-1], got %+v", got)
 	}
 
-	// Fail-closed: no tenant in context must refuse to run (CON-97).
+	// Fail-closed: no tenant in context must refuse to run.
 	if _, err := repo.ListSummaryProjections(t.Context()); err == nil {
 		t.Fatalf("expected fail-closed error for an unscoped read, got nil")
 	}

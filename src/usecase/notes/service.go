@@ -1,4 +1,4 @@
-// Package notes implements the shared "per-post Note" operations (CON-188).
+// Package notes implements the shared "per-post Note" operations.
 // It is the single source of truth for note writes used by the REST CRUD
 // (/api/posts/:post_id/notes) and the Post Assistant's createNote tool, so the
 // two entry points can never drift on validation or origin stamping. The
@@ -135,7 +135,7 @@ func (s *Service) Update(ctx context.Context, existing *models.PostNote, in Upda
 	return existing, nil
 }
 
-// List returns a post's notes, draft_thesis first then oldest-first (CON-188).
+// List returns a post's notes, draft_thesis first then oldest-first.
 func (s *Service) List(ctx context.Context, postID string) ([]models.PostNote, error) {
 	return s.repo.ListByPostID(ctx, postID)
 }

@@ -42,7 +42,7 @@ func TestCreateAtNextPositionRequiresParentPost(t *testing.T) {
 	// post-x genuinely exists (it was just attached to above), but only in the
 	// default tenant. A second tenant must not be able to attach to it: the
 	// FOR UPDATE lock is scoped by tenant_id, so the lookup finds no row and
-	// fails closed (CON-97) rather than inserting a cross-tenant attachment.
+	// fails closed rather than inserting a cross-tenant attachment.
 	// This is the case the orphan probe above can't reach — it proves the
 	// tenant_id half of the lock predicate, not just post_id existence.
 	otherCtx := tenantctx.With(t.Context(), "tenant-2")
@@ -55,7 +55,7 @@ func TestCreateAtNextPositionRequiresParentPost(t *testing.T) {
 	}
 }
 
-// TestReorderPositions verifies the transactional bulk renumber (CON-124),
+// TestReorderPositions verifies the transactional bulk renumber,
 // including the case the frontend workaround produces: starting positions that
 // have drifted into a non-contiguous high block rather than 0..n-1.
 func TestReorderPositions(t *testing.T) {

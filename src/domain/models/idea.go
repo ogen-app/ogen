@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// IdeaVerdict is the triage answer on an idea (CON-315). It is a stable, closed
+// IdeaVerdict is the triage answer on an idea. It is a stable, closed
 // set, mirrored by a DB CHECK. A nil verdict means the idea is waiting in the
 // inbox.
 type IdeaVerdict string
@@ -27,7 +27,7 @@ func (v IdeaVerdict) Valid() bool {
 	}
 }
 
-// Idea is one entry in a workspace's shared Ideas backlog (CON-315). It is
+// Idea is one entry in a workspace's shared Ideas backlog. It is
 // workspace-wide when CampaignID is nil and attached to that campaign otherwise;
 // moving between the two keeps the row, its verdict, and its author.
 //
@@ -35,7 +35,7 @@ func (v IdeaVerdict) Valid() bool {
 // the UI derives the woken state at read time and no job rewrites it.
 type Idea struct {
 	bun.BaseModel `bun:"table:ideas,alias:i" swaggerignore:"true"`
-	TenantScoped  // tenant_id column + central scoping hooks (CON-97)
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID         string       `bun:"id,pk"                                        json:"id"`
 	Title      string       `bun:"title,notnull"                                json:"title"`

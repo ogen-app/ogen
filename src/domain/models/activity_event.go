@@ -6,8 +6,8 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// ActivityEvent is one durable record of a meaningful user/tenant action
-// (CON-125): a post created, a signup, an AI flow run, a publish outcome, and
+// ActivityEvent is one durable record of a meaningful user/tenant action:
+// a post created, a signup, an AI flow run, a publish outcome, and
 // so on. It lives in the isolated analytics database next to UsageEvent, and
 // is the *behavioural* counterpart to metering: UsageEvent records vendor
 // cost/tokens, ActivityEvent records that something happened, to what, by whom,

@@ -60,7 +60,7 @@ func TestBootstrapPerTenantProfileNaming(t *testing.T) {
 	}
 
 	// The two create calls carried tenant-specific names:
-	// "Ogen-<env>-<tenant_id>" (CON-102 FR6).
+	// "Ogen-<env>-<tenant_id>".
 	mu.Lock()
 	defer mu.Unlock()
 	if len(createBodies) != 2 ||

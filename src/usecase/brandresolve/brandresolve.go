@@ -1,13 +1,13 @@
 // Package brandresolve turns a (campaign, post) pair into the Brand material a
-// content-writing Genkit flow should write under (CON-245), and renders it as a
-// compact prompt block. It is the single place the resolution precedence of the
-// PRD §5 lives, so content_plan, draft_post, post_assistant and campaign_assistant
+// content-writing Genkit flow should write under, and renders it as a
+// compact prompt block. It is the single place the Brand resolution precedence
+// lives, so content_plan, draft_post, post_assistant and campaign_assistant
 // all agree on which voice/audience/guardrails apply.
 //
 // Resolution fails open: any repository error, or simply an empty Brand library,
 // yields a Resolved that falls back to the campaign's legacy tone_guidelines /
-// target_persona prose — so a workspace without Brand material generates exactly
-// as it did before this feature.
+// target_persona prose — so a workspace without Brand material still generates
+// from the campaign's own tone and persona.
 package brandresolve
 
 import (
@@ -27,7 +27,7 @@ type Resolved struct {
 	Voice      *models.BrandVoice
 	Audience   *models.BrandAudience
 	Guardrails *models.BrandGuardrails
-	// Facts are the ledger's current facts (CON-316): expired ones are
+	// Facts are the ledger's current facts: expired ones are
 	// already dropped. Independent of Guardrails, which may be nil.
 	Facts         []models.BrandFact
 	LegacyTone    string // campaign.ToneGuidelines — used when Voice is nil
@@ -176,7 +176,7 @@ func (r *Resolved) PromptBlock(platformID string) string {
 	}
 
 	// ── Guardrails (always, voice-independent) ──
-	// Facts come from the ledger (CON-316) and render with or without a
+	// Facts come from the ledger and render with or without a
 	// guardrails row.
 	g := r.Guardrails
 	if g != nil || len(r.Facts) > 0 {

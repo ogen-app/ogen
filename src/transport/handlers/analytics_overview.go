@@ -15,8 +15,8 @@ import (
 
 // Overview serves the CON-237 "what happened over last N days" dashboard: five
 // KPI cards, per-metric current/previous series, and deterministic insights, in
-// one tenant-scoped call. Latest-per-post values come from post_analytics_current
-// (CON-236); "posts published" is composed from the main-DB posts table. The
+// one tenant-scoped call. Latest-per-post values come from post_analytics_current;
+// "posts published" is composed from the main-DB posts table. The
 // "usual range" baseline band is not yet computed (no tenant has enough history)
 // — cards report baseline "insufficient_history".
 //

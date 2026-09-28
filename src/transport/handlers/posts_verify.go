@@ -19,10 +19,10 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 )
 
-// PostVerificationHandler owns POST /api/posts/:id/verify-external (CON-153):
+// PostVerificationHandler owns POST /api/posts/:id/verify-external:
 // confirm a manually-published post via Zernio's sync-external, then back-fill
 // its publisher linkage + a first analytics snapshot. It was split out of the
-// PostsHandler god-object (CON-291) — a focused handler with only the deps this
+// PostsHandler god-object — a focused handler with only the deps this
 // one flow needs (external client, account resolution, analytics, versions).
 type PostVerificationHandler struct {
 	repo              repository.PostRepository
@@ -112,7 +112,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "zernio integration is not configured")
 	}
 
-	// Resolve the connected account whose token reads the platform (CON-150).
+	// Resolve the connected account whose token reads the platform.
 	supported := zernio.LookupSupportedBySqid(post.PlatformID)
 	if supported == nil {
 		return fiber.NewError(fiber.StatusConflict, "post has no supported platform")
@@ -158,7 +158,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 			post.PublishedAt = pa
 		}
 	}
-	// CON-165: persist the canonical, platform-normalised permalink. Verification
+	// Persist the canonical, platform-normalised permalink. Verification
 	// is authoritative, so a confirmed URL overwrites any user-pasted one.
 	if ext.PlatformPostURL != "" {
 		post.PublishedURL = ext.PlatformPostURL
@@ -169,14 +169,14 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 		jobs.ZernioExternalVerifyFailed.Add(1)
 		return err
 	}
-	// CON-251: the post is now confirmed published — snapshot the content as a
+	// The post is now confirmed published — snapshot the content as a
 	// durable record of what went out (best-effort, deduped against the head).
 	h.snapshotPublished(reqCtx(c), post)
 
 	// Refresh the current-state analytics row (best-effort) and emit the update
 	// event so open analytics streams refresh. The response carries the fetched
 	// metrics regardless of whether persistence is available. Mirrors the refresh
-	// job's dedup discipline (CON-236): preserve first_seen_at, always bump
+	// job's dedup discipline: preserve first_seen_at, always bump
 	// last_checked_at, and append a trend point / publish only on a real change —
 	// so re-verifying an already-tracked post doesn't clobber its history.
 	metrics := externalMetrics(ext.Analytics)
@@ -216,7 +216,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 			// The confirmed external post's own id — the one ext.Analytics
 			// belong to (post.PublisherPostID is left as-is when already set).
 			"publisher_post_id": ext.PlatformPostID,
-			// CON-165: echo the persisted permalink so the FE can render
+			// Echo the persisted permalink so the FE can render
 			// "View post" straight after verify, without a re-fetch.
 			"published_url": post.PublishedURL,
 			"sync_status":   "synced",
@@ -277,7 +277,7 @@ func externalMetrics(a zernio.ExternalPostAnalytics) models.PostAnalyticsMetrics
 
 // buildExternalCurrent builds the current-state analytics row from a synced
 // external post, denormalising the post's display fields exactly like the
-// refresh job (CON-236). The first_seen/last_changed/last_checked timestamps are
+// refresh job. The first_seen/last_changed/last_checked timestamps are
 // stamped by the caller (they depend on the dedup comparison against any
 // existing current row).
 func (h *PostVerificationHandler) buildExternalCurrent(post *models.Post, ext *zernio.ExternalPost) *models.PostAnalytics {
@@ -316,7 +316,7 @@ func (h *PostVerificationHandler) buildExternalCurrent(post *models.Post, ext *z
 	}
 }
 
-// publishAnalyticsUpdated emits the post.analytics.updated event (CON-93 §8)
+// publishAnalyticsUpdated emits the post.analytics.updated event
 // after a verify-external snapshot. No-op when no Hub is wired.
 func (h *PostVerificationHandler) publishAnalyticsUpdated(ctx context.Context, a *models.PostAnalytics) {
 	if h.analyticsHub == nil {
@@ -336,7 +336,7 @@ func (h *PostVerificationHandler) publishAnalyticsUpdated(ctx context.Context, a
 }
 
 // snapshotPublished records a system-authored version of a post's content at
-// the moment it is confirmed published (CON-251), so "what actually went out"
+// the moment it is confirmed published, so "what actually went out"
 // becomes a durable record rather than an assumption. Deduped only against a
 // prior "Published" system snapshot of identical content, so re-verifying an
 // already-published post adds nothing — but a matching-content user/assistant
@@ -352,7 +352,7 @@ func (h *PostVerificationHandler) snapshotPublished(ctx context.Context, post *m
 	if err != nil {
 		return
 	}
-	// CON-284 R2: content is the canonical full thread body, so SnapshotContent is
+	// Content is the canonical full thread body, so SnapshotContent is
 	// simply post.Content for every post type.
 	content := post.SnapshotContent()
 	if latest != nil && latest.IsSystemSnapshot() &&

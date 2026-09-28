@@ -14,7 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 )
 
-// initConsistency registers the read-only consistency review flow (CON-116) on
+// initConsistency registers the read-only consistency review flow on
 // the shared Genkit instance and returns the brief + posts review callbacks for
 // the campaigns handler and the campaign assistant tools.
 func initConsistency(

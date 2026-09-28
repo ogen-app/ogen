@@ -12,8 +12,8 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// EmailListFilter parameterises a tenant-scoped, keyset-paginated email list
-// (CON-298). A zero cursor (empty CursorID) requests the first page; otherwise
+// EmailListFilter parameterises a tenant-scoped, keyset-paginated email list.
+// A zero cursor (empty CursorID) requests the first page; otherwise
 // rows strictly older than (CursorCreatedAt, CursorID) in newest-first order are
 // returned. All filter fields are optional (empty = any).
 type EmailListFilter struct {
@@ -26,28 +26,28 @@ type EmailListFilter struct {
 	CursorID        string
 }
 
-// EmailLogRepository is the append-only send-audit surface (CON-154 §7).
+// EmailLogRepository is the append-only send-audit surface.
 type EmailLogRepository interface {
 	Insert(ctx context.Context, l *models.EmailLog) error
 	// UpdateStatusByProviderMessageID updates the row a delivery webhook refers
 	// to (matched on the Resend message id). Returns whether a row matched.
 	UpdateStatusByProviderMessageID(ctx context.Context, providerMessageID string, status models.EmailLogStatus) (bool, error)
-	// GetByProviderMessageID resolves the log row a delivery webhook refers to
-	// (CON-298). Returns (nil, nil) when no row matches — an unknown message id is
+	// GetByProviderMessageID resolves the log row a delivery webhook refers to.
+	// Returns (nil, nil) when no row matches — an unknown message id is
 	// not an error, so the webhook can ack rather than trigger a retry storm.
 	GetByProviderMessageID(ctx context.Context, providerMessageID string) (*models.EmailLog, error)
 	// ListByTenant returns a tenant's emails newest-first (created_at desc, id
-	// desc), keyset-paginated (CON-298). NULL-tenant (system) rows never match a
+	// desc), keyset-paginated. NULL-tenant (system) rows never match a
 	// non-empty tenant, so they're excluded. Returns at most f.Limit rows.
 	ListByTenant(ctx context.Context, f EmailListFilter) ([]models.EmailLog, error)
-	// GetByIDForTenant fetches one email scoped to the tenant (CON-298). Returns
+	// GetByIDForTenant fetches one email scoped to the tenant. Returns
 	// (nil, nil) when the id doesn't exist or belongs to another tenant.
 	GetByIDForTenant(ctx context.Context, tenantID, id string) (*models.EmailLog, error)
 	// DeleteOlderThan drops rows created before cutoff (retention sweep),
 	// mirroring PostLogRepository. Returns the number removed.
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 	// ExistsByIdempotencyKey reports whether any log row already carries this
-	// idempotency key (CON-219). The connection-expiry sweep calls it before
+	// idempotency key. The connection-expiry sweep calls it before
 	// enqueuing so a multi-day expiry window swept many times notifies each
 	// (account, stage, expiry, owner) at most once — durable dedupe that outlives
 	// the provider's own idempotency-key TTL. The key is globally unique (partial

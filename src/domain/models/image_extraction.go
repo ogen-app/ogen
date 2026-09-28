@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Image-extraction lifecycle statuses (CON-281). The extraction row is the
+// Image-extraction lifecycle statuses. The extraction row is the
 // per-run state machine ogen owns while image-service does stateless compute:
 // pending -> normalizing -> classifying -> extracting -> describing ->
 // (complete | partial | failed). image-service performs the whole pipeline in a
@@ -26,7 +26,7 @@ const (
 	ImageExtractionStatusFailed   = "failed"
 )
 
-// Image shapes (CON-281 §8). Exactly one is chosen before extraction; the long
+// Image shapes. Exactly one is chosen before extraction; the long
 // tail collapses to "creative" (no sixth shape in v1).
 const (
 	ImageShapeProse        = "prose"
@@ -36,15 +36,15 @@ const (
 	ImageShapeCreative     = "creative"
 )
 
-// ImageExtraction is one vision-processing run of an IMG asset (CON-281). It
+// ImageExtraction is one vision-processing run of an IMG asset. It
 // holds only processing state — the searchable output (description + extracted
 // blocks) lands in assets_chunks, and the human-facing blocks in image_blocks.
 // A re-extraction mints a fresh row under a new RunKey. Idempotent on
 // (asset_id, run_key). cost_micros is snapshotted at write time from the
-// versioned gemini price table (CON-86) and never recomputed.
+// versioned gemini price table and never recomputed.
 type ImageExtraction struct {
 	bun.BaseModel `bun:"table:image_extractions,alias:ie" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID      string `bun:"id,pk"            json:"id"`
 	AssetID string `bun:"asset_id,notnull" json:"asset_id"`
@@ -97,7 +97,7 @@ type ImageExtraction struct {
 	// (unsupported/vector, over pixel-area/size, over quota, unreadable).
 	FailureReason string `bun:"failure_reason,notnull,default:''" json:"failure_reason,omitempty"`
 	// FailureCode is the stable, machine-readable companion to FailureReason
-	// (CON-281) — one of models.UploadCode* — so the client can distinguish a
+	// — one of models.UploadCode* — so the client can distinguish a
 	// quota block from a bad image from a transient outage from a searchable-but-
 	// partial run without parsing prose. Empty on a clean complete run.
 	FailureCode string `bun:"failure_code,notnull,default:''" json:"failure_code,omitempty"`

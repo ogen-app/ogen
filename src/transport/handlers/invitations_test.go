@@ -22,7 +22,7 @@ import (
 )
 
 // fakeInviteEnqueuer records the invitation emails a create would enqueue, so a
-// test can assert the enqueue fired without standing up River (CON-26). It is
+// test can assert the enqueue fired without standing up River. It is
 // invoked inside the create tx; recording + returning nil lets the tx commit.
 type fakeInviteEnqueuer struct {
 	mu       sync.Mutex // guards toEmails: the concurrent-re-issue test enqueues from many goroutines
@@ -80,7 +80,7 @@ var _ = Describe("InvitationsHandler", Ordered, func() {
 			_, err := db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(ctx)
 			Expect(err).NotTo(HaveOccurred())
 		}
-		// Cross-workspace invite tests seed extra tenants (CON-147 PR3); clear them
+		// Cross-workspace invite tests seed extra tenants; clear them
 		// so slugs/ids don't accumulate across specs.
 		_, err := db.NewDelete().Model((*models.Tenant)(nil)).Where("id <> ?", models.DefaultTenantID).Exec(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -175,7 +175,7 @@ var _ = Describe("InvitationsHandler", Ordered, func() {
 	}
 
 	// acceptAs is accept while signed in as some account — the existing-account
-	// path (CON-147 PR3), where the caller's session cookie proves they own the
+	// path, where the caller's session cookie proves they own the
 	// invited address.
 	acceptAs := func(token string, cookie *http.Cookie, payload fiber.Map) *http.Response {
 		GinkgoHelper()
@@ -497,7 +497,7 @@ var _ = Describe("InvitationsHandler", Ordered, func() {
 		})
 
 		It("returns 403 (invite left pending) when the email has an account and the caller isn't signed in as it", func() {
-			// CON-147 PR3: an email that already has an account is joined by signing
+			// An email that already has an account is joined by signing
 			// in as that account and accepting — not a dead-end 409. An anonymous
 			// accept is refused and the invite is left for the real owner to claim.
 			owner, _ := ownerCookie()
@@ -509,7 +509,7 @@ var _ = Describe("InvitationsHandler", Ordered, func() {
 		})
 	})
 
-	// ── Cross-workspace invitations & existing-account accept (CON-147 PR3) ───
+	// ── Cross-workspace invitations & existing-account accept ───
 
 	Describe("existing-account invitations (CON-147 PR3)", func() {
 		It("invites an email that already has an account in another workspace (201)", func() {

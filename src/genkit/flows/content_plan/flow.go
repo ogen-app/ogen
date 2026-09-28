@@ -42,13 +42,12 @@ var generatePostsRunner func(ctx context.Context, req GeneratePostsRequest, onEv
 type ContentPlanFlowConfig struct {
 	// Provider resolves the model reference + call config by role, so the
 	// flow doesn't hardcode the "anthropic/" prefix or the Anthropic SDK
-	// config type (CON-86 FR12).
+	// config type.
 	Provider *llm.Provider
-	// Recorder captures one usage event per model call; nil disables recording
-	// (CON-86 FR5/FR10).
+	// Recorder captures one usage event per model call; nil disables recording.
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps before the model
-	// call; nil = no enforcement (CON-86 FR9).
+	// call; nil = no enforcement.
 	Checker          *usage.Checker
 	ModelID          string
 	MaxContextAssets int   // max assets when no embedder (creation-order fallback)
@@ -68,7 +67,7 @@ type ContentPlanFlowConfig struct {
 	// events on success/failure. nil = silent (no events emitted).
 	Hub eventhub.Hub
 	// Notifier drops a durable content_plan.failed notification to the campaign
-	// owner (CON-285) — the failure twin of campaign.content_plan_ready (which the
+	// owner — the failure twin of campaign.content_plan_ready (which the
 	// campaign assistant emits on success). nil is a no-op.
 	Notifier   *notify.Service
 	systemTmpl *template.Template
@@ -83,11 +82,11 @@ type ContentPlanRepos struct {
 	Platforms repository.PlatformRepository
 	Posts     repository.PostRepository
 	// Notes captures each generated post's bullet-point thesis as a
-	// draft_thesis note instead of the post body (CON-188). nil skips note
+	// draft_thesis note instead of the post body. nil skips note
 	// creation (the post is still created with an empty body).
 	Notes repository.PostNoteRepository
 	// Brands resolves the campaign's brand voice/audience/guardrails into the
-	// prompt (CON-245). nil falls back to the legacy tone_guidelines prose.
+	// prompt. nil falls back to the legacy tone_guidelines prose.
 	Brands repository.BrandRepository
 }
 
@@ -200,7 +199,7 @@ func publishContentPlanFinalised(
 }
 
 // notifyContentPlanFailed drops a durable content_plan.failed notification to the
-// campaign owner (CON-285) when a plan generation fails — the failure twin of
+// campaign owner when a plan generation fails — the failure twin of
 // campaign.content_plan_ready, which the campaign assistant emits on success (so
 // this fires only on error, never on the happy path). The dedupe_key collapses
 // repeats for the same campaign while still unread. Uses a fresh tenant-scoped,
@@ -236,7 +235,7 @@ func runContentPlan(
 	start := time.Now()
 	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID)
 
-	// Enforcement gate (CON-86 FR9): block before any provider call when the
+	// Enforcement gate: block before any provider call when the
 	// tenant is already over a cap in enforce mode. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
@@ -253,7 +252,7 @@ func runContentPlan(
 			return
 		}
 		publishContentPlanFinalised(cfg.Hub, req.CampaignID, finaliseOwnerID, out, retErr)
-		// CON-285: the durable content_plan.failed twin (success is announced by
+		// The durable content_plan.failed twin (success is announced by
 		// the campaign assistant's campaign.content_plan_ready).
 		notifyContentPlanFailed(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, retErr)
 	}()

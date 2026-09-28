@@ -6,7 +6,7 @@ import (
 	"github.com/uptrace/bun"
 )
 
-// Audio-segment statuses (CON-282). A segment is a bounded window of the
+// Audio-segment statuses. A segment is a bounded window of the
 // normalized derivative, transcribed independently and checkpointed so a retry
 // resumes from the first incomplete one.
 const (
@@ -15,7 +15,7 @@ const (
 	AudioSegmentStatusFailed  = "failed"
 )
 
-// AudioSegment is one bounded transcription window of an extraction (CON-282).
+// AudioSegment is one bounded transcription window of an extraction.
 // Boundaries + source offsets are recorded (not inferred); the overlap between
 // adjacent segments is de-duplicated at chunk-assembly time. [StartMs, EndMs)
 // are on the ORIGINAL asset timeline.
@@ -33,7 +33,7 @@ type AudioSegment struct {
 	RetryCount     int    `bun:"retry_count,notnull,default:0" json:"retry_count"`
 	FailureReason  string `bun:"failure_reason"      json:"failure_reason,omitempty"`
 	UtteranceCount int    `bun:"utterance_count,notnull,default:0" json:"utterance_count"`
-	// CostMicros is this segment's transcription cost (CON-282), snapshotted from
+	// CostMicros is this segment's transcription cost, snapshotted from
 	// the versioned gemini price table and persisted in the SAME write that marks
 	// the segment done — so cost and completion commit atomically and a resume
 	// that skips a done segment never loses its cost. The extraction total sums

@@ -41,7 +41,7 @@ type CampaignAssistantResponse struct {
 	// targeted posts this turn. Action is then "posts_generated".
 	GeneratedPosts *GeneratedPostsResult `json:"generatedPosts,omitempty" jsonschema:"-"`
 	// DraftedPosts is set by the server when the draftPost tool created
-	// content-first drafts from chat research this turn (CON-207). Action is then
+	// content-first drafts from chat research this turn. Action is then
 	// "post_drafted".
 	DraftedPosts *DraftPostResult `json:"draftedPosts,omitempty" jsonschema:"-"`
 	// Dates is set by the server when setCampaignDates changed the campaign's
@@ -58,38 +58,38 @@ type CampaignAssistantResponse struct {
 	PostsReview *consistency.PostsReview `json:"postsReview,omitempty" jsonschema:"-"`
 }
 
-// DatesResult summarises a setCampaignDates tool invocation (CON-115).
+// DatesResult summarises a setCampaignDates tool invocation.
 type DatesResult struct {
 	StartDate         string `json:"startDate"`
 	EndDate           string `json:"endDate"`
 	PostsOutsideRange int    `json:"postsOutsideRange"` // eligible posts now dated outside the new range
 }
 
-// RedistributeResult summarises a redistributePosts tool invocation (CON-115).
+// RedistributeResult summarises a redistributePosts tool invocation.
 type RedistributeResult struct {
 	PostsUpdated int `json:"postsUpdated"`
 	PhaseCount   int `json:"phaseCount"`
 }
 
-// GeneratedPostsResult summarises a generatePosts tool invocation (CON-114).
+// GeneratedPostsResult summarises a generatePosts tool invocation.
 type GeneratedPostsResult struct {
 	PostCount   int      `json:"postCount"`
 	PlatformIDs []string `json:"platformIds"`
 	PhaseID     string   `json:"phaseId"`
 	Warnings    []string `json:"warnings,omitempty"`
-	// UsedAssets lists the campaign assets that informed the posts (CON-118);
+	// UsedAssets lists the campaign assets that informed the posts;
 	// empty when none were used.
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
 }
 
-// DraftPostResult summarises a draftPost tool invocation (CON-207).
+// DraftPostResult summarises a draftPost tool invocation.
 type DraftPostResult struct {
 	PostCount   int      `json:"postCount"`
 	PlatformIDs []string `json:"platformIds"`
 	PhaseID     string   `json:"phaseId"`
 	Dates       []string `json:"dates,omitempty"` // actual publish dates of the created posts
 	Warnings    []string `json:"warnings,omitempty"`
-	// UsedAssets lists the campaign assets that informed the drafts (CON-118);
+	// UsedAssets lists the campaign assets that informed the drafts;
 	// empty in v1 (provenance is carried by each post's Source research note).
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
 }
@@ -98,11 +98,11 @@ type DraftPostResult struct {
 type ContentPlanResult struct {
 	PostCount int      `json:"postCount"`
 	Warnings  []string `json:"warnings,omitempty"`
-	// UsedAssets lists the campaign assets that informed the plan (CON-118).
+	// UsedAssets lists the campaign assets that informed the plan.
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
 }
 
-// AssetRef is the id+title of a campaign asset that informed generation (CON-118).
+// AssetRef is the id+title of a campaign asset that informed generation.
 type AssetRef struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -119,12 +119,12 @@ type CampaignAssistantRepos struct {
 	Campaigns repository.CampaignRepository
 	// Posts backs the listCampaignPosts read tool used for grounded Q&A.
 	Posts repository.PostRepository
-	// Assets + Chunks back the askCampaignAssets read tool (CON-118): resolve the
+	// Assets + Chunks back the askCampaignAssets read tool: resolve the
 	// campaign's ready attached assets and search their embedded chunks.
 	Assets repository.AssetRepository
 	Chunks repository.AssetChunksRepository
 	// Brands resolves the campaign's brand voice/audience/guardrails into the
-	// context block (CON-245). nil falls back to the legacy tone prose.
+	// context block. nil falls back to the legacy tone prose.
 	Brands repository.BrandRepository
 }
 
@@ -138,7 +138,7 @@ type CampaignAssistantFlowConfig struct {
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker
-	// Embedder embeds the askCampaignAssets query for chunk search (CON-118).
+	// Embedder embeds the askCampaignAssets query for chunk search.
 	// A nil / unavailable embedder disables asset Q&A gracefully.
 	Embedder ai.Embedder
 	ModelID  string
@@ -152,12 +152,12 @@ type CampaignAssistantFlowConfig struct {
 	Hub eventhub.Hub
 	// Notifier drops a persistent "content plan ready" notification to the
 	// campaign owner when a run generates a content plan — only that action, not
-	// every assistant turn (CON-242). nil = silent.
+	// every assistant turn. nil = silent.
 	Notifier *notify.Service
 
 	// PrewarmTools, when true, fires one throwaway generation carrying the full
 	// tool set at init so Anthropic compiles + caches the strict-tool grammar
-	// off the user path (CON-112). Only worth it alongside a stable tool order,
+	// off the user path. Only worth it alongside a stable tool order,
 	// so the server sets this from cfg.AnthropicStableToolOrder.
 	PrewarmTools bool
 
@@ -166,23 +166,23 @@ type CampaignAssistantFlowConfig struct {
 	// generation. nil disables the corresponding tool.
 	ContentPlan func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	EnrichBrief func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
-	// Overview backs the getCampaignOverview read tool (CON-113). nil disables
+	// Overview backs the getCampaignOverview read tool. nil disables
 	// the tool.
 	Overview *overview.Service
-	// GeneratePosts backs the generatePosts targeted-generation tool (CON-114).
+	// GeneratePosts backs the generatePosts targeted-generation tool.
 	// nil disables the tool.
 	GeneratePosts func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
-	// MaxGeneratePosts caps how many posts one generatePosts call may create
-	// (CON-114). 0 falls back to 10.
+	// MaxGeneratePosts caps how many posts one generatePosts call may create.
+	// 0 falls back to 10.
 	MaxGeneratePosts int
-	// DraftPost backs the draftPost tool (CON-207): rewrite chat research into
+	// DraftPost backs the draftPost tool: rewrite chat research into
 	// extended content-first drafts. nil disables the tool.
 	DraftPost func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
-	// MaxDraftPosts caps how many posts one draftPost call may create (CON-207).
+	// MaxDraftPosts caps how many posts one draftPost call may create.
 	// 0 falls back to 5.
 	MaxDraftPosts int
-	// CheckBrief / CheckPosts back the read-only consistency review tools
-	// (CON-116). nil disables the corresponding tool.
+	// CheckBrief / CheckPosts back the read-only consistency review tools.
+	// nil disables the corresponding tool.
 	CheckBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	CheckPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 }
@@ -236,7 +236,7 @@ const (
 	SSEEventDraftPostComplete SSEEventKind = "draft_post_complete"
 
 	// SSEEventAssetsUsed reports which attached assets informed the generated
-	// posts (CON-118); emitted by runContentPlan/generatePosts when non-empty.
+	// posts; emitted by runContentPlan/generatePosts when non-empty.
 	SSEEventAssetsUsed SSEEventKind = "assets_used"
 
 	SSEEventDatesUpdated       SSEEventKind = "dates_updated"
@@ -302,7 +302,7 @@ type GeneratePostsCompleteEventPayload struct {
 	Warnings  []string `json:"warnings,omitempty"`
 }
 
-// DraftPostStartedEventPayload is emitted when the draftPost tool begins (CON-207).
+// DraftPostStartedEventPayload is emitted when the draftPost tool begins.
 type DraftPostStartedEventPayload struct {
 	PlatformIDs []string `json:"platformIds"`
 	Count       int      `json:"count"`
@@ -314,8 +314,7 @@ type DraftPostCompleteEventPayload struct {
 	Warnings  []string `json:"warnings,omitempty"`
 }
 
-// AssetsUsedEventPayload lists the attached assets that informed a generation
-// (CON-118).
+// AssetsUsedEventPayload lists the attached assets that informed a generation.
 type AssetsUsedEventPayload struct {
 	Assets []AssetRef `json:"assets"`
 }

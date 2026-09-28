@@ -8,7 +8,7 @@ import (
 )
 
 // SplitThread turns a single authored body into the ordered thread segments that
-// the rest of the pipeline publishes (CON-284 R2). It is the whole point of the
+// the rest of the pipeline publishes. It is the whole point of the
 // R2 revision: `posts.content` is the canonical draft (exactly what the author
 // typed) and `thread_segments` is DERIVED from it here on every write, inverting
 // R1 (which mirrored content from segments[0]).
@@ -59,7 +59,7 @@ func SplitThread(content string, perSegmentLimit int) models.ThreadSegments {
 // inserts between messages; its serialiser emits "***" by default (mdast-util-to-
 // markdown's rule:'*', ×3), so matching only hyphens — as R2 first shipped — split
 // on a delimiter the editor never actually writes, and every authored break fell
-// through into one long message (CON-284). Mixed markers ("-*-") and any line with
+// through into one long message. Mixed markers ("-*-") and any line with
 // other characters ("**bold**") are not rules.
 func isRuleLine(trimmed string) bool {
 	var marker rune

@@ -44,32 +44,32 @@ type PostsHandler struct {
 	platformRepo   repository.PlatformRepository
 	attachmentRepo repository.PostAttachmentRepository
 	// brandRepo validates a post's brand_voice_id/brand_audience_id belong to
-	// the tenant (CON-245). Optional (SetBrandRepo); nil skips validation.
+	// the tenant. Optional (SetBrandRepo); nil skips validation.
 	brandRepo repository.BrandRepository
 	auth      fiber.Handler
 	// onBeforeDelete runs before the post row is deleted. The server
 	// wires this to clean up S3 objects belonging to the post's
-	// attachments (CON-73 §2.7 — "all of its attachments are deleted
+	// attachments ("all of its attachments are deleted
 	// from S3 immediately as part of the same operation"). nil is
 	// treated as no-op for fixtures that don't care about attachments.
 	onBeforeDelete func(ctx context.Context, postID string) error
-	// postLogRepo records every meaningful operation against a Post
-	// (CON-69 §11). nil makes log writes no-ops so legacy fixtures stay
+	// postLogRepo records every meaningful operation against a Post.
+	// nil makes log writes no-ops so legacy fixtures stay
 	// green.
 	postLogRepo repository.PostLogRepository
 	// allowlistRepo answers "is this Zernio platform allowed to
-	// auto-publish?" when the user moves a post to Scheduled
-	// (CON-69 §5). nil disables the allowlist branch entirely;
+	// auto-publish?" when the user moves a post to Scheduled.
+	// nil disables the allowlist branch entirely;
 	// posts go straight to Scheduled with no River enqueue.
 	allowlistRepo repository.AutoPublishAllowlistRepository
-	// jobsClient enqueues the Zernio cancellation task (CON-69 §9). nil
+	// jobsClient enqueues the Zernio cancellation task. nil
 	// disables the cancel endpoint (503).
 	jobsClient CancelEnqueuer
 	// db is the Bun DB handle. Held so the schedule path can run the
 	// status update + PostLog write + River enqueue in a single
-	// transaction (CON-69 §5).
+	// transaction.
 	db *bun.DB
-	// scheduleSvc schedules a post for publishing (CON-78): the single
+	// scheduleSvc schedules a post for publishing: the single
 	// source of truth for allowlist routing + transactional persist +
 	// Zernio enqueue, shared by POST /:id/schedule, the assistant's
 	// schedulePost tool, and the PUT scheduling branch. nil disables the
@@ -81,7 +81,7 @@ type PostsHandler struct {
 	// disabled / fixtures). Wired via SetActivityRecorder.
 	activity *activity.Recorder
 	// campaignRepo answers "is this phase one of the campaign's type's
-	// phases?" (CON-166) so a mismatched campaign_type_phase_id gets a clean
+	// phases?" so a mismatched campaign_type_phase_id gets a clean
 	// 400. Optional (SetCampaignRepo); nil leaves it to the DB trigger, whose
 	// rejection is mapped to the same 400.
 	campaignRepo repository.CampaignRepository
@@ -93,7 +93,7 @@ func (h *PostsHandler) SetCampaignRepo(r repository.CampaignRepository) {
 }
 
 // checkPhase reports whether a post's campaign_type_phase_id (when set) is a
-// phase of its campaign's type (CON-166). Without a wired campaign repo it
+// phase of its campaign's type. Without a wired campaign repo it
 // passes and the DB trigger decides.
 func (h *PostsHandler) checkPhase(ctx context.Context, campaignID string, phaseID *string) (bool, error) {
 	if phaseID == nil || h.campaignRepo == nil {
@@ -141,7 +141,7 @@ func (h *PostsHandler) SetSchedulingDeps(allowlist repository.AutoPublishAllowli
 	h.db = db
 }
 
-// SetScheduleService wires the post-schedule service (CON-78). Until set,
+// SetScheduleService wires the post-schedule service. Until set,
 // the schedule endpoint returns 503 and the PUT scheduling branch falls
 // back to a plain status update.
 func (h *PostsHandler) SetScheduleService(s *schedule.Service) {
@@ -234,7 +234,7 @@ func (h *PostsHandler) validateReadyForPublish(c *fiber.Ctx, post *models.Post, 
 			platform = fresh
 		}
 	}
-	// CON-74/CON-284 R2: validate against the incoming request's content/post_type
+	// Validate against the incoming request's content/post_type
 	// so the gate sees what's about to be persisted, not the prior draft. For a
 	// thread the segments are DERIVED from the single authored body (content is the
 	// canonical source; thread_segments is materialised by splitting it) using the
@@ -407,7 +407,7 @@ func (h *PostsHandler) Schedule(c *fiber.Ctx) error {
 type cancelRequest struct {
 	// Target is the status the user wants the post moved to once
 	// Zernio confirms the cancellation. Defaults to "ready_for_publish"
-	// when omitted (CON-69 §9 — ReadyForPublish is the most common
+	// when omitted (ReadyForPublish is the most common
 	// "cancel and edit" landing state).
 	Target string `json:"target"`
 }
@@ -553,7 +553,7 @@ func (h *PostsHandler) ConvertToManual(c *fiber.Ctx) error {
 	// convert enqueues one durable cancel→manual task per still-scheduled
 	// post. Once enqueued the worker owns the cancel, the wait, and the
 	// final status, so the request can return without holding the post in
-	// an unscheduled limbo (CON-130).
+	// an unscheduled limbo.
 	convert := func(post *models.Post) {
 		switch post.Status {
 		case models.PostStatusScheduledForManualPublish:
@@ -637,7 +637,7 @@ func NewPostsHandler(
 }
 
 // postBrandRequest is the body of PUT /api/posts/:id/brand — a targeted set of
-// just the post's voice + audience (CON-245), so the editor's picker need not
+// just the post's voice + audience, so the editor's picker need not
 // round-trip the whole resource.
 type postBrandRequest struct {
 	BrandVoiceID    Optional[string] `json:"brand_voice_id"`
@@ -662,9 +662,9 @@ func (h *PostsHandler) SetBrand(c *fiber.Ctx) error {
 	if err := validateBrandRefs(reqCtx(c), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
 		return err
 	}
-	// Presence-aware (CON-245): an omitted field leaves the post's existing ref
+	// Presence-aware: an omitted field leaves the post's existing ref
 	// alone; an explicit null clears it. The two are independent, so sending only
-	// brand_voice_id no longer wipes the audience.
+	// brand_voice_id never wipes the audience.
 	req.BrandVoiceID.applyTo(&post.BrandVoiceID)
 	req.BrandAudienceID.applyTo(&post.BrandAudienceID)
 	post.UpdatedAt = time.Now().UTC()
@@ -707,7 +707,7 @@ func (h *PostsHandler) AddAssets(c *fiber.Ctx) error {
 		}
 		return err
 	}
-	// CON-251: a submitted post's sources are frozen — but only a real change is
+	// A submitted post's sources are frozen — but only a real change is
 	// rejected; re-adding ids it already has is a harmless no-op (matches PUT's
 	// mutatesLockedContent / no-op-save rule).
 	if post.Status.IsSubmitted() && addsNewID(post.UsedAssetIDs, req.AssetIDs) {
@@ -719,7 +719,7 @@ func (h *PostsHandler) AddAssets(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
 		}
 		// The repo re-checks the lock atomically, so a submit that won the race
-		// against the pre-check above still surfaces as a 409 (CON-251).
+		// against the pre-check above still surfaces as a 409.
 		if submitted, ok := errors.AsType[*repository.PostSubmittedError](err); ok {
 			return submittedLockError(submitted.Status)
 		}
@@ -767,7 +767,7 @@ func (h *PostsHandler) RemoveAsset(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusNotFound, "post not found")
 		}
 		// The repo re-checks the lock atomically, so a submit that won the race
-		// against the pre-check above still surfaces as a 409 (CON-251).
+		// against the pre-check above still surfaces as a 409.
 		if submitted, ok := errors.AsType[*repository.PostSubmittedError](err); ok {
 			return submittedLockError(submitted.Status)
 		}
@@ -805,16 +805,16 @@ func (h *PostsHandler) Register(app *fiber.App) {
 	g.Get("/", h.auth, h.List)
 	g.Post("/", h.auth, h.Create)
 	// Static route registered before "/:id/..." so it isn't shadowed by
-	// the id-parametrised routes (CON-130).
+	// the id-parametrised routes.
 	g.Post("/convert-to-manual", h.auth, h.ConvertToManual)
-	// CON-284 R2: stateless split preview for the thread composer. Static route,
+	// Stateless split preview for the thread composer. Static route,
 	// registered before "/:id/..." so it isn't shadowed (same reason as above).
 	g.Post("/thread/preview", h.auth, h.PreviewThread)
 	g.Get("/:id", h.auth, h.Get)
 	g.Put("/:id", h.auth, h.Update)
-	// CON-245: targeted set of a post's own brand voice + audience.
+	// Targeted set of a post's own brand voice + audience.
 	g.Put("/:id/brand", h.auth, h.SetBrand)
-	// CON-233: targeted membership writes for a post's sources, so attaching or
+	// Targeted membership writes for a post's sources, so attaching or
 	// detaching one source touches only used_asset_ids. Respects the CON-251
 	// content-lock: a real change to a submitted post's sources is a 409.
 	g.Post("/:id/assets", h.auth, h.AddAssets)
@@ -832,16 +832,16 @@ type postRequest struct {
 	CampaignID string `json:"campaign_id"             validate:"required"`
 	// PlatformID + PlatformPostType are required only when status is not
 	// "draft" — see requirePlatformIfNotDraft below. Drafts can be saved
-	// before the user has picked a platform (CON-60).
+	// before the user has picked a platform.
 	PlatformID       string `json:"platform_id"`
 	PlatformPostType string `json:"platform_post_type"`
-	// SocialAccountID (CON-150) names which same-platform account the post
+	// SocialAccountID names which same-platform account the post
 	// publishes to. Optional: omit it and the submit worker auto-selects the
 	// platform's single account, or requires a choice when there are several.
 	SocialAccountID string `json:"social_account_id"`
 	Title           string `json:"title"`
 	Content         string `json:"content"`
-	// ThreadSegments (CON-284) is DERIVED, not authored (R2): a thread is written
+	// ThreadSegments is DERIVED, not authored (R2): a thread is written
 	// as a single body in Content (with "---" delimiter lines, or auto-split by the
 	// per-segment char limit), and the server materialises the segment list from it.
 	// A client-sent value here is IGNORED — the field is retained only so existing
@@ -855,20 +855,20 @@ type postRequest struct {
 	CTAType             models.PostCTAType    `json:"cta_type"`
 	CTAUrl              string                `json:"cta_url"`
 	TargetAudienceNotes string                `json:"target_audience_notes"`
-	// UsedAssetIDs is presence-aware (CON-233): the sources have their own
+	// UsedAssetIDs is presence-aware: the sources have their own
 	// membership endpoints (POST/DELETE /posts/:id/assets), so an ordinary
 	// whole-record save that omits the key must leave the stored set alone rather
 	// than restate it and race the membership write. A present array replaces it;
 	// an explicit null clears it. See Optional and applyOptionalSlice.
 	UsedAssetIDs        Optional[models.StringSlice] `json:"used_asset_ids"`
 	CampaignTypePhaseID *string                      `json:"campaign_type_phase_id"`
-	// BrandVoiceID / BrandAudienceID are presence-aware (CON-245): unlike the
+	// BrandVoiceID / BrandAudienceID are presence-aware: unlike the
 	// other client-authored fields on this full-replace body, these are stamped
 	// server-side by content_plan / draft_post, so an omitted key must leave the
 	// stored ref untouched rather than null it. See Optional and apply.
 	BrandVoiceID    Optional[string] `json:"brand_voice_id"`
 	BrandAudienceID Optional[string] `json:"brand_audience_id"`
-	// PublishedURL (CON-165) lets the front-end record a permalink for posts
+	// PublishedURL lets the front-end record a permalink for posts
 	// Zernio cannot verify (the CON-149 skip path — e.g. LinkedIn personal
 	// accounts) or correct a wrong one. Like every field on this whole-resource
 	// PUT, the FE round-trips the current value; an empty string clears it.
@@ -900,7 +900,7 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType
 	post.SocialAccountID = r.SocialAccountID
 	post.Title = r.Title
 	post.Content = r.Content
-	// CON-284 R2: content is the canonical thread body — thread_segments is DERIVED
+	// Content is the canonical thread body — thread_segments is DERIVED
 	// from it, not authored as an array, so apply only carries the body. The
 	// Create/Update handlers call deriveThreadSegments right after this to
 	// materialise (or, for a non-thread, clear) the segments with the resolved
@@ -913,15 +913,15 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType
 	post.CTAUrl = r.CTAUrl
 	post.CampaignTypePhaseID = r.CampaignTypePhaseID
 	post.TargetAudienceNotes = r.TargetAudienceNotes
-	// CON-165: published_url stays writable after publish on purpose — recording
+	// published_url stays writable after publish on purpose — recording
 	// a permalink is a post-publish affordance. When CON-251's content-lock
 	// lands, keep this field on the allowed-after-submit list.
 	post.PublishedURL = r.PublishedURL
-	// Presence-aware (CON-245): omitting these leaves the server-stamped refs in
+	// Presence-aware: omitting these leaves the server-stamped refs in
 	// place; an explicit null clears them.
 	r.BrandVoiceID.applyTo(&post.BrandVoiceID)
 	r.BrandAudienceID.applyTo(&post.BrandAudienceID)
-	// Presence-aware (CON-233): omit to leave the sources alone (the membership
+	// Presence-aware: omit to leave the sources alone (the membership
 	// endpoints own them), a present array to replace, an explicit null to clear.
 	applyOptionalSlice(r.UsedAssetIDs, &post.UsedAssetIDs)
 	post.UpdatedAt = time.Now().UTC()
@@ -940,17 +940,17 @@ func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 		r.PlatformID != post.PlatformID ||
 		r.PlatformPostType != post.PlatformPostType ||
 		!slices.Equal(nullSlice(r.MediaURLs), post.MediaURLs) ||
-		// CON-284 R2: a thread's message list is locked content too, but content is
+		// A thread's message list is locked content too, but content is
 		// now the canonical thread body (thread_segments is derived from it), so the
 		// r.Content != post.Content check above already covers any thread edit — no
 		// separate segment comparison is needed.
-		// Sources are presence-aware (CON-233): an omitted key preserves the set,
+		// Sources are presence-aware: an omitted key preserves the set,
 		// so only a present-and-different value is a mutation of the locked content.
 		(r.UsedAssetIDs.Present && !slices.Equal(nullSlice(r.UsedAssetIDs.orZero()), post.UsedAssetIDs))
 }
 
-// deriveThreadSegments materialises post.ThreadSegments from the canonical body
-// (CON-284 R2). For a non-thread post it clears the list (also covering demotion);
+// deriveThreadSegments materialises post.ThreadSegments from the canonical body.
+// For a non-thread post it clears the list (also covering demotion);
 // for a thread it resolves the platform's per-segment char limit first, so a
 // delimiter-free body auto-splits to the right size.
 func (h *PostsHandler) deriveThreadSegments(ctx context.Context, post *models.Post) {
@@ -1151,7 +1151,7 @@ func (h *PostsHandler) PreviewThread(c *fiber.Ctx) error {
 		// char_count is the flattened, visible length — the same number the
 		// publish gate enforces (VisibleLen), so the composer's per-message counter
 		// matches what actually gets validated. Counting raw Markdown here would
-		// overstate a segment with bold/links/headings (CON-284 R2).
+		// overstate a segment with bold/links/headings.
 		out[i] = previewSegment{Content: s.Content, CharCount: platforms.VisibleLen(s.Content)}
 	}
 
@@ -1234,7 +1234,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		CreatedBy:           session.UserID,
 		UsedAssets:          []models.Asset{},
 	}
-	// CON-284 R2: derive the thread's segment list from the canonical body (a
+	// Derive the thread's segment list from the canonical body (a
 	// non-thread post gets an empty list). Runs before validateForCreate so the
 	// create-time publish gate sees the same segments submit will publish.
 	h.deriveThreadSegments(reqCtx(c), post)
@@ -1341,7 +1341,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		)
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status transition from "+string(post.Status)+" to "+string(status))
 	}
-	// CON-251: once a post is submitted (scheduled or published) a copy of it
+	// Once a post is submitted (scheduled or published) a copy of it
 	// exists outside Ogen — Zernio holds the scheduled submission (content
 	// snapshotted at schedule time), the network holds the published post.
 	// Editing the body/title/media/platform/post-type/sources here would
@@ -1355,7 +1355,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	if err := requirePlatformIfNotDraft(status, req.PlatformID, req.PlatformPostType); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	// CON-166: a (re)assigned phase — or a move to another campaign keeping one
+	// A (re)assigned phase — or a move to another campaign keeping one
 	// — must be a phase of the target campaign's type.
 	if req.CampaignTypePhaseID != nil &&
 		(req.CampaignID != post.CampaignID || post.CampaignTypePhaseID == nil || *req.CampaignTypePhaseID != *post.CampaignTypePhaseID) {
@@ -1374,7 +1374,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 
 	prevStatus := post.Status
 
-	// CON-69 §5 / CON-78: ReadyForPublish→Scheduled consults the
+	// ReadyForPublish→Scheduled consults the
 	// auto-publish allowlist and persists status, PostLog, and the submit
 	// River task transactionally — now via the shared schedule
 	// service so the REST/assistant/PUT paths can't drift. Falls through
@@ -1382,7 +1382,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	// fixtures).
 	if prevStatus == models.PostStatusReadyForPublish && status == models.PostStatusScheduled && h.scheduleSvc != nil {
 		req.apply(post, status, ctaType)
-		h.deriveThreadSegments(reqCtx(c), post) // CON-284 R2: materialise segments from the body before persist
+		h.deriveThreadSegments(reqCtx(c), post) // Materialise segments from the body before persist
 		actor := models.ActorSystem
 		if sess, ok := c.Locals("session").(*models.Session); ok && sess != nil {
 			actor = sess.UserID
@@ -1402,8 +1402,8 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		}
 	} else {
 		req.apply(post, status, ctaType)
-		h.deriveThreadSegments(reqCtx(c), post) // CON-284 R2: materialise segments from the body before persist
-		// Presence-aware sources (CON-233): apply already left an omitted
+		h.deriveThreadSegments(reqCtx(c), post) // Materialise segments from the body before persist
+		// Presence-aware sources: apply already left an omitted
 		// used_asset_ids at its hydrated value, but the whole-record UPDATE would
 		// still write that stale value back and clobber a concurrent membership
 		// write (AddUsedAssetIDs/RemoveUsedAssetID) that landed after GetByID. Drop

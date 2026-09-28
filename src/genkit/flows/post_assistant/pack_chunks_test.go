@@ -7,7 +7,7 @@ import (
 )
 
 // packChunks carries each chunk's source citation to the assistant so it can
-// name the slide/time range it drew from (CON-312); markdown chunks have none.
+// name the slide/time range it drew from; markdown chunks have none.
 func TestPackChunks_CarriesSourceCitation(t *testing.T) {
 	label := "0:45–1:30"
 	anchor := &models.SourceAnchor{Kind: "time", StartMs: 45_000, EndMs: 90_000}

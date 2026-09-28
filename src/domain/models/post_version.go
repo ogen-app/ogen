@@ -8,7 +8,7 @@ import (
 
 type PostVersion struct {
 	bun.BaseModel `bun:"table:post_versions,alias:pv" swaggerignore:"true"`
-	TenantScoped  // CON-97: tenant_id column + central scoping hooks
+	TenantScoped  // tenant_id column + central scoping hooks
 
 	ID            string    `bun:"id,pk"                                        json:"id"`
 	PostID        string    `bun:"post_id,notnull"                              json:"post_id"`

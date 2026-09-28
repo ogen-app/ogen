@@ -12,9 +12,9 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 )
 
-// PostActionsHandler owns the post derivation actions — clone (CON-59: duplicate
-// a post as a new draft) and restore (CON-68: roll a post back to an earlier
-// version). Split out of the PostsHandler god-object (CON-291): a focused handler
+// PostActionsHandler owns the post derivation actions — clone (duplicate
+// a post as a new draft) and restore (roll a post back to an earlier
+// version). Split out of the PostsHandler god-object: a focused handler
 // over the two action services, each nil-disabling its endpoint with a 503.
 type PostActionsHandler struct {
 	repo       repository.PostRepository

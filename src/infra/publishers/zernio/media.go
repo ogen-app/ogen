@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// MediaPresign is the response from POST /api/v1/media/presign (CON-122). The
+// MediaPresign is the response from POST /api/v1/media/presign. The
 // bytes are PUT to UploadURL (one-hour validity), and PublicURL is referenced
 // in a post's mediaItems. Uploads live in temporary storage for 7 days; Zernio
 // copies them to permanent storage when a post referencing PublicURL publishes.

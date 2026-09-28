@@ -24,7 +24,7 @@ type PlatformsHandler struct {
 // empty when no integration is configured — in that case List/Get
 // emit `"publishers": []` per platform so clients see a stable shape.
 //
-// allowlist is the auto-publish allowlist (CON-65). It may be nil in
+// allowlist is the auto-publish allowlist. It may be nil in
 // callers that don't care to surface auto_publish_allowed (legacy
 // tests); when nil, the field falls back to false on every view.
 func NewPlatformsHandler(
@@ -41,7 +41,7 @@ func (h *PlatformsHandler) Register(app *fiber.App) {
 	g.Get("/", h.auth, h.List)
 	g.Get("/:id", h.auth, h.Get)
 	g.Get("/:id/post-type-rules", h.auth, h.PostTypeRules)
-	// CON-292: platform lifecycle (create/update/delete + limits) is operator-only
+	// Platform lifecycle (create/update/delete + limits) is operator-only
 	// via Harbor → PlatformAdminService gRPC. The tenant surface is read-only;
 	// the former POST/PUT/DELETE handlers were retired (nothing in the ui repo
 	// called them).
@@ -93,7 +93,7 @@ type platformResponse struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/platforms [get]
 func (h *PlatformsHandler) List(c *fiber.Ctx) error {
-	// CON-292: the composer-facing list shows only enabled platforms, ordered by
+	// The composer-facing list shows only enabled platforms, ordered by
 	// sort_order. Disabled platforms drop out of the catalog (soft-disable) while
 	// their already-scheduled posts still publish via the resolver.
 	platforms, err := h.repo.ListEnabled(reqCtx(c))
@@ -131,7 +131,7 @@ func (h *PlatformsHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return notFound(err, "platform not found")
 	}
-	// Soft-disable (CON-292): a disabled platform is invisible to tenants, the
+	// Soft-disable: a disabled platform is invisible to tenants, the
 	// same as a missing one — the composer lists enabled platforms only, and the
 	// detail routes match so a disabled id can't be probed.
 	if !platform.Enabled {
@@ -179,7 +179,7 @@ func (h *PlatformsHandler) PostTypeRules(c *fiber.Ctx) error {
 	if err != nil {
 		return notFound(err, "platform not found")
 	}
-	// Soft-disable (CON-292): hide disabled platforms from tenants, as Get does.
+	// Soft-disable: hide disabled platforms from tenants, as Get does.
 	if !platform.Enabled {
 		return fiber.NewError(fiber.StatusNotFound, "platform not found")
 	}

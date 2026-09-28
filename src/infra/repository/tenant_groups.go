@@ -12,7 +12,7 @@ import (
 )
 
 // TenantGroupRepository is the persistence for the group catalog and the
-// tenant↔group membership join (CON-208).
+// tenant↔group membership join.
 //
 // Groups are a GLOBAL operator table (like tenants), read/written cross-tenant
 // with no tenantctx. Create/Update surface a name-uniqueness clash (23505);

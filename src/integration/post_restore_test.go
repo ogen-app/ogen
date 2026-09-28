@@ -74,7 +74,7 @@ var _ = Describe("Post restore — CON-68", Ordered, func() {
 		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth)
 		postsHandler.SetPostLogRepo(logRepo)
 		postsHandler.Register(app)
-		// CON-68/CON-291: the restore action now lives on the actions handler.
+		// The restore action now lives on the actions handler.
 		handlers.NewPostActionsHandler(postRepo, nil, restore.New(db, postRepo, versionRepo, logRepo, nil), nil, auth).Register(app)
 
 		// Seed user + session + campaign.

@@ -12,7 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// TestZernioPerTenantSyncIsolation proves the per-tenant sync sweep (CON-100):
+// TestZernioPerTenantSyncIsolation proves the per-tenant sync sweep:
 // each tenant is synced under its own context against its own Zernio profile, so
 // social_accounts land in — and are visible only within — the owning tenant.
 func TestZernioPerTenantSyncIsolation(t *testing.T) {
