@@ -39,8 +39,8 @@ func TestEmailAdminRoundTrip(t *testing.T) {
 	const token = "email-admin-token"
 
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(1)
-	db.DB.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	// FK-free seeding on a single pinned connection (mirrors the repo tests).
 	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
 		t.Fatalf("disable fks: %v", err)
@@ -234,8 +234,8 @@ func TestNotifyOperatorsTenantRegisteredRoundTrip(t *testing.T) {
 	const token = "notify-token"
 
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(1)
-	db.DB.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
 		t.Fatalf("disable fks: %v", err)
 	}

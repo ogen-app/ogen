@@ -78,7 +78,6 @@ type DraftPostFlowConfig struct {
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker
-	ModelID string
 	// MaxOutputTokens caps a single generation call. 0 falls back to 8192 —
 	// enough for a handful of full-length drafts.
 	MaxOutputTokens int64

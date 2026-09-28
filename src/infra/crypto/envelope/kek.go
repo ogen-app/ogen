@@ -95,7 +95,7 @@ func generateKEK(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("envelope: create KEK %q: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // durability comes from the checked Sync below
 
 	if _, err := f.Write(key); err != nil {
 		return nil, fmt.Errorf("envelope: write KEK %q: %w", path, err)

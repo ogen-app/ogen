@@ -61,6 +61,7 @@ func evaluate(
 	ctx context.Context,
 	g *genkit.Genkit,
 	cfg PostQualityFlowConfig,
+	mc modelconfig.Resolved,
 	prompts *renderedPrompts,
 ) (*assessmentOutput, error) {
 	results := make([]dimensionOutput, len(dimensionTargets))
@@ -69,7 +70,7 @@ func evaluate(
 	var wg sync.WaitGroup
 	for i, t := range dimensionTargets {
 		wg.Go(func() {
-			results[i], errs[i] = evaluateDimension(ctx, g, cfg, prompts, t.label)
+			results[i], errs[i] = evaluateDimension(ctx, g, cfg, mc, prompts, t.label)
 		})
 	}
 	wg.Wait()
@@ -103,6 +104,7 @@ func evaluateDimension(
 	ctx context.Context,
 	g *genkit.Genkit,
 	cfg PostQualityFlowConfig,
+	mc modelconfig.Resolved,
 	prompts *renderedPrompts,
 	label string,
 ) (dimensionOutput, error) {
@@ -110,7 +112,6 @@ func evaluateDimension(
 	if maxTokens == 0 {
 		maxTokens = defaultMaxOutputTokens
 	}
-	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
 	modelName := mc.Ref
 	userPrompt := prompts.user + dimensionInstruction(label, cfg.SuggestionCap)
 	u := flowkit.Usage{

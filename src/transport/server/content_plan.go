@@ -32,7 +32,6 @@ func initContentPlan(
 		Provider:           provider,
 		Recorder:           recorder,
 		Checker:            checker,
-		ModelID:            cfg.ModelID,
 		MaxContextAssets:   cfg.MaxContextAssets,
 		MaxContextChars:    cfg.MaxContextChars,
 		MaxOutputTokens:    cfg.MaxOutputTokens,

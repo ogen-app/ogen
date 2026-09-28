@@ -20,7 +20,7 @@ func periodicRunOnStart(t *testing.T, pj *river.PeriodicJob) bool {
 		t.Fatal("river.PeriodicJob has no opts field — River internals changed")
 	}
 	f = reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
-	opts, _ := f.Interface().(*river.PeriodicJobOpts)
+	opts, _ := reflect.TypeAssert[*river.PeriodicJobOpts](f)
 	return opts != nil && opts.RunOnStart
 }
 

@@ -64,9 +64,8 @@ var _ = Describe("Enrich brief flow", Ordered, func() {
 		if modelID == "" {
 			modelID = "claude-haiku-4-5-20251001"
 		}
-		Expect(enrich_brief.InitEnrichBrief(g, enrich_brief.EnrichBriefFlowConfig{
-			ModelID: modelID,
-		}, enrich_brief.EnrichBriefRepos{
+		initModelConfig(ctx, modelID, modelID)
+		Expect(enrich_brief.InitEnrichBrief(g, enrich_brief.EnrichBriefFlowConfig{}, enrich_brief.EnrichBriefRepos{
 			Campaigns:     campaignRepo,
 			CampaignTypes: campaignTypeRepo,
 		})).To(Succeed())

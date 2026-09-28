@@ -21,8 +21,8 @@ import (
 func openClassificationDB(t *testing.T) *bun.DB {
 	t.Helper()
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(2)
-	db.DB.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

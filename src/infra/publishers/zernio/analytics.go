@@ -128,7 +128,7 @@ func (t *flexTime) UnmarshalJSON(b []byte) error {
 // ptr returns a *time.Time for assigning onto the analytics model, nil
 // when unset/unparseable so the column stays NULL rather than epoch-zero.
 func (t *flexTime) ptr() *time.Time {
-	if t == nil || t.Time.IsZero() {
+	if t == nil || t.IsZero() {
 		return nil
 	}
 	tt := t.Time

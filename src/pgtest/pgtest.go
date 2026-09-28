@@ -110,8 +110,8 @@ func MustDB() *bun.DB {
 	}
 	// Small per-DB pool: tests create many of these and they're never
 	// closed mid-run, so keep the aggregate connection count modest.
-	db.DB.SetMaxOpenConns(5)
-	db.DB.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
 	if err := database.Migrate(ctx, db); err != nil {
 		panic(fmt.Sprintf("pgtest: migrate %s: %v", name, err))
 	}

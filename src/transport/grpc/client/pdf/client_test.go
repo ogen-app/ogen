@@ -95,7 +95,7 @@ func TestParseStreamsBytesAndReturnsResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// ~1.5 MiB forces multiple stream frames (frame size is 1 MiB).
 	pdfBytes := bytes.Repeat([]byte("%PDF-1.7 data "), 110_000)
@@ -143,7 +143,7 @@ func TestParsePropagatesCorrelationMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := logging.WithRequestID(t.Context(), "rid")
 	ctx = tenantctx.With(ctx, "ten")
@@ -169,7 +169,7 @@ func TestParseWithoutCorrelationSendsNoHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if _, err := client.Parse(t.Context(), bytes.NewReader([]byte("%PDF-1.7")), pdf.Options{}); err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -194,7 +194,7 @@ func TestRenderStreamsBytesAndReturnsPageCountAndThumbnail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	pdfBytes := bytes.Repeat([]byte("%PDF-1.7 data "), 110_000) // multi-frame
 	res, err := client.Render(t.Context(), bytes.NewReader(pdfBytes),

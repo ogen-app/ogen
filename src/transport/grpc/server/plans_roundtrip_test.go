@@ -28,8 +28,8 @@ func TestPlanAdminRoundTrip(t *testing.T) {
 	const token = "plan-admin-token"
 
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(2)
-	db.DB.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
 	t.Cleanup(func() { _ = db.Close() })
 
 	srv, err := New(Deps{
@@ -222,8 +222,8 @@ func newPlanAdminClient(t *testing.T, db *bun.DB, token string) plansv1.PlanAdmi
 // error codes, and ListTierVersionAssignments.
 func TestPlanAdminRetireDeleteRoundTrip(t *testing.T) {
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(2)
-	db.DB.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
 	t.Cleanup(func() { _ = db.Close() })
 
 	ctx := t.Context()

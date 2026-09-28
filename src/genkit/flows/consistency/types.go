@@ -128,7 +128,6 @@ type ConsistencyFlowConfig struct {
 	Provider        *llm.Provider
 	Recorder        *usage.Recorder
 	Checker         *usage.Checker
-	ModelID         string
 	MaxOutputTokens int64 // 0 → 8192
 	// MaxPosts caps how many posts a posts-review analyzes in one call.
 	// 0 → 20.

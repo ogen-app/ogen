@@ -26,10 +26,10 @@ func TestRationalePrecedesScore(t *testing.T) {
 	rationale := fieldIndex(t, typ, "Rationale")
 	weakness := fieldIndex(t, typ, "Weakness")
 	score := fieldIndex(t, typ, "Score")
-	if !(rationale < score) {
+	if rationale >= score {
 		t.Errorf("Rationale (idx %d) must precede Score (idx %d)", rationale, score)
 	}
-	if !(weakness < score) {
+	if weakness >= score {
 		t.Errorf("Weakness (idx %d) must precede Score (idx %d)", weakness, score)
 	}
 }

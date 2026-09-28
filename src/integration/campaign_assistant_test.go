@@ -113,7 +113,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		if modelID == "" {
 			modelID = "claude-haiku-4-5-20251001"
 		}
-		provider := llm.NewProvider(modelID, modelID, modelID)
+		provider := llm.NewProvider()
 		// Seed the modelconfig resolver so every flow slot (orchestrator
 		// + the content_plan/enrich_brief/draft_post sub-flows) resolves a model.
 		initModelConfig(ctx, modelID, modelID)

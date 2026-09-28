@@ -28,25 +28,25 @@ func buildPDF(n int) []byte {
 		if i > 0 {
 			buf.WriteString(" ")
 		}
-		buf.WriteString(fmt.Sprintf("%d 0 R", 3+i))
+		fmt.Fprintf(&buf, "%d 0 R", 3+i)
 	}
-	buf.WriteString(fmt.Sprintf("] /Count %d >>\nendobj\n", n))
+	fmt.Fprintf(&buf, "] /Count %d >>\nendobj\n", n)
 
 	for i := range n {
 		offsets = append(offsets, buf.Len())
-		buf.WriteString(fmt.Sprintf("%d 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n", 3+i))
+		fmt.Fprintf(&buf, "%d 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n", 3+i)
 	}
 
 	xrefStart := buf.Len()
 	totalObjs := 2 + n
-	buf.WriteString(fmt.Sprintf("xref\n0 %d\n", totalObjs+1))
+	fmt.Fprintf(&buf, "xref\n0 %d\n", totalObjs+1)
 	buf.WriteString("0000000000 65535 f \n")
 	for _, off := range offsets {
-		buf.WriteString(fmt.Sprintf("%010d 00000 n \n", off))
+		fmt.Fprintf(&buf, "%010d 00000 n \n", off)
 	}
 
-	buf.WriteString(fmt.Sprintf("trailer\n<< /Size %d /Root 1 0 R >>\n", totalObjs+1))
-	buf.WriteString(fmt.Sprintf("startxref\n%d\n", xrefStart))
+	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root 1 0 R >>\n", totalObjs+1)
+	fmt.Fprintf(&buf, "startxref\n%d\n", xrefStart)
 	buf.WriteString("%%EOF\n")
 	return buf.Bytes()
 }

@@ -483,10 +483,10 @@ func buildSchedulingContext(ctx context.Context, post *models.Post, repos PostAs
 
 	var b strings.Builder
 	b.WriteString("## Scheduling context\n")
-	b.WriteString(fmt.Sprintf("- Current time: %s (%s) — UTC %s\n",
-		now.In(loc).Format("Mon Jan 2, 2006 15:04"), tzName, now.UTC().Format(time.RFC3339)))
-	b.WriteString(fmt.Sprintf("- Workspace timezone: %s. Resolve relative times (\"tomorrow 9am\", \"next Monday morning\") against THIS zone and pass the result as ISO-8601 with its offset. Defaults: morning=09:00, afternoon=14:00, evening=18:00 unless the user says otherwise — state the assumed time when you confirm.\n", tzName))
-	b.WriteString(fmt.Sprintf("- Post status: %s\n", post.Status))
+	fmt.Fprintf(&b, "- Current time: %s (%s) — UTC %s\n",
+		now.In(loc).Format("Mon Jan 2, 2006 15:04"), tzName, now.UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "- Workspace timezone: %s. Resolve relative times (\"tomorrow 9am\", \"next Monday morning\") against THIS zone and pass the result as ISO-8601 with its offset. Defaults: morning=09:00, afternoon=14:00, evening=18:00 unless the user says otherwise — state the assumed time when you confirm.\n", tzName)
+	fmt.Fprintf(&b, "- Post status: %s\n", post.Status)
 
 	if post.PlatformID == "" {
 		b.WriteString("- Platform: none set — the post cannot be scheduled until a platform is chosen.\n")
@@ -511,7 +511,7 @@ func buildSchedulingContext(ctx context.Context, post *models.Post, repos PostAs
 		if autoPublish {
 			mode = "AUTO-publish — it will be sent automatically at the scheduled time."
 		}
-		b.WriteString(fmt.Sprintf("- Platform: %s → %s\n", name, mode))
+		fmt.Fprintf(&b, "- Platform: %s → %s\n", name, mode)
 	}
 
 	b.WriteString("- Readiness: ")
@@ -529,7 +529,7 @@ func buildSchedulingContext(ctx context.Context, post *models.Post, repos PostAs
 			b.WriteString("draft that is NOT yet publishable. Problems: " + strings.Join(reasons, "; ") + ". Decline and tell the user exactly what to fix; do NOT schedule.\n")
 		}
 	default:
-		b.WriteString(fmt.Sprintf("status %q is not schedulable (only ready_for_publish, or a draft you promote). If it's already scheduled, it must be cancelled first to reschedule.\n", post.Status))
+		fmt.Fprintf(&b, "status %q is not schedulable (only ready_for_publish, or a draft you promote). If it's already scheduled, it must be cancelled first to reschedule.\n", post.Status)
 	}
 
 	b.WriteString("\nTo schedule: resolve the time, then CONFIRM the absolute time + the auto/manual mode and WAIT for the user's \"yes\" before calling schedulePost. Never call schedulePost on the first turn.\n")

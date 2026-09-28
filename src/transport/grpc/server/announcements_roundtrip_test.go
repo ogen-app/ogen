@@ -27,8 +27,8 @@ func TestAnnouncementAdminRoundTrip(t *testing.T) {
 	const token = "announcement-admin-token"
 
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(1)
-	db.DB.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	// FK-free seeding on a single pinned connection (mirrors the repo tests).
 	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
 		t.Fatalf("disable fks: %v", err)

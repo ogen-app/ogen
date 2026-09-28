@@ -202,7 +202,7 @@ func resolve(ctx context.Context, flowKey, slotKey string) entry {
 		// Only consult the caller's tier when tier overrides actually exist. On
 		// day one (no tier rows) this skips the per-call tenant lookup that
 		// cfgTier falls back to, so a normal flow turn does zero tenant reads.
-		if snap.hasTier && cfgTier != nil && !(haveSlot && slot.GlobalOnly) {
+		if snap.hasTier && cfgTier != nil && !(haveSlot && slot.GlobalOnly) { //nolint:staticcheck // QF1001: reads as "not a global-only slot"
 			if t, ok := cfgTier(ctx); ok {
 				tier = t
 			}

@@ -119,7 +119,6 @@ type PostAssistantFlowConfig struct {
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker
-	ModelID string
 	// MaxOutputTokens caps the model's output for a single call. 0 falls
 	// back to 64000 — Claude 4.x Haiku/Sonnet's max output. Anthropic
 	// charges only for tokens actually emitted, so a generous cap costs

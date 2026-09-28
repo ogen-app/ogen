@@ -85,9 +85,9 @@ func run(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("connect to database: %w", err)
 	}
-	db.DB.SetMaxOpenConns(cfg.DBMaxOpenConns)
-	db.DB.SetMaxIdleConns(cfg.DBMaxIdleConns)
-	defer db.Close()
+	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	defer func() { _ = db.Close() }()
 
 	if err := database.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("run migrations: %w", err)

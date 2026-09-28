@@ -48,8 +48,6 @@ func freshMetrics() *usage.Metrics {
 	}
 }
 
-func i64(v int64) *int64 { return &v }
-
 func seedTenant(db *bun.DB, id, name, slug string) {
 	GinkgoHelper()
 	_, err := db.NewInsert().Model(&models.Tenant{ID: id, Name: name, Slug: slug, TierID: models.DefaultTierID}).Exec(context.Background())
@@ -193,11 +191,11 @@ var _ = Describe("Usage metering (CON-86)", Ordered, func() {
 		It("upserts a single row per tenant and reads it back", func() {
 			ctx := asTenant("tn-c")
 			Expect(limits.Upsert(ctx, &models.TenantUsageLimit{
-				DailyCapMicros: i64(500), Mode: models.LimitModeWarn, Enabled: true,
+				DailyCapMicros: new(int64(500)), Mode: models.LimitModeWarn, Enabled: true,
 			})).To(Succeed())
 			// Update (same tenant) — still one row, new values.
 			Expect(limits.Upsert(ctx, &models.TenantUsageLimit{
-				DailyCapMicros: i64(900), Mode: models.LimitModeEnforce, Enabled: true,
+				DailyCapMicros: new(int64(900)), Mode: models.LimitModeEnforce, Enabled: true,
 			})).To(Succeed())
 
 			row, err := limits.GetByTenant(ctx)
@@ -218,7 +216,7 @@ var _ = Describe("Usage metering (CON-86)", Ordered, func() {
 
 			// tn-a: cap 1000, spend 1500 → blocked.
 			Expect(limits.Upsert(asTenant("tn-a"), &models.TenantUsageLimit{
-				DailyCapMicros: i64(1000), Mode: models.LimitModeEnforce, Enabled: true,
+				DailyCapMicros: new(int64(1000)), Mode: models.LimitModeEnforce, Enabled: true,
 			})).To(Succeed())
 			insertEvents(mkEvent("tn-a", "itest-vendor", "model", "m", "generate", "content_plan", 0, 1500, at))
 
@@ -230,7 +228,7 @@ var _ = Describe("Usage metering (CON-86)", Ordered, func() {
 
 			// tn-b: cap 1000, spend 500 → allowed.
 			Expect(limits.Upsert(asTenant("tn-b"), &models.TenantUsageLimit{
-				DailyCapMicros: i64(1000), Mode: models.LimitModeEnforce, Enabled: true,
+				DailyCapMicros: new(int64(1000)), Mode: models.LimitModeEnforce, Enabled: true,
 			})).To(Succeed())
 			insertEvents(mkEvent("tn-b", "itest-vendor", "model", "m", "generate", "content_plan", 0, 500, at))
 

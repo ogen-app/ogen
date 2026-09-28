@@ -47,7 +47,6 @@ func initCampaignAssistant(
 		Recorder: recorder,
 		Checker:  checker,
 		Embedder: embedder,
-		ModelID:  cfg.PlanningModelID,
 		// Router slimming: the planner only emits a short JSON envelope
 		// (explanation + action) plus tool calls, so 2048 is ample and bounds
 		// worst-case streaming.

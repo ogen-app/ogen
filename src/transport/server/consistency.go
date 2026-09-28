@@ -35,7 +35,6 @@ func initConsistency(
 		Provider: provider,
 		Recorder: recorder,
 		Checker:  checker,
-		ModelID:  cfg.ModelID,
 		MaxPosts: cfg.ConsistencyPostsMax,
 		Hub:      hub,
 	}
