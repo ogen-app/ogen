@@ -77,101 +77,88 @@ func planBatches(
 		maxPostsPerBatch = totalPosts
 	}
 
-	// Defensive sort by Sequence — the campaign type repository may or may
-	// not order phases for us, and the front-loading rule depends on order.
-	sortedPhases := make([]resolvedPhase, len(phases))
-	copy(sortedPhases, phases)
+	// The repository may not order phases, and front-loading depends on it.
+	sortedPhases := slices.Clone(phases)
 	slices.SortStableFunc(sortedPhases, func(a, b resolvedPhase) int {
 		return cmp.Compare(a.Sequence, b.Sequence)
 	})
 
-	phasePosts := evenSplit(totalPosts, len(sortedPhases))
-	phaseWindows := computeDateWindows(startDate, endDate, len(sortedPhases))
-	// A campaign's manual phase plan pins each phase's window; it is
-	// all-or-nothing (the plan is stored whole), so only apply it when every
-	// phase carries one.
-	if manual := manualWindows(sortedPhases); manual != nil {
+	// Chunking preserves slot order, so phase/date locality holds within a
+	// batch wherever possible.
+	slots := buildSlots(totalPosts, sortedPhases, platforms, startDate, endDate)
+	specs := make([]batchSpec, 0, (len(slots)+maxPostsPerBatch-1)/maxPostsPerBatch)
+	for chunk := range slices.Chunk(slots, maxPostsPerBatch) {
+		spec := specForChunk(chunk, sortedPhases, platforms)
+		spec.Index = len(specs)
+		spec.GlobalStartIndex = len(specs) * maxPostsPerBatch
+		specs = append(specs, spec)
+	}
+	return specs
+}
+
+// slot is one planned post: its phase, platform and date window.
+type slot struct {
+	phaseIdx    int
+	platformIdx int
+	window      dateWindow
+}
+
+// buildSlots lays out every planned post in (phase, platform) order.
+func buildSlots(totalPosts int, phases []resolvedPhase, platforms []resolvedPlatform, startDate, endDate time.Time) []slot {
+	phasePosts := evenSplit(totalPosts, len(phases))
+	phaseWindows := computeDateWindows(startDate, endDate, len(phases))
+	// A manual phase plan is stored whole, so it applies only when every
+	// phase carries a pinned window.
+	if manual := manualWindows(phases); manual != nil {
 		phaseWindows = manual
 	}
 
-	type slot struct {
-		phaseIdx    int
-		platformIdx int
-		window      dateWindow
-	}
 	slots := make([]slot, 0, totalPosts)
-	for pi := range sortedPhases {
+	for pi := range phases {
 		if phasePosts[pi] == 0 {
 			continue
 		}
-		platCounts := evenSplit(phasePosts[pi], len(platforms))
-		for pli := range platforms {
-			for k := 0; k < platCounts[pli]; k++ {
-				slots = append(slots, slot{
-					phaseIdx:    pi,
-					platformIdx: pli,
-					window:      phaseWindows[pi],
-				})
+		for pli, n := range evenSplit(phasePosts[pi], len(platforms)) {
+			for range n {
+				slots = append(slots, slot{phaseIdx: pi, platformIdx: pli, window: phaseWindows[pi]})
 			}
 		}
 	}
+	return slots
+}
 
-	// Chunk into batches of K, preserving slot order so phase/date locality
-	// is naturally preserved within a batch wherever possible.
-	specs := make([]batchSpec, 0, (len(slots)+maxPostsPerBatch-1)/maxPostsPerBatch)
-	for i := 0; i < len(slots); i += maxPostsPerBatch {
-		end := min(i+maxPostsPerBatch, len(slots))
-		chunk := slots[i:end]
-
-		phaseAgg := map[int]int{}
-		platAgg := map[int]int{}
-		earliest := chunk[0].window.Start
-		latest := chunk[0].window.End
-		for _, s := range chunk {
-			phaseAgg[s.phaseIdx]++
-			platAgg[s.platformIdx]++
-			if s.window.Start < earliest {
-				earliest = s.window.Start
-			}
-			if s.window.End > latest {
-				latest = s.window.End
-			}
-		}
-
-		// Render phase / platform counts in the same order as the
-		// originals so the prompt is stable run-to-run.
-		var pcs []phaseCount
-		for pi, ph := range sortedPhases {
-			if c := phaseAgg[pi]; c > 0 {
-				pcs = append(pcs, phaseCount{
-					PhaseID:   ph.ID,
-					PhaseName: ph.Name,
-					Sequence:  ph.Sequence,
-					Count:     c,
-				})
-			}
-		}
-		var plcs []platformCount
-		for pli, pl := range platforms {
-			if c := platAgg[pli]; c > 0 {
-				plcs = append(plcs, platformCount{
-					PlatformID:   pl.ID,
-					PlatformName: pl.Name,
-					Count:        c,
-				})
-			}
-		}
-
-		specs = append(specs, batchSpec{
-			Index:            len(specs),
-			GlobalStartIndex: i,
-			PostCount:        len(chunk),
-			PhaseCounts:      pcs,
-			PlatformCounts:   plcs,
-			DateWindow:       dateWindow{Start: earliest, End: latest},
-		})
+// specForChunk aggregates a non-empty run of slots into a batch spec whose
+// window is the union of the slots' windows. Counts are listed in phase and
+// platform order so the prompt is stable run-to-run.
+func specForChunk(chunk []slot, phases []resolvedPhase, platforms []resolvedPlatform) batchSpec {
+	phaseAgg := map[int]int{}
+	platAgg := map[int]int{}
+	window := chunk[0].window
+	for _, s := range chunk {
+		phaseAgg[s.phaseIdx]++
+		platAgg[s.platformIdx]++
+		window.Start = min(window.Start, s.window.Start)
+		window.End = max(window.End, s.window.End)
 	}
-	return specs
+
+	var pcs []phaseCount
+	for pi, ph := range phases {
+		if c := phaseAgg[pi]; c > 0 {
+			pcs = append(pcs, phaseCount{PhaseID: ph.ID, PhaseName: ph.Name, Sequence: ph.Sequence, Count: c})
+		}
+	}
+	var plcs []platformCount
+	for pli, pl := range platforms {
+		if c := platAgg[pli]; c > 0 {
+			plcs = append(plcs, platformCount{PlatformID: pl.ID, PlatformName: pl.Name, Count: c})
+		}
+	}
+	return batchSpec{
+		PostCount:      len(chunk),
+		PhaseCounts:    pcs,
+		PlatformCounts: plcs,
+		DateWindow:     window,
+	}
 }
 
 // evenSplit distributes total into n buckets as evenly as possible, giving the

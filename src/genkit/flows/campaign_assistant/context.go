@@ -1,11 +1,11 @@
 package campaign_assistant
 
 import (
-	"bytes"
 	"text/template"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 )
 
 // assistantContext holds the rendered prompts ready for the model call.
@@ -83,21 +83,13 @@ func assembleContext(campaign *models.Campaign, brandBlock string, today time.Ti
 		Phases:         phases,
 	}
 
-	systemPrompt, err := renderTemplate(systemTmpl, data)
+	systemPrompt, err := flowkit.RenderTemplate(systemTmpl, data)
 	if err != nil {
 		return nil, err
 	}
-	contextBlock, err := renderTemplate(contextTmpl, data)
+	contextBlock, err := flowkit.RenderTemplate(contextTmpl, data)
 	if err != nil {
 		return nil, err
 	}
 	return &assistantContext{SystemPrompt: systemPrompt, ContextBlock: contextBlock}, nil
-}
-
-func renderTemplate(tmpl *template.Template, data any) (string, error) {
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
 }

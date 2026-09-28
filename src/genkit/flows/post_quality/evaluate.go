@@ -13,6 +13,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -112,6 +113,13 @@ func evaluateDimension(
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
 	modelName := mc.Ref
 	userPrompt := prompts.user + dimensionInstruction(label, cfg.SuggestionCap)
+	u := flowkit.Usage{
+		Recorder:  cfg.Recorder,
+		Model:     mc,
+		Feature:   "post_quality",
+		Component: "genkit.post_quality",
+		Attrs:     []any{"dimension", label},
+	}
 
 	var lastErr error
 	for attempt := range 2 {
@@ -133,13 +141,7 @@ func evaluateDimension(
 			ai.WithPrompt("%s", userPrompt),
 			cfg.Provider.CallConfig(maxTokens),
 		)
-		if resp != nil && resp.FinishReason == ai.FinishReasonLength {
-			var outputTokens int64
-			if resp.Usage != nil {
-				outputTokens = int64(resp.Usage.OutputTokens)
-			}
-			slog.WarnContext(ctx, "response truncated at max tokens", logging.AttrComponent, "genkit.post_quality", "dimension", label, "output_tokens", outputTokens, "cap", maxTokens)
-		}
+		u.WarnIfTruncated(ctx, resp, maxTokens)
 		if err != nil {
 			lastErr = fmt.Errorf("model call: %w", err)
 			slog.ErrorContext(ctx, "attempt failed", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1, logging.AttrError, lastErr)
@@ -147,7 +149,7 @@ func evaluateDimension(
 		}
 		// Record every completed call (one per dimension, plus any empty-rationale
 		// retry that still consumed tokens). Nil recorder = no-op.
-		cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_quality", resp)
+		u.Record(ctx, resp)
 		if strings.TrimSpace(out.Rationale) == "" {
 			lastErr = fmt.Errorf("empty rationale")
 			slog.WarnContext(ctx, "attempt returned empty rationale", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1)

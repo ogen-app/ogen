@@ -13,6 +13,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -58,7 +59,7 @@ func InitPostAssistant(g *genkit.Genkit, cfg PostAssistantFlowConfig, repos Post
 	var writerInstructions string
 	if cfg.PlannerEnabled {
 		activeSystemTmpl = plannerTmpl
-		wi, err := renderTemplate(writerTmpl, contextTemplateData{})
+		wi, err := flowkit.RenderTemplate(writerTmpl, contextTemplateData{})
 		if err != nil {
 			return fmt.Errorf("render writer instructions: %w", err)
 		}

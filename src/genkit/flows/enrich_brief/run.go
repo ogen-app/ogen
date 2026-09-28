@@ -1,6 +1,7 @@
 package enrich_brief
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -13,13 +14,25 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
+	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
+const logComponent = "genkit.enrich_brief"
+
 // defaultMaxOutputTokens caps a single brief generation. A brief is well
 // under this; the cap is just a truncation guard.
 const defaultMaxOutputTokens int64 = 32768
+
+// deltaEvents maps each streamed brief field to its preview event.
+var deltaEvents = map[string]SSEEventKind{
+	"description":    SSEEventDescriptionDelta,
+	"targetPersona":  SSEEventPersonaDelta,
+	"keyMessages":    SSEEventMessagesDelta,
+	"toneGuidelines": SSEEventToneDelta,
+}
 
 func runEnrichBrief(
 	ctx context.Context,
@@ -31,21 +44,44 @@ func runEnrichBrief(
 	onEvent OnEventFunc,
 ) (*EnrichBriefResponse, error) {
 	start := time.Now()
-	// Log the instruction length, not its content — it is user-provided
-	// free text and has no place in operational logs.
-	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "instruction_len", len(req.Instruction))
+	// The instruction is user free text, so only its length is logged.
+	slog.InfoContext(ctx, "starting", logging.AttrComponent, logComponent, "campaign_id", req.CampaignID, "instruction_len", len(req.Instruction))
 
-	// Enforcement gate: in enforce mode, block before any provider
-	// call when the tenant is already over a cap. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
 	}
+	campaign, err := loadCampaign(ctx, repos, req.CampaignID)
+	if err != nil {
+		return nil, err
+	}
+	bctx, err := assembleContextCached(ctx, campaign, req.Instruction, repos, systemTmpl, contextTmpl)
+	if err != nil {
+		return nil, fmt.Errorf("assemble context: %w", err)
+	}
+	emit(onEvent, SSEEventStep, StepEventPayload{Step: "buildContext", Status: "done"})
 
-	// ── Validate ─────────────────────────────────────────────────────────────
-	if req.CampaignID == "" {
+	scanner, err := generateBrief(ctx, g, cfg, req.CampaignID, bctx, onEvent, start)
+	if err != nil {
+		return nil, err
+	}
+	emit(onEvent, SSEEventStep, StepEventPayload{Step: "generate", Status: "done"})
+
+	result, err := decodeBrief(ctx, scanner, req.CampaignID)
+	if err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "done", logging.AttrComponent, logComponent, "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds())
+
+	// The caller emits the canonical `complete` event from the returned value;
+	// the *_delta events are preview-only.
+	return result, nil
+}
+
+func loadCampaign(ctx context.Context, repos EnrichBriefRepos, campaignID string) (*models.Campaign, error) {
+	if campaignID == "" {
 		return nil, &ValidationError{Msg: "campaign id is required"}
 	}
-	campaign, err := repos.Campaigns.GetByID(ctx, req.CampaignID)
+	campaign, err := repos.Campaigns.GetByID(ctx, campaignID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, &ValidationError{Msg: "campaign not found"}
@@ -55,118 +91,68 @@ func runEnrichBrief(
 	if campaign.CampaignTypeID == "" {
 		return nil, &ValidationError{Msg: "campaign type is required to enrich the brief"}
 	}
+	return campaign, nil
+}
 
-	// ── Build context (cached) ───────────────────────────────────────────────
-	bctx, err := assembleContextCached(ctx, campaign, req.Instruction, repos, systemTmpl, contextTmpl)
-	if err != nil {
-		return nil, fmt.Errorf("assemble context: %w", err)
-	}
-	emit(onEvent, SSEEventStep, StepEventPayload{Step: "buildContext", Status: "done"})
-
-	maxTokens := cfg.MaxOutputTokens
-	if maxTokens == 0 {
-		maxTokens = defaultMaxOutputTokens
-	}
+// generateBrief streams the brief, previewing each field as it arrives. It
+// avoids ai.WithOutputType because genkit's strict validator drops the whole
+// response on common JSON drift; the returned scanner parses it tolerantly.
+func generateBrief(
+	ctx context.Context,
+	g *genkit.Genkit,
+	cfg EnrichBriefFlowConfig,
+	campaignID string,
+	bctx *briefContext,
+	onEvent OnEventFunc,
+	start time.Time,
+) (*jsonstream.Scanner, error) {
+	maxTokens := cmp.Or(cfg.MaxOutputTokens, defaultMaxOutputTokens)
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowEnrichBrief, modelconfig.SlotMain)
-	modelName := mc.Ref
-
-	// Watch the four brief fields so the client previews each one as it
-	// streams. The scanner decodes JSON escapes as they arrive, so the
-	// client never sees raw \n / \uXXXX.
 	scanner := jsonstream.New(
 		[]string{"description", "targetPersona", "keyMessages", "toneGuidelines"},
 		func(key, delta string) {
-			switch key {
-			case "description":
-				emit(onEvent, SSEEventDescriptionDelta, DeltaEventPayload{Delta: delta})
-			case "targetPersona":
-				emit(onEvent, SSEEventPersonaDelta, DeltaEventPayload{Delta: delta})
-			case "keyMessages":
-				emit(onEvent, SSEEventMessagesDelta, DeltaEventPayload{Delta: delta})
-			case "toneGuidelines":
-				emit(onEvent, SSEEventToneDelta, DeltaEventPayload{Delta: delta})
+			if kind, ok := deltaEvents[key]; ok {
+				emit(onEvent, kind, DeltaEventPayload{Delta: delta})
 			}
 		},
 	)
 
-	streamCb := func(_ context.Context, chunk *ai.ModelResponseChunk) error {
-		// Skip aggregated frames — genkit replays the whole response in a
-		// final aggregated chunk, which would double-feed the scanner.
-		if chunk == nil || chunk.Aggregated {
-			return nil
-		}
-		for _, part := range chunk.Content {
-			if part.IsText() {
-				scanner.Push(part.Text)
-			}
-		}
-		return nil
-	}
-
-	// ── Generate ─────────────────────────────────────────────────────────────
-	// No ai.WithOutputType: genkit's strict post-generation validator drops
-	// the whole response on common Claude JSON drift (trailing commas, stray
-	// prose, etc.). We parse via the tolerant scanner below instead. Format
-	// discipline is enforced by the prompt.
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName(modelName),
+		ai.WithModelName(mc.Ref),
 		ai.WithSystem(bctx.SystemPrompt),
 		ai.WithPrompt(bctx.ContextBlock),
-		ai.WithStreaming(streamCb),
+		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: scanner.Push})),
 		cfg.Provider.CallConfig(maxTokens),
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
+		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "campaign_id", campaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
 		return nil, &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
 	}
+	flowkit.Usage{
+		Recorder:  cfg.Recorder,
+		Model:     mc,
+		Feature:   "enrich_brief",
+		Component: logComponent,
+		Attrs:     []any{"campaign_id", campaignID},
+	}.Finish(ctx, resp, maxTokens)
+	return scanner, nil
+}
 
-	if resp.FinishReason == ai.FinishReasonLength {
-		var outputTokens int64
-		if resp.Usage != nil {
-			outputTokens = int64(resp.Usage.OutputTokens)
-		}
-		slog.WarnContext(ctx, "response truncated at max tokens", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "output_tokens", outputTokens, "cap", maxTokens)
-	}
-	if resp.Usage != nil {
-		slog.InfoContext(ctx, "tokens", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens, "total", resp.Usage.InputTokens+resp.Usage.OutputTokens)
-	}
-	cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "enrich_brief", resp)
-	emit(onEvent, SSEEventStep, StepEventPayload{Step: "generate", Status: "done"})
-
-	// ── Assemble response from scanner ───────────────────────────────────────
-	// Values() returns the parsed top-level fields without encoding/json,
-	// bypassing the whole class of Claude JSON-drift bugs. See scanner_test.go
-	// TestValues_* for coverage.
+// decodeBrief reads the brief fields from the scanner. A brief truncated at
+// max_tokens drops its trailing fields first and is still useful, so only a
+// response with every field empty fails.
+func decodeBrief(ctx context.Context, scanner *jsonstream.Scanner, campaignID string) (*EnrichBriefResponse, error) {
 	vals := scanner.Values()
-	result := EnrichBriefResponse{}
-	if s, ok := vals["description"].(string); ok {
-		result.Description = s
-	}
-	if s, ok := vals["targetPersona"].(string); ok {
-		result.TargetPersona = s
-	}
-	if s, ok := vals["keyMessages"].(string); ok {
-		result.KeyMessages = s
-	}
-	if s, ok := vals["toneGuidelines"].(string); ok {
-		result.ToneGuidelines = s
-	}
+	var r EnrichBriefResponse
+	r.Description, _ = vals["description"].(string)
+	r.TargetPersona, _ = vals["targetPersona"].(string)
+	r.KeyMessages, _ = vals["keyMessages"].(string)
+	r.ToneGuidelines, _ = vals["toneGuidelines"].(string)
 
-	// Graceful degradation: a brief truncated at max_tokens drops its trailing
-	// fields first, so a partial brief is still useful. Fail only when the
-	// response is genuinely unusable — every field empty.
-	if result.Description == "" && result.TargetPersona == "" &&
-		result.KeyMessages == "" && result.ToneGuidelines == "" {
+	if r.Description == "" && r.TargetPersona == "" && r.KeyMessages == "" && r.ToneGuidelines == "" {
 		raw := scanner.FullText()
-		slog.ErrorContext(ctx, "scanner found no usable fields", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "len", len(raw), "raw_preview", logging.Preview(raw, 500))
+		slog.ErrorContext(ctx, "scanner found no usable fields", logging.AttrComponent, logComponent, "campaign_id", campaignID, "len", len(raw), "raw_preview", logging.Preview(raw, 500))
 		return nil, &AIError{Msg: "model response did not contain the expected fields"}
 	}
-
-	slog.InfoContext(ctx, "done", logging.AttrComponent, "genkit.enrich_brief", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds())
-
-	// The caller emits the single canonical `complete` event from this
-	// returned value (mirroring content_plan's GenerateDraft handler). The
-	// per-field *_delta events above are preview-only; the client treats
-	// `complete` as the source of truth.
-	return &result, nil
+	return &r, nil
 }

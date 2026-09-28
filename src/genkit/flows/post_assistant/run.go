@@ -1,6 +1,7 @@
 package post_assistant
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -18,20 +19,61 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
+const logComponent = "genkit.post_assistant"
+
+// Action values of PostAssistantResponse.Action.
+const (
+	actionEdited    = "edited"
+	actionDeclined  = "declined"
+	actionCloned    = "cloned"
+	actionRestored  = "restored"
+	actionScheduled = "scheduled"
+	actionNoted     = "noted"
+)
+
+// Envelope keys the model emits.
+const (
+	keyExplanation    = "explanation"
+	keyUpdatedContent = "updatedContent"
+)
+
 // isPostRemovedFKViolation reports whether err is a Postgres foreign-key
-// violation (SQLSTATE 23503) on a post_id constraint — i.e. an insert whose
-// post_id no longer matches a posts row. Every post-referencing write in this
-// flow (post_assistant_messages, post_versions) points at posts(id) through a
-// *_post_id_fkey constraint, so a concurrent post deletion trips exactly these.
+// violation (SQLSTATE 23503) on a post_id constraint. Every post-referencing
+// write in this flow goes through a *_post_id_fkey constraint, so a
+// concurrent post deletion trips exactly these.
 func isPostRemovedFKViolation(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	return ok &&
 		pgErr.Code == "23503" &&
 		strings.HasSuffix(pgErr.ConstraintName, "_post_id_fkey")
+}
+
+// flowPrompts are the templates and static prompt text a turn runs with.
+type flowPrompts struct {
+	system, context    *template.Template
+	writerInstructions string
+}
+
+// turn carries one assistant request through its phases.
+type turn struct {
+	g       *genkit.Genkit
+	req     PostAssistantRequest
+	cfg     PostAssistantFlowConfig
+	repos   PostAssistantRepos
+	onEvent OnEventFunc
+	start   time.Time
+
+	post    *models.Post
+	actx    *assistantContext
+	history []*ai.Message
+	st      *requestState
+	scanner *jsonstream.Scanner
+	result  PostAssistantResponse
 }
 
 func runPostAssistant(
@@ -45,560 +87,481 @@ func runPostAssistant(
 	tools *toolSet,
 	onEvent OnEventFunc,
 ) (out *PostAssistantResponse, retErr error) {
-	start := time.Now()
-	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "instruction_len", len(req.Instruction))
+	t := &turn{g: g, req: req, cfg: cfg, repos: repos, onEvent: onEvent, start: time.Now()}
+	slog.InfoContext(ctx, "starting", logging.AttrComponent, logComponent, "post_id", req.PostID, "instruction_len", len(req.Instruction))
 
-	// Enforcement gate: block before any provider call when the
-	// tenant is already over a cap in enforce mode. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
 	}
-
-	// finaliseOwnerID / finaliseTenantID are captured once the post is loaded so
-	// the deferred finalisation event + durable notification can be scoped to the
-	// post owner and tenant. Empty before load → finalisation for very-early
-	// failures is skipped.
-	var finaliseOwnerID, finaliseTenantID string
-
+	// Finalisation is scoped to the post owner, so failures before the post
+	// loads are not announced.
 	defer func() {
-		if finaliseOwnerID == "" {
+		if t.post == nil || t.post.CreatedBy == "" {
 			return
 		}
-		publishAssistantFinalised(cfg.Hub, req.PostID, finaliseOwnerID, out, retErr)
-		// A durable assistant finished/failed row for the initiator.
-		notifyAssistantFinalised(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.PostID, out, retErr)
+		publishAssistantFinalised(cfg.Hub, req.PostID, t.post.CreatedBy, out, retErr)
+		notifyAssistantFinalised(cfg.Notifier, t.post.TenantID, t.post.CreatedBy, req.PostID, out, retErr)
 	}()
 
-	if req.Instruction == "" {
-		return nil, &ValidationError{Msg: "instruction is required"}
+	ctx, err := t.prepare(ctx, flowPrompts{system: systemTmpl, context: contextTmpl, writerInstructions: writerInstructions})
+	if err != nil {
+		return nil, err
+	}
+	if err := t.callModel(ctx, t.loopParams(tools)); err != nil {
+		return nil, err
+	}
+	t.decodeEnvelope()
+	t.applyToolOutcomes()
+	if err := t.reconcile(ctx); err != nil {
+		return nil, err
+	}
+	if err := t.persistMessages(ctx); err != nil {
+		return nil, err
+	}
+	if err := t.commitEdit(ctx); err != nil {
+		return nil, err
 	}
 
-	// ── Load post ────────────────────────────────────────────────────────────
-	post, err := repos.Posts.GetByID(ctx, req.PostID)
+	slog.InfoContext(ctx, "done", logging.AttrComponent, logComponent, "post_id", req.PostID, "duration_ms", time.Since(t.start).Milliseconds(), "action", t.result.Action, "save_version", t.result.SaveVersion)
+	t.emitCompletion()
+	return &t.result, nil
+}
+
+// prepare validates the request, loads the post and its context, and returns
+// ctx carrying the per-request tool state.
+func (t *turn) prepare(ctx context.Context, p flowPrompts) (context.Context, error) {
+	if t.req.Instruction == "" {
+		return ctx, &ValidationError{Msg: "instruction is required"}
+	}
+	post, err := t.repos.Posts.GetByID(ctx, t.req.PostID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, &ValidationError{Msg: "post not found"}
+			return ctx, &ValidationError{Msg: "post not found"}
 		}
-		return nil, fmt.Errorf("load post: %w", err)
+		return ctx, fmt.Errorf("load post: %w", err)
 	}
-	finaliseOwnerID = post.CreatedBy
-	finaliseTenantID = post.TenantID
+	t.post = post
 
-	// ── Ensure initial version ───────────────────────────────────────────────
-	count, err := repos.Versions.CountByPostID(ctx, req.PostID)
+	if err := t.ensureInitialVersion(ctx); err != nil {
+		return ctx, err
+	}
+	if err := t.loadContextAndHistory(ctx, p); err != nil {
+		return ctx, err
+	}
+	t.st = t.newRequestState(ctx, p.writerInstructions)
+	return withRequestState(ctx, t.st), nil
+}
+
+// ensureInitialVersion snapshots the user's content as version 1 before the
+// assistant's first change, so it can always be restored.
+func (t *turn) ensureInitialVersion(ctx context.Context) error {
+	count, err := t.repos.Versions.CountByPostID(ctx, t.req.PostID)
 	if err != nil {
-		return nil, fmt.Errorf("count versions: %w", err)
+		return fmt.Errorf("count versions: %w", err)
 	}
-	if count == 0 && post.Content != "" {
-		id, err := models.NewID()
-		if err != nil {
-			return nil, err
-		}
-		if err := repos.Versions.Create(ctx, &models.PostVersion{
-			ID:            id,
-			PostID:        req.PostID,
-			VersionNumber: 1,
-			Content:       post.Content,
-			Note:          "Initial version",
-			Creator:       "user",
-		}); err != nil {
-			if isPostRemovedFKViolation(err) {
-				slog.WarnContext(ctx, "post deleted mid-turn; discarding assistant result", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
-				return nil, ErrPostRemovedDuringTurn
-			}
-			return nil, fmt.Errorf("create initial version: %w", err)
-		}
-		slog.InfoContext(ctx, "created initial version snapshot", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
+	if count != 0 || t.post.Content == "" {
+		return nil
 	}
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	if err := t.repos.Versions.Create(ctx, &models.PostVersion{
+		ID:            id,
+		PostID:        t.req.PostID,
+		VersionNumber: 1,
+		Content:       t.post.Content,
+		Note:          "Initial version",
+		Creator:       models.PostVersionCreatorUser,
+	}); err != nil {
+		return t.writeErr(ctx, err, isPostRemovedFKViolation(err), "create initial version")
+	}
+	slog.InfoContext(ctx, "created initial version snapshot", logging.AttrComponent, logComponent, "post_id", t.req.PostID)
+	return nil
+}
 
-	// ── Assemble context + load history in parallel ─────────────────────────
-	var actx *assistantContext
-	var ctxErr error
-	var history []*ai.Message
-	var histErr error
-
+func (t *turn) loadContextAndHistory(ctx context.Context, p flowPrompts) error {
+	var ctxErr, histErr error
+	var msgs []models.PostAssistantMessage
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		actx, ctxErr = assembleContextCached(ctx, post, repos, systemTmpl, contextTmpl)
+		t.actx, ctxErr = assembleContextCached(ctx, t.post, t.repos, p.system, p.context)
 	})
 	wg.Go(func() {
-		msgs, err := repos.Messages.ListRecentByPostID(ctx, req.PostID, 10)
-		if err != nil {
-			histErr = err
-			return
-		}
-		history = make([]*ai.Message, 0, len(msgs))
-		for _, m := range msgs {
-			switch m.Role {
-			case "user":
-				history = append(history, ai.NewUserTextMessage(m.Content))
-			case "model":
-				history = append(history, ai.NewModelTextMessage(m.Content))
-			}
-		}
+		msgs, histErr = t.repos.Messages.ListRecentByPostID(ctx, t.req.PostID, 10)
 	})
 	wg.Wait()
 
 	if ctxErr != nil {
-		return nil, fmt.Errorf("assemble context: %w", ctxErr)
+		return fmt.Errorf("assemble context: %w", ctxErr)
 	}
 	if histErr != nil {
-		return nil, fmt.Errorf("load history: %w", histErr)
+		return fmt.Errorf("load history: %w", histErr)
 	}
+	t.history = flowkit.History(msgs, func(m models.PostAssistantMessage) (string, string) { return m.Role, m.Content })
+	return nil
+}
 
-	// ── Inject per-request state for tools ───────────────────────────────────
-	// Platforms power the clonePost tool's "Threads" → ID resolution.
-	// Best-effort: a load failure just disables cross-platform clones.
-	var platforms []models.Platform
-	if repos.Platforms != nil {
-		if ps, perr := repos.Platforms.List(ctx); perr == nil {
-			platforms = ps
-		} else {
-			slog.WarnContext(ctx, "load platforms failed, clone name-resolution degraded", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, logging.AttrError, perr)
-		}
-	}
+func (t *turn) newRequestState(ctx context.Context, writerInstructions string) *requestState {
 	st := &requestState{
-		postID:      req.PostID,
-		postStatus:  post.Status,
-		assetIDs:    post.UsedAssetIDs,
-		repos:       repos,
-		embedder:    cfg.Embedder,
-		cloneSvc:    cfg.CloneService,
-		restoreSvc:  cfg.RestoreService,
-		scheduleSvc: cfg.ScheduleService,
-		noteSvc:     cfg.NoteService,
-		actor:       post.CreatedBy,
-		platforms:   platforms,
-		onEvent:     onEvent,
-		// Writer support: the editPost tool + clonePost adaptation
-		// run a nested Sonnet generation off this state.
-		g:               g,
-		provider:        cfg.Provider,
-		recorder:        cfg.Recorder,
-		writerMaxTokens: cfg.MaxOutputTokens,
+		postID:          t.req.PostID,
+		postStatus:      t.post.Status,
+		assetIDs:        t.post.UsedAssetIDs,
+		repos:           t.repos,
+		embedder:        t.cfg.Embedder,
+		cloneSvc:        t.cfg.CloneService,
+		restoreSvc:      t.cfg.RestoreService,
+		scheduleSvc:     t.cfg.ScheduleService,
+		noteSvc:         t.cfg.NoteService,
+		actor:           t.post.CreatedBy,
+		platforms:       t.loadPlatforms(ctx),
+		onEvent:         t.onEvent,
+		g:               t.g,
+		provider:        t.cfg.Provider,
+		recorder:        t.cfg.Recorder,
+		writerMaxTokens: t.cfg.MaxOutputTokens,
 	}
-	// The writer's system prompt is the copywriter instructions plus the same
-	// campaign/post context block the planner sees; only assembled in the
-	// hybrid path (writerSystem stays empty in the legacy path, which disables
-	// the writer helpers). Injecting the context here keeps the writer aware of
-	// the campaign voice + current content without a second DB read.
-	if cfg.PlannerEnabled {
-		st.writerSystem = writerInstructions + "\n\n" + actx.ContextBlock
+	// The writer sees the same context block as the planner, so it knows the
+	// campaign voice and current content without a second read. An empty
+	// writerSystem (legacy path) disables the writer helpers.
+	if t.cfg.PlannerEnabled {
+		st.writerSystem = writerInstructions + "\n\n" + t.actx.ContextBlock
 	}
-	ctx = withRequestState(ctx, st)
+	return st
+}
 
-	// The scheduling context (current time + workspace timezone,
-	// the post's status, its auto/manual routing, and a readiness summary)
-	// changes every turn — current time most of all — so it is injected
-	// fresh into the user turn rather than the cached system/context block,
-	// preserving Anthropic prompt caching of the stable prefix.
-	prompt := req.Instruction
-	if cfg.ScheduleService != nil {
-		if sb := buildSchedulingContext(ctx, post, repos); sb != "" {
-			prompt = sb + "\n\n---\n\nUser instruction: " + req.Instruction
-		}
-	}
-
-	// ── Call model ───────────────────────────────────────────────────────────
-	// In the hybrid path the orchestration loop routes on the cheap
-	// planning model and delegates all copywriting to the Sonnet editPost
-	// write-tool; the loop itself only emits a short envelope, so it takes a
-	// small output cap. The legacy path keeps the single generation-model call
-	// that writes the full post inline, so it needs the generous output budget.
-	planner := cfg.PlannerEnabled
-	// In the hybrid path the loop routes on the planner slot and delegates
-	// copywriting to the writer slot (the editPost tool); in the legacy path the
-	// single loop call does the writing itself, so it maps to the writer slot.
-	loopSlot := modelconfig.SlotWriter
-	loopMaxTokens := cfg.MaxOutputTokens
-	if loopMaxTokens == 0 {
-		loopMaxTokens = 64000
-	}
-	if planner {
-		loopSlot = modelconfig.SlotPlanner
-		loopMaxTokens = cfg.PlannerMaxOutputTokens
-		if loopMaxTokens == 0 {
-			loopMaxTokens = 8192
-		}
-	}
-	maxTurns := cfg.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = 8
-	}
-
-	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, loopSlot)
-	modelName := mc.Ref
-
-	// System + context block forms the stable cached prefix.
-	systemBlock := actx.SystemPrompt + "\n\n" + actx.ContextBlock
-
-	// Set up an incremental JSON scanner that watches the string-valued fields
-	// whose deltas we surface to the client. The scanner decodes JSON escapes
-	// as they arrive, so the client never sees raw \n / \uXXXX. In the hybrid
-	// path the planner never emits updatedContent — the editPost writer sub-call
-	// streams content_delta itself — so only explanation is watched. (Values()
-	// still returns every top-level field for response assembly regardless.)
-	watchFields := []string{"explanation", "updatedContent"}
-	if planner {
-		watchFields = []string{"explanation"}
-	}
-	scanner := jsonstream.New(
-		watchFields,
-		func(key, delta string) {
-			switch key {
-			case "explanation":
-				emit(onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
-			case "updatedContent":
-				emit(onEvent, SSEEventContentDelta, DeltaEventPayload{Delta: delta})
-			}
-		},
-	)
-
-	// Tool calls arrive in many partial streaming fragments as the model
-	// builds the input JSON; we only surface the final complete request.
-	// Tool responses are small and emitted once. Both are deduped by Ref
-	// since genkit may replay the same part in later chunks.
-	emittedToolCalls := map[string]bool{}
-	emittedToolResults := map[string]bool{}
-
-	streamCb := func(_ context.Context, chunk *ai.ModelResponseChunk) error {
-		if chunk == nil || chunk.Aggregated {
-			return nil
-		}
-		for _, part := range chunk.Content {
-			switch {
-			case part.IsText():
-				scanner.Push(part.Text)
-			case part.IsToolRequest():
-				tr := part.ToolRequest
-				if tr == nil || tr.Partial {
-					continue
-				}
-				if emittedToolCalls[tr.Ref] {
-					continue
-				}
-				emittedToolCalls[tr.Ref] = true
-				emit(onEvent, SSEEventToolCall, ToolCallEventPayload{
-					Name:  tr.Name,
-					Input: tr.Input,
-					Ref:   tr.Ref,
-				})
-			case part.IsToolResponse():
-				tr := part.ToolResponse
-				if tr == nil || emittedToolResults[tr.Ref] {
-					continue
-				}
-				emittedToolResults[tr.Ref] = true
-				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{
-					Name: tr.Name,
-					Ref:  tr.Ref,
-					OK:   true,
-				})
-			}
-		}
+// loadPlatforms backs the clonePost tool's platform-name resolution. It is
+// best-effort: a failure only disables cross-platform clones.
+func (t *turn) loadPlatforms(ctx context.Context) []models.Platform {
+	if t.repos.Platforms == nil {
 		return nil
 	}
-
-	// Use streaming mode — the Anthropic API requires it for requests
-	// that may involve tool calls (which can exceed the 10-minute timeout
-	// for non-streaming requests). The streaming callback fans chunks out
-	// as SSE events for the UI.
-	// NB: we deliberately do NOT pass ai.WithOutputType — genkit's
-	// post-generation schema validator parses the raw text strictly and
-	// returns (nil, err) on any blemish (trailing comma, stray char, etc.),
-	// discarding the full response. Dropping the constraint lets us do the
-	// parse ourselves with a tolerant preprocessor below. Format discipline
-	// is enforced via the prompt, which is already explicit.
-	// Tool set: the editPost write-tool is attached only in the hybrid path;
-	// the legacy loop writes content inline and never routes through it.
-	toolRefs := []ai.ToolRef{tools.listAssets, tools.getAssetChunks, tools.searchAssetChunks, tools.getCurrentContent, tools.clonePost, tools.restoreVersion, tools.schedulePost, tools.createNote}
-	if planner {
-		toolRefs = append(toolRefs, tools.editPost)
+	ps, err := t.repos.Platforms.List(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "load platforms failed, clone name-resolution degraded", logging.AttrComponent, logComponent, "post_id", t.req.PostID, logging.AttrError, err)
+		return nil
 	}
+	return ps
+}
 
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName(modelName),
-		ai.WithSystem(systemBlock),
-		ai.WithMessages(history...),
+// loopParams configures the orchestration call. In the hybrid path the loop
+// routes on the planner slot with a small output cap and delegates writing
+// to the editPost tool; the legacy path writes the post inline on the writer
+// slot and needs the full output budget.
+type loopParams struct {
+	slot      string
+	maxTokens int64
+	maxTurns  int
+	tools     []ai.ToolRef
+	// watch lists the envelope fields streamed as deltas. The planner never
+	// emits updatedContent; the editPost writer streams content itself.
+	watch []string
+}
+
+func (t *turn) loopParams(tools *toolSet) loopParams {
+	p := loopParams{
+		slot:      modelconfig.SlotWriter,
+		maxTokens: cmp.Or(t.cfg.MaxOutputTokens, 64000),
+		maxTurns:  cmp.Or(t.cfg.MaxTurns, 8),
+		tools:     []ai.ToolRef{tools.listAssets, tools.getAssetChunks, tools.searchAssetChunks, tools.getCurrentContent, tools.clonePost, tools.restoreVersion, tools.schedulePost, tools.createNote},
+		watch:     []string{keyExplanation, keyUpdatedContent},
+	}
+	if t.cfg.PlannerEnabled {
+		p.slot = modelconfig.SlotPlanner
+		p.maxTokens = cmp.Or(t.cfg.PlannerMaxOutputTokens, 8192)
+		p.tools = append(p.tools, tools.editPost)
+		p.watch = []string{keyExplanation}
+	}
+	return p
+}
+
+// schedulingPrompt prefixes the instruction with the scheduling context
+// (current time, timezone, status, readiness). It changes every turn, so it
+// goes into the user turn rather than the cached system prefix.
+func (t *turn) schedulingPrompt(ctx context.Context) string {
+	if t.cfg.ScheduleService == nil {
+		return t.req.Instruction
+	}
+	if sb := buildSchedulingContext(ctx, t.post, t.repos); sb != "" {
+		return sb + "\n\n---\n\nUser instruction: " + t.req.Instruction
+	}
+	return t.req.Instruction
+}
+
+// callModel runs the tool loop, streaming envelope deltas and tool events.
+// Streaming is required by Anthropic for long tool-using requests, and
+// ai.WithOutputType is deliberately not used: genkit's strict schema
+// validator discards the whole response on minor JSON drift, so the
+// envelope is parsed tolerantly by the scanner instead.
+func (t *turn) callModel(ctx context.Context, p loopParams) error {
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, p.slot)
+	t.scanner = jsonstream.New(p.watch, t.emitDelta)
+	prompt := t.schedulingPrompt(ctx)
+
+	resp, err := genkit.Generate(ctx, t.g,
+		ai.WithModelName(mc.Ref),
+		ai.WithSystem(t.actx.SystemPrompt+"\n\n"+t.actx.ContextBlock),
+		ai.WithMessages(t.history...),
 		ai.WithPrompt(prompt),
-		ai.WithTools(toolRefs...),
-		ai.WithMaxTurns(maxTurns),
-		ai.WithStreaming(streamCb),
-		cfg.Provider.CallConfig(loopMaxTokens),
+		ai.WithTools(p.tools...),
+		ai.WithMaxTurns(p.maxTurns),
+		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
+		t.cfg.Provider.CallConfig(p.maxTokens),
 	)
 	if err != nil {
-		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
-		return nil, &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
+		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "post_id", t.req.PostID, "duration_ms", time.Since(t.start).Milliseconds(), logging.AttrError, err)
+		return &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
 	}
+	flowkit.Usage{
+		Recorder:  t.cfg.Recorder,
+		Model:     mc,
+		Feature:   "post_assistant",
+		Component: logComponent,
+		Attrs:     []any{"post_id", t.req.PostID},
+	}.Finish(ctx, resp, p.maxTokens)
+	return nil
+}
 
-	// Deterministic truncation signal: when Anthropic's stop_reason is
-	// "max_tokens", genkit surfaces it as FinishReasonLength. Log loudly
-	// so the cap can be tuned (env MAX_OUTPUT_TOKENS) before users see
-	// the recovery branches kick in.
-	if resp.FinishReason == ai.FinishReasonLength {
-		var outputTokens int64
-		if resp.Usage != nil {
-			outputTokens = int64(resp.Usage.OutputTokens)
-		}
-		slog.WarnContext(ctx, "response truncated at max tokens", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "output_tokens", outputTokens, "cap", loopMaxTokens)
+func (t *turn) emitDelta(key, delta string) {
+	switch key {
+	case keyExplanation:
+		emit(t.onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
+	case keyUpdatedContent:
+		emit(t.onEvent, SSEEventContentDelta, DeltaEventPayload{Delta: delta})
 	}
+}
 
-	if resp.Usage != nil {
-		slog.InfoContext(ctx, "tokens", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens, "total", resp.Usage.InputTokens+resp.Usage.OutputTokens)
+func (t *turn) streamHandlers() flowkit.StreamHandlers {
+	return flowkit.StreamHandlers{
+		OnText: t.scanner.Push,
+		OnToolCall: func(tr *ai.ToolRequest) {
+			emit(t.onEvent, SSEEventToolCall, ToolCallEventPayload{Name: tr.Name, Input: tr.Input, Ref: tr.Ref})
+		},
+		OnToolResult: func(tr *ai.ToolResponse) {
+			emit(t.onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: true})
+		},
 	}
-	cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant", resp)
+}
 
-	// ── Assemble response from scanner ───────────────────────────────────────
-	// The scanner has been processing every chunk in the streaming callback
-	// above. Its Values() method returns the parsed top-level fields —
-	// strings decoded, literals coerced — without going through
-	// encoding/json. This bypasses the whole class of Claude JSON-drift
-	// bugs (trailing commas, missing separators, preamble prose, literal
-	// newlines inside strings, truncation) that would otherwise hard-fail
-	// the final Unmarshal. See scanner_test.go TestValues_* for coverage.
-	vals := scanner.Values()
-	result := PostAssistantResponse{}
-	if s, ok := vals["explanation"].(string); ok {
-		result.Explanation = s
-	}
-	if s, ok := vals["updatedContent"].(string); ok {
-		result.UpdatedContent = s
-	}
-	if s, ok := vals["action"].(string); ok {
-		result.Action = s
-	}
-	if b, ok := vals["saveVersion"].(bool); ok {
-		result.SaveVersion = b
-	}
-	if s, ok := vals["versionNote"].(string); ok {
-		result.VersionNote = s
-	}
+// decodeEnvelope reads the model's envelope from the scanner's tolerant
+// parse, which survives trailing commas, prose, raw newlines and truncation.
+func (t *turn) decodeEnvelope() {
+	vals := t.scanner.Values()
+	r := &t.result
+	r.Explanation, _ = vals[keyExplanation].(string)
+	r.UpdatedContent, _ = vals[keyUpdatedContent].(string)
+	r.Action, _ = vals["action"].(string)
+	r.SaveVersion, _ = vals["saveVersion"].(bool)
+	r.VersionNote, _ = vals["versionNote"].(string)
+}
 
-	// ── Clone handling ──────────────────────────────────────────────
-	// If the clonePost tool ran this turn, it is the authoritative outcome:
-	// the source post is untouched, action is "cloned", and we attach the
-	// new draft's id. Done before the "no usable fields" guard below so a
-	// terse model reply can't mask a successful clone.
-	if st.cloneResult != nil {
-		result.Action = "cloned"
-		result.UpdatedContent = ""
-		result.SaveVersion = false
-		if result.Explanation == "" {
-			result.Explanation = fmt.Sprintf("Cloned this post into a new draft (#%s).", st.cloneResult.Post.ID)
-		}
-		result.CloneResult = &CloneResultPayload{
-			NewPostID:  st.cloneResult.Post.ID,
-			PlatformID: st.cloneResult.Post.PlatformID,
-			PostType:   st.cloneResult.ResolvedPostType,
-			Adapted:    st.cloneResult.Adapted,
-		}
-	}
+// applyToolOutcomes lets the tools that ran this turn override the model's
+// envelope; their committed results are authoritative. Edit runs before notes
+// so an edit-and-note turn stays "edited".
+func (t *turn) applyToolOutcomes() {
+	t.applyClone()
+	t.applyRestore()
+	t.applySchedule()
+	t.applyEdit()
+	t.applyNotes()
+}
 
-	// ── Restore handling ────────────────────────────────────────────
-	// If the restoreVersion tool ran this turn, it is the authoritative
-	// outcome: the service has already swapped the post content and
-	// appended the version(s), so action is "restored" and we surface the
-	// restored content (for the editor) without re-running the edit path.
-	if st.restoreResult != nil {
-		rr := st.restoreResult
-		result.Action = "restored"
-		result.UpdatedContent = rr.Post.Content
-		result.SaveVersion = false
-		if result.Explanation == "" {
-			if rr.NoOp {
-				result.Explanation = fmt.Sprintf("The post already matches version %d — nothing to restore.", rr.RestoredFromVersion)
-			} else {
-				result.Explanation = fmt.Sprintf("Restored the post to version %d (saved as version %d). Your previous content is kept in the history.", rr.RestoredFromVersion, rr.NewVersionNumber)
-			}
-		}
-		result.RestoreResult = &RestoreResultPayload{
-			RestoredFromVersion: rr.RestoredFromVersion,
-			NewVersionNumber:    rr.NewVersionNumber,
-			NoOp:                rr.NoOp,
-		}
+func (t *turn) applyClone() {
+	cr := t.st.cloneResult
+	if cr == nil {
+		return
 	}
-
-	// ── Schedule handling ───────────────────────────────────────────
-	// If the schedulePost tool committed this turn, it is the authoritative
-	// outcome: the post's status + scheduled_at are persisted by the shared
-	// service, action is "scheduled", and content is untouched.
-	if st.scheduleResult != nil {
-		sr := st.scheduleResult
-		result.Action = "scheduled"
-		result.UpdatedContent = ""
-		result.SaveVersion = false
-		if result.Explanation == "" {
-			mode := "auto-publish"
-			if !sr.AutoPublish {
-				mode = "manual publishing"
-			}
-			result.Explanation = fmt.Sprintf("Scheduled this post for %s (%s).",
-				sr.ScheduledAt.Format("Jan 2, 2006 15:04 MST"), mode)
-		}
-		result.ScheduleResult = &ScheduleResultPayload{
-			ScheduledAt: sr.ScheduledAt.Format(time.RFC3339),
-			Status:      string(sr.Status),
-			AutoPublish: sr.AutoPublish,
-			Promoted:    sr.Promoted,
-		}
+	r := &t.result
+	r.Action = actionCloned
+	r.UpdatedContent = ""
+	r.SaveVersion = false
+	if r.Explanation == "" {
+		r.Explanation = fmt.Sprintf("Cloned this post into a new draft (#%s).", cr.Post.ID)
 	}
-
-	// ── Edit handling ──────────────────────────────────────────────
-	// In the hybrid path the editPost tool ran the Sonnet writer this turn; its
-	// content is authoritative and the planner never emits it. The planner
-	// supplies the metadata (action / saveVersion / versionNote) in its JSON
-	// envelope, already parsed into result above. Runs before the note handling
-	// so an edit-and-note turn is finalised as "edited" with the note attached.
-	if st.editResult != nil {
-		result.Action = "edited"
-		result.UpdatedContent = st.editResult.Content
+	r.CloneResult = &CloneResultPayload{
+		NewPostID:  cr.Post.ID,
+		PlatformID: cr.Post.PlatformID,
+		PostType:   cr.ResolvedPostType,
+		Adapted:    cr.Adapted,
 	}
+}
 
-	// ── Note handling ──────────────────────────────────────────────
-	// The createNote tool persisted its notes at call time (origin=assistant).
-	// Notes are additive: a turn may create notes on their own or alongside an
-	// edit, so this never clears an edit's updatedContent. When notes are the
-	// only effect — no content edit and no other authoritative tool action —
-	// the action is "noted".
-	if len(st.noteResults) > 0 {
-		result.NotesCreated = make([]NotePayload, 0, len(st.noteResults))
-		for _, n := range st.noteResults {
-			result.NotesCreated = append(result.NotesCreated, NotePayload{
-				ID:    n.ID,
-				Type:  string(n.Type),
-				Title: n.Title,
-				Body:  n.Body,
-			})
-		}
-		// Only claim a notes-only turn when there is no edited content. Guarding
-		// on updatedContent == "" protects a combined edit-and-note turn that was
-		// truncated before the model emitted action: the trailing switch below
-		// then infers "edited" from the non-empty content, and the notes still
-		// attach — we never discard the edit by clearing it here.
-		if result.Action != "edited" && result.UpdatedContent == "" && st.cloneResult == nil && st.restoreResult == nil && st.scheduleResult == nil {
-			result.Action = "noted"
-			result.SaveVersion = false
-		}
-		// Ensure a usable explanation so the "no usable fields" guard below
-		// doesn't misfire on a notes-only turn where the model left it empty.
-		if result.Explanation == "" {
-			if len(st.noteResults) == 1 {
-				result.Explanation = "Saved a note."
-			} else {
-				result.Explanation = fmt.Sprintf("Saved %d notes.", len(st.noteResults))
-			}
-		}
+// applyRestore surfaces the restored content; the restore service already
+// swapped the post content and appended the versions.
+func (t *turn) applyRestore() {
+	rr := t.st.restoreResult
+	if rr == nil {
+		return
 	}
-
-	// Hybrid safety: only the editPost writer may produce post copy,
-	// so an "edited" turn is legitimate ONLY when the writer actually ran
-	// (st.editResult set). Without it the planner either applied no edit, or
-	// emitted its own inline content in violation of the split — either way we
-	// must not persist that content (an empty body would wipe the post; a
-	// planner-written body would leak Haiku prose past the writer). Discard any
-	// such content and downgrade: to a notes-only turn if notes were captured
-	// this turn, otherwise to an answer, dropping the version snapshot. The
-	// legacy path can't hit this — there content comes from the same call.
-	if planner && result.Action == "edited" && st.editResult == nil {
-		slog.WarnContext(ctx, "planner claimed an edit without invoking editPost; discarding any inline content", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
-		result.UpdatedContent = ""
-		if len(st.noteResults) > 0 {
-			result.Action = "noted"
+	r := &t.result
+	r.Action = actionRestored
+	r.UpdatedContent = rr.Post.Content
+	r.SaveVersion = false
+	if r.Explanation == "" {
+		if rr.NoOp {
+			r.Explanation = fmt.Sprintf("The post already matches version %d — nothing to restore.", rr.RestoredFromVersion)
 		} else {
-			result.Action = "declined"
-		}
-		result.SaveVersion = false
-		if result.Explanation == "" {
-			result.Explanation = "I couldn't apply that edit — could you rephrase what you'd like changed?"
+			r.Explanation = fmt.Sprintf("Restored the post to version %d (saved as version %d). Your previous content is kept in the history.", rr.RestoredFromVersion, rr.NewVersionNumber)
 		}
 	}
+	r.RestoreResult = &RestoreResultPayload{
+		RestoredFromVersion: rr.RestoredFromVersion,
+		NewVersionNumber:    rr.NewVersionNumber,
+		NoOp:                rr.NoOp,
+	}
+}
 
-	// Pure-prose recovery: occasionally the model ignores the JSON
-	// envelope entirely and answers in plain prose (often when the user
-	// asks an informational question). Salvage the raw text as the
-	// explanation of a "declined" response so the user at least sees
-	// the answer in the chat bubble. The prompt is the proper fix —
-	// this is the safety net for when the prompt fails to constrain.
-	if result.Explanation == "" && result.UpdatedContent == "" {
-		raw := strings.TrimSpace(scanner.FullText())
-		if raw != "" && !strings.Contains(raw, "{") {
-			slog.WarnContext(ctx, "model emitted prose-only response, treating as informational/declined", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "len", len(raw))
-			result.Explanation = raw
-			result.Action = "declined"
+func (t *turn) applySchedule() {
+	sr := t.st.scheduleResult
+	if sr == nil {
+		return
+	}
+	r := &t.result
+	r.Action = actionScheduled
+	r.UpdatedContent = ""
+	r.SaveVersion = false
+	if r.Explanation == "" {
+		mode := "auto-publish"
+		if !sr.AutoPublish {
+			mode = "manual publishing"
+		}
+		r.Explanation = fmt.Sprintf("Scheduled this post for %s (%s).",
+			sr.ScheduledAt.Format("Jan 2, 2006 15:04 MST"), mode)
+	}
+	r.ScheduleResult = &ScheduleResultPayload{
+		ScheduledAt: sr.ScheduledAt.Format(time.RFC3339),
+		Status:      string(sr.Status),
+		AutoPublish: sr.AutoPublish,
+		Promoted:    sr.Promoted,
+	}
+}
+
+// applyEdit takes the editPost writer's content; the planner's envelope still
+// supplies saveVersion and versionNote.
+func (t *turn) applyEdit() {
+	if t.st.editResult == nil {
+		return
+	}
+	t.result.Action = actionEdited
+	t.result.UpdatedContent = t.st.editResult.Content
+}
+
+// applyNotes attaches the notes createNote persisted this turn. Notes are
+// additive, so an edit's content is never cleared here; the turn becomes
+// "noted" only when nothing else happened. Guarding on empty content keeps a
+// truncated edit-and-note turn (action missing) inferable as "edited" later.
+func (t *turn) applyNotes() {
+	created := t.st.noteResults
+	if len(created) == 0 {
+		return
+	}
+	r := &t.result
+	r.NotesCreated = make([]NotePayload, 0, len(created))
+	for _, n := range created {
+		r.NotesCreated = append(r.NotesCreated, NotePayload{ID: n.ID, Type: string(n.Type), Title: n.Title, Body: n.Body})
+	}
+	if r.Action != actionEdited && r.UpdatedContent == "" && t.st.cloneResult == nil && t.st.restoreResult == nil && t.st.scheduleResult == nil {
+		r.Action = actionNoted
+		r.SaveVersion = false
+	}
+	if r.Explanation == "" {
+		if len(created) == 1 {
+			r.Explanation = "Saved a note."
+		} else {
+			r.Explanation = fmt.Sprintf("Saved %d notes.", len(created))
 		}
 	}
+}
 
-	// Graceful degradation against truncated responses (max_tokens hit
-	// mid-content). Field order in the prompt is
-	// explanation → updatedContent → action → saveVersion → versionNote,
-	// so when the model runs out of tokens during updatedContent the
-	// trailing metadata fields are the first to drop off. If we got
-	// usable content, recover the missing fields from defaults instead
-	// of failing the whole turn.
+// reconcile applies the safety and recovery rules to the assembled result.
+func (t *turn) reconcile(ctx context.Context) error {
+	t.rejectPlannerInlineEdit(ctx)
+	t.recoverProse(ctx)
+	if err := t.recoverTruncation(ctx); err != nil {
+		return err
+	}
+	t.lockSubmittedPost(ctx)
+	return nil
+}
+
+// rejectPlannerInlineEdit enforces that in the hybrid path only the editPost
+// writer produces post copy. An "edited" turn without it either applied no
+// edit (an empty body would wipe the post) or leaked planner-written prose,
+// so the content is dropped and the turn downgraded.
+func (t *turn) rejectPlannerInlineEdit(ctx context.Context) {
+	r := &t.result
+	if !t.cfg.PlannerEnabled || r.Action != actionEdited || t.st.editResult != nil {
+		return
+	}
+	slog.WarnContext(ctx, "planner claimed an edit without invoking editPost; discarding any inline content", logging.AttrComponent, logComponent, "post_id", t.req.PostID)
+	r.UpdatedContent = ""
+	if len(t.st.noteResults) > 0 {
+		r.Action = actionNoted
+	} else {
+		r.Action = actionDeclined
+	}
+	r.SaveVersion = false
+	if r.Explanation == "" {
+		r.Explanation = "I couldn't apply that edit — could you rephrase what you'd like changed?"
+	}
+}
+
+// recoverProse salvages a reply where the model ignored the JSON envelope
+// and answered in plain prose, showing it as a declined turn.
+func (t *turn) recoverProse(ctx context.Context) {
+	r := &t.result
+	if r.Explanation != "" || r.UpdatedContent != "" {
+		return
+	}
+	raw := strings.TrimSpace(t.scanner.FullText())
+	if raw != "" && !strings.Contains(raw, "{") {
+		slog.WarnContext(ctx, "model emitted prose-only response, treating as informational/declined", logging.AttrComponent, logComponent, "post_id", t.req.PostID, "len", len(raw))
+		r.Explanation = raw
+		r.Action = actionDeclined
+	}
+}
+
+// recoverTruncation fills in fields lost to a max_tokens cut. The envelope
+// order is explanation → updatedContent → action → saveVersion → versionNote,
+// so truncation drops the trailing metadata first; only a reply with neither
+// explanation nor content is unusable.
+func (t *turn) recoverTruncation(ctx context.Context) error {
+	r := &t.result
 	switch {
-	case result.Explanation == "" && result.UpdatedContent == "":
-		// Genuinely unusable — neither field came through.
-		raw := scanner.FullText()
-		slog.ErrorContext(ctx, "scanner found no usable fields", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "len", len(raw), "raw_preview", logging.Preview(raw, 500))
-		return nil, &AIError{Msg: "model response did not contain the expected fields"}
-
-	case result.Action == "" && result.UpdatedContent != "":
-		// The model wouldn't have emitted updatedContent if it had
-		// decided to decline; infer "edited".
-		slog.WarnContext(ctx, "action missing, inferring edited from non-empty updatedContent (likely max_tokens truncation)", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
-		result.Action = "edited"
+	case r.Explanation == "" && r.UpdatedContent == "":
+		raw := t.scanner.FullText()
+		slog.ErrorContext(ctx, "scanner found no usable fields", logging.AttrComponent, logComponent, "post_id", t.req.PostID, "len", len(raw), "raw_preview", logging.Preview(raw, 500))
+		return &AIError{Msg: "model response did not contain the expected fields"}
+	case r.Action == "" && r.UpdatedContent != "":
+		slog.WarnContext(ctx, "action missing, inferring edited from non-empty updatedContent (likely max_tokens truncation)", logging.AttrComponent, logComponent, "post_id", t.req.PostID)
+		r.Action = actionEdited
 	}
-
-	// Surface a generic explanation if the model got truncated before
-	// it could write one.
-	if result.Explanation == "" && result.UpdatedContent != "" {
-		result.Explanation = "Updated post content."
+	if r.Explanation == "" && r.UpdatedContent != "" {
+		r.Explanation = "Updated post content."
 	}
+	return nil
+}
 
-	// CON-251 backstop: a submitted post's content is locked. The planner
-	// path already refuses in the editPost tool, but the legacy single-model
-	// path writes content straight into updatedContent with no tool, so guard
-	// the persist here too. Coerce the edit to a declined turn — drop the
-	// content and version so nothing is written — and explain why, keeping the
-	// response coherent rather than silently discarding the write.
-	if result.Action == "edited" && post.Status.IsSubmitted() {
-		slog.WarnContext(ctx, "refused content edit on submitted post", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "status", string(post.Status))
-		result.Action = "declined"
-		result.UpdatedContent = ""
-		result.SaveVersion = false
-		result.Explanation = "This post is " + string(post.Status) + ", so its content is locked and I can't change it. Unschedule it (or duplicate it into a new draft) if you'd like to make edits."
+// lockSubmittedPost refuses a content edit on a submitted post. The editPost
+// tool already refuses, but the legacy path writes content without a tool.
+func (t *turn) lockSubmittedPost(ctx context.Context) {
+	r := &t.result
+	if r.Action != actionEdited || !t.post.Status.IsSubmitted() {
+		return
 	}
+	slog.WarnContext(ctx, "refused content edit on submitted post", logging.AttrComponent, logComponent, "post_id", t.req.PostID, "status", string(t.post.Status))
+	r.Action = actionDeclined
+	r.UpdatedContent = ""
+	r.SaveVersion = false
+	r.Explanation = "This post is " + string(t.post.Status) + ", so its content is locked and I can't change it. Unschedule it (or duplicate it into a new draft) if you'd like to make edits."
+}
 
-	// Content is persisted and returned as Markdown. The frontend is the
-	// only layer that converts to/from BlockNote JSON for editor rendering.
-
-	// ── Persist conversation turn ────────────────────────────────────────────
-	userMsgID, err := models.NewID()
-	if err != nil {
-		return nil, err
-	}
-	if err := repos.Messages.Create(ctx, &models.PostAssistantMessage{
-		ID:      userMsgID,
-		PostID:  req.PostID,
-		Role:    "user",
-		Content: req.Instruction,
-	}); err != nil {
-		if isPostRemovedFKViolation(err) {
-			slog.WarnContext(ctx, "post deleted mid-turn; discarding assistant result", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
-			return nil, ErrPostRemovedDuringTurn
-		}
-		return nil, fmt.Errorf("persist user message: %w", err)
-	}
-
-	// Persist the model turn as the same JSON shape the assistant emits —
-	// minus `updatedContent`, which is bulky and would bloat history on
-	// subsequent turns. Storing JSON lets the UI reload the action /
-	// saveVersion / versionNote badges on page refresh without a round-trip
-	// through a custom parse, and gives the model its own prior response
-	// back in its native output format.
-	modelMsgID, err := models.NewID()
-	if err != nil {
-		return nil, err
+// persistMessages stores the instruction and the model's envelope. The model
+// row omits updatedContent to keep history small; storing JSON lets the UI
+// restore the action badges and gives the model its own prior output back.
+func (t *turn) persistMessages(ctx context.Context) error {
+	if err := t.createMessage(ctx, flowkit.RoleUser, t.req.Instruction, "persist user message"); err != nil {
+		return err
 	}
 	historyJSON, err := json.Marshal(struct {
 		Action      string `json:"action"`
@@ -607,99 +570,113 @@ func runPostAssistant(
 		VersionNote string `json:"versionNote,omitempty"`
 		NoteCount   int    `json:"noteCount,omitzero"`
 	}{
-		Action:      result.Action,
-		Explanation: result.Explanation,
-		SaveVersion: result.SaveVersion,
-		VersionNote: result.VersionNote,
-		NoteCount:   len(result.NotesCreated),
+		Action:      t.result.Action,
+		Explanation: t.result.Explanation,
+		SaveVersion: t.result.SaveVersion,
+		VersionNote: t.result.VersionNote,
+		NoteCount:   len(t.result.NotesCreated),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal model history: %w", err)
+		return fmt.Errorf("marshal model history: %w", err)
 	}
-	if err := repos.Messages.Create(ctx, &models.PostAssistantMessage{
-		ID:      modelMsgID,
-		PostID:  req.PostID,
-		Role:    "model",
-		Content: string(historyJSON),
+	return t.createMessage(ctx, flowkit.RoleModel, string(historyJSON), "persist model message")
+}
+
+func (t *turn) createMessage(ctx context.Context, role, content, op string) error {
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	if err := t.repos.Messages.Create(ctx, &models.PostAssistantMessage{
+		ID:      id,
+		PostID:  t.req.PostID,
+		Role:    role,
+		Content: content,
 	}); err != nil {
-		if isPostRemovedFKViolation(err) {
-			slog.WarnContext(ctx, "post deleted mid-turn; discarding assistant result", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
-			return nil, ErrPostRemovedDuringTurn
-		}
-		return nil, fmt.Errorf("persist model message: %w", err)
+		return t.writeErr(ctx, err, isPostRemovedFKViolation(err), op)
 	}
+	return nil
+}
 
-	// ── Handle versioning ────────────────────────────────────────────────────
-	if result.SaveVersion && result.Action == "edited" {
-		versionID, err := models.NewID()
-		if err != nil {
-			return nil, err
-		}
-		version := &models.PostVersion{
-			ID:      versionID,
-			PostID:  req.PostID,
-			Content: result.UpdatedContent,
-			Note:    result.VersionNote,
-			Creator: "assistant",
-		}
-		if err := repos.Versions.CreateNext(ctx, version); err != nil {
-			// CreateNext locks the post row first, so a post deleted mid-turn
-			// surfaces as ErrNoRows rather than an FK violation.
-			if errors.Is(err, sql.ErrNoRows) || isPostRemovedFKViolation(err) {
-				slog.WarnContext(ctx, "post deleted mid-turn; discarding assistant result", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
-				return nil, ErrPostRemovedDuringTurn
-			}
-			return nil, fmt.Errorf("create version: %w", err)
-		}
-		slog.InfoContext(ctx, "created version", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "version", version.VersionNumber, "note", result.VersionNote)
+// commitEdit snapshots a requested version and writes the edited content.
+// Content is stored as Markdown; only the frontend converts to editor JSON.
+func (t *turn) commitEdit(ctx context.Context) error {
+	r := &t.result
+	if r.Action != actionEdited {
+		return nil
 	}
-
-	// ── Update post content ──────────────────────────────────────────────────
-	if result.Action == "edited" {
-		post.Content = result.UpdatedContent
-		post.UpdatedAt = time.Now().UTC()
-		if err := repos.Posts.Update(ctx, post); err != nil {
-			return nil, fmt.Errorf("update post: %w", err)
+	if r.SaveVersion {
+		if err := t.createVersion(ctx); err != nil {
+			return err
 		}
 	}
+	t.post.Content = r.UpdatedContent
+	t.post.UpdatedAt = time.Now().UTC()
+	if err := t.repos.Posts.Update(ctx, t.post); err != nil {
+		return fmt.Errorf("update post: %w", err)
+	}
+	return nil
+}
 
-	slog.InfoContext(ctx, "done", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "duration_ms", time.Since(start).Milliseconds(), "action", result.Action, "save_version", result.SaveVersion)
+func (t *turn) createVersion(ctx context.Context) error {
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	version := &models.PostVersion{
+		ID:      id,
+		PostID:  t.req.PostID,
+		Content: t.result.UpdatedContent,
+		Note:    t.result.VersionNote,
+		Creator: models.PostVersionCreatorAssistant,
+	}
+	if err := t.repos.Versions.CreateNext(ctx, version); err != nil {
+		// CreateNext locks the post row first, so a deleted post surfaces as
+		// ErrNoRows rather than an FK violation.
+		return t.writeErr(ctx, err, errors.Is(err, sql.ErrNoRows) || isPostRemovedFKViolation(err), "create version")
+	}
+	slog.InfoContext(ctx, "created version", logging.AttrComponent, logComponent, "post_id", t.req.PostID, "version", version.VersionNumber, "note", t.result.VersionNote)
+	return nil
+}
 
-	// Surface the clone before the canonical "complete" so the UI can
-	// link to the new draft as soon as it exists.
-	if result.CloneResult != nil {
-		emit(onEvent, SSEEventCloneComplete, CloneCompleteEventPayload{
-			NewPostID:  result.CloneResult.NewPostID,
-			PlatformID: result.CloneResult.PlatformID,
-			PostType:   result.CloneResult.PostType,
-			Adapted:    result.CloneResult.Adapted,
+// writeErr maps a failed post-referencing write: when postRemoved, the post
+// was deleted mid-turn and the result is discarded with
+// ErrPostRemovedDuringTurn; otherwise err is wrapped with op.
+func (t *turn) writeErr(ctx context.Context, err error, postRemoved bool, op string) error {
+	if postRemoved {
+		slog.WarnContext(ctx, "post deleted mid-turn; discarding assistant result", logging.AttrComponent, logComponent, "post_id", t.req.PostID)
+		return ErrPostRemovedDuringTurn
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// emitCompletion surfaces tool outcomes before the canonical "complete" event
+// so the UI can refresh as soon as they land; deltas before it are
+// preview-only.
+func (t *turn) emitCompletion() {
+	r := &t.result
+	if cr := r.CloneResult; cr != nil {
+		emit(t.onEvent, SSEEventCloneComplete, CloneCompleteEventPayload{
+			NewPostID:  cr.NewPostID,
+			PlatformID: cr.PlatformID,
+			PostType:   cr.PostType,
+			Adapted:    cr.Adapted,
 		})
 	}
-
-	// Surface the restore outcome before the canonical "complete" so the
-	// UI can refresh the version list / editor as soon as it lands.
-	if result.RestoreResult != nil {
-		emit(onEvent, SSEEventRestoreComplete, RestoreCompleteEventPayload{
-			RestoredFromVersion: result.RestoreResult.RestoredFromVersion,
-			NewVersionNumber:    result.RestoreResult.NewVersionNumber,
-			NoOp:                result.RestoreResult.NoOp,
+	if rr := r.RestoreResult; rr != nil {
+		emit(t.onEvent, SSEEventRestoreComplete, RestoreCompleteEventPayload{
+			RestoredFromVersion: rr.RestoredFromVersion,
+			NewVersionNumber:    rr.NewVersionNumber,
+			NoOp:                rr.NoOp,
 		})
 	}
-
-	// Surface the schedule outcome before the canonical "complete" so the
-	// UI can refresh the post's status / scheduled time as soon as it lands.
-	if result.ScheduleResult != nil {
-		emit(onEvent, SSEEventScheduleComplete, ScheduleCompleteEventPayload{
-			ScheduledAt: result.ScheduleResult.ScheduledAt,
-			Status:      result.ScheduleResult.Status,
-			AutoPublish: result.ScheduleResult.AutoPublish,
-			Promoted:    result.ScheduleResult.Promoted,
+	if sr := r.ScheduleResult; sr != nil {
+		emit(t.onEvent, SSEEventScheduleComplete, ScheduleCompleteEventPayload{
+			ScheduledAt: sr.ScheduledAt,
+			Status:      sr.Status,
+			AutoPublish: sr.AutoPublish,
+			Promoted:    sr.Promoted,
 		})
 	}
-
-	// Emit the final structured response. The client treats this as the
-	// canonical result; delta events before this are preview-only.
-	emit(onEvent, SSEEventComplete, &result)
-
-	return &result, nil
+	emit(t.onEvent, SSEEventComplete, r)
 }

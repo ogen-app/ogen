@@ -1,6 +1,7 @@
 package post_assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
@@ -686,37 +688,22 @@ func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error
 	return &EditPostOutput{OK: true, Chars: len(content)}, nil
 }
 
-// runWriter executes the Sonnet copywriting sub-call. When stream is
-// true it fans the generated Markdown out to the client as content_delta events
-// (the editPost path, feeding the live editor); for clone adaptation it stays
-// silent (the copy lands in a new draft, not the open editor). It returns the
-// full generated post content. Usage is metered under the post_assistant_edit
-// flow so the writer's Sonnet spend is attributable separately from the cheap
-// planner loop.
+// runWriter executes the copywriting sub-call and returns the generated post
+// content. With stream set it emits the Markdown as content_delta events for
+// the live editor (the editPost path); clone adaptation stays silent because
+// the copy lands in a new draft. Usage is metered as post_assistant_edit so
+// the writer's spend is attributable separately from the planner loop.
 func runWriter(ctx context.Context, st *requestState, instruction string, stream bool) (string, error) {
 	if st.g == nil || st.provider == nil || st.writerSystem == "" {
 		return "", fmt.Errorf("content writing is not available")
 	}
 
 	var buf strings.Builder
-	streamCb := func(_ context.Context, chunk *ai.ModelResponseChunk) error {
-		if chunk == nil || chunk.Aggregated {
-			return nil
+	onText := func(text string) {
+		buf.WriteString(text)
+		if stream {
+			emit(st.onEvent, SSEEventContentDelta, DeltaEventPayload{Delta: text})
 		}
-		for _, part := range chunk.Content {
-			if part.IsText() {
-				buf.WriteString(part.Text)
-				if stream {
-					emit(st.onEvent, SSEEventContentDelta, DeltaEventPayload{Delta: part.Text})
-				}
-			}
-		}
-		return nil
-	}
-
-	maxTokens := st.writerMaxTokens
-	if maxTokens == 0 {
-		maxTokens = 64000
 	}
 
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter)
@@ -724,15 +711,13 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(st.writerSystem),
 		ai.WithPrompt(composeWriterInstruction(instruction, st.retrieved)),
-		ai.WithStreaming(streamCb),
-		st.provider.CallConfig(maxTokens),
+		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: onText})),
+		st.provider.CallConfig(cmp.Or(st.writerMaxTokens, 64000)),
 	)
 	if err != nil {
 		return "", err
 	}
-	if st.recorder != nil {
-		st.recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant_edit", resp)
-	}
+	st.recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant_edit", resp)
 
 	content := strings.TrimSpace(buf.String())
 	if content == "" {
