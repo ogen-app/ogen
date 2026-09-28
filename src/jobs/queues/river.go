@@ -459,6 +459,44 @@ func (e *Enqueuer) EnqueuePasswordResetTx(ctx context.Context, tx *sql.Tx, userI
 	return err
 }
 
+// NewDeviceLoginVars are the sign-in details a new-device alert shows. They
+// ride the job args because the worker can't rebuild them: the secure link's
+// token exists only as a hash.
+type NewDeviceLoginVars struct {
+	LoginTime   string
+	DeviceLabel string
+	IPAddress   string
+	Location    string
+	SecureURL   string
+	MaskedEmail string
+}
+
+// EnqueueNewDeviceLoginEmailTx enqueues the transactional new-device alert
+// inside the transaction that stores its alert token, so the mail exists iff
+// the token does. The recipient is re-resolved from userID at send time.
+// tokenID keys the idempotency. A nil enqueuer is a no-op.
+func (e *Enqueuer) EnqueueNewDeviceLoginEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID, tokenID string, v NewDeviceLoginVars) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+		UserID:         userID,
+		TenantID:       tenantID,
+		TemplateKey:    templates.KeyNewDeviceLogin,
+		EmailKind:      models.EmailKindTransactional,
+		IdempotencyKey: "new_device_login:" + tokenID,
+		Vars: map[string]string{
+			"login_time":   v.LoginTime,
+			"device_label": v.DeviceLabel,
+			"ip_address":   v.IPAddress,
+			"location":     v.Location,
+			"secure_url":   v.SecureURL,
+			"masked_email": v.MaskedEmail,
+		},
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
 // EnqueueInvitationEmailTx enqueues the transactional workspace-invitation email
 // inside the invite-minting transaction, so the mail exists iff the invitation
 // row does. The invitee has no users row yet, so the recipient address

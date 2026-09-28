@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+</head>
+<body xml:lang="en" style="margin:0;width:100%;height:100%;padding:0;word-break:break-word;"><div role="article" aria-roledescription="email" lang="en" dir="ltr" style="background-color:#f2f1ef;font-family:'Zalando Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:max(16px,1rem);">
+<div style="margin:0 auto;max-width:560px;padding:24px;color:#151515;">
+<div style="padding:16px 4px;"><p style="margin:0;font-size:18px;line-height:28px;font-weight:700;letter-spacing:-.025em;color:#151515;">Ogen</p></div>
+<div style="border-radius:4px;border:1px solid #e0deda;background-color:#fffffe;padding:40px 32px;">
+<h1 style="margin:0 0 20px;font-size:26px;line-height:32px;font-weight:700;color:#151515;">New sign-in to your account</h1>
+<p style="margin:0 0 16px;font-size:15px;line-height:24px;color:#57534d;">Hi [[ .Name ]],</p>
+<p style="margin:0 0 16px;font-size:15px;line-height:24px;color:#57534d;">We noticed a new sign-in to your Ogen account (<strong style="color:#151515;">[[ .MaskedEmail ]]</strong>).</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;width:100%;border-collapse:collapse;font-size:15px;line-height:24px;">
+<tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">When</td><td style="padding:4px 0;color:#151515;">[[ .LoginTime ]]</td></tr>
+<tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">Device</td><td style="padding:4px 0;color:#151515;">[[ .DeviceLabel ]]</td></tr>
+<tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">IP address</td><td style="padding:4px 0;color:#151515;">[[ .IPAddress ]]</td></tr>
+[[- if .Location ]]
+<tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">Approximate location</td><td style="padding:4px 0;color:#151515;">[[ .Location ]]</td></tr>
+[[- end ]]
+</table>
+<p style="margin:0 0 16px;font-size:15px;line-height:24px;color:#57534d;"><strong style="color:#151515;">If this was you,</strong> there's nothing to do.</p>
+<p style="margin:0 0 24px;font-size:15px;line-height:24px;color:#57534d;"><strong style="color:#151515;">If this wasn't you,</strong> secure your account now. This signs out every session and lets you set a new password.</p>
+<div style="margin:0 0 24px;">
+<a href="[[ .SecureURL ]]" style="display:inline-block;border-radius:4px;background-color:#151515;padding:12px 24px;font-size:15px;font-weight:600;color:#fffffe;text-decoration:none;">This wasn't me — secure my account</a>
+</div>
+<p style="margin:0 0 16px;font-size:13px;line-height:20px;color:#8a857d;">Or paste this link into your browser:<br><a href="[[ .SecureURL ]]" style="color:#57534d;word-break:break-all;">[[ .SecureURL ]]</a></p>
+<p style="margin:0;font-size:13px;line-height:20px;color:#8a857d;">The link works once and expires in 24 hours. After that, use "Forgot password" on the sign-in page.</p>
+</div>
+<div style="padding:24px 4px;"><p style="margin:0 0 8px;font-size:12px;line-height:18px;color:#8a857d;">— The Ogen team</p><p style="margin:0;font-size:12px;line-height:18px;color:#8a857d;"><a href="https://db-ip.com" style="color:#8a857d;">IP geolocation by DB-IP</a></p></div>
+</div>
+</div>
+</body>
+</html>
