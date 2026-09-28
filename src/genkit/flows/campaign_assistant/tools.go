@@ -823,7 +823,7 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 			}
 			continue
 		}
-		if env.Action != "" && env.Action != "answered" {
+		if env.Action != "" && env.Action != actionAnswered {
 			continue // an action confirmation, not research
 		}
 		if s := strings.TrimSpace(env.Explanation); s != "" {

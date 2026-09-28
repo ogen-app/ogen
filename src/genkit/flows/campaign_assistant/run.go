@@ -1,6 +1,7 @@
 package campaign_assistant
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -16,10 +17,34 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 )
+
+const logComponent = "genkit.campaign_assistant"
+
+// turn carries one assistant request through its phases.
+type turn struct {
+	g       *genkit.Genkit
+	req     CampaignAssistantRequest
+	cfg     CampaignAssistantFlowConfig
+	repos   CampaignAssistantRepos
+	onEvent OnEventFunc
+	timer   *phaseTimer
+
+	campaign *models.Campaign
+	actx     *assistantContext
+	history  []*ai.Message
+	st       *requestState
+	scanner  *jsonstream.Scanner
+	// cutShort is set when the tool loop hit MaxTurns; committed results are
+	// still finalised rather than failing the turn.
+	cutShort bool
+	outcomes []outcome
+	result   CampaignAssistantResponse
+}
 
 func runCampaignAssistant(
 	ctx context.Context,
@@ -31,470 +56,245 @@ func runCampaignAssistant(
 	tools *toolSet,
 	onEvent OnEventFunc,
 ) (out *CampaignAssistantResponse, retErr error) {
-	start := time.Now()
-	slog.InfoContext(ctx, "starting", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "instruction_len", len(req.Instruction))
+	t := &turn{g: g, req: req, cfg: cfg, repos: repos, onEvent: onEvent, timer: newPhaseTimer()}
+	slog.InfoContext(ctx, "starting", logging.AttrComponent, logComponent, "campaign_id", req.CampaignID, "instruction_len", len(req.Instruction))
 
-	// Enforcement gate: block before any provider call when the
-	// tenant is already over a cap in enforce mode. Nil checker = no gate.
 	if err := cfg.Checker.Enforce(ctx); err != nil {
 		return nil, err
 	}
-	// Phase timers (CON-112 perf): every stage of the turn is timed so a single
-	// request reveals where wall-clock goes — pre-model DB, model TTFT, per-tool
-	// execution, or persist. Logged once as "phase timings" at the end.
-	tAfterEnforce := time.Now()
+	t.timer.lap("enforce")
 
-	// finaliseOwnerID / finaliseTenantID are captured once the campaign is loaded
-	// so the deferred finalisation event + notification are scoped to the campaign
-	// owner and tenant. Empty before load → finalisation for very-early failures
-	// is skipped.
-	var finaliseOwnerID, finaliseTenantID string
+	// Finalisation is scoped to the campaign owner, so failures before the
+	// campaign loads are not announced.
 	defer func() {
-		if finaliseOwnerID == "" {
+		c := t.campaign
+		if c == nil || c.CreatedBy == "" {
 			return
 		}
-		publishAssistantFinalised(cfg.Hub, req.CampaignID, finaliseOwnerID, out, retErr)
-		// A persistent "content plan ready" notification — fired only
-		// when this run actually generated a plan, not on every assistant turn.
-		notifyContentPlanReady(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, out, retErr)
-		// A durable assistant finished/failed row for the initiator
-		// (skips the content-plan success, which the line above already covers).
-		notifyAssistantFinalised(cfg.Notifier, finaliseTenantID, finaliseOwnerID, req.CampaignID, out, retErr)
+		publishAssistantFinalised(cfg.Hub, req.CampaignID, c.CreatedBy, out, retErr)
+		// Fires only when this run generated a plan.
+		notifyContentPlanReady(cfg.Notifier, c.TenantID, c.CreatedBy, req.CampaignID, out, retErr)
+		// Skips the content-plan success already covered above.
+		notifyAssistantFinalised(cfg.Notifier, c.TenantID, c.CreatedBy, req.CampaignID, out, retErr)
 	}()
 
-	if strings.TrimSpace(req.Instruction) == "" {
-		return nil, &ValidationError{Msg: "instruction is required"}
+	ctx, err := t.prepare(ctx, systemTmpl, contextTmpl)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.callModel(ctx, tools); err != nil {
+		return nil, err
+	}
+	if err := t.assembleResult(ctx); err != nil {
+		return nil, err
 	}
 
-	// ── Load campaign (tenant-scoped) ────────────────────────────────────────
-	// GetByID runs under the request tenant, so a campaign from another tenant
-	// reads as not-found — the assistant never crosses a tenant boundary.
-	campaign, err := repos.Campaigns.GetByID(ctx, req.CampaignID)
+	// A history-write failure must not fail the turn: tool side effects have
+	// already committed, so it is logged and the completion events still go out.
+	persistStart := time.Now()
+	if err := persistTurn(ctx, repos, req, &t.result); err != nil {
+		slog.ErrorContext(ctx, "persist conversation turn failed", logging.AttrComponent, logComponent, "campaign_id", req.CampaignID, logging.AttrError, err)
+	}
+	t.timer.persistMs = time.Since(persistStart).Milliseconds()
+
+	t.timer.log(ctx, req.CampaignID, t.result.Action)
+	slog.InfoContext(ctx, "done", logging.AttrComponent, logComponent, "campaign_id", req.CampaignID, "duration_ms", t.timer.totalMs(), "action", t.result.Action)
+
+	// Tool completions go out before the canonical "complete" so the UI can
+	// refresh as soon as they land; deltas before it are preview-only.
+	for _, o := range t.outcomes {
+		emit(onEvent, o.event, o.payload)
+	}
+	emit(onEvent, SSEEventComplete, &t.result)
+	return &t.result, nil
+}
+
+// prepare validates the request, loads the campaign (tenant-scoped, so another
+// tenant's campaign reads as not found), its context and history, and returns
+// ctx carrying the per-request tool state.
+func (t *turn) prepare(ctx context.Context, systemTmpl, contextTmpl *template.Template) (context.Context, error) {
+	if strings.TrimSpace(t.req.Instruction) == "" {
+		return ctx, &ValidationError{Msg: "instruction is required"}
+	}
+	campaign, err := t.repos.Campaigns.GetByID(ctx, t.req.CampaignID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, &ValidationError{Msg: "campaign not found"}
+			return ctx, &ValidationError{Msg: "campaign not found"}
 		}
-		return nil, fmt.Errorf("load campaign: %w", err)
+		return ctx, fmt.Errorf("load campaign: %w", err)
 	}
-	finaliseOwnerID = campaign.CreatedBy
-	finaliseTenantID = campaign.TenantID
-	tAfterLoad := time.Now()
+	t.campaign = campaign
+	t.timer.lap("load")
 
-	// ── Assemble context + load history ──────────────────────────────────────
-	// Resolve the campaign's brand voice/audience/guardrails into the
-	// context block (falls back to the legacy tone prose). Fails open.
-	brandResolved, brerr := brandresolve.Resolve(ctx, repos.Brands, campaign, nil)
-	if brerr != nil {
-		// Fail open (resolved still carries the legacy prose), but log so a
-		// persistent brand-repo failure is observable rather than silent.
+	// Brand resolution fails open: the result still carries the legacy tone.
+	brand, err := brandresolve.Resolve(ctx, t.repos.Brands, campaign, nil)
+	if err != nil {
 		slog.WarnContext(ctx, "brand resolve failed; using legacy tone",
-			logging.AttrComponent, "genkit.campaign_assistant", "error", brerr)
+			logging.AttrComponent, logComponent, "error", err)
 	}
-	actx, err := assembleContext(campaign, brandResolved.PromptBlock(""), time.Now().UTC(), systemTmpl, contextTmpl)
+	t.actx, err = assembleContext(campaign, brand.PromptBlock(""), time.Now().UTC(), systemTmpl, contextTmpl)
 	if err != nil {
-		return nil, fmt.Errorf("assemble context: %w", err)
+		return ctx, fmt.Errorf("assemble context: %w", err)
 	}
-	tAfterContext := time.Now()
+	t.timer.lap("context")
 
-	msgs, err := repos.Messages.ListRecentByCampaignID(ctx, req.CampaignID, 10)
+	msgs, err := t.repos.Messages.ListRecentByCampaignID(ctx, t.req.CampaignID, 10)
 	if err != nil {
-		return nil, fmt.Errorf("load history: %w", err)
+		return ctx, fmt.Errorf("load history: %w", err)
 	}
-	history := make([]*ai.Message, 0, len(msgs))
-	for _, m := range msgs {
-		switch m.Role {
-		case "user":
-			history = append(history, ai.NewUserTextMessage(m.Content))
-		case "model":
-			history = append(history, ai.NewModelTextMessage(m.Content))
-		}
-	}
-	tAfterHistory := time.Now()
+	t.history = flowkit.History(msgs, func(m models.CampaignAssistantMessage) (string, string) { return m.Role, m.Content })
+	t.timer.lap("history")
 
-	// ── Inject per-request state for tools ───────────────────────────────────
-	st := &requestState{
-		campaignID:       req.CampaignID,
+	t.st = &requestState{
+		campaignID:       t.req.CampaignID,
 		campaign:         campaign,
-		repos:            repos,
-		onEvent:          onEvent,
-		instruction:      req.Instruction,
-		embedder:         cfg.Embedder,
-		contentPlan:      cfg.ContentPlan,
-		enrichBrief:      cfg.EnrichBrief,
-		overview:         cfg.Overview,
-		generatePosts:    cfg.GeneratePosts,
-		maxGeneratePosts: cfg.MaxGeneratePosts,
-		draftPost:        cfg.DraftPost,
-		maxDraftPosts:    cfg.MaxDraftPosts,
-		checkBrief:       cfg.CheckBrief,
-		checkPosts:       cfg.CheckPosts,
+		repos:            t.repos,
+		onEvent:          t.onEvent,
+		instruction:      t.req.Instruction,
+		embedder:         t.cfg.Embedder,
+		contentPlan:      t.cfg.ContentPlan,
+		enrichBrief:      t.cfg.EnrichBrief,
+		overview:         t.cfg.Overview,
+		generatePosts:    t.cfg.GeneratePosts,
+		maxGeneratePosts: t.cfg.MaxGeneratePosts,
+		draftPost:        t.cfg.DraftPost,
+		maxDraftPosts:    t.cfg.MaxDraftPosts,
+		checkBrief:       t.cfg.CheckBrief,
+		checkPosts:       t.cfg.CheckPosts,
 	}
-	ctx = withRequestState(ctx, st)
+	return withRequestState(ctx, t.st), nil
+}
 
-	// ── Call model (planner on the cheap RolePlanning model) ─────────────────
-	maxTokens := cfg.MaxOutputTokens
-	if maxTokens == 0 {
-		maxTokens = 8192
-	}
-	maxTurns := cfg.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = 4
-	}
+// callModel runs the planner tool loop on the orchestrator slot, streaming the
+// explanation and tool events. The envelope is parsed by the tolerant scanner
+// rather than ai.WithOutputType, whose strict validator drops the whole
+// response on common JSON drift.
+//
+// A MaxTurns abort is recoverable: tools that ran have committed and the
+// explanation is already in the scanner, so the turn is finalised from them.
+// genkit returns a nil response then, so the final partial turn's usage goes
+// unrecorded (the sub-flows record their own).
+func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
+	maxTokens := cmp.Or(t.cfg.MaxOutputTokens, 8192)
+	maxTurns := cmp.Or(t.cfg.MaxTurns, 4)
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)
-	modelName := mc.Ref
-	systemBlock := actx.SystemPrompt + "\n\n" + actx.ContextBlock
-
-	// Stream the conversational reply. Only "explanation" is surfaced as a
-	// delta; the scanner decodes JSON escapes as they arrive.
-	scanner := jsonstream.New(
-		[]string{"explanation"},
-		func(key, delta string) {
-			if key == "explanation" {
-				emit(onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
-			}
-		},
-	)
-
-	emittedToolCalls := map[string]bool{}
-	emittedToolResults := map[string]bool{}
-
-	// Streaming instrumentation (CON-112 perf). streamCb runs serially on the
-	// plugin's stream loop, so these need no locking.
-	type toolTiming struct {
-		name string
-		ms   int64
-	}
-	var (
-		firstChunkAt time.Time // model TTFT
-		firstToolAt  time.Time // routing latency (time to first tool call)
-		toolStartAt  = map[string]time.Time{}
-		toolTimings  []toolTiming // per-tool wall-time (call → result)
-	)
-
-	streamCb := func(_ context.Context, chunk *ai.ModelResponseChunk) error {
-		if chunk == nil || chunk.Aggregated {
-			return nil
+	t.scanner = jsonstream.New([]string{"explanation"}, func(key, delta string) {
+		if key == "explanation" {
+			emit(t.onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
 		}
-		if firstChunkAt.IsZero() {
-			firstChunkAt = time.Now()
-		}
-		for _, part := range chunk.Content {
-			switch {
-			case part.IsText():
-				scanner.Push(part.Text)
-			case part.IsToolRequest():
-				tr := part.ToolRequest
-				if tr == nil || tr.Partial || emittedToolCalls[tr.Ref] {
-					continue
-				}
-				emittedToolCalls[tr.Ref] = true
-				if firstToolAt.IsZero() {
-					firstToolAt = time.Now()
-				}
-				toolStartAt[tr.Ref] = time.Now()
-				emit(onEvent, SSEEventToolCall, ToolCallEventPayload{Name: tr.Name, Input: tr.Input, Ref: tr.Ref})
-			case part.IsToolResponse():
-				tr := part.ToolResponse
-				if tr == nil || emittedToolResults[tr.Ref] {
-					continue
-				}
-				emittedToolResults[tr.Ref] = true
-				if s, ok := toolStartAt[tr.Ref]; ok {
-					toolTimings = append(toolTimings, toolTiming{name: tr.Name, ms: time.Since(s).Milliseconds()})
-				}
-				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: true})
-			}
-		}
-		return nil
-	}
+	})
 
-	// No ai.WithOutputType — genkit's strict validator drops the whole response
-	// on common Claude JSON drift. We parse via the tolerant scanner below.
-	genStart := time.Now()
-	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName(modelName),
-		ai.WithSystem(systemBlock),
-		ai.WithMessages(history...),
-		ai.WithPrompt(req.Instruction),
+	t.timer.genStart = time.Now()
+	resp, err := genkit.Generate(ctx, t.g,
+		ai.WithModelName(mc.Ref),
+		ai.WithSystem(t.actx.SystemPrompt+"\n\n"+t.actx.ContextBlock),
+		ai.WithMessages(t.history...),
+		ai.WithPrompt(t.req.Instruction),
 		ai.WithTools(tools.runContentPlan, tools.enrichBrief, tools.listCampaignPosts, tools.getCampaignOverview, tools.generatePosts, tools.draftPost, tools.setCampaignDates, tools.redistributePosts, tools.checkBrief, tools.checkPostsConsistency, tools.askCampaignAssets),
 		ai.WithMaxTurns(maxTurns),
-		ai.WithStreaming(streamCb),
-		cfg.Provider.CallConfig(maxTokens),
+		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
+		t.cfg.Provider.CallConfig(maxTokens),
 	)
-	genMs := time.Since(genStart).Milliseconds()
-	// A max-tool-iterations abort is recoverable, not fatal: any tools
-	// that ran committed their side effects and set st.*Result, and the streamed
-	// explanation is already in the scanner. Rather than 502ing and hiding
-	// committed work, fall through to finalise from whatever the turn produced.
-	// genkit returns a nil resp on this error, so every resp.* access below is
-	// nil-guarded and the planner's final-turn usage simply goes unrecorded.
-	turnCutShort := false
+	t.timer.genMs = time.Since(t.timer.genStart).Milliseconds()
 	if err != nil {
-		if isMaxTurnsExceeded(err) {
-			turnCutShort = true
-			slog.WarnContext(ctx, "tool-call budget exhausted; finalising from committed results", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "max_turns", maxTurns, "duration_ms", time.Since(start).Milliseconds())
-		} else {
-			slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
-			return nil, &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
+		if !isMaxTurnsExceeded(err) {
+			slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "duration_ms", t.timer.totalMs(), logging.AttrError, err)
+			return &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
+		}
+		t.cutShort = true
+		slog.WarnContext(ctx, "tool-call budget exhausted; finalising from committed results", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "max_turns", maxTurns, "duration_ms", t.timer.totalMs())
+	}
+	// The sub-flows record their own usage, so the planner's is not double
+	// counted.
+	flowkit.Usage{
+		Recorder:  t.cfg.Recorder,
+		Model:     mc,
+		Feature:   "campaign_assistant",
+		Component: logComponent,
+		Attrs:     []any{"campaign_id", t.req.CampaignID},
+	}.Finish(ctx, resp, maxTokens)
+	return nil
+}
+
+func (t *turn) streamHandlers() flowkit.StreamHandlers {
+	return flowkit.StreamHandlers{
+		OnChunk: t.timer.chunk,
+		OnText:  t.scanner.Push,
+		OnToolCall: func(tr *ai.ToolRequest) {
+			t.timer.toolCalled(tr.Ref)
+			emit(t.onEvent, SSEEventToolCall, ToolCallEventPayload{Name: tr.Name, Input: tr.Input, Ref: tr.Ref})
+		},
+		OnToolResult: func(tr *ai.ToolResponse) {
+			t.timer.toolReturned(tr.Name, tr.Ref)
+			emit(t.onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: true})
+		},
+	}
+}
+
+// assembleResult merges the model's envelope with the committed tool
+// outcomes and applies the recovery rules.
+func (t *turn) assembleResult(ctx context.Context) error {
+	vals := t.scanner.Values()
+	r := &t.result
+	r.Explanation, _ = vals["explanation"].(string)
+	r.Action, _ = vals["action"].(string)
+
+	t.outcomes = t.st.outcomes()
+	for _, o := range t.outcomes {
+		r.Action = o.action
+		o.attach(r)
+		if r.Explanation == "" {
+			r.Explanation = o.explanation
 		}
 	}
 
-	if resp != nil && resp.FinishReason == ai.FinishReasonLength {
-		var outputTokens int64
-		if resp.Usage != nil {
-			outputTokens = int64(resp.Usage.OutputTokens)
-		}
-		slog.WarnContext(ctx, "response truncated at max tokens", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "output_tokens", outputTokens, "cap", maxTokens)
+	if r.Explanation == "" && len(t.outcomes) == 0 {
+		t.recoverProse(ctx)
 	}
-	if resp != nil && resp.Usage != nil {
-		slog.InfoContext(ctx, "tokens", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens, "total", resp.Usage.InputTokens+resp.Usage.OutputTokens)
+	if r.Explanation == "" {
+		return t.unusable(ctx)
 	}
-	// Record the planner's usage under this flow name; the sub-flows record
-	// their own under content_plan / enrich_brief, so there's no double count.
-	// resp is nil when the turn was cut short at MaxTurns — nothing to
-	// record for that final partial turn; the heavy sub-flows already recorded.
-	if resp != nil {
-		cfg.Recorder.RecordResp(ctx, mc.Vendor, mc.Model, "campaign_assistant", resp)
+	if r.Action == "" {
+		r.Action = actionAnswered
 	}
+	return nil
+}
 
-	// ── Assemble response from scanner ───────────────────────────────────────
-	vals := scanner.Values()
-	result := CampaignAssistantResponse{}
-	if s, ok := vals["explanation"].(string); ok {
-		result.Explanation = s
+// recoverProse salvages a reply where the model ignored the JSON envelope
+// and answered in plain prose (common for informational questions).
+func (t *turn) recoverProse(ctx context.Context) {
+	raw := strings.TrimSpace(t.scanner.FullText())
+	if raw == "" || strings.Contains(raw, "{") {
+		return
 	}
-	if s, ok := vals["action"].(string); ok {
-		result.Action = s
-	}
+	slog.WarnContext(ctx, "model emitted prose-only response, treating as answered", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "len", len(raw))
+	t.result.Explanation = raw
+	t.result.Action = actionAnswered
+}
 
-	// Tool outcomes are authoritative — a terse model reply can't mask a
-	// content plan or a brief that actually ran.
-	if st.contentPlanResult != nil {
-		result.Action = "content_plan_generated"
-		result.ContentPlan = st.contentPlanResult
-		if result.Explanation == "" {
-			if st.contentPlanResult.PostCount == 0 {
-				result.Explanation = "I couldn't generate any posts for this campaign."
-			} else {
-				result.Explanation = fmt.Sprintf("I generated a content plan with %d draft post(s) for this campaign.", st.contentPlanResult.PostCount)
-			}
-		}
+// unusable reports a turn that produced nothing. When it was cut short at
+// MaxTurns the planner kept calling tools without answering, so the user
+// gets an actionable nudge instead of the generic parse failure.
+func (t *turn) unusable(ctx context.Context) error {
+	raw := t.scanner.FullText()
+	if t.cutShort {
+		slog.WarnContext(ctx, "turn cut short with no committed result", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "len", len(raw))
+		return &AIError{Msg: "I couldn't complete that in a single step. Try splitting it into smaller requests, or rephrasing."}
 	}
-	if st.briefResult != nil {
-		result.Action = "brief_enriched"
-		result.Brief = st.briefResult
-		if result.Explanation == "" {
-			result.Explanation = "I enriched the campaign brief and saved it to the campaign."
-		}
-	}
-	if st.generatedPostsResult != nil {
-		result.Action = "posts_generated"
-		result.GeneratedPosts = st.generatedPostsResult
-		if result.Explanation == "" {
-			if st.generatedPostsResult.PostCount == 0 {
-				result.Explanation = "I couldn't add any posts for that request."
-			} else {
-				result.Explanation = fmt.Sprintf("I added %d draft post(s) to the campaign.", st.generatedPostsResult.PostCount)
-			}
-		}
-	}
-	if st.draftPostResult != nil {
-		result.Action = "post_drafted"
-		result.DraftedPosts = st.draftPostResult
-		if result.Explanation == "" {
-			if st.draftPostResult.PostCount == 0 {
-				result.Explanation = "I couldn't draft a post from that research."
-			} else {
-				result.Explanation = fmt.Sprintf("I drafted %d post(s) from your research, ready for review.", st.draftPostResult.PostCount)
-			}
-		}
-	}
-	if st.datesResult != nil {
-		result.Action = "dates_updated"
-		result.Dates = st.datesResult
-		if result.Explanation == "" {
-			result.Explanation = fmt.Sprintf("Updated the campaign dates to %s – %s.", st.datesResult.StartDate, st.datesResult.EndDate)
-			if st.datesResult.PostsOutsideRange > 0 {
-				result.Explanation += fmt.Sprintf(" %d draft/ready post(s) now fall outside the new range — want me to redistribute them?", st.datesResult.PostsOutsideRange)
-			}
-		}
-	}
-	if st.redistributeResult != nil {
-		result.Action = "posts_redistributed"
-		result.Redistribute = st.redistributeResult
-		if result.Explanation == "" {
-			if st.redistributeResult.PostsUpdated == 0 {
-				result.Explanation = "There were no draft or ready-for-publish posts to redistribute."
-			} else {
-				result.Explanation = fmt.Sprintf("Redistributed %d post(s) across the campaign timeline.", st.redistributeResult.PostsUpdated)
-			}
-		}
-	}
-	if st.briefReviewResult != nil {
-		result.Action = "brief_reviewed"
-		result.BriefReview = st.briefReviewResult
-		if result.Explanation == "" {
-			if len(st.briefReviewResult.Findings) == 0 {
-				result.Explanation = "The brief looks consistent — no issues found."
-			} else {
-				result.Explanation = fmt.Sprintf("I found %d consistency issue(s) in the brief.", len(st.briefReviewResult.Findings))
-			}
-		}
-	}
-	if st.postsReviewResult != nil {
-		result.Action = "posts_reviewed"
-		result.PostsReview = st.postsReviewResult
-		if result.Explanation == "" {
-			if len(st.postsReviewResult.Findings) == 0 {
-				result.Explanation = fmt.Sprintf("Checked %d post(s); they all follow the brief.", st.postsReviewResult.Checked)
-			} else {
-				result.Explanation = fmt.Sprintf("%d of %d checked post(s) drift from the brief.", len(st.postsReviewResult.Findings), st.postsReviewResult.Checked)
-			}
-		}
-	}
-
-	// Pure-prose recovery: the model ignored the JSON envelope and answered in
-	// plain prose (common for informational questions) and no tool ran. Salvage
-	// the raw text as an "answered" reply.
-	if result.Explanation == "" && st.contentPlanResult == nil && st.briefResult == nil && st.generatedPostsResult == nil && st.draftPostResult == nil && st.datesResult == nil && st.redistributeResult == nil && st.briefReviewResult == nil && st.postsReviewResult == nil {
-		raw := strings.TrimSpace(scanner.FullText())
-		if raw != "" && !strings.Contains(raw, "{") {
-			slog.WarnContext(ctx, "model emitted prose-only response, treating as answered", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "len", len(raw))
-			result.Explanation = raw
-			result.Action = "answered"
-		}
-	}
-
-	// Genuinely unusable — nothing came through.
-	if result.Explanation == "" {
-		raw := scanner.FullText()
-		// Cut short at MaxTurns with nothing committed and no prose:
-		// the planner kept calling tools without ever answering. Give the user an
-		// actionable nudge instead of the generic parse-failure message.
-		if turnCutShort {
-			slog.WarnContext(ctx, "turn cut short with no committed result", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "len", len(raw))
-			return nil, &AIError{Msg: "I couldn't complete that in a single step. Try splitting it into smaller requests, or rephrasing."}
-		}
-		slog.ErrorContext(ctx, "scanner found no usable fields", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "len", len(raw), "raw_preview", logging.Preview(raw, 500))
-		return nil, &AIError{Msg: "model response did not contain the expected fields"}
-	}
-
-	if result.Action == "" {
-		result.Action = "answered"
-	}
-
-	// ── Persist conversation turn ────────────────────────────────────────────
-	// A history-write failure must not fail the turn: any tool side effects
-	// (posts persisted, brief applied) have already committed, so we log and
-	// still emit the completion events below rather than reporting an error.
-	tPersistStart := time.Now()
-	if err := persistTurn(ctx, repos, req, &result); err != nil {
-		slog.ErrorContext(ctx, "persist conversation turn failed", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, logging.AttrError, err)
-	}
-	persistMs := time.Since(tPersistStart).Milliseconds()
-
-	// ── Phase timings (CON-112 perf) ─────────────────────────────────────────
-	// One structured line to pinpoint where a slow turn spends wall-clock:
-	// pre-model DB (enforce/load/context/history), the genkit call (ttft =
-	// model TTFT, route = time to first tool call, gen = whole call incl. inline
-	// tool execution), per-tool wall-time, and persist. "gen" minus the model's
-	// own generation is the sub-flow tool cost run inside the turn.
-	sinceMs := func(a, b time.Time) int64 { return b.Sub(a).Milliseconds() }
-	var ttftMs, routeMs int64 = -1, -1
-	if !firstChunkAt.IsZero() {
-		ttftMs = sinceMs(genStart, firstChunkAt)
-	}
-	if !firstToolAt.IsZero() {
-		routeMs = sinceMs(genStart, firstToolAt)
-	}
-	toolParts := make([]string, 0, len(toolTimings))
-	for _, tt := range toolTimings {
-		toolParts = append(toolParts, fmt.Sprintf("%s=%dms", tt.name, tt.ms))
-	}
-	slog.InfoContext(ctx, "phase timings", logging.AttrComponent, "genkit.campaign_assistant",
-		"campaign_id", req.CampaignID,
-		"enforce_ms", sinceMs(start, tAfterEnforce),
-		"load_ms", sinceMs(tAfterEnforce, tAfterLoad),
-		"context_ms", sinceMs(tAfterLoad, tAfterContext),
-		"history_ms", sinceMs(tAfterContext, tAfterHistory),
-		"ttft_ms", ttftMs,
-		"route_ms", routeMs,
-		"gen_ms", genMs,
-		"tools", strings.Join(toolParts, ","),
-		"persist_ms", persistMs,
-		"total_ms", time.Since(start).Milliseconds(),
-		"action", result.Action,
-	)
-
-	slog.InfoContext(ctx, "done", logging.AttrComponent, "genkit.campaign_assistant", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), "action", result.Action)
-
-	// Surface tool completions before the canonical "complete" so the UI can
-	// refresh the post list / brief as soon as they land.
-	if result.ContentPlan != nil {
-		emit(onEvent, SSEEventContentPlanComplete, ContentPlanCompleteEventPayload{
-			PostCount: result.ContentPlan.PostCount,
-			Warnings:  result.ContentPlan.Warnings,
-		})
-	}
-	if result.Brief != nil {
-		emit(onEvent, SSEEventEnrichBriefComplete, EnrichBriefCompleteEventPayload{Applied: result.Brief.Applied})
-	}
-	if result.GeneratedPosts != nil {
-		emit(onEvent, SSEEventGeneratePostsComplete, GeneratePostsCompleteEventPayload{
-			PostCount: result.GeneratedPosts.PostCount,
-			Warnings:  result.GeneratedPosts.Warnings,
-		})
-	}
-	if result.DraftedPosts != nil {
-		emit(onEvent, SSEEventDraftPostComplete, DraftPostCompleteEventPayload{
-			PostCount: result.DraftedPosts.PostCount,
-			Warnings:  result.DraftedPosts.Warnings,
-		})
-	}
-	if result.Dates != nil {
-		emit(onEvent, SSEEventDatesUpdated, DatesUpdatedEventPayload{
-			StartDate:         result.Dates.StartDate,
-			EndDate:           result.Dates.EndDate,
-			PostsOutsideRange: result.Dates.PostsOutsideRange,
-		})
-	}
-	if result.Redistribute != nil {
-		emit(onEvent, SSEEventPostsRedistributed, PostsRedistributedEventPayload{PostsUpdated: result.Redistribute.PostsUpdated})
-	}
-	if result.BriefReview != nil {
-		emit(onEvent, SSEEventCheckBriefComplete, CheckBriefCompleteEventPayload{
-			Consistent:   result.BriefReview.Consistent,
-			FindingCount: len(result.BriefReview.Findings),
-		})
-	}
-	if result.PostsReview != nil {
-		emit(onEvent, SSEEventCheckPostsComplete, CheckPostsCompleteEventPayload{
-			Checked:    result.PostsReview.Checked,
-			Total:      result.PostsReview.Total,
-			Capped:     result.PostsReview.Capped,
-			DriftCount: len(result.PostsReview.Findings),
-		})
-	}
-
-	// Emit the final structured response — the canonical result; deltas before
-	// this are preview-only.
-	emit(onEvent, SSEEventComplete, &result)
-
-	return &result, nil
+	slog.ErrorContext(ctx, "scanner found no usable fields", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "len", len(raw), "raw_preview", logging.Preview(raw, 500))
+	return &AIError{Msg: "model response did not contain the expected fields"}
 }
 
 // isMaxTurnsExceeded reports whether err is genkit's "exceeded maximum tool
-// call iterations" abort (ai/generate.go). It is matched on the stable message
-// substring — genkit returns it as a core.ABORTED error with no exported
-// sentinel — so a tool-happy planner degrades gracefully instead of 502ing.
+// call iterations" abort. genkit exports no sentinel for it, so it is matched
+// on the stable message substring.
 func isMaxTurnsExceeded(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "maximum tool call iterations")
 }
 
 // persistTurn stores the user instruction verbatim and the model turn as a
-// compact JSON envelope (no bulky generated content) so history stays small.
-// Both messages are written in a single transaction so a turn never persists
-// half-written.
+// compact JSON envelope (no generated content) in one transaction, so a turn
+// never persists half-written.
 func persistTurn(ctx context.Context, repos CampaignAssistantRepos, req CampaignAssistantRequest, result *CampaignAssistantResponse) error {
 	userMsgID, err := models.NewID()
 	if err != nil {
@@ -526,8 +326,8 @@ func persistTurn(ctx context.Context, repos CampaignAssistantRepos, req Campaign
 	}
 
 	if err := repos.Messages.CreateBatch(ctx, []*models.CampaignAssistantMessage{
-		{ID: userMsgID, CampaignID: req.CampaignID, Role: "user", Content: req.Instruction},
-		{ID: modelMsgID, CampaignID: req.CampaignID, Role: "model", Content: string(historyJSON)},
+		{ID: userMsgID, CampaignID: req.CampaignID, Role: flowkit.RoleUser, Content: req.Instruction},
+		{ID: modelMsgID, CampaignID: req.CampaignID, Role: flowkit.RoleModel, Content: string(historyJSON)},
 	}); err != nil {
 		return fmt.Errorf("persist conversation turn: %w", err)
 	}

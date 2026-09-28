@@ -1,7 +1,6 @@
 package enrich_brief
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 )
 
 // contextCacheTTL controls how long a cached context block stays valid.
@@ -149,11 +149,11 @@ func assembleContext(
 		}
 	}
 
-	systemPrompt, err := renderTemplate(systemTmpl, data)
+	systemPrompt, err := flowkit.RenderTemplate(systemTmpl, data)
 	if err != nil {
 		return nil, fmt.Errorf("render system prompt: %w", err)
 	}
-	contextBlock, err := renderTemplate(contextTmpl, data)
+	contextBlock, err := flowkit.RenderTemplate(contextTmpl, data)
 	if err != nil {
 		return nil, fmt.Errorf("render context block: %w", err)
 	}
@@ -178,12 +178,4 @@ type phaseInfo struct {
 	Sequence int
 	Name     string
 	Purpose  string
-}
-
-func renderTemplate(tmpl *template.Template, data any) (string, error) {
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
 }

@@ -162,107 +162,123 @@ func (s *Scanner) step(c byte) {
 			s.state = stTop
 		}
 	case stTop:
-		switch c {
-		case '"':
-			s.keyBuf = s.keyBuf[:0]
-			s.esc = escNone
-			s.state = stInKey
-		case '}':
-			s.state = stDone
-		}
+		s.topByte(c)
 	case stInKey:
-		// Keys are kept simple — no \uXXXX support needed in practice.
-		if s.esc == escBackslash {
-			s.keyBuf = append(s.keyBuf, c)
-			s.esc = escNone
-			return
-		}
-		switch c {
-		case '\\':
-			s.esc = escBackslash
-		case '"':
-			s.curKey = string(s.keyBuf)
-			s.watching = s.watched[s.curKey]
-			s.state = stAfterKey
-		default:
-			s.keyBuf = append(s.keyBuf, c)
-		}
+		s.keyByte(c)
 	case stAfterKey:
 		if c == ':' {
 			s.state = stAwaitValue
 		}
 	case stAwaitValue:
-		switch c {
-		case ' ', '\t', '\n', '\r':
-			// skip whitespace
-		case '"':
-			s.esc = escNone
-			s.hexBuf = s.hexBuf[:0]
-			s.pendHigh = 0
-			s.resetAccumulator(s.curKey, valKindString)
-			s.state = stInString
-		case '{', '[':
-			// Nested structure — we don't extract these, but still skip
-			// cleanly so following keys are parsed.
-			s.nestedDepth = 1
-			s.state = stInNested
-		default:
-			// bool / number / null literal — accumulate from the first byte.
-			s.resetAccumulator(s.curKey, valKindLiteral)
-			s.appendToAccumulator(c)
-			s.state = stCollectLiteral
-		}
+		s.awaitValueByte(c)
 	case stInString:
 		s.stringByte(c)
 	case stCollectLiteral:
-		switch c {
-		case ',':
-			s.resetKey()
-			s.state = stTop
-		case '}':
-			s.state = stDone
-		case '"':
-			// Missing comma recovery: a quote mid-literal-tail is
-			// almost certainly the start of the next key. Terminate the
-			// literal and jump into key-parsing.
-			s.resetKey()
-			s.keyBuf = s.keyBuf[:0]
-			s.esc = escNone
-			s.state = stInKey
-		case ' ', '\t', '\n', '\r':
-			// Whitespace ends the literal; wait for the separator
-			// (or a missing-comma quote) in stAfterValue.
-			s.state = stAfterValue
-		default:
-			s.appendToAccumulator(c)
-		}
+		s.literalByte(c)
 	case stAfterValue:
-		switch c {
-		case ',':
-			s.resetKey()
-			s.state = stTop
-		case '}':
-			s.state = stDone
-		case '"':
-			// Missing comma recovery: next key starts here.
-			s.resetKey()
-			s.keyBuf = s.keyBuf[:0]
-			s.esc = escNone
-			s.state = stInKey
-		}
+		s.separatorByte(c)
 	case stInNested:
-		switch c {
-		case '{', '[':
-			s.nestedDepth++
-		case '}', ']':
-			s.nestedDepth--
-			if s.nestedDepth == 0 {
-				s.resetKey()
-				s.state = stTop
-			}
-		}
+		s.nestedByte(c)
 	case stDone:
 		// ignore everything after top-level close
+	}
+}
+
+func (s *Scanner) topByte(c byte) {
+	switch c {
+	case '"':
+		s.beginKey()
+	case '}':
+		s.state = stDone
+	}
+}
+
+// beginKey starts parsing a key after its opening quote.
+func (s *Scanner) beginKey() {
+	s.keyBuf = s.keyBuf[:0]
+	s.esc = escNone
+	s.state = stInKey
+}
+
+// keyByte parses key bytes. A backslash only protects the next byte; \uXXXX
+// is not decoded because keys never need it in practice.
+func (s *Scanner) keyByte(c byte) {
+	if s.esc == escBackslash {
+		s.keyBuf = append(s.keyBuf, c)
+		s.esc = escNone
+		return
+	}
+	switch c {
+	case '\\':
+		s.esc = escBackslash
+	case '"':
+		s.curKey = string(s.keyBuf)
+		s.watching = s.watched[s.curKey]
+		s.state = stAfterKey
+	default:
+		s.keyBuf = append(s.keyBuf, c)
+	}
+}
+
+func (s *Scanner) awaitValueByte(c byte) {
+	switch c {
+	case ' ', '\t', '\n', '\r':
+	case '"':
+		s.esc = escNone
+		s.hexBuf = s.hexBuf[:0]
+		s.pendHigh = 0
+		s.resetAccumulator(s.curKey, valKindString)
+		s.state = stInString
+	case '{', '[':
+		// Nested values are not extracted but are skipped cleanly so the
+		// following keys still parse.
+		s.nestedDepth = 1
+		s.state = stInNested
+	default:
+		s.resetAccumulator(s.curKey, valKindLiteral)
+		s.appendToAccumulator(c)
+		s.state = stCollectLiteral
+	}
+}
+
+// literalByte accumulates a bool / number / null literal. Whitespace ends
+// the literal and hands over to separatorByte for the next byte.
+func (s *Scanner) literalByte(c byte) {
+	switch c {
+	case ',', '}', '"':
+		s.separatorByte(c)
+	case ' ', '\t', '\n', '\r':
+		s.state = stAfterValue
+	default:
+		s.appendToAccumulator(c)
+	}
+}
+
+// separatorByte handles the bytes after a complete value. A quote where a
+// comma was expected starts the next key, recovering from a missing comma.
+func (s *Scanner) separatorByte(c byte) {
+	switch c {
+	case ',':
+		s.resetKey()
+		s.state = stTop
+	case '}':
+		s.state = stDone
+	case '"':
+		s.resetKey()
+		s.beginKey()
+	}
+}
+
+func (s *Scanner) nestedByte(c byte) {
+	switch c {
+	case '{', '[':
+		s.nestedDepth++
+	case '}', ']':
+		s.nestedDepth--
+		if s.nestedDepth == 0 {
+			s.resetKey()
+			s.state = stTop
+		}
 	}
 }
 
@@ -291,86 +307,89 @@ func (s *Scanner) appendToAccumulator(c byte) {
 	}
 }
 
+// simpleEscapes maps the byte after a backslash to its decoded byte for the
+// single-character JSON escapes; zero marks anything else.
+var simpleEscapes = [256]byte{
+	'"':  '"',
+	'\\': '\\',
+	'/':  '/',
+	'n':  '\n',
+	't':  '\t',
+	'r':  '\r',
+	'b':  '\b',
+	'f':  '\f',
+}
+
 func (s *Scanner) stringByte(c byte) {
 	switch s.esc {
 	case escNone:
-		switch c {
-		case '\\':
-			s.esc = escBackslash
-		case '"':
-			// End of string value. Transition state first so flushDelta
-			// treats this as "no more bytes coming for this key" and emits
-			// any dangling partial-UTF-8 carry instead of retaining it.
-			s.state = stAfterValue
-			s.flushDelta()
-			s.resetKey()
-			s.carry = s.carry[:0]
-		default:
-			s.appendByte(c)
-		}
+		s.plainStringByte(c)
 	case escBackslash:
-		switch c {
-		case '"':
-			s.appendByte('"')
-			s.esc = escNone
-		case '\\':
-			s.appendByte('\\')
-			s.esc = escNone
-		case '/':
-			s.appendByte('/')
-			s.esc = escNone
-		case 'n':
-			s.appendByte('\n')
-			s.esc = escNone
-		case 't':
-			s.appendByte('\t')
-			s.esc = escNone
-		case 'r':
-			s.appendByte('\r')
-			s.esc = escNone
-		case 'b':
-			s.appendByte('\b')
-			s.esc = escNone
-		case 'f':
-			s.appendByte('\f')
-			s.esc = escNone
-		case 'u':
-			s.hexBuf = s.hexBuf[:0]
-			s.esc = escUnicode
-		default:
-			// malformed — emit the byte verbatim so nothing is silently lost
-			s.appendByte(c)
-			s.esc = escNone
-		}
+		s.escapeByte(c)
 	case escUnicode:
 		s.hexBuf = append(s.hexBuf, c)
 		if len(s.hexBuf) == 4 {
-			v, err := strconv.ParseUint(string(s.hexBuf), 16, 32)
-			if err == nil {
-				r := rune(v)
-				switch {
-				case utf16.IsSurrogate(r) && r >= 0xD800 && r <= 0xDBFF:
-					// high surrogate — wait for the low half
-					s.pendHigh = r
-				case utf16.IsSurrogate(r) && r >= 0xDC00 && r <= 0xDFFF:
-					if s.pendHigh != 0 {
-						combined := utf16.DecodeRune(s.pendHigh, r)
-						s.appendRune(combined)
-						s.pendHigh = 0
-					}
-					// lone low surrogate — skip silently
-				default:
-					if s.pendHigh != 0 {
-						// dangling high surrogate — emit as-is then reset
-						s.appendRune(s.pendHigh)
-						s.pendHigh = 0
-					}
-					s.appendRune(r)
-				}
-			}
+			s.decodeUnicodeEscape()
 			s.hexBuf = s.hexBuf[:0]
 			s.esc = escNone
 		}
+	}
+}
+
+func (s *Scanner) plainStringByte(c byte) {
+	switch c {
+	case '\\':
+		s.esc = escBackslash
+	case '"':
+		// Leave stInString before flushing so flushDelta emits any dangling
+		// partial-UTF-8 carry instead of retaining it for a next chunk.
+		s.state = stAfterValue
+		s.flushDelta()
+		s.resetKey()
+		s.carry = s.carry[:0]
+	default:
+		s.appendByte(c)
+	}
+}
+
+// escapeByte decodes the byte after a backslash. An unknown escape emits the
+// byte verbatim so nothing is silently lost.
+func (s *Scanner) escapeByte(c byte) {
+	if c == 'u' {
+		s.hexBuf = s.hexBuf[:0]
+		s.esc = escUnicode
+		return
+	}
+	if d := simpleEscapes[c]; d != 0 {
+		c = d
+	}
+	s.appendByte(c)
+	s.esc = escNone
+}
+
+// decodeUnicodeEscape decodes the four hex digits in hexBuf, pairing UTF-16
+// surrogates: a lone low surrogate is dropped, and a pending high surrogate
+// followed by a non-surrogate is emitted as-is first. Invalid hex is ignored.
+func (s *Scanner) decodeUnicodeEscape() {
+	v, err := strconv.ParseUint(string(s.hexBuf), 16, 32)
+	if err != nil {
+		return
+	}
+	r := rune(v)
+	switch {
+	case r >= 0xD800 && r <= 0xDBFF:
+		s.pendHigh = r
+	case r >= 0xDC00 && r <= 0xDFFF:
+		if s.pendHigh != 0 {
+			s.appendRune(utf16.DecodeRune(s.pendHigh, r))
+			s.pendHigh = 0
+		}
+	default:
+		if s.pendHigh != 0 {
+			s.appendRune(s.pendHigh)
+			s.pendHigh = 0
+		}
+		s.appendRune(r)
 	}
 }
 

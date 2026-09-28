@@ -41,44 +41,6 @@ func TestSpreadDates(t *testing.T) {
 	}
 }
 
-// The streaming scanner must yield each top-level object exactly once, tolerate
-// split chunks, and not be fooled by braces or brackets inside strings.
-func TestJSONObjScanner(t *testing.T) {
-	s := newJSONObjScanner()
-	var got []string
-	// Feed the array in awkward chunk boundaries.
-	feed := []string{
-		`[{"title":"a","content":"hello `,
-		`{world}"},`,
-		`{"title":"b",`,
-		`"content":"line1\nline2"}]`,
-	}
-	for _, f := range feed {
-		got = append(got, s.push(f)...)
-	}
-	want := []string{
-		`{"title":"a","content":"hello {world}"}`,
-		`{"title":"b","content":"line1\nline2"}`,
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("scanner objects = %v, want %v", got, want)
-	}
-}
-
-func TestStripFences(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"[{\"a\":1}]", `[{"a":1}]`},
-		{"```json\n[{\"a\":1}]\n```", `[{"a":1}]`},
-		{"```\n[1,2]\n```", `[1,2]`},
-		{"  [1]  ", `[1]`},
-	}
-	for _, c := range cases {
-		if got := stripFences(c.in); got != c.want {
-			t.Errorf("stripFences(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 // fakePlatformRepo is a minimal PlatformRepository returning a fixed list.
 type fakePlatformRepo struct {
 	repository.PlatformRepository

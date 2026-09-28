@@ -1,7 +1,6 @@
 package post_assistant
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/settings"
@@ -247,11 +247,11 @@ func assembleContext(
 		Notes:               noteSummaries,
 	}
 
-	systemPrompt, err := renderTemplate(systemTmpl, data)
+	systemPrompt, err := flowkit.RenderTemplate(systemTmpl, data)
 	if err != nil {
 		return nil, fmt.Errorf("render system prompt: %w", err)
 	}
-	contextBlock, err := renderTemplate(contextTmpl, data)
+	contextBlock, err := flowkit.RenderTemplate(contextTmpl, data)
 	if err != nil {
 		return nil, fmt.Errorf("render context block: %w", err)
 	}
@@ -575,12 +575,4 @@ func truncateRunes(s string, max int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:max]) + "…"
-}
-
-func renderTemplate(tmpl *template.Template, data any) (string, error) {
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
 }
