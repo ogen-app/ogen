@@ -25,10 +25,14 @@ func loadOperatorCatalogs(ctx context.Context, cfg *config.Config, r *repos) {
 	// fresh database resolves exactly the models the environment names.
 	modelconfig.Init(ctx, r.flowModelConfigRepo,
 		modelconfig.Defaults{
-			Generation: cfg.ModelID, //nolint:staticcheck // Seed-only read; the DB is authoritative after boot.
-			Quality:    cfg.QualityModelID,
-			Planning:   cfg.PlanningModelID,
-			Embed:      cfg.EmbedModel,
+			Generation:     cfg.ModelID, //nolint:staticcheck // Seed-only read; the DB is authoritative after boot.
+			Quality:        cfg.QualityModelID,
+			Planning:       cfg.PlanningModelID,
+			Embed:          cfg.EmbedModel,
+			VisionClassify: cfg.VisionClassifyModel,
+			VisionExtract:  cfg.VisionExtractModel,
+			VisionEscalate: cfg.VisionEscalateModel,
+			Transcribe:     cfg.TranscribeModel,
 		},
 		vendors.VendorOf,
 		tenantTierOf(r),
