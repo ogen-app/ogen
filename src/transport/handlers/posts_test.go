@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -151,6 +152,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		_, err = db.NewDelete().TableExpr("sessions").Where("1 = 1").Exec(tenantCtx())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("users").Where("1 = 1").Exec(tenantCtx())
+		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("accounts").Where("1 = 1").Exec(tenantCtx())
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -180,9 +182,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 			"platform_post_type": "text-post",
 			"title":              title,
 		}
-		for k, v := range extraFields {
-			payload[k] = v
-		}
+		maps.Copy(payload, extraFields)
 		body, _ := json.Marshal(payload)
 		req := httptest.NewRequest("POST", "/api/posts", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -971,12 +971,10 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				p := createPost("Concurrent Sources", nil)
 				var wg sync.WaitGroup
 				for _, id := range []string{"c1", "c2"} {
-					wg.Add(1)
-					go func(assetID string) {
+					wg.Go(func() {
 						defer GinkgoRecover()
-						defer wg.Done()
-						Expect(addAssets(p.ID, []string{assetID}).StatusCode).To(Equal(200))
-					}(id)
+						Expect(addAssets(p.ID, []string{id}).StatusCode).To(Equal(200))
+					})
 				}
 				wg.Wait()
 

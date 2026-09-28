@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -30,9 +31,7 @@ const (
 // no slot for a code.
 func rejectCoded(c *fiber.Ctx, status int, code, msg string, extra fiber.Map) error {
 	body := fiber.Map{"code": code, "error": msg}
-	for k, v := range extra {
-		body[k] = v
-	}
+	maps.Copy(body, extra)
 	return c.Status(status).JSON(body)
 }
 

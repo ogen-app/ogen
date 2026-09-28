@@ -53,15 +53,13 @@ var _ = Describe("InvitationsHandler seat cap (CON-295)", Ordered, func() {
 		// (defaultErrorHandler in src/transport/server/server.go).
 		app = fiber.New(fiber.Config{
 			ErrorHandler: func(c *fiber.Ctx, err error) error {
-				var qe *entitlements.QuotaExceededError
-				if errors.As(err, &qe) {
+				if qe, ok := errors.AsType[*entitlements.QuotaExceededError](err); ok {
 					return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
 						"error": "entitlement_exceeded", "feature": qe.Key, "limit": qe.Limit, "current": qe.Current,
 					})
 				}
 				code := fiber.StatusInternalServerError
-				var fe *fiber.Error
-				if errors.As(err, &fe) {
+				if fe, ok := errors.AsType[*fiber.Error](err); ok {
 					code = fe.Code
 				}
 				return c.Status(code).JSON(fiber.Map{"error": err.Error()})

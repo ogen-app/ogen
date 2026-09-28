@@ -385,8 +385,8 @@ func mimeToFormat(mime string) string {
 	}
 	// Fall back to the subtype for any other video/* container so an
 	// unmapped-but-declared format is compared by its short name.
-	if strings.HasPrefix(mime, "video/") {
-		return strings.TrimPrefix(mime, "video/")
+	if after, ok := strings.CutPrefix(mime, "video/"); ok {
+		return after
 	}
 	return mime
 }

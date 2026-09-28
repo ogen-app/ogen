@@ -238,12 +238,12 @@ func verifySvixSignature(secret, id, timestamp, signatureHeader string, body []b
 	mac.Write(body)
 	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 
-	for _, part := range strings.Fields(signatureHeader) {
-		comma := strings.IndexByte(part, ',')
-		if comma < 0 {
+	for part := range strings.FieldsSeq(signatureHeader) {
+		_, after, ok := strings.Cut(part, ",")
+		if !ok {
 			continue
 		}
-		if hmac.Equal([]byte(part[comma+1:]), []byte(expected)) {
+		if hmac.Equal([]byte(after), []byte(expected)) {
 			return nil
 		}
 	}

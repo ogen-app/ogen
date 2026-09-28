@@ -19,12 +19,12 @@ func day(s string) time.Time {
 	return t
 }
 
-func ptrTime(t time.Time) *time.Time { return &t }
+//go:fix inline
 
 func timelineCampaign() *models.Campaign {
 	return &models.Campaign{
-		StartDate: ptrTime(day("2026-01-01")),
-		EndDate:   ptrTime(day("2026-01-30")), // 30 days, 3 phases → 10 days each
+		StartDate: new(day("2026-01-01")),
+		EndDate:   new(day("2026-01-30")), // 30 days, 3 phases → 10 days each
 		CampaignType: &models.CampaignType{
 			Phases: []models.CampaignTypePhase{
 				{ID: "p1", Name: "Hook", Sequence: 1},

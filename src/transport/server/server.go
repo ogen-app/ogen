@@ -7,7 +7,7 @@ import (
 	"expvar"
 	"log/slog"
 	"os"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -120,7 +120,7 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 				modelIDs = append(modelIDs, d.Name+"/"+id)
 			}
 		}
-		sort.Strings(modelIDs)
+		slices.Sort(modelIDs)
 		slog.InfoContext(ctx, "model catalog loaded", logging.AttrComponent, "modelconfig",
 			"count", len(modelIDs), "models", modelIDs)
 	}

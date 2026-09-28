@@ -34,7 +34,7 @@ func (r *campaignRepository) hydrateTypeLocked(ctx context.Context, campaigns []
 		Model((*models.Post)(nil)).
 		ColumnExpr("po.campaign_id AS campaign_id").
 		ColumnExpr("count(*) AS n").
-		Where("po.campaign_id IN (?)", bun.In(ids)).
+		Where("po.campaign_id IN (?)", bun.List(ids)).
 		Where("po.campaign_type_phase_id IS NOT NULL").
 		GroupExpr("po.campaign_id").
 		Scan(ctx, &rows)

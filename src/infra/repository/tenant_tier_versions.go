@@ -161,7 +161,7 @@ func (r *tenantTierVersionRepository) PricesByVersionIDs(ctx context.Context, ve
 	}
 	var prices []models.TenantTierVersionPrice
 	err := r.db.NewSelect().Model(&prices).
-		Where("ttvp.tier_version_id IN (?)", bun.In(versionIDs)).
+		Where("ttvp.tier_version_id IN (?)", bun.List(versionIDs)).
 		OrderExpr("currency ASC, billing_interval ASC").
 		Scan(ctx)
 	if err != nil {
@@ -384,7 +384,7 @@ func (r *tenantTierVersionRepository) OpenAssignmentCounts(ctx context.Context, 
 	err := r.db.NewSelect().Model((*models.TenantTierAssignment)(nil)).
 		ColumnExpr("tier_version_id").
 		ColumnExpr("count(*) AS n").
-		Where("tier_version_id IN (?)", bun.In(versionIDs)).
+		Where("tier_version_id IN (?)", bun.List(versionIDs)).
 		Where("upper_inf(valid)").
 		GroupExpr("tier_version_id").
 		Scan(ctx, &rows)

@@ -133,7 +133,7 @@ func (r *announcementRepository) ActiveForTenant(ctx context.Context, a Announce
 	if err := r.db.NewSelect().Model((*models.AnnouncementInteraction)(nil)).
 		Column("announcement_id").
 		Where("ai.user_id = ?", a.UserID).
-		Where("ai.announcement_id IN (?)", bun.In(ids)).
+		Where("ai.announcement_id IN (?)", bun.List(ids)).
 		Where("ai.clicked_at IS NOT NULL").
 		Scan(ctx, &clickedIDs); err != nil {
 		return nil, err
@@ -196,7 +196,7 @@ func (r *announcementRepository) recordInteraction(ctx context.Context, announce
 	// by the model alias (bun inserts `... AS ai`); EXCLUDED is the proposed row.
 	_, err = r.db.NewInsert().Model(row).
 		On("CONFLICT (announcement_id, user_id) DO UPDATE").
-		Set(column+" = COALESCE(ai."+column+", EXCLUDED."+column+")").
+		Set(column + " = COALESCE(ai." + column + ", EXCLUDED." + column + ")").
 		Set("updated_at = now()").
 		Exec(ctx)
 	if err != nil {
@@ -413,7 +413,7 @@ func targetingWhere(aud AnnouncementAudience) func(*bun.SelectQuery) *bun.Select
 		sq = sq.WhereOr("an.target_all = TRUE").
 			WhereOr("EXISTS (SELECT 1 FROM announcement_target_tiers att WHERE att.announcement_id = an.id AND att.tier_id = ?)", aud.TierID)
 		if len(aud.GroupIDs) > 0 {
-			sq = sq.WhereOr("EXISTS (SELECT 1 FROM announcement_target_groups atg WHERE atg.announcement_id = an.id AND atg.group_id IN (?))", bun.In(aud.GroupIDs))
+			sq = sq.WhereOr("EXISTS (SELECT 1 FROM announcement_target_groups atg WHERE atg.announcement_id = an.id AND atg.group_id IN (?))", bun.List(aud.GroupIDs))
 		}
 		return sq
 	}
@@ -430,11 +430,11 @@ func targetingPredicate(an *models.Announcement) (frag string, args []any, nobod
 	var parts []string
 	if len(an.TargetTierIDs) > 0 {
 		parts = append(parts, "tn.tier_id IN (?)")
-		args = append(args, bun.In(an.TargetTierIDs))
+		args = append(args, bun.List(an.TargetTierIDs))
 	}
 	if len(an.TargetGroupIDs) > 0 {
 		parts = append(parts, "EXISTS (SELECT 1 FROM tenant_group_assignments tga WHERE tga.tenant_id = tn.id AND tga.group_id IN (?))")
-		args = append(args, bun.In(an.TargetGroupIDs))
+		args = append(args, bun.List(an.TargetGroupIDs))
 	}
 	if len(parts) == 0 {
 		return "", nil, true
@@ -458,7 +458,7 @@ func (r *announcementRepository) hydrateTargets(ctx context.Context, list []*mod
 	}
 
 	var grows []models.AnnouncementTargetGroup
-	if err := r.db.NewSelect().Model(&grows).Where("atg.announcement_id IN (?)", bun.In(ids)).OrderExpr("atg.group_id ASC").Scan(ctx); err != nil {
+	if err := r.db.NewSelect().Model(&grows).Where("atg.announcement_id IN (?)", bun.List(ids)).OrderExpr("atg.group_id ASC").Scan(ctx); err != nil {
 		return err
 	}
 	for _, g := range grows {
@@ -468,7 +468,7 @@ func (r *announcementRepository) hydrateTargets(ctx context.Context, list []*mod
 	}
 
 	var trows []models.AnnouncementTargetTier
-	if err := r.db.NewSelect().Model(&trows).Where("att.announcement_id IN (?)", bun.In(ids)).OrderExpr("att.tier_id ASC").Scan(ctx); err != nil {
+	if err := r.db.NewSelect().Model(&trows).Where("att.announcement_id IN (?)", bun.List(ids)).OrderExpr("att.tier_id ASC").Scan(ctx); err != nil {
 		return err
 	}
 	for _, t := range trows {

@@ -12,11 +12,12 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"expvar"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -92,7 +93,7 @@ func (s *modelConfigAdminService) ListModels(_ context.Context, req *modelconfig
 			for kind, rate := range rates {
 				pbRates = append(pbRates, &modelconfigv1.ModelRate{Kind: string(kind), MicrosPerMillion: rate})
 			}
-			sort.Slice(pbRates, func(i, j int) bool { return pbRates[i].Kind < pbRates[j].Kind })
+			slices.SortFunc(pbRates, func(a, b *modelconfigv1.ModelRate) int { return cmp.Compare(a.Kind, b.Kind) })
 			out = append(out, &modelconfigv1.Model{
 				Id:           modelID,
 				Vendor:       d.Name,
@@ -114,11 +115,8 @@ func (s *modelConfigAdminService) ListModels(_ context.Context, req *modelconfig
 		}
 	}
 	// Stable order (vendor, id) so the Harbor dropdown doesn't reshuffle.
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Vendor != out[j].Vendor {
-			return out[i].Vendor < out[j].Vendor
-		}
-		return out[i].Id < out[j].Id
+	slices.SortFunc(out, func(a, b *modelconfigv1.Model) int {
+		return cmp.Or(cmp.Compare(a.Vendor, b.Vendor), cmp.Compare(a.Id, b.Id))
 	})
 	return &modelconfigv1.ListModelsResponse{Models: out}, nil
 }

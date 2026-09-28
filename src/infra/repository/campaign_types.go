@@ -113,7 +113,7 @@ func (r *campaignTypeRepository) GetByIDs(ctx context.Context, ids []string) (ma
 		return map[string]*models.CampaignType{}, nil
 	}
 	var types []models.CampaignType
-	q, err := visibleTypes(ctx, r.db.NewSelect().Model(&types).Where("ct.id IN (?)", bun.In(ids)), "ct.tenant_id")
+	q, err := visibleTypes(ctx, r.db.NewSelect().Model(&types).Where("ct.id IN (?)", bun.List(ids)), "ct.tenant_id")
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (r *campaignTypeRepository) hydratePhases(ctx context.Context, types []mode
 	var phases []models.CampaignTypePhase
 	if err := r.db.NewSelect().
 		Model(&phases).
-		Where("ctp.campaign_type_id IN (?)", bun.In(ids)).
+		Where("ctp.campaign_type_id IN (?)", bun.List(ids)).
 		OrderExpr("ctp.sequence ASC").
 		Scan(ctx); err != nil {
 		return err

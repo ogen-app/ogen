@@ -16,7 +16,7 @@ func day(s string) time.Time {
 	return t
 }
 
-func ptr(t time.Time) *time.Time { return &t }
+//go:fix inline
 
 // campaign builds a 3-phase campaign over [start, end]; phases are declared
 // out of sequence order to prove everything sorts by Sequence.
@@ -30,10 +30,10 @@ func campaign(start, end string) *models.Campaign {
 		}},
 	}
 	if start != "" {
-		c.StartDate = ptr(day(start))
+		c.StartDate = new(day(start))
 	}
 	if end != "" {
-		c.EndDate = ptr(day(end))
+		c.EndDate = new(day(end))
 	}
 	return c
 }
@@ -163,8 +163,7 @@ func TestValidate_Rules(t *testing.T) {
 	}
 	for name, plan := range cases {
 		_, err := Validate(c, plan)
-		var pe *PlanError
-		if !errors.As(err, &pe) {
+		if _, ok := errors.AsType[*PlanError](err); !ok {
 			t.Errorf("%s: err = %v, want *PlanError", name, err)
 		}
 	}

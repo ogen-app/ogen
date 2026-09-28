@@ -279,7 +279,7 @@ func reconcileFacts(ctx context.Context, tx bun.Tx, want []string, author *strin
 		}
 	}
 	if len(drop) > 0 {
-		if _, err := tx.NewDelete().Model((*models.BrandFact)(nil)).Where("id IN (?)", bun.In(drop)).Exec(ctx); err != nil {
+		if _, err := tx.NewDelete().Model((*models.BrandFact)(nil)).Where("id IN (?)", bun.List(drop)).Exec(ctx); err != nil {
 			return rec, err
 		}
 		rec.Removed = len(drop)

@@ -9,7 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 )
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
 
 func TestClassifyHealth(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
@@ -20,15 +20,15 @@ func TestClassifyHealth(t *testing.T) {
 		h    zernio.AccountHealth
 		want string
 	}{
-		{"healthy far expiry", zernio.AccountHealth{Status: "healthy", TokenValid: true, TokenExpiresAt: ptr(now.AddDate(0, 0, 30))}, ""},
+		{"healthy far expiry", zernio.AccountHealth{Status: "healthy", TokenValid: true, TokenExpiresAt: new(now.AddDate(0, 0, 30))}, ""},
 		{"healthy no expiry", zernio.AccountHealth{Status: "healthy", TokenValid: true}, ""},
-		{"within lead window", zernio.AccountHealth{Status: "healthy", TokenExpiresAt: ptr(now.AddDate(0, 0, 3))}, templates.StageExpiringSoon},
-		{"exactly at lead edge", zernio.AccountHealth{Status: "healthy", TokenExpiresAt: ptr(now.AddDate(0, 0, 7))}, templates.StageExpiringSoon},
-		{"warning status", zernio.AccountHealth{Status: "warning", TokenExpiresAt: ptr(now.AddDate(0, 0, 30))}, templates.StageExpiringSoon},
+		{"within lead window", zernio.AccountHealth{Status: "healthy", TokenExpiresAt: new(now.AddDate(0, 0, 3))}, templates.StageExpiringSoon},
+		{"exactly at lead edge", zernio.AccountHealth{Status: "healthy", TokenExpiresAt: new(now.AddDate(0, 0, 7))}, templates.StageExpiringSoon},
+		{"warning status", zernio.AccountHealth{Status: "warning", TokenExpiresAt: new(now.AddDate(0, 0, 30))}, templates.StageExpiringSoon},
 		{"error status", zernio.AccountHealth{Status: "error"}, templates.StageActionRequired},
 		{"needs reconnect", zernio.AccountHealth{Status: "healthy", NeedsReconnect: true}, templates.StageActionRequired},
-		{"already expired", zernio.AccountHealth{Status: "healthy", TokenExpiresAt: ptr(now.AddDate(0, 0, -1))}, templates.StageActionRequired},
-		{"expired trumps warning", zernio.AccountHealth{Status: "warning", TokenExpiresAt: ptr(now.AddDate(0, 0, -1))}, templates.StageActionRequired},
+		{"already expired", zernio.AccountHealth{Status: "healthy", TokenExpiresAt: new(now.AddDate(0, 0, -1))}, templates.StageActionRequired},
+		{"expired trumps warning", zernio.AccountHealth{Status: "warning", TokenExpiresAt: new(now.AddDate(0, 0, -1))}, templates.StageActionRequired},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

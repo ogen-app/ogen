@@ -475,10 +475,7 @@ func spreadDates(start, end time.Time, n int) []string {
 	if n <= 1 {
 		return append(out, start.Format(iso))
 	}
-	totalDays := int(end.Sub(start).Hours() / 24)
-	if totalDays < 0 {
-		totalDays = 0
-	}
+	totalDays := max(int(end.Sub(start).Hours()/24), 0)
 	for i := range n {
 		off := 0
 		if totalDays > 0 {

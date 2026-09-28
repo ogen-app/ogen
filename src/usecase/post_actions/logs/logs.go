@@ -38,10 +38,7 @@ func Capper(payload string) string {
 		return payload
 	}
 	marker := fmt.Sprintf(truncationMarker, len(payload))
-	keep := MaxPayloadBytes - len(marker)
-	if keep < 0 {
-		keep = 0
-	}
+	keep := max(MaxPayloadBytes-len(marker), 0)
 	// Round down to a UTF-8 boundary so we don't slice mid-rune.
 	for keep > 0 && payload[keep]&0xC0 == 0x80 {
 		keep--

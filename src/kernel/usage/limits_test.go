@@ -11,7 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 )
 
-func ptr(v int64) *int64 { return &v }
+//go:fix inline
 
 type fakeLimits struct {
 	row *models.TenantUsageLimit
@@ -56,7 +56,7 @@ func newChecker(t *testing.T, lim fakeLimits, sp *fakeSpend, def usage.Defaults)
 }
 
 func TestChecker_EnforceOverDayCapBlocks(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1000), Mode: models.LimitModeEnforce, Enabled: true}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(1000)), Mode: models.LimitModeEnforce, Enabled: true}
 	c, m := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{1000, 0}}, usage.Defaults{})
 
 	d := c.Check(tenantCtx("tA"))
@@ -69,7 +69,7 @@ func TestChecker_EnforceOverDayCapBlocks(t *testing.T) {
 }
 
 func TestChecker_WarnOverProceeds(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1000), Mode: models.LimitModeWarn, Enabled: true}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(1000)), Mode: models.LimitModeWarn, Enabled: true}
 	c, m := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{2000, 0}}, usage.Defaults{})
 
 	d := c.Check(tenantCtx("tA"))
@@ -82,7 +82,7 @@ func TestChecker_WarnOverProceeds(t *testing.T) {
 }
 
 func TestChecker_UnderCapAllows(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1000), Mode: models.LimitModeEnforce, Enabled: true}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(1000)), Mode: models.LimitModeEnforce, Enabled: true}
 	c, _ := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{500, 0}}, usage.Defaults{})
 
 	if d := c.Check(tenantCtx("tA")); d.Blocked {
@@ -91,7 +91,7 @@ func TestChecker_UnderCapAllows(t *testing.T) {
 }
 
 func TestChecker_MonthCapBlocksWhenDayUnderOrUnset(t *testing.T) {
-	row := &models.TenantUsageLimit{MonthlyCapMicros: ptr(1000), Mode: models.LimitModeEnforce, Enabled: true}
+	row := &models.TenantUsageLimit{MonthlyCapMicros: new(int64(1000)), Mode: models.LimitModeEnforce, Enabled: true}
 	c, _ := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{500, 1000}}, usage.Defaults{})
 
 	d := c.Check(tenantCtx("tA"))
@@ -101,7 +101,7 @@ func TestChecker_MonthCapBlocksWhenDayUnderOrUnset(t *testing.T) {
 }
 
 func TestChecker_DisabledRowAllows(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1), Mode: models.LimitModeEnforce, Enabled: false}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(1)), Mode: models.LimitModeEnforce, Enabled: false}
 	c, _ := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{100, 100}}, usage.Defaults{})
 
 	if d := c.Check(tenantCtx("tA")); d.Blocked {
@@ -144,7 +144,7 @@ func TestChecker_UnlimitedWhenNoRowNoDefaults(t *testing.T) {
 }
 
 func TestChecker_FailOpenOnSpendError(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1), Mode: models.LimitModeEnforce, Enabled: true}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(1)), Mode: models.LimitModeEnforce, Enabled: true}
 	c, m := newChecker(t, fakeLimits{row: row}, &fakeSpend{err: errors.New("analytics down")}, usage.Defaults{})
 
 	if d := c.Check(tenantCtx("tA")); d.Blocked {
@@ -167,7 +167,7 @@ func TestChecker_FailOpenOnLimitsError(t *testing.T) {
 }
 
 func TestChecker_CachesWithinTTL(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(10_000), Mode: models.LimitModeEnforce, Enabled: true}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(10_000)), Mode: models.LimitModeEnforce, Enabled: true}
 	sp := &fakeSpend{vals: []int64{500, 0}}
 	c, _ := newChecker(t, fakeLimits{row: row}, sp, usage.Defaults{})
 
@@ -192,7 +192,7 @@ func TestChecker_NilAllows(t *testing.T) {
 }
 
 func TestChecker_EnforceReturnsLimitError(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1000), Mode: models.LimitModeEnforce, Enabled: true}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(1000)), Mode: models.LimitModeEnforce, Enabled: true}
 	c, _ := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{1000, 0}}, usage.Defaults{})
 
 	err := c.Enforce(tenantCtx("tA"))
@@ -207,7 +207,7 @@ func TestChecker_EnforceReturnsLimitError(t *testing.T) {
 
 func TestResolve(t *testing.T) {
 	t.Run("tenant row wins", func(t *testing.T) {
-		row := &models.TenantUsageLimit{DailyCapMicros: ptr(500), Mode: models.LimitModeWarn, Enabled: true}
+		row := &models.TenantUsageLimit{DailyCapMicros: new(int64(500)), Mode: models.LimitModeWarn, Enabled: true}
 		eff := usage.Resolve(row, usage.Defaults{DailyCapMicros: 999})
 		if eff.Source != "tenant" || eff.Mode != models.LimitModeWarn || eff.DailyCapMicros == nil || *eff.DailyCapMicros != 500 {
 			t.Fatalf("resolve(tenant) = %+v", eff)
@@ -231,7 +231,7 @@ func TestResolve(t *testing.T) {
 }
 
 func TestChecker_UntenantedNotGated(t *testing.T) {
-	row := &models.TenantUsageLimit{DailyCapMicros: ptr(1), Mode: models.LimitModeEnforce, Enabled: true}
+	row := &models.TenantUsageLimit{DailyCapMicros: new(int64(1)), Mode: models.LimitModeEnforce, Enabled: true}
 	c, _ := newChecker(t, fakeLimits{row: row}, &fakeSpend{vals: []int64{100, 100}}, usage.Defaults{})
 
 	if d := c.Check(t.Context()); d.Blocked {

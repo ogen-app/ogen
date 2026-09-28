@@ -112,7 +112,7 @@ func (r *emailLogRepository) ListByTenant(ctx context.Context, f EmailListFilter
 	}
 	q := r.db.NewSelect().Model(&rows).Where("tenant_id = ?", f.TenantID)
 	if len(f.Statuses) > 0 {
-		q = q.Where("status IN (?)", bun.In(f.Statuses))
+		q = q.Where("status IN (?)", bun.List(f.Statuses))
 	}
 	if f.Kind != "" {
 		q = q.Where("kind = ?", f.Kind)

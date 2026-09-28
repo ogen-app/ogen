@@ -93,7 +93,7 @@ func fetchByIDs[T any](
 		return result, nil
 	}
 	var items []T
-	if err := db.NewSelect().Model(&items).Where("id IN (?)", bun.In(ids)).Scan(ctx); err != nil {
+	if err := db.NewSelect().Model(&items).Where("id IN (?)", bun.List(ids)).Scan(ctx); err != nil {
 		return nil, err
 	}
 	for i := range items {

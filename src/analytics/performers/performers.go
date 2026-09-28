@@ -306,13 +306,6 @@ func shareOf(reach, total int) float64 {
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 func round4(f float64) float64 { return math.Round(f*10000) / 10000 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // --- insights ---
 
 func buildInsights(sorted []Row, total int) []insights.Insight {

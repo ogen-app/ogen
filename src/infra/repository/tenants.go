@@ -152,10 +152,7 @@ func (r *tenantRepository) ListWithClassification(ctx context.Context, f TenantL
 	if limit > 500 {
 		limit = 500
 	}
-	offset := f.Offset
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(f.Offset, 0)
 
 	var tenants []models.Tenant
 	// Any status by default (CON-190): the operator console lists all tenants and
@@ -282,7 +279,7 @@ func (r *tenantRepository) hydrateClassification(ctx context.Context, tenants []
 		}
 	}
 	var tiers []models.TenantTier
-	if err := r.db.NewSelect().Model(&tiers).Where("tt.id IN (?)", bun.In(tierIDs)).Scan(ctx); err != nil {
+	if err := r.db.NewSelect().Model(&tiers).Where("tt.id IN (?)", bun.List(tierIDs)).Scan(ctx); err != nil {
 		return err
 	}
 	tierByID := make(map[string]*models.TenantTier, len(tiers))
@@ -308,7 +305,7 @@ func (r *tenantRepository) hydrateClassification(ctx context.Context, tenants []
 		TableExpr("tenant_group_assignments AS tga").
 		ColumnExpr("tga.tenant_id, tg.id, tg.name, tg.color, tg.description, tg.created_at, tg.updated_at").
 		Join("JOIN tenant_groups AS tg ON tg.id = tga.group_id").
-		Where("tga.tenant_id IN (?)", bun.In(tenantIDs)).
+		Where("tga.tenant_id IN (?)", bun.List(tenantIDs)).
 		OrderExpr("tg.name ASC").
 		Scan(ctx, &rows); err != nil {
 		return err

@@ -172,10 +172,7 @@ func (l *keyedRateLimiter) sweep(now time.Time) {
 // user-facing message (the login/signup forms surface the response body
 // verbatim), matching the Zernio connect-link limiter's contract.
 func tooManyRequests(c *fiber.Ctx, retry time.Duration, message string) error {
-	sec := int(math.Ceil(retry.Seconds()))
-	if sec < 1 {
-		sec = 1
-	}
+	sec := max(int(math.Ceil(retry.Seconds())), 1)
 	c.Set("Retry-After", strconv.Itoa(sec))
 	return fiber.NewError(fiber.StatusTooManyRequests, message)
 }

@@ -110,7 +110,7 @@ func (r *assetFileRepository) ListByAssetIDs(ctx context.Context, assetIDs []str
 		return out, nil
 	}
 	var files []models.AssetFile
-	err := r.db.NewSelect().Model(&files).Where("asset_id IN (?)", bun.In(assetIDs)).Scan(ctx)
+	err := r.db.NewSelect().Model(&files).Where("asset_id IN (?)", bun.List(assetIDs)).Scan(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -120,7 +119,7 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 		}
 	}
 	if len(rejected) > 0 {
-		sort.Strings(rejected)
+		slices.Sort(rejected)
 		return nil, fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("field %q cannot be set here", rejected[0]))
 	}
 	return raw, nil

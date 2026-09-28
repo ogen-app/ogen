@@ -15,14 +15,14 @@ func day(s string) time.Time {
 	return t
 }
 
-func ptrTime(t time.Time) *time.Time { return &t }
+//go:fix inline
 
 // 30-day campaign, 3 phases → 10-day windows:
 // p1 [01-01,01-10], p2 [01-11,01-20], p3 [01-21,01-30].
 func threePhaseCampaign() *models.Campaign {
 	return &models.Campaign{
-		StartDate: ptrTime(day("2026-01-01")),
-		EndDate:   ptrTime(day("2026-01-30")),
+		StartDate: new(day("2026-01-01")),
+		EndDate:   new(day("2026-01-30")),
 		CampaignType: &models.CampaignType{Phases: []models.CampaignTypePhase{
 			{ID: "p1", Sequence: 1},
 			{ID: "p2", Sequence: 2},

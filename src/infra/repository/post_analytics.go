@@ -342,10 +342,7 @@ type postAnalyticsListRow struct {
 }
 
 func (r *postAnalyticsRepository) List(ctx context.Context, opts PostAnalyticsListOptions) ([]PostAnalyticsListItem, PostAnalyticsOverview, error) {
-	page := opts.Page
-	if page < 1 {
-		page = 1
-	}
+	page := max(opts.Page, 1)
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 50

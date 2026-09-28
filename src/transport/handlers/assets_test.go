@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -75,6 +76,7 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 		_, err = db.NewDelete().TableExpr("sessions").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("users").Where("1 = 1").Exec(context.Background())
+		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("accounts").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -672,6 +674,7 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 		_, err = db.NewDelete().TableExpr("sessions").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("users").Where("1 = 1").Exec(context.Background())
+		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("accounts").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -701,9 +704,7 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 
 	updateAsset := func(id, title, content string, extra map[string]any) {
 		body := fiber.Map{"title": title, "content": content}
-		for k, v := range extra {
-			body[k] = v
-		}
+		maps.Copy(body, extra)
 		buf, _ := json.Marshal(body)
 		req := httptest.NewRequest("PUT", "/api/content-bank/assets/"+id, bytes.NewReader(buf))
 		req.Header.Set("Content-Type", "application/json")

@@ -281,7 +281,7 @@ func (r *assetRepository) ApplyTags(ctx context.Context, assetIDs, add, remove [
 		var assets []models.Asset
 		if err := tx.NewSelect().
 			Model(&assets).
-			Where("a.id IN (?)", bun.In(assetIDs)).
+			Where("a.id IN (?)", bun.List(assetIDs)).
 			For("UPDATE").
 			Scan(ctx); err != nil {
 			return err

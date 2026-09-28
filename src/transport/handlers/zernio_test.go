@@ -106,12 +106,6 @@ func (q *quietHub) Subscribe(_ context.Context, _ eventhub.SubscribeOpts) (<-cha
 	return nil, nil, eventhub.ErrNoTopics
 }
 
-func (q *quietHub) snapshot() []eventhub.Event {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return append([]eventhub.Event(nil), q.events...)
-}
-
 var _ eventhub.Hub = (*quietHub)(nil)
 
 var _ = Describe("ZernioHandler", Ordered, func() {

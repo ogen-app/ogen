@@ -95,6 +95,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		_, err = db.NewDelete().TableExpr("sessions").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("users").Where("1 = 1").Exec(context.Background())
+		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("accounts").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -568,12 +569,10 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				c := createCampaign("Concurrent Campaign", "Uk")
 				var wg sync.WaitGroup
 				for _, id := range []string{"concurrent-1", "concurrent-2"} {
-					wg.Add(1)
-					go func(assetID string) {
+					wg.Go(func() {
 						defer GinkgoRecover()
-						defer wg.Done()
-						Expect(addAssets(c.ID, []string{assetID}).StatusCode).To(Equal(200))
-					}(id)
+						Expect(addAssets(c.ID, []string{id}).StatusCode).To(Equal(200))
+					})
 				}
 				wg.Wait()
 
@@ -1028,10 +1027,10 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				var eventType, eventData string
 				for scanner.Scan() {
 					line := scanner.Text()
-					if strings.HasPrefix(line, "event: ") {
-						eventType = strings.TrimPrefix(line, "event: ")
-					} else if strings.HasPrefix(line, "data: ") {
-						eventData = strings.TrimPrefix(line, "data: ")
+					if after, ok := strings.CutPrefix(line, "event: "); ok {
+						eventType = after
+					} else if after, ok := strings.CutPrefix(line, "data: "); ok {
+						eventData = after
 					}
 				}
 				Expect(eventType).To(Equal("error"))

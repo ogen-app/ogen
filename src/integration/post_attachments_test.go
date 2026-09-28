@@ -293,9 +293,7 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 		results := make(chan map[string]any, N)
 		errs := make(chan error, N)
 		for i := range N {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
+			wg.Go(func() {
 				body, ct := multipartBody("file", fmt.Sprintf("img-%d.png", i), "image/png", makePNG(4))
 				req := httptest.NewRequest("POST", "/api/posts/"+postID+"/attachments", body)
 				req.Header.Set("Content-Type", ct)
@@ -316,7 +314,7 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 					return
 				}
 				results <- att
-			}(i)
+			})
 		}
 		wg.Wait()
 		close(results)
