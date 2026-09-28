@@ -2,7 +2,9 @@ package loginsecurity
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"time"
@@ -65,25 +67,40 @@ type Secured struct {
 	SessionsRevoked int    `json:"sessions_revoked"`
 }
 
-// Secure spends an alert token and, in the same transaction, signs the account
-// out everywhere, forgets its devices, voids its other alert links and mints a
-// password-reset token. It sends no email and opens no session: the owner is
-// already in the flow, and only a password login starts a session.
+// Secure spends an alert token and, in the same transaction, replaces the
+// password with an unknown random one, signs the account out everywhere,
+// forgets its devices, voids its other alert links and mints a password-reset
+// token. Replacing the password is what keeps the intruder out: without it they
+// could sign straight back in with the password they have, and that login would
+// enrol silently because the devices were just cleared. Login re-checks the
+// password hash under the account row lock before creating a session, so a
+// login racing this transaction can't leave a session behind either. It sends
+// no email and opens no session: the owner is already in the flow.
 func (s *Service) Secure(ctx context.Context, rawToken string) (*Secured, error) {
 	if !models.ValidLoginAlertToken(rawToken) {
 		return nil, ErrNotFound
 	}
 	hash := models.HashLoginAlertToken(rawToken)
 	now := s.clock()
+	// Hashed before the transaction: argon2id is deliberately slow.
+	lockedHash, err := unguessablePasswordHash()
+	if err != nil {
+		return nil, err
+	}
 
 	var (
 		res     Secured
 		tok     *models.LoginAlertToken
 		devices int
 	)
-	err := s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	err = s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var err error
 		if tok, err = s.d.Alerts.Consume(ctx, tx, hash, now); err != nil {
+			return err
+		}
+		// Takes the account row lock first, so a concurrent login's session
+		// check waits for this transaction and then sees the new hash.
+		if err = s.d.Accounts.UpdatePasswordTx(ctx, tx, tok.AccountID, lockedHash); err != nil {
 			return err
 		}
 		if res.SessionsRevoked, err = s.d.Sessions.DeleteAllForAccount(ctx, tx, tok.AccountID, ""); err != nil {
@@ -116,6 +133,16 @@ func (s *Service) Secure(ctx context.Context, rawToken string) (*Secured, error)
 		}),
 	)
 	return &res, nil
+}
+
+// unguessablePasswordHash hashes 32 random bytes nobody ever sees, so no
+// password matches it until the owner sets a new one through the reset link.
+func unguessablePasswordHash() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return models.HashPassword(base64.RawURLEncoding.EncodeToString(b))
 }
 
 // mintReset issues a password-reset token for the account's current default

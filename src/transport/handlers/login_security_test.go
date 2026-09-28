@@ -210,6 +210,10 @@ var _ = Describe("Login security", Ordered, func() {
 		decode(resp, &body)
 		Expect(body["error"]).To(Equal("token_used"))
 
+		// The intruder's copy of the password no longer works.
+		resp = do("POST", "/api/sessions", fiber.Map{"email": "jane@acme.com", "password": "password123"})
+		Expect(resp.StatusCode).To(Equal(fiber.StatusUnauthorized))
+
 		// The reset link it returned completes a normal password reset.
 		resetToken := strings.TrimPrefix(secured.ResetURL, "https://app.example/auth/reset?token=")
 		pr := handlers.NewPasswordResetHandler(db, repository.NewUserRepository(db), repository.NewAccountRepository(db), "https://app.example", nil, nil)

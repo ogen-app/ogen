@@ -43,6 +43,9 @@ func (stubSessionRepo) SetDefaultWorkspace(context.Context, string, string, stri
 	return nil
 }
 func (stubSessionRepo) Delete(context.Context, string) (bool, error) { return false, nil }
+func (stubSessionRepo) CreateForCredential(context.Context, *models.Session, string) (bool, error) {
+	return true, nil
+}
 func (stubSessionRepo) DeleteAllForAccount(context.Context, bun.IDB, string, string) (int, error) {
 	return 0, nil
 }

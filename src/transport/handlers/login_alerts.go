@@ -72,7 +72,7 @@ func (h *LoginAlertsHandler) Preview(c *fiber.Ctx) error {
 
 // Secure godoc
 // @Summary      Secure an account from a new-device login alert
-// @Description  Public. Spends the single-use alert token and, atomically, signs the account out of every session, forgets its known devices, voids its other alert links and issues a password-reset link, returned as reset_url. Opens no session. reset_url is empty only when the account has no workspace left.
+// @Description  Public. Spends the single-use alert token and, atomically, replaces the password with an unknown random one (the old one stops working), signs the account out of every session, forgets its known devices, voids its other alert links and issues a password-reset link, returned as reset_url. Opens no session. reset_url is empty only when the account has no workspace left.
 // @Tags         security
 // @Produce      json
 // @Param        token  path      string  true  "Alert token from the email link"

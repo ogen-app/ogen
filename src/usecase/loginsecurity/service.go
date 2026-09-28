@@ -153,7 +153,12 @@ func (s *Service) Enroll(ctx context.Context, in Login) string {
 		UserAgent: in.UserAgent, LastIP: in.IP, FirstSeenAt: now, LastSeenAt: now,
 	}
 	if d.ID, err = models.NewID(); err == nil {
-		err = s.d.Devices.Upsert(ctx, nil, d)
+		err = s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			if err := s.d.Devices.Upsert(ctx, tx, d); err != nil {
+				return err
+			}
+			return s.d.Devices.MarkEnrolled(ctx, tx, in.AccountID, now)
+		})
 	}
 	if err != nil {
 		s.logFailure(ctx, in, err)
@@ -182,7 +187,9 @@ type enrolOutcome struct {
 
 // enrolNewDevice stores the device and, when warranted, the alert token plus
 // its email, in one transaction. The account row is locked so concurrent
-// logins agree on "first device" and on the hourly cap.
+// logins agree on "first device" and on the hourly cap. "First" means the
+// account has never enrolled a device (or was secured since), not that it has
+// no rows now: the retention sweep empties the table for dormant accounts.
 func (s *Service) enrolNewDevice(ctx context.Context, in Login, hash, label string, now time.Time) (enrolOutcome, error) {
 	var out enrolOutcome
 	// Resolved before the transaction: it is an in-memory lookup, but there is
@@ -196,12 +203,7 @@ func (s *Service) enrolNewDevice(ctx context.Context, in Login, hash, label stri
 	}
 
 	err = s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		var locked string
-		if err := tx.NewSelect().Table("accounts").Column("id").
-			Where("id = ?", in.AccountID).For("UPDATE").Scan(ctx, &locked); err != nil {
-			return err
-		}
-		known, err := s.d.Devices.CountForAccount(ctx, tx, in.AccountID)
+		enrolled, err := s.d.Devices.LockEnrollment(ctx, tx, in.AccountID)
 		if err != nil {
 			return err
 		}
@@ -212,9 +214,9 @@ func (s *Service) enrolNewDevice(ctx context.Context, in Login, hash, label stri
 		if err := s.d.Devices.Upsert(ctx, tx, d); err != nil {
 			return err
 		}
-		if known == 0 {
+		if !enrolled {
 			out.first = true
-			return nil
+			return s.d.Devices.MarkEnrolled(ctx, tx, in.AccountID, now)
 		}
 		sent, err := s.d.Alerts.CountSince(ctx, tx, in.AccountID, now.Add(-alertWindow))
 		if err != nil {

@@ -8643,7 +8643,7 @@
         },
         "/api/security/login-alerts/{token}/secure": {
             "post": {
-                "description": "Public. Spends the single-use alert token and, atomically, signs the account out of every session, forgets its known devices, voids its other alert links and issues a password-reset link, returned as reset_url. Opens no session. reset_url is empty only when the account has no workspace left.",
+                "description": "Public. Spends the single-use alert token and, atomically, replaces the password with an unknown random one (the old one stops working), signs the account out of every session, forgets its known devices, voids its other alert links and issues a password-reset link, returned as reset_url. Opens no session. reset_url is empty only when the account has no workspace left.",
                 "produces": [
                     "application/json"
                 ],
