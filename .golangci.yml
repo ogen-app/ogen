@@ -29,8 +29,10 @@ linters:
 
 issues:
   # Gate new and changed code only, so the existing backlog can be paid down
-  # incrementally without blocking unrelated work.
-  new-from-merge-base: main
+  # incrementally without blocking unrelated work. origin/main, not main: CI
+  # checkouts have no local main branch, and an unresolvable ref silently
+  # disables the filter.
+  new-from-merge-base: origin/main
 
 formatters:
   enable:
