@@ -124,7 +124,7 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 		ImageReembed: reembed,
 	}).Register(app)
 	handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, d.store, d.db, audioJobs, d.auth, lim).Register(app)
-	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.VisionClassifyModel, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
+	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).Register(app)
 }
@@ -171,7 +171,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, d.auth).Register(app)
 
 	handlers.NewImagesHandler(d.store, d.auth).Register(app)
-	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.VisionClassifyModel, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).Register(app)
+	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).Register(app)
 	handlers.NewPostNotesHandler(d.svc.notes, r.postRepo, d.auth, rec).Register(app)
 }
 

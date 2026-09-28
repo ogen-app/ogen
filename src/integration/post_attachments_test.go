@@ -150,7 +150,7 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 		}
 		postsHandler := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{OnBeforeDelete: onBeforeDelete})
 		postsHandler.Register(app)
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, "gemini-2.5-flash", 280, auth, nil).Register(app)
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, 280, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "it@example.com", "it-password")
 

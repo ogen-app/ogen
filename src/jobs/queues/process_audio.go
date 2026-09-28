@@ -10,6 +10,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors"
@@ -117,11 +118,12 @@ type AudioDeps struct {
 	// nil-safe.
 	Recorder *usage.Recorder
 	Checker  *usage.Checker
-	// EmbedModel is the price-map key for transcript-chunk embedding usage;
-	// TranscribeModel is the Gemini multimodal model id (config, never compiled
-	// in) passed through to audio-service and used as the metering model.
-	EmbedModel      string
-	TranscribeModel string
+	// EmbedModel is the price-map key for transcript-chunk embedding usage.
+	// Models picks the transcription model passed through to audio-service and
+	// used as the metering model (nil = the modelconfig resolver); a run
+	// resolves it once and keeps it on its extraction row.
+	EmbedModel string
+	Models     modelResolver
 	// Segmentation + tier-gate knobs (config). Zero falls back to the defaults.
 	SegmentMaxMs     int64
 	SegmentOverlapMs int64
@@ -208,6 +210,7 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 	if err != nil {
 		return err
 	}
+	p.freezeModel(ctx, in, ext)
 	if ext.Status == models.AudioExtractionStatusComplete {
 		return nil // idempotent re-drive of a finished run
 	}
@@ -249,9 +252,10 @@ func (p *ProcessAudioProcessor) loadSegments(ctx context.Context, in ProcessAudi
 }
 
 // transcribeAll transcribes every segment not yet terminal. A transient error
-// returns so River resumes from that segment.
+// returns so River resumes from that segment. Every segment, on every attempt,
+// runs the model recorded on the run.
 func (p *ProcessAudioProcessor) transcribeAll(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction, segments []models.AudioSegment, lastAttempt bool) error {
-	model := p.transcribeModel(in)
+	model := ext.TranscribeModel
 	for i := range segments {
 		seg := &segments[i]
 		if seg.Status == models.AudioSegmentStatusDone || seg.Status == models.AudioSegmentStatusFailed {
@@ -265,18 +269,32 @@ func (p *ProcessAudioProcessor) transcribeAll(ctx context.Context, in ProcessAud
 }
 
 // ensureExtraction loads the (asset, run_key) extraction or creates a fresh
-// pending one.
+// pending one with the run's model resolved.
 func (p *ProcessAudioProcessor) ensureExtraction(ctx context.Context, in ProcessAudioTask) (*models.AudioExtraction, error) {
 	return ensureExtractionRun(ctx, p.Deps.Extractions, "process_audio", in.AssetID, in.RunKey, func(id string) *models.AudioExtraction {
-		return &models.AudioExtraction{
-			ID:              id,
-			AssetID:         in.AssetID,
-			RunKey:          in.RunKey,
-			Status:          models.AudioExtractionStatusPending,
-			TranscribeModel: p.transcribeModel(in),
-			EmbedModel:      p.Deps.EmbedModel,
+		ext := &models.AudioExtraction{
+			ID:         id,
+			AssetID:    in.AssetID,
+			RunKey:     in.RunKey,
+			Status:     models.AudioExtractionStatusPending,
+			EmbedModel: p.Deps.EmbedModel,
 		}
+		p.freezeModel(ctx, in, ext)
+		return ext
 	})
+}
+
+// freezeModel resolves the transcription model if the run doesn't carry one
+// yet. A new run gets it at creation; a loaded run keeps what it recorded, so a
+// resumed run never switches models between segments. The pinned model wins.
+func (p *ProcessAudioProcessor) freezeModel(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction) {
+	if ext.TranscribeModel != "" {
+		return
+	}
+	ext.TranscribeModel = in.PinnedModel
+	if ext.TranscribeModel == "" {
+		ext.TranscribeModel = p.Deps.Models.model(ctx, modelconfig.FlowTranscribe, modelconfig.SlotMain)
+	}
 }
 
 // probeGateNormalize runs Probe, enforces the max-duration + cost gates, then
@@ -665,13 +683,6 @@ func (p *ProcessAudioProcessor) failSegment(ctx context.Context, seg *models.Aud
 
 func (p *ProcessAudioProcessor) statusWriter() assetStatusWriter {
 	return assetStatusWriter{op: "process_audio", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "audio", kind: models.AssetTypeAudio}
-}
-
-func (p *ProcessAudioProcessor) transcribeModel(in ProcessAudioTask) string {
-	if in.PinnedModel != "" {
-		return in.PinnedModel
-	}
-	return p.Deps.TranscribeModel
 }
 
 func (p *ProcessAudioProcessor) segmentMaxMs() int64 {

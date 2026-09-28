@@ -556,7 +556,7 @@ func (e *Enqueuer) EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, ass
 // a committed upload always has a job, a rolled-back one never does. The worker
 // hands audio-service presigned URLs (storageKey is the tenant-relative object
 // path), so the bytes are not in the args. runKey makes the run idempotent; an
-// empty pinnedModel uses the configured TRANSCRIBE_MODEL. The task's InsertOpts
+// empty pinnedModel uses the transcribe/main model slot. The task's InsertOpts
 // routes it onto the dedicated `audio` queue. Takes primitives so the handler
 // depends on a narrow interface, not this package.
 func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error {
@@ -580,7 +580,7 @@ func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetI
 // committed upload always has a job, a rolled-back one never does. The worker
 // hands image-service presigned URLs (storageKey is the tenant-relative object
 // path), so the bytes are not in the args. runKey makes the run idempotent; an
-// empty pinnedModel uses the configured VISION_EXTRACT_MODEL. The task's
+// empty pinnedModel uses the vision/extract model slot. The task's
 // InsertOpts routes it onto the dedicated `image` queue. Takes primitives so the
 // handler depends on a narrow interface, not this package.
 func (e *Enqueuer) EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error {

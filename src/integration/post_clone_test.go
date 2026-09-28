@@ -101,7 +101,7 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 			OnBeforeDelete: onBeforeDelete,
 		})
 		postsHandler.Register(app)
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, "gemini-2.5-flash", 280, auth, nil).Register(app)
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, 280, auth, nil).Register(app)
 
 		// Seed user + session + campaign.
 		seedTenantUser(db, "Admin", "clone@example.com", "clone-password")

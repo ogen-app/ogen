@@ -127,18 +127,59 @@ func baseImageDeps(client imageExtractor) (ImageDeps, *fakeImageAssets, *fakeChu
 	blocks := &fakeImageBlocks{}
 	exts := &fakeImageExtractions{}
 	return ImageDeps{
-		Client:        client,
-		Embedder:      &fakeEmbedder{},
-		Storage:       presignBlob{},
-		Assets:        assets,
-		Chunks:        chunks,
-		Files:         &fakeImageFiles{},
-		Extractions:   exts,
-		Blocks:        blocks,
-		ClassifyModel: "gemini-2.5-flash",
-		ExtractModel:  "gemini-2.5-pro",
-		EscalateModel: "gemini-2.5-pro",
+		Client:      client,
+		Embedder:    &fakeEmbedder{},
+		Storage:     presignBlob{},
+		Assets:      assets,
+		Chunks:      chunks,
+		Files:       &fakeImageFiles{},
+		Extractions: exts,
+		Blocks:      blocks,
+		Models:      staticModels(map[string]string{"classify": "gemini-2.5-flash", "extract": "gemini-2.5-pro", "escalate": "gemini-2.5-pro"}),
 	}, assets, chunks, blocks, exts
+}
+
+// staticModels resolves a slot key to a fixed model, standing in for the
+// modelconfig resolver.
+func staticModels(bySlot map[string]string) modelResolver {
+	return func(_ context.Context, _, slotKey string) string { return bySlot[slotKey] }
+}
+
+// TestProcessImage_ModelsFrozenPerRun: a retry after an operator changes the
+// vision models still sends (and records) the models the run started with.
+func TestProcessImage_ModelsFrozenPerRun(t *testing.T) {
+	client := &fakeImageClient{err: grpcstatus.Error(codes.Unavailable, "down")}
+	deps, _, _, _, exts := baseImageDeps(client)
+	p := newImageProc(deps)
+	task := ProcessImageTask{AssetID: "i1", StorageKey: "assets/i1/original.png", RunKey: "run-1", MimeType: "image/png"}
+
+	if err := p.process(t.Context(), task, false); err == nil {
+		t.Fatal("first attempt: want a transient error")
+	}
+	if got := client.gotOpts; got.ClassifyModel != "gemini-2.5-flash" || got.ExtractModel != "gemini-2.5-pro" || got.EscalateModel != "gemini-2.5-pro" {
+		t.Fatalf("first attempt sent %+v, want the resolved models", got)
+	}
+
+	p.Deps.Models = staticModels(map[string]string{"classify": "changed", "extract": "changed", "escalate": "changed"})
+	_ = p.process(t.Context(), task, false)
+	if got := client.gotOpts; got.ClassifyModel != "gemini-2.5-flash" || got.ExtractModel != "gemini-2.5-pro" || got.EscalateModel != "gemini-2.5-pro" {
+		t.Fatalf("retry sent %+v, want the models frozen on the run", got)
+	}
+	if exts.create != 1 || exts.ext.ClassifyModel != "gemini-2.5-flash" || exts.ext.ExtractModel != "gemini-2.5-pro" {
+		t.Fatalf("run row = %+v (creates=%d), want one run recording the original models", exts.ext, exts.create)
+	}
+}
+
+// TestProcessImage_PinnedModelOverridesExtract: a pinned model replaces only the
+// extract slot; classify and escalate still come from the resolver.
+func TestProcessImage_PinnedModelOverridesExtract(t *testing.T) {
+	client := &fakeImageClient{err: grpcstatus.Error(codes.Unavailable, "down")}
+	deps, _, _, _, _ := baseImageDeps(client)
+	task := ProcessImageTask{AssetID: "i1", StorageKey: "assets/i1/original.png", RunKey: "run-1", PinnedModel: "gemini-pinned"}
+	_ = newImageProc(deps).process(t.Context(), task, false)
+	if got := client.gotOpts; got.ExtractModel != "gemini-pinned" || got.ClassifyModel != "gemini-2.5-flash" || got.EscalateModel != "gemini-2.5-pro" {
+		t.Fatalf("sent %+v, want pinned extract with resolved classify/escalate", got)
+	}
 }
 
 // TestProcessImage_Success is the heart of the job: a successful Extract persists

@@ -10983,7 +10983,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "model": {
-                    "description": "PinnedModel optionally overrides TRANSCRIBE_MODEL for this run.",
+                    "description": "PinnedModel optionally overrides the configured transcription model for this run.",
                     "type": "string"
                 }
             }
