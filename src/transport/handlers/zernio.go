@@ -12,13 +12,13 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/crypto/envelope"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/connectlink"
 )
 
 // fastPollWindow is the fast-cadence window the worker honours after a
@@ -273,99 +273,43 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusTooManyRequests, "rate_limited")
 	}
 
-	profileID, ok, err := h.settings.Get(reqCtx(c), zernio.SettingProfileID)
+	svc := &connectlink.Service{
+		Integration:    h.integ,
+		Bootstrapper:   h.bootstrapper,
+		Settings:       h.settings,
+		Sessions:       h.connectSessions,
+		CallbackURL:    h.connectCallbackURL,
+		NewSessionID:   newConnectSessionID,
+		SessionTTL:     connectSessionTTL,
+		FastPollWindow: fastPollWindow,
+	}
+	link, err := svc.Create(reqCtx(c), req.Platform)
 	if err != nil {
-		return err
-	}
-	if !ok || profileID == "" {
-		// Lazily bootstrap THIS tenant's Zernio profile on its first
-		// connect (the request context carries the tenant), then re-read it.
-		if err := h.bootstrapper.Run(reqCtx(c)); err != nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "integration_degraded")
-		}
-		profileID, ok, err = h.settings.Get(reqCtx(c), zernio.SettingProfileID)
-		if err != nil {
-			return err
-		}
-		if !ok || profileID == "" {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "integration_degraded")
-		}
+		return connectLinkError(err)
 	}
 
-	// Health gate runs *after* the lazy bootstrap above: a missing-profile
-	// bootstrap promotes a transient StateDegraded back to StateOK on success,
-	// so a first connect can self-heal instead of being short-
-	// circuited to 503 before it ever gets the chance.
-	if h.integ.State() != zernio.StateOK {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "integration_degraded")
-	}
-
-	// Mint a short-lived connect session so the headless OAuth callback
-	// can resolve this tenant + profile without relying on the browser session
-	// (which may not survive the cross-site redirect through Zernio), and hold
-	// the pending selection when a platform has 2+ targets. The session id rides
-	// the callback URL as ogen_cn.
-	tenantID, ok := tenantctx.From(reqCtx(c))
-	if !ok {
-		return fiber.NewError(fiber.StatusUnauthorized, "no_tenant")
-	}
-	sessionID, err := newConnectSessionID()
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	if err := h.connectSessions.Create(reqCtx(c), &models.ZernioConnectSession{
-		ID:        sessionID,
-		TenantID:  tenantID,
-		ProfileID: profileID,
-		Platform:  req.Platform,
-		Status:    models.ZernioConnectStatusPendingAuth,
-		CreatedAt: now,
-		UpdatedAt: now,
-		ExpiresAt: now.Add(connectSessionTTL),
-	}); err != nil {
-		return err
-	}
-
-	connectURL, err := h.integ.Client.CreateConnectLink(reqCtx(c), profileID, req.Platform, h.connectCallbackURL(sessionID))
-	if err != nil {
-		if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
-			return fiber.NewError(http.StatusBadGateway, apiErr.Error())
-		}
-		return err
-	}
-
-	// Adaptive polling window: tighten the worker cadence for the next
-	// fastPollWindow so the user sees their connected account fast.
-	h.integ.BumpFastUntil(time.Now().Add(fastPollWindow))
-
-	// Mark this tenant as having initiated a Zernio connection so the
-	// background sync worker starts sweeping it. With eager provisioning every
-	// tenant has a profile from signup, so the worker keys its sweep on this
-	// marker — not mere profile presence — to avoid polling tenants that never
-	// connected. This marker is the *only* sweep selector for the tenant, so the
-	// write must be durable: surface store failures as a retryable error rather
-	// than silently stranding the account the user is about to authorize (they
-	// already received a link, so they would not retry on their own). Written once.
-	marker, ok, err := h.settings.Get(reqCtx(c), zernio.SettingConnectInitiatedAt)
-	if err != nil {
-		return err
-	}
-	if !ok || marker == "" {
-		if err := h.settings.Set(reqCtx(c), zernio.SettingConnectInitiatedAt, time.Now().UTC().Format(time.RFC3339)); err != nil {
-			return err
-		}
-	}
-
-	// Log redacted URL only — the query string contains a short-lived
-	// token that must not appear in log lines.
-	slog.InfoContext(reqCtx(c), "connect link issued", logging.AttrComponent, "zernio", "platform", req.Platform, "profile", profileID, "url", redactConnectURL(connectURL))
+	// Log the redacted URL only — the query string carries a short-lived token.
+	slog.InfoContext(reqCtx(c), "connect link issued", logging.AttrComponent, "zernio", "platform", req.Platform, "profile", link.ProfileID, "url", redactConnectURL(link.URL))
 
 	return c.JSON(connectLinkResponse{
 		Platform:   req.Platform,
-		ConnectURL: connectURL,
-		ExpiresAt:  now.Add(connectSessionTTL),
+		ConnectURL: link.URL,
+		ExpiresAt:  link.ExpiresAt,
 	})
+}
+
+// connectLinkError maps a connect-link use-case error onto its response.
+func connectLinkError(err error) error {
+	switch {
+	case errors.Is(err, connectlink.ErrDegraded):
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, connectlink.ErrNoTenant):
+		return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+	}
+	if apiErr, ok := errors.AsType[*zernio.APIError](err); ok {
+		return fiber.NewError(http.StatusBadGateway, apiErr.Error())
+	}
+	return err
 }
 
 type accountsResponse struct {

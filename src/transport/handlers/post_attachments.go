@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	imageclient "github.com/ogen-app/ogen/src/transport/grpc/client/image"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
+	"github.com/ogen-app/ogen/src/usecase/ingest"
 )
 
 // The upload ceilings (image/pdf/video bytes, alt-text length) are not
@@ -320,266 +322,40 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		return err
 	}
 
-	fh, err := c.FormFile("file")
+	up, err := h.openUpload(c)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "file is required")
+		return attachmentError(c, err)
 	}
-	// Reject anything larger than the largest per-kind cap before we even open
-	// the file — this handler accepts both images and PDFs, and the image cap can
-	// exceed the PDF cap (both are operator-configurable), so gate on the larger
-	// of the two. The precise per-kind cap is enforced again inside the probe.
-	preSniffCap := maxPDFUploadBytes()
-	if img := maxImageUploadBytes(); img > preSniffCap {
-		preSniffCap = img
-	}
-	if fh.Size > preSniffCap {
-		return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
-			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20))
-	}
-	// This upload adds fh.Size bytes to the tenant's media_storage_bytes
-	// budget. Check before touching storage so a denied upload never leaves an
-	// orphaned object behind.
-	mediaQuota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", fh.Size)
-	if err != nil {
-		return err
-	}
-
-	f, err := fh.Open()
-	if err != nil {
-		return fmt.Errorf("post_attachments: open upload: %w", err)
-	}
-	defer f.Close()
-
-	// Sniff magic bytes to decide image vs PDF without trusting the
-	// client's declared Content-Type or filename.
-	sniff := make([]byte, 512)
-	n, _ := io.ReadFull(f, sniff)
-	if n == 0 {
-		return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeEmptyFile, "file is empty")
-	}
-	kind := http.DetectContentType(sniff[:n])
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("post_attachments: rewind upload: %w", err)
-	}
+	defer func() { _ = up.file.Close() }()
 
 	session, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
-	id, err := models.NewID()
+	att, err := newUploadAttachment(c, post, session.UserID)
 	if err != nil {
 		return err
 	}
 
-	altText, err := normalizeAltText(c.FormValue("alt_text"))
-	if err != nil {
-		return err
-	}
-
-	// On a thread post the client names which segment this media
-	// belongs to (0-based). Omitted/blank ⇒ NULL (whole-post attachment,
-	// today's behaviour). Range against thread_segments is enforced at the
-	// publish gate, not here — media may be uploaded before segments are set.
-	segIdx, err := parseSegmentIndex(c.FormValue("segment_index"))
-	if err != nil {
-		return err
-	}
-	// A segment only exists on a thread post; refuse to stamp one on an ordinary
-	// post so a meaningless index is never stored or returned.
-	if segIdx != nil && !post.IsThread() {
-		return fiber.NewError(fiber.StatusUnprocessableEntity, "segment_index is only valid on a thread post")
-	}
-
-	att := &models.PostAttachment{
-		ID:           id,
-		PostID:       post.ID,
-		AltText:      altText,
-		SegmentIndex: segIdx,
-		CreatedBy:    session.UserID,
-		// A user-supplied alt text on upload is a manual edit: mark it
-		// so the async auto-generator never overwrites it.
-		AltTextEditedByUser: altText != "",
-	}
-	var data []byte
-	var keyExt string
-	var pendingThumbnail []byte
-	// imagePrepared marks that the image branch already wrote the (EXIF-stripped)
-	// object to att.S3Key via image-service, so the shared upload tail is skipped.
-	var imagePrepared bool
-
-	if kind == pdfprobe.MIME {
-		if fh.Size > maxPDFUploadBytes() {
-			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
-				fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes()>>20))
-		}
-		probe, raw, err := pdfprobe.Probe(f, maxPDFUploadBytes())
-		if err != nil {
-			if errors.Is(err, pdfprobe.ErrUnsupportedMIME) {
-				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, err.Error())
-			}
-			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, err.Error())
-		}
-		att.MimeType = probe.MIME
-		att.SizeBytes = probe.Size
-		att.ChecksumSHA256 = probe.SHA256
-		data = raw
-		keyExt = probe.Extension
-
-		// Page count + first-page thumbnail come from pdf-service.
-		// Best-effort: a render failure leaves page_count 0 / no thumbnail
-		// rather than failing the upload. page_count is set here, before the
-		// platform soft-validation below, so the max_pages check still works.
-		if h.pdf != nil {
-			rctx, cancel := context.WithTimeout(reqCtx(c), pdfRenderTimeout)
-			render, rerr := h.pdf.Render(rctx, bytes.NewReader(raw), pdf.RenderOptions{
-				RenderThumbnail: true,
-				ThumbnailDPI:    pdfThumbnailDPI,
-			})
-			cancel()
-			if rerr != nil {
-				// A terminal "not a usable PDF" verdict (corrupt/encrypted/not a
-				// PDF) is a client error — reject before storing anything. Magic
-				// bytes alone are not enough; pdfprobe only checks the prefix, so
-				// pdf-service is the structural validator. Transient/unreachable
-				// failures degrade gracefully: keep the attachment, no page count
-				// or thumbnail.
-				if pdf.IsInvalidPDF(rerr) {
-					return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable PDF")
-				}
-				slog.WarnContext(reqCtx(c), "pdf render failed", logging.AttrComponent, "post_attachments", "name", fh.Filename, logging.AttrError, rerr)
-			} else {
-				att.PageCount = render.PageCount
-				pendingThumbnail = render.ThumbnailPNG
-			}
-		}
+	var thumbnail []byte
+	if up.kind == pdfprobe.MIME {
+		thumbnail, err = h.preparePDF(reqCtx(c), up, att)
 	} else {
-		if fh.Size > maxImageUploadBytes() {
-			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeTooLarge,
-				fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes()>>20))
-		}
-		// image-service is the sole image authority (D6): validate + metadata +
-		// EXIF-strip (pixels preserved) all happen there. Nil client → reject
-		// (no imageprobe fallback).
-		if h.image == nil {
-			return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
-		}
-		// The extension routes the object key + presign content-type (the service
-		// preserves the format, pixels intact); the body is still sniffed
-		// authoritatively by image-service. SVG/unknown → 415.
-		ext := strings.ToLower(filepath.Ext(fh.Filename))
-		mime, ok := imageUploadMIMEs[ext]
-		if !ok {
-			// An SVG lands here (it's in no raster allowlist); name it specifically.
-			if ext == ".svg" {
-				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)")
-			}
-			return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image type — accepted: JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, BMP")
-		}
-		raw, rerr := io.ReadAll(f)
-		if rerr != nil {
-			return fmt.Errorf("post_attachments: read image: %w", rerr)
-		}
-
-		// Stage the EXIF-bearing original at a temp key, hand image-service presigned
-		// GET/PUT, and let it write the cleaned (metadata-stripped, pixel-identical)
-		// copy to the final key. The original is discarded after — its EXIF /
-		// geolocation must never persist or publish.
-		cleanKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+ext)
-		origKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+".orig"+ext)
-		if _, err := h.storage.Upload(reqCtx(c), origKey, bytes.NewReader(raw), int64(len(raw)), mime); err != nil {
-			return fmt.Errorf("post_attachments: stage original: %w", err)
-		}
-		getURL, gerr := h.storage.PresignedGetURL(reqCtx(c), origKey, PresignedURLTTL)
-		putURL, perr := h.storage.PresignedPutURL(reqCtx(c), cleanKey, mime, PresignedURLTTL)
-		if gerr != nil || perr != nil {
-			_ = h.storage.Delete(reqCtx(c), origKey)
-			return fmt.Errorf("post_attachments: presign image transfer: get=%v put=%v", gerr, perr)
-		}
-		prep, err := h.image.PrepareAttachment(reqCtx(c), imageclient.PrepareAttachmentOptions{
-			SourceURL:     getURL,
-			DestPutURL:    putURL,
-			StripMetadata: true,
-			WantAltText:   false, // alt text is generated asynchronously below
-			Filename:      fh.Filename,
-		})
-		if err != nil {
-			// Drop BOTH the staged original and any partial cleaned object the service
-			// may have written to cleanKey before failing — never leave orphaned bytes.
-			_ = h.storage.Delete(reqCtx(c), origKey)
-			_ = h.storage.Delete(reqCtx(c), cleanKey)
-			// Prefer the fine-grained reason image-service attaches to a terminal
-			// reject over the coarse gRPC-code buckets (CON-281 Phase 2); the buckets
-			// stay as the fallback for an older service that carries no ErrorInfo.
-			if code := imageclient.UploadCode(err); code != "" {
-				return rejectAttachment(c, imageRejectStatus(code), code, models.UploadRejectMessage(code))
-			}
-			switch {
-			case imageclient.IsUnsupportedImage(err):
-				return rejectAttachment(c, fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image format")
-			case imageclient.IsInvalidImage(err):
-				return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable image")
-			default:
-				// Transient / unreachable — no imageprobe fallback (D6).
-				return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable; please retry")
-			}
-		}
-		if prep.RejectedReason != "" {
-			_ = h.storage.Delete(reqCtx(c), origKey)
-			_ = h.storage.Delete(reqCtx(c), cleanKey)
-			// A structured verdict from the service, carried through with its own
-			// message. Phase 1 maps it to the coarse "not a usable image" bucket; the
-			// image.v1 RejectedCode enum (CON-281 Phase 2) refines it to the exact
-			// reason (vector / oversize / corrupt) without a client change.
-			return rejectAttachment(c, fiber.StatusBadRequest, models.UploadCodeInvalidFile, prep.RejectedReason)
-		}
-		att.MimeType = prep.Mime
-		att.SizeBytes = prep.SizeBytes
-		att.Width = prep.Width
-		att.Height = prep.Height
-		att.IsAnimated = prep.IsAnimated
-		att.ChecksumSHA256 = prep.ChecksumSHA256
-		att.S3Key = cleanKey
-		imagePrepared = true
-		// The EXIF-bearing original has served its purpose — drop it (best-effort).
-		_ = h.storage.Delete(reqCtx(c), origKey)
+		err = h.prepareImage(reqCtx(c), up, att)
 	}
-
-	if !imagePrepared {
-		att.S3Key = storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+keyExt)
-		if _, err := h.storage.Upload(reqCtx(c), att.S3Key, bytes.NewReader(data), att.SizeBytes, att.MimeType); err != nil {
-			return fmt.Errorf("post_attachments: storage upload: %w", err)
-		}
+	if err != nil {
+		return attachmentError(c, err)
 	}
-
-	// Upload the first-page thumbnail rendered by pdf-service (if any). Storing
-	// it is best-effort — the attachment stays valid without a thumbnail.
-	if len(pendingThumbnail) > 0 {
-		thumbKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+".thumb.png")
-		if _, uerr := h.storage.Upload(reqCtx(c), thumbKey, bytes.NewReader(pendingThumbnail), int64(len(pendingThumbnail)), "image/png"); uerr == nil {
-			att.ThumbnailS3Key = thumbKey
-		}
-	}
-
-	// CreateAtNextPosition assigns att.Position atomically, eliminating
-	// the read-then-insert race that NextPosition+Create exposed under
-	// concurrent uploads to the same post.
-	if err := h.repo.CreateAtNextPosition(reqCtx(c), att); err != nil {
-		// Clean up the orphan objects — the metadata row is what makes
-		// the attachment discoverable; without it, the bytes are dead
-		// weight in the bucket (CON-73 §2.2 transactional rollback).
-		_ = h.storage.Delete(reqCtx(c), att.S3Key)
-		if att.ThumbnailS3Key != "" {
-			_ = h.storage.Delete(reqCtx(c), att.ThumbnailS3Key)
-		}
+	if err := h.persistAttachment(reqCtx(c), att, thumbnail); err != nil {
 		return err
 	}
 	// The attachment (and its bytes) now exist — fire any near-limit crossing.
-	mediaQuota.dispatch(reqCtx(c))
+	up.quota.dispatch(reqCtx(c))
 
-	// Auto-generate alt text asynchronously for an image with no user-supplied one:
-	// the synchronous upload stays fast, and the generator writes
-	// only where alt text is still un-edited.
-	if imagePrepared && att.AltText == "" && h.image != nil {
+	// Auto-generate alt text asynchronously for an image with no user-supplied
+	// one: the upload stays fast, and the generator writes only where alt text
+	// is still un-edited.
+	if up.kind != pdfprobe.MIME && att.AltText == "" && h.image != nil {
 		altCtx := detachedContext(c, session.TenantID)
 		backgroundTasks.Go("post_attachments.alt_text", func() {
 			h.generateAttachmentAltText(altCtx, session.TenantID, att.ID, att.S3Key)
@@ -591,6 +367,285 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		PostAttachment:     att,
 		PlatformValidation: platforms.ValidateAttachment(att, post.Platform),
 	})
+}
+
+// attachmentReject is a terminal upload rejection carrying a stable code; the
+// handler renders it through rejectAttachment.
+type attachmentReject struct {
+	status int
+	code   string
+	msg    string
+}
+
+func (r *attachmentReject) Error() string { return r.msg }
+
+func rejectUpload(status int, code, msg string) error {
+	return &attachmentReject{status: status, code: code, msg: msg}
+}
+
+// attachmentError renders an *attachmentReject as its coded response and
+// passes any other error through.
+func attachmentError(c *fiber.Ctx, err error) error {
+	if r, ok := errors.AsType[*attachmentReject](err); ok {
+		return rejectAttachment(c, r.status, r.code, r.msg)
+	}
+	return err
+}
+
+// attachmentUpload is an opened, sniffed, quota-cleared upload.
+type attachmentUpload struct {
+	header *multipart.FileHeader
+	file   multipart.File
+	// kind is the sniffed content type (magic bytes, not the client's claim).
+	kind  string
+	quota quotaHold
+}
+
+// openUpload reads the form file, rejects anything above the larger of the
+// per-kind caps before opening it (the precise cap is enforced per kind),
+// gates media_storage_bytes before touching storage so a denied upload leaves
+// no object, and sniffs the magic bytes. The caller closes the file.
+func (h *PostAttachmentsHandler) openUpload(c *fiber.Ctx) (*attachmentUpload, error) {
+	fh, err := c.FormFile("file")
+	if err != nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "file is required")
+	}
+	preSniffCap := max(maxPDFUploadBytes(), maxImageUploadBytes())
+	if fh.Size > preSniffCap {
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeTooLarge,
+			fmt.Sprintf("file exceeds upload limit of %d MB", preSniffCap>>20))
+	}
+	quota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", fh.Size)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := fh.Open()
+	if err != nil {
+		return nil, fmt.Errorf("post_attachments: open upload: %w", err)
+	}
+	sniff := make([]byte, 512)
+	n, _ := io.ReadFull(f, sniff)
+	if n == 0 {
+		_ = f.Close()
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeEmptyFile, "file is empty")
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("post_attachments: rewind upload: %w", err)
+	}
+	return &attachmentUpload{header: fh, file: f, kind: http.DetectContentType(sniff[:n]), quota: quota}, nil
+}
+
+// newUploadAttachment builds the attachment row from the form fields. On a
+// thread post the client may name the (0-based) segment the media belongs to;
+// blank means a whole-post attachment. The index is range-checked at the
+// publish gate, since media may be uploaded before segments are set.
+func newUploadAttachment(c *fiber.Ctx, post *models.Post, createdBy string) (*models.PostAttachment, error) {
+	id, err := models.NewID()
+	if err != nil {
+		return nil, err
+	}
+	altText, err := normalizeAltText(c.FormValue("alt_text"))
+	if err != nil {
+		return nil, err
+	}
+	segIdx, err := parseSegmentIndex(c.FormValue("segment_index"))
+	if err != nil {
+		return nil, err
+	}
+	if segIdx != nil && !post.IsThread() {
+		return nil, fiber.NewError(fiber.StatusUnprocessableEntity, "segment_index is only valid on a thread post")
+	}
+	return &models.PostAttachment{
+		ID:           id,
+		PostID:       post.ID,
+		AltText:      altText,
+		SegmentIndex: segIdx,
+		CreatedBy:    createdBy,
+		// A user-supplied alt text on upload is a manual edit: the async
+		// generator never overwrites it.
+		AltTextEditedByUser: altText != "",
+	}, nil
+}
+
+// attachmentKey is the tenant-scoped storage key of an attachment object.
+func attachmentKey(ctx context.Context, att *models.PostAttachment, suffix string) string {
+	return storage.TenantKey(ctx, "post-attachments/"+att.PostID+"/"+att.ID+suffix)
+}
+
+// preparePDF validates and stores a PDF upload, returning its rendered
+// first-page thumbnail (nil when unavailable). Page count and thumbnail come
+// from pdf-service best-effort; a terminal "not a usable PDF" verdict is a
+// client error, since pdfprobe only checks the magic prefix.
+func (h *PostAttachmentsHandler) preparePDF(ctx context.Context, up *attachmentUpload, att *models.PostAttachment) ([]byte, error) {
+	if up.header.Size > maxPDFUploadBytes() {
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeTooLarge,
+			fmt.Sprintf("PDF exceeds upload limit of %d MB", maxPDFUploadBytes()>>20))
+	}
+	probe, raw, err := pdfprobe.Probe(up.file, maxPDFUploadBytes())
+	if err != nil {
+		if errors.Is(err, pdfprobe.ErrUnsupportedMIME) {
+			return nil, rejectUpload(fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, err.Error())
+		}
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeInvalidFile, err.Error())
+	}
+	att.MimeType = probe.MIME
+	att.SizeBytes = probe.Size
+	att.ChecksumSHA256 = probe.SHA256
+
+	thumbnail, err := h.renderPDF(ctx, up.header.Filename, raw, att)
+	if err != nil {
+		return nil, err
+	}
+	att.S3Key = attachmentKey(ctx, att, probe.Extension)
+	if _, err := h.storage.Upload(ctx, att.S3Key, bytes.NewReader(raw), att.SizeBytes, att.MimeType); err != nil {
+		return nil, fmt.Errorf("post_attachments: storage upload: %w", err)
+	}
+	return thumbnail, nil
+}
+
+// renderPDF sets the page count (before platform soft-validation, so the
+// max_pages check works) and returns the thumbnail. Transient or unreachable
+// pdf-service failures degrade to no page count / thumbnail.
+func (h *PostAttachmentsHandler) renderPDF(ctx context.Context, filename string, raw []byte, att *models.PostAttachment) ([]byte, error) {
+	if h.pdf == nil {
+		return nil, nil
+	}
+	rctx, cancel := context.WithTimeout(ctx, pdfRenderTimeout)
+	render, err := h.pdf.Render(rctx, bytes.NewReader(raw), pdf.RenderOptions{
+		RenderThumbnail: true,
+		ThumbnailDPI:    pdfThumbnailDPI,
+	})
+	cancel()
+	if err != nil {
+		if pdf.IsInvalidPDF(err) {
+			return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable PDF")
+		}
+		slog.WarnContext(ctx, "pdf render failed", logging.AttrComponent, "post_attachments", "name", filename, logging.AttrError, err)
+		return nil, nil
+	}
+	att.PageCount = render.PageCount
+	return render.ThumbnailPNG, nil
+}
+
+// prepareImage runs an image upload through image-service, the sole image
+// authority: validate + metadata + EXIF-strip with pixels preserved. The
+// EXIF-bearing original is staged at a temp key, image-service reads it via a
+// presigned GET and writes the cleaned copy to the final key via a presigned
+// PUT; the original is always discarded — its EXIF/geolocation must never
+// persist or publish.
+func (h *PostAttachmentsHandler) prepareImage(ctx context.Context, up *attachmentUpload, att *models.PostAttachment) error {
+	fh := up.header
+	if fh.Size > maxImageUploadBytes() {
+		return rejectUpload(fiber.StatusBadRequest, models.UploadCodeTooLarge,
+			fmt.Sprintf("image exceeds upload limit of %d MB", maxImageUploadBytes()>>20))
+	}
+	if h.image == nil {
+		return rejectUpload(fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
+	}
+	// The extension routes the object key + presign content type; the body is
+	// still sniffed authoritatively by image-service.
+	ext := strings.ToLower(filepath.Ext(fh.Filename))
+	mime, ok := imageUploadMIMEs[ext]
+	if !ok {
+		if ext == ".svg" {
+			return rejectUpload(fiber.StatusUnsupportedMediaType, models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)")
+		}
+		return rejectUpload(fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image type — accepted: JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, BMP")
+	}
+	raw, err := io.ReadAll(up.file)
+	if err != nil {
+		return fmt.Errorf("post_attachments: read image: %w", err)
+	}
+
+	cleanKey := attachmentKey(ctx, att, ext)
+	orig, err := ingest.PutBlob(ctx, h.storage, attachmentKey(ctx, att, ".orig"+ext), raw, mime)
+	if err != nil {
+		return fmt.Errorf("post_attachments: stage original: %w", err)
+	}
+	defer orig.Discard(ctx)
+
+	prep, err := h.stripImage(ctx, orig.Key(), cleanKey, mime, fh.Filename)
+	if err != nil {
+		return err
+	}
+	att.MimeType = prep.Mime
+	att.SizeBytes = prep.SizeBytes
+	att.Width = prep.Width
+	att.Height = prep.Height
+	att.IsAnimated = prep.IsAnimated
+	att.ChecksumSHA256 = prep.ChecksumSHA256
+	att.S3Key = cleanKey
+	return nil
+}
+
+// stripImage hands image-service presigned GET/PUT URLs for the staged
+// original and the clean key. On any failure the partial cleaned object is
+// dropped too, so no orphaned bytes remain.
+func (h *PostAttachmentsHandler) stripImage(ctx context.Context, origKey, cleanKey, mime, filename string) (*imageclient.PrepareAttachmentResult, error) {
+	getURL, gerr := h.storage.PresignedGetURL(ctx, origKey, PresignedURLTTL)
+	putURL, perr := h.storage.PresignedPutURL(ctx, cleanKey, mime, PresignedURLTTL)
+	if gerr != nil || perr != nil {
+		return nil, fmt.Errorf("post_attachments: presign image transfer: get=%v put=%v", gerr, perr)
+	}
+	prep, err := h.image.PrepareAttachment(ctx, imageclient.PrepareAttachmentOptions{
+		SourceURL:     getURL,
+		DestPutURL:    putURL,
+		StripMetadata: true,
+		WantAltText:   false, // alt text is generated asynchronously after upload
+		Filename:      filename,
+	})
+	if err != nil {
+		_ = h.storage.Delete(ctx, cleanKey)
+		return nil, imagePrepareReject(err)
+	}
+	if prep.RejectedReason != "" {
+		_ = h.storage.Delete(ctx, cleanKey)
+		// A structured verdict from the service, carried with its own message.
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeInvalidFile, prep.RejectedReason)
+	}
+	return prep, nil
+}
+
+// imagePrepareReject maps a PrepareAttachment failure to its rejection. The
+// fine-grained reason image-service attaches to a terminal reject wins; the
+// coarse gRPC-code buckets are the fallback for a service that carries no
+// ErrorInfo. Transient / unreachable failures are a retryable 503 (there is
+// no local fallback).
+func imagePrepareReject(err error) error {
+	if code := imageclient.UploadCode(err); code != "" {
+		return rejectUpload(imageRejectStatus(code), code, models.UploadRejectMessage(code))
+	}
+	switch {
+	case imageclient.IsUnsupportedImage(err):
+		return rejectUpload(fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported image format")
+	case imageclient.IsInvalidImage(err):
+		return rejectUpload(fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable image")
+	default:
+		return rejectUpload(fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable; please retry")
+	}
+}
+
+// persistAttachment stores the PDF thumbnail (best-effort — the attachment is
+// valid without one) and inserts the row at the next position atomically. If
+// the insert fails the stored objects are deleted: without the row they are
+// undiscoverable dead weight.
+func (h *PostAttachmentsHandler) persistAttachment(ctx context.Context, att *models.PostAttachment, thumbnail []byte) error {
+	if len(thumbnail) > 0 {
+		thumbKey := attachmentKey(ctx, att, ".thumb.png")
+		if _, err := h.storage.Upload(ctx, thumbKey, bytes.NewReader(thumbnail), int64(len(thumbnail)), "image/png"); err == nil {
+			att.ThumbnailS3Key = thumbKey
+		}
+	}
+	if err := h.repo.CreateAtNextPosition(ctx, att); err != nil {
+		_ = h.storage.Delete(ctx, att.S3Key)
+		if att.ThumbnailS3Key != "" {
+			_ = h.storage.Delete(ctx, att.ThumbnailS3Key)
+		}
+		return err
+	}
+	return nil
 }
 
 // generateAttachmentAltText runs image-service's GenerateAltText for a freshly
@@ -679,6 +734,40 @@ type updateAttachmentRequest struct {
 	SegmentIndex Optional[int] `json:"segment_index"`
 }
 
+// toPatch validates and normalizes every field before any mutation, so an
+// invalid field can't leave a partially-applied update (e.g. position already
+// changed).
+func (req *updateAttachmentRequest) toPatch(post *models.Post) (repository.AttachmentPatch, error) {
+	var patch repository.AttachmentPatch
+	if req.Position == nil && req.AltText == nil && !req.SegmentIndex.Present {
+		return patch, fiber.NewError(fiber.StatusBadRequest, "at least one of position, alt_text or segment_index is required")
+	}
+	if req.Position != nil && *req.Position < 0 {
+		return patch, fiber.NewError(fiber.StatusBadRequest, "position must be non-negative")
+	}
+	if req.SegmentIndex.Present && req.SegmentIndex.Value != nil {
+		if *req.SegmentIndex.Value < 0 {
+			return patch, fiber.NewError(fiber.StatusBadRequest, "segment_index must be non-negative")
+		}
+		// A non-null segment only belongs on a thread post; an explicit null is
+		// always allowed (it clears the field back to a whole-post attachment).
+		if !post.IsThread() {
+			return patch, fiber.NewError(fiber.StatusUnprocessableEntity, "segment_index is only valid on a thread post")
+		}
+	}
+	patch.Position = req.Position
+	patch.SetSegmentIndex = req.SegmentIndex.Present
+	patch.SegmentIndex = req.SegmentIndex.Value
+	if req.AltText != nil {
+		normalized, err := normalizeAltText(*req.AltText)
+		if err != nil {
+			return patch, err
+		}
+		patch.AltText = &normalized
+	}
+	return patch, nil
+}
+
 // Update godoc
 // @Summary      Update a post attachment
 // @Description  Updates an attachment's `position` and/or `alt_text` (at least
@@ -718,37 +807,9 @@ func (h *PostAttachmentsHandler) Update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	if req.Position == nil && req.AltText == nil && !req.SegmentIndex.Present {
-		return fiber.NewError(fiber.StatusBadRequest, "at least one of position, alt_text or segment_index is required")
-	}
-
-	// Validate + normalize all inputs before any mutation, so an invalid
-	// field can't leave a partially-applied update (e.g. position already
-	// changed).
-	if req.Position != nil && *req.Position < 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "position must be non-negative")
-	}
-	if req.SegmentIndex.Present && req.SegmentIndex.Value != nil {
-		if *req.SegmentIndex.Value < 0 {
-			return fiber.NewError(fiber.StatusBadRequest, "segment_index must be non-negative")
-		}
-		// A non-null segment only belongs on a thread post; an explicit null is
-		// always allowed (it clears the field back to a whole-post attachment).
-		if !post.IsThread() {
-			return fiber.NewError(fiber.StatusUnprocessableEntity, "segment_index is only valid on a thread post")
-		}
-	}
-	patch := repository.AttachmentPatch{
-		Position:        req.Position,
-		SetSegmentIndex: req.SegmentIndex.Present,
-		SegmentIndex:    req.SegmentIndex.Value,
-	}
-	if req.AltText != nil {
-		normalized, err := normalizeAltText(*req.AltText)
-		if err != nil {
-			return err
-		}
-		patch.AltText = &normalized
+	patch, err := req.toPatch(post)
+	if err != nil {
+		return err
 	}
 
 	if err := h.repo.Patch(reqCtx(c), att.ID, patch); err != nil {

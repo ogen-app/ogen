@@ -248,6 +248,78 @@ func (r *campaignRequest) normalizeScheduling() (publishingTime string, timezone
 	return publishingTime, timezone, days, spread, nil
 }
 
+// campaignSchedule is the normalized scheduling + goal settings of a request.
+type campaignSchedule struct {
+	publishingTime string
+	timezone       string
+	publishingDays models.StringSlice
+	spread         int
+	goalCadence    string
+}
+
+// normalizeSchedule validates the scheduling fields and the goal cadence,
+// returning the effective values with defaults applied. A failure is a
+// 400-worthy error.
+func (r *campaignRequest) normalizeSchedule() (campaignSchedule, error) {
+	publishingTime, timezone, days, spread, err := r.normalizeScheduling()
+	if err != nil {
+		return campaignSchedule{}, err
+	}
+	goalCadence, err := campaigngoal.Normalize(strings.TrimSpace(r.GoalCadence))
+	if err != nil {
+		return campaignSchedule{}, err
+	}
+	return campaignSchedule{
+		publishingTime: publishingTime,
+		timezone:       timezone,
+		publishingDays: days,
+		spread:         spread,
+		goalCadence:    goalCadence,
+	}, nil
+}
+
+// applyTo copies the request's mutable fields onto an existing campaign.
+// Brand refs and the content-bank set/flag are presence-aware: omitted leaves
+// the stored value (the membership endpoints own the set), present replaces,
+// explicit null clears.
+func (r *campaignRequest) applyTo(c *models.Campaign, status models.CampaignStatus, sched campaignSchedule) {
+	c.Name = r.Name
+	c.Description = r.Description
+	c.TargetPersona = r.TargetPersona
+	c.KeyMessages = r.KeyMessages
+	c.ToneGuidelines = r.ToneGuidelines
+	r.BrandVoiceID.applyTo(&c.BrandVoiceID)
+	r.BrandAudienceID.applyTo(&c.BrandAudienceID)
+	r.UseAssets.applyToValue(&c.UseAssets)
+	applyOptionalSlice(r.AssetIDs, &c.AssetIDs)
+	c.TargetPlatforms = nullCampaignPlatforms(r.TargetPlatforms)
+	c.CampaignTypeID = r.CampaignTypeID
+	c.Status = status
+	c.EstimatedPostCount = r.EstimatedPostCount
+	c.StartDate = r.StartDate
+	c.EndDate = r.EndDate
+	c.Budget = r.Budget
+	c.Currency = r.Currency
+	c.Language = r.Language
+	c.TagIDs = nullSlice(r.TagIDs)
+	c.PublishingTime = sched.publishingTime
+	c.Timezone = sched.timezone
+	c.PublishingDays = sched.publishingDays
+	c.SpreadMinutes = sched.spread
+	c.GoalCadence = sched.goalCadence
+}
+
+// omitColumns lists the presence-aware content-bank columns an omitted field
+// must keep out of the whole-record UPDATE: applyTo already left the hydrated
+// value in place, but writing it back would clobber a concurrent membership
+// write (AddAssetIDs/RemoveAssetID) that landed after the read.
+func (r *campaignRequest) omitColumns() []string {
+	return omitAbsent(
+		columnPresence{"asset_ids", r.AssetIDs.Present},
+		columnPresence{"use_assets", r.UseAssets.Present && r.UseAssets.Value != nil},
+	)
+}
+
 // toStatus resolves the campaign's status, defaulting to active. CON-156 BE 6:
 // draft is not a user-facing distinction (nothing behaves differently), so a
 // campaign with no explicit status is created active rather than draft. Existing
@@ -429,11 +501,7 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
 	}
-	publishingTime, timezone, publishingDays, spread, err := req.normalizeScheduling()
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
-	}
-	goalCadence, err := campaigngoal.Normalize(strings.TrimSpace(req.GoalCadence))
+	sched, err := req.normalizeSchedule()
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
@@ -448,16 +516,8 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	}
 
 	typeChanged := req.CampaignTypeID != campaign.CampaignTypeID
-	// Once posts are planned against the type's phases, the type is
-	// locked — switching would orphan their phase references. (A DB trigger
-	// backstops this against a concurrent phase assignment.)
-	if typeChanged && campaign.TypeLocked {
-		return rejectTypeLocked(c, campaign.PhasedPostCount)
-	}
-	// Only gate when the caller is switching to a gated campaign type,
-	// so an unrelated edit of a campaign that already uses one is never blocked.
 	if typeChanged {
-		if err := h.gateCampaignType(c, campaignType); err != nil {
+		if err := h.checkTypeChange(c, campaign, campaignType); err != nil {
 			return err
 		}
 	}
@@ -466,49 +526,10 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	prevStatus := campaign.Status
 	prevStart, prevEnd := campaign.StartDate, campaign.EndDate
 
-	campaign.Name = req.Name
-	campaign.Description = req.Description
-	campaign.TargetPersona = req.TargetPersona
-	campaign.KeyMessages = req.KeyMessages
-	campaign.ToneGuidelines = req.ToneGuidelines
-	// Presence-aware: omit to leave alone, explicit null to clear.
-	req.BrandVoiceID.applyTo(&campaign.BrandVoiceID)
-	req.BrandAudienceID.applyTo(&campaign.BrandAudienceID)
-	// Presence-aware: omit to leave the content-bank set + derived flag
-	// alone (the membership endpoints own them), present to replace, explicit null
-	// on asset_ids to clear.
-	req.UseAssets.applyToValue(&campaign.UseAssets)
-	applyOptionalSlice(req.AssetIDs, &campaign.AssetIDs)
-	campaign.TargetPlatforms = nullCampaignPlatforms(req.TargetPlatforms)
-	campaign.CampaignTypeID = req.CampaignTypeID
-	campaign.Status = status
-	campaign.EstimatedPostCount = req.EstimatedPostCount
-	campaign.StartDate = req.StartDate
-	campaign.EndDate = req.EndDate
-	campaign.Budget = req.Budget
-	campaign.Currency = req.Currency
-	campaign.Language = req.Language
-	campaign.TagIDs = nullSlice(req.TagIDs)
-	campaign.PublishingTime = publishingTime
-	campaign.Timezone = timezone
-	campaign.PublishingDays = publishingDays
-	campaign.SpreadMinutes = spread
-	campaign.GoalCadence = goalCadence
+	req.applyTo(campaign, status, sched)
 	campaign.UpdatedAt = time.Now().UTC()
 
-	// Presence-aware content-bank fields: the in-memory apply above
-	// already left an omitted field at its hydrated value, but the whole-record
-	// UPDATE would still write that stale value back and clobber a concurrent
-	// membership write (AddAssetIDs/RemoveAssetID) that landed after GetByID.
-	// Drop the omitted columns from the write so "leave alone" holds at the DB.
-	var omit []string
-	if !req.AssetIDs.Present {
-		omit = append(omit, "asset_ids")
-	}
-	if !(req.UseAssets.Present && req.UseAssets.Value != nil) {
-		omit = append(omit, "use_assets")
-	}
-	if err := h.repo.Update(reqCtx(c), campaign, omit...); err != nil {
+	if err := h.repo.Update(reqCtx(c), campaign, req.omitColumns()...); err != nil {
 		if repository.IsConstraintViolation(err, repository.ConstraintCampaignTypeLocked) {
 			// A phase was assigned between our read and the write (trigger backstop),
 			// so the pre-read count is stale — at least one post now holds a phase.
@@ -525,6 +546,25 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 			activity.WithEntity("campaign", campaign.ID),
 		)
 	}
+	h.recordCampaignUpdated(c, campaign, prevStatus, datesChanged)
+	return c.JSON(campaign)
+}
+
+// checkTypeChange guards a campaign-type switch. Once posts are planned
+// against the type's phases the type is locked — switching would orphan their
+// phase references (a DB trigger backstops a concurrent phase assignment).
+// The entitlement gate applies only to a switch, so an unrelated edit of a
+// campaign already on a gated type is never blocked.
+func (h *CampaignsHandler) checkTypeChange(c *fiber.Ctx, campaign *models.Campaign, target *models.CampaignType) error {
+	if campaign.TypeLocked {
+		return rejectTypeLocked(c, campaign.PhasedPostCount)
+	}
+	return h.gateCampaignType(c, target)
+}
+
+// recordCampaignUpdated emits the update activity plus the status- and
+// date-change events when those fields moved.
+func (h *CampaignsHandler) recordCampaignUpdated(c *fiber.Ctx, campaign *models.Campaign, prevStatus models.CampaignStatus, datesChanged bool) {
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_updated",
 		activity.WithEntity("campaign", campaign.ID),
 		activity.WithStatus(string(campaign.Status)),
@@ -540,7 +580,6 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 			activity.WithEntity("campaign", campaign.ID),
 		)
 	}
-	return c.JSON(campaign)
 }
 
 // assetMembershipRequest is the body of the CON-233 membership-add endpoints on

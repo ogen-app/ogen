@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/usecase/ingest"
 )
 
 // maxAudioUploadBytes caps a direct-to-storage audio upload. Audio is
@@ -212,13 +213,8 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 		SizeBytes:    0,
 		S3Key:        fullKey,
 	}
-	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(asset).Exec(ctx); err != nil {
-			return err
-		}
-		_, err := tx.NewInsert().Model(file).Exec(ctx)
-		return err
-	}); err != nil {
+	svc := &ingest.Service{DB: h.db, Assets: h.repo, Files: h.fileRepo}
+	if _, err := svc.Create(reqCtx(c), ingest.NewAsset{Asset: asset, File: file}); err != nil {
 		return err
 	}
 	assetQuota.dispatch(reqCtx(c))

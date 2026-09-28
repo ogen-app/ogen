@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -170,8 +169,7 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 	// Ownership: the key must sit under this tenant+post prefix, exactly as
 	// PresignVideo minted it. This blocks finalizing an arbitrary object (or
 	// another post's / tenant's upload).
-	wantPrefix := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/")
-	if !strings.HasPrefix(req.S3Key, wantPrefix) {
+	if !strings.HasPrefix(req.S3Key, storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/")) {
 		return fiber.NewError(fiber.StatusBadRequest, "s3_key does not belong to this post")
 	}
 
@@ -179,19 +177,9 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-
-	// Authoritative size comes from the stored object, not the client.
-	info, err := h.storage.Head(reqCtx(c), req.S3Key)
+	info, err := h.statVideoUpload(reqCtx(c), req.S3Key)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "uploaded object not found; PUT the bytes to the presigned URL first")
-	}
-	if info.Size == 0 {
-		_ = h.storage.Delete(reqCtx(c), req.S3Key)
-		return fiber.NewError(fiber.StatusBadRequest, "uploaded object is empty")
-	}
-	if info.Size > maxVideoUploadBytes() {
-		_ = h.storage.Delete(reqCtx(c), req.S3Key)
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes()>>30))
+		return err
 	}
 
 	session, err := sessionFrom(c)
@@ -211,65 +199,26 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 		CreatedBy: session.UserID,
 	}
 
-	// Probe via video-service. Best-effort like pdf-service: a
-	// terminal "not a readable video" verdict rejects the upload; transient /
-	// unreachable failures degrade to an unprobed attachment.
-	var probe *video.ProbeResult
-	if h.video != nil {
-		srcURL, perr := h.storage.PresignedGetURL(reqCtx(c), req.S3Key, probeGetTTL)
-		if perr != nil {
-			slog.WarnContext(reqCtx(c), "video probe presign failed", logging.AttrComponent, "post_attachments", logging.AttrError, perr)
-		} else {
-			pctx, cancel := context.WithTimeout(reqCtx(c), videoProbeTimeout)
-			res, rerr := h.video.Probe(pctx, video.ProbeOptions{
-				SourceURL:    srcURL,
-				RenderPoster: true,
-				Filename:     path.Base(req.S3Key),
-			})
-			cancel()
-			if rerr != nil {
-				if video.IsInvalidVideo(rerr) {
-					_ = h.storage.Delete(reqCtx(c), req.S3Key)
-					return fiber.NewError(fiber.StatusBadRequest, "uploaded file is not a readable video")
-				}
-				slog.WarnContext(reqCtx(c), "video probe failed", logging.AttrComponent, "post_attachments", "key", req.S3Key, logging.AttrError, rerr)
-			} else {
-				probe = res
-				att.DurationMs = res.DurationMs
-				att.Codec = res.Codec
-				att.Width = res.Width
-				att.Height = res.Height
-			}
-		}
+	probe, err := h.probeVideo(reqCtx(c), att)
+	if err != nil {
+		return err
 	}
-
-	// Resolve the MIME type so kind detection routes this to the video
-	// validator. Prefer the probed container; fall back to the stored
-	// content-type, then the key extension. If none yields a video type the
-	// container is unsupported.
+	// Resolve the MIME so kind detection routes this to the video validator:
+	// the probed container, else the stored content type, else the key
+	// extension. No video type means the container is unsupported.
 	att.MimeType = resolveVideoMIME(probe, info.ContentType, req.S3Key)
 	if !strings.HasPrefix(att.MimeType, "video/") {
 		_ = h.storage.Delete(reqCtx(c), req.S3Key)
 		return fiber.NewError(fiber.StatusUnsupportedMediaType, "unsupported video container or codec")
 	}
 
-	// Store the poster frame as the attachment thumbnail before the insert so
-	// ThumbnailS3Key is persisted in one write (mirrors the PDF path). Storing
-	// it is best-effort — the attachment stays valid without a thumbnail.
-	if probe != nil && len(probe.PosterPNG) > 0 {
-		thumbKey := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+id+".thumb.png")
-		if _, uerr := h.storage.Upload(reqCtx(c), thumbKey, bytes.NewReader(probe.PosterPNG), int64(len(probe.PosterPNG)), "image/png"); uerr == nil {
-			att.ThumbnailS3Key = thumbKey
-		}
+	// The poster frame becomes the thumbnail, stored before the insert so
+	// ThumbnailS3Key lands in one write.
+	var poster []byte
+	if probe != nil {
+		poster = probe.PosterPNG
 	}
-
-	if err := h.repo.CreateAtNextPosition(reqCtx(c), att); err != nil {
-		// Clean up the orphan objects — without the metadata row the bytes are
-		// dead weight in the bucket.
-		_ = h.storage.Delete(reqCtx(c), att.S3Key)
-		if att.ThumbnailS3Key != "" {
-			_ = h.storage.Delete(reqCtx(c), att.ThumbnailS3Key)
-		}
+	if err := h.persistAttachment(reqCtx(c), att, poster); err != nil {
 		return err
 	}
 
@@ -278,6 +227,60 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 		PostAttachment:     att,
 		PlatformValidation: platforms.ValidateAttachment(att, post.Platform),
 	})
+}
+
+// statVideoUpload reads the uploaded object's authoritative size (never the
+// client's claim), deleting an empty or oversized object.
+func (h *PostAttachmentsHandler) statVideoUpload(ctx context.Context, key string) (*storage.ObjectInfo, error) {
+	info, err := h.storage.Head(ctx, key)
+	if err != nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "uploaded object not found; PUT the bytes to the presigned URL first")
+	}
+	if info.Size == 0 {
+		_ = h.storage.Delete(ctx, key)
+		return nil, fiber.NewError(fiber.StatusBadRequest, "uploaded object is empty")
+	}
+	if info.Size > maxVideoUploadBytes() {
+		_ = h.storage.Delete(ctx, key)
+		return nil, fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes()>>30))
+	}
+	return info, nil
+}
+
+// probeVideo probes the uploaded object via video-service and stamps the
+// duration, codec and dimensions on att. Best-effort like pdf-service: a
+// terminal "not a readable video" verdict deletes the object and rejects the
+// upload; presign, transient or unreachable failures degrade to an unprobed
+// attachment (nil result).
+func (h *PostAttachmentsHandler) probeVideo(ctx context.Context, att *models.PostAttachment) (*video.ProbeResult, error) {
+	if h.video == nil {
+		return nil, nil
+	}
+	srcURL, err := h.storage.PresignedGetURL(ctx, att.S3Key, probeGetTTL)
+	if err != nil {
+		slog.WarnContext(ctx, "video probe presign failed", logging.AttrComponent, "post_attachments", logging.AttrError, err)
+		return nil, nil
+	}
+	pctx, cancel := context.WithTimeout(ctx, videoProbeTimeout)
+	res, err := h.video.Probe(pctx, video.ProbeOptions{
+		SourceURL:    srcURL,
+		RenderPoster: true,
+		Filename:     path.Base(att.S3Key),
+	})
+	cancel()
+	if err != nil {
+		if video.IsInvalidVideo(err) {
+			_ = h.storage.Delete(ctx, att.S3Key)
+			return nil, fiber.NewError(fiber.StatusBadRequest, "uploaded file is not a readable video")
+		}
+		slog.WarnContext(ctx, "video probe failed", logging.AttrComponent, "post_attachments", "key", att.S3Key, logging.AttrError, err)
+		return nil, nil
+	}
+	att.DurationMs = res.DurationMs
+	att.Codec = res.Codec
+	att.Width = res.Width
+	att.Height = res.Height
+	return res, nil
 }
 
 // resolveVideoMIME picks the canonical video MIME for a finalized upload.
