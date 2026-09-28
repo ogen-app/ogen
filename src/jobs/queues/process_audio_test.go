@@ -61,7 +61,8 @@ func (presignBlob) PresignedPutURL(_ context.Context, key, _ string, _ time.Dura
 }
 
 type fakeExtractions struct {
-	m map[string]*models.AudioExtraction
+	updates int
+	m       map[string]*models.AudioExtraction
 }
 
 func (f *fakeExtractions) key(assetID, runKey string) string { return assetID + "|" + runKey }
@@ -79,6 +80,7 @@ func (f *fakeExtractions) GetByAssetAndRunKey(_ context.Context, assetID, runKey
 	return nil, sql.ErrNoRows
 }
 func (f *fakeExtractions) Update(_ context.Context, e *models.AudioExtraction) error {
+	f.updates++
 	if f.m == nil {
 		f.m = map[string]*models.AudioExtraction{}
 	}
@@ -392,6 +394,24 @@ func TestProcessAudio_ModelFrozenAcrossRetries(t *testing.T) {
 	}
 	if got := ext.m["a7|run-1"].TranscribeModel; got != "gemini-2.5-flash" {
 		t.Fatalf("run records %q, want gemini-2.5-flash", got)
+	}
+}
+
+// TestProcessAudio_PersistsModelFilledOnLoadedRun: a run loaded without a model
+// gets one written back before the retryable probe, so a failed attempt can't
+// leave the next one to resolve a different model.
+func TestProcessAudio_PersistsModelFilledOnLoadedRun(t *testing.T) {
+	client := &fakeAudioClient{probeErr: grpcstatus.Error(codes.Unavailable, "down")}
+	ext := &fakeExtractions{m: map[string]*models.AudioExtraction{
+		"a6|run-1": {ID: "x6", AssetID: "a6", RunKey: "run-1", Status: models.AudioExtractionStatusPending},
+	}}
+	p := newAudioProc(baseAudioDeps(client, ext, &fakeSegments{}, &fakeUtterances{}, &fakeStatus{}, &fakeChunks{}))
+
+	if err := p.process(t.Context(), ProcessAudioTask{AssetID: "a6", RunKey: "run-1", StorageKey: "assets/a6/original.mp3"}, false); err == nil {
+		t.Fatal("want a transient error")
+	}
+	if ext.updates != 1 || ext.m["a6|run-1"].TranscribeModel != "gemini-2.5-flash" {
+		t.Fatalf("updates = %d, model = %q; want the resolved model persisted once before the probe", ext.updates, ext.m["a6|run-1"].TranscribeModel)
 	}
 }
 

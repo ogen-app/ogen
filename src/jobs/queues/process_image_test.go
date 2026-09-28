@@ -170,6 +170,26 @@ func TestProcessImage_ModelsFrozenPerRun(t *testing.T) {
 	}
 }
 
+// TestProcessImage_PersistsModelsFilledOnLoadedRun: a run loaded without its
+// models gets them written back before the retryable vision call, so a failed
+// attempt can't leave the next one to resolve different models.
+func TestProcessImage_PersistsModelsFilledOnLoadedRun(t *testing.T) {
+	client := &fakeImageClient{err: grpcstatus.Error(codes.Unavailable, "down")}
+	deps, _, _, _, exts := baseImageDeps(client)
+	exts.ext = &models.ImageExtraction{ID: "x1", AssetID: "i1", RunKey: "run-1", Status: models.ImageExtractionStatusPending}
+	task := ProcessImageTask{AssetID: "i1", StorageKey: "assets/i1/original.png", RunKey: "run-1"}
+
+	if err := newImageProc(deps).process(t.Context(), task, false); err == nil {
+		t.Fatal("want a transient error")
+	}
+	if exts.update != 1 {
+		t.Fatalf("updates = %d, want the filled models persisted once before the vision call", exts.update)
+	}
+	if exts.ext.ClassifyModel != "gemini-2.5-flash" || exts.ext.ExtractModel != "gemini-2.5-pro" || exts.ext.EscalateModel != "gemini-2.5-pro" {
+		t.Fatalf("persisted row = %+v, want the resolved models", exts.ext)
+	}
+}
+
 // TestProcessImage_PinnedModelOverridesExtract: a pinned model replaces only the
 // extract slot; classify and escalate still come from the resolver.
 func TestProcessImage_PinnedModelOverridesExtract(t *testing.T) {

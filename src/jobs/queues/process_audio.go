@@ -210,9 +210,15 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 	if err != nil {
 		return err
 	}
-	p.freezeModel(ctx, in, ext)
 	if ext.Status == models.AudioExtractionStatusComplete {
 		return nil // idempotent re-drive of a finished run
+	}
+	// A run loaded without a model gets one now, persisted before any
+	// retryable work so the next attempt can't resolve a different one.
+	if p.freezeModel(ctx, in, ext) {
+		if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
+			return fmt.Errorf("process_audio %s: persist model: %w", in.AssetID, err)
+		}
 	}
 	if err := status.set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
 		return err
@@ -287,14 +293,16 @@ func (p *ProcessAudioProcessor) ensureExtraction(ctx context.Context, in Process
 // freezeModel resolves the transcription model if the run doesn't carry one
 // yet. A new run gets it at creation; a loaded run keeps what it recorded, so a
 // resumed run never switches models between segments. The pinned model wins.
-func (p *ProcessAudioProcessor) freezeModel(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction) {
+// It reports whether it filled the model in.
+func (p *ProcessAudioProcessor) freezeModel(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction) bool {
 	if ext.TranscribeModel != "" {
-		return
+		return false
 	}
 	ext.TranscribeModel = in.PinnedModel
 	if ext.TranscribeModel == "" {
 		ext.TranscribeModel = p.Deps.Models.model(ctx, modelconfig.FlowTranscribe, modelconfig.SlotMain)
 	}
+	return ext.TranscribeModel != ""
 }
 
 // probeGateNormalize runs Probe, enforces the max-duration + cost gates, then
