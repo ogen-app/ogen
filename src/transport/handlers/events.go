@@ -2,40 +2,17 @@ package handlers
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/valyala/fasthttp"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/kernel/logging"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
-
-// defaultHeartbeatInterval keeps idle SSE connections alive past
-// load-balancer timeouts (typically 30–60s) and gives us a write probe
-// to detect dead clients via send failures.
-const defaultHeartbeatInterval = 20 * time.Second
-
-// defaultStreamLifetime is the hard ceiling on how long a single SSE
-// connection is held open before the writer closes it and reclaims its hub
-// subscription. The heartbeat write is not a reliable liveness probe:
-// a client that vanishes without a clean close (laptop sleep, NAT/idle timeout,
-// a peer advertising a zero window) never surfaces a write error — the tiny
-// heartbeats keep buffering into the kernel — so the writer goroutine, and the
-// per-user slot it holds, would otherwise leak for the whole process lifetime.
-// Bounding the connection's *age* (independent of any write succeeding)
-// guarantees the slot is reclaimed; a healthy client simply reconnects, and for
-// the notification stream the Last-Event-ID replay covers the gap.
-const defaultStreamLifetime = 30 * time.Minute
 
 // EventsHandler streams Hub events to authenticated clients over SSE.
 type EventsHandler struct {
@@ -113,10 +90,9 @@ func (h *EventsHandler) Register(app *fiber.App) {
 // @Failure      429  {object}  map[string]string
 // @Router       /api/events [get]
 func (h *EventsHandler) Stream(c *fiber.Ctx) error {
-	session, ok := c.Locals("session").(*models.Session)
-	if !ok || session == nil {
-		// auth middleware should have caught this, but defend in depth
-		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
 	}
 
 	topics, err := parseTopicsParam(c.Query("topics"))
@@ -139,79 +115,17 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 		return err
 	}
 
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
-
-	// Capture into locals before the stream writer runs — the fiber ctx
-	// is cancelled the moment this handler returns, so the writer goroutine
-	// must not depend on it.
-	sessionID := session.ID
-	sessionRepo := h.sessionRepo
-	heartbeat := h.heartbeatInterval
-	maxLifetime := h.maxLifetime
-
-	// The stream writer runs on a fasthttp goroutine after this handler
-	// returns, at which point c.Context() (the *fasthttp.RequestCtx) has been
-	// reset and returned to the pool — reading it then is a use-after-free
-	// that nil-panics inside the slog ContextHandler, on a goroutine the Fiber
-	// recover middleware can't see, taking the whole process down.
-	// Detach a logging context now so writer-side logs still correlate with
-	// request_id / tenant_id / user_id without touching the recycled ctx.
-	reqID, _ := logging.RequestIDFrom(reqCtx(c))
-	logCtx := logging.WithRequestID(context.Background(), reqID)
-	logCtx = logging.WithUserID(logCtx, session.UserID)
-	logCtx = tenantctx.With(logCtx, session.TenantID)
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		defer unsubscribe()
-
-		// Send an initial heartbeat so the client confirms a working
-		// connection before any real event arrives.
-		if err := writeHeartbeat(w); err != nil {
-			return
-		}
-
-		ticker := time.NewTicker(heartbeat)
-		defer ticker.Stop()
-
-		// Hard lifetime ceiling. Guarantees this goroutine — and the
-		// hub slot it holds — is released even if the client vanished without a
-		// detectable close and no write ever fails. The client reconnects.
-		lifetime := time.NewTimer(maxLifetime)
-		defer lifetime.Stop()
-
-		for {
-			select {
-			case ev, ok := <-eventCh:
-				if !ok {
-					// Hub disconnected us (backpressure, eviction, or shutdown).
-					return
-				}
-				if err := writeSSEEvent(w, ev); err != nil {
-					slog.ErrorContext(logCtx, "sse write failed", logging.AttrComponent, "events", logging.AttrError, err)
-					return
-				}
-			case <-ticker.C:
-				if err := writeHeartbeat(w); err != nil {
-					return
-				}
-				// Periodic session recheck. If the session was invalidated
-				// (logout, expiry, deletion) we drop the stream now rather
-				// than keep delivering events to an unauthenticated client.
-				if !sessionStillValid(sessionRepo, sessionID) {
-					slog.InfoContext(logCtx, "session no longer valid; closing stream", logging.AttrComponent, "events")
-					return
-				}
-			case <-lifetime.C:
-				slog.InfoContext(logCtx, "stream lifetime reached; closing to reclaim slot", logging.AttrComponent, "events")
-				_ = writeRecycleFrame(w) // best-effort; closing regardless, client reconnects
-				return
-			}
-		}
-	}))
-
+	streamHub(c, session, hubStream{
+		component:      "events",
+		events:         eventCh,
+		unsubscribe:    unsubscribe,
+		sessionRepo:    h.sessionRepo,
+		heartbeat:      h.heartbeatInterval,
+		lifetime:       h.maxLifetime,
+		writeFailedMsg: "sse write failed",
+		sessionGoneMsg: "session no longer valid; closing stream",
+		write:          writeSSEEvent,
+	})
 	return nil
 }
 
@@ -251,38 +165,4 @@ func writeSSEEvent(w *bufio.Writer, ev eventhub.Event) error {
 		return err
 	}
 	return w.Flush()
-}
-
-// writeHeartbeat sends a comment frame. SSE comments start with `:` and
-// are ignored by clients but keep proxies/load balancers from killing
-// the idle connection.
-func writeHeartbeat(w *bufio.Writer) error {
-	if _, err := w.WriteString(": ping\n\n"); err != nil {
-		return err
-	}
-	return w.Flush()
-}
-
-// writeRecycleFrame announces a deliberate server-side connection recycle (the
-// CON-286 lifetime ceiling) just before the stream is closed. A clean close is
-// otherwise indistinguishable from a dropped connection, so the client runs its
-// full reconnect recovery (cache reconcile / "catching up" UI) on every 30-min
-// recycle even though nothing was down. This lets a client that opts in
-// (addEventListener('recycle', …)) skip that catch-up honestly. No `id:` line —
-// this is not a replayable event and must not advance the Last-Event-ID cursor.
-func writeRecycleFrame(w *bufio.Writer) error {
-	if _, err := w.WriteString("event: recycle\ndata: {\"reason\":\"lifetime\"}\n\n"); err != nil {
-		return err
-	}
-	return w.Flush()
-}
-
-// sessionStillValid runs a fresh repo lookup. Background context — the
-// fiber request ctx is gone by the time the stream writer runs.
-func sessionStillValid(repo repository.SessionRepository, id string) bool {
-	s, err := repo.GetByID(context.Background(), id)
-	if err != nil || s == nil {
-		return false
-	}
-	return time.Now().UTC().Before(s.ExpiresAt)
 }

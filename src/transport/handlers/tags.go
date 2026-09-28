@@ -67,7 +67,10 @@ func (h *TagsHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 
 	id, err := models.NewID()
 	if err != nil {

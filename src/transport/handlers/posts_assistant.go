@@ -1,15 +1,10 @@
 package handlers
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/valyala/fasthttp"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
@@ -87,17 +82,9 @@ func (h *PostAssistantHandler) Assistant(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "post assistant is not available")
 	}
 	var req assistantRequest
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	if err := bindAndValidate(c, &req); err != nil {
+		return err
 	}
-	if err := validate.Struct(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, validationError(err).Error())
-	}
-
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
 
 	h.activity.Record(reqCtx(c), activity.CategoryAIFlow, "post_assistant_turn",
 		activity.WithEntity("post", c.Params("id")),
@@ -106,55 +93,29 @@ func (h *PostAssistantHandler) Assistant(c *fiber.Ctx) error {
 
 	// c.Params / BodyParser values alias fasthttp's request buffer, which is
 	// recycled for a later request the moment this handler returns — but the
-	// StreamWriter below runs *after* that return and only persists at the end
-	// of a multi-minute model call. Without copying, a concurrent request can
-	// overwrite the buffer mid-turn, corrupting the post id (observed in the
-	// wild as post_id="ations/zerni") so the final insert trips the post_id FK
-	// and is mis-surfaced as "this post was deleted while the assistant was
-	// working". Clone the retained strings to pin their own backing arrays.
-	postID := strings.Clone(c.Params("id"))
-	instruction := strings.Clone(req.Instruction)
+	// stream writer runs after that return and only persists at the end of a
+	// multi-minute model call. Without copying, a concurrent request can
+	// overwrite the buffer mid-turn, corrupting the post id so the final
+	// insert trips the post_id FK and is mis-surfaced as "this post was
+	// deleted while the assistant was working".
+	flowReq := post_assistant.PostAssistantRequest{
+		PostID:      strings.Clone(c.Params("id")),
+		Instruction: strings.Clone(req.Instruction),
+	}
 	assistant := h.assistant
-	// Carry the tenant into the detached flow context (the StreamWriter runs
-	// after this handler returns) so usage recording + enforcement attribute
-	// to the right tenant.
+	// The detached context carries the tenant so usage recording and
+	// enforcement attribute correctly.
 	tenantID, _ := c.Locals(tenantctx.Key).(string)
 	flowCtx := detachedContext(c, tenantID)
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := post_assistant.OnEventFunc(func(name post_assistant.SSEEventKind, data any) {
-			writeEvent(string(name), data)
+	streamFlow(c, func(emit sseEmit) {
+		_, err := assistant(flowCtx, flowReq, func(name post_assistant.SSEEventKind, data any) {
+			emit(string(name), data)
 		})
-
-		_, err := assistant(flowCtx, post_assistant.PostAssistantRequest{
-			PostID:      postID,
-			Instruction: instruction,
-		}, onEvent)
 		if err != nil {
-			code := fiber.StatusInternalServerError
-			msg := err.Error()
-			var ve *post_assistant.ValidationError
-			var ae *post_assistant.AIError
-			switch {
-			case errors.As(err, &ve):
-				code = fiber.StatusBadRequest
-				msg = ve.Msg
-			case errors.As(err, &ae):
-				code = fiber.StatusBadGateway
-				msg = ae.Msg
-			}
-			writeEvent(string(post_assistant.SSEEventError), post_assistant.ErrorEventPayload{Message: msg, Code: code})
-			return
+			emit(string(post_assistant.SSEEventError), flowError[*post_assistant.ValidationError, *post_assistant.AIError](err))
 		}
-		// "complete" is emitted by the runner itself; nothing to write here.
-	}))
-
+		// "complete" is emitted by the runner itself.
+	})
 	return nil
 }
 

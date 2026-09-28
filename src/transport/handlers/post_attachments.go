@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -82,7 +81,7 @@ var PresignedURLTTL = 15 * time.Minute
 // PostAttachmentsHandler exposes the upload/list/reorder/delete API
 // for post attachments — images and PDFs. All
 // mutations are blocked once the parent post is submitted — scheduled or
-// published; see lockedForMutations.
+// published; see ensureMutable.
 type PostAttachmentsHandler struct {
 	repo     repository.PostAttachmentRepository
 	postRepo repository.PostRepository
@@ -163,28 +162,6 @@ type listResponse struct {
 	PlatformValidation []platforms.ValidationError `json:"platform_validation"`
 }
 
-// loadPostOrErr fetches the post and returns 404 if missing. Mutating
-// callers should additionally check lockedForMutations.
-func (h *PostAttachmentsHandler) loadPostOrErr(c *fiber.Ctx) (*models.Post, error) {
-	postID := c.Params("post_id")
-	post, err := h.postRepo.GetByID(reqCtx(c), postID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fiber.NewError(fiber.StatusNotFound, "post not found")
-		}
-		return nil, err
-	}
-	return post, nil
-}
-
-// lockedForMutations reports whether the post is in a state that freezes
-// its attachments: every submitted state (IsSubmitted), not just published,
-// so a scheduled post's media freezes too — Zernio snapshots the attachments at schedule
-// time, so a later change here would silently diverge from what publishes.
-func lockedForMutations(s models.PostStatus) bool {
-	return s.IsSubmitted()
-}
-
 // hydratePresigned fills att.PresignedURL (and ThumbnailURL when a
 // thumbnail key is present) when storage is configured. Errors are
 // swallowed — a missing presigned URL still leaves callers with the
@@ -221,7 +198,7 @@ func (h *PostAttachmentsHandler) hydratePresigned(c *fiber.Ctx, att *models.Post
 // @Failure      404      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments [get]
 func (h *PostAttachmentsHandler) List(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -258,7 +235,7 @@ func (h *PostAttachmentsHandler) List(c *fiber.Ctx) error {
 // @Failure      404      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments/{id} [get]
 func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -335,12 +312,12 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "storage not configured")
 	}
 
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if lockedForMutations(post.Status) {
-		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
+	if err := ensureMutable(post); err != nil {
+		return err
 	}
 
 	fh, err := c.FormFile("file")
@@ -362,14 +339,9 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// This upload adds fh.Size bytes to the tenant's media_storage_bytes
 	// budget. Check before touching storage so a denied upload never leaves an
 	// orphaned object behind.
-	var mediaQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(reqCtx(c))
-	if hasTenant {
-		dec, qErr := h.limiter.RequireAmount(reqCtx(c), tenantID, "media_storage_bytes", fh.Size)
-		if qErr != nil {
-			return qErr
-		}
-		mediaQuota = dec
+	mediaQuota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", fh.Size)
+	if err != nil {
+		return err
 	}
 
 	f, err := fh.Open()
@@ -390,7 +362,10 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		return fmt.Errorf("post_attachments: rewind upload: %w", err)
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	id, err := models.NewID()
 	if err != nil {
 		return err
@@ -599,9 +574,7 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 		return err
 	}
 	// The attachment (and its bytes) now exist — fire any near-limit crossing.
-	if hasTenant {
-		h.limiter.DispatchCrossing(reqCtx(c), tenantID, mediaQuota)
-	}
+	mediaQuota.dispatch(reqCtx(c))
 
 	// Auto-generate alt text asynchronously for an image with no user-supplied one:
 	// the synchronous upload stays fast, and the generator writes
@@ -725,12 +698,12 @@ type updateAttachmentRequest struct {
 // @Failure      409      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments/{id} [patch]
 func (h *PostAttachmentsHandler) Update(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if lockedForMutations(post.Status) {
-		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
+	if err := ensureMutable(post); err != nil {
+		return err
 	}
 
 	att, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
@@ -825,12 +798,12 @@ type reorderAllRequest struct {
 // @Failure      409      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments/reorder [patch]
 func (h *PostAttachmentsHandler) ReorderAll(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if lockedForMutations(post.Status) {
-		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
+	if err := ensureMutable(post); err != nil {
+		return err
 	}
 
 	var req reorderAllRequest
@@ -902,12 +875,12 @@ func (h *PostAttachmentsHandler) ReorderAll(c *fiber.Ctx) error {
 // @Failure      502      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments/{id} [delete]
 func (h *PostAttachmentsHandler) Delete(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if lockedForMutations(post.Status) {
-		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
+	if err := ensureMutable(post); err != nil {
+		return err
 	}
 
 	att, err := h.repo.GetByID(reqCtx(c), c.Params("id"))

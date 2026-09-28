@@ -349,14 +349,9 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 	}
 
 	// The content_bank_assets quota gates a new asset.
-	var assetQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(reqCtx(c))
-	if hasTenant {
-		dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "content_bank_assets")
-		if qErr != nil {
-			return qErr
-		}
-		assetQuota = dec
+	assetQuota, err := requireQuota(c, h.limiter, "content_bank_assets")
+	if err != nil {
+		return err
 	}
 
 	altText, err := normalizeAltText(req.AltText)
@@ -364,7 +359,10 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 
 	id, err := models.NewID()
 	if err != nil {
@@ -385,11 +383,10 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 	// The asset now exists — fire any near-limit crossing.
-	if hasTenant {
-		h.limiter.DispatchCrossing(reqCtx(c), tenantID, assetQuota)
-	}
+	assetQuota.dispatch(reqCtx(c))
 
 	if h.onSave != nil {
+		tenantID, _ := tenantctx.From(reqCtx(c))
 		backgroundTasks.Go("assets.on_save", func() { h.onSave(asset.ID, asset.Title, asset.Content, tenantID) })
 	}
 
@@ -452,9 +449,10 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "no files provided (use field 'files')")
 	}
 
-	session := c.Locals("session").(*models.Session)
-	tenantID, hasTenant := tenantctx.From(reqCtx(c))
-
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	results := make([]uploadResult, 0, len(files))
 	for _, fh := range files {
 		res := uploadResult{Filename: fh.Filename}
@@ -462,25 +460,17 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		// Each file becomes a content_bank_assets row, so gate every one.
 		// The processors below Create the asset synchronously, so the next
 		// iteration's count reflects the ones already stored.
-		var fileQuota entitlements.Decision
-		if hasTenant {
-			dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "content_bank_assets")
-			if qErr != nil {
-				results = append(results, res.fail(models.UploadCodeQuotaExceeded, "content bank asset limit reached"))
-				continue
-			}
-			fileQuota = dec
+		fileQuota, qErr := requireQuota(c, h.limiter, "content_bank_assets")
+		if qErr != nil {
+			results = append(results, res.fail(models.UploadCodeQuotaExceeded, "content bank asset limit reached"))
+			continue
 		}
 		// The file's bytes join media_storage_bytes ("all uploaded
 		// media"). Checked before storage so a denied file leaves no object.
-		var mediaQuota entitlements.Decision
-		if hasTenant {
-			dec, qErr := h.limiter.RequireAmount(reqCtx(c), tenantID, "media_storage_bytes", fh.Size)
-			if qErr != nil {
-				results = append(results, res.fail(models.UploadCodeQuotaExceeded, "media storage limit reached"))
-				continue
-			}
-			mediaQuota = dec
+		mediaQuota, qErr := requireQuotaAmount(c, h.limiter, "media_storage_bytes", fh.Size)
+		if qErr != nil {
+			results = append(results, res.fail(models.UploadCodeQuotaExceeded, "media storage limit reached"))
+			continue
 		}
 
 		switch detectUploadKind(fh.Filename) {
@@ -496,9 +486,9 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 			res = res.fail(models.UploadCodeExtensionNotAllowed, "only .md, .pdf, image, and office/text document files are accepted")
 		}
 		// Only a stored asset counts — fire the crossing once we know it landed.
-		if hasTenant && res.Status == "created" {
-			h.limiter.DispatchCrossing(reqCtx(c), tenantID, fileQuota)
-			h.limiter.DispatchCrossing(reqCtx(c), tenantID, mediaQuota)
+		if res.Status == "created" {
+			fileQuota.dispatch(reqCtx(c))
+			mediaQuota.dispatch(reqCtx(c))
 		}
 		results = append(results, res)
 	}
@@ -956,7 +946,10 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, "url scraping is not configured")
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	ctx := reqCtx(c)
 
 	// Dedupe: an existing URL asset with this source_url refreshes in place.
@@ -973,19 +966,13 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 	// a refresh of an existing one (handled above) does not. The URL sub-cap is
 	// checked first, so a workspace with bank room left but out of URL imports is
 	// refused on the allowance that actually ran out.
-	var urlQuota, importQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(ctx)
-	if hasTenant {
-		dec, qErr := h.limiter.Require(ctx, tenantID, "web_page_imports")
-		if qErr != nil {
-			return qErr
-		}
-		importQuota = dec
-		dec, qErr = h.limiter.Require(ctx, tenantID, "content_bank_assets")
-		if qErr != nil {
-			return qErr
-		}
-		urlQuota = dec
+	importQuota, err := requireQuota(c, h.limiter, "web_page_imports")
+	if err != nil {
+		return err
+	}
+	urlQuota, err := requireQuota(c, h.limiter, "content_bank_assets")
+	if err != nil {
+		return err
 	}
 
 	id, err := models.NewID()
@@ -1021,10 +1008,8 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 	}
 	// The URL asset now exists — fire any near-limit crossing on both
 	// the URL sub-cap and the total bank.
-	if hasTenant {
-		h.limiter.DispatchCrossing(ctx, tenantID, importQuota)
-		h.limiter.DispatchCrossing(ctx, tenantID, urlQuota)
-	}
+	importQuota.dispatch(ctx)
+	urlQuota.dispatch(ctx)
 
 	return c.Status(fiber.StatusCreated).JSON(asset)
 }
@@ -1196,7 +1181,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 	case isImage:
 		if descriptionChanged && h.imgReembed != nil {
 			if err := h.imgReembed.EnqueueReembedImage(reqCtx(c), asset.ID, tid); err != nil {
-				slog.ErrorContext(reqCtx(c), "enqueue image re-embed failed", logging.AttrComponent, "handlers.assets", "asset_id", asset.ID, "error", err)
+				slog.ErrorContext(reqCtx(c), "enqueue image re-embed failed", logging.AttrComponent, "handlers.assets", "asset_id", asset.ID, logging.AttrError, err)
 			}
 		}
 	case ingested:

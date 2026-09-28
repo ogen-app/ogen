@@ -1,18 +1,11 @@
 package handlers
 
 import (
-	"bufio"
 	"context"
-	"database/sql"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/valyala/fasthttp"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -113,38 +106,30 @@ func (h *CampaignGenerationHandler) GeneratePosts(c *fiber.Ctx) error {
 	if body.Count < 1 {
 		return fiber.NewError(fiber.StatusBadRequest, "count must be at least 1")
 	}
-	max := h.generatePostsMax
-	if max <= 0 {
-		max = 10
+	limit := h.generatePostsMax
+	if limit <= 0 {
+		limit = 10
 	}
-	if body.Count > max {
-		body.Count = max
-	}
+	body.Count = min(body.Count, limit)
 
 	// 404 before opening the stream (tenant-scoped).
-	if _, err := h.repo.GetByID(reqCtx(c), c.Params("id")); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "campaign not found")
-		}
+	if _, err := load(c, h.repo.GetByID, "campaign not found"); err != nil {
 		return err
 	}
-
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 
 	h.recordActivity(c, activity.CategoryCampaign, "content_generated",
 		activity.WithEntity("campaign", c.Params("id")),
 		activity.WithPayload(map[string]any{"mode": "generate_posts", "count": body.Count}),
 	)
 
-	session := c.Locals("session").(*models.Session)
 	flowCtx := detachedContext(c, session.TenantID)
 	generatePosts := h.generatePosts
 	req := content_plan.GeneratePostsRequest{
-		// Copied: the StreamWriter below outlives the request buffer this id
-		// points into (see the post assistant handler).
+		// Cloned: the stream writer outlives the request buffer this id aliases.
 		CampaignID:  strings.Clone(c.Params("id")),
 		PlatformIDs: body.PlatformIDs,
 		PhaseID:     body.PhaseID,
@@ -153,38 +138,16 @@ func (h *CampaignGenerationHandler) GeneratePosts(c *fiber.Ctx) error {
 		WindowEnd:   body.WindowEnd,
 		PostType:    body.PostType,
 	}
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := content_plan.OnEventFunc(func(name content_plan.SSEEventKind, data any) {
-			writeEvent(string(name), data)
+	streamFlow(c, func(emit sseEmit) {
+		resp, err := generatePosts(flowCtx, req, func(name content_plan.SSEEventKind, data any) {
+			emit(string(name), data)
 		})
-
-		resp, err := generatePosts(flowCtx, req, onEvent)
 		if err != nil {
-			code := fiber.StatusInternalServerError
-			msg := err.Error()
-			var ve *content_plan.ValidationError
-			var ae *content_plan.AIError
-			switch {
-			case errors.As(err, &ve):
-				code = fiber.StatusBadRequest
-				msg = ve.Msg
-			case errors.As(err, &ae):
-				code = fiber.StatusBadGateway
-				msg = ae.Msg
-			}
-			writeEvent(string(content_plan.SSEEventError), content_plan.ErrorEventPayload{Message: msg, Code: code})
+			emit(string(content_plan.SSEEventError), flowError[*content_plan.ValidationError, *content_plan.AIError](err))
 			return
 		}
-		writeEvent(string(content_plan.SSEEventComplete), resp)
-	}))
-
+		emit(string(content_plan.SSEEventComplete), resp)
+	})
 	return nil
 }
 
@@ -211,47 +174,30 @@ func (h *CampaignGenerationHandler) BriefReview(c *fiber.Ctx) error {
 	}
 
 	// 404 before opening the stream (tenant-scoped).
-	if _, err := h.repo.GetByID(reqCtx(c), c.Params("id")); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "campaign not found")
-		}
+	if _, err := load(c, h.repo.GetByID, "campaign not found"); err != nil {
+		return err
+	}
+	session, err := sessionFrom(c)
+	if err != nil {
 		return err
 	}
 
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
-
-	session := c.Locals("session").(*models.Session)
 	flowCtx := detachedContext(c, session.TenantID)
 	h.recordActivity(c, activity.CategoryAIFlow, "brief_review",
 		activity.WithEntity("campaign", c.Params("id")),
 	)
 
 	checkBrief := h.checkBrief
-	// Copied: the StreamWriter outlives the request buffer (see post assistant).
+	// Cloned: the stream writer outlives the request buffer.
 	campaignID := strings.Clone(c.Params("id"))
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := consistency.OnEventFunc(func(name consistency.SSEEventKind, data any) {
-			writeEvent(string(name), data)
-		})
-
-		resp, err := checkBrief(flowCtx, campaignID, onEvent)
+	streamFlow(c, func(emit sseEmit) {
+		resp, err := checkBrief(flowCtx, campaignID, consistencyEmitter(emit))
 		if err != nil {
-			writeEvent(string(consistency.SSEEventError), consistencyError(err))
+			emit(string(consistency.SSEEventError), consistencyError(err))
 			return
 		}
-		writeEvent(string(consistency.SSEEventComplete), resp)
-	}))
-
+		emit(string(consistency.SSEEventComplete), resp)
+	})
 	return nil
 }
 
@@ -290,64 +236,39 @@ func (h *CampaignGenerationHandler) PostsReview(c *fiber.Ctx) error {
 	}
 
 	// 404 before opening the stream (tenant-scoped).
-	if _, err := h.repo.GetByID(reqCtx(c), c.Params("id")); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "campaign not found")
-		}
+	if _, err := load(c, h.repo.GetByID, "campaign not found"); err != nil {
+		return err
+	}
+	session, err := sessionFrom(c)
+	if err != nil {
 		return err
 	}
 
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
-
-	session := c.Locals("session").(*models.Session)
 	flowCtx := detachedContext(c, session.TenantID)
 	h.recordActivity(c, activity.CategoryAIFlow, "posts_review",
 		activity.WithEntity("campaign", c.Params("id")),
 	)
 
 	checkPosts := h.checkPosts
-	// Copied: the StreamWriter outlives the request buffer (see post assistant).
+	// Cloned: the stream writer outlives the request buffer.
 	req := consistency.PostsCheckRequest{CampaignID: strings.Clone(c.Params("id")), Max: body.Max}
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := consistency.OnEventFunc(func(name consistency.SSEEventKind, data any) {
-			writeEvent(string(name), data)
-		})
-
-		resp, err := checkPosts(flowCtx, req, onEvent)
+	streamFlow(c, func(emit sseEmit) {
+		resp, err := checkPosts(flowCtx, req, consistencyEmitter(emit))
 		if err != nil {
-			writeEvent(string(consistency.SSEEventError), consistencyError(err))
+			emit(string(consistency.SSEEventError), consistencyError(err))
 			return
 		}
-		writeEvent(string(consistency.SSEEventComplete), resp)
-	}))
-
+		emit(string(consistency.SSEEventComplete), resp)
+	})
 	return nil
 }
 
-// consistencyError maps a consistency flow error onto the SSE error payload,
-// classifying validation vs. AI-provider failures for the client.
-func consistencyError(err error) consistency.ErrorEventPayload {
-	code := fiber.StatusInternalServerError
-	msg := err.Error()
-	var ve *consistency.ValidationError
-	var ae *consistency.AIError
-	switch {
-	case errors.As(err, &ve):
-		code = fiber.StatusBadRequest
-		msg = ve.Msg
-	case errors.As(err, &ae):
-		code = fiber.StatusBadGateway
-		msg = ae.Msg
-	}
-	return consistency.ErrorEventPayload{Message: msg, Code: code}
+// consistencyEmitter adapts an SSE emitter to the consistency flow callback.
+func consistencyEmitter(emit sseEmit) consistency.OnEventFunc {
+	return func(name consistency.SSEEventKind, data any) { emit(string(name), data) }
+}
+
+// consistencyError maps a consistency flow error onto the SSE error payload.
+func consistencyError(err error) flowErrorPayload {
+	return flowError[*consistency.ValidationError, *consistency.AIError](err)
 }

@@ -16,7 +16,6 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 // maxAudioUploadBytes caps a direct-to-storage audio upload. Audio is
@@ -165,17 +164,15 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 
 	// Presign mints a content_bank_assets row, so gate it like
 	// /upload does. The bytes aren't known yet — finalize gates storage.
-	var assetQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(reqCtx(c))
-	if hasTenant {
-		dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "content_bank_assets")
-		if qErr != nil {
-			return qErr
-		}
-		assetQuota = dec
+	assetQuota, err := requireQuota(c, h.limiter, "content_bank_assets")
+	if err != nil {
+		return err
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	id, err := models.NewID()
 	if err != nil {
 		return err
@@ -224,9 +221,7 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 	}); err != nil {
 		return err
 	}
-	if hasTenant {
-		h.limiter.DispatchCrossing(reqCtx(c), tenantID, assetQuota)
-	}
+	assetQuota.dispatch(reqCtx(c))
 
 	return c.Status(fiber.StatusCreated).JSON(presignAudioResponse{
 		Asset:      asset,
@@ -377,10 +372,7 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	}
 	ext, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "no extraction to retry")
-		}
-		return err
+		return notFound(err, "no extraction to retry")
 	}
 	if ext.Status == models.AudioExtractionStatusComplete {
 		return fiber.NewError(fiber.StatusConflict, "extraction already complete — nothing to retry")
@@ -399,7 +391,10 @@ func (h *AudioAssetsHandler) Retry(c *fiber.Ctx) error {
 	// together (CR9): if the enqueue fails, the reset/update roll back, so the
 	// extraction never lands in `transcribing` with no job behind it. A zero-reset
 	// aborts the tx and maps to 409.
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	err = h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		res, err := tx.NewUpdate().Model((*models.AudioSegment)(nil)).
@@ -465,10 +460,7 @@ func (h *AudioAssetsHandler) Status(c *fiber.Ctx) error {
 	}
 	ext, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "no extraction for this asset")
-		}
-		return err
+		return notFound(err, "no extraction for this asset")
 	}
 	segs, err := h.segments.ListByExtraction(reqCtx(c), ext.ID)
 	if err != nil {
@@ -554,18 +546,18 @@ func (h *AudioAssetsHandler) prepareAndEnqueue(c *fiber.Ctx, asset *models.Asset
 	// The uploaded bytes join the tenant's media_storage_bytes.
 	// Only the growth over what the file row already records is new (0 on a
 	// retry/reextract, whose size was stamped by the first finalize).
-	var mediaQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(reqCtx(c))
-	if added := size - file.SizeBytes; hasTenant && added > 0 {
-		dec, qErr := h.limiter.RequireAmount(reqCtx(c), tenantID, "media_storage_bytes", added)
-		if qErr != nil {
-			return qErr
+	var mediaQuota quotaHold
+	if added := size - file.SizeBytes; added > 0 {
+		if mediaQuota, err = requireQuotaAmount(c, h.limiter, "media_storage_bytes", added); err != nil {
+			return err
 		}
-		mediaQuota = dec
 	}
 	file.SizeBytes = size
 	file.UpdatedAt = time.Now().UTC()
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	storageKey := relativeAudioKey(asset.ID, file.OriginalName)
 	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewUpdate().Model(file).Column("size_bytes", "updated_at").WherePK().Exec(ctx); err != nil {
@@ -575,9 +567,7 @@ func (h *AudioAssetsHandler) prepareAndEnqueue(c *fiber.Ctx, asset *models.Asset
 	}); err != nil {
 		return err
 	}
-	if hasTenant {
-		h.limiter.DispatchCrossing(reqCtx(c), tenantID, mediaQuota)
-	}
+	mediaQuota.dispatch(reqCtx(c))
 	return nil
 }
 

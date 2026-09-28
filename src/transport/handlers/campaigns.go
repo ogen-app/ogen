@@ -1,16 +1,12 @@
 package handlers
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/valyala/fasthttp"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -307,14 +303,9 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
 	// The active_campaigns quota gates a new campaign.
-	var campaignQuota entitlements.Decision
-	tenantID, hasTenant := tenantctx.From(reqCtx(c))
-	if hasTenant {
-		dec, qErr := h.limiter.Require(reqCtx(c), tenantID, "active_campaigns")
-		if qErr != nil {
-			return qErr
-		}
-		campaignQuota = dec
+	campaignQuota, err := requireQuota(c, h.limiter, "active_campaigns")
+	if err != nil {
+		return err
 	}
 	campaignType, err := h.campaignTypeRepo.GetByID(reqCtx(c), req.CampaignTypeID)
 	if err != nil {
@@ -333,7 +324,10 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 
 	id, err := models.NewID()
 	if err != nil {
@@ -377,9 +371,7 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 	// The campaign now exists — fire any near-limit crossing.
-	if hasTenant {
-		h.limiter.DispatchCrossing(reqCtx(c), tenantID, campaignQuota)
-	}
+	campaignQuota.dispatch(reqCtx(c))
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_created",
 		activity.WithEntity("campaign", campaign.ID),
 		activity.WithPayload(map[string]any{"status": string(campaign.Status), "campaign_type_id": campaign.CampaignTypeID}),
@@ -717,20 +709,17 @@ func (h *CampaignsHandler) GenerateDraft(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "content plan feature is not enabled")
 	}
 
-	campaign, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
+	campaign, err := load(c, h.repo.GetByID, "campaign not found")
 	if err != nil {
-		return notFound(err, "campaign not found")
+		return err
 	}
-
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	if campaign.CreatedBy != session.UserID {
 		return fiber.NewError(fiber.StatusForbidden, "forbidden")
 	}
-
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
 
 	h.recordActivity(c, activity.CategoryCampaign, "content_generated",
 		activity.WithEntity("campaign", campaign.ID),
@@ -739,43 +728,19 @@ func (h *CampaignsHandler) GenerateDraft(c *fiber.Ctx) error {
 
 	campaignID := campaign.ID
 	generateDraft := h.generateDraft
-	// Carry the tenant into the detached flow context (the StreamWriter runs
-	// after this handler returns) so usage recording + enforcement attribute
-	// to the right tenant.
+	// The flow runs after this handler returns; the detached context carries
+	// the tenant so usage recording and enforcement attribute correctly.
 	flowCtx := detachedContext(c, session.TenantID)
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := content_plan.OnEventFunc(func(name content_plan.SSEEventKind, data any) {
-			writeEvent(string(name), data)
+	streamFlow(c, func(emit sseEmit) {
+		resp, err := generateDraft(flowCtx, campaignID, func(name content_plan.SSEEventKind, data any) {
+			emit(string(name), data)
 		})
-
-		resp, err := generateDraft(flowCtx, campaignID, onEvent)
 		if err != nil {
-			code := fiber.StatusInternalServerError
-			msg := err.Error()
-			var ve *content_plan.ValidationError
-			var ae *content_plan.AIError
-			switch {
-			case errors.As(err, &ve):
-				code = fiber.StatusBadRequest
-				msg = ve.Msg
-			case errors.As(err, &ae):
-				code = fiber.StatusBadGateway
-				msg = ae.Msg
-			}
-			writeEvent(string(content_plan.SSEEventError), content_plan.ErrorEventPayload{Message: msg, Code: code})
+			emit(string(content_plan.SSEEventError), flowError[*content_plan.ValidationError, *content_plan.AIError](err))
 			return
 		}
-
-		writeEvent(string(content_plan.SSEEventComplete), resp)
-	}))
-
+		emit(string(content_plan.SSEEventComplete), resp)
+	})
 	return nil
 }
 
@@ -818,61 +783,36 @@ func (h *CampaignsHandler) EnrichBrief(c *fiber.Ctx) error {
 		}
 	}
 
-	campaign, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
+	campaign, err := load(c, h.repo.GetByID, "campaign not found")
 	if err != nil {
-		return notFound(err, "campaign not found")
+		return err
 	}
-
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	if campaign.CreatedBy != session.UserID {
 		return fiber.NewError(fiber.StatusForbidden, "forbidden")
 	}
-
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
 
 	h.recordActivity(c, activity.CategoryCampaign, "brief_enriched",
 		activity.WithEntity("campaign", campaign.ID),
 	)
 
-	req := enrich_brief.EnrichBriefRequest{CampaignID: campaign.ID, Instruction: body.Instruction}
+	// The instruction aliases the request buffer, which the stream writer outlives.
+	req := enrich_brief.EnrichBriefRequest{CampaignID: campaign.ID, Instruction: strings.Clone(body.Instruction)}
 	enrichBrief := h.enrichBrief
 	flowCtx := detachedContext(c, session.TenantID)
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := enrich_brief.OnEventFunc(func(name enrich_brief.SSEEventKind, data any) {
-			writeEvent(string(name), data)
+	streamFlow(c, func(emit sseEmit) {
+		resp, err := enrichBrief(flowCtx, req, func(name enrich_brief.SSEEventKind, data any) {
+			emit(string(name), data)
 		})
-
-		resp, err := enrichBrief(flowCtx, req, onEvent)
 		if err != nil {
-			code := fiber.StatusInternalServerError
-			msg := err.Error()
-			var ve *enrich_brief.ValidationError
-			var ae *enrich_brief.AIError
-			switch {
-			case errors.As(err, &ve):
-				code = fiber.StatusBadRequest
-				msg = ve.Msg
-			case errors.As(err, &ae):
-				code = fiber.StatusBadGateway
-				msg = ae.Msg
-			}
-			writeEvent(string(enrich_brief.SSEEventError), enrich_brief.ErrorEventPayload{Message: msg, Code: code})
+			emit(string(enrich_brief.SSEEventError), flowError[*enrich_brief.ValidationError, *enrich_brief.AIError](err))
 			return
 		}
-
-		writeEvent(string(enrich_brief.SSEEventComplete), resp)
-	}))
-
+		emit(string(enrich_brief.SSEEventComplete), resp)
+	})
 	return nil
 }
 
@@ -908,64 +848,35 @@ func (h *CampaignsHandler) Assistant(c *fiber.Ctx) error {
 	if err := bindAndValidate(c, &req); err != nil {
 		return err
 	}
-
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 
 	h.recordActivity(c, activity.CategoryAIFlow, "campaign_assistant_turn",
 		activity.WithEntity("campaign", c.Params("id")),
 		activity.WithSource(activity.SourceAssistant),
 	)
 
-	// Copy the buffer-backed request values: the StreamWriter runs after this
-	// handler returns, by which point fasthttp may have recycled the request
-	// buffer into a concurrent request and corrupted them. See the post
-	// assistant handler for the failure this prevents.
-	campaignID := strings.Clone(c.Params("id"))
-	instruction := strings.Clone(req.Instruction)
+	// Params and body values alias the fasthttp request buffer, which the
+	// stream writer outlives; clone them (see PostAssistantHandler.Assistant).
+	flowReq := campaign_assistant.CampaignAssistantRequest{
+		CampaignID:  strings.Clone(c.Params("id")),
+		Instruction: strings.Clone(req.Instruction),
+	}
 	assistant := h.assistant
-	session := c.Locals("session").(*models.Session)
-	// Carry the tenant into the detached flow context (the StreamWriter runs
-	// after this handler returns) so the tenant-scoped campaign load, brief
-	// write, and usage recording all attribute to the right tenant (CON-86/97).
+	// The detached context carries the tenant so the tenant-scoped campaign
+	// load, brief write, and usage recording attribute correctly.
 	flowCtx := detachedContext(c, session.TenantID)
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := campaign_assistant.OnEventFunc(func(name campaign_assistant.SSEEventKind, data any) {
-			writeEvent(string(name), data)
+	streamFlow(c, func(emit sseEmit) {
+		_, err := assistant(flowCtx, flowReq, func(name campaign_assistant.SSEEventKind, data any) {
+			emit(string(name), data)
 		})
-
-		_, err := assistant(flowCtx, campaign_assistant.CampaignAssistantRequest{
-			CampaignID:  campaignID,
-			Instruction: instruction,
-		}, onEvent)
 		if err != nil {
-			code := fiber.StatusInternalServerError
-			msg := err.Error()
-			var ve *campaign_assistant.ValidationError
-			var ae *campaign_assistant.AIError
-			switch {
-			case errors.As(err, &ve):
-				code = fiber.StatusBadRequest
-				msg = ve.Msg
-			case errors.As(err, &ae):
-				code = fiber.StatusBadGateway
-				msg = ae.Msg
-			}
-			writeEvent(string(campaign_assistant.SSEEventError), campaign_assistant.ErrorEventPayload{Message: msg, Code: code})
-			return
+			emit(string(campaign_assistant.SSEEventError), flowError[*campaign_assistant.ValidationError, *campaign_assistant.AIError](err))
 		}
-		// "complete" is emitted by the runner itself; nothing to write here.
-	}))
-
+		// "complete" is emitted by the runner itself.
+	})
 	return nil
 }
 

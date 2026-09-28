@@ -5,7 +5,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
@@ -94,7 +93,10 @@ func (h *PostActionsHandler) Clone(c *fiber.Ctx) error {
 		}
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	opts := clone.DefaultOptions(session.UserID, clone.TriggerAPI)
 	opts.TargetPlatformID = req.TargetPlatformID
 	opts.TargetPostType = req.TargetPostType
@@ -153,7 +155,10 @@ func (h *PostActionsHandler) Restore(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "version_number is required and must be positive")
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	res, err := h.restoreSvc.Restore(reqCtx(c), c.Params("id"), restore.Options{
 		Actor:         session.UserID,
 		Trigger:       restore.TriggerAPI,

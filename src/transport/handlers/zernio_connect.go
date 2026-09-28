@@ -298,10 +298,7 @@ func (h *ZernioHandler) loadPendingForTenant(c *fiber.Ctx) (*models.ZernioConnec
 	}
 	sess, err := h.connectSessions.GetLive(reqCtx(c), id, time.Now().UTC())
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fiber.NewError(fiber.StatusNotFound, "connection_not_found")
-		}
-		return nil, err
+		return nil, notFound(err, "connection_not_found")
 	}
 	tenantID, ok := tenantctx.From(reqCtx(c))
 	if !ok || sess.TenantID != tenantID || sess.Status != models.ZernioConnectStatusAwaitingSelection {

@@ -1,17 +1,10 @@
 package handlers
 
 import (
-	"bufio"
 	"context"
-	"database/sql"
-	"encoding/json"
-	"errors"
-	"fmt"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/valyala/fasthttp"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
@@ -91,67 +84,35 @@ func (h *PostInsightsHandler) Assess(c *fiber.Ctx) error {
 	// gets a clean 404 rather than an in-stream error event. Posts are
 	// shared across the workspace — any authenticated user may assess any
 	// post, consistent with GET/PUT/DELETE/assistant/clone.
-	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
+	post, err := load(c, h.repo.GetByID, "post not found")
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "post not found")
-		}
 		return err
 	}
-
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
 
 	postID := post.ID
 	assess := h.assessQuality
 	tenantID, _ := c.Locals(tenantctx.Key).(string)
 	flowCtx := detachedContext(c, tenantID)
-	// Capture the actor now; the stream writer runs after the request context
-	// may be recycled, so the activity record can't read it from c.Context().
-	var actorID string
-	if sess, ok := c.Locals("session").(*models.Session); ok && sess != nil {
-		actorID = sess.UserID
-	}
-
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		writeEvent := func(event string, data any) {
-			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-			_ = w.Flush()
-		}
-
-		onEvent := post_quality.OnEventFunc(func(name post_quality.SSEEventKind, data any) {
-			writeEvent(string(name), data)
+	// Captured now: the stream writer runs after the request context is
+	// recycled, so the activity record can't read the actor from it.
+	actor := actorID(c)
+	rec := h.activity
+	streamFlow(c, func(emit sseEmit) {
+		_, err := assess(flowCtx, postID, func(name post_quality.SSEEventKind, data any) {
+			emit(string(name), data)
 		})
-
-		_, err := assess(flowCtx, postID, onEvent)
 		if err != nil {
-			code := fiber.StatusInternalServerError
-			msg := err.Error()
-			var ve *post_quality.ValidationError
-			var ae *post_quality.AIError
-			switch {
-			case errors.As(err, &ve):
-				code = fiber.StatusBadRequest
-				msg = ve.Msg
-			case errors.As(err, &ae):
-				code = fiber.StatusBadGateway
-				msg = ae.Msg
-			}
-			writeEvent(string(post_quality.SSEEventError), post_quality.ErrorEventPayload{Message: msg, Code: code})
+			emit(string(post_quality.SSEEventError), flowError[*post_quality.ValidationError, *post_quality.AIError](err))
 			return
 		}
-		// "complete" is emitted by the runner itself; nothing to write here.
-		h.activity.Record(flowCtx, activity.CategoryPost, "post_quality_assessed",
-			activity.WithUser(actorID),
+		// "complete" is emitted by the runner itself.
+		rec.Record(flowCtx, activity.CategoryPost, "post_quality_assessed",
+			activity.WithUser(actor),
 			activity.WithEntity("post", postID),
 			activity.WithSource(activity.SourceAPI),
 			activity.WithStatus("success"),
 		)
-	}))
-
+	})
 	return nil
 }
 
@@ -204,11 +165,8 @@ func (h *PostInsightsHandler) GetAnalytics(c *fiber.Ctx) error {
 	if h.analyticsRepo == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "post analytics is not available")
 	}
-	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
+	post, err := load(c, h.repo.GetByID, "post not found")
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "post not found")
-		}
 		return err
 	}
 	// Analytics is defined only for posts published through a publisher;

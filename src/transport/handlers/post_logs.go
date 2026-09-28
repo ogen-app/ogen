@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
-	"errors"
 	"strconv"
 	"time"
 
@@ -47,10 +45,7 @@ func (h *PostLogsHandler) Register(app *fiber.App) {
 func (h *PostLogsHandler) ListByPost(c *fiber.Ctx) error {
 	postID := c.Params("post_id")
 	if _, err := h.postRepo.GetByID(reqCtx(c), postID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "post not found")
-		}
-		return err
+		return notFound(err, "post not found")
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	logs, err := h.repo.ListByPostID(reqCtx(c), postID, limit)

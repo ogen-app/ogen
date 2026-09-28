@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/publishers"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 type PlatformsHandler struct {
@@ -205,75 +207,102 @@ func (h *PlatformsHandler) collectPublisherViews(ctx context.Context, platforms 
 		return out, nil
 	}
 
-	idIndex := make(map[string]string, len(platforms))   // platform.ID → platform.ID (identity, for fast contains)
-	nameIndex := make(map[string]string, len(platforms)) // lower(platform.Name) → platform.ID
-	for _, p := range platforms {
-		idIndex[p.ID] = p.ID
-		nameIndex[strings.ToLower(p.Name)] = p.ID
-	}
-
-	// Pull the auto-publish allowlist once per request and turn it
-	// into a set keyed by the publisher's wire ID. nil repo (legacy
-	// callers) and a transient query error both degrade to "nothing
-	// allowlisted" rather than failing the request — auto_publish is
-	// a forward-looking permission, not a precondition for reading
-	// the platform list.
-	allowSet := map[string]struct{}{}
-	if h.allowlist != nil {
-		ids, err := h.allowlist.List(ctx)
-		if err == nil {
-			for _, id := range ids {
-				allowSet[id] = struct{}{}
-			}
-		}
-	}
-
+	idx := newPlatformIndex(platforms)
+	allowSet := h.autoPublishAllowSet(ctx)
 	for _, pub := range h.publishers {
 		views, err := pub.PlatformViews(ctx)
 		if err != nil {
 			return nil, err
 		}
 		for _, v := range views {
-			matchID := ""
-			if v.OgenPlatformID != "" {
-				if id, ok := idIndex[v.OgenPlatformID]; ok {
-					matchID = id
-				}
-			}
-			if matchID == "" && v.PlatformName != "" {
-				if id, ok := nameIndex[strings.ToLower(v.PlatformName)]; ok {
-					matchID = id
-				}
-			}
-			if matchID == "" {
+			matchID, ok := idx.match(v)
+			if !ok {
 				continue
 			}
-
-			accounts := make([]accountView, 0, len(v.Accounts))
-			for _, a := range v.Accounts {
-				accounts = append(accounts, accountView{
-					ID:          a.ID,
-					Username:    a.Username,
-					DisplayName: a.DisplayName,
-					AvatarURL:   a.AvatarURL,
-					IsActive:    a.IsActive,
-					ConnectedAt: a.ConnectedAt,
-				})
-			}
-			autoPublish := false
-			if v.PublisherPlatformID != "" {
-				_, autoPublish = allowSet[v.PublisherPlatformID]
-			}
+			_, autoPublish := allowSet[v.PublisherPlatformID]
+			accounts := toAccountViews(v.Accounts)
 			out[matchID] = append(out[matchID], publisherView{
 				ID:                 pub.ID(),
 				Name:               pub.Name(),
 				State:              pub.State(),
 				Connected:          len(accounts) > 0,
-				AutoPublishAllowed: autoPublish,
+				AutoPublishAllowed: v.PublisherPlatformID != "" && autoPublish,
 				SupportedPostTypes: append([]string(nil), v.SupportedPostTypes...),
 				Accounts:           accounts,
 			})
 		}
 	}
 	return out, nil
+}
+
+// platformIndex resolves a publisher view to a local platform row.
+type platformIndex struct {
+	ids    map[string]struct{} // platform.ID
+	byName map[string]string   // lower(platform.Name) → platform.ID
+}
+
+func newPlatformIndex(platforms []models.Platform) platformIndex {
+	idx := platformIndex{
+		ids:    make(map[string]struct{}, len(platforms)),
+		byName: make(map[string]string, len(platforms)),
+	}
+	for _, p := range platforms {
+		idx.ids[p.ID] = struct{}{}
+		idx.byName[strings.ToLower(p.Name)] = p.ID
+	}
+	return idx
+}
+
+// match joins v by OgenPlatformID first, then case-insensitively by name.
+func (idx platformIndex) match(v publishers.PlatformView) (string, bool) {
+	if v.OgenPlatformID != "" {
+		if _, ok := idx.ids[v.OgenPlatformID]; ok {
+			return v.OgenPlatformID, true
+		}
+	}
+	if v.PlatformName != "" {
+		if id, ok := idx.byName[strings.ToLower(v.PlatformName)]; ok {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// autoPublishAllowSet loads the auto-publish allowlist keyed by the
+// publisher's wire ID. A nil repo or a query error degrades to "nothing
+// allowlisted" rather than failing the read — auto_publish is a
+// forward-looking permission, not a precondition for listing platforms — but
+// the error is logged so an outage is visible.
+func (h *PlatformsHandler) autoPublishAllowSet(ctx context.Context) map[string]struct{} {
+	set := map[string]struct{}{}
+	if h.allowlist == nil {
+		return set
+	}
+	ids, err := h.allowlist.List(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "auto-publish allowlist unavailable; treating as empty",
+			logging.AttrComponent, "platforms", logging.AttrError, err)
+		return set
+	}
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
+// toAccountViews projects publisher accounts onto the wire shape; the result
+// is never nil.
+func toAccountViews(in []publishers.Account) []accountView {
+	out := make([]accountView, 0, len(in))
+	for _, a := range in {
+		out = append(out, accountView{
+			ID:          a.ID,
+			Username:    a.Username,
+			DisplayName: a.DisplayName,
+			AvatarURL:   a.AvatarURL,
+			IsActive:    a.IsActive,
+			ConnectedAt: a.ConnectedAt,
+		})
+	}
+	return out
 }
