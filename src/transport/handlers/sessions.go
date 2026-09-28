@@ -64,6 +64,9 @@ type SessionsHandler struct {
 	// outside tenant scope, so the handler builds an explicit tenant+user
 	// context per event. nil is a no-op.
 	activity *activity.Recorder
+	// devices runs new-device detection after a successful login; off until
+	// SetLoginSecurity wires it.
+	devices deviceTracker
 }
 
 func NewSessionsHandler(userRepo repository.UserRepository, accountRepo repository.AccountRepository, sessionRepo repository.SessionRepository, cookieName string, secureCookie bool, rec *activity.Recorder) *SessionsHandler {
@@ -84,6 +87,12 @@ func NewSessionsHandler(userRepo repository.UserRepository, accountRepo reposito
 // attribute an auth event that happens before the auth middleware would run.
 func (h *SessionsHandler) authCtx(c *fiber.Ctx, tenantID, userID string) context.Context {
 	return logging.WithUserID(tenantctx.With(reqCtx(c), tenantID), userID)
+}
+
+// SetLoginSecurity turns on known-device tracking and new-device alerts for
+// password logins, using cookieName for the device cookie.
+func (h *SessionsHandler) SetLoginSecurity(sec LoginSecurity, cookieName string) {
+	h.devices = deviceTracker{sec: sec, cookieName: cookieName, secure: h.secureCookie}
 }
 
 func (h *SessionsHandler) Register(app *fiber.App) {
@@ -194,6 +203,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 		Secure:   h.secureCookie,
 		SameSite: "Lax",
 	})
+	h.devices.observe(c, session, account.Email)
 
 	return c.Status(fiber.StatusCreated).JSON(session)
 }

@@ -69,6 +69,8 @@ type TenantsHandler struct {
 	// Signup runs outside tenant scope, so it builds an explicit context. nil is
 	// a no-op.
 	activity *activity.Recorder
+	// devices enrols the signup browser as the account's first known device.
+	devices deviceTracker
 }
 
 func NewTenantsHandler(signupSvc *signup.Service, tenantRepo repository.TenantRepository, cookieName string, secureCookie bool, auth fiber.Handler, rec *activity.Recorder) *TenantsHandler {
@@ -81,6 +83,12 @@ func NewTenantsHandler(signupSvc *signup.Service, tenantRepo repository.TenantRe
 		ipLimiter:    newKeyedRateLimiter(signupPerIPBurst, signupRateWindow),
 		activity:     rec,
 	}
+}
+
+// SetLoginSecurity makes signup enrol the browser as a known device, so the
+// owner's first real login from it isn't reported as new.
+func (h *TenantsHandler) SetLoginSecurity(sec LoginSecurity, cookieName string) {
+	h.devices = deviceTracker{sec: sec, cookieName: cookieName, secure: h.secureCookie}
 }
 
 func (h *TenantsHandler) Register(app *fiber.App) {
@@ -157,6 +165,7 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 		Secure:   h.secureCookie,
 		SameSite: "Lax",
 	})
+	h.devices.enroll(c, res.Session, res.User.Email)
 
 	h.activity.Record(
 		logging.WithUserID(tenantctx.With(reqCtx(c), res.Tenant.ID), res.User.ID),

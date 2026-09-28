@@ -76,6 +76,9 @@ type InvitationsHandler struct {
 
 	limiter  *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 	activity *activity.Recorder
+	// devices enrols the browser that accepts as a new account as its first
+	// known device.
+	devices deviceTracker
 }
 
 // seatQuota checks the team_seats entitlement for the workspace an invite joins.
@@ -97,6 +100,10 @@ type InvitationsOptions struct {
 	// direct-create path in users.go.
 	Limiter  *entitlements.Limiter
 	Activity *activity.Recorder
+	// LoginSecurity enrols a new account's browser as a known device, using
+	// the DeviceCookieName cookie. nil leaves device tracking off.
+	LoginSecurity    LoginSecurity
+	DeviceCookieName string
 }
 
 // NewInvitationsHandler builds the handler. appBaseURL (APP_BASE_URL) is the base
@@ -120,6 +127,7 @@ func NewInvitationsHandler(db *bun.DB, userRepo repository.UserRepository, accou
 		tenantLimiter: newKeyedRateLimiter(invitePerTenantBurst, inviteRateWindow),
 		ipLimiter:     newKeyedRateLimiter(invitePerIPBurst, inviteRateWindow),
 		acceptLimiter: newKeyedRateLimiter(inviteAcceptPerIP, inviteRateWindow),
+		devices:       deviceTracker{sec: opts.LoginSecurity, cookieName: opts.DeviceCookieName, secure: secureCookie},
 	}
 }
 
@@ -601,6 +609,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 		Secure:   h.secureCookie,
 		SameSite: "Lax",
 	})
+	h.devices.enroll(c, session, inv.Email)
 
 	h.activity.Record(
 		logging.WithUserID(tenantctx.With(reqCtx(c), inv.TenantID), newUser.ID),

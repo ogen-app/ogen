@@ -8600,6 +8600,109 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/security/login-alerts/{token}": {
+            "get": {
+                "description": "Public and read-only: mail scanners follow links with GET, so this never changes anything. Returns the sign-in the alert reported and whether its link is still usable (status pending, used or expired).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "security"
+                ],
+                "summary": "Preview a new-device login alert",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Alert token from the email link",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/loginsecurity.Preview"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/security/login-alerts/{token}/secure": {
+            "post": {
+                "description": "Public. Spends the single-use alert token and, atomically, signs the account out of every session, forgets its known devices, voids its other alert links and issues a password-reset link, returned as reset_url. Opens no session. reset_url is empty only when the account has no workspace left.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "security"
+                ],
+                "summary": "Secure an account from a new-device login alert",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Alert token from the email link",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/loginsecurity.Secured"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "token_used or token_expired",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/sessions": {
             "post": {
                 "description": "Authenticates a user by email and password, sets a session cookie, and returns the created session. Failed attempts are rate-limited per client IP and per address; once a budget is exhausted the endpoint answers 429 with a Retry-After header (CON-162).",
@@ -11871,6 +11974,41 @@ const docTemplate = `{
                 },
                 "url": {
                     "type": "string"
+                }
+            }
+        },
+        "loginsecurity.Preview": {
+            "type": "object",
+            "properties": {
+                "device": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "ip": {
+                    "type": "string"
+                },
+                "location": {
+                    "type": "string"
+                },
+                "login_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "loginsecurity.Secured": {
+            "type": "object",
+            "properties": {
+                "reset_url": {
+                    "description": "ResetURL is a fresh single-use password-reset link. It is empty when the\naccount has no live workspace to attach a reset token to; such an account\ncan't sign in anyway.",
+                    "type": "string"
+                },
+                "sessions_revoked": {
+                    "type": "integer"
                 }
             }
         },
