@@ -3,6 +3,8 @@ version: "2"
 run:
   go: "1.26"
   timeout: 10m
+  build-tags:
+    - integration
 
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused
@@ -34,11 +36,9 @@ linters:
           - gocognit
 
 issues:
-  # Gate new and changed code only, so the existing backlog can be paid down
-  # incrementally without blocking unrelated work. origin/main, not main: CI
-  # checkouts have no local main branch, and an unresolvable ref silently
-  # disables the filter.
-  new-from-merge-base: origin/main
+  # The whole repo is lint-clean: report every issue, not a sample.
+  max-issues-per-linter: 0
+  max-same-issues: 0
 
 formatters:
   enable:

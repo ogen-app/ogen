@@ -69,7 +69,7 @@ test-integration:
 tidy:
 	go mod tidy
 
-# Lints new and changed code against main (see .golangci.yml). Install the
+# Lints the whole repo, integration tests included (see .golangci.yml). Install the
 # binary per https://golangci-lint.run/welcome/install/ (v2.6+).
 lint:
 	golangci-lint run ./...
