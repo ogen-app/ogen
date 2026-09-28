@@ -11,6 +11,12 @@ linters:
     - gocognit
     - modernize
   settings:
+    errcheck:
+      # Closing the read side (response bodies, downloads, uploaded files) has
+      # nothing to recover; write paths must still check Close.
+      exclude-functions:
+        - (io.ReadCloser).Close
+        - (mime/multipart.File).Close
     gocyclo:
       min-complexity: 20
     gocognit:

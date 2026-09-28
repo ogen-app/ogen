@@ -52,7 +52,7 @@ func TestAccessLogDoesNotDrainStreamingResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if _, err := fmt.Fprint(conn, "GET /stream HTTP/1.1\r\nHost: test\r\nAccept: text/event-stream\r\n\r\n"); err != nil {
 		t.Fatalf("write request: %v", err)

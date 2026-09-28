@@ -67,7 +67,7 @@ func seedTenantUser(db *bun.DB, name, email, password string) *models.User {
 // concurrent-upload integration test can exercise parallel handler requests.
 func mustOpenIntegrationDB() *bun.DB {
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(10)
-	db.DB.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
 	return db
 }

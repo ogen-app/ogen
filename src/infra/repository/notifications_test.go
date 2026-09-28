@@ -20,8 +20,8 @@ import (
 func openNotifDB(t *testing.T) *bun.DB {
 	t.Helper()
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(1)
-	db.DB.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
 		t.Fatalf("disable fks: %v", err)
 	}

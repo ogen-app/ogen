@@ -30,7 +30,6 @@ func initEnrichBrief(
 		Provider: provider,
 		Recorder: recorder,
 		Checker:  checker,
-		ModelID:  cfg.ModelID,
 	}
 	if err := enrich_brief.InitEnrichBrief(g, flowCfg, repos); err != nil {
 		return nil, fmt.Errorf("init enrich brief flow: %w", err)

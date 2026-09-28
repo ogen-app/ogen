@@ -40,7 +40,6 @@ func initPostAssistant(
 		Provider:        provider,
 		Recorder:        recorder,
 		Checker:         checker,
-		ModelID:         cfg.ModelID,
 		MaxOutputTokens: cfg.MaxOutputTokens,
 		Embedder:        embedder,
 		Hub:             hub,

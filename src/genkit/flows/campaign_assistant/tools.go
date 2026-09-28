@@ -455,7 +455,7 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 		return nil, fmt.Errorf("brief enrichment is not available")
 	}
 
-	emit(st.onEvent, SSEEventEnrichBriefStarted, EnrichBriefStartedEventPayload{Instruction: in.Instruction})
+	emit(st.onEvent, SSEEventEnrichBriefStarted, EnrichBriefStartedEventPayload{Instruction: in.Instruction}) //nolint:staticcheck // S1016: keep the tool-input schema decoupled from the SSE payload
 
 	nested := enrich_brief.OnEventFunc(func(name enrich_brief.SSEEventKind, data any) {
 		switch name {

@@ -30,8 +30,8 @@ func TestTenantAdminRoundTrip(t *testing.T) {
 	const token = "tenant-admin-token"
 
 	db := pgtest.MustDB()
-	db.DB.SetMaxOpenConns(2)
-	db.DB.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
 	t.Cleanup(func() { _ = db.Close() })
 
 	tierRepo := repository.NewTenantTierRepository(db)

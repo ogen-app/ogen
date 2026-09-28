@@ -42,7 +42,6 @@ type EnrichBriefFlowConfig struct {
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker
-	ModelID string
 	// MaxOutputTokens caps a single model call. 0 falls back to 32768 — a
 	// brief is well under that, so truncation should never fire; the cap is
 	// just a guard.

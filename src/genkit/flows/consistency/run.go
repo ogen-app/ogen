@@ -74,7 +74,7 @@ func runCheckBrief(
 	findings := make([]Finding, 0, len(out.Findings))
 	consistent := true
 	for _, f := range out.Findings {
-		findings = append(findings, Finding{Aspect: f.Aspect, Severity: f.Severity, Issue: f.Issue, Suggestion: f.Suggestion})
+		findings = append(findings, Finding{Aspect: f.Aspect, Severity: f.Severity, Issue: f.Issue, Suggestion: f.Suggestion}) //nolint:staticcheck // S1016: keep the model output schema decoupled from the API type
 		if severityHigh(f.Severity) {
 			consistent = false
 		}

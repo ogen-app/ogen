@@ -42,7 +42,6 @@ func initPostQuality(
 		Provider: provider,
 		Recorder: recorder,
 		Checker:  checker,
-		ModelID:  cfg.QualityModelID,
 		Weights:  weights,
 		Hub:      hub,
 		Notifier: notifier,

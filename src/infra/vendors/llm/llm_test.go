@@ -95,16 +95,3 @@ func TestEmbedMeter(t *testing.T) {
 		t.Error("zero tokens should yield ok=false")
 	}
 }
-
-func TestProviderRef(t *testing.T) {
-	p := llm.NewProvider("claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001")
-	if got := p.Ref(llm.RoleGeneration); got != "anthropic/claude-sonnet-4-5-20250929" {
-		t.Errorf("generation Ref = %q", got)
-	}
-	if got := p.Model(llm.RoleQuality); got != "claude-haiku-4-5-20251001" {
-		t.Errorf("quality Model = %q", got)
-	}
-	if got := p.Ref(llm.RolePlanning); got != "anthropic/claude-haiku-4-5-20251001" {
-		t.Errorf("planning Ref = %q", got)
-	}
-}

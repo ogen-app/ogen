@@ -108,7 +108,7 @@ func multipartBody(filename string, content []byte) (*bytes.Buffer, string) {
 	w := multipart.NewWriter(&buf)
 	fw, _ := w.CreateFormFile("file", filename)
 	_, _ = fw.Write(content)
-	w.Close()
+	Expect(w.Close()).To(Succeed())
 	return &buf, w.FormDataContentType()
 }
 
@@ -220,7 +220,7 @@ var _ = Describe("ImagesHandler", Ordered, Serial, func() {
 			It("returns 400 when no file is provided", func() {
 				var buf bytes.Buffer
 				w := multipart.NewWriter(&buf)
-				w.Close()
+				Expect(w.Close()).To(Succeed())
 				req := httptest.NewRequest("POST", "/api/images", &buf)
 				req.Header.Set("Content-Type", w.FormDataContentType())
 				req.AddCookie(authCookie)

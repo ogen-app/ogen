@@ -98,8 +98,8 @@ var _ = Describe("Content plan flow", Ordered, func() {
 		if modelID == "" {
 			modelID = "claude-haiku-4-5-20251001"
 		}
+		initModelConfig(ctx, modelID, modelID)
 		flowCfg := content_plan.ContentPlanFlowConfig{
-			ModelID:          modelID,
 			MaxContextAssets: 5,
 			MaxContextChars:  3000,
 			MaxOutputTokens:  8192,

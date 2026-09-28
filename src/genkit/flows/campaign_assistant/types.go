@@ -141,7 +141,6 @@ type CampaignAssistantFlowConfig struct {
 	// Embedder embeds the askCampaignAssets query for chunk search.
 	// A nil / unavailable embedder disables asset Q&A gracefully.
 	Embedder ai.Embedder
-	ModelID  string
 	// MaxOutputTokens caps a single planner call. 0 falls back to 8192 — the
 	// planner only emits a short JSON envelope, never long prose.
 	MaxOutputTokens int64

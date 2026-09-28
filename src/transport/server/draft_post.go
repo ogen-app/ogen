@@ -28,7 +28,6 @@ func initDraftPost(
 		Provider: provider,
 		Recorder: recorder,
 		Checker:  checker,
-		ModelID:  cfg.ModelID,
 	}
 	if err := draft_post.InitDraftPost(g, flowCfg, repos); err != nil {
 		return nil, fmt.Errorf("init draft post flow: %w", err)

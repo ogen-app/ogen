@@ -102,8 +102,8 @@ var _ = Describe("Post quality assessment flow", Ordered, func() {
 			modelID = "claude-haiku-4-5-20251001"
 		}
 		// Weights are required — without a profile ComposeScore returns 0.
+		initModelConfig(ctx, modelID, modelID)
 		Expect(post_quality.InitPostQuality(g, post_quality.PostQualityFlowConfig{
-			ModelID: modelID,
 			Weights: post_quality.DefaultWeights(),
 		}, repos)).To(Succeed())
 		callback = post_quality.NewPostQualityCallback()
@@ -326,8 +326,8 @@ What's stopped your team from trying it? 👇`
 	Describe("ranking eval", func() {
 		assessBoth := func(modelID string) (strong, weak float64) {
 			g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
+			initModelConfig(ctx, modelID, modelID)
 			Expect(post_quality.InitPostQuality(g, post_quality.PostQualityFlowConfig{
-				ModelID: modelID,
 				Weights: post_quality.DefaultWeights(),
 			}, repos)).To(Succeed())
 			cb := post_quality.NewPostQualityCallback()

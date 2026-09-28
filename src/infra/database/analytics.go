@@ -56,7 +56,7 @@ func NewAnalytics(dsn string, debug bool) (*bun.DB, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			db.Close()
+			_ = db.Close()
 		}
 	}()
 

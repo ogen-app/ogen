@@ -40,8 +40,8 @@ func openMigratedDB(t *testing.T) *bun.DB {
 	if err := database.MigrateAnalytics(t.Context(), db); err != nil {
 		t.Fatalf("migrate analytics: %v", err)
 	}
-	db.DB.SetMaxOpenConns(1)
-	db.DB.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
 		t.Fatalf("disable fks: %v", err)
 	}

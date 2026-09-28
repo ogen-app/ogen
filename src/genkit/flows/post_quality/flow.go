@@ -13,6 +13,7 @@ import (
 
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -30,16 +31,13 @@ const defaultSuggestionCap = 3
 
 // PostQualityFlowConfig holds the settings for the assessPostQuality flow.
 type PostQualityFlowConfig struct {
-	// Provider resolves the model reference + call config by role; post_quality
-	// uses the quality role (cfg.QualityModelID).
+	// Provider builds the model call config; the model itself comes from the
+	// modelconfig resolver (FlowPostQuality, SlotMain).
 	Provider *llm.Provider
 	// Recorder captures usage events; nil disables recording.
 	Recorder *usage.Recorder
 	// Checker gates the flow against the tenant's spend caps; nil = no gate.
 	Checker *usage.Checker
-	// ModelID is the Anthropic model used for scoring — Sonnet 4.5 by
-	// default, specified separately from the generation flows.
-	ModelID string
 	// MaxOutputTokens caps the model response; 0 falls back to
 	// defaultMaxOutputTokens. Keep it under the Anthropic non-streaming
 	// limit — evaluate issues a blocking GenerateData call.
@@ -180,7 +178,10 @@ func runPostQuality(
 	// since the stored evaluation, skip the model run and return the cached
 	// result — so we re-assess only when something that actually affects the
 	// score changed.
-	hash := inputHash(prompts, cfg.ModelID, cfg.Weights.For(post.PlatformPostType))
+	// Resolved once per run so the cache key, the scoring calls and the
+	// persisted model id always agree.
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
+	hash := inputHash(prompts, mc.Ref, cfg.Weights.For(post.PlatformPostType))
 	if cached, cerr := repos.Evaluations.GetByPostID(ctx, post.ID); cerr == nil && cached != nil && cached.InputHash == hash {
 		slog.InfoContext(ctx, "inputs unchanged, returning cached evaluation", logging.AttrComponent, "genkit.post_quality", "post_id", req.PostID)
 		resp := &PostQualityResponse{
@@ -200,7 +201,7 @@ func runPostQuality(
 	}
 
 	// ── Step 3: evaluate (single model call, 1-retry/2s-backoff) ─────────
-	output, err := evaluate(ctx, g, cfg, prompts)
+	output, err := evaluate(ctx, g, cfg, mc, prompts)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +217,7 @@ func runPostQuality(
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "composeScore", Status: "done"})
 
 	// ── Step 6: persist (upsert evaluation + PostLog) ────────────────────
-	eval, err := persist(ctx, repos, post, result, overall, prompts.captionScoped, cfg.ModelID, hash)
+	eval, err := persist(ctx, repos, post, result, overall, prompts.captionScoped, mc.Ref, hash)
 	if err != nil {
 		return nil, fmt.Errorf("persist evaluation: %w", err)
 	}
@@ -278,7 +279,7 @@ func inputHash(prompts *renderedPrompts, modelID string, profile Profile) string
 	h.Write([]byte{0x1f})
 	h.Write([]byte(modelID))
 	h.Write([]byte{0x1f})
-	fmt.Fprintf(h, "%g,%g,%g,%g", profile.Correctness, profile.Clarity, profile.Engagement, profile.Delivery)
+	h.Write(fmt.Appendf(nil, "%g,%g,%g,%g", profile.Correctness, profile.Clarity, profile.Engagement, profile.Delivery))
 	return hex.EncodeToString(h.Sum(nil))
 }
 

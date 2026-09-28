@@ -336,13 +336,16 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				req := httptest.NewRequest("POST", "/api/campaigns", bytes.NewReader(body))
 				req.Header.Set("Content-Type", "application/json")
 				req.AddCookie(authCookie)
-				resp, _ := app.Test(req)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(201))
 				var created models.Campaign
-				json.NewDecoder(resp.Body).Decode(&created)
+				Expect(json.NewDecoder(resp.Body).Decode(&created)).To(Succeed())
+				Expect(created.ID).NotTo(BeEmpty())
 
 				req = httptest.NewRequest("GET", "/api/campaigns/"+created.ID, nil)
 				req.AddCookie(authCookie)
-				resp, err := app.Test(req)
+				resp, err = app.Test(req)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(Equal(200))
 

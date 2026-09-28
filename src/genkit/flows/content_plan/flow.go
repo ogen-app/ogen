@@ -12,6 +12,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -49,7 +50,6 @@ type ContentPlanFlowConfig struct {
 	// Checker gates the flow against the tenant's spend caps before the model
 	// call; nil = no enforcement.
 	Checker          *usage.Checker
-	ModelID          string
 	MaxContextAssets int   // max assets when no embedder (creation-order fallback)
 	MaxContextChars  int   // character budget for asset context in the prompt
 	MaxOutputTokens  int64 // max_tokens sent to the model; 0 falls back to 8192
@@ -303,7 +303,7 @@ func runContentPlan(
 	// "validateOutput" / "persistDraftPosts" SSE step events still fire as
 	// no-ops below for client compatibility; the substantive work all
 	// happens inside generatePosts.
-	slog.InfoContext(ctx, "step 4/6 generatePosts", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "model", cfg.ModelID, "estimated_count", campaign.EstimatedPostCount)
+	slog.InfoContext(ctx, "step 4/6 generatePosts", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "model", modelconfig.Resolve(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain).Ref, "estimated_count", campaign.EstimatedPostCount)
 	posts, genWarnings, err := generatePosts(ctx, g, campaign, platforms, assets, cfg, repos, onEvent, nil)
 	if err != nil {
 		slog.ErrorContext(ctx, "generatePosts failed", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), "persisted", len(posts), logging.AttrError, err)

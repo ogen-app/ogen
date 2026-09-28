@@ -309,7 +309,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	// flows pass; model SELECTION moved to the DB-backed modelconfig resolver,
 	// which each flow consults per (flow, slot). The model-id args are
 	// vestigial and ignored by CallConfig — kept until provider.go is trimmed.
-	provider := llm.NewProvider(r.cfg.ModelID, r.cfg.QualityModelID, r.cfg.PlanningModelID)
+	provider := llm.NewProvider()
 
 	contentPlanFn, err := initContentPlan(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.contentPlanRepos)
 	if err != nil {
