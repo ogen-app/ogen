@@ -22,7 +22,8 @@ func TestShutdownPlanRunsStagesInOrder(t *testing.T) {
 	plan.add(stageRecorders, hook("usage"))
 	plan.add(stageRecorders, hook("activity"))
 	plan.add(stageIntegrations, hook("zernio"))
-	plan.add(stageIntegrations, hook("pdf"))
+	plan.add(stageIntegrations, hook("video"))
+	plan.add(stageJobClients, hook("pdf"))
 	plan.add(stageJobClients, hook("audio"))
 	plan.add(stageJobClients, hook("image"))
 	plan.add(stageJobs, hook("river"))
@@ -32,7 +33,7 @@ func TestShutdownPlanRunsStagesInOrder(t *testing.T) {
 	// Fiber runs the shutdown hooks even when the app never listened.
 	_ = app.Shutdown()
 
-	want := []string{"drain", "zernio", "pdf", "river", "audio", "image", "usage", "activity"}
+	want := []string{"drain", "zernio", "video", "river", "pdf", "audio", "image", "usage", "activity"}
 	if !slices.Equal(ran, want) {
 		t.Fatalf("shutdown order = %v, want %v", ran, want)
 	}
