@@ -79,16 +79,16 @@ type Asset struct {
 	// by (re-)processing (CON-281 D5): image-service fills AltText only while this
 	// is false; a PUT that sets alt_text flips it true, so re-extraction never
 	// clobbers a human edit.
-	AltTextEditedByUser bool        `bun:"alt_text_edited_by_user,notnull,default:false" json:"alt_text_edited_by_user"`
+	AltTextEditedByUser bool `bun:"alt_text_edited_by_user,notnull,default:false" json:"alt_text_edited_by_user"`
 	// FailureCode/FailureReason say why ingestion failed (CON-312): a stable
 	// models.UploadCode* plus tenant-visible prose. Set only while status is
 	// failed; any other status write clears them. Written for DOC assets —
 	// audio/image carry theirs on the extraction row.
 	FailureCode   string      `bun:"failure_code,notnull,default:''"              json:"failure_code,omitempty"`
 	FailureReason string      `bun:"failure_reason,notnull,default:''"            json:"failure_reason,omitempty"`
-	TagIDs              StringSlice `bun:"tag_ids,notnull,type:jsonb"                   json:"tag_ids"`
-	Tags                []Tag       `bun:"-"                                            json:"tags"`
-	File                *AssetFile  `bun:"-"                                            json:"file,omitempty"`
+	TagIDs        StringSlice `bun:"tag_ids,notnull,type:jsonb"                   json:"tag_ids"`
+	Tags          []Tag       `bun:"-"                                            json:"tags"`
+	File          *AssetFile  `bun:"-"                                            json:"file,omitempty"`
 	// Images are the mirrored page images for URL assets (CON-222), hydrated and
 	// URL-decorated by the handler layer. Not persisted on assets.
 	Images    []AssetImage `bun:"-" json:"images,omitempty"`

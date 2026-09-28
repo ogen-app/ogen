@@ -10,7 +10,7 @@ func d(y int, m time.Month, day int) *time.Time {
 	return &t
 }
 
-func ip(n int) *int { return &n }
+//go:fix inline
 
 func TestNormalize(t *testing.T) {
 	cases := []struct {
@@ -75,11 +75,11 @@ func TestEffectiveCount(t *testing.T) {
 		end       *time.Time
 		want      int
 	}{
-		{"5/week over 9 weeks", ip(5), CadenceWeek, d(2026, 6, 1), d(2026, 7, 31), 45},
-		{"12/month over 2 months", ip(12), CadenceMonth, d(2026, 6, 1), d(2026, 7, 31), 24},
+		{"5/week over 9 weeks", new(5), CadenceWeek, d(2026, 6, 1), d(2026, 7, 31), 45},
+		{"12/month over 2 months", new(12), CadenceMonth, d(2026, 6, 1), d(2026, 7, 31), 24},
 		{"nil count → 0", nil, CadenceMonth, d(2026, 6, 1), d(2026, 7, 31), 0},
-		{"zero count → 0", ip(0), CadenceMonth, d(2026, 6, 1), d(2026, 7, 31), 0},
-		{"missing dates → count×1", ip(10), CadenceMonth, nil, nil, 10},
+		{"zero count → 0", new(0), CadenceMonth, d(2026, 6, 1), d(2026, 7, 31), 0},
+		{"missing dates → count×1", new(10), CadenceMonth, nil, nil, 10},
 	}
 	for _, c := range cases {
 		if got := EffectiveCount(c.perPeriod, c.cadence, c.start, c.end, time.UTC); got != c.want {

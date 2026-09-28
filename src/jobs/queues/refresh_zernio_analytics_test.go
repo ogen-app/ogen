@@ -2,6 +2,7 @@ package queues_test
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -64,9 +65,7 @@ func (r *fakeAnalyticsRepo) CurrentByPostID(context.Context) (map[string]*models
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string]*models.PostAnalytics, len(r.upserted))
-	for k, v := range r.upserted {
-		out[k] = v
-	}
+	maps.Copy(out, r.upserted)
 	return out, nil
 }
 func (r *fakeAnalyticsRepo) List(context.Context, repository.PostAnalyticsListOptions) ([]repository.PostAnalyticsListItem, repository.PostAnalyticsOverview, error) {

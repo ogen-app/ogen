@@ -124,10 +124,6 @@ func (h *EventsHandler) Stream(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
-	// Last-Event-ID is parsed but currently unused (forward-compat hook
-	// per the AC). Documented in swagger above.
-	_ = c.Get("Last-Event-Id")
-
 	eventCh, unsubscribe, err := h.hub.Subscribe(reqCtx(c), eventhub.SubscribeOpts{
 		UserID:   session.UserID,
 		TenantID: session.TenantID, // CON-97 §10.2: only this tenant's events

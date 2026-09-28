@@ -392,10 +392,7 @@ func (w *Worker) tick(ctx context.Context) error {
 
 // handleRateLimit doubles the next interval, capped at the documented 5m.
 func (w *Worker) handleRateLimit() {
-	delay := w.interval * 2
-	if delay > rateLimitBackoffCap {
-		delay = rateLimitBackoffCap
-	}
+	delay := min(w.interval*2, rateLimitBackoffCap)
 	w.rateLimitUntil = time.Now().Add(delay)
 	slog.Warn("rate-limited; backing off",
 		logging.AttrComponent, "zernio.worker",

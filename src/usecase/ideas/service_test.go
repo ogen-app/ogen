@@ -59,7 +59,7 @@ func newTestService(repo *stubRepo, user *models.User) *Service {
 	return svc
 }
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
 
 func TestCreate_StampsAuthorAndTrims(t *testing.T) {
 	repo := &stubRepo{}
@@ -103,7 +103,7 @@ func TestCreate_Validation(t *testing.T) {
 	}{
 		"blank title":      {CreateInput{Title: "   "}, ErrEmptyTitle},
 		"long title":       {CreateInput{Title: string(long)}, ErrTitleTooLong},
-		"unknown campaign": {CreateInput{Title: "x", CampaignID: ptr("nope")}, ErrCampaignNotFound},
+		"unknown campaign": {CreateInput{Title: "x", CampaignID: new("nope")}, ErrCampaignNotFound},
 	}
 	for name, tc := range cases {
 		if _, err := svc.Create(t.Context(), tc.in); !errors.Is(err, tc.want) {
@@ -117,12 +117,12 @@ func TestCreate_Validation(t *testing.T) {
 
 func TestUpdate_WritesOnlyPresentFields(t *testing.T) {
 	repo := &stubRepo{
-		idea:          &models.Idea{ID: "i1", Title: "old", Note: "keep", Verdict: ptr(models.IdeaVerdictYes)},
+		idea:          &models.Idea{ID: "i1", Title: "old", Note: "keep", Verdict: new(models.IdeaVerdictYes)},
 		liveCampaigns: map[string]bool{"c1": true},
 	}
 	svc := newTestService(repo, nil)
 
-	idea, fields, err := svc.Update(t.Context(), "i1", UpdateInput{Title: ptr(" new "), SetCampaign: true, CampaignID: ptr("c1")})
+	idea, fields, err := svc.Update(t.Context(), "i1", UpdateInput{Title: new(" new "), SetCampaign: true, CampaignID: new("c1")})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestUpdate_WritesOnlyPresentFields(t *testing.T) {
 		t.Errorf("detach: %v / %v", err, idea.CampaignID)
 	}
 
-	if _, _, err := svc.Update(t.Context(), "missing", UpdateInput{Note: ptr("")}); !errors.Is(err, ErrNotFound) {
+	if _, _, err := svc.Update(t.Context(), "missing", UpdateInput{Note: new("")}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing idea: got %v", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestSetVerdict_Invariants(t *testing.T) {
 	week := fixedNow.Add(7 * 24 * time.Hour)
 
 	// later + remind_at stamps the decision.
-	idea, prev, err := svc.SetVerdict(t.Context(), "i1", ptr(models.IdeaVerdictLater), &week, "u2")
+	idea, prev, err := svc.SetVerdict(t.Context(), "i1", new(models.IdeaVerdictLater), &week, "u2")
 	if err != nil {
 		t.Fatalf("later: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestSetVerdict_Invariants(t *testing.T) {
 	}
 
 	// yes clears remind_at.
-	idea, prev, err = svc.SetVerdict(t.Context(), "i1", ptr(models.IdeaVerdictYes), nil, "u3")
+	idea, prev, err = svc.SetVerdict(t.Context(), "i1", new(models.IdeaVerdictYes), nil, "u3")
 	if err != nil || *prev != models.IdeaVerdictLater || idea.RemindAt != nil || *idea.DecidedBy != "u3" {
 		t.Errorf("yes: err=%v prev=%v idea=%+v", err, prev, idea)
 	}
@@ -190,13 +190,13 @@ func TestSetVerdict_Validation(t *testing.T) {
 		remindAt *time.Time
 		want     error
 	}{
-		"bogus verdict":      {ptr(models.IdeaVerdict("maybe")), nil, ErrInvalidVerdict},
-		"later without date": {ptr(models.IdeaVerdictLater), nil, ErrRemindAtRequired},
-		"yes with date":      {ptr(models.IdeaVerdictYes), &soon, ErrRemindAtNotAllowed},
+		"bogus verdict":      {new(models.IdeaVerdict("maybe")), nil, ErrInvalidVerdict},
+		"later without date": {new(models.IdeaVerdictLater), nil, ErrRemindAtRequired},
+		"yes with date":      {new(models.IdeaVerdictYes), &soon, ErrRemindAtNotAllowed},
 		"null with date":     {nil, &soon, ErrRemindAtNotAllowed},
-		"later in the past":  {ptr(models.IdeaVerdictLater), &past, ErrRemindAtOutOfRange},
-		"later too far":      {ptr(models.IdeaVerdictLater), &far, ErrRemindAtOutOfRange},
-		"later within skew":  {ptr(models.IdeaVerdictLater), &skew, nil},
+		"later in the past":  {new(models.IdeaVerdictLater), &past, ErrRemindAtOutOfRange},
+		"later too far":      {new(models.IdeaVerdictLater), &far, ErrRemindAtOutOfRange},
+		"later within skew":  {new(models.IdeaVerdictLater), &skew, nil},
 	}
 	for name, tc := range cases {
 		_, _, err := svc.SetVerdict(t.Context(), "i1", tc.verdict, tc.remindAt, "u1")

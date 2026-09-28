@@ -121,10 +121,7 @@ func settledPosts(points []LifespanPoint) []settledPost {
 		// The blended curve is only read up to gridCapHours, so cap the grid
 		// there rather than allocating out to a very old post's maxAge. final
 		// stays the post's true eventual reach (its last sample).
-		gridMax := maxAge
-		if gridMax > gridCapHours {
-			gridMax = gridCapHours
-		}
+		gridMax := min(maxAge, gridCapHours)
 		byHour := make([]float64, gridMax+1)
 		pi, last := 0, 0.0
 		for a := 0; a <= gridMax; a++ {

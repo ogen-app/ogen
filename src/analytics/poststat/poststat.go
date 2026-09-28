@@ -209,10 +209,7 @@ func buildSeries(snaps []Snapshot) map[string][]SeriesPoint {
 	for _, m := range metricOrder {
 		pts := make([]SeriesPoint, 0, len(snaps)+1)
 		for _, s := range snaps {
-			age := s.AgeHours
-			if age < 0 {
-				age = 0
-			}
+			age := max(s.AgeHours, 0)
 			pts = append(pts, SeriesPoint{AgeHours: age, Value: displayValue(m, metricValue(s.Metrics, m))})
 		}
 		if len(pts) == 0 || pts[0].AgeHours > 0 {

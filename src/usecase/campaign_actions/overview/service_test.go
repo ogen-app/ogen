@@ -7,9 +7,9 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-func ptr(s string) *string { return &s }
+//go:fix inline
 
-func tptr(t time.Time) *time.Time { return &t }
+//go:fix inline
 
 func dateUTC(y int, m time.Month, day int) time.Time {
 	return time.Date(y, m, day, 9, 0, 0, 0, time.UTC)
@@ -48,9 +48,9 @@ func bucketMap(bs []Bucket) map[string]int {
 
 func TestBuildOverview_DistributionAndReconciliation(t *testing.T) {
 	posts := []models.Post{
-		{ID: "a", CampaignTypePhaseID: ptr("p1"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
-		{ID: "b", CampaignTypePhaseID: ptr("p1"), PlatformID: "pl2", PlatformPostType: "article", Status: models.PostStatusPublished},
-		{ID: "c", CampaignTypePhaseID: ptr("p2"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
+		{ID: "a", CampaignTypePhaseID: new("p1"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
+		{ID: "b", CampaignTypePhaseID: new("p1"), PlatformID: "pl2", PlatformPostType: "article", Status: models.PostStatusPublished},
+		{ID: "c", CampaignTypePhaseID: new("p2"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
 		{ID: "d", CampaignTypePhaseID: nil, PlatformID: "", PlatformPostType: "", Status: models.PostStatusScheduled},
 	}
 	names := map[string]string{"pl1": "LinkedIn", "pl2": "X"}
@@ -130,8 +130,8 @@ func TestBuildOverview_DistributionAndReconciliation(t *testing.T) {
 
 func TestBuildOverview_StalePhaseCountsAsUnassigned(t *testing.T) {
 	posts := []models.Post{
-		{ID: "a", CampaignTypePhaseID: ptr("p1"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
-		{ID: "b", CampaignTypePhaseID: ptr("deleted-phase"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
+		{ID: "a", CampaignTypePhaseID: new("p1"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
+		{ID: "b", CampaignTypePhaseID: new("deleted-phase"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
 	}
 	ov := buildOverview(sampleCampaign(), posts, nil)
 	if ov.Phases[0].PostCount != 1 {
@@ -160,7 +160,7 @@ func TestBuildOverview_NoCampaignType(t *testing.T) {
 	c := sampleCampaign()
 	c.CampaignType = nil
 	posts := []models.Post{
-		{ID: "a", CampaignTypePhaseID: ptr("p1"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
+		{ID: "a", CampaignTypePhaseID: new("p1"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
 	}
 	ov := buildOverview(c, posts, nil)
 	if ov.Type != "type-1" {
@@ -208,8 +208,8 @@ func goalCampaign(count int, cadence string, start, end time.Time) *models.Campa
 	return &models.Campaign{
 		EstimatedPostCount: &count,
 		GoalCadence:        cadence,
-		StartDate:          tptr(start),
-		EndDate:            tptr(end),
+		StartDate:          new(start),
+		EndDate:            new(end),
 	}
 }
 
@@ -218,11 +218,11 @@ func TestBuildGoalProgress_WeeklyBucketsAndTotals(t *testing.T) {
 		time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)) // 2 weeks
 	posts := []models.Post{
-		{ID: "1", Status: models.PostStatusScheduled, ScheduledAt: tptr(dateUTC(2026, 6, 2))},                 // week 1
-		{ID: "2", Status: models.PostStatusScheduledForManualPublish, ScheduledAt: tptr(dateUTC(2026, 6, 3))}, // week 1
-		{ID: "3", Status: models.PostStatusPublished, ScheduledAt: tptr(dateUTC(2026, 6, 9))},                 // week 2
-		{ID: "4", Status: models.PostStatusDraft, ScheduledAt: tptr(dateUTC(2026, 6, 2))},                     // not committed
-		{ID: "5", Status: models.PostStatusScheduled, ScheduledAt: nil},                                       // no date
+		{ID: "1", Status: models.PostStatusScheduled, ScheduledAt: new(dateUTC(2026, 6, 2))},                 // week 1
+		{ID: "2", Status: models.PostStatusScheduledForManualPublish, ScheduledAt: new(dateUTC(2026, 6, 3))}, // week 1
+		{ID: "3", Status: models.PostStatusPublished, ScheduledAt: new(dateUTC(2026, 6, 9))},                 // week 2
+		{ID: "4", Status: models.PostStatusDraft, ScheduledAt: new(dateUTC(2026, 6, 2))},                     // not committed
+		{ID: "5", Status: models.PostStatusScheduled, ScheduledAt: nil},                                      // no date
 	}
 
 	gp := buildGoalProgress(c, posts)
@@ -254,10 +254,10 @@ func TestBuildGoalProgress_StreakAndReached(t *testing.T) {
 		time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC))
 	posts := []models.Post{
-		{ID: "1", Status: models.PostStatusScheduled, ScheduledAt: tptr(dateUTC(2026, 6, 2))},
-		{ID: "2", Status: models.PostStatusPublished, ScheduledAt: tptr(dateUTC(2026, 6, 4))},
-		{ID: "3", Status: models.PostStatusScheduled, ScheduledAt: tptr(dateUTC(2026, 6, 9))},
-		{ID: "4", Status: models.PostStatusScheduled, ScheduledAt: tptr(dateUTC(2026, 6, 12))},
+		{ID: "1", Status: models.PostStatusScheduled, ScheduledAt: new(dateUTC(2026, 6, 2))},
+		{ID: "2", Status: models.PostStatusPublished, ScheduledAt: new(dateUTC(2026, 6, 4))},
+		{ID: "3", Status: models.PostStatusScheduled, ScheduledAt: new(dateUTC(2026, 6, 9))},
+		{ID: "4", Status: models.PostStatusScheduled, ScheduledAt: new(dateUTC(2026, 6, 12))},
 	}
 	gp := buildGoalProgress(c, posts)
 	if gp.TotalAchieved != 4 || !gp.Reached || gp.Percent != 100 {
@@ -272,9 +272,9 @@ func TestBuildGoalProgress_MissingDates(t *testing.T) {
 	count := 3
 	c := &models.Campaign{EstimatedPostCount: &count, GoalCadence: "month"} // no dates
 	posts := []models.Post{
-		{ID: "1", Status: models.PostStatusScheduled, ScheduledAt: tptr(dateUTC(2026, 6, 2))}, // committed + dated → counts
-		{ID: "2", Status: models.PostStatusPublished, ScheduledAt: nil},                       // committed but undated → excluded
-		{ID: "3", Status: models.PostStatusDraft},                                             // not committed → ignored
+		{ID: "1", Status: models.PostStatusScheduled, ScheduledAt: new(dateUTC(2026, 6, 2))}, // committed + dated → counts
+		{ID: "2", Status: models.PostStatusPublished, ScheduledAt: nil},                      // committed but undated → excluded
+		{ID: "3", Status: models.PostStatusDraft},                                            // not committed → ignored
 	}
 	gp := buildGoalProgress(c, posts)
 	if gp == nil {

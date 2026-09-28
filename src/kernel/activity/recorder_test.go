@@ -145,13 +145,11 @@ func TestRecorder_CloseIdempotent(t *testing.T) {
 	errs := make(chan error, callers)
 	var wg sync.WaitGroup
 	for range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			errs <- r.Close(ctx)
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

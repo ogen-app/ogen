@@ -174,9 +174,9 @@ func TestListAnalyticsTolerantTimestamps(t *testing.T) {
 		lastUpdated string // raw JSON value as it appears on the wire
 		want        *time.Time
 	}{
-		{"space separated zoneless (the incident)", `"2026-07-29 12:47:25"`, timePtr(time.Date(2026, 7, 29, 12, 47, 25, 0, time.UTC))},
-		{"rfc3339 still works", `"2026-06-15T09:00:00Z"`, timePtr(time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC))},
-		{"date only", `"2026-07-29"`, timePtr(time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC))},
+		{"space separated zoneless (the incident)", `"2026-07-29 12:47:25"`, new(time.Date(2026, 7, 29, 12, 47, 25, 0, time.UTC))},
+		{"rfc3339 still works", `"2026-06-15T09:00:00Z"`, new(time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC))},
+		{"date only", `"2026-07-29"`, new(time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC))},
 		{"unparseable degrades to nil", `"whenever"`, nil},
 		{"null degrades to nil", `null`, nil},
 	}
@@ -215,7 +215,7 @@ func TestListAnalyticsTolerantTimestamps(t *testing.T) {
 	}
 }
 
-func timePtr(t time.Time) *time.Time { return &t }
+//go:fix inline
 
 // TestListAnalyticsUnknownEnvelopeIsEmptyNotError ensures an object with no
 // recognizable array key and no post id decodes to an empty page rather than a

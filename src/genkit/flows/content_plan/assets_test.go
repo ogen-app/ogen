@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func ptrInt(i int) *int { return &i }
+//go:fix inline
 
 func TestJoinPagedChunks_NoPageInfo(t *testing.T) {
 	got := joinPagedChunks([]chunkPart{
@@ -20,7 +20,7 @@ func TestJoinPagedChunks_NoPageInfo(t *testing.T) {
 
 func TestJoinPagedChunks_SinglePage(t *testing.T) {
 	got := joinPagedChunks([]chunkPart{
-		{Content: "first chunk", PageStart: ptrInt(2), PageEnd: ptrInt(2)},
+		{Content: "first chunk", PageStart: new(2), PageEnd: new(2)},
 	})
 	if !strings.HasPrefix(got, "[p. 2] ") {
 		t.Errorf("expected single-page prefix, got %q", got)
@@ -29,7 +29,7 @@ func TestJoinPagedChunks_SinglePage(t *testing.T) {
 
 func TestJoinPagedChunks_PageRange(t *testing.T) {
 	got := joinPagedChunks([]chunkPart{
-		{Content: "pages three through five", PageStart: ptrInt(3), PageEnd: ptrInt(5)},
+		{Content: "pages three through five", PageStart: new(3), PageEnd: new(5)},
 	})
 	if !strings.HasPrefix(got, "[pp. 3–5] ") {
 		t.Errorf("expected page-range prefix, got %q", got)
@@ -39,8 +39,8 @@ func TestJoinPagedChunks_PageRange(t *testing.T) {
 func TestJoinPagedChunks_MixedPagesAndPlain(t *testing.T) {
 	parts := []chunkPart{
 		{Content: "intro"},
-		{Content: "middle", PageStart: ptrInt(4), PageEnd: ptrInt(4)},
-		{Content: "outro", PageStart: ptrInt(10), PageEnd: ptrInt(12)},
+		{Content: "middle", PageStart: new(4), PageEnd: new(4)},
+		{Content: "outro", PageStart: new(10), PageEnd: new(12)},
 	}
 	got := joinPagedChunks(parts)
 	if !strings.Contains(got, "[p. 4] middle") {

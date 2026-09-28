@@ -66,6 +66,7 @@ var _ = Describe("TagsHandler", Ordered, func() {
 		_, err = db.NewDelete().TableExpr("sessions").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("users").Where("1 = 1").Exec(context.Background())
+		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("accounts").Where("1 = 1").Exec(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 	})

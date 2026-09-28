@@ -159,7 +159,7 @@ func (r *postLogRepository) TerminalTransitionsBetween(ctx context.Context, from
 		ColumnExpr("pl.event_timestamp AS event_timestamp").
 		Join("JOIN posts AS po ON po.id = pl.post_id").
 		Where("pl.event_type = ?", string(models.PostLogEventStateTransition)).
-		Where("pl.to_status IN (?)", bun.In([]string{
+		Where("pl.to_status IN (?)", bun.List([]string{
 			string(models.PostStatusFailed),
 			string(models.PostStatusNotPublished),
 		})).

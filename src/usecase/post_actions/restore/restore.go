@@ -292,8 +292,8 @@ func (s *Service) publishRestored(postID string, opts Options, newVersion int) {
 		return
 	}
 	_ = s.hub.Publish(context.Background(), eventhub.Event{
-		ID:     evID,
-		Topic:  "entity:post:" + postID,
+		ID:    evID,
+		Topic: "entity:post:" + postID,
 		// Dotted bus wire type (CON-285). The post_logs.event_type and
 		// tenant_activity_events taxonomy constants stay "post_restored".
 		Type:   "post.restored",

@@ -79,7 +79,7 @@ func (r *assetImageRepository) ListByAssetIDs(ctx context.Context, assetIDs []st
 	var images []models.AssetImage
 	err := r.db.NewSelect().
 		Model(&images).
-		Where("aimg.asset_id IN (?)", bun.In(assetIDs)).
+		Where("aimg.asset_id IN (?)", bun.List(assetIDs)).
 		OrderExpr("aimg.asset_id ASC, aimg.idx ASC").
 		Scan(ctx)
 	if err != nil {

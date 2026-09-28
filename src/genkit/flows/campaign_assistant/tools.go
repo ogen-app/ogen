@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -807,17 +808,17 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 		return "", fmt.Errorf("load conversation history: %w", err)
 	}
 	// Messages come back oldest-first; scan newest-first for the latest answer.
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != "model" {
+	for _, msg := range slices.Backward(msgs) {
+		if msg.Role != "model" {
 			continue
 		}
 		var env struct {
 			Action      string `json:"action"`
 			Explanation string `json:"explanation"`
 		}
-		if err := json.Unmarshal([]byte(msgs[i].Content), &env); err != nil {
+		if err := json.Unmarshal([]byte(msg.Content), &env); err != nil {
 			// Legacy/plain-text model message (not JSON-wrapped) — use it directly.
-			if s := strings.TrimSpace(msgs[i].Content); s != "" {
+			if s := strings.TrimSpace(msg.Content); s != "" {
 				return s, nil
 			}
 			continue

@@ -366,7 +366,7 @@ func (r *postRepository) CountPendingByAccount(ctx context.Context, socialAccoun
 	// ready_for_publish are excluded — they're freely editable, not committed.
 	return r.db.NewSelect().Model((*models.Post)(nil)).
 		Where("po.social_account_id = ?", socialAccountID).
-		Where("po.status IN (?)", bun.In([]models.PostStatus{
+		Where("po.status IN (?)", bun.List([]models.PostStatus{
 			models.PostStatusScheduled,
 			models.PostStatusScheduledForManualPublish,
 		})).
@@ -387,7 +387,7 @@ func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*mo
 			// than clobbering a schedule that moved out from under us.
 			res, err := tx.NewUpdate().Model(p).
 				Column("scheduled_at", "updated_at").
-				Where("status IN (?)", bun.In([]models.PostStatus{
+				Where("status IN (?)", bun.List([]models.PostStatus{
 					models.PostStatusDraft, models.PostStatusReadyForPublish,
 				})).
 				WherePK().

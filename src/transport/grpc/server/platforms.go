@@ -349,7 +349,7 @@ func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGloba
 		if vid.GetMaxFileSizeBytes() > limits.MaxVideoUploadBytes {
 			return status.Errorf(codes.InvalidArgument, "video max_file_size_bytes (%d) exceeds the global video upload ceiling (%d); raise the global cap first", vid.GetMaxFileSizeBytes(), limits.MaxVideoUploadBytes)
 		}
-		if max := vid.GetMaxDurationSeconds(); max > 0 && vid.GetMinDurationSeconds() > max {
+		if maxDur := vid.GetMaxDurationSeconds(); maxDur > 0 && vid.GetMinDurationSeconds() > maxDur {
 			return status.Error(codes.InvalidArgument, "video min_duration_seconds must be <= max_duration_seconds")
 		}
 	}

@@ -424,8 +424,8 @@ func (s *Service) publishCloned(srcID, newID, actor string, adapted bool) {
 		return
 	}
 	_ = s.hub.Publish(context.Background(), eventhub.Event{
-		ID:     evID,
-		Topic:  "entity:post:" + newID,
+		ID:    evID,
+		Topic: "entity:post:" + newID,
 		// Dotted bus wire type (CON-285). Distinct from the post_logs.event_type
 		// and tenant_activity_events taxonomy constants, which stay "post_cloned"
 		// (persisted history + stability contract — do not rename those).

@@ -9,7 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-func strptr(s string) *string { return &s }
+//go:fix inline
 
 // TestFlowModelConfigScopes covers the CON-308 assignment store: a global-default
 // row and a per-tier override for the SAME (flow, slot) coexist (the COALESCE
@@ -26,7 +26,7 @@ func TestFlowModelConfigScopes(t *testing.T) {
 	if err := repo.Upsert(ctx, &models.FlowModelConfig{FlowKey: "content_plan", SlotKey: "main", ModelID: "sonnet"}); err != nil {
 		t.Fatalf("upsert global: %v", err)
 	}
-	if err := repo.Upsert(ctx, &models.FlowModelConfig{TierID: strptr("pro"), FlowKey: "content_plan", SlotKey: "main", ModelID: "opus"}); err != nil {
+	if err := repo.Upsert(ctx, &models.FlowModelConfig{TierID: new("pro"), FlowKey: "content_plan", SlotKey: "main", ModelID: "opus"}); err != nil {
 		t.Fatalf("upsert tier: %v", err)
 	}
 
@@ -48,7 +48,7 @@ func TestFlowModelConfigScopes(t *testing.T) {
 	}
 
 	// Tier override resolves distinctly.
-	ov, err := repo.GetByScope(ctx, strptr("pro"), "content_plan", "main")
+	ov, err := repo.GetByScope(ctx, new("pro"), "content_plan", "main")
 	if err != nil {
 		t.Fatalf("get tier: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestFlowModelConfigScopes(t *testing.T) {
 	}
 
 	// A tier with no override falls through (caller then uses the global default).
-	if _, err := repo.GetByScope(ctx, strptr("free"), "content_plan", "main"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := repo.GetByScope(ctx, new("free"), "content_plan", "main"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("absent scope err = %v, want sql.ErrNoRows", err)
 	}
 
@@ -73,17 +73,17 @@ func TestFlowModelConfigScopes(t *testing.T) {
 	}
 
 	// Delete removes only the addressed scope and reports existence.
-	deleted, err := repo.Delete(ctx, strptr("pro"), "content_plan", "main")
+	deleted, err := repo.Delete(ctx, new("pro"), "content_plan", "main")
 	if err != nil || !deleted {
 		t.Fatalf("delete tier = (%v, %v), want (true, nil)", deleted, err)
 	}
-	if _, err := repo.GetByScope(ctx, strptr("pro"), "content_plan", "main"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := repo.GetByScope(ctx, new("pro"), "content_plan", "main"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("tier still present after delete: %v", err)
 	}
 	if gd3, err := repo.GetByScope(ctx, nil, "content_plan", "main"); err != nil || gd3.ModelID != "haiku" {
 		t.Fatalf("global gone after tier delete: (%v, %v)", gd3, err)
 	}
-	if deleted, _ := repo.Delete(ctx, strptr("pro"), "content_plan", "main"); deleted {
+	if deleted, _ := repo.Delete(ctx, new("pro"), "content_plan", "main"); deleted {
 		t.Fatal("second delete reported a row, want false")
 	}
 }

@@ -60,7 +60,7 @@ func (f *fakeBrandRepo) CreateTemplate(context.Context, *models.BrandTemplate) e
 func (f *fakeBrandRepo) UpdateTemplate(context.Context, *models.BrandTemplate) error { return nil }
 func (f *fakeBrandRepo) DeleteTemplate(context.Context, string) (bool, error)        { return false, nil }
 
-func strptr(s string) *string { return &s }
+//go:fix inline
 
 func data() *models.BrandData {
 	return &models.BrandData{
@@ -91,8 +91,8 @@ func TestResolveVoicePrecedence(t *testing.T) {
 		post    *models.Post
 		wantVID string
 	}{
-		{"post ref wins", &models.Campaign{BrandVoiceID: strptr("v-camp")}, &models.Post{BrandVoiceID: strptr("v-post")}, "v-post"},
-		{"campaign ref when no post ref", &models.Campaign{BrandVoiceID: strptr("v-camp")}, &models.Post{}, "v-camp"},
+		{"post ref wins", &models.Campaign{BrandVoiceID: new("v-camp")}, &models.Post{BrandVoiceID: new("v-post")}, "v-post"},
+		{"campaign ref when no post ref", &models.Campaign{BrandVoiceID: new("v-camp")}, &models.Post{}, "v-camp"},
 		{"default voice when no refs", &models.Campaign{}, &models.Post{}, "v-def"},
 		{"default voice when post nil", &models.Campaign{}, nil, "v-def"},
 	}
@@ -113,11 +113,11 @@ func TestResolveAudiencePrecedence(t *testing.T) {
 	repo := &fakeBrandRepo{data: data()}
 	ctx := t.Context()
 
-	r, _ := Resolve(ctx, repo, &models.Campaign{BrandAudienceID: strptr("a-camp")}, &models.Post{BrandAudienceID: strptr("a-post")})
+	r, _ := Resolve(ctx, repo, &models.Campaign{BrandAudienceID: new("a-camp")}, &models.Post{BrandAudienceID: new("a-post")})
 	if r.Audience == nil || r.Audience.ID != "a-post" {
 		t.Fatalf("post audience ref should win, got %v", r.Audience)
 	}
-	r, _ = Resolve(ctx, repo, &models.Campaign{BrandAudienceID: strptr("a-camp")}, &models.Post{})
+	r, _ = Resolve(ctx, repo, &models.Campaign{BrandAudienceID: new("a-camp")}, &models.Post{})
 	if r.Audience == nil || r.Audience.ID != "a-camp" {
 		t.Fatalf("campaign audience ref should apply, got %v", r.Audience)
 	}
@@ -141,7 +141,7 @@ func TestResolveNilRepoFailsOpen(t *testing.T) {
 
 func TestPromptBlockRendersVoiceAudienceGuardrails(t *testing.T) {
 	repo := &fakeBrandRepo{data: data()}
-	r, _ := Resolve(t.Context(), repo, &models.Campaign{BrandVoiceID: strptr("v-def"), BrandAudienceID: strptr("a-camp")}, nil)
+	r, _ := Resolve(t.Context(), repo, &models.Campaign{BrandVoiceID: new("v-def"), BrandAudienceID: new("a-camp")}, nil)
 	block := r.PromptBlock("")
 
 	for _, want := range []string{"deadpan one-liner", "Default", "sceptics", "NEVER claim", "guaranteed", "Capital at risk."} {

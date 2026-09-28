@@ -228,7 +228,7 @@ func (r *socialAccountRepository) ApplyPlan(
 		if len(softDeleteIDs) > 0 {
 			if _, err := tx.NewUpdate().Model((*models.SocialAccount)(nil)).
 				Set("deleted_at = ?", now).
-				Where("id IN (?)", bun.In(softDeleteIDs)).
+				Where("id IN (?)", bun.List(softDeleteIDs)).
 				Where("deleted_at IS NULL").
 				Exec(ctx); err != nil {
 				return err

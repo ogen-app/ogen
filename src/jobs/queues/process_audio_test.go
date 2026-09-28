@@ -1,9 +1,10 @@
 package queues
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -109,7 +110,7 @@ func (f *fakeSegments) ListByExtraction(_ context.Context, extID string) ([]mode
 	for _, s := range byIdx {
 		out = append(out, s)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	slices.SortFunc(out, func(a, b models.AudioSegment) int { return cmp.Compare(a.Index, b.Index) })
 	return out, nil
 }
 func (f *fakeSegments) Update(_ context.Context, s *models.AudioSegment) error {
@@ -137,11 +138,8 @@ func (f *fakeUtterances) ListByExtraction(_ context.Context, _ string) ([]models
 	for _, utts := range f.bySeg {
 		out = append(out, utts...)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].StartMs != out[j].StartMs {
-			return out[i].StartMs < out[j].StartMs
-		}
-		return out[i].Index < out[j].Index
+	slices.SortFunc(out, func(a, b models.Utterance) int {
+		return cmp.Or(cmp.Compare(a.StartMs, b.StartMs), cmp.Compare(a.Index, b.Index))
 	})
 	return out, nil
 }

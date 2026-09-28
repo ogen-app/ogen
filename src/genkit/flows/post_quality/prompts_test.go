@@ -22,7 +22,7 @@ func fieldIndex(t *testing.T, typ reflect.Type, name string) int {
 // commits to a number (CON-85 "reason before scoring"). This is the guard
 // against an accidental reorder.
 func TestRationalePrecedesScore(t *testing.T) {
-	typ := reflect.TypeOf(dimensionOutput{})
+	typ := reflect.TypeFor[dimensionOutput]()
 	rationale := fieldIndex(t, typ, "Rationale")
 	weakness := fieldIndex(t, typ, "Weakness")
 	score := fieldIndex(t, typ, "Score")

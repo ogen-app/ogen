@@ -7,7 +7,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-func ptr(s string) *string { return &s }
+//go:fix inline
 
 // TestBuild_GroupsByCampaignPreservingOrder checks that build folds a flat,
 // campaign-ordered row set into per-campaign groups in first-seen order, and
@@ -55,7 +55,7 @@ func TestBuild_ProjectsReadinessFields(t *testing.T) {
 		PublishedAt:         &pub,
 		PlatformID:          "pl_li",
 		PlatformPostType:    "feed",
-		CampaignTypePhaseID: ptr("ph_2"),
+		CampaignTypePhaseID: new("ph_2"),
 		MediaURLs:           nil, // notnull column, but guard the nil→[] normalisation
 		CreatedBy:           "usr_ana",
 		FailureReason:       "zernio_rejected",

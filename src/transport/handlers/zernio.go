@@ -268,10 +268,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 	}
 
 	if allow, retryAfter := h.rateLimiter.Allow(); !allow {
-		seconds := int(math.Ceil(retryAfter.Seconds()))
-		if seconds < 1 {
-			seconds = 1
-		}
+		seconds := max(int(math.Ceil(retryAfter.Seconds())), 1)
 		c.Set("Retry-After", strconv.Itoa(seconds))
 		return fiber.NewError(fiber.StatusTooManyRequests, "rate_limited")
 	}

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -78,12 +79,7 @@ func (s PostStatus) CanTransition(next PostStatus) bool {
 	if s == next {
 		return true
 	}
-	for _, allowed := range ValidPostTransitions[s] {
-		if allowed == next {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ValidPostTransitions[s], next)
 }
 
 // PostTypeThread is the platform_post_type slug that marks a post as a native

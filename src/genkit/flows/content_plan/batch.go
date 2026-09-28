@@ -120,10 +120,7 @@ func planBatches(
 	// is naturally preserved within a batch wherever possible.
 	specs := make([]batchSpec, 0, (len(slots)+maxPostsPerBatch-1)/maxPostsPerBatch)
 	for i := 0; i < len(slots); i += maxPostsPerBatch {
-		end := i + maxPostsPerBatch
-		if end > len(slots) {
-			end = len(slots)
-		}
+		end := min(i+maxPostsPerBatch, len(slots))
 		chunk := slots[i:end]
 
 		phaseAgg := map[int]int{}

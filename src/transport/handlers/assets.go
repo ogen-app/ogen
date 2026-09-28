@@ -1325,8 +1325,8 @@ func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
 	if h.storage != nil {
 		for _, k := range keysToDelete {
 			if err := h.storage.Delete(reqCtx(c), k); err != nil {
-				// Fiber has no handler-level logger dependency here; swallow.
-				_ = err
+				slog.WarnContext(reqCtx(c), "delete asset object", logging.AttrComponent, "handlers.assets",
+					"key", k, logging.AttrError, err)
 			}
 		}
 	}

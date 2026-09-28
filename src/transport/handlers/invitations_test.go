@@ -312,12 +312,10 @@ var _ = Describe("InvitationsHandler", Ordered, func() {
 			var wg sync.WaitGroup
 			codes := make([]int, n)
 			for i := range n {
-				wg.Add(1)
-				go func(i int) {
+				wg.Go(func() {
 					defer GinkgoRecover()
-					defer wg.Done()
 					codes[i] = createInvite(cookie, fiber.Map{"email": "race@example.com"}).StatusCode
-				}(i)
+				})
 			}
 			wg.Wait()
 

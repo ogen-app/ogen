@@ -90,10 +90,7 @@ func (h *AnalyticsHandler) PostDetail(c *fiber.Ctx) error {
 		publishedAt = *published
 	}
 	header.PublishedAt = publishedAt
-	age := now.Sub(publishedAt)
-	if age < 0 {
-		age = 0
-	}
+	age := max(now.Sub(publishedAt), 0)
 
 	in := poststat.Inputs{
 		Now:      now,
@@ -219,10 +216,7 @@ func toBandSamples(in []repository.ReachAgeSample) []poststat.AgeSample {
 func toPoststatSnapshots(in []models.PostAnalyticsSnapshot, publishedAt time.Time) []poststat.Snapshot {
 	out := make([]poststat.Snapshot, 0, len(in))
 	for _, s := range in {
-		ageH := int(s.OccurredAt.Sub(publishedAt).Hours())
-		if ageH < 0 {
-			ageH = 0
-		}
+		ageH := max(int(s.OccurredAt.Sub(publishedAt).Hours()), 0)
 		out = append(out, poststat.Snapshot{
 			AgeHours: ageH,
 			Metrics: poststat.Metrics{

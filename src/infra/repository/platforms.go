@@ -128,7 +128,7 @@ func (r *platformRepository) InUseCounts(ctx context.Context, p *models.Platform
 	// would still fire after a disable — the in-flight work §11 preserves.
 	scheduledPosts, err = r.db.NewSelect().Model((*models.Post)(nil)).
 		Where("platform_id = ?", p.ID).
-		Where("status IN (?)", bun.In([]string{
+		Where("status IN (?)", bun.List([]string{
 			string(models.PostStatusScheduled),
 			string(models.PostStatusScheduledForManualPublish),
 		})).

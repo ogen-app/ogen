@@ -114,8 +114,8 @@ func (s *Service) publishScheduled(postID, actor string, scheduledAt time.Time, 
 		return
 	}
 	_ = s.hub.Publish(context.Background(), eventhub.Event{
-		ID:     evID,
-		Topic:  "entity:post:" + postID,
+		ID:    evID,
+		Topic: "entity:post:" + postID,
 		// Dotted bus wire type (CON-285). The post_logs event for scheduling is a
 		// separate constant (PostLogEventUserSchedule = "user_schedule") and the
 		// tenant_activity_events taxonomy stays "post_scheduled" — neither renamed.

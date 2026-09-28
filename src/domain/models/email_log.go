@@ -87,9 +87,9 @@ type EmailLog struct {
 	// DeliveredAt/FirstOpenedAt are first-occurrence timestamps; the counts are
 	// totals. All recomputed from email_events on every webhook.
 	LastEvent     string    `bun:"last_event,nullzero"      json:"last_event,omitempty"`
-	LastEventAt   time.Time `bun:"last_event_at,nullzero"   json:"last_event_at,omitempty"`
-	DeliveredAt   time.Time `bun:"delivered_at,nullzero"    json:"delivered_at,omitempty"`
-	FirstOpenedAt time.Time `bun:"first_opened_at,nullzero" json:"first_opened_at,omitempty"`
+	LastEventAt   time.Time `bun:"last_event_at,nullzero"   json:"last_event_at,omitzero"`
+	DeliveredAt   time.Time `bun:"delivered_at,nullzero"    json:"delivered_at,omitzero"`
+	FirstOpenedAt time.Time `bun:"first_opened_at,nullzero" json:"first_opened_at,omitzero"`
 	OpensCount    int       `bun:"opens_count,notnull,default:0"  json:"opens_count"`
 	ClicksCount   int       `bun:"clicks_count,notnull,default:0" json:"clicks_count"`
 

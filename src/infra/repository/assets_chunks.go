@@ -108,7 +108,7 @@ func (r *assetChunksRepository) SearchSimilar(ctx context.Context, query pgvecto
 		Where("(1 - (ac.embedding <=> ?)) >= ?", query, minScore).
 		OrderExpr("ac.embedding <=> ?", query)
 	if len(assetIDs) > 0 {
-		q = q.Where("ac.asset_id IN (?)", bun.In(assetIDs))
+		q = q.Where("ac.asset_id IN (?)", bun.List(assetIDs))
 	}
 	if limit > 0 {
 		q = q.Limit(limit)
@@ -134,7 +134,7 @@ func (r *assetChunksRepository) GetByIDs(ctx context.Context, ids []string) ([]m
 	var chunks []models.AssetChunk
 	err := r.db.NewSelect().
 		Model(&chunks).
-		Where("ac.id IN (?)", bun.In(ids)).
+		Where("ac.id IN (?)", bun.List(ids)).
 		OrderExpr("ac.asset_id ASC, ac.chunk_index ASC").
 		Scan(ctx)
 	return chunks, err

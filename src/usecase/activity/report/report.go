@@ -13,8 +13,11 @@
 package report
 
 import (
+	"cmp"
 	"errors"
 	"expvar"
+	"maps"
+	"slices"
 	"sort"
 	"time"
 )
@@ -205,7 +208,7 @@ func computeReport(in Inputs, date, tz string, w Window) Report {
 			})
 		}
 	}
-	sort.Slice(posts, func(i, j int) bool { return posts[i].PostID < posts[j].PostID })
+	slices.SortFunc(posts, func(a, b FailedPost) int { return cmp.Compare(a.PostID, b.PostID) })
 	r.Failed.ByChannel = channelCounts(failByCh)
 	r.Failed.Posts = posts
 
@@ -224,11 +227,10 @@ func computeReport(in Inputs, date, tz string, w Window) Report {
 	ids := make([]string, 0)
 	for _, cm := range in.Campaigns {
 		if w.contains(cm.At) {
-			r.CampaignsCreated.Total++
 			ids = append(ids, cm.CampaignID)
 		}
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	r.CampaignsCreated.Total = len(ids)
 	r.CampaignsCreated.CampaignIDs = ids
 
@@ -314,18 +316,16 @@ func bucketReports(in Inputs, loc *time.Location, limit int, floor time.Time) []
 
 func channelCounts(m map[string]int) []ChannelCount {
 	out := make([]ChannelCount, 0, len(m))
-	for id, n := range m {
-		out = append(out, ChannelCount{PlatformID: id, Count: n})
+	for _, id := range slices.Sorted(maps.Keys(m)) {
+		out = append(out, ChannelCount{PlatformID: id, Count: m[id]})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].PlatformID < out[j].PlatformID })
 	return out
 }
 
 func authorCounts(m map[string]int) []AuthorCount {
 	out := make([]AuthorCount, 0, len(m))
-	for id, n := range m {
-		out = append(out, AuthorCount{UserID: id, Count: n})
+	for _, id := range slices.Sorted(maps.Keys(m)) {
+		out = append(out, AuthorCount{UserID: id, Count: m[id]})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UserID < out[j].UserID })
 	return out
 }

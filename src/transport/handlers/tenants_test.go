@@ -155,13 +155,11 @@ var _ = Describe("TenantsHandler", Ordered, func() {
 			errs := make([]error, n)
 			var wg sync.WaitGroup
 			for i := range n {
-				wg.Add(1)
 				// No Ginkgo assertions inside the goroutine — record results and
 				// assert on the spec goroutine after Wait().
-				go func(idx int) {
-					defer wg.Done()
+				wg.Go(func() {
 					body, _ := json.Marshal(fiber.Map{
-						"tenant": fiber.Map{"name": fmt.Sprintf("Org %d", idx)},
+						"tenant": fiber.Map{"name": fmt.Sprintf("Org %d", i)},
 						"user":   fiber.Map{"name": "Racer", "email": "race@example.com", "password": "password-race"},
 					})
 					req := httptest.NewRequest("POST", "/api/tenants", bytes.NewReader(body))
@@ -169,11 +167,11 @@ var _ = Describe("TenantsHandler", Ordered, func() {
 					<-start // release all goroutines together to force the TOCTOU window
 					resp, err := app.Test(req, 5000)
 					if err != nil {
-						errs[idx] = err
+						errs[i] = err
 						return
 					}
-					codes[idx] = resp.StatusCode
-				}(i)
+					codes[i] = resp.StatusCode
+				})
 			}
 			close(start)
 			wg.Wait()

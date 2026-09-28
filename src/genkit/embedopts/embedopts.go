@@ -44,7 +44,7 @@ func Available(e any) bool {
 func Document() *genai.EmbedContentConfig {
 	return &genai.EmbedContentConfig{
 		TaskType:             "RETRIEVAL_DOCUMENT",
-		OutputDimensionality: genai.Ptr(Dimensions),
+		OutputDimensionality: new(Dimensions),
 	}
 }
 
@@ -54,6 +54,6 @@ func Document() *genai.EmbedContentConfig {
 func Query() *genai.EmbedContentConfig {
 	return &genai.EmbedContentConfig{
 		TaskType:             "RETRIEVAL_QUERY",
-		OutputDimensionality: genai.Ptr(Dimensions),
+		OutputDimensionality: new(Dimensions),
 	}
 }

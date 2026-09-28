@@ -289,9 +289,7 @@ func (h *AssetsImageHandler) loadImageAsset(c *fiber.Ctx) (*models.Asset, error)
 // pinnedModelFromBody reads an optional {"model": "..."} extraction-model
 // override from the request body; absent/invalid bodies mean "use the default".
 func pinnedModelFromBody(c *fiber.Ctx) string {
-	var body struct {
-		Model string `json:"model"`
-	}
+	var body pinnedModelRequest
 	_ = c.BodyParser(&body)
 	return strings.TrimSpace(body.Model)
 }

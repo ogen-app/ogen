@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -76,9 +75,6 @@ type PostQualityRepos struct {
 	Versions repository.PostVersionRepository
 }
 
-// postQualityFlow is the registered flow; nil until InitPostQuality runs.
-var postQualityFlow *core.Flow[PostQualityRequest, *PostQualityResponse, struct{}]
-
 // postQualityRunner is a closure over (g, cfg, repos) that threads an
 // OnEventFunc through for SSE streaming. Set by InitPostQuality.
 var postQualityRunner func(ctx context.Context, req PostQualityRequest, onEvent OnEventFunc) (*PostQualityResponse, error)
@@ -96,7 +92,7 @@ func InitPostQuality(g *genkit.Genkit, cfg PostQualityFlowConfig, repos PostQual
 		cfg.SuggestionCap = defaultSuggestionCap
 	}
 
-	postQualityFlow = genkit.DefineFlow(g, "assessPostQuality",
+	genkit.DefineFlow(g, "assessPostQuality",
 		func(ctx context.Context, req PostQualityRequest) (*PostQualityResponse, error) {
 			return runPostQuality(ctx, g, req, cfg, repos, nil)
 		},

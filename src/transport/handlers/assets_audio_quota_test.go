@@ -57,13 +57,11 @@ var _ = Describe("AudioAssetsHandler quota (CON-312)", Ordered, func() {
 		// Mirror the production error handler so a *QuotaExceededError is a 402.
 		app = fiber.New(fiber.Config{
 			ErrorHandler: func(c *fiber.Ctx, err error) error {
-				var qe *entitlements.QuotaExceededError
-				if errors.As(err, &qe) {
+				if qe, ok := errors.AsType[*entitlements.QuotaExceededError](err); ok {
 					return c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{"error": "entitlement_exceeded", "feature": qe.Key})
 				}
 				code := fiber.StatusInternalServerError
-				var fe *fiber.Error
-				if errors.As(err, &fe) {
+				if fe, ok := errors.AsType[*fiber.Error](err); ok {
 					code = fe.Code
 				}
 				return c.Status(code).JSON(fiber.Map{"error": err.Error()})

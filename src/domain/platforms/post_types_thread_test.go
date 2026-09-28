@@ -23,7 +23,7 @@ func threadPlatform() *models.Platform {
 	}
 }
 
-func segIdx(i int) *int { return &i }
+//go:fix inline
 
 func threadPost(contents ...string) *models.Post {
 	segs := make(models.ThreadSegments, len(contents))
@@ -104,13 +104,13 @@ func TestValidateThread_SegmentIndexIntegrity(t *testing.T) {
 	}
 
 	// Out-of-range (2 into a 2-message thread).
-	oor := []models.PostAttachment{{ID: "a", MimeType: "image/jpeg", SizeBytes: 100, SegmentIndex: segIdx(2)}}
+	oor := []models.PostAttachment{{ID: "a", MimeType: "image/jpeg", SizeBytes: 100, SegmentIndex: new(2)}}
 	if errs := ValidatePostType(post, p, oor); !hasRule(errs, RuleThreadSegmentIndex) {
 		t.Errorf("out-of-range segment_index: want thread_segment_index, got %+v", errs)
 	}
 
 	// A valid in-range index is clean.
-	ok := []models.PostAttachment{{ID: "a", MimeType: "image/jpeg", SizeBytes: 100, SegmentIndex: segIdx(0)}}
+	ok := []models.PostAttachment{{ID: "a", MimeType: "image/jpeg", SizeBytes: 100, SegmentIndex: new(0)}}
 	if errs := ValidatePostType(post, p, ok); hasRule(errs, RuleThreadSegmentIndex) {
 		t.Errorf("valid segment_index: want no integrity error, got %+v", errs)
 	}
@@ -142,7 +142,7 @@ func TestValidateThread_PerSegmentMediaCap(t *testing.T) {
 	// Five images all in segment 0 exceeds the 4-image cap for that segment.
 	five := make([]models.PostAttachment, 5)
 	for i := range five {
-		five[i] = models.PostAttachment{ID: "img", MimeType: "image/jpeg", SizeBytes: 100, Position: i, SegmentIndex: segIdx(0)}
+		five[i] = models.PostAttachment{ID: "img", MimeType: "image/jpeg", SizeBytes: 100, Position: i, SegmentIndex: new(0)}
 	}
 	errs := ValidatePostType(post, p, five)
 	if !hasRule(errs, RuleMaxAttachmentsCount) {
@@ -156,7 +156,7 @@ func TestValidateThread_PerSegmentMediaCap(t *testing.T) {
 	// per segment, not per post.
 	split := make([]models.PostAttachment, 8)
 	for i := range split {
-		split[i] = models.PostAttachment{ID: "img", MimeType: "image/jpeg", SizeBytes: 100, Position: i, SegmentIndex: segIdx(i / 4)}
+		split[i] = models.PostAttachment{ID: "img", MimeType: "image/jpeg", SizeBytes: 100, Position: i, SegmentIndex: new(i / 4)}
 	}
 	if errs := ValidatePostType(post, p, split); hasRule(errs, RuleMaxAttachmentsCount) {
 		t.Errorf("4+4 images across two segments: want no cap error, got %+v", errs)
@@ -171,7 +171,7 @@ func TestValidatePublishReadiness_ThreadVsWholePost(t *testing.T) {
 
 	split := make([]models.PostAttachment, 8)
 	for i := range split {
-		split[i] = models.PostAttachment{ID: "img", MimeType: "image/jpeg", SizeBytes: 100, Position: i, SegmentIndex: segIdx(i / 4)}
+		split[i] = models.PostAttachment{ID: "img", MimeType: "image/jpeg", SizeBytes: 100, Position: i, SegmentIndex: new(i / 4)}
 	}
 	thread := threadPost("root", "reply")
 	if got := ValidatePublishReadiness(thread, p, split); hasAnyThreadErr(got) {
@@ -193,8 +193,8 @@ func TestValidateThread_HappyPath(t *testing.T) {
 	p := threadPlatform()
 	post := threadPost("root message", "second message")
 	atts := []models.PostAttachment{
-		{ID: "a", MimeType: "image/jpeg", SizeBytes: 100, Position: 0, SegmentIndex: segIdx(0)},
-		{ID: "b", MimeType: "image/png", SizeBytes: 100, Position: 1, SegmentIndex: segIdx(1)},
+		{ID: "a", MimeType: "image/jpeg", SizeBytes: 100, Position: 0, SegmentIndex: new(0)},
+		{ID: "b", MimeType: "image/png", SizeBytes: 100, Position: 1, SegmentIndex: new(1)},
 	}
 	if errs := ValidatePostType(post, p, atts); len(errs) != 0 {
 		t.Errorf("valid thread: want no errors, got %+v", errs)

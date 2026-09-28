@@ -49,7 +49,7 @@ func (r *tagRepository) GetByIDs(ctx context.Context, ids []string) (map[string]
 		return map[string]models.Tag{}, nil
 	}
 	var tags []models.Tag
-	if err := r.db.NewSelect().Model(&tags).Where("id IN (?)", bun.In(ids)).Scan(ctx); err != nil {
+	if err := r.db.NewSelect().Model(&tags).Where("id IN (?)", bun.List(ids)).Scan(ctx); err != nil {
 		return nil, err
 	}
 	index := make(map[string]models.Tag, len(tags))

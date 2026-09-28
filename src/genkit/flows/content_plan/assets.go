@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/pgvector/pgvector-go"
@@ -355,9 +356,10 @@ func joinPagedChunks(parts []chunkPart) string {
 		}
 		return fmt.Sprintf("[pp. %d–%d] %s", *p.PageStart, *p.PageEnd, p.Content)
 	}
-	result := render(parts[0])
+	var result strings.Builder
+	result.WriteString(render(parts[0]))
 	for _, p := range parts[1:] {
-		result += "\n\n[...]\n\n" + render(p)
+		result.WriteString("\n\n[...]\n\n" + render(p))
 	}
-	return result
+	return result.String()
 }

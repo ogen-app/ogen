@@ -118,13 +118,10 @@ func runPostAssistant(
 	var histErr error
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		actx, ctxErr = assembleContextCached(ctx, post, repos, systemTmpl, contextTmpl)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		msgs, err := repos.Messages.ListRecentByPostID(ctx, req.PostID, 10)
 		if err != nil {
 			histErr = err
@@ -139,7 +136,7 @@ func runPostAssistant(
 				history = append(history, ai.NewModelTextMessage(m.Content))
 			}
 		}
-	}()
+	})
 	wg.Wait()
 
 	if ctxErr != nil {

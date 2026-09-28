@@ -84,7 +84,7 @@ func (r *listNoteRepo) ListByPostID(_ context.Context, _ string) ([]models.PostN
 // never the entry dropped when the limit is hit.
 func TestBuildNoteSummaries_LimitAndOrdering(t *testing.T) {
 	list := []models.PostNote{{Type: models.PostNoteTypeDraftThesis, Body: "the pinned thesis"}}
-	for i := 0; i < maxNotesInContext+15; i++ {
+	for range maxNotesInContext + 15 {
 		list = append(list, models.PostNote{Type: models.PostNoteTypeNote, Body: strings.Repeat("x", 10)})
 	}
 	repos := PostAssistantRepos{Notes: &listNoteRepo{notes: list}}

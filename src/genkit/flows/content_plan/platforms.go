@@ -101,7 +101,7 @@ func selectPlatforms(all []resolvedPlatform, ids []string, postType string) ([]r
 // platformSupportsSlug reports whether slug is among the platform's
 // (comma-separated) available post-type slugs.
 func platformSupportsSlug(p resolvedPlatform, slug string) bool {
-	for _, s := range strings.Split(p.PostTypes, ",") {
+	for s := range strings.SplitSeq(p.PostTypes, ",") {
 		if strings.TrimSpace(s) == slug {
 			return true
 		}

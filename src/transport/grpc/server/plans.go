@@ -355,10 +355,7 @@ func (s *planAdminService) ListTierVersionAssignments(ctx context.Context, req *
 	case limit > maxAssignmentPageSize:
 		limit = maxAssignmentPageSize
 	}
-	offset := int(req.GetOffset())
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(int(req.GetOffset()), 0)
 	rows, err := s.versions.TenantsOnVersion(ctx, versionID, limit, offset)
 	if err != nil {
 		return nil, s.internal(ctx, "list tier version assignments", err)
