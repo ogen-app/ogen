@@ -187,9 +187,15 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	if err != nil {
 		return err
 	}
-	p.freezeModels(ctx, in, ext)
 	if ext.Status == models.ImageExtractionStatusComplete {
 		return nil // idempotent re-drive of a finished run
+	}
+	// A run loaded without its models gets them now, persisted before any
+	// retryable work so the next attempt can't resolve different ones.
+	if p.freezeModels(ctx, in, ext) {
+		if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
+			return fmt.Errorf("process_image %s: persist models: %w", in.AssetID, err)
+		}
 	}
 	if err := status.set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
 		return err
@@ -442,8 +448,10 @@ func (p *ProcessImageProcessor) ensureExtraction(ctx context.Context, in Process
 
 // freezeModels resolves any model the run doesn't carry yet. A new run gets all
 // three at creation; a loaded run keeps what it recorded, so retries never pick
-// up an operator change made mid-run. The pinned model overrides extract.
-func (p *ProcessImageProcessor) freezeModels(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction) {
+// up an operator change made mid-run. The pinned model overrides extract. It
+// reports whether it filled any model in.
+func (p *ProcessImageProcessor) freezeModels(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction) bool {
+	before := *ext
 	if ext.ClassifyModel == "" {
 		ext.ClassifyModel = p.Deps.Models.model(ctx, modelconfig.FlowVision, modelconfig.SlotClassify)
 	}
@@ -456,6 +464,7 @@ func (p *ProcessImageProcessor) freezeModels(ctx context.Context, in ProcessImag
 	if ext.EscalateModel == "" {
 		ext.EscalateModel = p.Deps.Models.model(ctx, modelconfig.FlowVision, modelconfig.SlotEscalate)
 	}
+	return ext.ClassifyModel != before.ClassifyModel || ext.ExtractModel != before.ExtractModel || ext.EscalateModel != before.EscalateModel
 }
 
 // persistBlocks maps the service Blocks to image_blocks rows (with image-region
