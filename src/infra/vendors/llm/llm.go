@@ -16,10 +16,11 @@ import (
 )
 
 // Vendor name slugs — the `vendor` dimension on usage events, and (for
-// Anthropic) the genkit "provider/model" prefix.
+// Anthropic) the genkit "provider/model" prefix. Aliased from the model catalog
+// so slot vendor allowlists always name a registered vendor.
 const (
-	VendorAnthropic = "anthropic"
-	VendorGemini    = "gemini"
+	VendorAnthropic = modelconfig.VendorAnthropic
+	VendorGemini    = modelconfig.VendorGemini
 )
 
 // priceVersion tags the rate set below so historical cost is never recomputed
@@ -138,11 +139,11 @@ func init() {
 		},
 		Capabilities: map[string]modelconfig.ModelCapabilities{
 			"gemini-embedding-2": {Capability: modelconfig.CapabilityEmbed, EmbedDims: 3072},
-			// Chat-capable Gemini models (used today by the vision/transcription
-			// microservices, CON-310). Listed so ListModels can surface them; chat
-			// slots reject non-Anthropic models in v1.
-			"gemini-2.5-flash": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576},
-			"gemini-2.5-pro":   {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576},
+			// Multimodal Gemini models, run by image-service (vision slots) and
+			// audio-service (transcribe slot). In-process chat slots stay
+			// Anthropic-only, so these only fill vision/transcribe slots.
+			"gemini-2.5-flash": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576, VisionInput: true, AudioInput: true},
+			"gemini-2.5-pro":   {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576, VisionInput: true, AudioInput: true},
 		},
 	})
 }

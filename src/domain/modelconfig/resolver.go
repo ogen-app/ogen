@@ -48,6 +48,8 @@ func (d Defaults) For(flowKey, slotKey string) string {
 		return d.Planning
 	case flowKey == FlowCampaignAssistant && slotKey == SlotOrchestrator:
 		return d.Planning
+	case flowKey == FlowVision, flowKey == FlowTranscribe:
+		return "" // no seed: the generation model can't serve these slots
 	default:
 		return d.Generation
 	}

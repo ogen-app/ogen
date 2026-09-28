@@ -13,16 +13,31 @@
 // its models, never the reverse.
 package modelconfig
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Capability is the coarse model family a slot needs. Chat covers every
 // text-generation flow (Generate / GenerateStream / GenerateData); embed covers
-// the embedding pipeline. Vision/transcription are added by CON-310.
+// the embedding pipeline. Vision and transcribe are chat models with image or
+// audio input, run by image-service / audio-service with the model id ogen
+// passes on each request.
 type Capability string
 
 const (
-	CapabilityChat  Capability = "chat"
-	CapabilityEmbed Capability = "embed"
+	CapabilityChat       Capability = "chat"
+	CapabilityEmbed      Capability = "embed"
+	CapabilityVision     Capability = "vision"
+	CapabilityTranscribe Capability = "transcribe"
+)
+
+// Vendor slugs a slot can be restricted to. The vendor registry names its
+// descriptors from these (llm.VendorAnthropic / llm.VendorGemini), so the two
+// can't drift.
+const (
+	VendorAnthropic = "anthropic"
+	VendorGemini    = "gemini"
 )
 
 // Flow keys — stable identifiers persisted in flow_model_config.flow_key and
@@ -36,6 +51,8 @@ const (
 	FlowPostAssistant     = "post_assistant"
 	FlowCampaignAssistant = "campaign_assistant"
 	FlowEmbed             = "embed"
+	FlowVision            = "vision"
+	FlowTranscribe        = "transcribe"
 )
 
 // Slot keys — stable identifiers persisted in flow_model_config.slot_key.
@@ -44,6 +61,10 @@ const (
 	SlotPlanner      = "planner"
 	SlotWriter       = "writer"
 	SlotOrchestrator = "orchestrator"
+	SlotClassify     = "classify"
+	SlotExtract      = "extract"
+	SlotEscalate     = "escalate"
+	SlotAltText      = "alt_text"
 )
 
 // Requirements is the hard compatibility contract a slot places on any model
@@ -69,6 +90,22 @@ type ModelCapabilities struct {
 	MaxOutputTokens  int
 	ContextWindow    int
 	EmbedDims        int
+	VisionInput      bool // accepts image input (image-service vision calls)
+	AudioInput       bool // accepts audio input (audio-service transcription)
+}
+
+// Supports reports whether a model can serve a slot of the given capability.
+// Vision and transcribe are chat models with the matching input modality; the
+// other capabilities must match exactly.
+func (c ModelCapabilities) Supports(want Capability) bool {
+	switch want {
+	case CapabilityVision:
+		return c.Capability == CapabilityChat && c.VisionInput
+	case CapabilityTranscribe:
+		return c.Capability == CapabilityChat && c.AudioInput
+	default:
+		return c.Capability == want
+	}
 }
 
 // Slot is one model-selection site within a flow.
@@ -77,7 +114,16 @@ type Slot struct {
 	Description string
 	Capability  Capability
 	GlobalOnly  bool // true → no per-tier override (the embed slot, §D5)
-	Requires    Requirements
+	// Vendors restricts which vendors' models may fill the slot; empty = any.
+	// In-process chat slots build Anthropic call configs, and image-service /
+	// audio-service only call Gemini.
+	Vendors  []string
+	Requires Requirements
+}
+
+// AllowsVendor reports whether a model from vendor may fill the slot.
+func (s Slot) AllowsVendor(vendor string) bool {
+	return len(s.Vendors) == 0 || slices.Contains(s.Vendors, vendor)
 }
 
 // Flow is a configurable genkit flow and its model slots.
@@ -91,37 +137,51 @@ type Flow struct {
 // the config-matrix rows). Keep in sync with the flow call sites (Phase 4).
 var catalog = []Flow{
 	{Key: FlowContentPlan, Description: "Batch post generation from a campaign brief.", Slots: []Slot{
-		{Key: SlotMain, Description: "Generates the plan's posts.", Capability: CapabilityChat,
+		{Key: SlotMain, Description: "Generates the plan's posts.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStreaming: true, NeedsStructuredOutput: true, MinMaxOutputTokens: 64000}},
 	}},
 	{Key: FlowDraftPost, Description: "Targeted content drafting from research.", Slots: []Slot{
-		{Key: SlotMain, Description: "Writes the draft.", Capability: CapabilityChat},
+		{Key: SlotMain, Description: "Writes the draft.", Capability: CapabilityChat, Vendors: anthropicOnly},
 	}},
 	{Key: FlowEnrichBrief, Description: "Campaign brief enrichment.", Slots: []Slot{
-		{Key: SlotMain, Description: "Expands the brief.", Capability: CapabilityChat},
+		{Key: SlotMain, Description: "Expands the brief.", Capability: CapabilityChat, Vendors: anthropicOnly},
 	}},
 	{Key: FlowConsistency, Description: "Brief/posts consistency review.", Slots: []Slot{
-		{Key: SlotMain, Description: "Scores consistency.", Capability: CapabilityChat,
+		{Key: SlotMain, Description: "Scores consistency.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true}},
 	}},
 	{Key: FlowPostQuality, Description: "Per-dimension post quality assessment.", Slots: []Slot{
-		{Key: SlotMain, Description: "Scores quality dimensions.", Capability: CapabilityChat,
+		{Key: SlotMain, Description: "Scores quality dimensions.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true}},
 	}},
 	{Key: FlowPostAssistant, Description: "Interactive post editing assistant (hybrid).", Slots: []Slot{
-		{Key: SlotPlanner, Description: "Cheap orchestration/routing loop.", Capability: CapabilityChat,
+		{Key: SlotPlanner, Description: "Cheap orchestration/routing loop.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsTools: true}},
-		{Key: SlotWriter, Description: "Capable copywriter behind the editPost tool.", Capability: CapabilityChat},
+		{Key: SlotWriter, Description: "Capable copywriter behind the editPost tool.", Capability: CapabilityChat, Vendors: anthropicOnly},
 	}},
 	{Key: FlowCampaignAssistant, Description: "Campaign orchestration assistant.", Slots: []Slot{
-		{Key: SlotOrchestrator, Description: "Cheap orchestration/routing loop (delegates to sub-flows).", Capability: CapabilityChat,
+		{Key: SlotOrchestrator, Description: "Cheap orchestration/routing loop (delegates to sub-flows).", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsTools: true}},
 	}},
 	{Key: FlowEmbed, Description: "Embedding pipeline (assets, PDFs, queries).", Slots: []Slot{
 		{Key: SlotMain, Description: "Embeds text into the shared vector space.", Capability: CapabilityEmbed, GlobalOnly: true,
 			Requires: Requirements{EmbedDims: 3072}},
 	}},
+	{Key: FlowVision, Description: "Image understanding in image-service (asset ingestion, alt text).", Slots: []Slot{
+		{Key: SlotClassify, Description: "Cheap first pass that classifies the image.", Capability: CapabilityVision, Vendors: geminiOnly},
+		{Key: SlotExtract, Description: "High-resolution extraction of text, tables and description.", Capability: CapabilityVision, Vendors: geminiOnly},
+		{Key: SlotEscalate, Description: "One-shot re-extraction when classification confidence is low.", Capability: CapabilityVision, Vendors: geminiOnly},
+		{Key: SlotAltText, Description: "Alt text for uploaded images and post attachments.", Capability: CapabilityVision, Vendors: geminiOnly},
+	}},
+	{Key: FlowTranscribe, Description: "Audio transcription in audio-service.", Slots: []Slot{
+		{Key: SlotMain, Description: "Transcribes each audio segment.", Capability: CapabilityTranscribe, Vendors: geminiOnly},
+	}},
 }
+
+var (
+	anthropicOnly = []string{VendorAnthropic}
+	geminiOnly    = []string{VendorGemini}
+)
 
 // Flows returns the catalog (display order).
 func Flows() []Flow { return catalog }
@@ -162,8 +222,8 @@ func LookupSlot(flowKey, slotKey string) (Slot, bool) {
 
 // Satisfies reports the slot requirements a model's capabilities fail to meet.
 // An empty result means the model may be assigned to a slot with this
-// Requirements. The capability family (chat vs embed) is checked separately by
-// the caller against Slot.Capability.
+// Requirements. The capability family is checked separately by the caller
+// (ModelCapabilities.Supports against Slot.Capability).
 func Satisfies(caps ModelCapabilities, req Requirements) []string {
 	var unmet []string
 	if req.NeedsTools && !caps.Tools {

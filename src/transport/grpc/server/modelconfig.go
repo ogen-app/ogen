@@ -30,7 +30,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/modelprobe"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
+	_ "github.com/ogen-app/ogen/src/infra/vendors/llm" // registers the model vendors ListModels / validation read
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -83,11 +83,8 @@ func (s *modelConfigAdminService) ListModels(_ context.Context, req *modelconfig
 	for _, d := range vendors.ByFamily(vendors.FamilyModel) {
 		for modelID, rates := range d.Prices.Models {
 			caps, _ := vendors.CapabilitiesOf(d.Name, modelID)
-			if !assignable(d.Name, caps) {
-				continue // v1: a non-Anthropic chat model fills no slot — omit it
-			}
-			if filter != "" && string(caps.Capability) != filter {
-				continue
+			if !assignable(d.Name, caps, modelconfig.Capability(filter)) {
+				continue // no slot (of the requested capability) would accept it
 			}
 			pbRates := make([]*modelconfigv1.ModelRate, 0, len(rates))
 			for kind, rate := range rates {
@@ -297,7 +294,8 @@ func validateSlotModel(slot modelconfig.Slot, modelID string) error {
 }
 
 // unmetForSlot lists why a model can't fill a slot: unknown model, capability
-// family mismatch, the v1 Anthropic-only-chat rule, and each unmet requirement.
+// family mismatch, a vendor outside the slot's allowlist, and each unmet
+// requirement.
 func unmetForSlot(slot modelconfig.Slot, modelID string) []string {
 	vendor, ok := vendors.VendorOf(modelID)
 	if !ok {
@@ -305,26 +303,29 @@ func unmetForSlot(slot modelconfig.Slot, modelID string) []string {
 	}
 	caps, _ := vendors.CapabilitiesOf(vendor, modelID)
 	var unmet []string
-	if caps.Capability != slot.Capability {
+	if !caps.Supports(slot.Capability) {
 		unmet = append(unmet, "capability: needs "+string(slot.Capability)+", model is "+string(caps.Capability))
 	}
-	if slot.Capability == modelconfig.CapabilityChat && vendor != llm.VendorAnthropic {
-		unmet = append(unmet, "vendor: chat slots accept only Anthropic models in v1")
+	if !slot.AllowsVendor(vendor) {
+		unmet = append(unmet, "vendor: slot accepts only "+strings.Join(slot.Vendors, ", ")+" models")
 	}
 	unmet = append(unmet, modelconfig.Satisfies(caps, slot.Requires)...)
 	return unmet
 }
 
-// assignable reports whether a model can be assigned to any slot today, so
-// ListModels can omit models no slot would accept. It mirrors the v1 chat rule
-// in unmetForSlot: Provider.CallConfig is Anthropic-shaped, so a non-Anthropic
-// chat model fills no chat slot (and no other slot), and is dropped. Embed
-// models and Anthropic chat models are assignable.
-func assignable(vendor string, caps modelconfig.ModelCapabilities) bool {
-	if caps.Capability == modelconfig.CapabilityChat && vendor != llm.VendorAnthropic {
-		return false
+// assignable reports whether a model fits the capability and vendor of at
+// least one slot, so ListModels can omit models no slot would accept. A
+// non-empty want narrows the check to slots of that capability.
+func assignable(vendor string, caps modelconfig.ModelCapabilities, want modelconfig.Capability) bool {
+	for _, sr := range modelconfig.AllSlots() {
+		if want != "" && sr.Slot.Capability != want {
+			continue
+		}
+		if caps.Supports(sr.Slot.Capability) && sr.Slot.AllowsVendor(vendor) {
+			return true
+		}
 	}
-	return true
+	return false
 }
 
 func scopeTier(c *models.FlowModelConfig) string {

@@ -56,8 +56,14 @@ func TestResolverReconcileAndPrecedence(t *testing.T) {
 	src := &fakeSource{}
 	Init(ctx, src, testDefaults(), testVendorOf, tenantctx.TierFrom)
 
-	if got := len(src.rows); got != len(AllSlots()) {
-		t.Fatalf("reconcile seeded %d rows, want %d", got, len(AllSlots()))
+	seedable := 0
+	for _, sr := range AllSlots() {
+		if testDefaults().For(sr.FlowKey, sr.Slot.Key) != "" {
+			seedable++
+		}
+	}
+	if got := len(src.rows); got != seedable {
+		t.Fatalf("reconcile seeded %d rows, want %d", got, seedable)
 	}
 
 	base := context.Background()
