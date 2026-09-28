@@ -1,0 +1,47 @@
+version: "2"
+
+run:
+  go: "1.26"
+  timeout: 10m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - gocyclo
+    - gocognit
+    - modernize
+  settings:
+    gocyclo:
+      min-complexity: 20
+    gocognit:
+      min-complexity: 30
+  exclusions:
+    generated: strict
+    paths:
+      - ^gen/
+      - ^docs/
+    rules:
+      # Table-driven and scenario tests are allowed to be long and branchy.
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - gocognit
+
+issues:
+  # Gate new and changed code only, so the existing backlog can be paid down
+  # incrementally without blocking unrelated work.
+  new-from-merge-base: main
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ogen-app/ogen
+  exclusions:
+    generated: strict
+    paths:
+      - ^gen/
+      - ^docs/
