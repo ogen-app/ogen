@@ -286,8 +286,11 @@ tier-specific row wins over the global default. Operators edit them from Harbor
 via `ModelConfigAdminService`. A write is rejected when the model doesn't meet
 the slot's requirements, and it can be checked first with a live probe. On boot,
 missing global-default rows are seeded from the legacy `MODEL_ID` /
-`PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` / `EMBED_MODEL` env vars (now
-**seed-only**; after that, the DB is authoritative).
+`PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` / `EMBED_MODEL` / `VISION_*_MODEL` /
+`TRANSCRIBE_MODEL` env vars (now **seed-only**; after that, the DB is
+authoritative). In-process chat slots accept only Anthropic models. The vision
+and transcribe slots accept only Gemini models, because `image-service` and
+`audio-service` run the model ogen passes on each request.
 
 | Flow | Slot(s) | Seed default |
 |------|---------|--------------|
@@ -296,13 +299,12 @@ missing global-default rows are seeded from the legacy `MODEL_ID` /
 | `post_assistant` | `planner` / `writer` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) / Sonnet 4.5 (`MODEL_ID`) |
 | `campaign_assistant` | `orchestrator` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) |
 | `embed` | `main` (global only, no tier override) | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) |
+| `vision` (`image-service`) | `classify` / `extract` / `escalate` / `alt_text` | Gemini 2.5 Flash (`VISION_CLASSIFY_MODEL`) / 2.5 Pro (`VISION_EXTRACT_MODEL`) / 2.5 Pro (`VISION_ESCALATE_MODEL`) / 2.5 Flash (`VISION_CLASSIFY_MODEL`) |
+| `transcribe` (`audio-service`) | `main` | Gemini 2.5 Flash (`TRANSCRIBE_MODEL`) |
 
-The sidecars choose their own Gemini models (these aren't in the resolver yet):
-
-| Use | Model | Where |
-|-----|-------|-------|
-| transcription | Gemini 2.5 Flash (`TRANSCRIBE_MODEL`, multimodal) | `audio-service` segment transcription (priced via the `gemini` vendor) |
-| vision | Gemini 2.5 Flash / 2.5 Pro (`VISION_CLASSIFY_MODEL` / `VISION_EXTRACT_MODEL`) | `image-service` classify → extract → describe → alt text (priced via the `gemini` vendor) |
+An image or audio extraction run resolves its models once, when the run is
+created, and keeps them on the extraction row, so retries and every audio
+segment use the same model.
 
 | Flow | Purpose | Triggered by |
 |------|---------|--------------|

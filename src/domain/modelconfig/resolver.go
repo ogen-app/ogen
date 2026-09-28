@@ -31,10 +31,14 @@ type TierFunc func(ctx context.Context) (tierID string, ok bool)
 // Defaults are the boot-reconcile seed models for the global-default rows,
 // sourced from the legacy config fields so day-one behaviour is unchanged.
 type Defaults struct {
-	Generation string // chat generation flows (incl. post_assistant writer)
-	Quality    string // post_quality
-	Planning   string // post_assistant planner + campaign_assistant orchestrator
-	Embed      string // embed
+	Generation     string // chat generation flows (incl. post_assistant writer)
+	Quality        string // post_quality
+	Planning       string // post_assistant planner + campaign_assistant orchestrator
+	Embed          string // embed
+	VisionClassify string // vision classify + alt_text
+	VisionExtract  string // vision extract
+	VisionEscalate string // vision escalate
+	Transcribe     string // transcribe
 }
 
 // For maps a (flow, slot) to its legacy default model id.
@@ -48,8 +52,14 @@ func (d Defaults) For(flowKey, slotKey string) string {
 		return d.Planning
 	case flowKey == FlowCampaignAssistant && slotKey == SlotOrchestrator:
 		return d.Planning
-	case flowKey == FlowVision, flowKey == FlowTranscribe:
-		return "" // no seed: the generation model can't serve these slots
+	case flowKey == FlowVision && slotKey == SlotExtract:
+		return d.VisionExtract
+	case flowKey == FlowVision && slotKey == SlotEscalate:
+		return d.VisionEscalate
+	case flowKey == FlowVision:
+		return d.VisionClassify // classify, and alt_text which has always run on it
+	case flowKey == FlowTranscribe:
+		return d.Transcribe
 	default:
 		return d.Generation
 	}

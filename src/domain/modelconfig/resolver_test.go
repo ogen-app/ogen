@@ -36,7 +36,7 @@ func testVendorOf(model string) (string, bool) {
 	switch model {
 	case "sonnet", "haiku", "qual", "opus":
 		return "anthropic", true
-	case "emb":
+	case "emb", "flash", "pro", "asr":
 		return "gemini", true
 	default:
 		return "", false
@@ -44,7 +44,10 @@ func testVendorOf(model string) (string, bool) {
 }
 
 func testDefaults() Defaults {
-	return Defaults{Generation: "sonnet", Quality: "qual", Planning: "haiku", Embed: "emb"}
+	return Defaults{
+		Generation: "sonnet", Quality: "qual", Planning: "haiku", Embed: "emb",
+		VisionClassify: "flash", VisionExtract: "pro", VisionEscalate: "pro", Transcribe: "asr",
+	}
 }
 
 // TestResolverReconcileAndPrecedence covers boot reconcile (every catalog slot
@@ -56,14 +59,8 @@ func TestResolverReconcileAndPrecedence(t *testing.T) {
 	src := &fakeSource{}
 	Init(ctx, src, testDefaults(), testVendorOf, tenantctx.TierFrom)
 
-	seedable := 0
-	for _, sr := range AllSlots() {
-		if testDefaults().For(sr.FlowKey, sr.Slot.Key) != "" {
-			seedable++
-		}
-	}
-	if got := len(src.rows); got != seedable {
-		t.Fatalf("reconcile seeded %d rows, want %d", got, seedable)
+	if got := len(src.rows); got != len(AllSlots()) {
+		t.Fatalf("reconcile seeded %d rows, want %d", got, len(AllSlots()))
 	}
 
 	base := context.Background()
@@ -74,6 +71,11 @@ func TestResolverReconcileAndPrecedence(t *testing.T) {
 		{FlowPostAssistant, SlotWriter}:           "anthropic/sonnet",
 		{FlowCampaignAssistant, SlotOrchestrator}: "anthropic/haiku",
 		{FlowEmbed, SlotMain}:                     "gemini/emb",
+		{FlowVision, SlotClassify}:                "gemini/flash",
+		{FlowVision, SlotExtract}:                 "gemini/pro",
+		{FlowVision, SlotEscalate}:                "gemini/pro",
+		{FlowVision, SlotAltText}:                 "gemini/flash",
+		{FlowTranscribe, SlotMain}:                "gemini/asr",
 	}
 	for k, want := range cases {
 		if got := Ref(base, k[0], k[1]); got != want {
@@ -124,10 +126,19 @@ func TestReconcileDoesNotClobber(t *testing.T) {
 
 // TestDefaultsFor pins the per-slot default mapping the last-resort fallback
 // relies on: planner/orchestrator → planning, post_quality → quality, embed →
-// embed, everything else → generation.
+// embed, vision/transcribe → their own seeds (alt_text shares classify),
+// everything else → generation.
 func TestDefaultsFor(t *testing.T) {
-	d := Defaults{Generation: "gen", Quality: "qual", Planning: "plan", Embed: "emb"}
+	d := Defaults{
+		Generation: "gen", Quality: "qual", Planning: "plan", Embed: "emb",
+		VisionClassify: "cls", VisionExtract: "ext", VisionEscalate: "esc", Transcribe: "asr",
+	}
 	cases := map[[2]string]string{
+		{FlowVision, SlotClassify}:                "cls",
+		{FlowVision, SlotAltText}:                 "cls",
+		{FlowVision, SlotExtract}:                 "ext",
+		{FlowVision, SlotEscalate}:                "esc",
+		{FlowTranscribe, SlotMain}:                "asr",
 		{FlowContentPlan, SlotMain}:               "gen",
 		{FlowPostAssistant, SlotWriter}:           "gen",
 		{FlowPostQuality, SlotMain}:               "qual",

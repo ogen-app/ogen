@@ -238,9 +238,10 @@ type Config struct {
 	// single job attempt (checkpointed, so a longer run resumes). Segmentation:
 	// AudioSegmentMaxMs windows + AudioSegmentOverlapMs overlap. AudioMaxDurationMs
 	// is the pre-spend max-duration tier gate (0 = no cap; a CON-208 tier lowers
-	// it). TranscribeModel is the Gemini multimodal model id (config, never
-	// compiled in). Raw-audio embedding is deferred (CON-282 PRD); it gets a flag
-	// when it is built, not before (CON-312 removed the unused stub).
+	// it). TranscribeModel is seed-only (see ModelID): it seeds the
+	// transcribe/main global-default row; the DB is authoritative after boot.
+	// Raw-audio embedding is deferred (CON-282 PRD); it gets a flag when it is
+	// built, not before (CON-312 removed the unused stub).
 	AudioJobWorkers       int           `envconfig:"AUDIO_JOB_WORKERS"        default:"2"`
 	AudioJobTimeout       time.Duration `envconfig:"AUDIO_JOB_TIMEOUT"        default:"3h"`
 	AudioSegmentMaxMs     int64         `envconfig:"AUDIO_SEGMENT_MAX_MS"     default:"300000"`
@@ -273,9 +274,11 @@ type Config struct {
 	// single content-bank Extract job attempt.
 	ImageJobWorkers int           `envconfig:"IMAGE_JOB_WORKERS" default:"2"`
 	ImageJobTimeout time.Duration `envconfig:"IMAGE_JOB_TIMEOUT" default:"10m"`
-	// Vision model ids (config, never compiled in). classify runs at low
-	// media_resolution on a cheaper model; extract/escalate at high resolution on a
-	// stronger one. VisionConfidenceThreshold gates the one-shot escalation.
+	// Vision model ids are seed-only (see ModelID): they seed the vision/*
+	// global-default rows (alt_text from VisionClassifyModel); the DB is
+	// authoritative after boot. classify runs at low media_resolution on a
+	// cheaper model; extract/escalate at high resolution on a stronger one.
+	// VisionConfidenceThreshold gates the one-shot escalation and stays config.
 	// AltTextGenMaxChars is the generation TARGET length (short, social-friendly);
 	// the stored value is still bounded by the CON-292 alt-text cap as a guard.
 	VisionClassifyModel       string  `envconfig:"VISION_CLASSIFY_MODEL"       default:"gemini-2.5-flash"`
