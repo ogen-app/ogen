@@ -146,8 +146,8 @@ var _ = Describe("ImagesHandler", Ordered, Serial, func() {
 		sessionRepo := repository.NewSessionRepository(db)
 		settingRepo := repository.NewSettingRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewImagesHandler(stub, auth).Register(app)
 
 		// Seed user and log in.
@@ -250,8 +250,8 @@ var _ = Describe("ImagesHandler", Ordered, Serial, func() {
 				sessionRepo2 := repository.NewSessionRepository(db)
 				settingRepo2 := repository.NewSettingRepository(db)
 				auth2 := handlers.RequireAuth(sessionRepo2, userRepo2, testCookieName)
-				handlers.NewUsersHandler(db, userRepo2, repository.NewAccountRepository(db), settingRepo2, auth2).Register(app2)
-				handlers.NewSessionsHandler(userRepo2, repository.NewAccountRepository(db), sessionRepo2, testCookieName, false).Register(app2)
+				handlers.NewUsersHandler(db, userRepo2, repository.NewAccountRepository(db), settingRepo2, auth2, nil, nil).Register(app2)
+				handlers.NewSessionsHandler(userRepo2, repository.NewAccountRepository(db), sessionRepo2, testCookieName, false, nil).Register(app2)
 				handlers.NewImagesHandler(stub, auth2).Register(app2)
 				resp, err := app2.Test(req, 30000)
 				Expect(err).NotTo(HaveOccurred())
@@ -282,8 +282,8 @@ var _ = Describe("ImagesHandler", Ordered, Serial, func() {
 				sessionRepo2 := repository.NewSessionRepository(db)
 				settingRepo2 := repository.NewSettingRepository(db)
 				auth2 := handlers.RequireAuth(sessionRepo2, userRepo2, testCookieName)
-				handlers.NewUsersHandler(db, userRepo2, repository.NewAccountRepository(db), settingRepo2, auth2).Register(app2)
-				handlers.NewSessionsHandler(userRepo2, repository.NewAccountRepository(db), sessionRepo2, testCookieName, false).Register(app2)
+				handlers.NewUsersHandler(db, userRepo2, repository.NewAccountRepository(db), settingRepo2, auth2, nil, nil).Register(app2)
+				handlers.NewSessionsHandler(userRepo2, repository.NewAccountRepository(db), sessionRepo2, testCookieName, false, nil).Register(app2)
 				handlers.NewImagesHandler(nil, auth2).Register(app2) // nil = disabled
 
 				body, ct := multipartBody("photo.png", minimalPNG())

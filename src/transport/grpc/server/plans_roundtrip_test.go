@@ -32,14 +32,20 @@ func TestPlanAdminRoundTrip(t *testing.T) {
 	db.DB.SetMaxIdleConns(2)
 	t.Cleanup(func() { _ = db.Close() })
 
-	srv, err := New(token, nil,
-		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
-		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
-		repository.NewFlowModelConfigRepository(db),
-		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, nil,
-		nil, nil, "",
-		repository.NewAnnouncementRepository(db), nil)
+	srv, err := New(Deps{
+		Token:            token,
+		Tiers:            repository.NewTenantTierRepository(db),
+		Groups:           repository.NewTenantGroupRepository(db),
+		Tenants:          repository.NewTenantRepository(db),
+		Platforms:        repository.NewPlatformRepository(db),
+		PlatformLimits:   repository.NewPlatformGlobalLimitsRepository(db),
+		FlowModelConfigs: repository.NewFlowModelConfigRepository(db),
+		TierVersions:     repository.NewTenantTierVersionRepository(db),
+		TierAssignments:  repository.NewTenantTierAssignmentRepository(db),
+		EmailLogs:        repository.NewEmailLogRepository(db),
+		EmailEvents:      repository.NewEmailEventRepository(db),
+		Announcements:    repository.NewAnnouncementRepository(db),
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -173,14 +179,20 @@ func TestPlanAdminRoundTrip(t *testing.T) {
 // given token, backed by the supplied migrated Postgres.
 func newPlanAdminClient(t *testing.T, db *bun.DB, token string) plansv1.PlanAdminServiceClient {
 	t.Helper()
-	srv, err := New(token, nil,
-		repository.NewTenantTierRepository(db), repository.NewTenantGroupRepository(db), repository.NewTenantRepository(db),
-		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
-		repository.NewFlowModelConfigRepository(db),
-		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, nil,
-		nil, nil, "",
-		repository.NewAnnouncementRepository(db), nil)
+	srv, err := New(Deps{
+		Token:            token,
+		Tiers:            repository.NewTenantTierRepository(db),
+		Groups:           repository.NewTenantGroupRepository(db),
+		Tenants:          repository.NewTenantRepository(db),
+		Platforms:        repository.NewPlatformRepository(db),
+		PlatformLimits:   repository.NewPlatformGlobalLimitsRepository(db),
+		FlowModelConfigs: repository.NewFlowModelConfigRepository(db),
+		TierVersions:     repository.NewTenantTierVersionRepository(db),
+		TierAssignments:  repository.NewTenantTierAssignmentRepository(db),
+		EmailLogs:        repository.NewEmailLogRepository(db),
+		EmailEvents:      repository.NewEmailEventRepository(db),
+		Announcements:    repository.NewAnnouncementRepository(db),
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

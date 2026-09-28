@@ -28,7 +28,7 @@ var _ = Describe("PricingHandler", func() {
 
 		app = fiber.New()
 		noAuth := func(c *fiber.Ctx) error { return c.Next() }
-		handlers.NewPricingHandler(resolver, versionRepo, cat, noAuth).Register(app)
+		handlers.NewPricingHandler(resolver, versionRepo, cat, noAuth, nil).Register(app)
 	})
 
 	Describe("GET /api/public/pricing", func() {

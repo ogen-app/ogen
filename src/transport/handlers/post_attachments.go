@@ -102,9 +102,6 @@ type PostAttachmentsHandler struct {
 	limiter         *entitlements.Limiter // CON-295 media_storage_bytes quota (nil-safe)
 }
 
-// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
-func (h *PostAttachmentsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
-
 func NewPostAttachmentsHandler(
 	repo repository.PostAttachmentRepository,
 	postRepo repository.PostRepository,
@@ -116,6 +113,7 @@ func NewPostAttachmentsHandler(
 	altTextModel string,
 	altTextMaxChars int,
 	auth fiber.Handler,
+	limiter *entitlements.Limiter,
 ) *PostAttachmentsHandler {
 	return &PostAttachmentsHandler{
 		repo:            repo,
@@ -128,6 +126,7 @@ func NewPostAttachmentsHandler(
 		altTextModel:    altTextModel,
 		altTextMaxChars: altTextMaxChars,
 		auth:            auth,
+		limiter:         limiter,
 	}
 }
 

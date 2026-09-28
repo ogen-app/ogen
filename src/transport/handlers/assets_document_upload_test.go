@@ -68,8 +68,8 @@ var _ = Describe("AssetsHandler document upload (CON-280)", Ordered, Serial, fun
 		if withDocumentService {
 			docJobs = docEnq
 		}
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, docJobs, nil, auth, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
+		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, docJobs, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 	}
 
 	BeforeEach(func() {

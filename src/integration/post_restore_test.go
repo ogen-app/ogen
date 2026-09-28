@@ -67,12 +67,11 @@ var _ = Describe("Post restore — CON-68", Ordered, func() {
 		postAttRepo := repository.NewPostAttachmentRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, "test_session")
 
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 
-		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth)
-		postsHandler.SetPostLogRepo(logRepo)
+		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth, handlers.PostsOptions{PostLogs: logRepo})
 		postsHandler.Register(app)
 		// The restore action now lives on the actions handler.
 		handlers.NewPostActionsHandler(postRepo, nil, restore.New(db, postRepo, versionRepo, logRepo, nil), nil, auth).Register(app)

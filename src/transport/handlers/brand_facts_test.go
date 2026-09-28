@@ -51,9 +51,9 @@ var _ = Describe("Brand facts ledger (CON-316)", Ordered, func() {
 		accountRepo := repository.NewAccountRepository(db)
 		tenantRepo := repository.NewTenantRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false).Register(app)
-		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth).Register(app)
-		handlers.NewBrandHandler(repository.NewBrandRepository(db), nil, auth).Register(app)
+		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
+		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth, nil).Register(app)
+		handlers.NewBrandHandler(repository.NewBrandRepository(db), nil, auth, nil).Register(app)
 
 		admin = seedTenantUser(db, "Ada Admin", "admin@example.com", "admin-password")
 		authCookie = loginCookie(app, "admin@example.com", "admin-password")

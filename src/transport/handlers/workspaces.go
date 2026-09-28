@@ -48,6 +48,7 @@ func NewWorkspacesHandler(
 	sessionRepo repository.SessionRepository,
 	profileJobs ProfileLifecycleEnqueuer,
 	auth fiber.Handler,
+	rec *activity.Recorder,
 ) *WorkspacesHandler {
 	return &WorkspacesHandler{
 		db:            db,
@@ -58,11 +59,9 @@ func NewWorkspacesHandler(
 		sessionRepo:   sessionRepo,
 		profileJobs:   profileJobs,
 		auth:          auth,
+		activity:      rec,
 	}
 }
-
-// SetActivityRecorder wires the CON-125 activity recorder (nil-safe no-op).
-func (h *WorkspacesHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
 
 func (h *WorkspacesHandler) Register(app *fiber.App) {
 	g := app.Group("/api/workspaces", h.auth)

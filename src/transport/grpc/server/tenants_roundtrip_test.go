@@ -40,13 +40,20 @@ func TestTenantAdminRoundTrip(t *testing.T) {
 
 	// store is nil: this test never calls the secrets RPCs, and New only stores
 	// the reference. The tenant service gets real repositories.
-	srv, err := New(token, nil, tierRepo, groupRepo, tenantRepo,
-		repository.NewPlatformRepository(db), repository.NewPlatformGlobalLimitsRepository(db),
-		repository.NewFlowModelConfigRepository(db),
-		repository.NewTenantTierVersionRepository(db), repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db), repository.NewEmailEventRepository(db), nil, nil,
-		nil, nil, "",
-		repository.NewAnnouncementRepository(db), nil)
+	srv, err := New(Deps{
+		Token:            token,
+		Tiers:            tierRepo,
+		Groups:           groupRepo,
+		Tenants:          tenantRepo,
+		Platforms:        repository.NewPlatformRepository(db),
+		PlatformLimits:   repository.NewPlatformGlobalLimitsRepository(db),
+		FlowModelConfigs: repository.NewFlowModelConfigRepository(db),
+		TierVersions:     repository.NewTenantTierVersionRepository(db),
+		TierAssignments:  repository.NewTenantTierAssignmentRepository(db),
+		EmailLogs:        repository.NewEmailLogRepository(db),
+		EmailEvents:      repository.NewEmailEventRepository(db),
+		Announcements:    repository.NewAnnouncementRepository(db),
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

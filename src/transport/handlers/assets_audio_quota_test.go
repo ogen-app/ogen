@@ -82,11 +82,8 @@ var _ = Describe("AudioAssetsHandler quota (CON-312)", Ordered, func() {
 			Register("content_bank_assets", entitlements.CounterFunc(func(context.Context, string) (int64, error) { return assetCount, nil })).
 			Register("media_storage_bytes", entitlements.CounterFunc(func(context.Context, string) (int64, error) { return mediaBytes, nil }))
 
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		h := handlers.NewAudioAssetsHandler(assetRepo, fileRepo,
-			repository.NewAudioExtractionRepository(db), repository.NewAudioSegmentRepository(db), repository.NewUtteranceRepository(db),
-			store, db, enq, auth)
-		h.SetLimiter(lim)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
+		h := handlers.NewAudioAssetsHandler(assetRepo, fileRepo, repository.NewAudioExtractionRepository(db), repository.NewAudioSegmentRepository(db), repository.NewUtteranceRepository(db), store, db, enq, auth, lim)
 		h.Register(app)
 
 		seedTenantUser(db, "Admin", "audio-quota@example.com", "pw-password")

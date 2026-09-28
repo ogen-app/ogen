@@ -71,12 +71,12 @@ var _ = Describe("AssetsHandler POST /url", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		enq = &fakeURLEnqueuer{}
 		gate = &fakeScrapeGate{has: true}
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewAssetsHandler(
 			pieceRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db),
-			nil, db, nil, enq, gate, nil, nil, auth, nil,
-		).Register(app)
+			nil, db, nil, enq, gate, nil, nil, auth, nil, handlers.AssetsOptions{}).
+			Register(app)
 
 		seedTenantUser(db, "Admin", "url@example.com", "admin-password")
 		loginBody, _ := json.Marshal(fiber.Map{"email": "url@example.com", "password": "admin-password"})

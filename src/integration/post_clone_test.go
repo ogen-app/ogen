@@ -73,17 +73,15 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 		logRepo = repository.NewPostLogRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, "test_session")
 
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 
-		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth)
-		postsHandler.SetPostLogRepo(logRepo)
 		// POST /:id/clone now lives on the actions handler.
 		handlers.NewPostActionsHandler(postRepo, clone.New(db, postRepo, versionRepo, postAttRepo, platformRepo, logRepo, store, nil), nil, nil, auth).Register(app)
 		// Same S3-cleanup-on-delete hook the production server wires —
 		// the independence test relies on it.
-		postsHandler.SetOnBeforeDelete(func(ctx context.Context, postID string) error {
+		onBeforeDelete := func(ctx context.Context, postID string) error {
 			keys, err := postAttRepo.ListS3KeysByPostID(ctx, postID)
 			if err != nil {
 				return err
@@ -97,9 +95,13 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 				}
 			}
 			return nil
+		}
+		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth, handlers.PostsOptions{
+			PostLogs:       logRepo,
+			OnBeforeDelete: onBeforeDelete,
 		})
 		postsHandler.Register(app)
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, "gemini-2.5-flash", 280, auth).Register(app)
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, "gemini-2.5-flash", 280, auth, nil).Register(app)
 
 		// Seed user + session + campaign.
 		seedTenantUser(db, "Admin", "clone@example.com", "clone-password")

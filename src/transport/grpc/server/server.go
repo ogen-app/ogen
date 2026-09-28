@@ -42,77 +42,74 @@ import (
 // "Authorization" — it arrives here as "authorization".
 const authMetadataKey = "authorization"
 
-// New builds the internal gRPC server: a token-authenticated SecretsService
-// backed by store, plus the CON-208 TenantAdminService backed by the tenant /
-// tier / group repositories. The single token interceptor gates every RPC on
-// both services. An empty token is rejected — the caller must decide NOT to
-// start the server at all rather than run it unauthenticated.
-func New(
-	token string,
-	store secrets.Store,
-	tierRepo repository.TenantTierRepository,
-	groupRepo repository.TenantGroupRepository,
-	tenantRepo repository.TenantRepository,
-	platformRepo repository.PlatformRepository,
-	platformLimitsRepo repository.PlatformGlobalLimitsRepository,
-	flowModelConfigRepo repository.FlowModelConfigRepository,
-	versionRepo repository.TenantTierVersionRepository,
-	assignmentRepo repository.TenantTierAssignmentRepository,
-	emailLogRepo repository.EmailLogRepository,
-	emailEventRepo repository.EmailEventRepository,
-	emailBodyRepo repository.EmailBodyRepository,
-	emailBodies EmailBodyGetter,
-	// The admin-registration-notification send path — the users repo for
-	// the owner lookup, the River enqueuer for durable per-recipient sends, and
-	// Harbor's base URL for the "View in Harbor" deep link. All nil/empty-safe.
-	userRepo repository.UserRepository,
-	adminEmailEnqueuer AdminEmailEnqueuer,
-	harborBaseURL string,
-	announcementRepo repository.AnnouncementRepository,
-	// Shared in-process event hub so an operator tier change publishes an
-	// entitlement-invalidation event onto the tenant's /api/events stream. Nil-safe
-	// (a nil hub simply publishes nothing — the integration test passes nil).
-	hub eventhub.Hub,
-) (*grpc.Server, error) {
+// Deps is everything the internal gRPC server's services read. Only Token is
+// required at construction; tests leave unset the collaborators of services
+// they don't exercise.
+type Deps struct {
+	// Token is the shared bearer token. Surrounding whitespace is trimmed; an
+	// empty token is rejected.
+	Token   string
+	Secrets secrets.Store
+
+	Tiers           repository.TenantTierRepository
+	Groups          repository.TenantGroupRepository
+	Tenants         repository.TenantRepository
+	TierVersions    repository.TenantTierVersionRepository
+	TierAssignments repository.TenantTierAssignmentRepository
+
+	Platforms        repository.PlatformRepository
+	PlatformLimits   repository.PlatformGlobalLimitsRepository
+	FlowModelConfigs repository.FlowModelConfigRepository
+
+	EmailLogs   repository.EmailLogRepository
+	EmailEvents repository.EmailEventRepository
+	EmailBodies repository.EmailBodyRepository
+	// LiveEmailBodies fetches a rendered body from Resend when it is not
+	// stored locally.
+	LiveEmailBodies EmailBodyGetter
+	// Users, AdminEmailEnqueuer and HarborBaseURL drive the admin
+	// registration notification: owner lookup, durable per-recipient sends,
+	// and the "View in Harbor" deep link.
+	Users              repository.UserRepository
+	AdminEmailEnqueuer AdminEmailEnqueuer
+	HarborBaseURL      string
+
+	Announcements repository.AnnouncementRepository
+	// Hub carries the entitlement-invalidation event an operator tier change
+	// publishes onto the tenant's /api/events stream.
+	Hub eventhub.Hub
+}
+
+// New builds the internal gRPC server with every operator service registered
+// behind one token interceptor. An empty token is rejected — the caller must
+// decide NOT to start the server rather than run it unauthenticated.
+func New(d Deps) (*grpc.Server, error) {
 	// Env-configured secrets frequently arrive with a trailing newline (a very
 	// common Railway / docker-compose paste mistake). Trim it here so the
 	// byte-for-byte token compare in the interceptor doesn't silently reject an
 	// otherwise-correct token.
-	token = strings.TrimSpace(token)
+	token := strings.TrimSpace(d.Token)
 	if token == "" {
 		return nil, errors.New("grpcserver: auth token is required")
 	}
 	srv := grpc.NewServer(
-		// Trace inbound operator RPCs; continues an inbound trace if present.
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(tokenAuthInterceptor(token)),
 	)
-	// The versioned-tier-entitlement layer. Load the engineering-owned
-	// feature catalog (fails fast on a malformed embed) and build the point-in-time
-	// resolver both PlanAdminService and the CON-294 SetTenantTier stamp use.
+	// A malformed embedded feature catalog fails boot here.
 	catalog, err := entitlements.LoadCatalog()
 	if err != nil {
 		return nil, err
 	}
-	resolver := entitlements.NewResolver(versionRepo, assignmentRepo, tenantRepo, catalog)
+	resolver := entitlements.NewResolver(d.TierVersions, d.TierAssignments, d.Tenants, catalog)
 
-	secretsv1.RegisterSecretsServiceServer(srv, newSecretsService(store))
-	// TenantAdminService also gets the version + assignment repos: SetTenantTier
-	// now stamps a tenant_tier_assignment so tenants.tier_id and the open
-	// assignment never drift.
-	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(tierRepo, groupRepo, tenantRepo, versionRepo, assignmentRepo, hub))
-	registerPlatformAdmin(srv, platformRepo, platformLimitsRepo)
-	// ModelConfigAdminService lets Harbor assign a model to each
-	// (tier, flow, slot) over the code-owned flow/model catalogs. The prober
-	// (backed by the secrets store) runs TestSlotModel's live compatibility check.
-	registerModelConfigAdmin(srv, flowModelConfigRepo, modelprobe.New(store))
-	registerPlanAdmin(srv, versionRepo, assignmentRepo, catalog, resolver, hub)
-	// EmailAdminService serves a tenant's email history + per-email
-	// detail (rendered body fetched live from Resend) to Harbor's Emails tab.
-	registerEmailAdmin(srv, emailLogRepo, emailEventRepo, emailBodyRepo, emailBodies, tenantRepo, userRepo, adminEmailEnqueuer, harborBaseURL)
-	// AnnouncementAdminService lets Harbor author informational
-	// announcements (banners) and read their per-user click/dismiss engagement.
-	registerAnnouncementAdmin(srv, announcementRepo)
+	secretsv1.RegisterSecretsServiceServer(srv, newSecretsService(d.Secrets))
+	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(d.Tiers, d.Groups, d.Tenants, d.TierVersions, d.TierAssignments, d.Hub))
+	registerPlatformAdmin(srv, d.Platforms, d.PlatformLimits)
+	registerModelConfigAdmin(srv, d.FlowModelConfigs, modelprobe.New(d.Secrets))
+	registerPlanAdmin(srv, d.TierVersions, d.TierAssignments, catalog, resolver, d.Hub)
+	registerEmailAdmin(srv, d.EmailLogs, d.EmailEvents, d.EmailBodies, d.LiveEmailBodies, d.Tenants, d.Users, d.AdminEmailEnqueuer, d.HarborBaseURL)
+	registerAnnouncementAdmin(srv, d.Announcements)
 	return srv, nil
 }
 

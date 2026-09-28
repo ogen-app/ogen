@@ -47,7 +47,7 @@ var _ = Describe("PasswordResetHandler", Ordered, func() {
 		// a reset request mints + stores a token (observable) without needing the
 		// River/analytics stack. Enqueuer-specific behaviour is covered in the
 		// jobs package.
-		handlers.NewPasswordResetHandler(db, userRepo, accountRepo, "https://app.example.com").Register(app)
+		handlers.NewPasswordResetHandler(db, userRepo, accountRepo, "https://app.example.com", nil, nil).Register(app)
 	})
 
 	AfterEach(func() {

@@ -204,12 +204,12 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		postAttRepo := repository.NewPostAttachmentRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		postVersionRepo := repository.NewPostVersionRepository(db)
-		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth).Register(app)
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, "gemini-2.5-flash", 280, auth).Register(app)
+		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{}).Register(app)
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, "gemini-2.5-flash", 280, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "att@example.com", "att-password")
 

@@ -183,8 +183,8 @@ var _ = Describe("ZernioHandler", Ordered, func() {
 		platformRepo := repository.NewPlatformRepository(db)
 		accountRepo = repository.NewSocialAccountRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 
 		// Bypass the cache for tests so reads always hit the SQLite source
 		// of truth; Phase 4 unit tests already cover cache semantics.

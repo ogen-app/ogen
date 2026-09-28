@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 
 	_ "github.com/ogen-app/ogen/docs"
+	"github.com/ogen-app/ogen/src/infra/crypto/envelope"
 	"github.com/ogen-app/ogen/src/infra/database"
 	"github.com/ogen-app/ogen/src/infra/email/resend"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -97,7 +98,7 @@ func run(cfg *config.Config) error {
 		defer func() { _ = analyticsDB.Close() }()
 	}
 
-	store, err := initSecrets(ctx, cfg, db)
+	store, cipher, err := initSecrets(ctx, cfg, db)
 	if err != nil {
 		return err
 	}
@@ -111,7 +112,7 @@ func run(cfg *config.Config) error {
 	// Detached from the signal: server.New starts River and refresh loops with
 	// this ctx, and River hard-cancels running jobs when its Start ctx ends.
 	// Those are drained by the app's shutdown hooks instead.
-	app, err := server.New(context.WithoutCancel(ctx), db, analyticsDB, cfg, store, hub)
+	app, err := server.New(context.WithoutCancel(ctx), db, analyticsDB, cfg, store, cipher, hub)
 	if err != nil {
 		return fmt.Errorf("init server: %w", err)
 	}
@@ -166,12 +167,13 @@ func openAnalytics(ctx context.Context, cfg *config.Config) *bun.DB {
 }
 
 // initSecrets builds the envelope-encrypted secret store and seeds it from the
-// environment on first boot. A KEK error is fatal: running without an
-// unwrapper would make rotated keys silently unrecoverable.
-func initSecrets(ctx context.Context, cfg *config.Config, db *bun.DB) (secrets.Store, error) {
+// environment on first boot. It also returns the KEK cipher, which the API
+// server reuses to seal Zernio connect tokens at rest. A KEK error is fatal:
+// running without an unwrapper would make rotated keys silently unrecoverable.
+func initSecrets(ctx context.Context, cfg *config.Config, db *bun.DB) (secrets.Store, *envelope.Cipher, error) {
 	cipher, kekSrc, err := secrets.InitCipher(cfg.KEKPath)
 	if err != nil {
-		return nil, fmt.Errorf("init secret cipher: %w", err)
+		return nil, nil, fmt.Errorf("init secret cipher: %w", err)
 	}
 	store := secrets.NewStore(repository.NewSecretRepository(db), cipher)
 
@@ -187,15 +189,15 @@ func initSecrets(ctx context.Context, cfg *config.Config, db *bun.DB) (secrets.S
 		{Name: secrets.NameFirecrawlAPIKey, EnvValue: cfg.FirecrawlAPIKey},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("migrate secrets from env: %w", err)
+		return nil, nil, fmt.Errorf("migrate secrets from env: %w", err)
 	}
 	// The unsubscribe-link HMAC key has no operator source; generate a stable
 	// one on first boot so one-click unsubscribe works out of the box.
 	if err := secrets.EnsureGenerated(ctx, store, secrets.NameEmailLinkSecret); err != nil {
-		return nil, fmt.Errorf("ensure email link secret: %w", err)
+		return nil, nil, fmt.Errorf("ensure email link secret: %w", err)
 	}
 	secrets.LogBootSummary(kekSrc, filepath.Join(cfg.KEKPath, secrets.KEKFilename), bootResult)
-	return store, nil
+	return store, cipher, nil
 }
 
 // startInternalGRPC starts the operator gRPC surface used by Harbor. It runs
@@ -216,27 +218,28 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		adminEmailEnqueuer = enq
 	}
 
-	gs, err := grpcserver.New(
-		cfg.GRPCAuthToken, store,
-		repository.NewTenantTierRepository(db),
-		repository.NewTenantGroupRepository(db),
-		repository.NewTenantRepository(db),
-		repository.NewPlatformRepository(db),
-		repository.NewPlatformGlobalLimitsRepository(db),
-		repository.NewFlowModelConfigRepository(db),
-		repository.NewTenantTierVersionRepository(db),
-		repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db),
-		repository.NewEmailEventRepository(db),
-		repository.NewEmailBodyRepository(db),
+	gs, err := grpcserver.New(grpcserver.Deps{
+		Token:            cfg.GRPCAuthToken,
+		Secrets:          store,
+		Tiers:            repository.NewTenantTierRepository(db),
+		Groups:           repository.NewTenantGroupRepository(db),
+		Tenants:          repository.NewTenantRepository(db),
+		TierVersions:     repository.NewTenantTierVersionRepository(db),
+		TierAssignments:  repository.NewTenantTierAssignmentRepository(db),
+		Platforms:        repository.NewPlatformRepository(db),
+		PlatformLimits:   repository.NewPlatformGlobalLimitsRepository(db),
+		FlowModelConfigs: repository.NewFlowModelConfigRepository(db),
+		EmailLogs:        repository.NewEmailLogRepository(db),
+		EmailEvents:      repository.NewEmailEventRepository(db),
+		EmailBodies:      repository.NewEmailBodyRepository(db),
 		// Per-call key resolution, so a rotated Resend key applies without a reboot.
-		resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
-		repository.NewUserRepository(db),
-		adminEmailEnqueuer,
-		cfg.HarborBaseURL,
-		repository.NewAnnouncementRepository(db),
-		hub,
-	)
+		LiveEmailBodies:    resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
+		Users:              repository.NewUserRepository(db),
+		AdminEmailEnqueuer: adminEmailEnqueuer,
+		HarborBaseURL:      cfg.HarborBaseURL,
+		Announcements:      repository.NewAnnouncementRepository(db),
+		Hub:                hub,
+	})
 	if err != nil {
 		slog.Error("grpc init failed; internal grpc disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
 		return nil

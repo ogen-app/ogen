@@ -45,7 +45,7 @@ var ErrAnthropicUnavailable = errors.New("anthropic api key not configured")
 // key requires re-initialising the whole instance — Rebuild does that
 // under a write lock and atomically swaps the cached callbacks.
 //
-// The embedding genkit instance lives separately in server.New: it is
+// The embedding genkit instance lives separately (deps.initIngestion): it is
 // built once at boot, never rebuilt, and shared with the runtime via
 // the embedder dependency. Splitting the two instances keeps the
 // Anthropic rebuild from disturbing the embedder bound to the

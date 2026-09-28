@@ -32,20 +32,15 @@ type UsersHandler struct {
 	settingRepo repository.SettingRepository
 	auth        fiber.Handler
 	// activity records CON-125 authentication-category events (user_created,
-	// user_updated, user_deleted). nil is a no-op. Wired via SetActivityRecorder.
+	// user_updated, user_deleted). nil is a no-op.
 	activity *activity.Recorder
 	limiter  *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 }
 
-func NewUsersHandler(db *bun.DB, repo repository.UserRepository, accountRepo repository.AccountRepository, settingRepo repository.SettingRepository, auth fiber.Handler) *UsersHandler {
-	return &UsersHandler{db: db, repo: repo, accountRepo: accountRepo, settingRepo: settingRepo, auth: auth}
+// NewUsersHandler builds the handler. rec and limiter are nil-safe.
+func NewUsersHandler(db *bun.DB, repo repository.UserRepository, accountRepo repository.AccountRepository, settingRepo repository.SettingRepository, auth fiber.Handler, rec *activity.Recorder, limiter *entitlements.Limiter) *UsersHandler {
+	return &UsersHandler{db: db, repo: repo, accountRepo: accountRepo, settingRepo: settingRepo, auth: auth, activity: rec, limiter: limiter}
 }
-
-// SetActivityRecorder wires the CON-125 activity recorder (nil-safe no-op).
-func (h *UsersHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
-
-// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
-func (h *UsersHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func (h *UsersHandler) Register(app *fiber.App) {
 	app.Get("/api/current_user", h.auth, h.CurrentUser) // always protected

@@ -67,23 +67,20 @@ type PasswordResetHandler struct {
 
 // NewPasswordResetHandler builds the handler. appBaseURL (APP_BASE_URL) is the
 // base for the emailed reset link.
-func NewPasswordResetHandler(db *bun.DB, userRepo repository.UserRepository, accountRepo repository.AccountRepository, appBaseURL string) *PasswordResetHandler {
+// NewPasswordResetHandler builds the handler. A nil emailJobs mints and stores
+// the reset token but sends no mail; a nil rec records nothing.
+func NewPasswordResetHandler(db *bun.DB, userRepo repository.UserRepository, accountRepo repository.AccountRepository, appBaseURL string, emailJobs PasswordResetEnqueuer, rec *activity.Recorder) *PasswordResetHandler {
 	return &PasswordResetHandler{
 		db:           db,
 		userRepo:     userRepo,
 		accountRepo:  accountRepo,
 		appBaseURL:   appBaseURL,
+		emailJobs:    emailJobs,
+		activity:     rec,
 		ipLimiter:    newKeyedRateLimiter(resetPerIPBurst, resetRateWindow),
 		emailLimiter: newKeyedRateLimiter(resetPerEmailBurst, resetRateWindow),
 	}
 }
-
-// SetActivityRecorder wires the CON-125 activity recorder (nil-safe no-op).
-func (h *PasswordResetHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
-
-// SetEmailEnqueuer wires the CON-161 reset-email enqueuer (nil-safe no-op).
-// When unset, a reset request mints + stores a token but sends no mail.
-func (h *PasswordResetHandler) SetEmailEnqueuer(e PasswordResetEnqueuer) { h.emailJobs = e }
 
 func (h *PasswordResetHandler) Register(app *fiber.App) {
 	// Both public and unauthenticated — the emailed token is the capability.

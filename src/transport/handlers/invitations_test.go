@@ -67,12 +67,11 @@ var _ = Describe("InvitationsHandler", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 
 		enqueuer = &fakeInviteEnqueuer{}
-		ih := handlers.NewInvitationsHandler(db, userRepo, repository.NewAccountRepository(db), tenantRepo, inviteRepo, sessionRepo, "https://app.example.com", testCookieName, false, auth)
-		ih.SetEmailEnqueuer(enqueuer)
+		ih := handlers.NewInvitationsHandler(db, userRepo, repository.NewAccountRepository(db), tenantRepo, inviteRepo, sessionRepo, "https://app.example.com", testCookieName, false, auth, handlers.InvitationsOptions{EmailJobs: enqueuer})
 		ih.Register(app)
 		// UsersHandler for the role-change / removal (last-owner) tests; Sessions for login.
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 	})
 
 	AfterEach(func() {

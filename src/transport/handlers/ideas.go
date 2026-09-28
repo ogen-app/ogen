@@ -25,13 +25,9 @@ type IdeasHandler struct {
 	activity *activity.Recorder
 }
 
-func NewIdeasHandler(svc *ideas.Service, auth fiber.Handler) *IdeasHandler {
-	return &IdeasHandler{svc: svc, auth: auth}
-}
-
-// SetActivityRecorder wires the CON-125 activity recorder. nil is a no-op.
-func (h *IdeasHandler) SetActivityRecorder(r *activity.Recorder) {
-	h.activity = r
+// NewIdeasHandler builds the handler. A nil rec records nothing.
+func NewIdeasHandler(svc *ideas.Service, auth fiber.Handler, rec *activity.Recorder) *IdeasHandler {
+	return &IdeasHandler{svc: svc, auth: auth, activity: rec}
 }
 
 func (h *IdeasHandler) recordActivity(c *fiber.Ctx, typ, ideaID string, payload map[string]any) {

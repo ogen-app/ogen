@@ -46,7 +46,7 @@ type PostsHandler struct {
 	platformRepo   repository.PlatformRepository
 	attachmentRepo repository.PostAttachmentRepository
 	// brandRepo validates a post's brand_voice_id/brand_audience_id belong to
-	// the tenant. Optional (SetBrandRepo); nil skips validation.
+	// the tenant. nil skips validation.
 	brandRepo repository.BrandRepository
 	auth      fiber.Handler
 	// onBeforeDelete runs before the post row is deleted. The server
@@ -80,18 +80,13 @@ type PostsHandler struct {
 	scheduleSvc *schedule.Service
 	// activity records CON-125 user-activity events (post_created,
 	// post_scheduled, …) to the analytics store. nil is a no-op (analytics
-	// disabled / fixtures). Wired via SetActivityRecorder.
+	// disabled / fixtures).
 	activity *activity.Recorder
 	// campaignRepo answers "is this phase one of the campaign's type's
 	// phases?" so a mismatched campaign_type_phase_id gets a clean
-	// 400. Optional (SetCampaignRepo); nil leaves it to the DB trigger, whose
+	// 400. nil leaves it to the DB trigger, whose
 	// rejection is mapped to the same 400.
 	campaignRepo repository.CampaignRepository
-}
-
-// SetCampaignRepo wires the CON-166 phase-ownership check. Optional.
-func (h *PostsHandler) SetCampaignRepo(r repository.CampaignRepository) {
-	h.campaignRepo = r
 }
 
 // checkPhase reports whether a post's campaign_type_phase_id (when set) is a
@@ -101,13 +96,6 @@ func (h *PostsHandler) checkPhase(ctx context.Context, campaignID string, phaseI
 	return h.updater().PhaseBelongs(ctx, campaignID, phaseID)
 }
 
-// SetOnBeforeDelete registers a hook that runs before a post is
-// deleted. Used by the server to clean up post-attachment S3 objects
-// without forcing every PostsHandler caller to know about attachments.
-func (h *PostsHandler) SetOnBeforeDelete(fn func(ctx context.Context, postID string) error) {
-	h.onBeforeDelete = fn
-}
-
 // SetAttachmentRepo wires the repository the validation gate consults
 // when transitioning Draft→ReadyForPublish. Until set, the gate is a
 // no-op (used by fixtures that don't exercise the publish path).
@@ -115,48 +103,11 @@ func (h *PostsHandler) SetAttachmentRepo(r repository.PostAttachmentRepository) 
 	h.attachmentRepo = r
 }
 
-// SetPostLogRepo wires the audit repository. Until set, every PostLog
-// write performed by this handler is a no-op (used by handler-test
-// fixtures that don't care about the audit trail).
-func (h *PostsHandler) SetPostLogRepo(r repository.PostLogRepository) {
-	h.postLogRepo = r
-}
-
 // CancelEnqueuer enqueues a Zernio cancellation task. Implemented by
 // *queues.Enqueuer; kept as a narrow interface so the handler depends on a
 // tiny method set rather than the queue runtime directly.
 type CancelEnqueuer interface {
 	EnqueueCancel(ctx context.Context, postID string, target queues.CancelTarget, actor string) error
-}
-
-// SetSchedulingDeps wires everything the schedule path needs: the
-// allowlist repo (to choose Scheduled vs ScheduledForManualPublish),
-// the job enqueuer (to enqueue cancellation tasks), and the bun DB
-// handle. Any nil disables the corresponding branch — useful for
-// fixtures that don't exercise auto-publish.
-func (h *PostsHandler) SetSchedulingDeps(allowlist repository.AutoPublishAllowlistRepository, client CancelEnqueuer, db *bun.DB) {
-	h.allowlistRepo = allowlist
-	h.jobsClient = client
-	h.db = db
-}
-
-// SetScheduleService wires the post-schedule service. Until set,
-// the schedule endpoint returns 503 and the PUT scheduling branch falls
-// back to a plain status update.
-func (h *PostsHandler) SetScheduleService(s *schedule.Service) {
-	h.scheduleSvc = s
-}
-
-// SetBrandRepo wires the CON-245 brand repository so a post's brand refs can be
-// tenant-validated. Optional; nil skips validation.
-func (h *PostsHandler) SetBrandRepo(r repository.BrandRepository) {
-	h.brandRepo = r
-}
-
-// SetActivityRecorder wires the CON-125 activity recorder. nil (analytics
-// disabled) makes every activity emission a no-op.
-func (h *PostsHandler) SetActivityRecorder(r *activity.Recorder) {
-	h.activity = r
 }
 
 // recordActivity emits a best-effort CON-125 "post" activity event. Tenant +
@@ -534,6 +485,7 @@ func NewPostsHandler(
 	platformRepo repository.PlatformRepository,
 	attachmentRepo repository.PostAttachmentRepository,
 	auth fiber.Handler,
+	opts PostsOptions,
 ) *PostsHandler {
 	return &PostsHandler{
 		repo:           repo,
@@ -541,7 +493,34 @@ func NewPostsHandler(
 		platformRepo:   platformRepo,
 		attachmentRepo: attachmentRepo,
 		auth:           auth,
+		brandRepo:      opts.Brands,
+		campaignRepo:   opts.Campaigns,
+		postLogRepo:    opts.PostLogs,
+		allowlistRepo:  opts.Allowlist,
+		jobsClient:     opts.Jobs,
+		db:             opts.DB,
+		scheduleSvc:    opts.Schedule,
+		activity:       opts.Activity,
+		onBeforeDelete: opts.OnBeforeDelete,
 	}
+}
+
+// PostsOptions carries the handler's optional collaborators. Every field is
+// nil-safe: a nil one disables the branch it backs (see the matching
+// PostsHandler field).
+type PostsOptions struct {
+	Brands    repository.BrandRepository
+	Campaigns repository.CampaignRepository
+	PostLogs  repository.PostLogRepository
+	// Allowlist, Jobs and DB back the Scheduled transition: the allowlist
+	// chooses Scheduled vs ScheduledForManualPublish, Jobs enqueues
+	// cancellation tasks, and DB runs the status change in one transaction.
+	Allowlist      repository.AutoPublishAllowlistRepository
+	Jobs           CancelEnqueuer
+	DB             *bun.DB
+	Schedule       *schedule.Service
+	Activity       *activity.Recorder
+	OnBeforeDelete func(ctx context.Context, postID string) error
 }
 
 // postBrandRequest is the body of PUT /api/posts/:id/brand — a targeted set of

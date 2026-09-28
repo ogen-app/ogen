@@ -123,12 +123,12 @@ var _ = Describe("Post analytics — CON-93", Ordered, func() {
 		analyticsRepo = repository.NewPostAnalyticsRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, "test_session")
 
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 
-		postsHandler := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db),
-			platformRepo, repository.NewPostAttachmentRepository(db), auth)
+		postsHandler := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), platformRepo, repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{})
+
 		postsHandler.Register(app)
 		// GET /:id/analytics now lives on the insights handler.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, analyticsRepo, nil, nil, auth).Register(app)

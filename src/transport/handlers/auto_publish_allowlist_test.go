@@ -42,8 +42,8 @@ var _ = Describe("AutoPublishAllowlistHandler", Ordered, func() {
 		settingRepo := repository.NewSettingRepository(db)
 		allowlistRepo := repository.NewAutoPublishAllowlistRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewAutoPublishAllowlistHandler(allowlistRepo, auth).Register(app)
 
 		seedTenantUser(db, "Admin", "admin@example.com", "admin-password")

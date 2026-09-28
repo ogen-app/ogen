@@ -62,14 +62,14 @@ var _ = Describe("AudioAssetsHandler presign", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		store = &stubStorage{returnURL: "https://pub.example.com/x", objects: map[string][]byte{}}
 
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(a)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(a)
 		handlers.NewAudioAssetsHandler(
 			assetRepo, fileRepo,
 			repository.NewAudioExtractionRepository(db),
 			repository.NewAudioSegmentRepository(db),
 			repository.NewUtteranceRepository(db),
-			store, db, audioJobs, auth,
-		).Register(a)
+			store, db, audioJobs, auth, nil).
+			Register(a)
 		return a
 	}
 

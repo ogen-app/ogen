@@ -14,7 +14,7 @@ import (
 // repos is the API server's full data-access surface, built once by
 // wireRepositories. Collecting the ~30 repositories here makes the persistence
 // layer explicit in one place and lets it be constructed (and tested)
-// independently of the rest of New. Analytics-backed repos (postAnalyticsRepo,
+// independently of the rest of the wiring. Analytics-backed repos (postAnalyticsRepo,
 // followerStatsRepo) are nil when the analytics pool is disabled; every reader
 // already treats those as fail-open.
 type repos struct {

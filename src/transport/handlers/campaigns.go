@@ -35,7 +35,7 @@ type CampaignsHandler struct {
 	campaignTypeRepo repository.CampaignTypeRepository
 	limiter          *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 	// brandRepo validates campaign brand_voice_id/brand_audience_id belong to
-	// the tenant. Optional (SetBrandRepo); nil skips validation.
+	// the tenant. nil skips validation.
 	brandRepo     repository.BrandRepository
 	auth          fiber.Handler
 	generateDraft func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
@@ -59,18 +59,16 @@ type CampaignsHandler struct {
 	assistant func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
 	// activity records CON-125 user-activity events (campaign_created,
 	// content_generated, …). nil is a no-op (analytics disabled / fixtures).
-	// Wired via SetActivityRecorder.
 	activity *activity.Recorder
 }
 
-// SetBrandRepo wires the CON-245 brand repository so campaign brand refs can be
-// tenant-validated. Optional; nil skips validation.
-func (h *CampaignsHandler) SetBrandRepo(r repository.BrandRepository) {
-	h.brandRepo = r
+// CampaignsOptions carries the handler's nil-safe collaborators.
+type CampaignsOptions struct {
+	Limiter  *entitlements.Limiter
+	Activity *activity.Recorder
+	// Brands tenant-validates brand_voice_id/brand_audience_id; nil skips it.
+	Brands repository.BrandRepository
 }
-
-// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
-func (h *CampaignsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 // baselineCampaignTypeSlug is the one system campaign type every tier can use;
 // the other system types are gated by all_campaign_types.
@@ -92,12 +90,6 @@ func (h *CampaignsHandler) gateCampaignType(c *fiber.Ctx, ct *models.CampaignTyp
 		return h.limiter.RequireGate(reqCtx(c), tenantID, "all_campaign_types")
 	}
 	return nil
-}
-
-// SetActivityRecorder wires the CON-125 activity recorder. nil (analytics
-// disabled) makes every activity emission a no-op.
-func (h *CampaignsHandler) SetActivityRecorder(r *activity.Recorder) {
-	h.activity = r
 }
 
 // recordActivity emits a best-effort CON-125 activity event. Tenant + user are
@@ -126,8 +118,12 @@ func NewCampaignsHandler(
 	enrichBrief func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error),
 	messageRepo repository.CampaignAssistantMessageRepository,
 	assistant func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error),
+	opts CampaignsOptions,
 ) *CampaignsHandler {
 	return &CampaignsHandler{
+		limiter:            opts.Limiter,
+		activity:           opts.Activity,
+		brandRepo:          opts.Brands,
 		repo:               repo,
 		campaignTypeRepo:   campaignTypeRepo,
 		auth:               auth,

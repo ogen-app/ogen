@@ -35,7 +35,7 @@ type usageDeps struct {
 // graceful-disable path (FR10) — while the limits config surface stays usable.
 // The caller drains the recorder on shutdown via recorder.Close, registered
 // AFTER the river/zernio producers stop so loop() never exits while a worker is
-// still calling Record() (see server.New).
+// still calling Record() (see stageRecorders).
 func initUsage(cfg *config.Config, db, analyticsDB *bun.DB) usageDeps {
 	deps := usageDeps{
 		limits: repository.NewUsageLimitsRepository(db),
