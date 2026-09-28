@@ -48,14 +48,14 @@ func dialOptional[C optionalClient](plan *shutdownPlan, stage shutdownStage, dia
 	return c, nil
 }
 
-// newGRPCClients dials the optional microservices. The audio and image
-// clients close in stageJobClients because River jobs call them while
-// draining.
+// newGRPCClients dials the optional microservices. Every client a River job
+// calls (pdf, documents, audio, image) closes in stageJobClients, after the
+// jobs have drained; video is request-time only.
 func newGRPCClients(d *deps) (grpcClients, error) {
 	cfg := d.cfg
 	var c grpcClients
 	var err error
-	if c.pdf, err = dialOptional(d.shutdown, stageIntegrations, func() (*pdf.Client, error) {
+	if c.pdf, err = dialOptional(d.shutdown, stageJobClients, func() (*pdf.Client, error) {
 		return pdf.New(pdf.Config{Addr: cfg.PDFServiceAddr, Timeout: cfg.PDFServiceTimeout, MaxRecvBytes: cfg.PDFServiceMaxRecvBytes})
 	}); err != nil {
 		return c, err
@@ -65,7 +65,7 @@ func newGRPCClients(d *deps) (grpcClients, error) {
 	}); err != nil {
 		return c, err
 	}
-	if c.documents, err = dialOptional(d.shutdown, stageIntegrations, func() (*documents.Client, error) {
+	if c.documents, err = dialOptional(d.shutdown, stageJobClients, func() (*documents.Client, error) {
 		return documents.New(documents.Config{Addr: cfg.DocumentsServiceAddr, Timeout: cfg.DocumentsServiceTimeout, MaxRecvBytes: cfg.DocumentsServiceMaxRecvBytes})
 	}); err != nil {
 		return c, err

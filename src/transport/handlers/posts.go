@@ -96,13 +96,6 @@ func (h *PostsHandler) checkPhase(ctx context.Context, campaignID string, phaseI
 	return h.updater().PhaseBelongs(ctx, campaignID, phaseID)
 }
 
-// SetAttachmentRepo wires the repository the validation gate consults
-// when transitioning Draft→ReadyForPublish. Until set, the gate is a
-// no-op (used by fixtures that don't exercise the publish path).
-func (h *PostsHandler) SetAttachmentRepo(r repository.PostAttachmentRepository) {
-	h.attachmentRepo = r
-}
-
 // CancelEnqueuer enqueues a Zernio cancellation task. Implemented by
 // *queues.Enqueuer; kept as a narrow interface so the handler depends on a
 // tiny method set rather than the queue runtime directly.
