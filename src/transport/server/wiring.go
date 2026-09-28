@@ -142,14 +142,16 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 // panic-recovery, per-request correlation id, access logging, and —
 // when a cross-origin UI is configured — credentialed CORS.
 func newFiberApp(cfg *config.Config) *fiber.App {
-	app := fiber.New(fiber.Config{
+	fcfg := fiber.Config{
 		ErrorHandler: defaultErrorHandler,
 		// WriteTimeout 0 disables the per-response write deadline so that SSE
 		// streams (e.g. /generate-draft) are not forcibly closed mid-flight.
 		WriteTimeout: 0,
 		// Allow batched markdown uploads (up to 10 MB per file).
 		BodyLimit: 100 << 20,
-	})
+	}
+	applyProxyConfig(&fcfg, cfg)
+	app := fiber.New(fcfg)
 
 	// Tracing, panic recovery and error capture, outermost. See
 	// useObservability.
