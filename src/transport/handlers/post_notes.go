@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"errors"
 
 	"github.com/gofiber/fiber/v2"
@@ -46,28 +45,12 @@ func (h *PostNotesHandler) Register(app *fiber.App) {
 	g.Delete("/:id", h.Delete)
 }
 
-// loadPostOrErr fetches the parent post, returning 404 when it is missing or
-// belongs to another tenant.
-func (h *PostNotesHandler) loadPostOrErr(c *fiber.Ctx) (*models.Post, error) {
-	post, err := h.postRepo.GetByID(reqCtx(c), c.Params("post_id"))
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fiber.NewError(fiber.StatusNotFound, "post not found")
-		}
-		return nil, err
-	}
-	return post, nil
-}
-
 // loadNoteOrErr fetches a note and verifies it belongs to the post in the path,
 // returning 404 otherwise (so a note id from another post can't be reached).
 func (h *PostNotesHandler) loadNoteOrErr(c *fiber.Ctx, postID string) (*models.PostNote, error) {
 	note, err := h.svc.Get(reqCtx(c), c.Params("id"))
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fiber.NewError(fiber.StatusNotFound, "note not found")
-		}
-		return nil, err
+		return nil, notFound(err, "note not found")
 	}
 	if note.PostID != postID {
 		return nil, fiber.NewError(fiber.StatusNotFound, "note not found")
@@ -92,7 +75,7 @@ type updateNoteRequest struct {
 }
 
 func (h *PostNotesHandler) List(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -108,7 +91,7 @@ func (h *PostNotesHandler) List(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Get(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -120,7 +103,7 @@ func (h *PostNotesHandler) Get(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Create(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -130,7 +113,10 @@ func (h *PostNotesHandler) Create(c *fiber.Ctx) error {
 		return err
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	note, err := h.svc.Create(reqCtx(c), notes.CreateInput{
 		PostID:    post.ID,
 		Type:      models.PostNoteType(req.Type),
@@ -154,7 +140,7 @@ func (h *PostNotesHandler) Create(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Update(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -200,7 +186,7 @@ func (h *PostNotesHandler) Update(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Delete(c *fiber.Ctx) error {
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}

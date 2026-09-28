@@ -36,14 +36,6 @@ func (h *AnnouncementsHandler) Register(app *fiber.App) {
 	g.Post("/:id/dismiss", h.Dismiss)
 }
 
-func (h *AnnouncementsHandler) session(c *fiber.Ctx) (*models.Session, error) {
-	s, ok := c.Locals("session").(*models.Session)
-	if !ok || s == nil {
-		return nil, fiber.NewError(fiber.StatusUnauthorized, "authentication required")
-	}
-	return s, nil
-}
-
 // audience resolves the caller's active workspace to the targeting inputs
 // (tier + group ids) the repository uses to match — and authorize —
 // announcements. Shared by delivery and the click/dismiss gate so a user can
@@ -103,7 +95,7 @@ func toAnnouncementDTO(a repository.AnnouncementForUser) announcementDTO {
 // @Success  200 {array} handlers.announcementDTO
 // @Router   /api/announcements [get]
 func (h *AnnouncementsHandler) List(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -131,7 +123,7 @@ func (h *AnnouncementsHandler) List(c *fiber.Ctx) error {
 // @Failure  404 {object} map[string]string
 // @Router   /api/announcements/{id}/click [post]
 func (h *AnnouncementsHandler) Click(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -158,7 +150,7 @@ func (h *AnnouncementsHandler) Click(c *fiber.Ctx) error {
 // @Failure  404 {object} map[string]string
 // @Router   /api/announcements/{id}/dismiss [post]
 func (h *AnnouncementsHandler) Dismiss(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}

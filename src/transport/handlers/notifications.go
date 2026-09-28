@@ -12,13 +12,11 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/valyala/fasthttp"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
@@ -82,14 +80,6 @@ func (h *NotificationsHandler) Register(app *fiber.App) {
 	g.Delete("/:id", h.Dismiss)
 }
 
-func (h *NotificationsHandler) session(c *fiber.Ctx) (*models.Session, error) {
-	s, ok := c.Locals("session").(*models.Session)
-	if !ok || s == nil {
-		return nil, fiber.NewError(fiber.StatusUnauthorized, "authentication required")
-	}
-	return s, nil
-}
-
 // List godoc
 // @Summary  List notifications
 // @Tags     notifications
@@ -102,7 +92,7 @@ func (h *NotificationsHandler) session(c *fiber.Ctx) (*models.Session, error) {
 // @Success  200 {array} models.Notification
 // @Router   /api/notifications [get]
 func (h *NotificationsHandler) List(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -142,7 +132,7 @@ func (h *NotificationsHandler) List(c *fiber.Ctx) error {
 // @Success  200 {object} map[string]int
 // @Router   /api/notifications/unread-count [get]
 func (h *NotificationsHandler) UnreadCount(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -169,7 +159,7 @@ type patchNotificationRequest struct {
 // @Failure  404 {object} map[string]string
 // @Router   /api/notifications/{id} [patch]
 func (h *NotificationsHandler) Patch(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -210,7 +200,7 @@ type markAllReadRequest struct {
 // @Success  200 {object} map[string]int
 // @Router   /api/notifications/mark-all-read [post]
 func (h *NotificationsHandler) MarkAllRead(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -236,7 +226,7 @@ func (h *NotificationsHandler) MarkAllRead(c *fiber.Ctx) error {
 // @Failure  404 {object} map[string]string
 // @Router   /api/notifications/{id} [delete]
 func (h *NotificationsHandler) Dismiss(c *fiber.Ctx) error {
-	s, err := h.session(c)
+	s, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -270,7 +260,7 @@ func (h *NotificationsHandler) Dismiss(c *fiber.Ctx) error {
 // @Success      200 "SSE stream"
 // @Router       /api/notifications/stream [get]
 func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
-	session, err := h.session(c)
+	session, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
@@ -294,108 +284,80 @@ func (h *NotificationsHandler) Stream(c *fiber.Ctx) error {
 		return err
 	}
 
-	c.Set("Content-Type", "text/event-stream")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Connection", "keep-alive")
-	c.Set("X-Accel-Buffering", "no")
+	ns := &notificationStream{
+		repo:     h.repo,
+		userID:   session.UserID,
+		cursor:   cursor,
+		queryCtx: detachedContext(c, session.TenantID),
+	}
+	streamHub(c, session, hubStream{
+		component:      "notifications",
+		events:         eventCh,
+		unsubscribe:    unsubscribe,
+		sessionRepo:    h.sessionRepo,
+		heartbeat:      h.heartbeatInterval,
+		lifetime:       h.maxLifetime,
+		writeFailedMsg: "notification sse write failed",
+		sessionGoneMsg: "session no longer valid; closing notification stream",
+		connected:      trackStreamConnection,
+		open:           ns.replay,
+		write:          ns.write,
+	})
+	return nil
+}
 
-	// Capture before the writer goroutine runs — the fiber ctx is recycled the
-	// moment this handler returns, so nothing below may touch
-	// c.Context(). Build a detached, tenant-scoped ctx for the replay query.
-	userID := session.UserID
-	sessionID := session.ID
-	sessionRepo := h.sessionRepo
-	heartbeat := h.heartbeatInterval
-	maxLifetime := h.maxLifetime
-	repo := h.repo
+// trackStreamConnection counts an active notification stream; the increment
+// and the returned release run on the same writer goroutine so the gauge
+// never grows without a matching decrement.
+func trackStreamConnection() func() {
+	notify.StreamConnections.Add(1)
+	return func() { notify.StreamConnections.Add(-1) }
+}
 
-	reqID, _ := logging.RequestIDFrom(reqCtx(c))
-	logCtx := logging.WithRequestID(context.Background(), reqID)
-	logCtx = logging.WithUserID(logCtx, session.UserID)
-	logCtx = tenantctx.With(logCtx, session.TenantID)
-	queryCtx := detachedContext(c, session.TenantID)
+// notificationStream is the per-connection state of the notification SSE
+// stream: the replay cursor and the highest seq already flushed, which
+// dedupes the replay→live handoff.
+type notificationStream struct {
+	repo        repository.NotificationRepository
+	userID      string
+	cursor      int64
+	queryCtx    context.Context
+	lastSentSeq int64
+}
 
-	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		defer unsubscribe()
-		// Track *active* connections: increment and decrement in the same
-		// goroutine so the gauge can never grow without a matching release.
-		notify.StreamConnections.Add(1)
-		defer notify.StreamConnections.Add(-1)
-
-		// Confirm the connection before any real event arrives.
-		if err := writeHeartbeat(w); err != nil {
-			return
+// replay flushes everything missed since the cursor, in seq order, before the
+// stream goes live. A fresh client (no cursor) already has history from the
+// REST list. A failed query is non-fatal: the stream still goes live.
+func (ns *notificationStream) replay(logCtx context.Context, w *bufio.Writer) error {
+	if ns.cursor <= 0 {
+		return nil
+	}
+	missed, err := ns.repo.ReplaySince(ns.queryCtx, ns.userID, ns.cursor, maxReplayNotifications)
+	if err != nil {
+		slog.ErrorContext(logCtx, "notification replay failed", logging.AttrComponent, "notifications", logging.AttrError, err)
+		return nil
+	}
+	for i := range missed {
+		if err := writeNotificationFrame(w, &missed[i]); err != nil {
+			return err
 		}
+		ns.lastSentSeq = missed[i].Seq
+	}
+	notify.StreamReplayed.Add(int64(len(missed)))
+	return nil
+}
 
-		// Durable replay: everything missed since the cursor, in seq order,
-		// before switching to live. Only when a cursor was supplied — a fresh
-		// client (no Last-Event-ID) already has history from the REST list.
-		var lastSentSeq int64
-		if cursor > 0 {
-			missed, err := repo.ReplaySince(queryCtx, userID, cursor, maxReplayNotifications)
-			if err != nil {
-				// Non-fatal: fall through to live so the stream still works.
-				slog.ErrorContext(logCtx, "notification replay failed", logging.AttrComponent, "notifications", logging.AttrError, err)
-			} else {
-				for i := range missed {
-					if err := writeNotificationFrame(w, &missed[i]); err != nil {
-						return
-					}
-					lastSentSeq = missed[i].Seq
-				}
-				notify.StreamReplayed.Add(int64(len(missed)))
-			}
-		}
-
-		ticker := time.NewTicker(heartbeat)
-		defer ticker.Stop()
-
-		// Hard lifetime ceiling. Guarantees this goroutine — and the
-		// hub slot it holds — is released even if the client vanished without a
-		// detectable close and no write ever fails. The client reconnects and
-		// replays anything missed via Last-Event-ID (the seq on the id: line).
-		lifetime := time.NewTimer(maxLifetime)
-		defer lifetime.Stop()
-
-		for {
-			select {
-			case ev, ok := <-eventCh:
-				if !ok {
-					// Hub disconnected us (backpressure, eviction, or shutdown).
-					return
-				}
-				n, ok := ev.Payload.(*models.Notification)
-				if !ok {
-					continue
-				}
-				// Skip anything already flushed during replay (dedup across the
-				// replay→live handoff).
-				if n.Seq <= lastSentSeq {
-					continue
-				}
-				if err := writeNotificationFrame(w, n); err != nil {
-					slog.ErrorContext(logCtx, "notification sse write failed", logging.AttrComponent, "notifications", logging.AttrError, err)
-					return
-				}
-				lastSentSeq = n.Seq
-			case <-ticker.C:
-				if err := writeHeartbeat(w); err != nil {
-					return
-				}
-				// Drop the stream if the session was invalidated (logout/expiry)
-				// rather than keep delivering to an unauthenticated client.
-				if !sessionStillValid(sessionRepo, sessionID) {
-					slog.InfoContext(logCtx, "session no longer valid; closing notification stream", logging.AttrComponent, "notifications")
-					return
-				}
-			case <-lifetime.C:
-				slog.InfoContext(logCtx, "stream lifetime reached; closing to reclaim slot", logging.AttrComponent, "notifications")
-				_ = writeRecycleFrame(w) // best-effort; closing regardless, client reconnects & replays via Last-Event-ID
-				return
-			}
-		}
-	}))
-
+// write forwards one live notification, skipping foreign payloads and
+// anything already flushed during replay.
+func (ns *notificationStream) write(w *bufio.Writer, ev eventhub.Event) error {
+	n, ok := ev.Payload.(*models.Notification)
+	if !ok || n.Seq <= ns.lastSentSeq {
+		return nil
+	}
+	if err := writeNotificationFrame(w, n); err != nil {
+		return err
+	}
+	ns.lastSentSeq = n.Seq
 	return nil
 }
 

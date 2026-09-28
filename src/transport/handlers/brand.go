@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -134,10 +132,7 @@ func (h *BrandHandler) UpdateVoice(c *fiber.Ctx) error {
 	v.Summary = "" // FR5: withdrawn; regeneration is a follow-up.
 	v.UpdatedAt = brandNow()
 	if err := h.repo.UpdateVoice(reqCtx(c), &v); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "voice not found")
-		}
-		return err
+		return notFound(err, "voice not found")
 	}
 	h.recordActivity(c, "brand_voice_updated", activity.WithEntity("brand_voice", v.ID))
 	v.Usage = models.BrandUsage{}
@@ -196,10 +191,7 @@ func (h *BrandHandler) UpdateAudience(c *fiber.Ctx) error {
 	a.Summary = "" // FR5
 	a.UpdatedAt = brandNow()
 	if err := h.repo.UpdateAudience(reqCtx(c), &a); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "audience not found")
-		}
-		return err
+		return notFound(err, "audience not found")
 	}
 	h.recordActivity(c, "brand_audience_updated", activity.WithEntity("brand_audience", a.ID))
 	a.Usage = models.BrandUsage{}
@@ -392,10 +384,7 @@ func (h *BrandHandler) UpdateTemplate(c *fiber.Ctx) error {
 	}
 	t.UpdatedAt = brandNow()
 	if err := h.repo.UpdateTemplate(reqCtx(c), &t); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "template not found")
-		}
-		return err
+		return notFound(err, "template not found")
 	}
 	h.recordActivity(c, "brand_template_updated", activity.WithEntity("brand_template", t.ID))
 	return c.JSON(&t)

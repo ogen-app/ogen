@@ -164,7 +164,10 @@ func (h *IdeasHandler) Create(c *fiber.Ctx) error {
 	if err := json.Unmarshal(c.Body(), &req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	idea, err := h.svc.Create(reqCtx(c), ideas.CreateInput{
 		Title:      req.Title,
 		Note:       req.Note,
@@ -249,7 +252,10 @@ func (h *IdeasHandler) SetVerdict(c *fiber.Ctx) error {
 		v := models.IdeaVerdict(*req.Verdict)
 		verdict = &v
 	}
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	idea, previous, err := h.svc.SetVerdict(reqCtx(c), c.Params("id"), verdict, req.RemindAt, session.UserID)
 	if err != nil {
 		return ideaError(err)

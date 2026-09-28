@@ -76,12 +76,12 @@ func (h *PostAttachmentsHandler) PresignVideo(c *fiber.Ctx) error {
 	if h.storage == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
 	}
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if lockedForMutations(post.Status) {
-		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
+	if err := ensureMutable(post); err != nil {
+		return err
 	}
 
 	var req presignVideoRequest
@@ -152,12 +152,12 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 	if h.storage == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
 	}
-	post, err := h.loadPostOrErr(c)
+	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if lockedForMutations(post.Status) {
-		return fiber.NewError(fiber.StatusConflict, "post has been submitted (scheduled or published) and its attachments are locked")
+	if err := ensureMutable(post); err != nil {
+		return err
 	}
 
 	var req finalizeVideoRequest
@@ -194,7 +194,10 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes()>>30))
 	}
 
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	id, err := models.NewID()
 	if err != nil {
 		return err

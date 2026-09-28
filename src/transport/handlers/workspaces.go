@@ -86,7 +86,10 @@ type createWorkspaceRequest struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/workspaces [get]
 func (h *WorkspacesHandler) List(c *fiber.Ctx) error {
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	items, err := h.workspaceRepo.ListForAccount(reqCtx(c), session.AccountID)
 	if err != nil {
 		return err
@@ -113,7 +116,10 @@ func (h *WorkspacesHandler) List(c *fiber.Ctx) error {
 // @Failure      401   {object}  map[string]string
 // @Router       /api/workspaces [post]
 func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 
 	var req createWorkspaceRequest
 	if err := bindAndValidate(c, &req); err != nil {
@@ -192,7 +198,10 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 // @Failure      403  {object}  map[string]string
 // @Router       /api/workspaces/{id}/switch [post]
 func (h *WorkspacesHandler) Switch(c *fiber.Ctx) error {
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	targetID := c.Params("id")
 
 	// Only a workspace the account belongs to can become its default.
@@ -237,7 +246,10 @@ var errLastWorkspace = errors.New("cannot delete the account's only workspace")
 // @Failure      409  {object}  map[string]string
 // @Router       /api/workspaces/{id} [delete]
 func (h *WorkspacesHandler) Delete(c *fiber.Ctx) error {
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	targetID := c.Params("id")
 
 	// Resolve the target from the path (like Switch), independent of the active

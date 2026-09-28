@@ -190,10 +190,7 @@ func (h *AssetsImageHandler) Status(c *fiber.Ctx) error {
 	}
 	ext, err := h.extractions.GetLatestByAsset(reqCtx(c), asset.ID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "no extraction for this asset")
-		}
-		return err
+		return notFound(err, "no extraction for this asset")
 	}
 	blocks, err := h.blocks.ListByExtraction(reqCtx(c), ext.ID)
 	if err != nil {
@@ -269,7 +266,10 @@ func (h *AssetsImageHandler) enqueue(c *fiber.Ctx, asset *models.Asset, runKey, 
 	if err != nil || file == nil {
 		return fiber.NewError(fiber.StatusBadRequest, "asset has no uploaded image")
 	}
-	session := c.Locals("session").(*models.Session)
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
 	storageKey := relativeImageKey(asset.ID, file.OriginalName)
 	return h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
 		return h.imgJobs.EnqueueProcessImageTx(ctx, tx.Tx, asset.ID, session.TenantID, file.OriginalName, file.MimeType, storageKey, runKey, pinnedModel)

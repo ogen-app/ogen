@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -94,11 +92,8 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "url or post_id is required")
 	}
 
-	post, err := h.repo.GetByID(reqCtx(c), c.Params("id"))
+	post, err := load(c, h.repo.GetByID, "post not found")
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusNotFound, "post not found")
-		}
 		return err
 	}
 

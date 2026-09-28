@@ -122,9 +122,9 @@ const DefaultWorkspaceLocal = "default_workspace_id"
 // caller's own membership. Returns 401 when there is no session or the user is
 // gone.
 func callerUser(c *fiber.Ctx, userRepo repository.UserRepository) (*models.User, error) {
-	session, ok := c.Locals("session").(*models.Session)
-	if !ok || session == nil {
-		return nil, fiber.NewError(fiber.StatusUnauthorized, "authentication required")
+	session, err := sessionFrom(c)
+	if err != nil {
+		return nil, err
 	}
 	user, err := userRepo.GetByID(reqCtx(c), session.UserID)
 	if err != nil {
