@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	modelconfigv1 "github.com/ogen-app/ogen/gen/modelconfig/v1"
@@ -203,6 +204,17 @@ func TestTestSlotModelWiring(t *testing.T) {
 	resp, _ = newModelConfigAdminService(nil, unsupP).TestSlotModel(ctx, req(modelconfig.FlowEmbed, modelconfig.SlotMain, "gemini-embedding-2"))
 	if !resp.GetPassed() {
 		t.Fatalf("unsupported probe should keep static pass: %+v", resp)
+	}
+
+	// Vision slot through the real prober: static pass, no live probe.
+	resp, _ = newModelConfigAdminService(nil, modelprobe.New(nil)).TestSlotModel(ctx, req(modelconfig.FlowVision, modelconfig.SlotExtract, "gemini-2.5-pro"))
+	if !resp.GetPassed() || !strings.Contains(resp.GetDetail(), "no live probe") {
+		t.Fatalf("vision slot should static-pass without a live probe: %+v", resp)
+	}
+	// Claude into a vision slot fails statically.
+	resp, _ = newModelConfigAdminService(nil, nil).TestSlotModel(ctx, req(modelconfig.FlowVision, modelconfig.SlotExtract, "claude-sonnet-4-5-20250929"))
+	if resp.GetPassed() || len(resp.GetUnmetRequirements()) == 0 {
+		t.Fatalf("Claude on a vision slot should fail statically: %+v", resp)
 	}
 
 	// Nil prober → static-only pass.
