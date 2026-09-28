@@ -54,6 +54,7 @@ func periodicConfig(cfg *config.Config) queues.PeriodicConfig {
 		IncludeConnectionExpiry:    true,
 		NotificationCleanupEvery:   cfg.NotificationsCleanupEvery,
 		ManualPublishDueEvery:      cfg.ManualPublishDueSweepEvery,
+		LoginSecurityCleanupEvery:  24 * time.Hour,
 	}
 }
 
@@ -87,6 +88,8 @@ func queueDeps(d *deps) queues.Deps {
 		URL:                   d.ingest.url,
 		Email:                 d.email.Deps,
 		ConnectSessionRepo:    r.zernioConnectSessionRepo,
+		KnownDeviceRepo:       r.knownDeviceRepo,
+		LoginAlertTokenRepo:   r.loginAlertTokenRepo,
 		Tenants:               r.tenantRepo,
 		Users:                 r.userRepo,
 		AppBaseURL:            cfg.AppBaseURL,
