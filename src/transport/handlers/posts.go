@@ -431,85 +431,101 @@ func (h *PostsHandler) ConvertToManual(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	byPlatform := req.Platform != ""
-	byIDs := len(req.PostIDs) > 0
-	if byPlatform == byIDs {
+	if (req.Platform != "") == (len(req.PostIDs) > 0) {
 		return fiber.NewError(fiber.StatusBadRequest, `provide exactly one of "platform" or "post_ids"`)
 	}
 
-	actor := cmp.Or(actorID(c), models.ActorSystem)
-
-	converted := make([]string, 0)
-	failed := make([]convertFailure, 0)
-
-	// convert enqueues one durable cancel→manual task per still-scheduled
-	// post. Once enqueued the worker owns the cancel, the wait, and the
-	// final status, so the request can return without holding the post in
-	// an unscheduled limbo.
-	convert := func(post *models.Post) {
-		switch post.Status {
-		case models.PostStatusScheduledForManualPublish:
-			// Already where the caller wants it — idempotent success.
-			converted = append(converted, post.ID)
-		case models.PostStatusScheduled:
-			if err := h.jobsClient.EnqueueCancel(reqCtx(c), post.ID, queues.CancelTargetManualPublish, actor); err != nil {
-				failed = append(failed, convertFailure{ID: post.ID, Reason: "could not enqueue conversion: " + err.Error()})
-				return
-			}
-			converted = append(converted, post.ID)
-		default:
-			failed = append(failed, convertFailure{ID: post.ID,
-				Reason: "post is not scheduled (status: " + string(post.Status) + ")"})
-		}
-	}
-
-	if byPlatform {
-		sqid := zernio.LookupSqidByZernioID(req.Platform)
-		if sqid == "" {
-			return fiber.NewError(fiber.StatusBadRequest,
-				fmt.Sprintf("platform %q is not in the Ogen-supported set", req.Platform))
-		}
-		posts, err := h.repo.ListScheduledByPlatform(reqCtx(c), sqid)
-		if err != nil {
+	conv := &manualConverter{h: h, ctx: reqCtx(c), actor: cmp.Or(actorID(c), models.ActorSystem),
+		converted: make([]string, 0), failed: make([]convertFailure, 0)}
+	if req.Platform != "" {
+		if err := conv.byPlatform(req.Platform); err != nil {
 			return err
 		}
-		for i := range posts {
-			convert(&posts[i])
-		}
 	} else {
-		seen := make(map[string]bool, len(req.PostIDs))
-		for _, id := range req.PostIDs {
-			if id == "" || seen[id] {
-				continue
-			}
-			seen[id] = true
-			post, err := h.repo.GetByID(reqCtx(c), id)
-			if err != nil {
-				reason := "could not load post: " + err.Error()
-				if errors.Is(err, sql.ErrNoRows) {
-					reason = "post not found"
-				}
-				// Report this id and keep going — one bad id must not sink the
-				// whole batch, matching the endpoint's per-post contract.
-				failed = append(failed, convertFailure{ID: id, Reason: reason})
-				continue
-			}
-			convert(post)
-		}
+		conv.byIDs(req.PostIDs)
 	}
 
 	h.recordActivity(c, "posts_converted_to_manual",
 		activity.WithPayload(map[string]any{
 			"platform":  req.Platform,
-			"converted": len(converted),
-			"failed":    len(failed),
+			"converted": len(conv.converted),
+			"failed":    len(conv.failed),
 		}),
 	)
-
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-		"converted": converted,
-		"failed":    failed,
+		"converted": conv.converted,
+		"failed":    conv.failed,
 	})
+}
+
+// manualConverter collects the per-post outcomes of one convert-to-manual
+// request.
+type manualConverter struct {
+	h         *PostsHandler
+	ctx       context.Context
+	actor     string
+	converted []string
+	failed    []convertFailure
+}
+
+// convert enqueues one durable cancel→manual task per still-scheduled post.
+// Once enqueued the worker owns the cancel, the wait and the final status, so
+// the request never holds the post in an unscheduled limbo.
+func (m *manualConverter) convert(post *models.Post) {
+	switch post.Status {
+	case models.PostStatusScheduledForManualPublish:
+		m.converted = append(m.converted, post.ID) // already there: idempotent success
+	case models.PostStatusScheduled:
+		if err := m.h.jobsClient.EnqueueCancel(m.ctx, post.ID, queues.CancelTargetManualPublish, m.actor); err != nil {
+			m.fail(post.ID, "could not enqueue conversion: "+err.Error())
+			return
+		}
+		m.converted = append(m.converted, post.ID)
+	default:
+		m.fail(post.ID, "post is not scheduled (status: "+string(post.Status)+")")
+	}
+}
+
+func (m *manualConverter) fail(id, reason string) {
+	m.failed = append(m.failed, convertFailure{ID: id, Reason: reason})
+}
+
+// byPlatform converts every scheduled post of a Zernio platform id.
+func (m *manualConverter) byPlatform(platform string) error {
+	sqid := zernio.LookupSqidByZernioID(platform)
+	if sqid == "" {
+		return fiber.NewError(fiber.StatusBadRequest,
+			fmt.Sprintf("platform %q is not in the Ogen-supported set", platform))
+	}
+	posts, err := m.h.repo.ListScheduledByPlatform(m.ctx, sqid)
+	if err != nil {
+		return err
+	}
+	for i := range posts {
+		m.convert(&posts[i])
+	}
+	return nil
+}
+
+// byIDs converts each distinct id. A post that can't be loaded is reported and
+// skipped: one bad id must not sink the batch.
+func (m *manualConverter) byIDs(ids []string) {
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		post, err := m.h.repo.GetByID(m.ctx, id)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			m.fail(id, "post not found")
+		case err != nil:
+			m.fail(id, "could not load post: "+err.Error())
+		default:
+			m.convert(post)
+		}
+	}
 }
 
 func NewPostsHandler(

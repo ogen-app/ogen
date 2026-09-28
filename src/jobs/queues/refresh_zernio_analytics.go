@@ -10,6 +10,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/ogen-app/ogen/src/analytics/tracking"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -304,53 +305,19 @@ func (p *RefreshZernioAnalyticsProcessor) applyItem(ctx context.Context, s *anal
 		return false
 	}
 
-	// A history point is written only when the metric key moved (or on first
-	// sighting); the current row is upserted either way so last_checked_at and
-	// the latest breakdown stay current.
-	changed := prev == nil || prev.MetricsKey() != built.MetricsKey()
-	stampTimes(built, prev, s.now, changed)
-	if !changed {
-		if err := p.Deps.AnalyticsRepo.Upsert(ctx, built); err != nil {
-			slog.ErrorContext(ctx, "analytics upsert failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, err)
-			return false
-		}
-		s.current[postID] = built
-		jobs.ZernioAnalyticsPostsUnchanged.Add(1)
-		return false
-	}
-
-	// The current row and its trend point are written atomically so a snapshot
-	// failure can't advance the current row without its history point (dedup
-	// would then hide the change forever).
-	id, err := models.NewID()
+	changed, err := tracking.RecordCurrent(ctx, p.Deps.AnalyticsRepo, prev, built, s.now)
 	if err != nil {
-		slog.ErrorContext(ctx, "analytics id gen failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, err)
-		return false
-	}
-	if err := p.Deps.AnalyticsRepo.UpsertWithSnapshot(ctx, built, built.NewSnapshot(id, s.now)); err != nil {
-		slog.ErrorContext(ctx, "analytics upsert+snapshot failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, err)
+		slog.ErrorContext(ctx, "analytics record failed", logging.AttrComponent, "jobs.refresh_analytics",
+			"post_id", postID, "changed", changed, logging.AttrError, err)
 		return false
 	}
 	s.current[postID] = built
+	if !changed {
+		jobs.ZernioAnalyticsPostsUnchanged.Add(1)
+		return false
+	}
 	p.publishUpdated(ctx, built)
 	return true
-}
-
-// stampTimes sets the freshness timestamps: last checked now, first seen on
-// first sighting, last changed when the metric key moved.
-func stampTimes(built, prev *models.PostAnalytics, now time.Time, changed bool) {
-	built.LastCheckedAt = now
-	switch {
-	case prev == nil:
-		built.FirstSeenAt = now
-		built.LastChangedAt = now
-	case changed:
-		built.FirstSeenAt = prev.FirstSeenAt
-		built.LastChangedAt = now
-	default:
-		built.FirstSeenAt = prev.FirstSeenAt
-		built.LastChangedAt = prev.LastChangedAt
-	}
 }
 
 // shouldStopPaging reports whether page was the last one, robust to whichever
