@@ -43,7 +43,7 @@ func TestLookupWithDatabase(t *testing.T) {
 	if !l.Enabled() {
 		t.Fatalf("could not open %s", path)
 	}
-	defer l.Close()
+	t.Cleanup(func() { _ = l.Close() })
 
 	for _, ip := range []string{"10.0.0.1", "127.0.0.1", "192.168.1.1", "::1", "not-an-ip", "100.64.0.1"} {
 		if got := l.Lookup(ip); got != "" {
