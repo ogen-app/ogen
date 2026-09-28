@@ -13,6 +13,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/pgvector/pgvector-go"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -212,6 +213,17 @@ func (w assetStatusWriter) fail(ctx context.Context, assetID, code, reason strin
 	}
 	notifyAssetStatus(ctx, w.notifier, w.assets, assetID, models.AssetStatusFailed, w.label, w.kind)
 	return nil
+}
+
+// modelResolver picks the model for a (flow, slot) under ctx's tenant tier. A
+// nil resolver uses the process-wide modelconfig resolver; tests inject one.
+type modelResolver func(ctx context.Context, flowKey, slotKey string) string
+
+func (r modelResolver) model(ctx context.Context, flowKey, slotKey string) string {
+	if r == nil {
+		return modelconfig.Model(ctx, flowKey, slotKey)
+	}
+	return r(ctx, flowKey, slotKey)
 }
 
 // extractionRunStore loads and creates the per-(asset, run_key) extraction row

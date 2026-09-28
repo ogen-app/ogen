@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
@@ -36,7 +37,6 @@ type AssetsImageHandler struct {
 	imgJobs         ImageIngestEnqueuer
 	image           ImagePreparer // for GenerateAltText
 	recorder        *usage.Recorder
-	altTextModel    string
 	altTextMaxChars int
 	auth            fiber.Handler
 }
@@ -51,7 +51,6 @@ func NewAssetsImageHandler(
 	imgJobs ImageIngestEnqueuer,
 	preparer ImagePreparer,
 	recorder *usage.Recorder,
-	altTextModel string,
 	altTextMaxChars int,
 	auth fiber.Handler,
 ) *AssetsImageHandler {
@@ -65,7 +64,6 @@ func NewAssetsImageHandler(
 		imgJobs:         imgJobs,
 		image:           preparer,
 		recorder:        recorder,
-		altTextModel:    altTextModel,
 		altTextMaxChars: altTextMaxChars,
 		auth:            auth,
 	}
@@ -238,7 +236,7 @@ func (h *AssetsImageHandler) RegenerateAltText(c *fiber.Ctx) error {
 	res, err := h.image.GenerateAltText(reqCtx(c), imageclient.GenerateAltTextOptions{
 		SourceURL: getURL,
 		MaxChars:  h.altTextMaxChars,
-		Model:     h.altTextModel,
+		Model:     modelconfig.Model(reqCtx(c), modelconfig.FlowVision, modelconfig.SlotAltText),
 	})
 	if err != nil {
 		if imageclient.IsInvalidImage(err) || imageclient.IsUnsupportedImage(err) {

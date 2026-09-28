@@ -11,6 +11,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors"
@@ -101,14 +102,13 @@ type ImageDeps struct {
 	// nil-safe.
 	Recorder *usage.Recorder
 	Checker  *usage.Checker
-	// EmbedModel is the price-map key for description/block embedding usage. The
-	// Vision* model ids are config (never compiled in) passed through to
-	// image-service; ConfidenceThreshold gates its one-shot escalation;
+	// EmbedModel is the price-map key for description/block embedding usage.
+	// Models picks the vision models passed through to image-service (nil = the
+	// modelconfig resolver); a run resolves them once and keeps them on its
+	// extraction row. ConfidenceThreshold gates the one-shot escalation;
 	// AltTextMaxChars is the alt-text generation target length.
 	EmbedModel          string
-	ClassifyModel       string
-	ExtractModel        string
-	EscalateModel       string
+	Models              modelResolver
 	ConfidenceThreshold float64
 	AltTextMaxChars     int
 	JobTimeout          time.Duration
@@ -187,6 +187,7 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	if err != nil {
 		return err
 	}
+	p.freezeModels(ctx, in, ext)
 	if ext.Status == models.ImageExtractionStatusComplete {
 		return nil // idempotent re-drive of a finished run
 	}
@@ -220,7 +221,7 @@ func (p *ProcessImageProcessor) describe(ctx context.Context, in ProcessImageTas
 	if err != nil {
 		return err
 	}
-	res, err := p.Deps.Client.Extract(ctx, p.extractOptions(in, srcURL, dstURL))
+	res, err := p.Deps.Client.Extract(ctx, p.extractOptions(in, ext, srcURL, dstURL))
 	if err != nil {
 		code, reason, terminal := classifyExtractErr(err, lastAttempt)
 		if !terminal {
@@ -276,14 +277,16 @@ func (p *ProcessImageProcessor) presign(ctx context.Context, in ProcessImageTask
 	return srcURL, dstURL, normKey, nil
 }
 
-func (p *ProcessImageProcessor) extractOptions(in ProcessImageTask, srcURL, dstURL string) imageclient.ExtractOptions {
+// extractOptions sends the models frozen on the run, so a retry after an
+// operator change still runs (and records) the models the run started with.
+func (p *ProcessImageProcessor) extractOptions(in ProcessImageTask, ext *models.ImageExtraction, srcURL, dstURL string) imageclient.ExtractOptions {
 	return imageclient.ExtractOptions{
 		SourceURL:           srcURL,
 		DestPutURL:          dstURL,
 		Filename:            in.OriginalName,
-		ClassifyModel:       p.Deps.ClassifyModel,
-		ExtractModel:        p.extractModel(in),
-		EscalateModel:       p.Deps.EscalateModel,
+		ClassifyModel:       ext.ClassifyModel,
+		ExtractModel:        ext.ExtractModel,
+		EscalateModel:       ext.EscalateModel,
 		AltTextMaxChars:     p.Deps.AltTextMaxChars,
 		ConfidenceThreshold: p.Deps.ConfidenceThreshold,
 	}
@@ -423,19 +426,36 @@ func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessIm
 }
 
 // ensureExtraction loads the (asset, run_key) extraction or creates a fresh
-// pending one.
+// pending one with the run's models resolved.
 func (p *ProcessImageProcessor) ensureExtraction(ctx context.Context, in ProcessImageTask) (*models.ImageExtraction, error) {
 	return ensureExtractionRun(ctx, p.Deps.Extractions, "process_image", in.AssetID, in.RunKey, func(id string) *models.ImageExtraction {
-		return &models.ImageExtraction{
-			ID:            id,
-			AssetID:       in.AssetID,
-			RunKey:        in.RunKey,
-			Status:        models.ImageExtractionStatusPending,
-			ClassifyModel: p.Deps.ClassifyModel,
-			ExtractModel:  p.extractModel(in),
-			EscalateModel: p.Deps.EscalateModel,
+		ext := &models.ImageExtraction{
+			ID:      id,
+			AssetID: in.AssetID,
+			RunKey:  in.RunKey,
+			Status:  models.ImageExtractionStatusPending,
 		}
+		p.freezeModels(ctx, in, ext)
+		return ext
 	})
+}
+
+// freezeModels resolves any model the run doesn't carry yet. A new run gets all
+// three at creation; a loaded run keeps what it recorded, so retries never pick
+// up an operator change made mid-run. The pinned model overrides extract.
+func (p *ProcessImageProcessor) freezeModels(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction) {
+	if ext.ClassifyModel == "" {
+		ext.ClassifyModel = p.Deps.Models.model(ctx, modelconfig.FlowVision, modelconfig.SlotClassify)
+	}
+	if ext.ExtractModel == "" {
+		ext.ExtractModel = in.PinnedModel
+		if ext.ExtractModel == "" {
+			ext.ExtractModel = p.Deps.Models.model(ctx, modelconfig.FlowVision, modelconfig.SlotExtract)
+		}
+	}
+	if ext.EscalateModel == "" {
+		ext.EscalateModel = p.Deps.Models.model(ctx, modelconfig.FlowVision, modelconfig.SlotEscalate)
+	}
 }
 
 // persistBlocks maps the service Blocks to image_blocks rows (with image-region
@@ -609,13 +629,6 @@ func (p *ProcessImageProcessor) terminalReject(ctx context.Context, in ProcessIm
 
 func (p *ProcessImageProcessor) statusWriter() assetStatusWriter {
 	return assetStatusWriter{op: "process_image", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "image", kind: models.AssetTypeImage}
-}
-
-func (p *ProcessImageProcessor) extractModel(in ProcessImageTask) string {
-	if in.PinnedModel != "" {
-		return in.PinnedModel
-	}
-	return p.Deps.ExtractModel
 }
 
 // blockAnchor maps a service Block's image-region anchor to the persisted

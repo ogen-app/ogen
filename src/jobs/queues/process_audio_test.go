@@ -27,6 +27,8 @@ type fakeAudioClient struct {
 	transcribeErr error
 
 	probeCalls, normalizeCalls, transcribeCalls int
+	// models records the model sent with each TranscribeSegment call.
+	models []string
 }
 
 func (f *fakeAudioClient) Probe(context.Context, audio.ProbeOptions) (*audio.ProbeResult, error) {
@@ -39,7 +41,8 @@ func (f *fakeAudioClient) Normalize(context.Context, audio.NormalizeOptions) (*a
 	return f.norm, f.normErr
 }
 
-func (f *fakeAudioClient) TranscribeSegment(_ context.Context, _ audio.TranscribeSegmentOptions) (*audio.TranscribeSegmentResult, error) {
+func (f *fakeAudioClient) TranscribeSegment(_ context.Context, opts audio.TranscribeSegmentOptions) (*audio.TranscribeSegmentResult, error) {
+	f.models = append(f.models, opts.Model)
 	f.transcribeCalls++
 	if f.transcribeErr != nil {
 		return nil, f.transcribeErr
@@ -148,17 +151,17 @@ func newAudioProc(d AudioDeps) *ProcessAudioProcessor { return &ProcessAudioProc
 
 func baseAudioDeps(client audioTranscriber, ext *fakeExtractions, seg *fakeSegments, utt *fakeUtterances, status *fakeStatus, chunks *fakeChunks) AudioDeps {
 	return AudioDeps{
-		Client:          client,
-		Embedder:        &fakeEmbedder{},
-		Storage:         presignBlob{},
-		Assets:          status,
-		Chunks:          chunks,
-		Extractions:     ext,
-		Segments:        seg,
-		Utterances:      utt,
-		EmbedModel:      "gemini-embedding-2",
-		TranscribeModel: "gemini-2.5-flash",
-		SegmentMaxMs:    defaultSegmentMaxMs,
+		Client:       client,
+		Embedder:     &fakeEmbedder{},
+		Storage:      presignBlob{},
+		Assets:       status,
+		Chunks:       chunks,
+		Extractions:  ext,
+		Segments:     seg,
+		Utterances:   utt,
+		EmbedModel:   "gemini-embedding-2",
+		Models:       staticModels(map[string]string{"main": "gemini-2.5-flash"}),
+		SegmentMaxMs: defaultSegmentMaxMs,
 	}
 }
 
@@ -353,6 +356,56 @@ func TestProcessAudio_OverMaxDurationIsTerminal(t *testing.T) {
 	}
 	if status.last() != models.AssetStatusFailed {
 		t.Fatalf("status = %q, want failed", status.last())
+	}
+}
+
+// TestProcessAudio_ModelFrozenAcrossRetries: an operator changing the
+// transcription model mid-run must not switch models between segments. Every
+// segment, on every attempt, runs the model recorded when the run was created.
+func TestProcessAudio_ModelFrozenAcrossRetries(t *testing.T) {
+	client := &fakeAudioClient{
+		probe:         &audio.ProbeResult{DurationMs: 3 * defaultSegmentMaxMs},
+		norm:          &audio.NormalizeResult{DurationMs: 3 * defaultSegmentMaxMs},
+		transcribe:    &audio.TranscribeSegmentResult{Utterances: []audio.Utterance{{Text: "hi", StartMs: 0, EndMs: 1_000, IsSpeech: true}}},
+		transcribeErr: grpcstatus.Error(codes.Unavailable, "gemini down"),
+	}
+	ext := &fakeExtractions{}
+	p := newAudioProc(baseAudioDeps(client, ext, &fakeSegments{}, &fakeUtterances{}, &fakeStatus{}, &fakeChunks{}))
+	task := ProcessAudioTask{AssetID: "a7", RunKey: "run-1", StorageKey: "assets/a7/original.mp3"}
+
+	if err := p.process(t.Context(), task, false); err == nil {
+		t.Fatal("first attempt: want a transient error")
+	}
+	p.Deps.Models = staticModels(map[string]string{"main": "changed-mid-run"})
+	client.transcribeErr = nil
+	if err := p.process(t.Context(), task, false); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	if len(client.models) < 3 {
+		t.Fatalf("want every segment transcribed, got calls %v", client.models)
+	}
+	for i, m := range client.models {
+		if m != "gemini-2.5-flash" {
+			t.Fatalf("call %d used %q, want the run's model gemini-2.5-flash (all: %v)", i, m, client.models)
+		}
+	}
+	if got := ext.m["a7|run-1"].TranscribeModel; got != "gemini-2.5-flash" {
+		t.Fatalf("run records %q, want gemini-2.5-flash", got)
+	}
+}
+
+// TestProcessAudio_PinnedModelWins: a pinned model beats the configured slot.
+func TestProcessAudio_PinnedModelWins(t *testing.T) {
+	client := &fakeAudioClient{
+		probe:         &audio.ProbeResult{DurationMs: 60_000},
+		norm:          &audio.NormalizeResult{DurationMs: 60_000},
+		transcribeErr: grpcstatus.Error(codes.Unavailable, "gemini down"),
+	}
+	p := newAudioProc(baseAudioDeps(client, &fakeExtractions{}, &fakeSegments{}, &fakeUtterances{}, &fakeStatus{}, &fakeChunks{}))
+	_ = p.process(t.Context(), ProcessAudioTask{AssetID: "a8", RunKey: "run-1", StorageKey: "assets/a8/original.mp3", PinnedModel: "gemini-pinned"}, false)
+	if len(client.models) == 0 || client.models[0] != "gemini-pinned" {
+		t.Fatalf("sent %v, want the pinned model", client.models)
 	}
 }
 

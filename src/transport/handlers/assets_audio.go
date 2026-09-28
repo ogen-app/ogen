@@ -229,7 +229,7 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 
 type finalizeAudioRequest struct {
 	AssetID string `json:"asset_id" validate:"required"`
-	// PinnedModel optionally overrides TRANSCRIBE_MODEL for this run.
+	// PinnedModel optionally overrides the configured transcription model for this run.
 	PinnedModel string `json:"model"`
 }
 

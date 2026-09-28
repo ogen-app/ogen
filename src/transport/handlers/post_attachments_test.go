@@ -209,7 +209,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		postVersionRepo := repository.NewPostVersionRepository(db)
 		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{}).Register(app)
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, "gemini-2.5-flash", 280, auth, nil).Register(app)
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, 280, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "att@example.com", "att-password")
 

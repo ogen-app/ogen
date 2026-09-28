@@ -18,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -92,11 +93,11 @@ type PostAttachmentsHandler struct {
 	video    VideoProber
 	// image runs the CON-281 light path (EXIF-strip + metadata + async alt text).
 	// Nil disables image attachments (image-service unwired, D6). recorder meters
-	// the alt-text vision call (CON-86, nil-safe); altTextModel/altTextMaxChars are
-	// the generation model + target length.
+	// the alt-text vision call (CON-86, nil-safe); altTextMaxChars is the
+	// generation target length. The model is the vision/alt_text slot, resolved
+	// per call.
 	image           ImagePreparer
 	recorder        *usage.Recorder
-	altTextModel    string
 	altTextMaxChars int
 	auth            fiber.Handler
 	limiter         *entitlements.Limiter // CON-295 media_storage_bytes quota (nil-safe)
@@ -110,7 +111,6 @@ func NewPostAttachmentsHandler(
 	prober VideoProber,
 	preparer ImagePreparer,
 	recorder *usage.Recorder,
-	altTextModel string,
 	altTextMaxChars int,
 	auth fiber.Handler,
 	limiter *entitlements.Limiter,
@@ -123,7 +123,6 @@ func NewPostAttachmentsHandler(
 		video:           prober,
 		image:           preparer,
 		recorder:        recorder,
-		altTextModel:    altTextModel,
 		altTextMaxChars: altTextMaxChars,
 		auth:            auth,
 		limiter:         limiter,
@@ -670,7 +669,7 @@ func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, 
 	res, err := h.image.GenerateAltText(ctx, imageclient.GenerateAltTextOptions{
 		SourceURL: getURL,
 		MaxChars:  h.altTextMaxChars,
-		Model:     h.altTextModel,
+		Model:     modelconfig.Model(ctx, modelconfig.FlowVision, modelconfig.SlotAltText),
 	})
 	if err != nil || res == nil {
 		slog.WarnContext(ctx, "attachment alt-text generation failed", logging.AttrComponent, "post_attachments", "attachment_id", attID, logging.AttrError, err)
