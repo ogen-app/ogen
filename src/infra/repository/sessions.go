@@ -25,6 +25,10 @@ type SessionRepository interface {
 	// stays valid and other tabs are unaffected.
 	SetDefaultWorkspace(ctx context.Context, sessionID, userID, tenantID string) error
 	Delete(ctx context.Context, id string) (bool, error)
+	// DeleteAllForAccount revokes every session of an account except
+	// exceptSessionID ("" keeps none), returning how many it removed. db lets it
+	// join the caller's transaction; nil uses the repository's DB.
+	DeleteAllForAccount(ctx context.Context, db bun.IDB, accountID, exceptSessionID string) (int, error)
 }
 
 type sessionRepository struct {
@@ -77,4 +81,20 @@ func (r *sessionRepository) Delete(ctx context.Context, id string) (bool, error)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+func (r *sessionRepository) DeleteAllForAccount(ctx context.Context, db bun.IDB, accountID, exceptSessionID string) (int, error) {
+	if db == nil {
+		db = r.db
+	}
+	q := db.NewDelete().Model((*models.Session)(nil)).Where("account_id = ?", accountID)
+	if exceptSessionID != "" {
+		q = q.Where("id != ?", exceptSessionID)
+	}
+	res, err := q.Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
