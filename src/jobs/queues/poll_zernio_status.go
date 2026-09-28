@@ -105,12 +105,12 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 		if zernio.IsTerminalAPIError(statusErr) {
 			jobs.ZernioPollFailed.Add(1)
 			appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
-				"poll terminal API error; awaiting reconcile", `{"error":"`+statusErr.Error()+`"}`)
+				"poll terminal API error; awaiting reconcile", errPayload(statusErr))
 			return nil
 		}
 		jobs.ZernioPollRetried.Add(1)
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
-			"poll transient error; River will retry", `{"error":"`+statusErr.Error()+`"}`)
+			"poll transient error; River will retry", errPayload(statusErr))
 		return statusErr
 	}
 	jobs.ZernioPollSucceeded.Add(1)
@@ -188,7 +188,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 	default:
 		// Defensive: unknown terminal state.
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
-			"unknown Zernio terminal status — ignoring", `{"zernio_status":"`+string(job.Status)+`"}`)
+			"unknown Zernio terminal status — ignoring", logs.MarshalCapped(map[string]string{"zernio_status": string(job.Status)}))
 	}
 	return nil
 }

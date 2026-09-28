@@ -634,34 +634,27 @@ func runPostAssistant(
 
 	// ── Handle versioning ────────────────────────────────────────────────────
 	if result.SaveVersion && result.Action == "edited" {
-		latest, err := repos.Versions.GetLatestByPostID(ctx, req.PostID)
-		if err != nil {
-			return nil, fmt.Errorf("get latest version: %w", err)
-		}
-		nextNum := 1
-		if latest != nil {
-			nextNum = latest.VersionNumber + 1
-		}
-
 		versionID, err := models.NewID()
 		if err != nil {
 			return nil, err
 		}
-		if err := repos.Versions.Create(ctx, &models.PostVersion{
-			ID:            versionID,
-			PostID:        req.PostID,
-			VersionNumber: nextNum,
-			Content:       result.UpdatedContent,
-			Note:          result.VersionNote,
-			Creator:       "assistant",
-		}); err != nil {
-			if isPostRemovedFKViolation(err) {
+		version := &models.PostVersion{
+			ID:      versionID,
+			PostID:  req.PostID,
+			Content: result.UpdatedContent,
+			Note:    result.VersionNote,
+			Creator: "assistant",
+		}
+		if err := repos.Versions.CreateNext(ctx, version); err != nil {
+			// CreateNext locks the post row first, so a post deleted mid-turn
+			// surfaces as ErrNoRows rather than an FK violation.
+			if errors.Is(err, sql.ErrNoRows) || isPostRemovedFKViolation(err) {
 				slog.WarnContext(ctx, "post deleted mid-turn; discarding assistant result", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID)
 				return nil, ErrPostRemovedDuringTurn
 			}
 			return nil, fmt.Errorf("create version: %w", err)
 		}
-		slog.InfoContext(ctx, "created version", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "version", nextNum, "note", result.VersionNote)
+		slog.InfoContext(ctx, "created version", logging.AttrComponent, "genkit.post_assistant", "post_id", req.PostID, "version", version.VersionNumber, "note", result.VersionNote)
 	}
 
 	// ── Update post content ──────────────────────────────────────────────────

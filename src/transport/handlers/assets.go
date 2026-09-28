@@ -390,7 +390,7 @@ func (h *AssetsHandler) Create(c *fiber.Ctx) error {
 	}
 
 	if h.onSave != nil {
-		go h.onSave(asset.ID, asset.Title, asset.Content, tenantID)
+		backgroundTasks.Go("assets.on_save", func() { h.onSave(asset.ID, asset.Title, asset.Content, tenantID) })
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(asset)
@@ -577,7 +577,7 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 
 	if h.onSave != nil {
 		tid, _ := tenantctx.From(reqCtx(c))
-		go h.onSave(asset.ID, asset.Title, asset.Content, tid)
+		backgroundTasks.Go("assets.on_save", func() { h.onSave(asset.ID, asset.Title, asset.Content, tid) })
 	}
 
 	res.AssetID = asset.ID
@@ -1201,7 +1201,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		}
 	case ingested:
 	case h.onSave != nil && embedInputChanged:
-		go h.onSave(asset.ID, asset.Title, asset.Content, tid)
+		backgroundTasks.Go("assets.on_save", func() { h.onSave(asset.ID, asset.Title, asset.Content, tid) })
 	}
 
 	h.decorateFile(asset)

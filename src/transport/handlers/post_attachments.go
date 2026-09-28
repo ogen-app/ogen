@@ -608,7 +608,10 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	// (CON-281 §10): the synchronous upload stays fast, and the generator writes
 	// only where alt text is still un-edited.
 	if imagePrepared && att.AltText == "" && h.image != nil {
-		go h.generateAttachmentAltText(detachedContext(c, session.TenantID), session.TenantID, att.ID, att.S3Key)
+		altCtx := detachedContext(c, session.TenantID)
+		backgroundTasks.Go("post_attachments.alt_text", func() {
+			h.generateAttachmentAltText(altCtx, session.TenantID, att.ID, att.S3Key)
+		})
 	}
 
 	h.hydratePresigned(c, att)
@@ -763,38 +766,27 @@ func (h *PostAttachmentsHandler) Update(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusUnprocessableEntity, "segment_index is only valid on a thread post")
 		}
 	}
-	var altText string
+	patch := repository.AttachmentPatch{
+		Position:        req.Position,
+		SetSegmentIndex: req.SegmentIndex.Present,
+		SegmentIndex:    req.SegmentIndex.Value,
+	}
 	if req.AltText != nil {
 		normalized, err := normalizeAltText(*req.AltText)
 		if err != nil {
 			return err
 		}
-		altText = normalized
+		patch.AltText = &normalized
 	}
 
-	if req.Position != nil {
-		if err := h.repo.UpdatePosition(reqCtx(c), att.ID, *req.Position); err != nil {
-			// UNIQUE(post_id, position): another attachment already holds the
-			// target position. Surface as 409 (not a raw 500) and point at the
-			// atomic reorder endpoint (CON-124).
-			if isUniqueViolationOn(err, postAttachmentsPositionConstraint) {
-				return fiber.NewError(fiber.StatusConflict,
-					"another attachment already holds that position; PATCH /attachments/reorder to reorder the whole list atomically")
-			}
-			return err
+	if err := h.repo.Patch(reqCtx(c), att.ID, patch); err != nil {
+		// UNIQUE(post_id, position): another attachment already holds the target
+		// position. Point the caller at the atomic reorder endpoint instead.
+		if isUniqueViolationOn(err, postAttachmentsPositionConstraint) {
+			return fiber.NewError(fiber.StatusConflict,
+				"another attachment already holds that position; PATCH /attachments/reorder to reorder the whole list atomically")
 		}
-	}
-	if req.AltText != nil {
-		if err := h.repo.UpdateAltText(reqCtx(c), att.ID, altText); err != nil {
-			return err
-		}
-	}
-	if req.SegmentIndex.Present {
-		// Optional[int].Value is already the *int UpdateSegmentIndex wants: a
-		// number sets the segment, an explicit null (nil) detaches it.
-		if err := h.repo.UpdateSegmentIndex(reqCtx(c), att.ID, req.SegmentIndex.Value); err != nil {
-			return err
-		}
+		return err
 	}
 
 	updated, err := h.repo.GetByID(reqCtx(c), att.ID)

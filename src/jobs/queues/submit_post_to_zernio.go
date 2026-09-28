@@ -123,14 +123,14 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	//     can keep polling against the same id.
 	if post.PublisherPostID != "" {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
-			"calling Zernio POST /posts/:id/retry", `{"publisher_post_id":"`+post.PublisherPostID+`"}`)
+			"calling Zernio POST /posts/:id/retry", logs.MarshalCapped(map[string]string{"publisher_post_id": post.PublisherPostID}))
 		job, retryErr := p.Deps.Client.Retry(ctx, post.PublisherPostID)
 		if retryErr != nil {
 			if zernio.IsTerminalAPIError(retryErr) {
 				return p.terminal(ctx, post, "zernio_retry_rejected", retryErr.Error())
 			}
 			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-				"transient Zernio retry error; River will retry", `{"error":"`+retryErr.Error()+`"}`)
+				"transient Zernio retry error; River will retry", errPayload(retryErr))
 			return retryErr
 		}
 		return p.persistSuccess(ctx, post, job, "")
@@ -188,7 +188,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 		if tErr != nil {
 			jobs.ZernioSubmitRetried.Add(1)
 			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-				"transient error uploading thread media to Zernio; River will retry", `{"error":"`+tErr.Error()+`"}`)
+				"transient error uploading thread media to Zernio; River will retry", errPayload(tErr))
 			return tErr
 		}
 		variant.PlatformSpecificData = &zernio.PlatformSpecificData{ThreadItems: threadItems}
@@ -197,7 +197,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 		if mediaErr != nil {
 			jobs.ZernioSubmitRetried.Add(1)
 			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-				"transient error uploading media to Zernio; River will retry", `{"error":"`+mediaErr.Error()+`"}`)
+				"transient error uploading media to Zernio; River will retry", errPayload(mediaErr))
 			return mediaErr
 		}
 		mediaItems = items
@@ -258,7 +258,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 				// again and re-attempts recovery rather than dead-ending the post.
 				jobs.ZernioSubmitRetried.Add(1)
 				appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-					"transient error locating dedupe match; River will retry", `{"error":"`+ferr.Error()+`"}`)
+					"transient error locating dedupe match; River will retry", errPayload(ferr))
 				return ferr
 			case recovered != nil && !recovered.Status.IsTerminal():
 				// Still-pending earlier job (almost always this post's own prior
@@ -291,7 +291,7 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 		// Transient — let River retry per InsertOpts.
 		jobs.ZernioSubmitRetried.Add(1)
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-			"transient Zernio error; River will retry", `{"error":"`+submitErr.Error()+`"}`)
+			"transient Zernio error; River will retry", errPayload(submitErr))
 		return submitErr
 	}
 
@@ -498,7 +498,7 @@ func (p *SubmitPostProcessor) enqueuePoll(ctx context.Context, post *models.Post
 	}
 	if _, err := client.Insert(ctx, PollZernioStatusTask{PostID: post.ID}, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: when})); err != nil {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskFailed, post.Status, post.Status,
-			"failed to enqueue poll_zernio_status", `{"error":"`+err.Error()+`"}`)
+			"failed to enqueue poll_zernio_status", errPayload(err))
 	}
 }
 
@@ -647,6 +647,12 @@ func appendLog(
 		Summary:    summary,
 		Payload:    logs.SanitizeAndCap(payload),
 	})
+}
+
+// errPayload encodes err as a {"error": "..."} log payload. Error text often
+// carries quotes, so it must be marshalled rather than concatenated.
+func errPayload(err error) string {
+	return logs.MarshalCapped(map[string]string{"error": err.Error()})
 }
 
 // MarshalSubmit is exported so tests can produce a payload byte slice
