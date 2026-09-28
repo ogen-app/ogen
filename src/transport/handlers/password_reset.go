@@ -53,6 +53,7 @@ type PasswordResetHandler struct {
 	db          *bun.DB
 	userRepo    repository.UserRepository
 	accountRepo repository.AccountRepository
+	sessions    repository.SessionRepository
 	emailJobs   PasswordResetEnqueuer
 	appBaseURL  string
 
@@ -74,6 +75,7 @@ func NewPasswordResetHandler(db *bun.DB, userRepo repository.UserRepository, acc
 		db:           db,
 		userRepo:     userRepo,
 		accountRepo:  accountRepo,
+		sessions:     repository.NewSessionRepository(db),
 		appBaseURL:   appBaseURL,
 		emailJobs:    emailJobs,
 		activity:     rec,
@@ -300,12 +302,8 @@ func (h *PasswordResetHandler) Confirm(c *fiber.Ctx) error {
 		// intruder across every workspace the account can reach, and confirm
 		// deliberately opens no session (POST /api/sessions stays the only thing
 		// that starts one), so there is no "current" session to preserve.
-		if _, err := tx.NewDelete().Model((*models.Session)(nil)).
-			Where("account_id = ?", accountID).
-			Exec(ctx); err != nil {
-			return err
-		}
-		return nil
+		_, err = h.sessions.DeleteAllForAccount(ctx, tx, accountID, "")
+		return err
 	})
 	if err != nil {
 		if errors.Is(err, errResetInvalid) {

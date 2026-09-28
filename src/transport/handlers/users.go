@@ -25,6 +25,7 @@ type UsersHandler struct {
 	// member creates their account, and password changes rotate the credential on
 	// the account rather than the membership row.
 	accountRepo repository.AccountRepository
+	sessions    repository.SessionRepository
 	// settingRepo backed the setup_complete bootstrap gate, removed in CON-97
 	// (signup via POST /api/tenants is the sole bootstrap). Retained on the
 	// constructor to avoid churn across the ~37 call sites; revisit when
@@ -39,7 +40,7 @@ type UsersHandler struct {
 
 // NewUsersHandler builds the handler. rec and limiter are nil-safe.
 func NewUsersHandler(db *bun.DB, repo repository.UserRepository, accountRepo repository.AccountRepository, settingRepo repository.SettingRepository, auth fiber.Handler, rec *activity.Recorder, limiter *entitlements.Limiter) *UsersHandler {
-	return &UsersHandler{db: db, repo: repo, accountRepo: accountRepo, settingRepo: settingRepo, auth: auth, activity: rec, limiter: limiter}
+	return &UsersHandler{db: db, repo: repo, accountRepo: accountRepo, sessions: repository.NewSessionRepository(db), settingRepo: settingRepo, auth: auth, activity: rec, limiter: limiter}
 }
 
 func (h *UsersHandler) Register(app *fiber.App) {
@@ -413,10 +414,7 @@ func (h *UsersHandler) changePassword(ctx context.Context, user *models.User, re
 		}
 		// Revoke the account's other sessions: a password change may be locking
 		// out an intruder across every workspace the account can reach.
-		_, err := tx.NewDelete().Model((*models.Session)(nil)).
-			Where("account_id = ?", user.AccountID).
-			Where("id != ?", keepSessionID).
-			Exec(ctx)
+		_, err := h.sessions.DeleteAllForAccount(ctx, tx, user.AccountID, keepSessionID)
 		return err
 	})
 }
