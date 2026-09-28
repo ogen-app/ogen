@@ -117,11 +117,13 @@ func embedChunks(ctx context.Context, embedder chunkEmbedder, assetID string, so
 	return chunks, stats
 }
 
-// storeChunks upserts the embedded chunks. An empty set is skipped unless
-// upsertEmpty, since upserting nothing replaces the asset's chunks with none.
-// A nil store is a no-op.
-func storeChunks(ctx context.Context, store chunkUpserter, op, assetID string, chunks []models.AssetChunk, upsertEmpty bool) error {
-	if store == nil || (len(chunks) == 0 && !upsertEmpty) {
+// storeChunks replaces the asset's chunks with the embedded ones. An empty set
+// is written only when clearStale and nothing was embeddable, clearing chunks
+// left over from earlier content of a re-ingested asset. When every embed
+// failed nothing is written, so the previous chunks stay searchable through a
+// retry. A nil store is a no-op.
+func storeChunks(ctx context.Context, store chunkUpserter, op, assetID string, chunks []models.AssetChunk, stats embedStats, clearStale bool) error {
+	if store == nil || (len(chunks) == 0 && (!clearStale || stats.Attempts > 0)) {
 		return nil
 	}
 	if err := store.UpsertChunks(ctx, assetID, chunks); err != nil {
@@ -163,9 +165,21 @@ type assetStatusWriter struct {
 	// label and kind word the notification (see notifyAssetStatus).
 	label string
 	kind  string
-	// marker, when set, lets fail persist its code and reason; without it fail
-	// writes the bare failed status.
+	// marker persists fail's code and reason. When unset, assets is used if it
+	// implements assetFailureMarker; otherwise fail writes the bare status.
 	marker assetFailureMarker
+}
+
+// unavailableReason is the tenant-visible reason when a dependency (embedder,
+// processing service) stays down for every attempt.
+func (w assetStatusWriter) unavailableReason() string {
+	return w.label + " processing is temporarily unavailable — please try again"
+}
+
+// notConfiguredReason is the tenant-visible reason when the deployment lacks
+// what the ingest needs; retrying cannot help.
+func (w assetStatusWriter) notConfiguredReason() string {
+	return w.label + " processing is not configured"
 }
 
 func (w assetStatusWriter) set(ctx context.Context, assetID, status string) error {
@@ -182,13 +196,18 @@ func (w assetStatusWriter) set(ctx context.Context, assetID, status string) erro
 // fail marks the asset failed with a machine-readable code and a tenant-visible
 // reason. Without a marker the code and reason are dropped.
 func (w assetStatusWriter) fail(ctx context.Context, assetID, code, reason string) error {
-	if w.marker == nil {
-		return w.set(ctx, assetID, models.AssetStatusFailed)
-	}
 	if w.assets == nil {
 		return nil
 	}
-	if err := w.marker.MarkFailed(ctx, assetID, code, reason); err != nil {
+	marker := w.marker
+	if marker == nil {
+		m, ok := w.assets.(assetFailureMarker)
+		if !ok {
+			return w.set(ctx, assetID, models.AssetStatusFailed)
+		}
+		marker = m
+	}
+	if err := marker.MarkFailed(ctx, assetID, code, reason); err != nil {
 		return fmt.Errorf("%s %s: mark failed: %w", w.op, assetID, err)
 	}
 	notifyAssetStatus(ctx, w.notifier, w.assets, assetID, models.AssetStatusFailed, w.label, w.kind)

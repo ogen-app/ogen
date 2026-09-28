@@ -213,6 +213,37 @@ func TestProcessAudio_Success_TimeAnchoredChunks(t *testing.T) {
 	}
 }
 
+// TestProcessAudio_AllEmbedsFail_FailsOnLastAttempt: a transcript whose every
+// chunk fails to embed retries, and on the last attempt settles to failed with
+// a reason instead of leaving the asset in "processing".
+func TestProcessAudio_AllEmbedsFail_FailsOnLastAttempt(t *testing.T) {
+	run := func(lastAttempt bool) (*fakeStatus, error) {
+		client := &fakeAudioClient{
+			probe: &audio.ProbeResult{DurationMs: 60_000, Channels: 1, SampleRate: 16_000},
+			norm:  &audio.NormalizeResult{DurationMs: 60_000, Channels: 1, SampleRate: 16_000},
+			transcribe: &audio.TranscribeSegmentResult{Utterances: []audio.Utterance{
+				{Text: "hello world", StartMs: 0, EndMs: 2_000, IsSpeech: true, Language: "en"},
+			}},
+		}
+		status := &fakeStatus{}
+		deps := baseAudioDeps(client, &fakeExtractions{}, &fakeSegments{}, &fakeUtterances{}, status, &fakeChunks{})
+		deps.Embedder = &fakeEmbedder{failAll: true}
+		task := ProcessAudioTask{AssetID: "a9", RunKey: "run-1", StorageKey: "assets/a9/original.mp3", MimeType: "audio/mpeg"}
+		return status, newAudioProc(deps).process(t.Context(), task, lastAttempt)
+	}
+
+	if status, err := run(false); err == nil || status.last() == models.AssetStatusFailed {
+		t.Fatalf("before the last attempt: err %v status %q, want a retry error and no failed status", err, status.last())
+	}
+	status, err := run(true)
+	if err != nil {
+		t.Fatalf("last attempt must settle without an error: %v", err)
+	}
+	if status.last() != models.AssetStatusFailed || status.failCode != models.UploadCodeServiceUnavailable || status.failReason == "" {
+		t.Fatalf("last attempt: status %q code %q reason %q, want failed with service_unavailable", status.last(), status.failCode, status.failReason)
+	}
+}
+
 type fakeContent struct{ got map[string]string }
 
 func (f *fakeContent) SetContent(_ context.Context, id, content string) error {

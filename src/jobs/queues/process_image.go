@@ -173,10 +173,12 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	}
 	status := p.statusWriter()
 	if p.Deps.Storage == nil || p.Deps.Extractions == nil || p.Deps.Blocks == nil {
-		_ = status.set(ctx, in.AssetID, models.AssetStatusFailed)
+		_ = status.fail(ctx, in.AssetID, models.UploadCodeInternalError, status.notConfiguredReason())
 		return fmt.Errorf("process_image %s: storage/repos not configured", in.AssetID)
 	}
-	giveUp := func() error { return status.set(ctx, in.AssetID, models.AssetStatusFailed) }
+	giveUp := func() error {
+		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, status.unavailableReason())
+	}
 	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_image", in.AssetID, lastAttempt, giveUp); !ok {
 		return err
 	}
@@ -544,7 +546,7 @@ func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, 
 	if _, err := stats.settle(false); err != nil {
 		return stats.Failures, fmt.Errorf("process_image %s: %w", in.AssetID, err)
 	}
-	if err := storeChunks(ctx, p.Deps.Chunks, "process_image", in.AssetID, chunks, false); err != nil {
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_image", in.AssetID, chunks, stats, false); err != nil {
 		return stats.Failures, err
 	}
 	// Metered once the chunks are stored, so a retry after a failed store
@@ -602,7 +604,7 @@ func (p *ProcessImageProcessor) terminalReject(ctx context.Context, in ProcessIm
 		return fmt.Errorf("process_image %s: mark extraction failed: %w", in.AssetID, err)
 	}
 	slog.WarnContext(ctx, "image ingestion rejected", logging.AttrComponent, "jobs.process_image", "asset_id", in.AssetID, "reason", reason)
-	return p.statusWriter().set(ctx, in.AssetID, models.AssetStatusFailed)
+	return p.statusWriter().fail(ctx, in.AssetID, code, reason)
 }
 
 func (p *ProcessImageProcessor) statusWriter() assetStatusWriter {

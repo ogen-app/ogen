@@ -80,21 +80,29 @@ func TestEmbedChunks(t *testing.T) {
 func TestStoreChunks(t *testing.T) {
 	ctx := t.Context()
 	store := &fakeChunks{}
-	if err := storeChunks(ctx, store, "op", "a1", nil, false); err != nil || store.calls != 0 {
-		t.Fatalf("empty set without upsertEmpty: err %v calls %d, want skipped", err, store.calls)
+	allFailed := embedStats{Attempts: 2, Failures: 2}
+	if err := storeChunks(ctx, store, "op", "a1", nil, allFailed, true); err != nil || store.calls != 0 {
+		t.Fatalf("every embed failed: err %v calls %d, want skipped to keep prior chunks", err, store.calls)
 	}
-	if err := storeChunks(ctx, store, "op", "a1", nil, true); err != nil || store.calls != 1 {
-		t.Fatalf("empty set with upsertEmpty: err %v calls %d, want 1 call", err, store.calls)
+	if err := storeChunks(ctx, store, "op", "a1", nil, embedStats{}, false); err != nil || store.calls != 0 {
+		t.Fatalf("nothing embeddable, first ingest: err %v calls %d, want skipped", err, store.calls)
 	}
-	if err := storeChunks(ctx, nil, "op", "a1", []models.AssetChunk{{ID: "a1:0"}}, true); err != nil {
+	if err := storeChunks(ctx, store, "op", "a1", nil, embedStats{}, true); err != nil || store.calls != 1 {
+		t.Fatalf("nothing embeddable, re-ingest: err %v calls %d, want 1 call clearing stale chunks", err, store.calls)
+	}
+	one := []models.AssetChunk{{ID: "a1:0"}}
+	if err := storeChunks(ctx, nil, "op", "a1", one, embedStats{Attempts: 1, Embedded: 1}, false); err != nil {
 		t.Fatalf("nil store: %v", err)
 	}
 	failing := &failingChunks{}
-	err := storeChunks(ctx, failing, "process_x", "a1", []models.AssetChunk{{ID: "a1:0"}}, false)
+	err := storeChunks(ctx, failing, "process_x", "a1", one, embedStats{Attempts: 1, Embedded: 1}, false)
 	if err == nil || err.Error() != "process_x a1: store chunks: chunks: db down" {
 		t.Fatalf("store error = %v", err)
 	}
 }
+
+// statusOnly hides fakeStatus's MarkFailed, modelling a store without one.
+type statusOnly struct{ assetStatusUpdater }
 
 type failingChunks struct{}
 
@@ -128,7 +136,7 @@ func TestAssetStatusWriter(t *testing.T) {
 	ctx := t.Context()
 
 	plain := &fakeStatus{}
-	w := assetStatusWriter{op: "op", assets: plain}
+	w := assetStatusWriter{op: "op", assets: statusOnly{plain}}
 	if err := w.set(ctx, "a1", models.AssetStatusProcessing); err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +145,15 @@ func TestAssetStatusWriter(t *testing.T) {
 	}
 	if plain.last() != models.AssetStatusFailed || plain.failCode != "" {
 		t.Fatalf("without a marker fail must write the bare status: last %q code %q", plain.last(), plain.failCode)
+	}
+
+	implicit := &fakeStatus{}
+	w = assetStatusWriter{op: "op", assets: implicit}
+	if err := w.fail(ctx, "a1", models.UploadCodeServiceUnavailable, "down"); err != nil {
+		t.Fatal(err)
+	}
+	if implicit.failCode != models.UploadCodeServiceUnavailable || implicit.failReason != "down" {
+		t.Fatalf("an assets store that can mark failures must record code+reason: %q %q", implicit.failCode, implicit.failReason)
 	}
 
 	marked := &fakeStatus{}
