@@ -94,63 +94,41 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	if err != nil {
 		return fmt.Errorf("submit: load post %s: %w", task.PostID, err)
 	}
-	// Scope the rest of the job to the owning tenant.
 	ctx = tenantctx.With(ctx, post.TenantID)
 	if post.Status != models.PostStatusScheduled {
-		// User cancelled or reconciliation moved this post; abort
-		// quietly. The poll task does the same check.
+		// User cancelled or reconciliation moved this post; abort quietly. The
+		// poll task does the same check.
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, post.Status, post.Status,
 			"submit aborted: post no longer Scheduled", `{"reason":"status_changed"}`)
 		return nil
 	}
-	// Don't publish for a suspended/deleted tenant. The post stays
-	// Scheduled, so it resumes if the tenant is reactivated (or the reconcile
-	// sweep — also tenant-gated — leaves it alone).
-	if active, aerr := tenantIsActive(ctx, p.Tenants, post.TenantID); aerr != nil {
-		return fmt.Errorf("submit: tenant status %s: %w", post.TenantID, aerr)
-	} else if !active {
+	// A suspended/deleted tenant publishes nothing. The post stays Scheduled so
+	// it resumes if the tenant is reactivated.
+	active, err := tenantIsActive(ctx, p.Tenants, post.TenantID)
+	if err != nil {
+		return fmt.Errorf("submit: tenant status %s: %w", post.TenantID, err)
+	}
+	if !active {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, post.Status, post.Status,
 			"submit aborted: tenant not active", `{"reason":"tenant_not_active"}`)
 		return nil
 	}
-	// Idempotency / manual retry path:
-	//   - On a fresh submit, PublisherPostID is empty and we POST /posts.
-	//   - On a manual retry of a previously-failed Post (the user
-	//     moved Failed→ReadyForPublish, then ReadyForPublish→Scheduled),
-	//     PublisherPostID is still set from the prior attempt. Calling
-	//     Zernio's /posts/:id/retry endpoint reuses the same job
-	//     identity so we don't create a duplicate Zernio post and
-	//     can keep polling against the same id.
+	// A manual retry of a previously-failed post still carries the prior
+	// attempt's PublisherPostID: Zernio's retry endpoint reuses that job
+	// identity instead of creating a duplicate post.
 	if post.PublisherPostID != "" {
-		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
-			"calling Zernio POST /posts/:id/retry", logs.MarshalCapped(map[string]string{"publisher_post_id": post.PublisherPostID}))
-		job, retryErr := p.Deps.Client.Retry(ctx, post.PublisherPostID)
-		if retryErr != nil {
-			if zernio.IsTerminalAPIError(retryErr) {
-				return p.terminal(ctx, post, "zernio_retry_rejected", retryErr.Error())
-			}
-			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-				"transient Zernio retry error; River will retry", errPayload(retryErr))
-			return retryErr
-		}
-		return p.persistSuccess(ctx, post, job, "")
+		return p.retryExisting(ctx, post)
 	}
 
 	platform := post.Platform
 	if platform == nil {
 		return p.terminal(ctx, post, "missing_platform", "post has no platform set")
 	}
-
 	supported := zernio.LookupSupportedBySqid(platform.ID)
 	if supported == nil {
 		return p.terminal(ctx, post, "unsupported_platform",
 			fmt.Sprintf("platform %s (%s) is not Zernio-supported", platform.Name, platform.ID))
 	}
-
-	// Resolve which same-platform account this post publishes to.
-	// An explicit selection (post.SocialAccountID) is validated and used
-	// verbatim; otherwise auto-select when the platform has exactly one
-	// active account, and require an explicit choice when it has more.
 	if p.Deps.ProfileID == nil {
 		return p.terminal(ctx, post, "integration_disabled", "Zernio integration is not configured")
 	}
@@ -160,85 +138,16 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	}
 	accountID, aerr := p.resolveAccountID(ctx, post, profileID, supported.ZernioID)
 	if accountID == "" {
-		// resolveAccountID has either written a terminal PostLog (aerr == nil,
-		// so this returns nil and River does not retry) or hit a transient
-		// error River should retry (aerr != nil). An account id is never "".
+		// resolveAccountID either wrote a terminal PostLog (aerr == nil, no
+		// retry) or hit a transient error River should retry.
 		return aerr
 	}
 
-	when := time.Now().UTC().Add(time.Minute)
-	if post.ScheduledAt != nil {
-		when = post.ScheduledAt.UTC()
+	variant, mediaItems, err := p.buildVariant(ctx, post, supported.ZernioID, accountID)
+	if err != nil {
+		return err
 	}
-	// The instant (ScheduledFor) is the source of truth and stays UTC;
-	// the workspace timezone is echoed so Zernio renders the
-	// schedule in the operator's zone. Defaults to UTC when unset.
-	_, tzName := settings.WorkspaceTimezone(ctx, p.Deps.SettingRepo)
-
-	// Upload the post's attachments to Zernio and reference
-	// them as mediaItems. A thread carries its media inside per-segment
-	// threadItems (built below); an ordinary post carries a flat top-level
-	// mediaItems array. Either upload failure is transient (network / Zernio
-	// media endpoint) so River retries; media isn't lost because the post
-	// stays Scheduled.
-	variant := zernio.PlatformVariant{Platform: supported.ZernioID, AccountID: accountID}
-	var mediaItems []map[string]any
-	if post.IsThread() {
-		threadItems, tErr := p.buildThreadItems(ctx, post)
-		if tErr != nil {
-			jobs.ZernioSubmitRetried.Add(1)
-			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-				"transient error uploading thread media to Zernio; River will retry", errPayload(tErr))
-			return tErr
-		}
-		variant.PlatformSpecificData = &zernio.PlatformSpecificData{ThreadItems: threadItems}
-	} else {
-		items, mediaErr := p.buildMediaItems(ctx, post)
-		if mediaErr != nil {
-			jobs.ZernioSubmitRetried.Add(1)
-			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-				"transient error uploading media to Zernio; River will retry", errPayload(mediaErr))
-			return mediaErr
-		}
-		mediaItems = items
-	}
-
-	// post.Content is the full thread body; Zernio's top-level content
-	// must be just the root message. Derive it from the segments, falling back to
-	// the body for a non-thread post (or the defensive empty-segment case).
-	topContent := post.Content
-	if post.IsThread() && len(post.ThreadSegments) > 0 {
-		topContent = post.ThreadSegments.RootContent()
-	}
-	// None of the networks render Markdown — Zernio publishes the content
-	// string verbatim — so flatten it to the plain text a caption actually shows
-	// before it leaves Ogen, otherwise `**bold**` and `[text](url)` land literally
-	// on X/Threads. The editor's Markdown source (posts.content) is untouched; only
-	// this outbound copy is flattened. Thread segments are flattened the same way in
-	// buildThreadItems, so every message that ships is plain text.
-	topContent = platforms.FlattenSocialText(topContent)
-
-	req := zernio.SubmitRequest{
-		// For a thread, top-level Content must be the ROOT segment. As of CON-284
-		// R2 post.Content is the full delimited thread body (the canonical draft),
-		// so we take the root from the derived segments (topContent above), then
-		// flatten it — keeping the CON-129 dedupe-recovery invariant intact
-		// (recovery matches on req.Content, the flattened root; FindByContent
-		// flattens nothing itself, so both sides agree). The chain rides in
-		// Platforms[0].PlatformSpecificData.ThreadItems and top-level MediaItems
-		// stays empty. Zernio publishes from threadItems when present; confirm
-		// against docs.zernio.com during rollout that it does NOT also post the
-		// top-level content (if it does, blank it here).
-		Content:      topContent,
-		Platforms:    []zernio.PlatformVariant{variant},
-		ScheduledFor: when,
-		Timezone:     tzName,
-		MediaItems:   mediaItems,
-		// Pass the title through for platforms that need it
-		// explicitly (YouTube video). omitempty drops it for the common case.
-		Title: post.Title,
-	}
-
+	req := p.buildRequest(ctx, post, variant, mediaItems)
 	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, post.Status, post.Status,
 		"calling Zernio POST /posts", logs.MarshalCapped(req))
 
@@ -246,57 +155,135 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	job, submitErr := p.Deps.Client.Submit(ctx, req)
 	jobs.ObserveZernioCall(time.Since(apiStart))
 	if submitErr != nil {
-		// 24h dedupe recovery. Search the whole dedupe window across all
-		// statuses, matching on the content we actually submitted — req.Content is
-		// the flattened body, and FindByContent matches it verbatim, so
-		// both sides compare the same string.
-		if errors.Is(submitErr, zernio.ErrDuplicateContent) {
-			recovered, ferr := p.Deps.Client.FindByContent(ctx, req.Content, 24*time.Hour)
-			switch {
-			case ferr != nil:
-				// Couldn't query Zernio to recover — transient; retry, which 409s
-				// again and re-attempts recovery rather than dead-ending the post.
-				jobs.ZernioSubmitRetried.Add(1)
-				appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-					"transient error locating dedupe match; River will retry", errPayload(ferr))
-				return ferr
-			case recovered != nil && !recovered.Status.IsTerminal():
-				// Still-pending earlier job (almost always this post's own prior
-				// attempt): adopt it and keep polling. Count it like the main
-				// success path (persistSuccess doesn't, so this is exactly once).
-				jobs.ZernioSubmitSucceeded.Add(1)
-				appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, post.Status, post.Status,
-					"recovered pending Zernio job after 409 dedupe", logs.MarshalCapped(recovered))
-				return p.persistSuccess(ctx, post, recovered, accountID)
-			case recovered != nil:
-				// Match is terminal (published/failed/partial): the content already
-				// ran on Zernio in this window. Don't adopt a finished job — fail
-				// with the cause named so the user can act.
-				jobs.ZernioSubmitFailed.Add(1)
-				return p.terminal(ctx, post, "zernio_duplicate_content",
-					fmt.Sprintf("identical content was already %s on Zernio within the last 24h (job %s); edit the content to submit again",
-						recovered.Status, recovered.ID))
-			default:
-				// Duplicate per Zernio, but no matching job located (content
-				// normalisation mismatch, or beyond the search window). Name it.
-				jobs.ZernioSubmitFailed.Add(1)
-				return p.terminal(ctx, post, "zernio_duplicate_content",
-					"Zernio rejected this as duplicate content submitted within the last 24h; edit the content or wait for the dedupe window to pass")
-			}
-		}
-		if zernio.IsTerminalAPIError(submitErr) {
-			jobs.ZernioSubmitFailed.Add(1)
-			return p.terminal(ctx, post, "zernio_rejected", submitErr.Error())
-		}
-		// Transient — let River retry per InsertOpts.
-		jobs.ZernioSubmitRetried.Add(1)
-		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
-			"transient Zernio error; River will retry", errPayload(submitErr))
-		return submitErr
+		return p.handleSubmitErr(ctx, post, req, accountID, submitErr)
 	}
-
 	jobs.ZernioSubmitSucceeded.Add(1)
 	return p.persistSuccess(ctx, post, job, accountID)
+}
+
+// retryExisting re-drives a prior Zernio job through POST /posts/:id/retry.
+func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Post) error {
+	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
+		"calling Zernio POST /posts/:id/retry", logs.MarshalCapped(map[string]string{"publisher_post_id": post.PublisherPostID}))
+	job, err := p.Deps.Client.Retry(ctx, post.PublisherPostID)
+	if err == nil {
+		return p.persistSuccess(ctx, post, job, "")
+	}
+	if zernio.IsTerminalAPIError(err) {
+		return p.terminal(ctx, post, "zernio_retry_rejected", err.Error())
+	}
+	p.logRetried(ctx, post, "transient Zernio retry error; River will retry", err)
+	return err
+}
+
+// buildVariant uploads the post's attachments to Zernio and returns the
+// platform variant plus the top-level mediaItems. A thread carries its media
+// inside per-segment threadItems; an ordinary post carries a flat mediaItems
+// array. An upload failure is transient: the post stays Scheduled and River
+// retries.
+func (p *SubmitPostProcessor) buildVariant(ctx context.Context, post *models.Post, zernioPlatform, accountID string) (zernio.PlatformVariant, []map[string]any, error) {
+	variant := zernio.PlatformVariant{Platform: zernioPlatform, AccountID: accountID}
+	if post.IsThread() {
+		threadItems, err := p.buildThreadItems(ctx, post)
+		if err != nil {
+			return variant, nil, p.transient(ctx, post, "transient error uploading thread media to Zernio; River will retry", err)
+		}
+		variant.PlatformSpecificData = &zernio.PlatformSpecificData{ThreadItems: threadItems}
+		return variant, nil, nil
+	}
+	items, err := p.buildMediaItems(ctx, post)
+	if err != nil {
+		return variant, nil, p.transient(ctx, post, "transient error uploading media to Zernio; River will retry", err)
+	}
+	return variant, items, nil
+}
+
+// buildRequest assembles the submit request. ScheduledFor is the UTC source of
+// truth; the workspace timezone is echoed so Zernio renders the schedule in the
+// operator's zone.
+func (p *SubmitPostProcessor) buildRequest(ctx context.Context, post *models.Post, variant zernio.PlatformVariant, mediaItems []map[string]any) zernio.SubmitRequest {
+	when := time.Now().UTC().Add(time.Minute)
+	if post.ScheduledAt != nil {
+		when = post.ScheduledAt.UTC()
+	}
+	_, tzName := settings.WorkspaceTimezone(ctx, p.Deps.SettingRepo)
+
+	// post.Content is the full delimited thread body; Zernio's top-level
+	// content must be just the root message, and the chain rides in
+	// ThreadItems. Networks render no Markdown, so the outbound copy is
+	// flattened to the plain text a caption shows; the dedupe recovery matches
+	// on this same flattened string.
+	topContent := post.Content
+	if post.IsThread() && len(post.ThreadSegments) > 0 {
+		topContent = post.ThreadSegments.RootContent()
+	}
+	return zernio.SubmitRequest{
+		Content:      platforms.FlattenSocialText(topContent),
+		Platforms:    []zernio.PlatformVariant{variant},
+		ScheduledFor: when,
+		Timezone:     tzName,
+		MediaItems:   mediaItems,
+		// Platforms that need an explicit title (YouTube video) get it;
+		// omitempty drops it otherwise.
+		Title: post.Title,
+	}
+}
+
+// handleSubmitErr settles a failed submit: dedupe recovery for a 409, terminal
+// for a rejected request, otherwise a River retry.
+func (p *SubmitPostProcessor) handleSubmitErr(ctx context.Context, post *models.Post, req zernio.SubmitRequest, accountID string, err error) error {
+	if errors.Is(err, zernio.ErrDuplicateContent) {
+		return p.recoverDuplicate(ctx, post, req.Content, accountID)
+	}
+	if zernio.IsTerminalAPIError(err) {
+		jobs.ZernioSubmitFailed.Add(1)
+		return p.terminal(ctx, post, "zernio_rejected", err.Error())
+	}
+	return p.transient(ctx, post, "transient Zernio error; River will retry", err)
+}
+
+// recoverDuplicate handles Zernio's 24h dedupe 409 by searching the whole
+// window, across all statuses, for the content actually submitted.
+func (p *SubmitPostProcessor) recoverDuplicate(ctx context.Context, post *models.Post, content, accountID string) error {
+	recovered, err := p.Deps.Client.FindByContent(ctx, content, 24*time.Hour)
+	switch {
+	case err != nil:
+		// Retrying 409s again and re-attempts recovery rather than dead-ending
+		// the post.
+		return p.transient(ctx, post, "transient error locating dedupe match; River will retry", err)
+	case recovered != nil && !recovered.Status.IsTerminal():
+		// A still-pending earlier job (almost always this post's own prior
+		// attempt): adopt it and keep polling. Counted here because
+		// persistSuccess doesn't count.
+		jobs.ZernioSubmitSucceeded.Add(1)
+		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, post.Status, post.Status,
+			"recovered pending Zernio job after 409 dedupe", logs.MarshalCapped(recovered))
+		return p.persistSuccess(ctx, post, recovered, accountID)
+	case recovered != nil:
+		// The content already ran to a terminal state in this window; adopting a
+		// finished job would be wrong, so fail with the cause named.
+		jobs.ZernioSubmitFailed.Add(1)
+		return p.terminal(ctx, post, "zernio_duplicate_content",
+			fmt.Sprintf("identical content was already %s on Zernio within the last 24h (job %s); edit the content to submit again",
+				recovered.Status, recovered.ID))
+	default:
+		// Duplicate per Zernio, but no matching job located (normalisation
+		// mismatch, or beyond the search window).
+		jobs.ZernioSubmitFailed.Add(1)
+		return p.terminal(ctx, post, "zernio_duplicate_content",
+			"Zernio rejected this as duplicate content submitted within the last 24h; edit the content or wait for the dedupe window to pass")
+	}
+}
+
+// transient counts a retried submit, logs it and returns err so River retries.
+func (p *SubmitPostProcessor) transient(ctx context.Context, post *models.Post, msg string, err error) error {
+	jobs.ZernioSubmitRetried.Add(1)
+	p.logRetried(ctx, post, msg, err)
+	return err
+}
+
+func (p *SubmitPostProcessor) logRetried(ctx context.Context, post *models.Post, msg string, err error) {
+	appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status, msg, errPayload(err))
 }
 
 // resolveAccountID picks the Zernio accountId this post publishes to.

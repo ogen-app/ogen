@@ -5,18 +5,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/pgvector/pgvector-go"
 	"github.com/riverqueue/river"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -134,44 +132,26 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 		slog.WarnContext(ctx, "pdf-service not configured", logging.AttrComponent, "jobs.process_pdf", "asset_id", in.AssetID)
 		return nil
 	}
+	status := p.statusWriter()
 	if p.Deps.Storage == nil {
-		// Best-effort status write; we return the more descriptive error below.
-		_ = p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
+		// Best-effort status write; the returned error is more descriptive.
+		_ = status.set(ctx, in.AssetID, models.AssetStatusFailed)
 		return fmt.Errorf("process_pdf %s: storage not configured", in.AssetID)
 	}
-
-	// No gemini_api_key configured yet: checked up front so we don't
-	// download + parse the PDF only to fail every chunk embed. Retry rather than
-	// fail — a key set via the secrets API takes effect without a restart, so a
-	// later attempt can succeed; give up (failed) only once attempts are
-	// exhausted, mirroring the all-chunks-failed path below, so the asset never
-	// stays stuck in "processing".
-	if !embedopts.Available(p.Deps.Embedder) {
-		if lastAttempt {
-			return p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
-		}
-		slog.WarnContext(ctx, "embedder unavailable will retry", logging.AttrComponent, "jobs.process_pdf", "asset_id", in.AssetID)
-		return fmt.Errorf("process_pdf %s: embedder unavailable", in.AssetID)
+	giveUp := func() error { return status.set(ctx, in.AssetID, models.AssetStatusFailed) }
+	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_pdf", in.AssetID, lastAttempt, giveUp); !ok {
+		return err
 	}
-
-	if err := p.setStatus(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
+	if err := status.set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
 		return err
 	}
 
-	// 1. Re-read original.pdf (the upload handler stored it before enqueue).
-	//    Transient read errors retry.
 	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original.pdf", in.AssetID))
-	rc, err := p.Deps.Storage.Download(ctx, key)
+	data, err := downloadOriginal(ctx, p.Deps.Storage, "process_pdf", in.AssetID, key, "pdf")
 	if err != nil {
-		return fmt.Errorf("process_pdf %s: download %s: %w", in.AssetID, key, err)
+		return err
 	}
-	data, err := io.ReadAll(rc)
-	_ = rc.Close()
-	if err != nil {
-		return fmt.Errorf("process_pdf %s: read pdf: %w", in.AssetID, err)
-	}
-
-	// 2. Parse via pdf-service. Corrupt/unsupported PDFs are terminal (no retry).
+	// Corrupt/unsupported PDFs are terminal; service-down/deadline retry.
 	res, err := p.Deps.Client.Parse(ctx, bytes.NewReader(data), pdf.Options{
 		Filename:        in.OriginalName,
 		RenderThumbnail: true,
@@ -180,87 +160,48 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	if err != nil {
 		if isTerminalParseErr(err) {
 			slog.WarnContext(ctx, "unparseable pdf", logging.AttrComponent, "jobs.process_pdf", "asset_id", in.AssetID, logging.AttrError, err)
-			return p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
+			return status.set(ctx, in.AssetID, models.AssetStatusFailed)
 		}
 		return fmt.Errorf("process_pdf %s: parse: %w", in.AssetID, err)
 	}
 
-	// 3. Embed each chunk that has words.
-	chunks := make([]models.AssetChunk, 0, len(res.Chunks))
-	var embedAttempts, embedFailures int
-	var totalEmbedTokens int64
-	for _, ch := range res.Chunks {
-		if !hasWords(ch.Text) {
-			continue
-		}
-		embedAttempts++
-		emb, eErr := p.Deps.Embedder.Embed(ctx, &ai.EmbedRequest{
-			Input:   []*ai.Document{ai.DocumentFromText(ch.Text, nil)},
-			Options: embedopts.Document(),
-		})
-		if eErr != nil || len(emb.Embeddings) != 1 {
-			embedFailures++
-			continue
-		}
-		tokens := estimateTokens(ch.Text)
-		totalEmbedTokens += int64(tokens)
-		chunk := models.AssetChunk{
-			ID:         fmt.Sprintf("%s:%d", in.AssetID, ch.Index),
-			AssetID:    in.AssetID,
-			ChunkIndex: ch.Index,
-			Content:    ch.Text,
-			TokenCount: tokens,
-			Embedding:  pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
-			Model:      p.Deps.Embedder.Name(),
-		}
-		// Page bounds are optional: pdfium pages are 1-based, so a zero value
-		// means "unknown" — leave the pointers nil rather than store page 0.
-		if ch.PageStart > 0 {
-			ps := ch.PageStart
-			chunk.PageStart = &ps
-		}
-		if ch.PageEnd > 0 {
-			pe := ch.PageEnd
-			chunk.PageEnd = &pe
-		}
-		chunks = append(chunks, chunk)
+	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, pdfChunkSources(res.Chunks))
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_pdf", in.AssetID, chunks, false); err != nil {
+		return err
 	}
+	// One usage event per ingest; the Gemini embed response carries no usage,
+	// so the tokens are the embedded chunks' estimates.
+	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "pdf_extract", llm.EmbedUsage{Tokens: stats.Tokens})
 
-	if len(chunks) > 0 && p.Deps.Chunks != nil {
-		if err := p.Deps.Chunks.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
-			return fmt.Errorf("process_pdf %s: store chunks: %w", in.AssetID, err)
-		}
-	}
-
-	// One usage event per PDF ingest (sum of embedded-chunk token
-	// estimates; the Gemini embed response carries no usage). Nil recorder = no-op.
-	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "pdf_extract", llm.EmbedUsage{Tokens: totalEmbedTokens})
-
-	// 4. Thumbnail (non-fatal). 5. File metadata — retried on failure so the
-	//    asset never lands "ready" without its file row / page count / thumbnail.
+	// The thumbnail is non-fatal; the file row is retried so the asset never
+	// lands "ready" without its file row, page count or thumbnail.
 	thumbKey := p.uploadThumbnail(ctx, in.AssetID, res.ThumbnailPNG)
 	if err := p.persistFile(ctx, in, key, thumbKey, len(data), res.PageCount); err != nil {
 		return err
 	}
 
-	// 6. Final status. Propagate a write failure so the worker retries rather
-	//    than reporting success with the asset stuck in "processing".
-	switch {
-	case embedAttempts == 0:
-		// No embeddable text (empty or image-only PDF) — ready with 0 chunks.
-		return p.setStatus(ctx, in.AssetID, models.AssetStatusReady)
-	case len(chunks) == 0:
-		// Every chunk failed to embed — almost always a transient embedder
-		// outage. Retry; give up (failed) only once attempts are exhausted, so
-		// the asset never stays stuck in "processing".
-		if lastAttempt {
-			return p.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
+	final, err := stats.settle(lastAttempt)
+	if err != nil {
+		return fmt.Errorf("process_pdf %s: %w", in.AssetID, err)
+	}
+	return status.set(ctx, in.AssetID, final)
+}
+
+// pdfChunkSources yields the parsed chunks with their page bounds. pdfium pages
+// are 1-based, so a zero bound means unknown and persists as NULL.
+func pdfChunkSources(chunks []pdf.Chunk) iter.Seq[chunkSource] {
+	return func(yield func(chunkSource) bool) {
+		for _, ch := range chunks {
+			src := chunkSource{
+				Index:     ch.Index,
+				Text:      ch.Text,
+				PageStart: positiveIntPtr(ch.PageStart),
+				PageEnd:   positiveIntPtr(ch.PageEnd),
+			}
+			if !yield(src) {
+				return
+			}
 		}
-		return fmt.Errorf("process_pdf %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
-	case embedFailures > 0:
-		return p.setStatus(ctx, in.AssetID, models.AssetStatusPartial)
-	default:
-		return p.setStatus(ctx, in.AssetID, models.AssetStatusReady)
 	}
 }
 
@@ -271,20 +212,8 @@ func (p *ProcessPDFProcessor) thumbnailDPI() int {
 	return thumbnailDPIDefault
 }
 
-// setStatus persists the asset status, returning the error so callers can fail
-// the job rather than reporting success with an unpersisted status. A nil Assets
-// dep (status updates disabled) is a no-op.
-func (p *ProcessPDFProcessor) setStatus(ctx context.Context, assetID, status string) error {
-	if p.Deps.Assets == nil {
-		return nil
-	}
-	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
-		return fmt.Errorf("process_pdf %s: set status %s: %w", assetID, status, err)
-	}
-	// Announce terminal outcomes to the asset's creator (no-op for the
-	// intermediate "processing" write).
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "document", models.AssetTypePDF)
-	return nil
+func (p *ProcessPDFProcessor) statusWriter() assetStatusWriter {
+	return assetStatusWriter{op: "process_pdf", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "document", kind: models.AssetTypePDF}
 }
 
 func (p *ProcessPDFProcessor) uploadThumbnail(ctx context.Context, assetID string, png []byte) *string {
@@ -345,27 +274,4 @@ func isTerminalParseErr(err error) bool {
 	default:
 		return false
 	}
-}
-
-// estimateTokens mirrors flows.EstimateTokens (≈4 chars/token). Kept local so
-// the queue package doesn't depend on genkit/flows.
-func estimateTokens(text string) int {
-	if len(text) == 0 {
-		return 0
-	}
-	if t := len(text) / 4; t > 0 {
-		return t
-	}
-	return 1
-}
-
-// hasWords mirrors the flows helper: true when text has a non-whitespace word
-// character (catches zero-width / non-breaking spaces the embedder can't use).
-func hasWords(text string) bool {
-	for _, r := range text {
-		if r > 32 && !strings.ContainsRune(" \t\n\r\v\f\u00a0\u200b\u200c\u200d\ufeff", r) {
-			return true
-		}
-	}
-	return false
 }

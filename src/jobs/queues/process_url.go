@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -15,12 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/pgvector/pgvector-go"
 	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/genkit/flows"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/firecrawl"
@@ -152,29 +150,16 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 		slog.WarnContext(ctx, "firecrawl not configured", logging.AttrComponent, "jobs.process_url", "asset_id", in.AssetID)
 		return nil
 	}
-	// No gemini_api_key yet: fail fast rather than scrape + mirror only
-	// to fail every embed. Retry — a key set via the secrets API takes effect
-	// without a restart; give up only once attempts are exhausted.
-	if !embedopts.Available(p.Deps.Embedder) {
-		if lastAttempt {
-			return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, "embedder unavailable")
-		}
-		slog.WarnContext(ctx, "embedder unavailable will retry", logging.AttrComponent, "jobs.process_url", "asset_id", in.AssetID)
-		return fmt.Errorf("process_url %s: embedder unavailable", in.AssetID)
+	giveUp := func() error { return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, "embedder unavailable") }
+	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_url", in.AssetID, lastAttempt, giveUp); !ok {
+		return err
 	}
-
-	if err := p.setStatus(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
+	if err := p.statusWriter().set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
 		return err
 	}
 	p.publish(ctx, in, models.AssetStatusProcessing, "", 0, 0, 0, "")
 
-	// 1. Scrape → Markdown + metadata. On refresh, bypass Firecrawl's cache.
-	req := firecrawl.ScrapeRequest{URL: in.SourceURL}
-	if in.Refresh {
-		zero := 0
-		req.MaxAge = &zero
-	}
-	res, err := p.Deps.Scraper.Scrape(ctx, req)
+	res, err := p.scrape(ctx, in)
 	if err != nil {
 		if firecrawl.IsTransient(err) {
 			return fmt.Errorf("process_url %s: scrape: %w", in.AssetID, err)
@@ -183,85 +168,76 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 		return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, err.Error())
 	}
 
-	// One usage event per successful Firecrawl scrape (each call
-	// is a real billable credit, so recording here — after a 200 — is accurate
-	// even across retries). Nil recorder = no-op.
+	markdown, images, imgFailed := p.mirrorImages(ctx, in.AssetID, res.Markdown)
+	title := cmp.Or(strings.TrimSpace(res.Title), in.SourceURL)
+	if err := p.persistContent(ctx, in.AssetID, title, markdown, images); err != nil {
+		return err
+	}
+
+	// The title is prepended for context, like embed_asset.
+	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, textChunkSources(flows.ChunkText(title+"\n\n"+markdown)))
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_url", in.AssetID, chunks, true); err != nil {
+		return err
+	}
+	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "url_embed", llm.EmbedUsage{Tokens: stats.Tokens})
+
+	final, err := stats.settle(lastAttempt)
+	if err != nil {
+		return fmt.Errorf("process_url %s: %w", in.AssetID, err)
+	}
+	switch {
+	case final == models.AssetStatusFailed:
+		return p.finish(ctx, in, final, title, len(images), 0, imgFailed, "all chunks failed to embed")
+	case final == models.AssetStatusReady && imgFailed > 0:
+		final = models.AssetStatusPartial
+	}
+	return p.finish(ctx, in, final, title, len(images), len(chunks), imgFailed, "")
+}
+
+// scrape fetches the page as Markdown and meters the call. On refresh it
+// bypasses Firecrawl's cache.
+func (p *ProcessURLProcessor) scrape(ctx context.Context, in ProcessURLTask) (*firecrawl.ScrapeResult, error) {
+	req := firecrawl.ScrapeRequest{URL: in.SourceURL}
+	if in.Refresh {
+		req.MaxAge = new(0)
+	}
+	res, err := p.Deps.Scraper.Scrape(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	// Every successful scrape is a billable credit, so recording after a 200 is
+	// accurate even across retries.
 	p.Deps.Recorder.Record(ctx, firecrawl.VendorFirecrawl, "url_scrape", vendors.MeterEvent{
 		Model:     "scrape",
 		Operation: firecrawl.OpScrape,
 		Usage:     vendors.Usage{vendors.KindURLScrape: 1},
 	})
+	return res, nil
+}
 
-	// 2. Mirror images (best-effort) and rewrite the Markdown links.
-	markdown, images, imgFailed := p.mirrorImages(ctx, in.AssetID, res.Markdown)
-
-	title := strings.TrimSpace(res.Title)
-	if title == "" {
-		title = in.SourceURL
+// persistContent writes the title + rewritten Markdown, then replaces the
+// mirrored images.
+func (p *ProcessURLProcessor) persistContent(ctx context.Context, assetID, title, markdown string, images []models.AssetImage) error {
+	if err := p.Deps.Assets.UpdateContent(ctx, assetID, title, markdown); err != nil {
+		return fmt.Errorf("process_url %s: write content: %w", assetID, err)
 	}
-
-	// 3. Persist content + title, then replace mirrored images.
-	if err := p.Deps.Assets.UpdateContent(ctx, in.AssetID, title, markdown); err != nil {
-		return fmt.Errorf("process_url %s: write content: %w", in.AssetID, err)
+	if p.Deps.Images == nil {
+		return nil
 	}
-	if p.Deps.Images != nil {
-		if err := p.Deps.Images.ReplaceForAsset(ctx, in.AssetID, images); err != nil {
-			return fmt.Errorf("process_url %s: store images: %w", in.AssetID, err)
-		}
+	if err := p.Deps.Images.ReplaceForAsset(ctx, assetID, images); err != nil {
+		return fmt.Errorf("process_url %s: store images: %w", assetID, err)
 	}
+	return nil
+}
 
-	// 4. Chunk + embed the Markdown (title prepended for context, like embed_asset).
-	fullText := title + "\n\n" + markdown
-	chunkStrs := flows.ChunkText(fullText)
-	chunks := make([]models.AssetChunk, 0, len(chunkStrs))
-	var embedAttempts, embedFailures int
-	var totalEmbedTokens int64
-	for i, text := range chunkStrs {
-		if !hasWords(text) {
-			continue
+// textChunkSources yields plain text chunks indexed by position.
+func textChunkSources(texts []string) iter.Seq[chunkSource] {
+	return func(yield func(chunkSource) bool) {
+		for i, text := range texts {
+			if !yield(chunkSource{Index: i, Text: text}) {
+				return
+			}
 		}
-		embedAttempts++
-		emb, eErr := p.Deps.Embedder.Embed(ctx, &ai.EmbedRequest{
-			Input:   []*ai.Document{ai.DocumentFromText(text, nil)},
-			Options: embedopts.Document(),
-		})
-		if eErr != nil || len(emb.Embeddings) != 1 {
-			embedFailures++
-			continue
-		}
-		tokens := estimateTokens(text)
-		totalEmbedTokens += int64(tokens)
-		chunks = append(chunks, models.AssetChunk{
-			ID:         fmt.Sprintf("%s:%d", in.AssetID, i),
-			AssetID:    in.AssetID,
-			ChunkIndex: i,
-			Content:    text,
-			TokenCount: tokens,
-			Embedding:  pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
-			Model:      p.Deps.Embedder.Name(),
-		})
-	}
-
-	if p.Deps.Chunks != nil {
-		if err := p.Deps.Chunks.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
-			return fmt.Errorf("process_url %s: store chunks: %w", in.AssetID, err)
-		}
-	}
-	p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "url_embed", llm.EmbedUsage{Tokens: totalEmbedTokens})
-
-	// 5. Final status.
-	switch {
-	case embedAttempts > 0 && len(chunks) == 0:
-		// Every chunk failed to embed — almost always a transient embedder
-		// outage. Retry; give up (failed) only once attempts are exhausted.
-		if lastAttempt {
-			return p.finish(ctx, in, models.AssetStatusFailed, title, len(images), 0, imgFailed, "all chunks failed to embed")
-		}
-		return fmt.Errorf("process_url %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
-	case embedFailures > 0 || imgFailed > 0:
-		return p.finish(ctx, in, models.AssetStatusPartial, title, len(images), len(chunks), imgFailed, "")
-	default:
-		return p.finish(ctx, in, models.AssetStatusReady, title, len(images), len(chunks), imgFailed, "")
 	}
 }
 
@@ -269,25 +245,15 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 // status write error is propagated so the worker retries rather than reporting
 // success with an unpersisted status.
 func (p *ProcessURLProcessor) finish(ctx context.Context, in ProcessURLTask, status, title string, imageCount, chunkCount, failedImages int, errMsg string) error {
-	if err := p.setStatus(ctx, in.AssetID, status); err != nil {
+	if err := p.statusWriter().set(ctx, in.AssetID, status); err != nil {
 		return err
 	}
 	p.publish(ctx, in, status, title, imageCount, chunkCount, failedImages, errMsg)
 	return nil
 }
 
-// setStatus persists the asset status; a nil Assets dep is a no-op.
-func (p *ProcessURLProcessor) setStatus(ctx context.Context, assetID, status string) error {
-	if p.Deps.Assets == nil {
-		return nil
-	}
-	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
-		return fmt.Errorf("process_url %s: set status %s: %w", assetID, status, err)
-	}
-	// Announce terminal outcomes to the asset's creator (no-op for the
-	// intermediate "processing" write).
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "link", models.AssetTypeURL)
-	return nil
+func (p *ProcessURLProcessor) statusWriter() assetStatusWriter {
+	return assetStatusWriter{op: "process_url", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "link", kind: models.AssetTypeURL}
 }
 
 // assetEventPayload is the SSE `data:` body for an asset.updated frame.
