@@ -369,21 +369,16 @@ func (s *Service) snapshotSubmitted(ctx context.Context, post *models.Post) {
 		latest.Note == models.PostVersionNoteSubmitted && latest.Content == content {
 		return // already snapshotted this exact submission — nothing new went out
 	}
-	nextNum := 1
-	if latest != nil {
-		nextNum = latest.VersionNumber + 1
-	}
 	id, err := models.NewID()
 	if err != nil {
 		return
 	}
-	if err := s.versions.Create(ctx, &models.PostVersion{
-		ID:            id,
-		PostID:        post.ID,
-		VersionNumber: nextNum,
-		Content:       content,
-		Note:          models.PostVersionNoteSubmitted,
-		Creator:       models.PostVersionCreatorSystem,
+	if err := s.versions.CreateNext(ctx, &models.PostVersion{
+		ID:      id,
+		PostID:  post.ID,
+		Content: content,
+		Note:    models.PostVersionNoteSubmitted,
+		Creator: models.PostVersionCreatorSystem,
 	}); err != nil {
 		slog.WarnContext(ctx, "schedule: create submit snapshot",
 			logging.AttrComponent, "schedule", "post_id", post.ID, logging.AttrError, err)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 )
@@ -30,12 +31,12 @@ func (r *fakeAttachmentRepo) GetByID(context.Context, string) (*models.PostAttac
 func (r *fakeAttachmentRepo) CreateAtNextPosition(context.Context, *models.PostAttachment) error {
 	return nil
 }
-func (r *fakeAttachmentRepo) UpdatePosition(context.Context, string, int) error   { return nil }
-func (r *fakeAttachmentRepo) UpdateAltText(context.Context, string, string) error { return nil }
+func (r *fakeAttachmentRepo) Patch(context.Context, string, repository.AttachmentPatch) error {
+	return nil
+}
 func (r *fakeAttachmentRepo) SetGeneratedAltText(context.Context, string, string) error {
 	return nil
 }
-func (r *fakeAttachmentRepo) UpdateSegmentIndex(context.Context, string, *int) error   { return nil }
 func (r *fakeAttachmentRepo) ReorderPositions(context.Context, string, []string) error { return nil }
 func (r *fakeAttachmentRepo) Delete(context.Context, string) (bool, error)             { return false, nil }
 func (r *fakeAttachmentRepo) SumSizeBytesInTenant(context.Context) (int64, error)      { return 0, nil }

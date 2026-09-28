@@ -359,20 +359,15 @@ func (h *PostVerificationHandler) snapshotPublished(ctx context.Context, post *m
 		latest.Note == models.PostVersionNotePublished && latest.Content == content {
 		return
 	}
-	nextNum := 1
-	if latest != nil {
-		nextNum = latest.VersionNumber + 1
-	}
 	id, err := models.NewID()
 	if err != nil {
 		return
 	}
-	_ = h.versionRepo.Create(ctx, &models.PostVersion{
-		ID:            id,
-		PostID:        post.ID,
-		VersionNumber: nextNum,
-		Content:       content,
-		Note:          models.PostVersionNotePublished,
-		Creator:       models.PostVersionCreatorSystem,
+	_ = h.versionRepo.CreateNext(ctx, &models.PostVersion{
+		ID:      id,
+		PostID:  post.ID,
+		Content: content,
+		Note:    models.PostVersionNotePublished,
+		Creator: models.PostVersionCreatorSystem,
 	})
 }

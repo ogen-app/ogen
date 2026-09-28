@@ -65,6 +65,13 @@ func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secre
 	}
 
 	app := newFiberApp(cfg)
+	// Registered first so it runs first: handler background tasks may enqueue
+	// jobs or call gRPC clients that later hooks shut down.
+	app.Hooks().OnShutdown(func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return handlers.DrainBackground(ctx)
+	})
 
 	// API routes: the full data-access layer is built once by wireRepositories.
 	r := wireRepositories(db, analyticsDB)

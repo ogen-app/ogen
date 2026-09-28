@@ -21,18 +21,13 @@ type PostAttachmentRepository interface {
 	// unique constraint. att.Position is overwritten with the assigned
 	// value on success.
 	CreateAtNextPosition(ctx context.Context, att *models.PostAttachment) error
-	UpdatePosition(ctx context.Context, id string, position int) error
-	// UpdateAltText sets a user-supplied alt text (the PATCH path) and marks it
-	// user-edited (CON-281 D5), so async auto-generation never overwrites it.
-	UpdateAltText(ctx context.Context, id string, altText string) error
+	// Patch applies every set field of p in a single UPDATE, so a PATCH request
+	// either lands completely or not at all.
+	Patch(ctx context.Context, id string, p AttachmentPatch) error
 	// SetGeneratedAltText sets auto-generated alt text but ONLY where the user has
 	// not edited it (alt_text_edited_by_user = false), and does not flip the flag
 	// (CON-281). The async attachment alt-text generator uses it.
 	SetGeneratedAltText(ctx context.Context, id string, altText string) error
-	// UpdateSegmentIndex reassigns which thread segment an attachment belongs
-	// to (CON-284). A nil segmentIndex clears it (detach from any segment,
-	// i.e. back to a non-thread attachment).
-	UpdateSegmentIndex(ctx context.Context, id string, segmentIndex *int) error
 	// ReorderPositions renumbers the post's attachments to 0..n-1 to match
 	// orderedIDs, in one transaction, without tripping UNIQUE(post_id, position)
 	// (CON-124). Callers must pass every current attachment of the post exactly
@@ -42,6 +37,22 @@ type PostAttachmentRepository interface {
 	// SumSizeBytesInTenant totals size_bytes across every attachment in the ctx
 	// tenant — the live usage behind the media_storage_bytes quota (CON-295).
 	SumSizeBytesInTenant(ctx context.Context) (int64, error)
+}
+
+// AttachmentPatch is a partial update of a post attachment. Nil fields are left
+// untouched. A user-supplied AltText also marks the text as user-edited, so
+// async auto-generation never overwrites it. SetSegmentIndex distinguishes
+// "leave as-is" from an explicit nil SegmentIndex, which detaches the
+// attachment from any thread segment.
+type AttachmentPatch struct {
+	Position        *int
+	AltText         *string
+	SetSegmentIndex bool
+	SegmentIndex    *int
+}
+
+func (p AttachmentPatch) empty() bool {
+	return p.Position == nil && p.AltText == nil && !p.SetSegmentIndex
 }
 
 type postAttachmentRepository struct {
@@ -157,22 +168,21 @@ func (r *postAttachmentRepository) CreateAtNextPosition(ctx context.Context, att
 	})
 }
 
-func (r *postAttachmentRepository) UpdatePosition(ctx context.Context, id string, position int) error {
-	_, err := r.db.NewUpdate().
-		Model((*models.PostAttachment)(nil)).
-		Set("position = ?", position).
-		Where("id = ?", id).
-		Exec(ctx)
-	return err
-}
-
-func (r *postAttachmentRepository) UpdateAltText(ctx context.Context, id string, altText string) error {
-	_, err := r.db.NewUpdate().
-		Model((*models.PostAttachment)(nil)).
-		Set("alt_text = ?", altText).
-		Set("alt_text_edited_by_user = true").
-		Where("id = ?", id).
-		Exec(ctx)
+func (r *postAttachmentRepository) Patch(ctx context.Context, id string, p AttachmentPatch) error {
+	if p.empty() {
+		return nil
+	}
+	q := r.db.NewUpdate().Model((*models.PostAttachment)(nil)).Where("id = ?", id)
+	if p.Position != nil {
+		q = q.Set("position = ?", *p.Position)
+	}
+	if p.AltText != nil {
+		q = q.Set("alt_text = ?", *p.AltText).Set("alt_text_edited_by_user = true")
+	}
+	if p.SetSegmentIndex {
+		q = q.Set("segment_index = ?", p.SegmentIndex)
+	}
+	_, err := q.Exec(ctx)
 	return err
 }
 
@@ -182,17 +192,6 @@ func (r *postAttachmentRepository) SetGeneratedAltText(ctx context.Context, id s
 		Set("alt_text = ?", altText).
 		Where("id = ?", id).
 		Where("alt_text_edited_by_user = false").
-		Exec(ctx)
-	return err
-}
-
-func (r *postAttachmentRepository) UpdateSegmentIndex(ctx context.Context, id string, segmentIndex *int) error {
-	// bun binds a nil *int as NULL, a non-nil pointer as the value — so this
-	// both sets and clears segment_index (CON-284).
-	_, err := r.db.NewUpdate().
-		Model((*models.PostAttachment)(nil)).
-		Set("segment_index = ?", segmentIndex).
-		Where("id = ?", id).
 		Exec(ctx)
 	return err
 }

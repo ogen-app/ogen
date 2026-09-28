@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
 // stubAttRepo is a minimal PostAttachmentRepository for copyAttachments
@@ -21,10 +22,8 @@ func (s stubAttRepo) GetByID(context.Context, string) (*models.PostAttachment, e
 	return nil, nil
 }
 func (s stubAttRepo) CreateAtNextPosition(context.Context, *models.PostAttachment) error { return nil }
-func (s stubAttRepo) UpdatePosition(context.Context, string, int) error                  { return nil }
-func (s stubAttRepo) UpdateAltText(context.Context, string, string) error                { return nil }
+func (s stubAttRepo) Patch(context.Context, string, repository.AttachmentPatch) error    { return nil }
 func (s stubAttRepo) SetGeneratedAltText(context.Context, string, string) error          { return nil }
-func (s stubAttRepo) UpdateSegmentIndex(context.Context, string, *int) error             { return nil }
 func (s stubAttRepo) ReorderPositions(context.Context, string, []string) error           { return nil }
 func (s stubAttRepo) Delete(context.Context, string) (bool, error)                       { return false, nil }
 func (s stubAttRepo) SumSizeBytesInTenant(context.Context) (int64, error)                { return 0, nil }

@@ -21,7 +21,8 @@ func (f *fakeVersionRepo) GetLatestByPostID(_ context.Context, postID string) (*
 	return f.latest, f.err
 }
 
-func (f *fakeVersionRepo) Create(context.Context, *models.PostVersion) error { return nil }
+func (f *fakeVersionRepo) Create(context.Context, *models.PostVersion) error     { return nil }
+func (f *fakeVersionRepo) CreateNext(context.Context, *models.PostVersion) error { return nil }
 func (f *fakeVersionRepo) ListByPostID(context.Context, string) ([]models.PostVersion, error) {
 	return nil, nil
 }

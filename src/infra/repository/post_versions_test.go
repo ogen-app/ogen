@@ -1,6 +1,8 @@
 package repository_test
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -65,5 +67,49 @@ func seedVersion(t *testing.T, db *bun.DB, id, postID string, num int, content s
 	}
 	if _, err := db.NewInsert().Model(v).Exec(tenantCtx()); err != nil {
 		t.Fatalf("seed version %s: %v", id, err)
+	}
+}
+
+// TestPostVersionCreateNextConcurrent proves concurrent writers each get a
+// distinct, gap-free version_number instead of colliding on the unique index.
+func TestPostVersionCreateNextConcurrent(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewPostVersionRepository(db)
+	seedPost(t, db, "post-c", "", "", time.Now().UTC())
+	seedVersion(t, db, "ver-c1", "post-c", 1, "seed")
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := range writers {
+		wg.Go(func() {
+			errs <- repo.CreateNext(ctx, &models.PostVersion{
+				ID:      fmt.Sprintf("ver-c-%d", i),
+				PostID:  "post-c",
+				Content: "concurrent",
+				Creator: "user",
+			})
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("create next: %v", err)
+		}
+	}
+
+	versions, err := repo.ListByPostID(ctx, "post-c")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(versions) != writers+1 {
+		t.Fatalf("got %d versions, want %d", len(versions), writers+1)
+	}
+	for i, v := range versions {
+		if v.VersionNumber != i+1 {
+			t.Fatalf("version[%d] = %d, want %d", i, v.VersionNumber, i+1)
+		}
 	}
 }

@@ -147,7 +147,7 @@ func (h *PasswordResetHandler) Request(c *fiber.Ctx) error {
 // failure is logged, never surfaced (surfacing it would itself be an oracle).
 func (h *PasswordResetHandler) dispatchReset(account *models.Account) {
 	const comp = "handlers.password_reset"
-	go func() {
+	backgroundTasks.Go("password_reset.dispatch", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -203,7 +203,7 @@ func (h *PasswordResetHandler) dispatchReset(account *models.Account) {
 			activity.CategoryAuthentication, "password_reset_requested",
 			activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI),
 		)
-	}()
+	})
 }
 
 type passwordResetConfirmRequest struct {

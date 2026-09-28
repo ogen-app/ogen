@@ -79,7 +79,7 @@ func TestReorderPositions(t *testing.T) {
 	// Drift positions up into a non-contiguous block (5,6,7) to mimic the
 	// frontend's max+1..max+n renumbering.
 	for i, id := range ids {
-		if err := repo.UpdatePosition(ctx, id, 5+i); err != nil {
+		if err := repo.Patch(ctx, id, repository.AttachmentPatch{Position: new(5 + i)}); err != nil {
 			t.Fatalf("drift %s: %v", id, err)
 		}
 	}

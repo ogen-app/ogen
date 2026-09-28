@@ -141,12 +141,12 @@ func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZerni
 	if zernio.IsTerminalAPIError(cancelErr) {
 		jobs.ZernioCancelFailed.Add(1)
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
-			"Zernio cancel terminally failed", `{"error":"`+cancelErr.Error()+`"}`)
+			"Zernio cancel terminally failed", errPayload(cancelErr))
 		return nil
 	}
 	// Transient — retry per InsertOpts.
 	appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventTaskRetried, post.Status, post.Status,
-		"transient cancel error; River will retry", `{"error":"`+cancelErr.Error()+`"}`)
+		"transient cancel error; River will retry", errPayload(cancelErr))
 	return cancelErr
 }
 

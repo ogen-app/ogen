@@ -1516,29 +1516,19 @@ func (h *PostsHandler) CreateVersion(c *fiber.Ctx) error {
 		return err
 	}
 
-	latest, err := h.versionRepo.GetLatestByPostID(reqCtx(c), post.ID)
-	if err != nil {
-		return err
-	}
-	nextNum := 1
-	if latest != nil {
-		nextNum = latest.VersionNumber + 1
-	}
-
 	id, err := models.NewID()
 	if err != nil {
 		return err
 	}
 
 	version := &models.PostVersion{
-		ID:            id,
-		PostID:        post.ID,
-		VersionNumber: nextNum,
-		Content:       post.Content,
-		Note:          req.Note,
-		Creator:       "user",
+		ID:      id,
+		PostID:  post.ID,
+		Content: post.Content,
+		Note:    req.Note,
+		Creator: "user",
 	}
-	if err := h.versionRepo.Create(reqCtx(c), version); err != nil {
+	if err := h.versionRepo.CreateNext(reqCtx(c), version); err != nil {
 		return err
 	}
 	return c.Status(fiber.StatusCreated).JSON(version)

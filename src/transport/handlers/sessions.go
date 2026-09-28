@@ -229,7 +229,7 @@ func (h *SessionsHandler) recordLoginThrottled(c *fiber.Ctx, email string) {
 		return
 	}
 	ip := c.IP()
-	go func() {
+	backgroundTasks.Go("sessions.record_throttle", func() {
 		defer func() { <-h.throttleRecordSem }()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -247,7 +247,7 @@ func (h *SessionsHandler) recordLoginThrottled(c *fiber.Ctx, email string) {
 			activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI),
 			activity.WithPayload(map[string]any{"ip": ip}),
 		)
-	}()
+	})
 }
 
 // Delete godoc
