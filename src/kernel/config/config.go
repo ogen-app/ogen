@@ -67,6 +67,24 @@ type Config struct {
 	DBMaxIdleConns    int    `envconfig:"DB_MAX_IDLE_CONNS" default:"5"`
 	SessionCookieName string `envconfig:"SESSION_COOKIE_NAME" default:"c3_session"`
 
+	// Client IP behind a reverse proxy. TrustedProxies is a comma-separated
+	// list of IPs/CIDRs whose ProxyHeader is believed; requests from any other
+	// peer keep the socket address, so the header can't be spoofed by a direct
+	// caller. Empty trusts nobody and c.IP() is the socket peer — correct only
+	// when nothing sits in front of the API. Railway's edge reaches the service
+	// from its internal 100.0.0.0/8 range and sets X-Real-IP itself, ignoring a
+	// client-sent value; X-Forwarded-For is appended to, so its leftmost entry
+	// is caller-controlled and it is not the default.
+	TrustedProxies string `envconfig:"TRUSTED_PROXIES" default:""`
+	ProxyHeader    string `envconfig:"PROXY_HEADER"    default:"X-Real-IP"`
+
+	// Known-device tracking for new-device login alerts. DeviceCookieName is
+	// the long-lived browser identifier. GeoIPDBPath points at an offline
+	// MaxMind-format City database (DB-IP City Lite ships in the image); empty
+	// or unreadable leaves the location out of the alert.
+	DeviceCookieName string `envconfig:"DEVICE_COOKIE_NAME" default:"ogen_device"`
+	GeoIPDBPath      string `envconfig:"GEOIP_DB_PATH"      default:""`
+
 	// Embeddings. Generated via the hosted Gemini Embedding 2 API
 	// (google.golang.org/genai through the Genkit googlegenai plugin).
 	// GeminiAPIKey is a first-boot seed source only: it is migrated into the
