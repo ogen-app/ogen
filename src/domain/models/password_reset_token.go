@@ -36,18 +36,42 @@ type PasswordResetToken struct {
 // bytes of entropy) together with its hash for storage. The plaintext is
 // returned once — for the emailed link — and never persisted.
 func NewResetToken() (token, hash string, err error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", "", fmt.Errorf("generate reset token: %w", err)
-	}
-	token = base64.RawURLEncoding.EncodeToString(b)
-	return token, HashResetToken(token), nil
+	return newHashedToken("reset token")
 }
 
-// HashResetToken returns the hex-encoded sha256 of a reset token. The token is
+// HashResetToken returns the hex-encoded sha256 of a reset token.
+func HashResetToken(token string) string {
+	return hashToken(token)
+}
+
+// newHashedToken returns 32 random bytes as a URL-safe string plus its storage
+// hash. kind names the token in the error.
+func newHashedToken(kind string) (token, hash string, err error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", fmt.Errorf("generate %s: %w", kind, err)
+	}
+	token = base64.RawURLEncoding.EncodeToString(b)
+	return token, hashToken(token), nil
+}
+
+// hashToken is the hex-encoded sha256 of an opaque token. The tokens are
 // high-entropy random, so a plain (unsalted) hash is sufficient — unlike a
 // low-entropy password, there is nothing to brute-force from the hash.
-func HashResetToken(token string) string {
+func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+// opaqueTokenLen is the encoded length of 32 random bytes in unpadded base64url.
+const opaqueTokenLen = 43
+
+// wellFormedToken reports whether s could have come from newHashedToken, so a
+// garbage value is rejected without a database lookup.
+func wellFormedToken(s string) bool {
+	if len(s) != opaqueTokenLen {
+		return false
+	}
+	_, err := base64.RawURLEncoding.DecodeString(s)
+	return err == nil
 }
