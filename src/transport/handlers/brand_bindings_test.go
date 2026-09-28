@@ -49,12 +49,10 @@ var _ = Describe("Brand bindings (CON-245)", Ordered, func() {
 		campaignRepo := repository.NewCampaignRepository(db, repository.NewTagRepository(db), repository.NewPlatformRepository(db), campaignTypeRepo)
 		postRepo := repository.NewPostRepository(db)
 
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		ch := handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil)
-		ch.SetBrandRepo(brandRepo)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
+		ch := handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{Brands: brandRepo})
 		ch.Register(app)
-		ph := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth)
-		ph.SetBrandRepo(brandRepo)
+		ph := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{Brands: brandRepo})
 		ph.Register(app)
 
 		user := seedTenantUser(db, "Admin", "admin@example.com", "admin-password")

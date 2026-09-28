@@ -67,11 +67,11 @@ type TenantsHandler struct {
 	ipLimiter *keyedRateLimiter
 	// activity records CON-125 authentication events (signup, tenant_updated).
 	// Signup runs outside tenant scope, so it builds an explicit context. nil is
-	// a no-op. Wired via SetActivityRecorder.
+	// a no-op.
 	activity *activity.Recorder
 }
 
-func NewTenantsHandler(signupSvc *signup.Service, tenantRepo repository.TenantRepository, cookieName string, secureCookie bool, auth fiber.Handler) *TenantsHandler {
+func NewTenantsHandler(signupSvc *signup.Service, tenantRepo repository.TenantRepository, cookieName string, secureCookie bool, auth fiber.Handler, rec *activity.Recorder) *TenantsHandler {
 	return &TenantsHandler{
 		signup:       signupSvc,
 		tenantRepo:   tenantRepo,
@@ -79,11 +79,9 @@ func NewTenantsHandler(signupSvc *signup.Service, tenantRepo repository.TenantRe
 		secureCookie: secureCookie,
 		auth:         auth,
 		ipLimiter:    newKeyedRateLimiter(signupPerIPBurst, signupRateWindow),
+		activity:     rec,
 	}
 }
-
-// SetActivityRecorder wires the CON-125 activity recorder (nil-safe no-op).
-func (h *TenantsHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
 
 func (h *TenantsHandler) Register(app *fiber.App) {
 	app.Post("/api/tenants", h.Signup) // public self-service signup

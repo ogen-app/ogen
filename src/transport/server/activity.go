@@ -30,7 +30,7 @@ type activityDeps struct {
 // recorder/events are left nil: call-sites then record nothing — the
 // graceful-disable path. The caller drains the recorder on shutdown via
 // recorder.Close, registered AFTER the river/zernio producers stop so loop()
-// never exits while a worker is still calling Record() (see server.New).
+// never exits while a worker is still calling Record() (see stageRecorders).
 func initActivity(cfg *config.Config, analyticsDB *bun.DB) activityDeps {
 	if analyticsDB == nil {
 		slog.Warn("activity collection disabled (ANALYTICS_DSN empty)",

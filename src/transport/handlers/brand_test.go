@@ -44,9 +44,9 @@ var _ = Describe("BrandHandler", Ordered, func() {
 		sessionRepo := repository.NewSessionRepository(db)
 		accountRepo := repository.NewAccountRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false).Register(app)
+		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
 		// nil storage: uploads are not exercised here (they'd need object storage).
-		handlers.NewBrandHandler(repository.NewBrandRepository(db), nil, auth).Register(app)
+		handlers.NewBrandHandler(repository.NewBrandRepository(db), nil, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "admin@example.com", "admin-password")
 

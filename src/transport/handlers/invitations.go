@@ -78,11 +78,6 @@ type InvitationsHandler struct {
 	activity *activity.Recorder
 }
 
-// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op). Invites are
-// the preferred way to add teammates, so the team_seats cap must gate the accept
-// path as well as the direct-create path in users.go.
-func (h *InvitationsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
-
 // seatQuota checks the team_seats entitlement for the workspace an invite joins.
 // Accepting is unauthenticated (acceptNew) or signed in as a different workspace
 // (acceptExisting), so the seat counter — which reads the tenant from the context
@@ -92,11 +87,26 @@ func (h *InvitationsHandler) seatQuota(ctx context.Context, tenantID string) (en
 	return h.limiter.Require(tenantctx.With(ctx, tenantID), tenantID, "team_seats")
 }
 
+// InvitationsOptions carries the handler's nil-safe collaborators.
+type InvitationsOptions struct {
+	// EmailJobs sends the invitation email; nil mints and stores the invite
+	// but sends no mail.
+	EmailJobs InvitationEmailEnqueuer
+	// Limiter gates the accept path on team_seats: invites are the preferred
+	// way to add teammates, so the cap must hold there as well as on the
+	// direct-create path in users.go.
+	Limiter  *entitlements.Limiter
+	Activity *activity.Recorder
+}
+
 // NewInvitationsHandler builds the handler. appBaseURL (APP_BASE_URL) is the base
 // for the emailed accept link; cookieName/secureCookie mirror the session cookie
 // set at login so accept can auto-log-in the new user.
-func NewInvitationsHandler(db *bun.DB, userRepo repository.UserRepository, accountRepo repository.AccountRepository, tenantRepo repository.TenantRepository, inviteRepo repository.InvitationRepository, sessionRepo repository.SessionRepository, appBaseURL, cookieName string, secureCookie bool, auth fiber.Handler) *InvitationsHandler {
+func NewInvitationsHandler(db *bun.DB, userRepo repository.UserRepository, accountRepo repository.AccountRepository, tenantRepo repository.TenantRepository, inviteRepo repository.InvitationRepository, sessionRepo repository.SessionRepository, appBaseURL, cookieName string, secureCookie bool, auth fiber.Handler, opts InvitationsOptions) *InvitationsHandler {
 	return &InvitationsHandler{
+		emailJobs:     opts.EmailJobs,
+		limiter:       opts.Limiter,
+		activity:      opts.Activity,
 		db:            db,
 		userRepo:      userRepo,
 		accountRepo:   accountRepo,
@@ -112,13 +122,6 @@ func NewInvitationsHandler(db *bun.DB, userRepo repository.UserRepository, accou
 		acceptLimiter: newKeyedRateLimiter(inviteAcceptPerIP, inviteRateWindow),
 	}
 }
-
-// SetActivityRecorder wires the CON-125 activity recorder (nil-safe no-op).
-func (h *InvitationsHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
-
-// SetEmailEnqueuer wires the CON-26 invitation-email enqueuer (nil-safe no-op).
-// When unset, creating an invite mints + stores it but sends no mail.
-func (h *InvitationsHandler) SetEmailEnqueuer(e InvitationEmailEnqueuer) { h.emailJobs = e }
 
 func (h *InvitationsHandler) Register(app *fiber.App) {
 	// Public accept surface — the emailed token is the capability, so these are

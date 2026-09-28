@@ -22,13 +22,9 @@ type PostNotesHandler struct {
 	activity *activity.Recorder
 }
 
-func NewPostNotesHandler(svc *notes.Service, postRepo repository.PostRepository, auth fiber.Handler) *PostNotesHandler {
-	return &PostNotesHandler{svc: svc, postRepo: postRepo, auth: auth}
-}
-
-// SetActivityRecorder wires the CON-125 activity recorder. nil is a no-op.
-func (h *PostNotesHandler) SetActivityRecorder(r *activity.Recorder) {
-	h.activity = r
+// NewPostNotesHandler builds the handler. A nil rec records nothing.
+func NewPostNotesHandler(svc *notes.Service, postRepo repository.PostRepository, auth fiber.Handler, rec *activity.Recorder) *PostNotesHandler {
+	return &PostNotesHandler{svc: svc, postRepo: postRepo, auth: auth, activity: rec}
 }
 
 func (h *PostNotesHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity.Option) {

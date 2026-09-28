@@ -161,6 +161,16 @@ type AssetsHandler struct {
 	chunks AssetChunkLister
 }
 
+// AssetsOptions carries the handler's nil-safe collaborators.
+type AssetsOptions struct {
+	Limiter *entitlements.Limiter
+	// Chunks backs GET /:id/chunks; nil answers 409.
+	Chunks AssetChunkLister
+	// ImageReembed re-embeds an image asset after its description is edited;
+	// nil skips it (image ingestion not configured).
+	ImageReembed ImageReembedEnqueuer
+}
+
 func NewAssetsHandler(
 	repo repository.AssetRepository,
 	fileRepo repository.AssetFileRepository,
@@ -174,8 +184,12 @@ func NewAssetsHandler(
 	imgJobs ImageIngestEnqueuer,
 	auth fiber.Handler,
 	onSave func(assetID, title, content, tenantID string),
+	opts AssetsOptions,
 ) *AssetsHandler {
 	return &AssetsHandler{
+		limiter:    opts.Limiter,
+		chunks:     opts.Chunks,
+		imgReembed: opts.ImageReembed,
 		repo:       repo,
 		fileRepo:   fileRepo,
 		imageRepo:  imageRepo,
@@ -190,12 +204,6 @@ func NewAssetsHandler(
 		imgJobs:    imgJobs,
 	}
 }
-
-// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op).
-func (h *AssetsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
-
-// SetImageReembedder wires the image description re-embed. Nil-safe.
-func (h *AssetsHandler) SetImageReembedder(e ImageReembedEnqueuer) { h.imgReembed = e }
 
 func (h *AssetsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/content-bank/assets")

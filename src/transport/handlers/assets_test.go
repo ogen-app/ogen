@@ -49,9 +49,9 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 		tagRepo := repository.NewTagRepository(db)
 		pieceRepo := repository.NewAssetRepository(db, tagRepo, repository.NewAssetFileRepository(db))
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
+		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
 
 		// Seed an auth user and log in
@@ -643,15 +643,14 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 		tagRepo := repository.NewTagRepository(db)
 		assetRepo := repository.NewAssetRepository(db, tagRepo, repository.NewAssetFileRepository(db))
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
 		reembed = &fakeImageReembedder{ch: make(chan string, 16)}
 		h := handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, func(assetID, _, _, tenantID string) {
 			saveCh <- assetID
 			tenantCh <- tenantID
-		})
-		h.SetImageReembedder(reembed)
+		}, handlers.AssetsOptions{ImageReembed: reembed})
 		h.Register(app)
 
 		seedTenantUser(db, "Admin", "admin@example.com", "admin-password")
@@ -897,9 +896,8 @@ var _ = Describe("AssetsHandler GET /:id/chunks (CON-312)", Ordered, func() {
 		assetRepo := repository.NewAssetRepository(db, tagRepo, fileRepo)
 		chunksRepo = repository.NewAssetChunksRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
-		h := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil)
-		h.SetChunkLister(chunksRepo)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
+		h := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{Chunks: chunksRepo})
 		h.Register(app)
 
 		userID = seedTenantUser(db, "Admin", "chunks@example.com", "admin-password").ID

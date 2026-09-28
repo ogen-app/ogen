@@ -127,14 +127,13 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 		postVersionRepo := repository.NewPostVersionRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, "test_session")
 
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 
-		postsHandler := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth)
 		// Wire the same S3-cleanup hook the production server wires —
 		// this is exactly what test #3 exercises.
-		postsHandler.SetOnBeforeDelete(func(ctx context.Context, postID string) error {
+		onBeforeDelete := func(ctx context.Context, postID string) error {
 			keys, err := postAttRepo.ListS3KeysByPostID(ctx, postID)
 			if err != nil {
 				return err
@@ -148,9 +147,10 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 				}
 			}
 			return nil
-		})
+		}
+		postsHandler := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{OnBeforeDelete: onBeforeDelete})
 		postsHandler.Register(app)
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, "gemini-2.5-flash", 280, auth).Register(app)
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, httpImagePreparer{}, nil, "gemini-2.5-flash", 280, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "it@example.com", "it-password")
 

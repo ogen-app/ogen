@@ -30,13 +30,11 @@ type BrandHandler struct {
 	activity *activity.Recorder
 }
 
-// NewBrandHandler constructs the handler. storage may be nil (uploads then 503).
-func NewBrandHandler(repo repository.BrandRepository, store storage.Storage, auth fiber.Handler) *BrandHandler {
-	return &BrandHandler{repo: repo, storage: store, auth: auth}
+// NewBrandHandler constructs the handler. storage may be nil (uploads then 503);
+// a nil rec records nothing.
+func NewBrandHandler(repo repository.BrandRepository, store storage.Storage, auth fiber.Handler, rec *activity.Recorder) *BrandHandler {
+	return &BrandHandler{repo: repo, storage: store, auth: auth, activity: rec}
 }
-
-// SetActivityRecorder wires the CON-125 activity recorder. nil is a no-op.
-func (h *BrandHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
 
 func (h *BrandHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity.Option) {
 	if h.activity == nil {

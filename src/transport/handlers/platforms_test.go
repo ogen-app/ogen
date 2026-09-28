@@ -47,8 +47,8 @@ var _ = Describe("PlatformsHandler", Ordered, func() {
 		settingRepo := repository.NewSettingRepository(db)
 		platformRepo := repository.NewPlatformRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewPlatformsHandler(platformRepo, nil, nil, auth).Register(app)
 
 		// Seed an auth user and log in

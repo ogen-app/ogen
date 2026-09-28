@@ -61,24 +61,22 @@ func newSecretsGRPCRig() *secretsGRPCRig {
 	db := mustOpenIntegrationDB()
 	store := newSecretsStore(db)
 
-	srv, err := grpcserver.New(
-		secretsGRPCToken, store,
-		repository.NewTenantTierRepository(db),
-		repository.NewTenantGroupRepository(db),
-		repository.NewTenantRepository(db),
-		repository.NewPlatformRepository(db),
-		repository.NewPlatformGlobalLimitsRepository(db),
-		repository.NewFlowModelConfigRepository(db), // ModelConfigAdminService
-		repository.NewTenantTierVersionRepository(db),
-		repository.NewTenantTierAssignmentRepository(db),
-		repository.NewEmailLogRepository(db),
-		repository.NewEmailEventRepository(db),
-		nil,
-		nil,
-		nil, nil, "", // No admin-notification path needed for the secrets rig
-		repository.NewAnnouncementRepository(db),
-		nil, // No event hub needed for the secrets rig
-	)
+	// No email bodies, admin-notification path or event hub needed here.
+	srv, err := grpcserver.New(grpcserver.Deps{
+		Token:            secretsGRPCToken,
+		Secrets:          store,
+		Tiers:            repository.NewTenantTierRepository(db),
+		Groups:           repository.NewTenantGroupRepository(db),
+		Tenants:          repository.NewTenantRepository(db),
+		Platforms:        repository.NewPlatformRepository(db),
+		PlatformLimits:   repository.NewPlatformGlobalLimitsRepository(db),
+		FlowModelConfigs: repository.NewFlowModelConfigRepository(db),
+		TierVersions:     repository.NewTenantTierVersionRepository(db),
+		TierAssignments:  repository.NewTenantTierAssignmentRepository(db),
+		EmailLogs:        repository.NewEmailLogRepository(db),
+		EmailEvents:      repository.NewEmailEventRepository(db),
+		Announcements:    repository.NewAnnouncementRepository(db),
+	})
 	Expect(err).NotTo(HaveOccurred())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	Expect(err).NotTo(HaveOccurred())

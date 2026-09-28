@@ -54,11 +54,11 @@ var _ = Describe("Post notes CRUD (CON-188)", Ordered, func() {
 		noteSvc := notes.New(repository.NewPostNoteRepository(db))
 		auth := handlers.RequireAuth(sessionRepo, userRepo, "test_session")
 
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
-		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth).Register(app)
-		handlers.NewPostNotesHandler(noteSvc, postRepo, auth).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{}).Register(app)
+		handlers.NewPostNotesHandler(noteSvc, postRepo, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "notes-it@example.com", "it-password")
 

@@ -19,10 +19,6 @@ type AssetChunkLister interface {
 	ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error)
 }
 
-// SetChunkLister wires the chunk view. Nil leaves GET /:id/chunks
-// answering 409.
-func (h *AssetsHandler) SetChunkLister(l AssetChunkLister) { h.chunks = l }
-
 // assetChunksResponse is one page of an asset's searchable chunks.
 type assetChunksResponse struct {
 	Chunks []models.AssetChunk `json:"chunks"`

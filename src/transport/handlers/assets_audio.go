@@ -73,13 +73,10 @@ type AudioAssetsHandler struct {
 	db          *bun.DB
 	audioJobs   AudioIngestEnqueuer
 	auth        fiber.Handler
-	limiter     *entitlements.Limiter // CON-295 quota gate (nil-safe)
+	// limiter gates content_bank_assets at presign and media_storage_bytes at
+	// finalize on the real uploaded size. Nil-safe.
+	limiter *entitlements.Limiter
 }
-
-// SetLimiter wires the CON-295 entitlement limiter (nil-safe no-op): presign
-// gates content_bank_assets, finalize gates media_storage_bytes on the real
-// uploaded size.
-func (h *AudioAssetsHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func NewAudioAssetsHandler(
 	repo repository.AssetRepository,
@@ -91,6 +88,7 @@ func NewAudioAssetsHandler(
 	db *bun.DB,
 	audioJobs AudioIngestEnqueuer,
 	auth fiber.Handler,
+	limiter *entitlements.Limiter,
 ) *AudioAssetsHandler {
 	return &AudioAssetsHandler{
 		repo:        repo,
@@ -102,6 +100,7 @@ func NewAudioAssetsHandler(
 		db:          db,
 		audioJobs:   audioJobs,
 		auth:        auth,
+		limiter:     limiter,
 	}
 }
 

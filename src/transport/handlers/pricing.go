@@ -26,13 +26,12 @@ type PricingHandler struct {
 // NewPricingHandler builds the handler over the entitlement resolver, the
 // version repository (for the public catalog), the feature catalog, and the auth
 // middleware.
-func NewPricingHandler(resolver *entitlements.Resolver, versions repository.TenantTierVersionRepository, catalog *entitlements.Catalog, auth fiber.Handler) *PricingHandler {
-	return &PricingHandler{resolver: resolver, versions: versions, catalog: catalog, auth: auth}
+//
+// limiter lets MyEntitlements attach each numeric feature's live usage; nil
+// makes the read omit `current`.
+func NewPricingHandler(resolver *entitlements.Resolver, versions repository.TenantTierVersionRepository, catalog *entitlements.Catalog, auth fiber.Handler, limiter *entitlements.Limiter) *PricingHandler {
+	return &PricingHandler{resolver: resolver, versions: versions, catalog: catalog, auth: auth, limiter: limiter}
 }
-
-// SetLimiter wires the CON-295 limiter so MyEntitlements can attach each numeric
-// feature's live usage (nil-safe: without it the read simply omits `current`).
-func (h *PricingHandler) SetLimiter(l *entitlements.Limiter) { h.limiter = l }
 
 func (h *PricingHandler) Register(app *fiber.App) {
 	app.Get("/api/public/pricing", h.Pricing)                 // PUBLIC — no auth (marketing site)

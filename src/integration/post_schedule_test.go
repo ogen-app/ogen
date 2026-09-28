@@ -73,17 +73,18 @@ var _ = Describe("Post schedule — CON-78", Ordered, func() {
 		allowlistRepo = repository.NewAutoPublishAllowlistRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, "test_session")
 
-		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 
-		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth)
-		postsHandler.SetPostLogRepo(logRepo)
 		// Real schedule service over a real allowlist. No jobs
 		// client wired — the auto-publish routing decision is still
 		// exercised; the Zernio submit enqueue is out of scope here
 		// (consistent with the rest of the suite, which doesn't run the River worker pool).
-		postsHandler.SetScheduleService(schedule.New(db, postRepo, platformRepo, postAttRepo, allowlistRepo, logRepo, nil, nil))
+		postsHandler := handlers.NewPostsHandler(postRepo, versionRepo, platformRepo, postAttRepo, auth, handlers.PostsOptions{
+			PostLogs: logRepo,
+			Schedule: schedule.New(db, postRepo, platformRepo, postAttRepo, allowlistRepo, logRepo, nil, nil),
+		})
 		postsHandler.Register(app)
 
 		// Seed user + session + campaign.

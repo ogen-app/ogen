@@ -79,8 +79,7 @@ var _ = Describe("InvitationsHandler seat cap (CON-295)", Ordered, func() {
 		lim := entitlements.NewLimiter(resolver, cat, entitlements.ModeEnforce).
 			Register("team_seats", entitlements.CounterFunc(func(c context.Context, _ string) (int64, error) { return userRepo.CountInTenant(c) }))
 
-		ih := handlers.NewInvitationsHandler(db, userRepo, repository.NewAccountRepository(db), tenantRepo, inviteRepo, sessionRepo, "https://app.example.com", testCookieName, false, auth)
-		ih.SetLimiter(lim)
+		ih := handlers.NewInvitationsHandler(db, userRepo, repository.NewAccountRepository(db), tenantRepo, inviteRepo, sessionRepo, "https://app.example.com", testCookieName, false, auth, handlers.InvitationsOptions{Limiter: lim})
 		ih.Register(app)
 	})
 

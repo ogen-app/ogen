@@ -62,11 +62,11 @@ type SessionsHandler struct {
 	throttleRecordSem chan struct{}
 	// activity records CON-125 authentication events (login, logout). Both run
 	// outside tenant scope, so the handler builds an explicit tenant+user
-	// context per event. nil is a no-op. Wired via SetActivityRecorder.
+	// context per event. nil is a no-op.
 	activity *activity.Recorder
 }
 
-func NewSessionsHandler(userRepo repository.UserRepository, accountRepo repository.AccountRepository, sessionRepo repository.SessionRepository, cookieName string, secureCookie bool) *SessionsHandler {
+func NewSessionsHandler(userRepo repository.UserRepository, accountRepo repository.AccountRepository, sessionRepo repository.SessionRepository, cookieName string, secureCookie bool, rec *activity.Recorder) *SessionsHandler {
 	return &SessionsHandler{
 		userRepo:          userRepo,
 		accountRepo:       accountRepo,
@@ -76,11 +76,9 @@ func NewSessionsHandler(userRepo repository.UserRepository, accountRepo reposito
 		ipLimiter:         newKeyedRateLimiter(loginPerIPBurst, loginRateWindow),
 		emailLimiter:      newKeyedRateLimiter(loginPerEmailBurst, loginRateWindow),
 		throttleRecordSem: make(chan struct{}, maxConcurrentThrottleRecords),
+		activity:          rec,
 	}
 }
-
-// SetActivityRecorder wires the CON-125 activity recorder (nil-safe no-op).
-func (h *SessionsHandler) SetActivityRecorder(r *activity.Recorder) { h.activity = r }
 
 // authCtx builds a context carrying the given tenant + user so the recorder can
 // attribute an auth event that happens before the auth middleware would run.

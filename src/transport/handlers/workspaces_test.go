@@ -87,10 +87,10 @@ var _ = Describe("Workspaces (CON-147)", Ordered, func() {
 		// workspace handler gets a recording fake so the CON-203 teardown enqueue
 		// (and its tx-coupling) can be asserted.
 		enq = &fakeLifecycleEnqueuer{}
-		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth).Register(app)
-		handlers.NewWorkspacesHandler(db, workspaceRepo, userRepo, accountRepo, tenantRepo, sessionRepo, enq, auth).Register(app)
-		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false).Register(app)
-		handlers.NewUsersHandler(db, userRepo, accountRepo, settingRepo, auth).Register(app)
+		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth, nil).Register(app)
+		handlers.NewWorkspacesHandler(db, workspaceRepo, userRepo, accountRepo, tenantRepo, sessionRepo, enq, auth, nil).Register(app)
+		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
+		handlers.NewUsersHandler(db, userRepo, accountRepo, settingRepo, auth, nil, nil).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
 	})
 
