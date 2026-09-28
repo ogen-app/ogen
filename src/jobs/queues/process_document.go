@@ -5,15 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"time"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/pgvector/pgvector-go"
 	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -116,44 +114,29 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 		slog.WarnContext(ctx, "document-service not configured", logging.AttrComponent, "jobs.process_document", "asset_id", in.AssetID)
 		return nil
 	}
+	status := p.statusWriter()
 	if p.Deps.Storage == nil {
-		// Best-effort status write; we return the more descriptive error below.
-		_ = p.fail(ctx, in.AssetID, models.UploadCodeInternalError, "document processing is not configured")
+		// Best-effort status write; the returned error is more descriptive.
+		_ = status.fail(ctx, in.AssetID, models.UploadCodeInternalError, "document processing is not configured")
 		return fmt.Errorf("process_document %s: storage not configured", in.AssetID)
 	}
-
-	// No gemini_api_key configured yet: checked up front so we don't
-	// download + parse the document only to fail every chunk embed. Retry rather
-	// than fail — a key set via the secrets API takes effect without a restart,
-	// so a later attempt can succeed; give up (failed) only once attempts are
-	// exhausted, so the asset never stays stuck in "processing".
-	if !embedopts.Available(p.Deps.Embedder) {
-		if lastAttempt {
-			return p.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, "document processing is temporarily unavailable — please try again")
-		}
-		slog.WarnContext(ctx, "embedder unavailable will retry", logging.AttrComponent, "jobs.process_document", "asset_id", in.AssetID)
-		return fmt.Errorf("process_document %s: embedder unavailable", in.AssetID)
+	giveUp := func() error {
+		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, documentUnavailableReason)
 	}
-
-	if err := p.setStatus(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
+	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_document", in.AssetID, lastAttempt, giveUp); !ok {
+		return err
+	}
+	if err := status.set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
 		return err
 	}
 
-	// 1. Re-read the original (the upload handler stored it before enqueue).
-	//    Transient read errors retry.
 	key := storage.TenantKey(ctx, in.StorageKey)
-	rc, err := p.Deps.Storage.Download(ctx, key)
+	data, err := downloadOriginal(ctx, p.Deps.Storage, "process_document", in.AssetID, key, "document")
 	if err != nil {
-		return fmt.Errorf("process_document %s: download %s: %w", in.AssetID, key, err)
+		return err
 	}
-	data, err := io.ReadAll(rc)
-	_ = rc.Close()
-	if err != nil {
-		return fmt.Errorf("process_document %s: read document: %w", in.AssetID, err)
-	}
-
-	// 2. Parse via document-service. Unsupported/corrupt/encrypted documents are
-	//    terminal (no retry); service-down/deadline are transient.
+	// Unsupported/corrupt/encrypted documents are terminal; service-down and
+	// deadline errors retry.
 	res, err := p.Deps.Client.Parse(ctx, bytes.NewReader(data), documents.Options{
 		Filename:    in.OriginalName,
 		ContentType: in.MimeType,
@@ -161,125 +144,63 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 	if err != nil {
 		if isTerminalParseErr(err) {
 			slog.WarnContext(ctx, "unparseable document", logging.AttrComponent, "jobs.process_document", "asset_id", in.AssetID, logging.AttrError, err)
-			return p.fail(ctx, in.AssetID, models.UploadCodeInvalidFile, "the document could not be read (corrupt, encrypted, or unsupported)")
+			return status.fail(ctx, in.AssetID, models.UploadCodeInvalidFile, "the document could not be read (corrupt, encrypted, or unsupported)")
 		}
 		return fmt.Errorf("process_document %s: parse: %w", in.AssetID, err)
 	}
 
-	// 3. Embed each chunk that has words.
-	chunks := make([]models.AssetChunk, 0, len(res.Chunks))
-	var embedAttempts, embedFailures int
-	var totalEmbedTokens int64
-	for _, ch := range res.Chunks {
-		if !hasWords(ch.Text) {
-			continue
-		}
-		embedAttempts++
-		emb, eErr := p.Deps.Embedder.Embed(ctx, &ai.EmbedRequest{
-			Input:   []*ai.Document{ai.DocumentFromText(ch.Text, nil)},
-			Options: embedopts.Document(),
-		})
-		if eErr != nil || len(emb.Embeddings) != 1 {
-			embedFailures++
-			continue
-		}
-		tokens := ch.TokenCount
-		if tokens <= 0 {
-			tokens = estimateTokens(ch.Text)
-		}
-		totalEmbedTokens += int64(tokens)
-		chunk := models.AssetChunk{
-			ID:         fmt.Sprintf("%s:%d", in.AssetID, ch.Index),
-			AssetID:    in.AssetID,
-			ChunkIndex: ch.Index,
-			Content:    ch.Text,
-			TokenCount: tokens,
-			Embedding:  pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
-			Model:      p.Deps.Embedder.Name(),
-		}
-		if ch.SourceLabel != "" {
-			label := ch.SourceLabel
-			chunk.SourceLabel = &label
-		}
-		chunk.SourceAnchor, chunk.PageStart, chunk.PageEnd = documentAnchor(ch.Anchor)
-		chunks = append(chunks, chunk)
+	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, documentChunkSources(res.Chunks))
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_document", in.AssetID, chunks, false); err != nil {
+		return err
 	}
-
-	if len(chunks) > 0 && p.Deps.Chunks != nil {
-		if err := p.Deps.Chunks.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
-			return fmt.Errorf("process_document %s: store chunks: %w", in.AssetID, err)
-		}
-	}
-
-	// 4. File metadata — retried on failure so the asset never lands "ready"
-	//    without its file row.
+	// The file row is retried so the asset never lands "ready" without it.
 	if err := p.persistFile(ctx, in, key, len(data)); err != nil {
 		return err
 	}
 
-	// 5. Final status. Propagate a write failure so the worker retries rather
-	//    than reporting success with the asset stuck in "processing".
-	var finalStatus string
-	switch {
-	case embedAttempts == 0:
-		// No embeddable text (e.g. image-only or empty document) — ready with 0
-		// chunks (searchable-but-empty; not an error).
-		finalStatus = models.AssetStatusReady
-	case len(chunks) == 0:
-		// Every chunk failed to embed — almost always a transient embedder
-		// outage. Retry; give up (failed) only once attempts are exhausted, so
-		// the asset never stays stuck in "processing".
-		if !lastAttempt {
-			return fmt.Errorf("process_document %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
-		}
-		return p.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, "document processing is temporarily unavailable — please try again")
-	case embedFailures > 0:
-		finalStatus = models.AssetStatusPartial
-	default:
-		finalStatus = models.AssetStatusReady
+	final, err := stats.settle(lastAttempt)
+	if err != nil {
+		return fmt.Errorf("process_document %s: %w", in.AssetID, err)
 	}
-	if err := p.setStatus(ctx, in.AssetID, finalStatus); err != nil {
+	if final == models.AssetStatusFailed {
+		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, documentUnavailableReason)
+	}
+	if err := status.set(ctx, in.AssetID, final); err != nil {
 		return err
 	}
 
-	// One usage event per document ingest (sum of embedded-chunk token
-	// estimates; the Gemini embed response carries no usage). Recorded only AFTER
-	// the durable writes (chunks + file + status) succeed, so a River retry from a
-	// late failure can't double-count. Nil recorder = no-op; skip when nothing
-	// embedded.
-	if totalEmbedTokens > 0 {
-		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "document_extract", llm.EmbedUsage{Tokens: totalEmbedTokens})
+	// One usage event per ingest, recorded only after the durable writes so a
+	// retry from a late failure can't double-count. The Gemini embed response
+	// carries no usage, so the tokens are the chunks' counts.
+	if stats.Tokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "document_extract", llm.EmbedUsage{Tokens: stats.Tokens})
 	}
 	return nil
 }
 
-// setStatus persists the asset status, returning the error so callers can fail
-// the job rather than reporting success with an unpersisted status. A nil Assets
-// dep (status updates disabled) is a no-op.
-func (p *ProcessDocumentProcessor) setStatus(ctx context.Context, assetID, status string) error {
-	if p.Deps.Assets == nil {
-		return nil
+// documentUnavailableReason is the tenant-visible reason when the embedder
+// stays down for every attempt.
+const documentUnavailableReason = "document processing is temporarily unavailable — please try again"
+
+// documentChunkSources yields the parsed chunks with their service-reported
+// token counts, citation labels and anchors.
+func documentChunkSources(chunks []documents.Chunk) iter.Seq[chunkSource] {
+	return func(yield func(chunkSource) bool) {
+		for _, ch := range chunks {
+			src := chunkSource{Index: ch.Index, Text: ch.Text, Tokens: ch.TokenCount, Label: ch.SourceLabel}
+			src.Anchor, src.PageStart, src.PageEnd = documentAnchor(ch.Anchor)
+			if !yield(src) {
+				return
+			}
+		}
 	}
-	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
-		return fmt.Errorf("process_document %s: set status %s: %w", assetID, status, err)
-	}
-	// Announce terminal outcomes to the asset's creator (no-op for the
-	// intermediate "processing" write).
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "document", models.AssetTypeDocument)
-	return nil
 }
 
-// fail marks the asset failed with a machine-readable code and a tenant-visible
-// reason and announces it to the creator, like setStatus(failed).
-func (p *ProcessDocumentProcessor) fail(ctx context.Context, assetID, code, reason string) error {
-	if p.Deps.Assets == nil {
-		return nil
+func (p *ProcessDocumentProcessor) statusWriter() assetStatusWriter {
+	return assetStatusWriter{
+		op: "process_document", assets: p.Deps.Assets, marker: p.Deps.Assets,
+		notifier: p.Deps.Notifier, label: "document", kind: models.AssetTypeDocument,
 	}
-	if err := p.Deps.Assets.MarkFailed(ctx, assetID, code, reason); err != nil {
-		return fmt.Errorf("process_document %s: mark failed: %w", assetID, err)
-	}
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, models.AssetStatusFailed, "document", models.AssetTypeDocument)
-	return nil
 }
 
 // persistFile upserts the asset_file row (s3 key, mime, size). The Upsert
@@ -325,14 +246,7 @@ func documentAnchor(a documents.Anchor) (anchor *models.SourceAnchor, pageStart,
 		HeadingPath: a.HeadingPath,
 	}
 	if a.Kind == "page" {
-		if a.PageStart > 0 {
-			ps := a.PageStart
-			pageStart = &ps
-		}
-		if a.PageEnd > 0 {
-			pe := a.PageEnd
-			pageEnd = &pe
-		}
+		pageStart, pageEnd = positiveIntPtr(a.PageStart), positiveIntPtr(a.PageEnd)
 	}
 	return anchor, pageStart, pageEnd
 }

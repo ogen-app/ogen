@@ -6,14 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/pgvector/pgvector-go"
 	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -173,20 +171,14 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		slog.WarnContext(ctx, "image-service not configured", logging.AttrComponent, "jobs.process_image", "asset_id", in.AssetID)
 		return nil
 	}
+	status := p.statusWriter()
 	if p.Deps.Storage == nil || p.Deps.Extractions == nil || p.Deps.Blocks == nil {
-		_ = p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
+		_ = status.set(ctx, in.AssetID, models.AssetStatusFailed)
 		return fmt.Errorf("process_image %s: storage/repos not configured", in.AssetID)
 	}
-	// The description embed needs gemini_api_key: checked up front so we
-	// don't run the (paid) vision pipeline only to fail every embed. Retry rather
-	// than fail — a key set via the secrets API takes effect without a restart;
-	// give up (failed) only once attempts are exhausted.
-	if !embedopts.Available(p.Deps.Embedder) {
-		if lastAttempt {
-			return p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
-		}
-		slog.WarnContext(ctx, "embedder unavailable will retry", logging.AttrComponent, "jobs.process_image", "asset_id", in.AssetID)
-		return fmt.Errorf("process_image %s: embedder unavailable", in.AssetID)
+	giveUp := func() error { return status.set(ctx, in.AssetID, models.AssetStatusFailed) }
+	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_image", in.AssetID, lastAttempt, giveUp); !ok {
+		return err
 	}
 
 	ext, err := p.ensureExtraction(ctx, in)
@@ -196,48 +188,94 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	if ext.Status == models.ImageExtractionStatusComplete {
 		return nil // idempotent re-drive of a finished run
 	}
-	if err := p.setAssetStatus(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
+	if err := status.set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
 		return err
 	}
-
-	// Resume: if a PRIOR attempt already ran the (paid) vision pass and checkpointed
-	// its results, skip the cost gate + Extract entirely and resume at embedding
-	// from the persisted description + blocks. This is what stops a transient
-	// downstream (embed) failure from re-invoking — and re-charging — the vision
-	// model on every River retry.
+	// A prior attempt already ran and checkpointed the paid vision pass: resume
+	// at embedding so a transient embed failure never re-charges Extract.
 	if ext.Status == models.ImageExtractionStatusDescribing {
 		return p.resumeFromCheckpoint(ctx, in, ext, lastAttempt)
 	}
+	return p.describe(ctx, in, ext, lastAttempt)
+}
 
-	// Cost-cap gate (CON-86 usage.Checker) BEFORE the vision spend. Nil checker =
-	// no gate. Over-cap is terminal (reject before spend).
+// describe runs the paid vision pass behind the cost-cap gate, persists and
+// checkpoints its result, then embeds from the persisted state.
+func (p *ProcessImageProcessor) describe(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, lastAttempt bool) error {
+	// Over-cap is terminal: reject before the spend. A nil checker is no gate.
 	if p.Deps.Checker != nil {
 		if err := p.Deps.Checker.Enforce(ctx); err != nil {
 			return p.terminalReject(ctx, in, ext, models.UploadCodeQuotaExceeded, "your usage limit has been reached — image processing was not started")
 		}
 	}
-
-	// The description as it stands before the vision call: the result replaces it
-	// only if nobody edits it meanwhile (compare-and-set, CON-312).
+	// The description as it stands before the vision call: the result replaces
+	// it only if nobody edits it meanwhile (compare-and-set).
 	before, err := p.Deps.Assets.GetByID(ctx, in.AssetID)
 	if err != nil {
 		return fmt.Errorf("process_image %s: load asset: %w", in.AssetID, err)
 	}
-
-	// Presign the original (in) and the normalized-derivative slot (out). Bytes
-	// never traverse gRPC — image-service reads/writes these directly.
-	originalKey := storage.TenantKey(ctx, in.StorageKey)
-	srcURL, err := p.Deps.Storage.PresignedGetURL(ctx, originalKey, imagePresignTTL)
+	srcURL, dstURL, normKey, err := p.presign(ctx, in)
 	if err != nil {
-		return fmt.Errorf("process_image %s: presign source: %w", in.AssetID, err)
+		return err
 	}
-	normKey := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/normalized.png", in.AssetID))
-	dstURL, err := p.Deps.Storage.PresignedPutURL(ctx, normKey, normalizedImageContentType, imagePresignTTL)
+	res, err := p.Deps.Client.Extract(ctx, p.extractOptions(in, srcURL, dstURL))
 	if err != nil {
-		return fmt.Errorf("process_image %s: presign normalized: %w", in.AssetID, err)
+		code, reason, terminal := classifyExtractErr(err, lastAttempt)
+		if !terminal {
+			return fmt.Errorf("process_image %s: extract: %w", in.AssetID, err)
+		}
+		return p.terminalReject(ctx, in, ext, code, reason)
+	}
+	if res.RejectedReason != "" {
+		return p.terminalReject(ctx, in, ext, models.UploadCodeInvalidFile, res.RejectedReason)
 	}
 
-	res, err := p.Deps.Client.Extract(ctx, imageclient.ExtractOptions{
+	applyExtraction(ext, res, normKey)
+	p.accrueCost(ctx, in, ext, res.Usage)
+	if err := p.persistBlocks(ctx, in, ext, res.Blocks); err != nil {
+		return err
+	}
+	if err := p.stampFile(ctx, in, res); err != nil {
+		return err
+	}
+	// Description → asset.Content, alt text → asset.AltText, both guarded
+	// against a user edit in SQL. The title stays the upload filename.
+	if err := p.Deps.Assets.SetImageResult(ctx, in.AssetID, before.Content, res.Description, res.AltText, res.AltText != ""); err != nil {
+		return fmt.Errorf("process_image %s: set description/alt: %w", in.AssetID, err)
+	}
+
+	// Checkpoint the vision pass before the retryable embed: `describing` means
+	// "vision done, embedding pending", so a retry resumes via
+	// resumeFromCheckpoint instead of re-calling the paid Extract.
+	ext.Status = models.ImageExtractionStatusDescribing
+	ext.FailureReason = ""
+	ext.FailureCode = ""
+	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
+		return fmt.Errorf("process_image %s: checkpoint extraction: %w", in.AssetID, err)
+	}
+	// Embed from the persisted state, not res: the description may have been
+	// edited mid-run and kept by the compare-and-set above.
+	return p.resumeFromCheckpoint(ctx, in, ext, lastAttempt)
+}
+
+// presign returns presigned URLs for the original (in) and the
+// normalized-derivative slot (out), plus the normalized key: image-service
+// reads and writes these directly, so bytes never traverse gRPC.
+func (p *ProcessImageProcessor) presign(ctx context.Context, in ProcessImageTask) (srcURL, dstURL, normKey string, err error) {
+	srcURL, err = p.Deps.Storage.PresignedGetURL(ctx, storage.TenantKey(ctx, in.StorageKey), imagePresignTTL)
+	if err != nil {
+		return "", "", "", fmt.Errorf("process_image %s: presign source: %w", in.AssetID, err)
+	}
+	normKey = storage.TenantKey(ctx, fmt.Sprintf("assets/%s/normalized.png", in.AssetID))
+	dstURL, err = p.Deps.Storage.PresignedPutURL(ctx, normKey, normalizedImageContentType, imagePresignTTL)
+	if err != nil {
+		return "", "", "", fmt.Errorf("process_image %s: presign normalized: %w", in.AssetID, err)
+	}
+	return srcURL, dstURL, normKey, nil
+}
+
+func (p *ProcessImageProcessor) extractOptions(in ProcessImageTask, srcURL, dstURL string) imageclient.ExtractOptions {
+	return imageclient.ExtractOptions{
 		SourceURL:           srcURL,
 		DestPutURL:          dstURL,
 		Filename:            in.OriginalName,
@@ -246,38 +284,38 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 		EscalateModel:       p.Deps.EscalateModel,
 		AltTextMaxChars:     p.Deps.AltTextMaxChars,
 		ConfidenceThreshold: p.Deps.ConfidenceThreshold,
-	})
-	if err != nil {
-		// Prefer the fine-grained reason image-service attaches to a terminal reject
-		// (vector / too-large / dimensions / corrupt / unsupported) over the coarse
-		// gRPC-code buckets, which stay as the fallback for an older service that
-		// carries no ErrorInfo (CON-281 Phase 2).
-		if code := imageclient.UploadCode(err); code != "" {
-			return p.terminalReject(ctx, in, ext, code, models.UploadRejectMessage(code))
-		}
-		switch {
-		case imageclient.IsUnsupportedImage(err):
-			return p.terminalReject(ctx, in, ext, models.UploadCodeUnsupportedMediaType, "the image format is not supported")
-		case imageclient.IsInvalidImage(err):
-			return p.terminalReject(ctx, in, ext, models.UploadCodeInvalidFile, "the image could not be processed (corrupt or too large)")
-		case lastAttempt:
-			// Transient (service down / deadline / 5xx). Retry — but on the FINAL
-			// attempt settle to failed so the asset never strands in "processing"
-			// once River gives up (mirrors process_audio/process_document handling).
-			return p.terminalReject(ctx, in, ext, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable — please try again")
-		default:
-			return fmt.Errorf("process_image %s: extract: %w", in.AssetID, err)
-		}
 	}
-	if res.RejectedReason != "" {
-		// A structured verdict from the service. Phase 1 maps it to the coarse
-		// "not a usable image" bucket; the image.v1 RejectedCode enum (CON-281
-		// Phase 2) refines it to the exact reason without a client change.
-		return p.terminalReject(ctx, in, ext, models.UploadCodeInvalidFile, res.RejectedReason)
-	}
+}
 
-	// Persist the run's metadata + blocks, and the service-reported metadata onto
-	// the asset_file row. Then set the description/alt text, embed, snapshot cost.
+// classifyExtractErr maps an extract failure to a terminal reject (code,
+// reason, true) or reports it as retryable (false). The fine-grained reason
+// image-service attaches wins over the coarse gRPC-code buckets, which remain
+// the fallback for a service that sends no ErrorInfo. A transient failure on
+// the last attempt settles to failed so the asset never strands in
+// "processing" once River gives up.
+func classifyExtractErr(err error, lastAttempt bool) (code, reason string, terminal bool) {
+	if code := imageclient.UploadCode(err); code != "" {
+		return code, models.UploadRejectMessage(code), true
+	}
+	switch {
+	case imageclient.IsUnsupportedImage(err):
+		return models.UploadCodeUnsupportedMediaType, "the image format is not supported", true
+	case imageclient.IsInvalidImage(err):
+		return models.UploadCodeInvalidFile, "the image could not be processed (corrupt or too large)", true
+	case lastAttempt:
+		return models.UploadCodeServiceUnavailable, imageUnavailableReason, true
+	default:
+		return "", "", false
+	}
+}
+
+// imageUnavailableReason is the tenant-visible reason when image-service or
+// the embedder stays down for every attempt; it words the failure as retriable.
+const imageUnavailableReason = "image processing is temporarily unavailable — please try again"
+
+// applyExtraction copies the service-reported shape, quality flags and
+// normalized-derivative metadata onto the extraction row.
+func applyExtraction(ext *models.ImageExtraction, res *imageclient.ExtractResult, normKey string) {
 	ext.Shape = res.Shape
 	ext.ClassifyConfidence = res.ClassifyConfidence
 	ext.Escalated = res.Escalated
@@ -293,36 +331,6 @@ func (p *ProcessImageProcessor) process(ctx context.Context, in ProcessImageTask
 	if res.Normalized.ChecksumSHA256 != "" {
 		ext.ChecksumSHA256 = res.Normalized.ChecksumSHA256
 	}
-	p.accrueCost(ctx, in, ext, res.Usage)
-
-	if err := p.persistBlocks(ctx, in, ext, res.Blocks); err != nil {
-		return err
-	}
-	if err := p.stampFile(ctx, in, res); err != nil {
-		return err
-	}
-
-	// Description → asset.Content; alt text → asset.AltText (guarded against a user
-	// edit in SQL, D5). Title stays the upload filename.
-	if err := p.Deps.Assets.SetImageResult(ctx, in.AssetID, before.Content, res.Description, res.AltText, res.AltText != ""); err != nil {
-		return fmt.Errorf("process_image %s: set description/alt: %w", in.AssetID, err)
-	}
-
-	// CHECKPOINT the successful vision pass BEFORE the retryable embed. The
-	// extraction now durably holds the shape, quality flags, cost, blocks, and
-	// description; marking it `describing` (== "vision done, embedding pending")
-	// means a retry after an embed failure resumes here via resumeFromCheckpoint,
-	// never re-calling the paid Extract.
-	ext.Status = models.ImageExtractionStatusDescribing
-	ext.FailureReason = ""
-	ext.FailureCode = ""
-	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
-		return fmt.Errorf("process_image %s: checkpoint extraction: %w", in.AssetID, err)
-	}
-
-	// Embed from the persisted state, not res: the description may have been
-	// edited mid-run and kept by the compare-and-set above.
-	return p.resumeFromCheckpoint(ctx, in, ext, lastAttempt)
 }
 
 // resumeFromCheckpoint re-drives ONLY the embedding + settle steps of a run whose
@@ -342,30 +350,23 @@ func (p *ProcessImageProcessor) resumeFromCheckpoint(ctx context.Context, in Pro
 	return p.embedAndSettle(ctx, in, ext, embedInputsFromPersisted(asset.Content, blocks), lastAttempt)
 }
 
-// embedInput is one text to embed with its anchor + citation label.
-type embedInput struct {
-	text   string
-	anchor *models.SourceAnchor
-	label  string
-}
-
 // embedInputsFromPersisted builds the embed set from the stored state: the
 // description (asset.Content) + the stored image_blocks (which already carry
-// their persisted SourceAnchor).
-func embedInputsFromPersisted(description string, blocks []models.ImageBlock) []embedInput {
-	inputs := make([]embedInput, 0, len(blocks)+1)
+// their persisted SourceAnchor). Each source is indexed by its position.
+func embedInputsFromPersisted(description string, blocks []models.ImageBlock) []chunkSource {
+	inputs := make([]chunkSource, 0, len(blocks)+1)
 	if hasWords(description) {
-		inputs = append(inputs, embedInput{
-			text:   description,
-			anchor: &models.SourceAnchor{Kind: "image", Provenance: "image_extraction"},
-			label:  "Image description",
+		inputs = append(inputs, chunkSource{
+			Text:   description,
+			Anchor: &models.SourceAnchor{Kind: "image", Provenance: "image_extraction"},
+			Label:  "Image description",
 		})
 	}
 	for i := range blocks {
 		if !hasWords(blocks[i].Text) {
 			continue
 		}
-		inputs = append(inputs, embedInput{text: blocks[i].Text, anchor: blocks[i].Anchor, label: fmt.Sprintf("Region %d", i+1)})
+		inputs = append(inputs, chunkSource{Index: len(inputs), Text: blocks[i].Text, Anchor: blocks[i].Anchor, Label: fmt.Sprintf("Region %d", i+1)})
 	}
 	return inputs
 }
@@ -377,16 +378,13 @@ func embedInputsFromPersisted(description string, blocks []models.ImageBlock) []
 // `processing` / the extraction in `describing` once River gives up. The
 // partial-vs-ready decision reads the quality flags persisted on the extraction,
 // so it is identical on the fresh and resume paths.
-func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, inputs []embedInput, lastAttempt bool) error {
+func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, inputs []chunkSource, lastAttempt bool) error {
 	embedFailures, err := p.embed(ctx, in, inputs)
 	if err != nil {
 		if lastAttempt {
-			// River has exhausted retries; a persistent embedder outage must not
-			// leave the asset stuck in `processing`. Settle terminally (nothing
-			// embedded → not searchable) with a retriable reason so the tenant can
-			// re-extract once the embedder recovers (mirrors the transient-Extract
-			// lastAttempt handling).
-			return p.terminalReject(ctx, in, ext, models.UploadCodeServiceUnavailable, "image processing is temporarily unavailable — please try again")
+			// Nothing embedded, so the asset is not searchable; the retriable
+			// reason lets the tenant re-extract once the embedder recovers.
+			return p.terminalReject(ctx, in, ext, models.UploadCodeServiceUnavailable, imageUnavailableReason)
 		}
 		return err // transient embedder outage → retry (resumes from checkpoint)
 	}
@@ -407,12 +405,12 @@ func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessIm
 		failureCode = models.UploadCodeExtractionPartial
 		failureReason = "the image was described and is searchable, but structured extraction did not fully complete"
 	}
-	if err := p.setAssetStatus(ctx, in.AssetID, status); err != nil {
+	if err := p.statusWriter().set(ctx, in.AssetID, status); err != nil {
 		return err
 	}
 	// The run has settled searchable (partial|complete) and the normalized.png
-	// exists — only now is it safe to publish the browser-drawable key (AC4). A
-	// failed run returns above (terminalReject) and never reaches here.
+	// exists — only now is it safe to publish the browser-drawable key. A failed
+	// run returns above (terminalReject) and never reaches here.
 	if err := p.exposeNormalizedDerivative(ctx, in); err != nil {
 		return err
 	}
@@ -423,35 +421,19 @@ func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessIm
 }
 
 // ensureExtraction loads the (asset, run_key) extraction or creates a fresh
-// pending one. Idempotent under a concurrent create via the unique index.
+// pending one.
 func (p *ProcessImageProcessor) ensureExtraction(ctx context.Context, in ProcessImageTask) (*models.ImageExtraction, error) {
-	ext, err := p.Deps.Extractions.GetByAssetAndRunKey(ctx, in.AssetID, in.RunKey)
-	if err == nil {
-		return ext, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("process_image %s: load extraction: %w", in.AssetID, err)
-	}
-	id, err := models.NewID()
-	if err != nil {
-		return nil, fmt.Errorf("process_image %s: new extraction id: %w", in.AssetID, err)
-	}
-	ext = &models.ImageExtraction{
-		ID:            id,
-		AssetID:       in.AssetID,
-		RunKey:        in.RunKey,
-		Status:        models.ImageExtractionStatusPending,
-		ClassifyModel: p.Deps.ClassifyModel,
-		ExtractModel:  p.extractModel(in),
-		EscalateModel: p.Deps.EscalateModel,
-	}
-	if err := p.Deps.Extractions.Create(ctx, ext); err != nil {
-		if again, gErr := p.Deps.Extractions.GetByAssetAndRunKey(ctx, in.AssetID, in.RunKey); gErr == nil {
-			return again, nil
+	return ensureExtractionRun(ctx, p.Deps.Extractions, "process_image", in.AssetID, in.RunKey, func(id string) *models.ImageExtraction {
+		return &models.ImageExtraction{
+			ID:            id,
+			AssetID:       in.AssetID,
+			RunKey:        in.RunKey,
+			Status:        models.ImageExtractionStatusPending,
+			ClassifyModel: p.Deps.ClassifyModel,
+			ExtractModel:  p.extractModel(in),
+			EscalateModel: p.Deps.EscalateModel,
 		}
-		return nil, fmt.Errorf("process_image %s: create extraction: %w", in.AssetID, err)
-	}
-	return ext, nil
+	})
 }
 
 // persistBlocks maps the service Blocks to image_blocks rows (with image-region
@@ -556,53 +538,21 @@ func (p *ProcessImageProcessor) exposeNormalizedDerivative(ctx context.Context, 
 // embed embeds the given inputs into assets_chunks (anchored). Returns the count
 // of chunks that failed to embed; a total embed failure (nothing landed though
 // something was embeddable) is returned as an error so the job retries.
-func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, inputs []embedInput) (int, error) {
-	chunks := make([]models.AssetChunk, 0, len(inputs))
-	var embedAttempts, embedFailures int
-	var totalEmbedTokens int64
-	for idx, e := range inputs {
-		embedAttempts++
-		emb, eErr := p.Deps.Embedder.Embed(ctx, &ai.EmbedRequest{
-			Input:   []*ai.Document{ai.DocumentFromText(e.text, nil)},
-			Options: embedopts.Document(),
-		})
-		if eErr != nil || len(emb.Embeddings) != 1 {
-			embedFailures++
-			continue
-		}
-		label := e.label
-		tokens := estimateTokens(e.text)
-		totalEmbedTokens += int64(tokens)
-		chunks = append(chunks, models.AssetChunk{
-			ID:           fmt.Sprintf("%s:%d", in.AssetID, idx),
-			AssetID:      in.AssetID,
-			ChunkIndex:   idx,
-			Content:      e.text,
-			TokenCount:   tokens,
-			Embedding:    pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
-			Model:        p.Deps.Embedder.Name(),
-			SourceLabel:  &label,
-			SourceAnchor: e.anchor,
-		})
+func (p *ProcessImageProcessor) embed(ctx context.Context, in ProcessImageTask, inputs []chunkSource) (int, error) {
+	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, slices.Values(inputs))
+	// A creative image with no text has nothing embeddable: ready, 0 chunks.
+	if _, err := stats.settle(false); err != nil {
+		return stats.Failures, fmt.Errorf("process_image %s: %w", in.AssetID, err)
 	}
-
-	// Every chunk failed to embed (transient embedder outage) — retry, unless there
-	// was nothing embeddable (creative image with no text → ready, 0 chunks).
-	if embedAttempts > 0 && len(chunks) == 0 {
-		return embedFailures, fmt.Errorf("process_image %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_image", in.AssetID, chunks, false); err != nil {
+		return stats.Failures, err
 	}
-	if len(chunks) > 0 && p.Deps.Chunks != nil {
-		if err := p.Deps.Chunks.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
-			return embedFailures, fmt.Errorf("process_image %s: store chunks: %w", in.AssetID, err)
-		}
+	// Metered once the chunks are stored, so a retry after a failed store
+	// doesn't double-count. Covers ingestion and the re-embed.
+	if stats.Tokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "image_embed", llm.EmbedUsage{Tokens: stats.Tokens})
 	}
-	// Meter the description/region embeddings on the gemini vendor, like
-	// document_extract, once the chunks are stored — a retry after a
-	// failed store doesn't double-count. Covers ingestion and the re-embed.
-	if totalEmbedTokens > 0 {
-		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "image_embed", llm.EmbedUsage{Tokens: totalEmbedTokens})
-	}
-	return embedFailures, nil
+	return stats.Failures, nil
 }
 
 // accrueCost prices each vision call's token usage via the gemini vendor,
@@ -652,20 +602,11 @@ func (p *ProcessImageProcessor) terminalReject(ctx context.Context, in ProcessIm
 		return fmt.Errorf("process_image %s: mark extraction failed: %w", in.AssetID, err)
 	}
 	slog.WarnContext(ctx, "image ingestion rejected", logging.AttrComponent, "jobs.process_image", "asset_id", in.AssetID, "reason", reason)
-	return p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
+	return p.statusWriter().set(ctx, in.AssetID, models.AssetStatusFailed)
 }
 
-// setAssetStatus persists the asset status and announces terminal outcomes to
-// the creator. A nil Assets dep is a no-op.
-func (p *ProcessImageProcessor) setAssetStatus(ctx context.Context, assetID, status string) error {
-	if p.Deps.Assets == nil {
-		return nil
-	}
-	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
-		return fmt.Errorf("process_image %s: set status %s: %w", assetID, status, err)
-	}
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "image", models.AssetTypeImage)
-	return nil
+func (p *ProcessImageProcessor) statusWriter() assetStatusWriter {
+	return assetStatusWriter{op: "process_image", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "image", kind: models.AssetTypeImage}
 }
 
 func (p *ProcessImageProcessor) extractModel(in ProcessImageTask) string {

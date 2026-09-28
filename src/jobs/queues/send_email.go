@@ -89,80 +89,61 @@ func init() {
 // (so River retries); every terminal outcome (skip, disabled, render failure,
 // 4xx) is logged and returns nil.
 func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error {
-	const comp = "jobs.send_email"
 	dep := p.Deps
 	if t.TemplateKey == "" || (t.UserID == "" && t.ToEmail == "") {
-		slog.WarnContext(ctx, "send_email skipped: missing args", logging.AttrComponent, comp)
+		slog.WarnContext(ctx, "send_email skipped: missing args", logging.AttrComponent, sendEmailComponent)
 		return nil
 	}
 	if dep.Templates == nil {
-		slog.WarnContext(ctx, "send_email skipped: deps not wired", logging.AttrComponent, comp)
+		slog.WarnContext(ctx, "send_email skipped: deps not wired", logging.AttrComponent, sendEmailComponent)
 		return nil
 	}
 	ctx = tenantctx.With(ctx, t.TenantID)
 
-	// Skip mail for a suspended/deleted tenant: a frozen tenant sends no
-	// welcome/drip/transactional mail. A DB error retries; otherwise terminal.
-	if active, aerr := tenantIsActive(ctx, p.Tenants, t.TenantID); aerr != nil {
-		return aerr
-	} else if !active {
-		slog.InfoContext(ctx, "send_email skipped: tenant not active", logging.AttrComponent, comp, "template", t.TemplateKey)
+	// A frozen tenant sends no mail. A DB error retries.
+	active, err := tenantIsActive(ctx, p.Tenants, t.TenantID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		slog.InfoContext(ctx, "send_email skipped: tenant not active", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey)
 		return nil
 	}
 
-	// Resolve the recipient. The usual path re-resolves it fresh from users (so an
-	// email change since enqueue is honoured and a deleted user is a clean terminal
-	// skip). When the mail targets someone who isn't a user yet — an invitee
-	// — the address is carried on the task itself; the workspace name then rides the
-	// vars, since there's no user/tenant to load.
-	var recipientName, toEmail, workspace string
-	if t.UserID != "" {
-		if dep.Users == nil {
-			slog.WarnContext(ctx, "send_email skipped: deps not wired", logging.AttrComponent, comp)
-			return nil
-		}
-		user, err := dep.Users.GetByIDWithTenant(ctx, t.UserID)
-		if errors.Is(err, sql.ErrNoRows) {
-			slog.InfoContext(ctx, "send_email skipped: user gone", logging.AttrComponent, comp, "user", t.UserID)
-			return nil
-		} else if err != nil {
-			return err // transient (DB)
-		}
-		recipientName, toEmail = user.Name, user.Email
-		if user.Tenant != nil {
-			workspace = user.Tenant.Name
-		}
-	} else {
-		recipientName, toEmail = t.ToName, t.ToEmail
-		workspace = t.Vars["workspace_name"]
+	rcpt, ok, err := p.resolveRecipient(ctx, t)
+	if !ok {
+		return err
 	}
-
 	logBase := models.EmailLog{
 		TenantID:       t.TenantID,
 		UserID:         t.UserID,
 		TemplateID:     t.TemplateKey,
 		Kind:           t.EmailKind,
-		ToEmail:        toEmail,
+		ToEmail:        rcpt.email,
 		Provider:       models.ProviderResend,
 		IdempotencyKey: t.IdempotencyKey,
 	}
+	return p.deliver(ctx, t, rcpt, logBase)
+}
 
+// deliver runs the send-time gates (sending disabled, suppression), renders
+// the template and sends it, logging every terminal outcome.
+func (p *SendEmailProcessor) deliver(ctx context.Context, t SendEmailTask, rcpt emailRecipient, logBase models.EmailLog) error {
+	dep := p.Deps
 	// Sending disabled (no Resend key wired): record and succeed.
 	if dep.Sender == nil {
 		p.writeLog(ctx, logBase, models.EmailLogSkippedDisabled, "", "")
-		slog.InfoContext(ctx, "send_email skipped: sending disabled", logging.AttrComponent, comp, "template", t.TemplateKey)
+		slog.InfoContext(ctx, "send_email skipped: sending disabled", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey)
 		return nil
 	}
-
-	// Send-time suppression gate.
 	if dep.Suppressions != nil {
-		suppressed, err := dep.Suppressions.IsSuppressed(ctx, toEmail, t.EmailKind)
+		suppressed, err := dep.Suppressions.IsSuppressed(ctx, rcpt.email, t.EmailKind)
 		if err != nil {
 			return err // transient (DB)
 		}
 		if suppressed {
 			p.writeLog(ctx, logBase, models.EmailLogSkippedSuppressed, "", "")
-			slog.InfoContext(ctx, "send_email skipped: suppressed", logging.AttrComponent, comp, "template", t.TemplateKey, "kind", string(t.EmailKind))
+			slog.InfoContext(ctx, "send_email skipped: suppressed", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, "kind", string(t.EmailKind))
 			return nil
 		}
 	}
@@ -170,74 +151,34 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 	tmpl, err := dep.Templates.GetByKey(ctx, t.TemplateKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		p.writeLog(ctx, logBase, models.EmailLogFailed, "", "template not found: "+t.TemplateKey)
-		slog.WarnContext(ctx, "send_email failed: template not found", logging.AttrComponent, comp, "template", t.TemplateKey)
+		slog.WarnContext(ctx, "send_email failed: template not found", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey)
 		return nil // terminal
-	} else if err != nil {
+	}
+	if err != nil {
 		return err // transient (DB)
 	}
 
-	// Marketing mail must carry an unsubscribe affordance.
-	headers := map[string]string{}
-	unsubURL := ""
-	if t.EmailKind == models.EmailKindMarketing {
-		secret := ""
-		if dep.LinkSecret != nil {
-			secret, err = dep.LinkSecret(ctx)
-			if err != nil {
-				return err // transient (secret read)
-			}
-		}
-		if secret == "" {
-			p.writeLog(ctx, logBase, models.EmailLogFailed, "", "no link secret for unsubscribe")
-			slog.WarnContext(ctx, "send_email failed: no unsubscribe secret", logging.AttrComponent, comp, "template", t.TemplateKey)
-			return nil // terminal
-		}
-		unsubURL = dep.unsubscribeURL(secret, toEmail)
-		headers["List-Unsubscribe"] = "<" + unsubURL + ">"
-		headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+	headers, unsubURL, ok, err := p.unsubscribeHeaders(ctx, t, rcpt.email)
+	if err != nil {
+		return err // transient (secret read)
+	}
+	if !ok {
+		p.writeLog(ctx, logBase, models.EmailLogFailed, "", "no link secret for unsubscribe")
+		slog.WarnContext(ctx, "send_email failed: no unsubscribe secret", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey)
+		return nil // terminal
 	}
 
-	rendered, err := templates.Render(tmpl, templates.Data{
-		Name:           recipientName,
-		WorkspaceName:  workspace,
-		AppURL:         dep.AppBaseURL,
-		UnsubscribeURL: unsubURL,
-		// Per-message vars: the password_reset template reads ResetURL;
-		// the invitation template reads InviteURL/InviterName/Role; the
-		// connection_expiring template reads Platform/AccountName/Stage/Expires*/
-		// ReconnectURL; other templates leave them empty.
-		ResetURL:     t.Vars["reset_url"],
-		InviteURL:    t.Vars["invite_url"],
-		InviterName:  t.Vars["inviter_name"],
-		Role:         t.Vars["role"],
-		Platform:     t.Vars["platform"],
-		AccountName:  t.Vars["account_name"],
-		Stage:        t.Vars["stage"],
-		ExpiresAt:    t.Vars["expires_at"],
-		ExpiresIn:    t.Vars["expires_in"],
-		ReconnectURL: t.Vars["reconnect_url"],
-		// admin_tenant_registered: the operator notification carries the
-		// newly-registered tenant's details as vars (there's no user/tenant to load
-		// for the operator recipient); other templates leave them empty.
-		TenantID:     t.Vars["tenant_id"],
-		TenantSlug:   t.Vars["tenant_slug"],
-		OwnerName:    t.Vars["owner_name"],
-		OwnerEmail:   t.Vars["owner_email"],
-		Tier:         t.Vars["tier"],
-		Status:       t.Vars["status"],
-		RegisteredAt: t.Vars["registered_at"],
-		TenantURL:    t.Vars["tenant_url"],
-	})
+	rendered, err := templates.Render(tmpl, templateData(rcpt, dep.AppBaseURL, unsubURL, t.Vars))
 	if err != nil {
 		p.writeLog(ctx, logBase, models.EmailLogFailed, "", "render: "+err.Error())
-		slog.WarnContext(ctx, "send_email failed: render", logging.AttrComponent, comp, "template", t.TemplateKey, logging.AttrError, err)
+		slog.WarnContext(ctx, "send_email failed: render", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, logging.AttrError, err)
 		return nil // terminal
 	}
 
 	msgID, err := dep.Sender.Send(ctx, email.Message{
 		From:           dep.From,
 		ReplyTo:        dep.ReplyTo,
-		To:             toEmail,
+		To:             rcpt.email,
 		Subject:        rendered.Subject,
 		HTML:           rendered.HTML,
 		Text:           rendered.Text,
@@ -245,31 +186,127 @@ func (p *SendEmailProcessor) Process(ctx context.Context, t SendEmailTask) error
 		IdempotencyKey: t.IdempotencyKey,
 	})
 	if err != nil {
-		if email.IsDisabled(err) {
-			// No Resend key configured at send time (e.g. cleared after enqueue):
-			// record as disabled, not failed — the subsystem is intentionally off.
-			p.writeLog(ctx, logBase, models.EmailLogSkippedDisabled, "", "")
-			slog.InfoContext(ctx, "send_email skipped: sending disabled", logging.AttrComponent, comp, "template", t.TemplateKey)
-			return nil
-		}
-		if email.IsTransient(err) {
-			slog.WarnContext(ctx, "send_email transient failure; will retry", logging.AttrComponent, comp, "template", t.TemplateKey, logging.AttrError, err)
-			return err
-		}
-		// Post-render terminal failure: persist what we attempted to send
-		// so an operator can see the rendered body behind a failed delivery.
-		id := p.writeLog(ctx, logBase, models.EmailLogFailed, "", err.Error())
-		p.writeBody(ctx, id, rendered, dep.From, dep.ReplyTo)
-		slog.WarnContext(ctx, "send_email terminal failure", logging.AttrComponent, comp, "template", t.TemplateKey, logging.AttrError, err)
-		return nil // terminal
+		return p.handleSendErr(ctx, t, logBase, rendered, err)
 	}
 
-	// Persist the rendered body alongside the sent log so the operator
-	// Emails tab renders it even after the Resend message ages out of retention.
+	// The rendered body is kept beside the sent log so the operator Emails tab
+	// renders it even after the Resend message ages out of retention.
 	id := p.writeLog(ctx, logBase, models.EmailLogSent, msgID, "")
 	p.writeBody(ctx, id, rendered, dep.From, dep.ReplyTo)
-	slog.InfoContext(ctx, "send_email sent", logging.AttrComponent, comp, "template", t.TemplateKey, "kind", string(t.EmailKind))
+	slog.InfoContext(ctx, "send_email sent", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, "kind", string(t.EmailKind))
 	return nil
+}
+
+const sendEmailComponent = "jobs.send_email"
+
+// emailRecipient is the resolved addressee plus the workspace name the
+// templates greet them with.
+type emailRecipient struct {
+	name      string
+	email     string
+	workspace string
+}
+
+// resolveRecipient re-resolves a user recipient fresh from users, so an email
+// change since enqueue is honoured and a deleted user is a clean terminal skip.
+// A recipient who isn't a user yet (an invitee) is addressed from the task,
+// with the workspace name riding the vars. ok is false when the caller must
+// return err: nil for a terminal skip, non-nil for a transient DB error.
+func (p *SendEmailProcessor) resolveRecipient(ctx context.Context, t SendEmailTask) (rcpt emailRecipient, ok bool, err error) {
+	if t.UserID == "" {
+		return emailRecipient{name: t.ToName, email: t.ToEmail, workspace: t.Vars["workspace_name"]}, true, nil
+	}
+	if p.Deps.Users == nil {
+		slog.WarnContext(ctx, "send_email skipped: deps not wired", logging.AttrComponent, sendEmailComponent)
+		return rcpt, false, nil
+	}
+	user, err := p.Deps.Users.GetByIDWithTenant(ctx, t.UserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		slog.InfoContext(ctx, "send_email skipped: user gone", logging.AttrComponent, sendEmailComponent, "user", t.UserID)
+		return rcpt, false, nil
+	}
+	if err != nil {
+		return rcpt, false, err // transient (DB)
+	}
+	rcpt = emailRecipient{name: user.Name, email: user.Email}
+	if user.Tenant != nil {
+		rcpt.workspace = user.Tenant.Name
+	}
+	return rcpt, true, nil
+}
+
+// unsubscribeHeaders builds the one-click unsubscribe headers marketing mail
+// must carry, returning the unsubscribe URL for the template. Other kinds get
+// no headers. ok is false when marketing mail has no link secret to sign the
+// URL with; err is a transient secret-read failure.
+func (p *SendEmailProcessor) unsubscribeHeaders(ctx context.Context, t SendEmailTask, toEmail string) (headers map[string]string, unsubURL string, ok bool, err error) {
+	headers = map[string]string{}
+	if t.EmailKind != models.EmailKindMarketing {
+		return headers, "", true, nil
+	}
+	secret := ""
+	if p.Deps.LinkSecret != nil {
+		if secret, err = p.Deps.LinkSecret(ctx); err != nil {
+			return nil, "", false, err
+		}
+	}
+	if secret == "" {
+		return nil, "", false, nil
+	}
+	unsubURL = p.Deps.unsubscribeURL(secret, toEmail)
+	headers["List-Unsubscribe"] = "<" + unsubURL + ">"
+	headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+	return headers, unsubURL, true, nil
+}
+
+// templateData maps the recipient and the task's per-message vars onto the
+// template data. Vars carry what isn't derivable at send time (reset and
+// invite links, connection-expiry details, the operator's new-tenant
+// details); templates that don't use a var leave it empty.
+func templateData(rcpt emailRecipient, appURL, unsubURL string, vars map[string]string) templates.Data {
+	return templates.Data{
+		Name:           rcpt.name,
+		WorkspaceName:  rcpt.workspace,
+		AppURL:         appURL,
+		UnsubscribeURL: unsubURL,
+		ResetURL:       vars["reset_url"],
+		InviteURL:      vars["invite_url"],
+		InviterName:    vars["inviter_name"],
+		Role:           vars["role"],
+		Platform:       vars["platform"],
+		AccountName:    vars["account_name"],
+		Stage:          vars["stage"],
+		ExpiresAt:      vars["expires_at"],
+		ExpiresIn:      vars["expires_in"],
+		ReconnectURL:   vars["reconnect_url"],
+		TenantID:       vars["tenant_id"],
+		TenantSlug:     vars["tenant_slug"],
+		OwnerName:      vars["owner_name"],
+		OwnerEmail:     vars["owner_email"],
+		Tier:           vars["tier"],
+		Status:         vars["status"],
+		RegisteredAt:   vars["registered_at"],
+		TenantURL:      vars["tenant_url"],
+	}
+}
+
+// handleSendErr settles a failed send. A key cleared after enqueue records a
+// disabled skip, a transient error retries, and any other failure persists
+// what was attempted so an operator can see the body behind it.
+func (p *SendEmailProcessor) handleSendErr(ctx context.Context, t SendEmailTask, logBase models.EmailLog, rendered templates.Rendered, err error) error {
+	if email.IsDisabled(err) {
+		p.writeLog(ctx, logBase, models.EmailLogSkippedDisabled, "", "")
+		slog.InfoContext(ctx, "send_email skipped: sending disabled", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey)
+		return nil
+	}
+	if email.IsTransient(err) {
+		slog.WarnContext(ctx, "send_email transient failure; will retry", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, logging.AttrError, err)
+		return err
+	}
+	id := p.writeLog(ctx, logBase, models.EmailLogFailed, "", err.Error())
+	p.writeBody(ctx, id, rendered, p.Deps.From, p.Deps.ReplyTo)
+	slog.WarnContext(ctx, "send_email terminal failure", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, logging.AttrError, err)
+	return nil // terminal
 }
 
 // writeLog appends one email_logs row (best-effort). The mail decision is
@@ -298,7 +335,7 @@ func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog,
 	}
 	id, err := models.NewID()
 	if err != nil {
-		slog.WarnContext(ctx, "email_log id gen failed", logging.AttrComponent, "jobs.send_email", logging.AttrError, err)
+		slog.WarnContext(ctx, "email_log id gen failed", logging.AttrComponent, sendEmailComponent, logging.AttrError, err)
 		return ""
 	}
 	row := base
@@ -307,7 +344,7 @@ func (p *SendEmailProcessor) writeLog(ctx context.Context, base models.EmailLog,
 	row.ProviderMessageID = providerMsgID
 	row.Error = errMsg
 	if err := p.Deps.Logs.Insert(ctx, &row); err != nil {
-		slog.WarnContext(ctx, "email_log insert failed (best-effort)", logging.AttrComponent, "jobs.send_email", logging.AttrError, err)
+		slog.WarnContext(ctx, "email_log insert failed (best-effort)", logging.AttrComponent, sendEmailComponent, logging.AttrError, err)
 		return "" // no committed parent row → don't attempt the body write
 	}
 	return id
@@ -332,7 +369,7 @@ func (p *SendEmailProcessor) writeBody(ctx context.Context, emailLogID string, r
 		From:       from,
 		ReplyTo:    replyTo,
 	}); err != nil {
-		slog.WarnContext(ctx, "email_body insert failed (best-effort)", logging.AttrComponent, "jobs.send_email", logging.AttrError, err)
+		slog.WarnContext(ctx, "email_body insert failed (best-effort)", logging.AttrComponent, sendEmailComponent, logging.AttrError, err)
 	}
 }
 

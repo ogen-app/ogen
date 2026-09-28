@@ -363,3 +363,29 @@ func TestProcessImage_DisabledClientNoOp(t *testing.T) {
 		t.Fatalf("disabled client must not touch status, saw %v", assets.statuses)
 	}
 }
+
+func TestClassifyExtractErr(t *testing.T) {
+	vector, _ := grpcstatus.New(codes.InvalidArgument, "vector").
+		WithDetails(&errdetails.ErrorInfo{Domain: "image.v1", Reason: "REJECTED_CODE_VECTOR"})
+	cases := []struct {
+		name         string
+		err          error
+		lastAttempt  bool
+		wantCode     string
+		wantTerminal bool
+	}{
+		{name: "fine-grained reject code", err: vector.Err(), wantCode: models.UploadCodeVectorRejected, wantTerminal: true},
+		{name: "unsupported", err: grpcstatus.Error(codes.Unimplemented, "x"), wantCode: models.UploadCodeUnsupportedMediaType, wantTerminal: true},
+		{name: "invalid", err: grpcstatus.Error(codes.InvalidArgument, "x"), wantCode: models.UploadCodeInvalidFile, wantTerminal: true},
+		{name: "transient retries", err: grpcstatus.Error(codes.Unavailable, "x")},
+		{name: "transient on last attempt", err: grpcstatus.Error(codes.Unavailable, "x"), lastAttempt: true, wantCode: models.UploadCodeServiceUnavailable, wantTerminal: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, reason, terminal := classifyExtractErr(tc.err, tc.lastAttempt)
+			if code != tc.wantCode || terminal != tc.wantTerminal || (terminal && reason == "") {
+				t.Fatalf("classify = (%q, %q, %v), want (%q, _, %v)", code, reason, terminal, tc.wantCode, tc.wantTerminal)
+			}
+		})
+	}
+}

@@ -2,19 +2,15 @@ package queues
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/pgvector/pgvector-go"
 	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -196,20 +192,14 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 		slog.WarnContext(ctx, "audio-service not configured", logging.AttrComponent, "jobs.process_audio", "asset_id", in.AssetID)
 		return nil
 	}
+	status := p.statusWriter()
 	if p.Deps.Storage == nil || p.Deps.Extractions == nil || p.Deps.Segments == nil || p.Deps.Utterances == nil {
-		_ = p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
+		_ = status.set(ctx, in.AssetID, models.AssetStatusFailed)
 		return fmt.Errorf("process_audio %s: storage/repos not configured", in.AssetID)
 	}
-	// Transcription AND embedding both need gemini_api_key: checked up
-	// front so we don't normalize + transcribe only to fail every chunk embed.
-	// Retry rather than fail — a key set via the secrets API takes effect without
-	// a restart; give up (failed) only once attempts are exhausted.
-	if !embedopts.Available(p.Deps.Embedder) {
-		if lastAttempt {
-			return p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
-		}
-		slog.WarnContext(ctx, "embedder unavailable will retry", logging.AttrComponent, "jobs.process_audio", "asset_id", in.AssetID)
-		return fmt.Errorf("process_audio %s: embedder unavailable", in.AssetID)
+	giveUp := func() error { return status.set(ctx, in.AssetID, models.AssetStatusFailed) }
+	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_audio", in.AssetID, lastAttempt, giveUp); !ok {
+		return err
 	}
 
 	ext, err := p.ensureExtraction(ctx, in)
@@ -219,12 +209,12 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 	if ext.Status == models.AudioExtractionStatusComplete {
 		return nil // idempotent re-drive of a finished run
 	}
-	if err := p.setAssetStatus(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
+	if err := status.set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
 		return err
 	}
 
-	// 1–2. Probe + tier gate + normalize, only until the normalized derivative
-	//      exists. On resume this whole block is skipped.
+	// Probe, gate and normalize only until the normalized derivative exists;
+	// a resumed run skips straight to its segments.
 	if ext.NormalizedS3Key == nil {
 		if err := p.probeGateNormalize(ctx, in, ext); err != nil {
 			return err
@@ -233,20 +223,32 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 			return nil // terminal reject already persisted (asset failed)
 		}
 	}
+	segments, err := p.loadSegments(ctx, in, ext)
+	if err != nil {
+		return err
+	}
+	if err := p.transcribeAll(ctx, in, ext, segments, lastAttempt); err != nil {
+		return err
+	}
+	return p.finalize(ctx, in, ext)
+}
 
-	// 3. Segment: compute bounded windows once.
+// loadSegments returns the run's segments, computing and persisting the
+// bounded windows on first use.
+func (p *ProcessAudioProcessor) loadSegments(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction) ([]models.AudioSegment, error) {
 	segments, err := p.Deps.Segments.ListByExtraction(ctx, ext.ID)
 	if err != nil {
-		return fmt.Errorf("process_audio %s: list segments: %w", in.AssetID, err)
+		return nil, fmt.Errorf("process_audio %s: list segments: %w", in.AssetID, err)
 	}
-	if len(segments) == 0 {
-		segments, err = p.createSegments(ctx, in, ext)
-		if err != nil {
-			return err
-		}
+	if len(segments) > 0 {
+		return segments, nil
 	}
+	return p.createSegments(ctx, in, ext)
+}
 
-	// 4. Transcribe each incomplete segment (checkpointed).
+// transcribeAll transcribes every segment not yet terminal. A transient error
+// returns so River resumes from that segment.
+func (p *ProcessAudioProcessor) transcribeAll(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction, segments []models.AudioSegment, lastAttempt bool) error {
 	model := p.transcribeModel(in)
 	for i := range segments {
 		seg := &segments[i]
@@ -254,44 +256,25 @@ func (p *ProcessAudioProcessor) process(ctx context.Context, in ProcessAudioTask
 			continue
 		}
 		if err := p.transcribeSegment(ctx, in, ext, seg, model, lastAttempt); err != nil {
-			return err // transient → River resumes from this segment
+			return err
 		}
 	}
-
-	// 5. All segments terminal → assemble/embed on full success; else partial.
-	return p.finalize(ctx, in, ext)
+	return nil
 }
 
 // ensureExtraction loads the (asset, run_key) extraction or creates a fresh
-// pending one. Idempotent under a concurrent create via the unique index.
+// pending one.
 func (p *ProcessAudioProcessor) ensureExtraction(ctx context.Context, in ProcessAudioTask) (*models.AudioExtraction, error) {
-	ext, err := p.Deps.Extractions.GetByAssetAndRunKey(ctx, in.AssetID, in.RunKey)
-	if err == nil {
-		return ext, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("process_audio %s: load extraction: %w", in.AssetID, err)
-	}
-	id, err := models.NewID()
-	if err != nil {
-		return nil, fmt.Errorf("process_audio %s: new extraction id: %w", in.AssetID, err)
-	}
-	ext = &models.AudioExtraction{
-		ID:              id,
-		AssetID:         in.AssetID,
-		RunKey:          in.RunKey,
-		Status:          models.AudioExtractionStatusPending,
-		TranscribeModel: p.transcribeModel(in),
-		EmbedModel:      p.Deps.EmbedModel,
-	}
-	if err := p.Deps.Extractions.Create(ctx, ext); err != nil {
-		// Concurrent create (unique asset_id+run_key): reload the winner.
-		if again, gErr := p.Deps.Extractions.GetByAssetAndRunKey(ctx, in.AssetID, in.RunKey); gErr == nil {
-			return again, nil
+	return ensureExtractionRun(ctx, p.Deps.Extractions, "process_audio", in.AssetID, in.RunKey, func(id string) *models.AudioExtraction {
+		return &models.AudioExtraction{
+			ID:              id,
+			AssetID:         in.AssetID,
+			RunKey:          in.RunKey,
+			Status:          models.AudioExtractionStatusPending,
+			TranscribeModel: p.transcribeModel(in),
+			EmbedModel:      p.Deps.EmbedModel,
 		}
-		return nil, fmt.Errorf("process_audio %s: create extraction: %w", in.AssetID, err)
-	}
-	return ext, nil
+	})
 }
 
 // probeGateNormalize runs Probe, enforces the max-duration + cost gates, then
@@ -409,73 +392,30 @@ func (p *ProcessAudioProcessor) transcribeSegment(ctx context.Context, in Proces
 		Model:         model,
 	})
 	if err != nil {
-		if audio.IsInvalidAudio(err) || audio.IsUnsupportedAudio(err) {
-			return p.failSegment(ctx, seg, "segment could not be transcribed")
-		}
-		// Transient: bump the retry counter and either retry the job or, on the
-		// last attempt, give up on just this segment (→ partial).
-		seg.RetryCount++
-		if lastAttempt {
-			return p.failSegment(ctx, seg, "transcription repeatedly failed")
-		}
-		if uErr := p.Deps.Segments.Update(ctx, seg); uErr != nil {
-			return fmt.Errorf("process_audio %s: checkpoint segment retry: %w", in.AssetID, uErr)
-		}
-		return fmt.Errorf("process_audio %s: transcribe segment %d: %w", in.AssetID, seg.Index, err)
+		return p.handleTranscribeErr(ctx, in, seg, err, lastAttempt)
 	}
 
-	utts := make([]models.Utterance, 0, len(res.Utterances))
-	for i, u := range res.Utterances {
-		id, idErr := models.NewID()
-		if idErr != nil {
-			return fmt.Errorf("process_audio %s: new utterance id: %w", in.AssetID, idErr)
-		}
-		utts = append(utts, models.Utterance{
-			ID:         id,
-			SegmentID:  seg.ID,
-			AssetID:    in.AssetID,
-			Index:      i,
-			StartMs:    u.StartMs,
-			EndMs:      u.EndMs,
-			Text:       u.Text,
-			Confidence: u.Confidence,
-			Language:   u.Language,
-			IsSpeech:   u.IsSpeech,
-		})
+	utts, err := toUtterances(in.AssetID, seg.ID, res.Utterances)
+	if err != nil {
+		return fmt.Errorf("process_audio %s: new utterance id: %w", in.AssetID, err)
 	}
 	if err := p.Deps.Utterances.ReplaceForSegment(ctx, seg.ID, utts); err != nil {
 		return fmt.Errorf("process_audio %s: store utterances: %w", in.AssetID, err)
 	}
 
-	// Compute this segment's cost and persist it ON THE SEGMENT in the SAME write
-	// that marks it done, so cost and completion commit atomically: a
-	// crash between the two can never leave a done segment whose cost is then lost
-	// on the resume that skips it. finalize sums the per-segment costs.
-	var segCost int64
-	if res.InputTokens > 0 || res.OutputTokens > 0 {
-		u := vendors.Usage{}
-		if res.InputTokens > 0 {
-			u[vendors.KindInput] = res.InputTokens
-		}
-		if res.OutputTokens > 0 {
-			u[vendors.KindOutput] = res.OutputTokens
-		}
-		if micros, _, ok := vendors.CostOf(llm.VendorGemini, model, u); ok {
-			segCost = micros
-		}
-	}
+	// The segment's cost is persisted in the same write that marks it done, so
+	// a crash can never leave a done segment whose cost is lost on the resume
+	// that skips it. finalize sums the per-segment costs.
 	seg.Status = models.AudioSegmentStatusDone
 	seg.UtteranceCount = len(utts)
-	seg.CostMicros = segCost
+	seg.CostMicros = segmentCost(model, res.InputTokens, res.OutputTokens)
 	seg.FailureReason = ""
 	if err := p.Deps.Segments.Update(ctx, seg); err != nil {
 		return fmt.Errorf("process_audio %s: checkpoint segment done: %w", in.AssetID, err)
 	}
 
-	// Best-effort AFTER the durable segment write: a usage event and an
-	// early detected-language hint. A crash here loses only an analytics event or
-	// a cosmetic hint (re-derived at finalize) — never the authoritative cost,
-	// which is stored on the segment row.
+	// Best-effort after the durable segment write: a crash here loses only a
+	// usage event or a language hint finalize re-derives, never the cost.
 	if res.InputTokens > 0 || res.OutputTokens > 0 {
 		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, model, "transcribe", llm.TranscribeUsage{
 			InputTokens:  res.InputTokens,
@@ -489,144 +429,206 @@ func (p *ProcessAudioProcessor) transcribeSegment(ctx context.Context, in Proces
 	return nil
 }
 
-// finalize inspects the settled segment set: all done → assemble + embed + store
-// chunks and mark ready; any failed → partial (queryable, NOT searchable — no
-// chunks written, awaiting retry).
+// handleTranscribeErr settles a failed transcription. Unusable audio fails
+// just this segment. A transient error bumps the retry counter and retries
+// the job, or on the last attempt gives up on the segment (→ partial).
+func (p *ProcessAudioProcessor) handleTranscribeErr(ctx context.Context, in ProcessAudioTask, seg *models.AudioSegment, err error, lastAttempt bool) error {
+	if audio.IsInvalidAudio(err) || audio.IsUnsupportedAudio(err) {
+		return p.failSegment(ctx, seg, "segment could not be transcribed")
+	}
+	seg.RetryCount++
+	if lastAttempt {
+		return p.failSegment(ctx, seg, "transcription repeatedly failed")
+	}
+	if uErr := p.Deps.Segments.Update(ctx, seg); uErr != nil {
+		return fmt.Errorf("process_audio %s: checkpoint segment retry: %w", in.AssetID, uErr)
+	}
+	return fmt.Errorf("process_audio %s: transcribe segment %d: %w", in.AssetID, seg.Index, err)
+}
+
+// toUtterances maps a segment's transcribed utterances to rows.
+func toUtterances(assetID, segmentID string, in []audio.Utterance) ([]models.Utterance, error) {
+	utts := make([]models.Utterance, 0, len(in))
+	for i, u := range in {
+		id, err := models.NewID()
+		if err != nil {
+			return nil, err
+		}
+		utts = append(utts, models.Utterance{
+			ID:         id,
+			SegmentID:  segmentID,
+			AssetID:    assetID,
+			Index:      i,
+			StartMs:    u.StartMs,
+			EndMs:      u.EndMs,
+			Text:       u.Text,
+			Confidence: u.Confidence,
+			Language:   u.Language,
+			IsSpeech:   u.IsSpeech,
+		})
+	}
+	return utts, nil
+}
+
+// segmentCost prices one segment's transcription tokens on the gemini vendor;
+// zero when there is no usage or the model has no price.
+func segmentCost(model string, inputTokens, outputTokens int64) int64 {
+	u := vendors.Usage{}
+	if inputTokens > 0 {
+		u[vendors.KindInput] = inputTokens
+	}
+	if outputTokens > 0 {
+		u[vendors.KindOutput] = outputTokens
+	}
+	if len(u) == 0 {
+		return 0
+	}
+	micros, _, ok := vendors.CostOf(llm.VendorGemini, model, u)
+	if !ok {
+		return 0
+	}
+	return micros
+}
+
+// finalize settles a run whose segments are all terminal: all done → assemble,
+// embed and store the transcript and mark ready; any failed → partial
+// (queryable, not searchable — no chunks written, awaiting retry).
 func (p *ProcessAudioProcessor) finalize(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction) error {
 	segments, err := p.Deps.Segments.ListByExtraction(ctx, ext.ID)
 	if err != nil {
 		return fmt.Errorf("process_audio %s: reload segments: %w", in.AssetID, err)
 	}
-	var failed int
-	var costSum int64
+	failed, costSum, err := tallySegments(in.AssetID, segments)
+	if err != nil {
+		return err
+	}
+	// The per-segment costs were each persisted atomically with completion, so
+	// the sum is exact no matter how many attempts the run took.
+	ext.CostMicros = costSum
+	if desc, ok := vendors.Get(llm.VendorGemini); ok {
+		ext.PriceVersion = desc.Prices.Version
+	}
+	if failed > 0 {
+		return p.settlePartial(ctx, in, ext)
+	}
+
+	// Only THIS run's utterances, so a re-run never mixes in a prior run's spans.
+	utts, err := p.Deps.Utterances.ListByExtraction(ctx, ext.ID)
+	if err != nil {
+		return fmt.Errorf("process_audio %s: load utterances: %w", in.AssetID, err)
+	}
+	if ext.DetectedLanguage == "" {
+		ext.DetectedLanguage = firstSpeechLanguage(utts)
+	}
+	assembled := assembleAudioChunks(utts)
+	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, audioChunkSources(assembled))
+	// A silent/no-speech transcript is ready with 0 chunks; every embed failing
+	// retries, even on the last attempt.
+	status, err := stats.settle(false)
+	if err != nil {
+		return fmt.Errorf("process_audio %s: %w", in.AssetID, err)
+	}
+	if err := p.writeTranscript(ctx, in, assembled, chunks); err != nil {
+		return err
+	}
+	return p.complete(ctx, in, ext, status, stats.Tokens)
+}
+
+// tallySegments counts failed segments and sums the persisted segment costs.
+// A still-pending segment means the transcribe loop returned early on a
+// transient error, so it errors and the job retries rather than settling.
+func tallySegments(assetID string, segments []models.AudioSegment) (failed int, costSum int64, err error) {
 	for i := range segments {
 		switch segments[i].Status {
 		case models.AudioSegmentStatusFailed:
 			failed++
 		case models.AudioSegmentStatusDone:
 		default:
-			// A still-pending segment means the loop returned early on a transient
-			// error; propagate so the job retries rather than settling prematurely.
-			return fmt.Errorf("process_audio %s: segment %d not terminal", in.AssetID, segments[i].Index)
+			return 0, 0, fmt.Errorf("process_audio %s: segment %d not terminal", assetID, segments[i].Index)
 		}
 		costSum += segments[i].CostMicros
 	}
-	// The run cost is the sum of the per-segment costs each done segment persisted
-	// atomically, so it's exact no matter how many attempts the run took.
-	ext.CostMicros = costSum
-	if desc, ok := vendors.Get(llm.VendorGemini); ok {
-		ext.PriceVersion = desc.Prices.Version
-	}
+	return failed, costSum, nil
+}
 
-	if failed > 0 {
-		ext.Status = models.AudioExtractionStatusPartial
-		ext.FailureReason = "some segments could not be transcribed"
-		ext.FailureCode = models.UploadCodeExtractionPartial
-		if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
-			return err
-		}
-		return p.setAssetStatus(ctx, in.AssetID, models.AssetStatusPartial)
-	}
-
-	// All done → assemble time-anchored chunks from THIS run's utterances only
-	// (scoped to the extraction, so a re-run never mixes in a prior run's spans).
-	utts, err := p.Deps.Utterances.ListByExtraction(ctx, ext.ID)
-	if err != nil {
-		return fmt.Errorf("process_audio %s: load utterances: %w", in.AssetID, err)
-	}
-	// Fall back to the first speech utterance's language if a segment's best-effort
-	// detected-language write didn't land (crash-then-resume).
-	if ext.DetectedLanguage == "" {
-		for i := range utts {
-			if utts[i].IsSpeech && utts[i].Language != "" {
-				ext.DetectedLanguage = utts[i].Language
-				break
-			}
-		}
-	}
-	assembled := assembleAudioChunks(utts)
-
-	chunks := make([]models.AssetChunk, 0, len(assembled))
-	var embedAttempts, embedFailures int
-	var totalEmbedTokens int64
-	for idx, a := range assembled {
-		text := a.text()
-		if !hasWords(text) {
-			continue
-		}
-		embedAttempts++
-		emb, eErr := p.Deps.Embedder.Embed(ctx, &ai.EmbedRequest{
-			Input:   []*ai.Document{ai.DocumentFromText(text, nil)},
-			Options: embedopts.Document(),
-		})
-		if eErr != nil || len(emb.Embeddings) != 1 {
-			embedFailures++
-			continue
-		}
-		label := formatTimeRange(a.startMs, a.endMs)
-		tokens := estimateTokens(text)
-		totalEmbedTokens += int64(tokens)
-		chunks = append(chunks, models.AssetChunk{
-			ID:          fmt.Sprintf("%s:%d", in.AssetID, idx),
-			AssetID:     in.AssetID,
-			ChunkIndex:  idx,
-			Content:     text,
-			TokenCount:  tokens,
-			Embedding:   pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
-			Model:       p.Deps.Embedder.Name(),
-			SourceLabel: &label,
-			SourceAnchor: &models.SourceAnchor{
-				Kind:       "time",
-				StartMs:    a.startMs,
-				EndMs:      a.endMs,
-				Provenance: "transcript",
-			},
-		})
-	}
-
-	// Every chunk failed to embed (transient embedder outage) — retry, unless
-	// there was nothing to embed (silent/no-speech transcript → ready, 0 chunks).
-	if embedAttempts > 0 && len(chunks) == 0 {
-		return fmt.Errorf("process_audio %s: all %d chunk(s) failed to embed", in.AssetID, embedAttempts)
-	}
-	if len(chunks) > 0 && p.Deps.Chunks != nil {
-		if err := p.Deps.Chunks.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
-			return fmt.Errorf("process_audio %s: store chunks: %w", in.AssetID, err)
-		}
-	}
-	// The transcript becomes the asset's content (read-only to PUT, CON-312):
-	// the same de-overlapped text the chunks hold, one paragraph per chunk.
-	if p.Deps.Content != nil {
-		paras := make([]string, 0, len(assembled))
-		for _, a := range assembled {
-			if t := a.text(); hasWords(t) {
-				paras = append(paras, t)
-			}
-		}
-		if err := p.Deps.Content.SetContent(ctx, in.AssetID, strings.Join(paras, "\n\n")); err != nil {
-			return fmt.Errorf("process_audio %s: store transcript: %w", in.AssetID, err)
-		}
-	}
-
-	// Persist the ASSET terminal status BEFORE marking the extraction complete:
-	// the completed-run guard in process() short-circuits a retry, so
-	// flipping the extraction to complete first and then failing the asset-status
-	// write would strand the asset in "processing" forever. This order lets a
-	// retry re-run finalize (idempotent — chunks upsert-replace) and re-attempt
-	// the status write. A partial embed (some chunks failed) is ready-with-gaps; a
-	// clean run is ready. Either way the asset is searchable.
-	status := models.AssetStatusReady
-	if embedFailures > 0 {
-		status = models.AssetStatusPartial
-	}
-	if err := p.setAssetStatus(ctx, in.AssetID, status); err != nil {
+// settlePartial marks a run with failed segments partial.
+func (p *ProcessAudioProcessor) settlePartial(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction) error {
+	ext.Status = models.AudioExtractionStatusPartial
+	ext.FailureReason = "some segments could not be transcribed"
+	ext.FailureCode = models.UploadCodeExtractionPartial
+	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
 		return err
 	}
-	// Meter the transcript-chunk embeddings on the gemini vendor, like
-	// document_extract: only after the durable writes (chunks +
-	// transcript + status), so a retry from a late failure can't double-count.
-	if totalEmbedTokens > 0 {
-		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "audio_embed", llm.EmbedUsage{Tokens: totalEmbedTokens})
+	return p.statusWriter().set(ctx, in.AssetID, models.AssetStatusPartial)
+}
+
+// firstSpeechLanguage covers a segment whose best-effort language write didn't
+// land (crash-then-resume): the first speech utterance's language, or "".
+func firstSpeechLanguage(utts []models.Utterance) string {
+	for i := range utts {
+		if utts[i].IsSpeech && utts[i].Language != "" {
+			return utts[i].Language
+		}
+	}
+	return ""
+}
+
+// audioChunkSources yields the assembled transcript chunks with their
+// time-range citation and anchor.
+func audioChunkSources(assembled []assembledAudioChunk) iter.Seq[chunkSource] {
+	return func(yield func(chunkSource) bool) {
+		for idx, a := range assembled {
+			src := chunkSource{
+				Index: idx,
+				Text:  a.text(),
+				Label: formatTimeRange(a.startMs, a.endMs),
+				Anchor: &models.SourceAnchor{
+					Kind:       "time",
+					StartMs:    a.startMs,
+					EndMs:      a.endMs,
+					Provenance: "transcript",
+				},
+			}
+			if !yield(src) {
+				return
+			}
+		}
+	}
+}
+
+// writeTranscript stores the embedded chunks and writes the transcript onto
+// asset.Content (read-only to PUT): the same de-overlapped text the chunks
+// hold, one paragraph per chunk.
+func (p *ProcessAudioProcessor) writeTranscript(ctx context.Context, in ProcessAudioTask, assembled []assembledAudioChunk, chunks []models.AssetChunk) error {
+	if err := storeChunks(ctx, p.Deps.Chunks, "process_audio", in.AssetID, chunks, false); err != nil {
+		return err
+	}
+	if p.Deps.Content == nil {
+		return nil
+	}
+	paras := make([]string, 0, len(assembled))
+	for _, a := range assembled {
+		if t := a.text(); hasWords(t) {
+			paras = append(paras, t)
+		}
+	}
+	if err := p.Deps.Content.SetContent(ctx, in.AssetID, strings.Join(paras, "\n\n")); err != nil {
+		return fmt.Errorf("process_audio %s: store transcript: %w", in.AssetID, err)
+	}
+	return nil
+}
+
+// complete writes the asset's terminal status, meters the embeddings and marks
+// the extraction complete. The asset status goes first: the completed-run guard
+// in process short-circuits a retry, so completing the extraction before a
+// failed status write would strand the asset in "processing". Metering follows
+// the durable writes so a retry from a late failure can't double-count.
+func (p *ProcessAudioProcessor) complete(ctx context.Context, in ProcessAudioTask, ext *models.AudioExtraction, status string, embedTokens int64) error {
+	if err := p.statusWriter().set(ctx, in.AssetID, status); err != nil {
+		return err
+	}
+	if embedTokens > 0 {
+		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "audio_embed", llm.EmbedUsage{Tokens: embedTokens})
 	}
 	ext.Status = models.AudioExtractionStatusComplete
 	ext.FailureReason = ""
@@ -645,7 +647,7 @@ func (p *ProcessAudioProcessor) terminalReject(ctx context.Context, in ProcessAu
 		return fmt.Errorf("process_audio %s: mark extraction failed: %w", in.AssetID, err)
 	}
 	slog.WarnContext(ctx, "audio ingestion rejected", logging.AttrComponent, "jobs.process_audio", "asset_id", in.AssetID, "reason", reason)
-	return p.setAssetStatus(ctx, in.AssetID, models.AssetStatusFailed)
+	return p.statusWriter().set(ctx, in.AssetID, models.AssetStatusFailed)
 }
 
 func (p *ProcessAudioProcessor) failSegment(ctx context.Context, seg *models.AudioSegment, reason string) error {
@@ -654,17 +656,8 @@ func (p *ProcessAudioProcessor) failSegment(ctx context.Context, seg *models.Aud
 	return p.Deps.Segments.Update(ctx, seg)
 }
 
-// setAssetStatus persists the asset status and announces terminal outcomes to
-// the creator. A nil Assets dep is a no-op.
-func (p *ProcessAudioProcessor) setAssetStatus(ctx context.Context, assetID, status string) error {
-	if p.Deps.Assets == nil {
-		return nil
-	}
-	if err := p.Deps.Assets.UpdateStatus(ctx, assetID, status); err != nil {
-		return fmt.Errorf("process_audio %s: set status %s: %w", assetID, status, err)
-	}
-	notifyAssetStatus(ctx, p.Deps.Notifier, p.Deps.Assets, assetID, status, "audio", models.AssetTypeAudio)
-	return nil
+func (p *ProcessAudioProcessor) statusWriter() assetStatusWriter {
+	return assetStatusWriter{op: "process_audio", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "audio", kind: models.AssetTypeAudio}
 }
 
 func (p *ProcessAudioProcessor) transcribeModel(in ProcessAudioTask) string {

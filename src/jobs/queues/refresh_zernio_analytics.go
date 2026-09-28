@@ -210,43 +210,28 @@ func (p *RefreshZernioAnalyticsProcessor) refresh(ctx context.Context, now time.
 func (p *RefreshZernioAnalyticsProcessor) refreshTenant(ctx context.Context, posts []models.Post, platformName map[string]string, now time.Time) (upserts int, swept bool, err error) {
 	profileID := ""
 	if p.Deps.ProfileID != nil {
-		id, rerr := p.Deps.ProfileID(ctx)
-		if rerr != nil {
-			return 0, false, fmt.Errorf("resolve profile id: %w", rerr)
+		if profileID, err = p.Deps.ProfileID(ctx); err != nil {
+			return 0, false, fmt.Errorf("resolve profile id: %w", err)
 		}
-		profileID = id
 	}
 	if profileID == "" {
 		return 0, false, nil
 	}
 
-	// publisher_post_id → post_id match map for this tenant, plus the per-post
-	// fields denormalised onto the current-state row. Zernio returns analytics
-	// for every late post under the profile; we write only the ones Ogen owns.
-	byPublisherID := make(map[string]string, len(posts))
-	postByID := make(map[string]models.Post, len(posts))
-	for _, post := range posts {
-		byPublisherID[post.PublisherPostID] = post.ID
-		postByID[post.ID] = post
-	}
-
 	// Preload the tenant's current-state rows once: the decay gate reads
 	// last_checked_at from them and dedup compares metric keys, both without a
 	// per-post query. A nil map is fine (every post is a first sight).
-	current, cerr := p.Deps.AnalyticsRepo.CurrentByPostID(ctx)
-	if cerr != nil {
-		return upserts, true, fmt.Errorf("load current analytics: %w", cerr)
+	current, err := p.Deps.AnalyticsRepo.CurrentByPostID(ctx)
+	if err != nil {
+		return 0, true, fmt.Errorf("load current analytics: %w", err)
 	}
-	if current == nil {
-		current = map[string]*models.PostAnalytics{}
-	}
+	sweep := newAnalyticsSweep(posts, current, platformName, now)
 
 	from := now.AddDate(0, 0, -p.windowDays()).Format("2006-01-02")
 	limit := p.pageLimit()
-
 	for page := 1; page <= maxAnalyticsPages; page++ {
 		apiStart := time.Now()
-		items, pagination, lerr := p.Deps.Client.ListAnalytics(ctx, zernio.AnalyticsQuery{
+		items, pagination, err := p.Deps.Client.ListAnalytics(ctx, zernio.AnalyticsQuery{
 			Source:    zernio.AnalyticsSourceLate,
 			ProfileID: profileID,
 			FromDate:  from,
@@ -254,96 +239,131 @@ func (p *RefreshZernioAnalyticsProcessor) refreshTenant(ctx context.Context, pos
 			Page:      page,
 		})
 		jobs.ObserveZernioCall(time.Since(apiStart))
-		if lerr != nil {
-			return upserts, true, lerr
+		if err != nil {
+			return upserts, true, err
 		}
-
 		for i := range items {
-			postID, publisherPostID := p.matchPostID(byPublisherID, &items[i])
-			if postID == "" {
-				continue
+			if p.applyItem(ctx, sweep, &items[i]) {
+				upserts++
 			}
-			post := postByID[postID]
-			prev := current[postID]
-
-			// Decay gate: skip posts whose age bucket says they aren't due yet.
-			if !p.due(post, prev, now) {
-				jobs.ZernioAnalyticsPostsDueSkipped.Add(1)
-				continue
-			}
-
-			built, berr := buildCurrent(post, publisherPostID, platformName[post.PlatformID], &items[i])
-			if berr != nil {
-				slog.ErrorContext(ctx, "analytics build failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, berr)
-				continue
-			}
-
-			// Dedup: a new history point is written only when the metric key
-			// moved (or this is the first sighting). Either way we upsert the
-			// current row so last_checked_at (freshness) and the latest breakdown
-			// stay current.
-			changed := prev == nil || prev.MetricsKey() != built.MetricsKey()
-			built.LastCheckedAt = now
-			if prev == nil {
-				built.FirstSeenAt = now
-				built.LastChangedAt = now
-			} else {
-				built.FirstSeenAt = prev.FirstSeenAt
-				if changed {
-					built.LastChangedAt = now
-				} else {
-					built.LastChangedAt = prev.LastChangedAt
-				}
-			}
-
-			if !changed {
-				// Unchanged: just bump the current row (last_checked_at + latest
-				// breakdown); no new history point.
-				if uerr := p.Deps.AnalyticsRepo.Upsert(ctx, built); uerr != nil {
-					slog.ErrorContext(ctx, "analytics upsert failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, uerr)
-					continue
-				}
-				current[postID] = built
-				jobs.ZernioAnalyticsPostsUnchanged.Add(1)
-				continue
-			}
-
-			// Changed: write the current row and append the trend point atomically
-			// so a snapshot failure can't leave the current row advanced without
-			// its history point (dedup would then hide the change forever).
-			id, ierr := models.NewID()
-			if ierr != nil {
-				slog.ErrorContext(ctx, "analytics id gen failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, ierr)
-				continue
-			}
-			if werr := p.Deps.AnalyticsRepo.UpsertWithSnapshot(ctx, built, built.NewSnapshot(id, now)); werr != nil {
-				slog.ErrorContext(ctx, "analytics upsert+snapshot failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, werr)
-				continue
-			}
-			// Keep the in-memory map current so a duplicate item later in the
-			// same tick dedups against the value we just wrote.
-			current[postID] = built
-			upserts++
-			p.publishUpdated(ctx, built)
 		}
-
-		// Stop paging on the last page, robust to whichever pagination shape the
-		// endpoint returns: an explicit last-page number, the cursor-style
-		// hasMore flag, or — absent both — a short/empty page.
-		if len(items) == 0 {
-			break
-		}
-		if last := pagination.LastPage(); last > 0 {
-			if page >= last {
-				break
-			}
-			continue
-		}
-		if !pagination.HasMore && len(items) < limit {
+		if shouldStopPaging(page, len(items), limit, pagination) {
 			break
 		}
 	}
 	return upserts, true, nil
+}
+
+// analyticsSweep is one tenant's refresh state. Zernio returns analytics for
+// every late post under the profile; only posts Ogen owns are written.
+type analyticsSweep struct {
+	byPublisherID map[string]string // publisher_post_id → post_id
+	postByID      map[string]models.Post
+	// current is kept up to date as rows are written, so a duplicate item
+	// later in the same tick dedups against the value just written.
+	current      map[string]*models.PostAnalytics
+	platformName map[string]string
+	now          time.Time
+}
+
+func newAnalyticsSweep(posts []models.Post, current map[string]*models.PostAnalytics, platformName map[string]string, now time.Time) *analyticsSweep {
+	s := &analyticsSweep{
+		byPublisherID: make(map[string]string, len(posts)),
+		postByID:      make(map[string]models.Post, len(posts)),
+		current:       current,
+		platformName:  platformName,
+		now:           now,
+	}
+	if s.current == nil {
+		s.current = map[string]*models.PostAnalytics{}
+	}
+	for _, post := range posts {
+		s.byPublisherID[post.PublisherPostID] = post.ID
+		s.postByID[post.ID] = post
+	}
+	return s
+}
+
+// applyItem writes one analytics item for a post Ogen owns, gated by the decay
+// schedule. It reports whether a new history point was written; per-post
+// failures are logged and skipped.
+func (p *RefreshZernioAnalyticsProcessor) applyItem(ctx context.Context, s *analyticsSweep, item *zernio.AnalyticsItem) bool {
+	postID, publisherPostID := p.matchPostID(s.byPublisherID, item)
+	if postID == "" {
+		return false
+	}
+	post := s.postByID[postID]
+	prev := s.current[postID]
+	if !p.due(post, prev, s.now) {
+		jobs.ZernioAnalyticsPostsDueSkipped.Add(1)
+		return false
+	}
+	built, err := buildCurrent(post, publisherPostID, s.platformName[post.PlatformID], item)
+	if err != nil {
+		slog.ErrorContext(ctx, "analytics build failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, err)
+		return false
+	}
+
+	// A history point is written only when the metric key moved (or on first
+	// sighting); the current row is upserted either way so last_checked_at and
+	// the latest breakdown stay current.
+	changed := prev == nil || prev.MetricsKey() != built.MetricsKey()
+	stampTimes(built, prev, s.now, changed)
+	if !changed {
+		if err := p.Deps.AnalyticsRepo.Upsert(ctx, built); err != nil {
+			slog.ErrorContext(ctx, "analytics upsert failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, err)
+			return false
+		}
+		s.current[postID] = built
+		jobs.ZernioAnalyticsPostsUnchanged.Add(1)
+		return false
+	}
+
+	// The current row and its trend point are written atomically so a snapshot
+	// failure can't advance the current row without its history point (dedup
+	// would then hide the change forever).
+	id, err := models.NewID()
+	if err != nil {
+		slog.ErrorContext(ctx, "analytics id gen failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, err)
+		return false
+	}
+	if err := p.Deps.AnalyticsRepo.UpsertWithSnapshot(ctx, built, built.NewSnapshot(id, s.now)); err != nil {
+		slog.ErrorContext(ctx, "analytics upsert+snapshot failed", logging.AttrComponent, "jobs.refresh_analytics", "post_id", postID, logging.AttrError, err)
+		return false
+	}
+	s.current[postID] = built
+	p.publishUpdated(ctx, built)
+	return true
+}
+
+// stampTimes sets the freshness timestamps: last checked now, first seen on
+// first sighting, last changed when the metric key moved.
+func stampTimes(built, prev *models.PostAnalytics, now time.Time, changed bool) {
+	built.LastCheckedAt = now
+	switch {
+	case prev == nil:
+		built.FirstSeenAt = now
+		built.LastChangedAt = now
+	case changed:
+		built.FirstSeenAt = prev.FirstSeenAt
+		built.LastChangedAt = now
+	default:
+		built.FirstSeenAt = prev.FirstSeenAt
+		built.LastChangedAt = prev.LastChangedAt
+	}
+}
+
+// shouldStopPaging reports whether page was the last one, robust to whichever
+// pagination shape the endpoint returns: an explicit last-page number, the
+// cursor-style hasMore flag, or — absent both — a short/empty page.
+func shouldStopPaging(page, itemCount, limit int, pagination zernio.AnalyticsPagination) bool {
+	if itemCount == 0 {
+		return true
+	}
+	if last := pagination.LastPage(); last > 0 {
+		return page >= last
+	}
+	return !pagination.HasMore && itemCount < limit
 }
 
 // due reports whether a post should be re-checked this tick under the decay
