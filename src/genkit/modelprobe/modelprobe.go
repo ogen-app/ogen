@@ -4,7 +4,8 @@
 // (missing/rotated API key, plugin not registered, unknown model id, region
 // gating, wrong embedding dimensionality). Chat slots run a 1-token Anthropic
 // generation; embed slots run a real Gemini embedding and check the returned
-// dimensionality. Any other capability reports ErrProbeUnsupported.
+// dimensionality. Vision and transcribe slots run inside image-service /
+// audio-service, so they report ErrProbeUnsupported and keep the static verdict.
 package modelprobe
 
 import (
@@ -28,9 +29,8 @@ import (
 )
 
 // ErrProbeUnsupported signals that no live probe applies to this slot's
-// capability. The caller keeps the static-only verdict rather than reporting a
-// failure. (No current slot hits this — chat and embed are both probed — but
-// CON-310's vision/transcription slots will until they grow a probe.)
+// capability (vision, transcribe). The caller keeps the static-only verdict
+// rather than reporting a failure.
 var ErrProbeUnsupported = errors.New("modelprobe: no live probe for this slot")
 
 // probeTimeout bounds a single probe so a hung provider can't stall the operator.
@@ -54,6 +54,9 @@ func (r *Runner) Probe(ctx context.Context, flowKey, slotKey, modelID string) (s
 	if !ok {
 		return "", 0, fmt.Errorf("unknown flow/slot %q/%q", flowKey, slotKey)
 	}
+	if slot.Capability != modelconfig.CapabilityChat && slot.Capability != modelconfig.CapabilityEmbed {
+		return "", 0, ErrProbeUnsupported
+	}
 	vendor, ok := vendors.VendorOf(modelID)
 	if !ok {
 		return "", 0, fmt.Errorf("unknown model %q", modelID)
@@ -61,14 +64,10 @@ func (r *Runner) Probe(ctx context.Context, flowKey, slotKey, modelID string) (s
 	if r.store == nil {
 		return "", 0, errors.New("secrets store unavailable")
 	}
-	switch slot.Capability {
-	case modelconfig.CapabilityChat:
-		return r.probeChat(ctx, vendor, modelID)
-	case modelconfig.CapabilityEmbed:
+	if slot.Capability == modelconfig.CapabilityEmbed {
 		return r.probeEmbed(ctx, vendor, modelID, slot.Requires.EmbedDims)
-	default:
-		return "", 0, ErrProbeUnsupported
 	}
+	return r.probeChat(ctx, vendor, modelID)
 }
 
 // probeChat runs a 1-token generation. v1 chat is Anthropic-only.
