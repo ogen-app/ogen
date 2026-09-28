@@ -90,6 +90,10 @@ type Deps struct {
 	// headless-connect sessions). A nil repo makes the sweep a no-op.
 	ConnectSessionRepo repository.ZernioConnectSessionRepository
 
+	// The cleanup_login_security sweep's repos. Nil repos skip their half.
+	KnownDeviceRepo     repository.KnownDeviceRepository
+	LoginAlertTokenRepo repository.LoginAlertTokenRepository
+
 	// Reads a tenant's lifecycle status so per-tenant jobs (publish,
 	// bootstrap, email) skip suspended/deleted tenants. repository.TenantRepository
 	// satisfies it. A nil reader makes the guards no-ops (auth stays the gate).
@@ -187,6 +191,8 @@ type PeriodicConfig struct {
 	NotificationCleanupEvery time.Duration
 	// Manual-publish-due sweep. Positive-interval gated like the others.
 	ManualPublishDueEvery time.Duration
+	// Login-security retention sweep. Positive-interval gated like the others.
+	LoginSecurityCleanupEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -251,6 +257,11 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.ManualPublishDueEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.ManualPublishDueEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return DetectManualPublishDueTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.LoginSecurityCleanupEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.LoginSecurityCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return CleanupLoginSecurityTask{}, nil
 		}, runOnStart))
 	}
 	return jobs
