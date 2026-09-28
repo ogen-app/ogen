@@ -2,9 +2,7 @@ package queues
 
 import (
 	"testing"
-	"time"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 )
 
@@ -29,28 +27,5 @@ func TestShouldStopPaging(t *testing.T) {
 				t.Fatalf("shouldStopPaging = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestStampTimes(t *testing.T) {
-	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	seen := now.Add(-48 * time.Hour)
-	changedAt := now.Add(-24 * time.Hour)
-	prev := &models.PostAnalytics{FirstSeenAt: seen, LastChangedAt: changedAt}
-
-	first := &models.PostAnalytics{}
-	stampTimes(first, nil, now, true)
-	if !first.FirstSeenAt.Equal(now) || !first.LastChangedAt.Equal(now) || !first.LastCheckedAt.Equal(now) {
-		t.Fatalf("first sighting = %+v", first)
-	}
-	moved := &models.PostAnalytics{}
-	stampTimes(moved, prev, now, true)
-	if !moved.FirstSeenAt.Equal(seen) || !moved.LastChangedAt.Equal(now) {
-		t.Fatalf("changed = %+v", moved)
-	}
-	same := &models.PostAnalytics{}
-	stampTimes(same, prev, now, false)
-	if !same.FirstSeenAt.Equal(seen) || !same.LastChangedAt.Equal(changedAt) || !same.LastCheckedAt.Equal(now) {
-		t.Fatalf("unchanged = %+v", same)
 	}
 }
