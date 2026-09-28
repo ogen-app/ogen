@@ -1,4 +1,4 @@
-// Package performers assembles the CON-238 "performers and outliers" board:
+// Package performers assembles the "performers and outliers" board:
 // it ranks a window's posts, scores each against the account's typical post for
 // its platform and age, splits them into Best/Worst lists, and emits
 // deterministic (no-AI) insights. Build is a pure function over already-fetched
@@ -306,101 +306,118 @@ func shareOf(reach, total int) float64 {
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 func round4(f float64) float64 { return math.Round(f*10000) / 10000 }
 
-// --- insights ---
+// insightRule inspects the ranked rows and reports one insight when it fires.
+type insightRule func(sorted []Row, total int) (insights.Insight, bool)
+
+// insightRules run in order; the first maxInsights that fire are kept.
+var insightRules = []insightRule{
+	rankDivergenceInsight,
+	sampleSizeInsight,
+	platformSkewInsight,
+	spreadInsight,
+	freshStandoutInsight,
+}
 
 func buildInsights(sorted []Row, total int) []insights.Insight {
 	out := []insights.Insight{}
-
-	// 1. rank_divergence — best by engagement rate ≠ best by reach.
-	byReach := slices.Clone(sorted)
-	slices.SortStableFunc(byReach, func(a, b Row) int { return cmp.Compare(b.Reach, a.Reach) })
-	byEng := slices.Clone(sorted)
-	slices.SortStableFunc(byEng, func(a, b Row) int { return cmp.Compare(b.Metrics.EngagementRate, a.Metrics.EngagementRate) })
-	if len(byReach) > 1 && byEng[0].PostID != byReach[0].PostID {
-		rank := 1
-		for i, r := range byReach {
-			if r.PostID == byEng[0].PostID {
-				rank = i + 1
-				break
-			}
-		}
-		out = append(out, insights.Insight{
-			ID:       "rank_divergence",
-			Severity: insights.Info,
-			Text:     fmt.Sprintf("The best post by engagement rate is only the %s biggest by reach — it reached a smaller, already-following audience, which is why it converted and didn't travel.", ordinal(rank)),
-		})
-	}
-
-	// 2. sample_size.
-	if total > 0 && total < sampleSizeCaveat {
-		out = append(out, insights.Insight{
-			ID:       "sample_size",
-			Severity: insights.Note,
-			Text:     fmt.Sprintf("%s posts this period — enough to notice, not enough to call it a rule.", cap1(numberWord(total))),
-		})
-	}
-
-	// 3. platform_skew — top 3 all one platform.
-	topN := min(3, len(sorted))
-	if topN >= 2 {
-		p := sorted[0].Platform
-		same := true
-		for _, r := range sorted[:topN] {
-			if r.Platform != p {
-				same = false
-				break
-			}
-		}
-		if same {
-			out = append(out, insights.Insight{
-				ID:       "platform_skew",
-				Severity: insights.Note,
-				Text:     fmt.Sprintf("Your top %d all came from %s.", topN, titleCase(p)),
-			})
-		}
-	}
-
-	// 4. spread — wide multiplier dispersion.
-	var lo, hi float64
-	seen := false
-	for _, r := range sorted {
-		if r.AgainstTypical == nil {
-			continue
-		}
-		v := *r.AgainstTypical
-		if !seen {
-			lo, hi, seen = v, v, true
-			continue
-		}
-		if v < lo {
-			lo = v
-		}
-		if v > hi {
-			hi = v
-		}
-	}
-	if seen && hi >= dirUpper && lo <= dirLower {
-		out = append(out, insights.Insight{
-			ID:       "spread",
-			Severity: insights.Note,
-			Text:     fmt.Sprintf("Your posts ranged from %.1f× to %.1f× typical — a high-variance period.", lo, hi),
-		})
-	}
-
-	// 5. fresh_standout — a still-accruing post already outperforming.
-	for _, r := range sorted {
-		if r.ReachStillAccruing && r.AgainstTypical != nil && *r.AgainstTypical >= dirUpper {
-			out = append(out, insights.Insight{
-				ID:       "fresh_standout",
-				Severity: insights.Info,
-				Text:     fmt.Sprintf("%q is only %d days old and already outperforming your typical.", r.Title, r.AgeDays),
-			})
+	for _, rule := range insightRules {
+		if len(out) == maxInsights {
 			break
 		}
-	}
-
-	if len(out) > maxInsights {
-		out = out[:maxInsights]
+		if in, ok := rule(sorted, total); ok {
+			out = append(out, in)
+		}
 	}
 	return out
+}
+
+// rankDivergenceInsight fires when the best post by engagement rate is not
+// the best by reach.
+func rankDivergenceInsight(sorted []Row, _ int) (insights.Insight, bool) {
+	if len(sorted) < 2 {
+		return insights.Insight{}, false
+	}
+	byReach := slices.Clone(sorted)
+	slices.SortStableFunc(byReach, func(a, b Row) int { return cmp.Compare(b.Reach, a.Reach) })
+	bestEng := slices.MaxFunc(sorted, func(a, b Row) int {
+		return cmp.Compare(a.Metrics.EngagementRate, b.Metrics.EngagementRate)
+	})
+	if bestEng.PostID == byReach[0].PostID {
+		return insights.Insight{}, false
+	}
+	rank := max(slices.IndexFunc(byReach, func(r Row) bool { return r.PostID == bestEng.PostID }), 0) + 1
+	return insights.Insight{
+		ID:       "rank_divergence",
+		Severity: insights.Info,
+		Text:     fmt.Sprintf("The best post by engagement rate is only the %s biggest by reach — it reached a smaller, already-following audience, which is why it converted and didn't travel.", ordinal(rank)),
+	}, true
+}
+
+func sampleSizeInsight(_ []Row, total int) (insights.Insight, bool) {
+	if total <= 0 || total >= sampleSizeCaveat {
+		return insights.Insight{}, false
+	}
+	return insights.Insight{
+		ID:       "sample_size",
+		Severity: insights.Note,
+		Text:     fmt.Sprintf("%s posts this period — enough to notice, not enough to call it a rule.", cap1(numberWord(total))),
+	}, true
+}
+
+// platformSkewInsight fires when the top posts (up to three, at least two)
+// all come from one platform.
+func platformSkewInsight(sorted []Row, _ int) (insights.Insight, bool) {
+	topN := min(3, len(sorted))
+	if topN < 2 {
+		return insights.Insight{}, false
+	}
+	p := sorted[0].Platform
+	if slices.ContainsFunc(sorted[:topN], func(r Row) bool { return r.Platform != p }) {
+		return insights.Insight{}, false
+	}
+	return insights.Insight{
+		ID:       "platform_skew",
+		Severity: insights.Note,
+		Text:     fmt.Sprintf("Your top %d all came from %s.", topN, titleCase(p)),
+	}, true
+}
+
+// spreadInsight fires when the against-typical multipliers span both the
+// above and below bands.
+func spreadInsight(sorted []Row, _ int) (insights.Insight, bool) {
+	var mults []float64
+	for _, r := range sorted {
+		if r.AgainstTypical != nil {
+			mults = append(mults, *r.AgainstTypical)
+		}
+	}
+	if len(mults) == 0 {
+		return insights.Insight{}, false
+	}
+	lo, hi := slices.Min(mults), slices.Max(mults)
+	if hi < dirUpper || lo > dirLower {
+		return insights.Insight{}, false
+	}
+	return insights.Insight{
+		ID:       "spread",
+		Severity: insights.Note,
+		Text:     fmt.Sprintf("Your posts ranged from %.1f× to %.1f× typical — a high-variance period.", lo, hi),
+	}, true
+}
+
+// freshStandoutInsight fires for the first still-accruing post that already
+// beats the typical band.
+func freshStandoutInsight(sorted []Row, _ int) (insights.Insight, bool) {
+	i := slices.IndexFunc(sorted, func(r Row) bool {
+		return r.ReachStillAccruing && r.AgainstTypical != nil && *r.AgainstTypical >= dirUpper
+	})
+	if i < 0 {
+		return insights.Insight{}, false
+	}
+	r := sorted[i]
+	return insights.Insight{
+		ID:       "fresh_standout",
+		Severity: insights.Info,
+		Text:     fmt.Sprintf("%q is only %d days old and already outperforming your typical.", r.Title, r.AgeDays),
+	}, true
 }

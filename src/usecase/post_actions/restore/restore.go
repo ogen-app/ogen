@@ -15,7 +15,6 @@ package restore
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -25,7 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/internal/postaudit"
 )
 
 var (
@@ -42,8 +41,8 @@ var (
 // Trigger identifies which entry point initiated a restore (recorded in
 // the audit log and used to attribute the new version's creator role).
 const (
-	TriggerAPI       = "api"
-	TriggerAssistant = "assistant"
+	TriggerAPI       = postaudit.TriggerAPI
+	TriggerAssistant = postaudit.TriggerAssistant
 )
 
 // editableStatuses are the post statuses whose content may be restored.
@@ -114,31 +113,12 @@ func New(
 // restore version, the post update, and the audit entry all commit in a
 // single transaction so they succeed or roll back together.
 func (s *Service) Restore(ctx context.Context, postID string, opts Options) (*Result, error) {
-	if opts.VersionNumber <= 0 {
-		return nil, ErrVersionNotFound
-	}
-
-	post, err := s.posts.GetByID(ctx, postID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrPostNotFound
-		}
-		return nil, err
-	}
-	if !editableStatuses[post.Status] {
-		return nil, fmt.Errorf("%w: %s", ErrNotEditable, post.Status)
-	}
-
-	target, err := s.versions.GetByPostIDAndVersionNumber(ctx, postID, opts.VersionNumber)
+	post, target, err := s.load(ctx, postID, opts.VersionNumber)
 	if err != nil {
 		return nil, err
 	}
-	if target == nil {
-		return nil, ErrVersionNotFound
-	}
-
-	// No-op: the live content already equals the target — nothing to do,
-	// and appending a redundant version would only clutter the history.
+	// Appending a version identical to the live content would only
+	// clutter the history.
 	if target.Content == post.Content {
 		return &Result{
 			Post:                post,
@@ -147,46 +127,71 @@ func (s *Service) Restore(ctx context.Context, postID string, opts Options) (*Re
 		}, nil
 	}
 
-	// post_versions.creator is a role enum ('user' | 'assistant'), not a
-	// user id — an assistant-driven restore is "assistant", REST is "user".
-	creator := "user"
-	if opts.Trigger == TriggerAssistant {
-		creator = "assistant"
-	}
-
-	// Capture the pre-restore live content (for the dirty-HEAD snapshot)
-	// before overwriting it with the restored content.
 	preRestoreContent := post.Content
 	post.Content = target.Content
 	post.UpdatedAt = time.Now().UTC()
 
-	// Version numbering must be serialized with the inserts, so the latest
-	// version is read and nextNum computed INSIDE the transaction — using
-	// the tx handle, not a pooled repo call. Postgres runs writers
-	// concurrently (SQLite did not), so the transaction first locks the post
-	// row (SELECT ... FOR UPDATE): a concurrent restore of the same post then
-	// blocks until this one commits, after which it reads the version we just
-	// appended and computes the next number — no duplicate version_number, no
-	// UNIQUE-constraint collision.
-	var (
-		restoredVersionNum  int
-		autoSnapshotCreated bool
-	)
-	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewRaw(`SELECT 1 FROM posts WHERE id = ? AND tenant_id = ? FOR UPDATE`, postID, post.TenantID).Exec(ctx); err != nil {
-			return err
-		}
-		latest := new(models.PostVersion)
-		err := tx.NewSelect().
-			Model(latest).
-			Where("pv.post_id = ?", postID).
-			OrderExpr("pv.version_number DESC").
-			Limit(1).
-			Scan(ctx)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			latest = nil
-		case err != nil:
+	appended, err := s.appendVersions(ctx, post, preRestoreContent, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Dotted bus wire type; the persisted post_logs / activity taxonomy
+	// stays "post_restored".
+	postaudit.Publish(s.hub, post.ID, "post.restored", opts.Actor, map[string]any{
+		"restoredFromVersion": opts.VersionNumber,
+		"newVersionNumber":    appended.versionNumber,
+	})
+
+	return &Result{
+		Post:                post,
+		RestoredFromVersion: opts.VersionNumber,
+		NewVersionNumber:    appended.versionNumber,
+		AutoSnapshotCreated: appended.autoSnapshot,
+	}, nil
+}
+
+// load fetches the post and the version to restore, rejecting posts in
+// a non-editable status.
+func (s *Service) load(ctx context.Context, postID string, versionNumber int) (*models.Post, *models.PostVersion, error) {
+	if versionNumber <= 0 {
+		return nil, nil, ErrVersionNotFound
+	}
+	post, err := s.posts.GetByID(ctx, postID)
+	if err != nil {
+		return nil, nil, postaudit.NotFound(err, ErrPostNotFound)
+	}
+	if !editableStatuses[post.Status] {
+		return nil, nil, fmt.Errorf("%w: %s", ErrNotEditable, post.Status)
+	}
+	target, err := s.versions.GetByPostIDAndVersionNumber(ctx, postID, versionNumber)
+	if err != nil {
+		return nil, nil, err
+	}
+	if target == nil {
+		return nil, nil, ErrVersionNotFound
+	}
+	return post, target, nil
+}
+
+type appendResult struct {
+	versionNumber int
+	autoSnapshot  bool
+}
+
+// appendVersions appends the restore version (preceded by a dirty-HEAD
+// snapshot of preRestoreContent when the latest version doesn't hold
+// it), saves post and writes the audit entry in one transaction.
+//
+// The post row is locked FOR UPDATE before the latest version is read,
+// so a concurrent restore of the same post blocks until this one
+// finishes and then numbers its versions after ours, avoiding a
+// duplicate version_number.
+func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRestoreContent string, opts Options) (appendResult, error) {
+	var res appendResult
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		latest, err := lockAndReadLatest(ctx, tx, post)
+		if err != nil {
 			return err
 		}
 
@@ -194,113 +199,81 @@ func (s *Service) Restore(ctx context.Context, postID string, opts Options) (*Re
 		if latest != nil {
 			nextNum = latest.VersionNumber + 1
 		}
-
-		// Dirty HEAD: the live content isn't captured by the latest
-		// snapshot (e.g. an assistant edit with saveVersion=false).
-		// Snapshot it first so the pre-restore state is recoverable.
+		// Dirty HEAD: live edits not captured by any version (e.g. an
+		// assistant edit with saveVersion=false) are snapshotted first.
 		if latest != nil && latest.Content != preRestoreContent {
-			snapID, err := models.NewID()
-			if err != nil {
+			if err := insertVersion(ctx, tx, post.ID, nextNum, preRestoreContent, "Auto-saved before restore", postaudit.CreatorUser); err != nil {
 				return err
 			}
-			if _, err := tx.NewInsert().Model(&models.PostVersion{
-				ID:            snapID,
-				PostID:        postID,
-				VersionNumber: nextNum,
-				Content:       preRestoreContent,
-				Note:          "Auto-saved before restore",
-				Creator:       "user",
-			}).Exec(ctx); err != nil {
-				return err
-			}
-			autoSnapshotCreated = true
+			res.autoSnapshot = true
 			nextNum++
 		}
-
-		restoreID, err := models.NewID()
-		if err != nil {
+		note := fmt.Sprintf("Restored from v%d", opts.VersionNumber)
+		if err := insertVersion(ctx, tx, post.ID, nextNum, post.Content, note, postaudit.CreatorFor(opts.Trigger)); err != nil {
 			return err
 		}
-		if _, err := tx.NewInsert().Model(&models.PostVersion{
-			ID:            restoreID,
-			PostID:        postID,
-			VersionNumber: nextNum,
-			Content:       target.Content,
-			Note:          fmt.Sprintf("Restored from v%d", opts.VersionNumber),
-			Creator:       creator,
-		}).Exec(ctx); err != nil {
-			return err
-		}
-		restoredVersionNum = nextNum
+		res.versionNumber = nextNum
 
 		if _, err := tx.NewUpdate().Model(post).WherePK().Exec(ctx); err != nil {
 			return err
 		}
+		return s.appendLogTx(ctx, tx, post.ID, opts, res)
+	})
+	return res, err
+}
 
-		if s.logs != nil {
-			logEntry, err := s.buildLogEntry(post.ID, opts, nextNum, autoSnapshotCreated)
-			if err != nil {
-				return err
-			}
-			if err := s.logs.AppendTx(ctx, tx, logEntry); err != nil {
-				return err
-			}
-		}
+// lockAndReadLatest locks the post row and returns its latest version,
+// or nil when it has none.
+func lockAndReadLatest(ctx context.Context, tx bun.Tx, post *models.Post) (*models.PostVersion, error) {
+	if _, err := tx.NewRaw(`SELECT 1 FROM posts WHERE id = ? AND tenant_id = ? FOR UPDATE`, post.ID, post.TenantID).Exec(ctx); err != nil {
+		return nil, err
+	}
+	latest := new(models.PostVersion)
+	err := tx.NewSelect().
+		Model(latest).
+		Where("pv.post_id = ?", post.ID).
+		OrderExpr("pv.version_number DESC").
+		Limit(1).
+		Scan(ctx)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	return latest, nil
+}
+
+func insertVersion(ctx context.Context, tx bun.Tx, postID string, number int, content, note, creator string) error {
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	_, err = tx.NewInsert().Model(&models.PostVersion{
+		ID:            id,
+		PostID:        postID,
+		VersionNumber: number,
+		Content:       content,
+		Note:          note,
+		Creator:       creator,
+	}).Exec(ctx)
+	return err
+}
+
+func (s *Service) appendLogTx(ctx context.Context, tx bun.Tx, postID string, opts Options, res appendResult) error {
+	if s.logs == nil {
 		return nil
-	})
+	}
+	entry, err := postaudit.NewLog(postID, models.PostLogEventPostRestored, opts.Actor,
+		fmt.Sprintf("post restored to v%d", opts.VersionNumber),
+		map[string]any{
+			"restored_from_version": opts.VersionNumber,
+			"new_version_number":    res.versionNumber,
+			"auto_snapshot_created": res.autoSnapshot,
+			"trigger":               opts.Trigger,
+		})
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	s.publishRestored(post.ID, opts, restoredVersionNum)
-
-	return &Result{
-		Post:                post,
-		RestoredFromVersion: opts.VersionNumber,
-		NewVersionNumber:    restoredVersionNum,
-		AutoSnapshotCreated: autoSnapshotCreated,
-	}, nil
-}
-
-func (s *Service) buildLogEntry(postID string, opts Options, newVersion int, autoSnapshot bool) (*models.PostLog, error) {
-	logID, err := models.NewID()
-	if err != nil {
-		return nil, err
-	}
-	payload, _ := json.Marshal(map[string]any{
-		"restored_from_version": opts.VersionNumber,
-		"new_version_number":    newVersion,
-		"auto_snapshot_created": autoSnapshot,
-		"trigger":               opts.Trigger,
-	})
-	return &models.PostLog{
-		ID:        logID,
-		PostID:    postID,
-		EventType: models.PostLogEventPostRestored,
-		Actor:     opts.Actor,
-		Summary:   fmt.Sprintf("post restored to v%d", opts.VersionNumber),
-		Payload:   logs.SanitizeAndCap(string(payload)),
-	}, nil
-}
-
-func (s *Service) publishRestored(postID string, opts Options, newVersion int) {
-	if s.hub == nil {
-		return
-	}
-	evID, err := models.NewID()
-	if err != nil {
-		return
-	}
-	_ = s.hub.Publish(context.Background(), eventhub.Event{
-		ID:    evID,
-		Topic: "entity:post:" + postID,
-		// Dotted bus wire type. The post_logs.event_type and
-		// tenant_activity_events taxonomy constants stay "post_restored".
-		Type:   "post.restored",
-		UserID: opts.Actor,
-		Payload: map[string]any{
-			"restoredFromVersion": opts.VersionNumber,
-			"newVersionNumber":    newVersion,
-		},
-	})
+	return s.logs.AppendTx(ctx, tx, entry)
 }

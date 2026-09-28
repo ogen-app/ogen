@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -232,7 +233,7 @@ func (p AnalyticsPagination) LastPage() int {
 // might return) the analytics array. The endpoint is documented as returning
 // post objects and has shipped both as a bare top-level array and wrapped in a
 // single-key envelope; accepting all of these means an upstream shape change
-// can't silently zero out collection (CON-93 follow-up). `analytics` first
+// can't silently zero out collection. `analytics` first
 // because it is the historically-assumed key.
 var analyticsListKeys = []string{"analytics", "posts", "data", "results", "items"}
 
@@ -280,51 +281,57 @@ func decodeAnalyticsList(raw json.RawMessage) ([]AnalyticsItem, AnalyticsPaginat
 		items, err := decodeAnalyticsItems(rawItems)
 		return items, AnalyticsPagination{}, err
 	case '{':
-		var env map[string]json.RawMessage
-		if err := json.Unmarshal(trimmed, &env); err != nil {
-			return nil, AnalyticsPagination{}, fmt.Errorf("zernio: decode analytics envelope: %w", err)
-		}
-		var pag AnalyticsPagination
-		if p, ok := env["pagination"]; ok && len(p) > 0 {
-			// Pagination is advisory; a decode failure must not sink the page.
-			_ = json.Unmarshal(p, &pag)
-		}
-		for _, key := range analyticsListKeys {
-			arr, ok := env[key]
-			if !ok || len(arr) == 0 || string(arr) == "null" {
-				continue
-			}
-			if bytes.TrimSpace(arr)[0] != '[' {
-				continue // e.g. the metrics object at the "analytics" key of a single post
-			}
-			var rawItems []json.RawMessage
-			if err := json.Unmarshal(arr, &rawItems); err != nil {
-				return nil, pag, fmt.Errorf("zernio: decode analytics %q array: %w", key, err)
-			}
-			items, err := decodeAnalyticsItems(rawItems)
-			return items, pag, err
-		}
-		// No wrapper array — but the object may itself be a single post (the
-		// documented ?postId shape). Decode it as a one-item list when it
-		// carries a post id; otherwise it's an empty page.
-		if _, ok := env["postId"]; ok {
-			item, err := decodeAnalyticsItem(trimmed)
-			if err != nil {
-				return nil, pag, err
-			}
-			return []AnalyticsItem{*item}, pag, nil
-		}
-		if _, ok := env["latePostId"]; ok {
-			item, err := decodeAnalyticsItem(trimmed)
-			if err != nil {
-				return nil, pag, err
-			}
-			return []AnalyticsItem{*item}, pag, nil
-		}
-		return nil, pag, nil
+		return decodeEnvelope(trimmed)
 	default:
 		return nil, AnalyticsPagination{}, fmt.Errorf("zernio: analytics response is neither array nor object (starts with %q)", trimmed[0])
 	}
+}
+
+// analyticsPostIDKeys mark an object as a single post rather than an
+// envelope.
+var analyticsPostIDKeys = []string{"postId", "latePostId"}
+
+// decodeEnvelope decodes the object shapes: an envelope wrapping the array
+// under one of analyticsListKeys, a single post object, or an empty page.
+func decodeEnvelope(obj []byte) ([]AnalyticsItem, AnalyticsPagination, error) {
+	var env map[string]json.RawMessage
+	if err := json.Unmarshal(obj, &env); err != nil {
+		return nil, AnalyticsPagination{}, fmt.Errorf("zernio: decode analytics envelope: %w", err)
+	}
+	var pag AnalyticsPagination
+	if p, ok := env["pagination"]; ok && len(p) > 0 {
+		// Pagination is advisory; a decode failure must not sink the page.
+		_ = json.Unmarshal(p, &pag)
+	}
+	for _, key := range analyticsListKeys {
+		arr, ok := env[key]
+		if !ok || len(arr) == 0 || string(arr) == "null" {
+			continue
+		}
+		// Skip non-arrays, e.g. the metrics object at the "analytics" key of
+		// a single post.
+		if bytes.TrimSpace(arr)[0] != '[' {
+			continue
+		}
+		var rawItems []json.RawMessage
+		if err := json.Unmarshal(arr, &rawItems); err != nil {
+			return nil, pag, fmt.Errorf("zernio: decode analytics %q array: %w", key, err)
+		}
+		items, err := decodeAnalyticsItems(rawItems)
+		return items, pag, err
+	}
+	isPost := slices.ContainsFunc(analyticsPostIDKeys, func(k string) bool {
+		_, ok := env[k]
+		return ok
+	})
+	if !isPost {
+		return nil, pag, nil
+	}
+	item, err := decodeAnalyticsItem(obj)
+	if err != nil {
+		return nil, pag, err
+	}
+	return []AnalyticsItem{*item}, pag, nil
 }
 
 func decodeAnalyticsItems(rawItems []json.RawMessage) ([]AnalyticsItem, error) {

@@ -157,7 +157,7 @@ func buildOverview(campaign *models.Campaign, posts []models.Post, platformNames
 	}
 }
 
-// buildGoalProgress computes the CON-182 goal recap: per-period buckets of
+// buildGoalProgress computes the goal recap: per-period buckets of
 // committed posts (scheduled/published, keyed by scheduled_at) against the
 // per-period target, plus overall reached/percent and a trailing streak.
 // Returns nil when the campaign has no positive per-period target.
@@ -174,68 +174,77 @@ func buildGoalProgress(campaign *models.Campaign, posts []models.Post) *GoalProg
 	}
 
 	windows := campaigngoal.Windows(cadence, campaign.StartDate, campaign.EndDate, loc)
+	achieved, total := countByWindow(posts, windows, loc)
 	gp := &GoalProgress{
 		Cadence:        cadence,
 		PostsPerPeriod: perPeriod,
 		Periods:        campaigngoal.Periods(cadence, campaign.StartDate, campaign.EndDate, loc),
 		TotalTarget:    campaigngoal.EffectiveCount(campaign.EstimatedPostCount, cadence, campaign.StartDate, campaign.EndDate, loc),
+		TotalAchieved:  total,
 	}
-
-	total := 0
-	if len(windows) == 0 {
-		// No datable window (missing/invalid dates): report the committed total
-		// with no per-period breakdown. Same "committed and dated" rule as the
-		// windowed branch below, so TotalAchieved counts consistently.
-		for _, p := range posts {
-			if isCommitted(p.Status) && p.ScheduledAt != nil {
-				total++
-			}
-		}
-	} else {
-		achieved := make([]int, len(windows))
-		for _, p := range posts {
-			if !isCommitted(p.Status) || p.ScheduledAt == nil {
-				continue
-			}
-			at := p.ScheduledAt.In(loc)
-			for i := range windows {
-				if !at.Before(windows[i].Start) && at.Before(windows[i].End) {
-					achieved[i]++
-					total++
-					break
-				}
-			}
-		}
-
-		buckets := make([]GoalBucket, len(windows))
-		for i, w := range windows {
-			buckets[i] = GoalBucket{
-				Index:    i + 1,
-				Label:    w.Label,
-				Start:    w.Start,
-				End:      w.End,
-				Target:   perPeriod,
-				Achieved: achieved[i],
-				Reached:  achieved[i] >= perPeriod,
-			}
-		}
-		// Streak = consecutive reached periods counting back from the last.
-		for i := len(buckets) - 1; i >= 0 && buckets[i].Reached; i-- {
-			gp.Streak++
-		}
-		gp.Buckets = buckets
+	if len(windows) > 0 {
+		gp.Buckets = goalBuckets(windows, achieved, perPeriod)
+		gp.Streak = trailingStreak(gp.Buckets)
 	}
-
-	gp.TotalAchieved = total
 	if gp.TotalTarget > 0 {
 		gp.Reached = total >= gp.TotalTarget
-		if pct := int(math.Round(100 * float64(total) / float64(gp.TotalTarget))); pct > 100 {
-			gp.Percent = 100
-		} else {
-			gp.Percent = pct
-		}
+		gp.Percent = goalPercent(total, gp.TotalTarget)
 	}
 	return gp
+}
+
+// countByWindow counts committed, dated posts per window and in total.
+// With no windows (missing/invalid campaign dates) every committed, dated
+// post counts toward the total; otherwise only posts inside a window do.
+func countByWindow(posts []models.Post, windows []campaigngoal.Window, loc *time.Location) (achieved []int, total int) {
+	achieved = make([]int, len(windows))
+	for _, p := range posts {
+		if !isCommitted(p.Status) || p.ScheduledAt == nil {
+			continue
+		}
+		if len(windows) == 0 {
+			total++
+			continue
+		}
+		at := p.ScheduledAt.In(loc)
+		if i := slices.IndexFunc(windows, func(w campaigngoal.Window) bool {
+			return !at.Before(w.Start) && at.Before(w.End)
+		}); i >= 0 {
+			achieved[i]++
+			total++
+		}
+	}
+	return achieved, total
+}
+
+func goalBuckets(windows []campaigngoal.Window, achieved []int, perPeriod int) []GoalBucket {
+	buckets := make([]GoalBucket, len(windows))
+	for i, w := range windows {
+		buckets[i] = GoalBucket{
+			Index:    i + 1,
+			Label:    w.Label,
+			Start:    w.Start,
+			End:      w.End,
+			Target:   perPeriod,
+			Achieved: achieved[i],
+			Reached:  achieved[i] >= perPeriod,
+		}
+	}
+	return buckets
+}
+
+// trailingStreak counts consecutive reached periods back from the last.
+func trailingStreak(buckets []GoalBucket) int {
+	streak := 0
+	for i := len(buckets) - 1; i >= 0 && buckets[i].Reached; i-- {
+		streak++
+	}
+	return streak
+}
+
+// goalPercent is achieved as a rounded percentage of target, capped at 100.
+func goalPercent(achieved, target int) int {
+	return min(int(math.Round(100*float64(achieved)/float64(target))), 100)
 }
 
 // isCommitted reports whether a post counts toward goal progress: it is

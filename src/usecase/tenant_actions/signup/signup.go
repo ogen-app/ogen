@@ -35,20 +35,20 @@ const sessionTTL = 7 * 24 * time.Hour
 // create a workspace instead.
 var ErrEmailInUse = errors.New("email already in use")
 
-// ProfileEnqueuer enqueues the CON-102 Zernio profile-bootstrap job inside the
+// ProfileEnqueuer enqueues the Zernio profile-bootstrap job inside the
 // signup transaction. nil disables it (no profile provisioning).
 type ProfileEnqueuer interface {
 	EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error
 }
 
-// EmailEnqueuer enqueues the CON-154 welcome + onboarding-drip jobs inside the
+// EmailEnqueuer enqueues the welcome + onboarding-drip jobs inside the
 // signup transaction. nil disables it (no lifecycle mail).
 type EmailEnqueuer interface {
 	EnqueueWelcomeEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error
 	EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error
 }
 
-// HarborEnqueuer enqueues the CON-229 "notify Harbor a new tenant registered"
+// HarborEnqueuer enqueues the "notify Harbor a new tenant registered"
 // webhook job inside the signup transaction, so operators are notified iff the
 // tenant commits. nil disables it (no operator notification).
 type HarborEnqueuer interface {
@@ -108,104 +108,101 @@ func (s *Service) clock() time.Time {
 // when the email already identifies an account — both from the up-front check
 // and, under a race, from the accounts.email unique-constraint backstop.
 func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
-	// Email uniquely identifies an ACCOUNT. Reject a duplicate up front;
-	// the unique constraint below is the TOCTOU backstop.
+	// The unique constraint on accounts.email is the TOCTOU backstop.
 	if _, err := s.accounts.GetByEmail(ctx, in.Email); err == nil {
 		return nil, ErrEmailInUse
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
+		return nil, fmt.Errorf("signup: check email: %w", err)
 	}
 
 	slug, err := s.uniqueSlug(ctx, in.TenantName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("signup: allocate slug: %w", err)
 	}
-
-	tenantID, err := models.NewID()
+	e, err := newSignupEntities(in, slug, s.clock())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("signup: %w", err)
 	}
-	accountID, err := models.NewID()
-	if err != nil {
-		return nil, err
-	}
-	userID, err := models.NewID()
-	if err != nil {
-		return nil, err
-	}
-	hash, err := models.HashPassword(in.Password)
-	if err != nil {
-		return nil, err
-	}
-	token, err := models.NewSessionToken()
-	if err != nil {
-		return nil, err
-	}
-
-	now := s.clock()
-	// tenant.tier_id is required (NOT NULL). New workspaces start on the
-	// seeded default tier; Harbor reassigns them later over the gRPC admin surface.
-	tenant := &models.Tenant{ID: tenantID, Name: in.TenantName, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now}
-	// Identity (the credential) lives on the account; the users row is this
-	// account's membership of the new workspace. The signup user creates
-	// the workspace, so they are its first owner.
-	account := &models.Account{ID: accountID, Email: in.Email, PasswordHash: hash, Name: in.UserName, CreatedAt: now, UpdatedAt: now}
-	user := &models.User{ID: userID, AccountID: accountID, TenantID: tenantID, Name: in.UserName, Email: in.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now}
-	session := &models.Session{ID: token, AccountID: accountID, UserID: userID, TenantID: tenantID, ExpiresAt: now.Add(sessionTTL), CreatedAt: now}
 
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(tenant).Exec(ctx); err != nil {
-			return err
-		}
-		if _, err := tx.NewInsert().Model(account).Exec(ctx); err != nil {
-			return err
-		}
-		if _, err := tx.NewInsert().Model(user).Exec(ctx); err != nil {
-			return err
-		}
-		if _, err := tx.NewInsert().Model(session).Exec(ctx); err != nil {
-			return err
-		}
-		// Eagerly provision this tenant's Zernio profile in the
-		// background, enqueued inside THIS tx so the job exists iff the tenant
-		// does. The enqueue is a local DB insert; the Zernio call happens later in
-		// the worker, so signup never blocks on Zernio reachability.
-		if s.profiles != nil {
-			if err := s.profiles.EnqueueBootstrapProfileTx(ctx, tx.Tx, tenantID); err != nil {
+		for _, m := range []any{e.tenant, e.account, e.user, e.session} {
+			if _, err := tx.NewInsert().Model(m).Exec(ctx); err != nil {
 				return err
 			}
 		}
-		// Welcome (immediate) + onboarding drip (day 2/5/7) enqueued in
-		// this same tx, so a rolled-back signup queues no mail and a committed one
-		// durably queues exactly one welcome + drip.
-		if s.emails != nil {
-			if err := s.emails.EnqueueWelcomeEmailTx(ctx, tx.Tx, userID, tenantID); err != nil {
-				return err
-			}
-			if err := s.emails.EnqueueDripTx(ctx, tx.Tx, userID, tenantID); err != nil {
-				return err
-			}
-		}
-		// Notify operators of the new registration, enqueued in this same
-		// tx so a rolled-back signup notifies no one. The job POSTs a signed webhook
-		// to Harbor, which resolves the admin recipients and calls back the send RPC.
-		if s.harbor != nil {
-			if err := s.harbor.EnqueueNotifyHarborTenantRegisteredTx(ctx, tx.Tx, tenantID); err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.enqueueSideEffectsTx(ctx, tx.Tx, e.user.ID, e.tenant.ID)
 	}); err != nil {
-		// A concurrent signup with the same email passes the pre-check but loses
-		// the race to the accounts.email unique constraint — surface that as
-		// ErrEmailInUse (409) rather than a raw 500.
+		// A concurrent signup with the same email passes the pre-check but
+		// loses the race to the accounts.email unique constraint.
 		if isUniqueViolation(err) {
 			return nil, ErrEmailInUse
 		}
-		return nil, err
+		return nil, fmt.Errorf("signup: create tenant: %w", err)
 	}
 
-	return &Result{Tenant: tenant, User: user, Session: session}, nil
+	return &Result{Tenant: e.tenant, User: e.user, Session: e.session}, nil
+}
+
+// signupEntities are the rows a signup inserts.
+type signupEntities struct {
+	tenant  *models.Tenant
+	account *models.Account
+	user    *models.User
+	session *models.Session
+}
+
+// newSignupEntities generates the ids, password hash and session token
+// and assembles the rows. The account holds the credential; the user row
+// is that account's owner membership of the new workspace. New
+// workspaces start on the seeded default tier.
+func newSignupEntities(in Input, slug string, now time.Time) (*signupEntities, error) {
+	var tenantID, accountID, userID string
+	for _, id := range []*string{&tenantID, &accountID, &userID} {
+		v, err := models.NewID()
+		if err != nil {
+			return nil, fmt.Errorf("generate id: %w", err)
+		}
+		*id = v
+	}
+	hash, err := models.HashPassword(in.Password)
+	if err != nil {
+		return nil, fmt.Errorf("hash password: %w", err)
+	}
+	token, err := models.NewSessionToken()
+	if err != nil {
+		return nil, fmt.Errorf("generate session token: %w", err)
+	}
+	return &signupEntities{
+		tenant:  &models.Tenant{ID: tenantID, Name: in.TenantName, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now},
+		account: &models.Account{ID: accountID, Email: in.Email, PasswordHash: hash, Name: in.UserName, CreatedAt: now, UpdatedAt: now},
+		user:    &models.User{ID: userID, AccountID: accountID, TenantID: tenantID, Name: in.UserName, Email: in.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now},
+		session: &models.Session{ID: token, AccountID: accountID, UserID: userID, TenantID: tenantID, ExpiresAt: now.Add(sessionTTL), CreatedAt: now},
+	}, nil
+}
+
+// enqueueSideEffectsTx enqueues the Zernio profile bootstrap, the welcome
+// and onboarding-drip mails and the Harbor new-tenant notification inside
+// the signup transaction, so each job exists iff the tenant commits. The
+// enqueues are local inserts; the external calls happen in the workers,
+// so signup never blocks on Zernio or Harbor reachability.
+func (s *Service) enqueueSideEffectsTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error {
+	if s.profiles != nil {
+		if err := s.profiles.EnqueueBootstrapProfileTx(ctx, tx, tenantID); err != nil {
+			return err
+		}
+	}
+	if s.emails != nil {
+		if err := s.emails.EnqueueWelcomeEmailTx(ctx, tx, userID, tenantID); err != nil {
+			return err
+		}
+		if err := s.emails.EnqueueDripTx(ctx, tx, userID, tenantID); err != nil {
+			return err
+		}
+	}
+	if s.harbor != nil {
+		return s.harbor.EnqueueNotifyHarborTenantRegisteredTx(ctx, tx, tenantID)
+	}
+	return nil
 }
 
 // uniqueSlug returns slugify(name), suffixed with -2, -3, … until free.
