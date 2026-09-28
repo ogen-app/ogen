@@ -21,6 +21,7 @@ const (
 	KeyDripDay5           = "drip_day5"
 	KeyDripDay7           = "drip_day7"
 	KeyConnectionExpiring = "connection_expiring"
+	KeyNewDeviceLogin     = "new_device_login"
 	// KeyAdminTenantRegistered is the internal operator notification sent to
 	// admins when a new tenant registers. Unlike the templates above it
 	// is not customer-facing, so it is hand-authored rather than Maizzle-compiled.
@@ -80,6 +81,17 @@ type Data struct {
 	Status       string
 	RegisteredAt string
 	TenantURL    string
+	// LoginTime / DeviceLabel / IPAddress / Location / SecureURL / MaskedEmail
+	// feed the new_device_login alert: when and from where the sign-in came,
+	// the single-use "This wasn't me" link, and the account address with its
+	// local part masked. Location is empty when it can't be resolved, and the
+	// template drops that row. Empty and ignored for every other template.
+	LoginTime   string
+	DeviceLabel string
+	IPAddress   string
+	Location    string
+	SecureURL   string
+	MaskedEmail string
 }
 
 //go:embed defaults/*.tmpl
@@ -111,6 +123,12 @@ const (
 	varStatus         = "The tenant's lifecycle status at registration (active)."
 	varRegisteredAt   = "When the tenant registered, formatted (UTC)."
 	varTenantURL      = "Deep link to the tenant's detail page in Harbor (empty if HARBOR_BASE_URL is unset)."
+	varLoginTime      = "When the sign-in happened, formatted in UTC (e.g. 28 Sep 2026, 14:03 UTC)."
+	varDeviceLabel    = "Browser and operating system of the sign-in, e.g. \"Chrome on macOS\"."
+	varIPAddress      = "The IP address the sign-in came from."
+	varLocation       = "Approximate location of the IP, e.g. \"Kyiv, Ukraine\" (empty when unknown)."
+	varSecureURL      = "The single-use \"This wasn't me\" link; expires in 24 hours."
+	varMaskedEmail    = "The account's email address with the local part masked, e.g. j***@acme.com."
 )
 
 // transactionalVars / marketingVars build the per-template variable doc sets.
@@ -163,6 +181,20 @@ func connectionExpiringVars() models.StringMap {
 	return m
 }
 
+// newDeviceLoginVars documents the new_device_login security alert's
+// placeholders: the standard transactional set plus the sign-in details and the
+// secure-account link.
+func newDeviceLoginVars() models.StringMap {
+	m := transactionalVars()
+	m["LoginTime"] = varLoginTime
+	m["DeviceLabel"] = varDeviceLabel
+	m["IPAddress"] = varIPAddress
+	m["Location"] = varLocation
+	m["SecureURL"] = varSecureURL
+	m["MaskedEmail"] = varMaskedEmail
+	return m
+}
+
 // adminTenantRegisteredVars documents the admin_tenant_registered template's
 // placeholders. This is internal operator mail: WorkspaceName carries
 // the new tenant's name, the rest are the registration details + Harbor deep
@@ -203,6 +235,7 @@ var defaultSpecs = []defaultSpec{
 	{KeyDripDay5, models.EmailKindMarketing, "Your content, on autopilot", marketingVars()},
 	{KeyDripDay7, models.EmailKindMarketing, "A quick check-in from Ogen", marketingVars()},
 	{KeyConnectionExpiring, models.EmailKindTransactional, connectionExpiringSubject, connectionExpiringVars()},
+	{KeyNewDeviceLogin, models.EmailKindTransactional, "New sign-in to your Ogen account", newDeviceLoginVars()},
 	{KeyAdminTenantRegistered, models.EmailKindTransactional, "New tenant registered: [[ .WorkspaceName ]]", adminTenantRegisteredVars()},
 }
 

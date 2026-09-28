@@ -262,7 +262,7 @@ func (p *SendEmailProcessor) unsubscribeHeaders(ctx context.Context, t SendEmail
 // templateData maps the recipient and the task's per-message vars onto the
 // template data. Vars carry what isn't derivable at send time (reset and
 // invite links, connection-expiry details, the operator's new-tenant
-// details); templates that don't use a var leave it empty.
+// details, new-device sign-in details); templates that don't use a var leave it empty.
 func templateData(rcpt emailRecipient, appURL, unsubURL string, vars map[string]string) templates.Data {
 	return templates.Data{
 		Name:           rcpt.name,
@@ -287,6 +287,12 @@ func templateData(rcpt emailRecipient, appURL, unsubURL string, vars map[string]
 		Status:         vars["status"],
 		RegisteredAt:   vars["registered_at"],
 		TenantURL:      vars["tenant_url"],
+		LoginTime:      vars["login_time"],
+		DeviceLabel:    vars["device_label"],
+		IPAddress:      vars["ip_address"],
+		Location:       vars["location"],
+		SecureURL:      vars["secure_url"],
+		MaskedEmail:    vars["masked_email"],
 	}
 }
 
