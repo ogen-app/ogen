@@ -24,11 +24,16 @@ const (
 
 // FlowSlot is one model-selection site within a flow.
 type FlowSlot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
-	Capability    string                 `protobuf:"bytes,3,opt,name=capability,proto3" json:"capability,omitempty"`                    // "chat" | "embed" — the model family the slot needs
-	GlobalOnly    bool                   `protobuf:"varint,4,opt,name=global_only,json=globalOnly,proto3" json:"global_only,omitempty"` // true = no per-tier override (the embed slot)
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Key         string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Description string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	// The model family the slot needs: "chat" | "embed" | "vision" | "transcribe".
+	// A vision / transcribe slot is filled by a "chat" model whose capabilities
+	// carry vision_input / audio_input respectively.
+	Capability string `protobuf:"bytes,3,opt,name=capability,proto3" json:"capability,omitempty"`
+	GlobalOnly bool   `protobuf:"varint,4,opt,name=global_only,json=globalOnly,proto3" json:"global_only,omitempty"` // true = no per-tier override (the embed slot)
+	// Vendors whose models may fill the slot (e.g. ["anthropic"]); empty = any.
+	Vendors       []string `protobuf:"bytes,5,rep,name=vendors,proto3" json:"vendors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -89,6 +94,13 @@ func (x *FlowSlot) GetGlobalOnly() bool {
 		return x.GlobalOnly
 	}
 	return false
+}
+
+func (x *FlowSlot) GetVendors() []string {
+	if x != nil {
+		return x.Vendors
+	}
+	return nil
 }
 
 // Flow is a configurable genkit flow and its model slots.
@@ -295,8 +307,10 @@ type ModelCapabilities struct {
 	Streaming        bool                   `protobuf:"varint,3,opt,name=streaming,proto3" json:"streaming,omitempty"`
 	MaxOutputTokens  int32                  `protobuf:"varint,4,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
 	ContextWindow    int32                  `protobuf:"varint,5,opt,name=context_window,json=contextWindow,proto3" json:"context_window,omitempty"`
-	EmbedDims        int32                  `protobuf:"varint,6,opt,name=embed_dims,json=embedDims,proto3" json:"embed_dims,omitempty"` // embed models only
-	Live             bool                   `protobuf:"varint,7,opt,name=live,proto3" json:"live,omitempty"`                            // vendor plugin registered + API key present
+	EmbedDims        int32                  `protobuf:"varint,6,opt,name=embed_dims,json=embedDims,proto3" json:"embed_dims,omitempty"`       // embed models only
+	Live             bool                   `protobuf:"varint,7,opt,name=live,proto3" json:"live,omitempty"`                                  // vendor plugin registered + API key present
+	VisionInput      bool                   `protobuf:"varint,8,opt,name=vision_input,json=visionInput,proto3" json:"vision_input,omitempty"` // chat models only: accepts image input (can fill vision slots)
+	AudioInput       bool                   `protobuf:"varint,9,opt,name=audio_input,json=audioInput,proto3" json:"audio_input,omitempty"`    // chat models only: accepts audio input (can fill transcribe slots)
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -380,13 +394,27 @@ func (x *ModelCapabilities) GetLive() bool {
 	return false
 }
 
+func (x *ModelCapabilities) GetVisionInput() bool {
+	if x != nil {
+		return x.VisionInput
+	}
+	return false
+}
+
+func (x *ModelCapabilities) GetAudioInput() bool {
+	if x != nil {
+		return x.AudioInput
+	}
+	return false
+}
+
 // Model is one assignable model from the code-owned vendor registry, with its
 // pricing and capabilities so Harbor can render cost + valid choices.
 type Model struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                         // e.g. "claude-sonnet-4-5-20250929"
 	Vendor        string                 `protobuf:"bytes,2,opt,name=vendor,proto3" json:"vendor,omitempty"`                                 // "anthropic" | "gemini"
-	Capability    string                 `protobuf:"bytes,3,opt,name=capability,proto3" json:"capability,omitempty"`                         // "chat" | "embed"
+	Capability    string                 `protobuf:"bytes,3,opt,name=capability,proto3" json:"capability,omitempty"`                         // "chat" | "embed" (see capabilities for vision/audio input)
 	PriceVersion  string                 `protobuf:"bytes,4,opt,name=price_version,json=priceVersion,proto3" json:"price_version,omitempty"` // vendor PriceTable.Version
 	Rates         []*ModelRate           `protobuf:"bytes,5,rep,name=rates,proto3" json:"rates,omitempty"`                                   // per-kind rates (post USAGE_MODEL_PRICES merge)
 	Capabilities  *ModelCapabilities     `protobuf:"bytes,6,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
@@ -467,8 +495,10 @@ func (x *Model) GetCapabilities() *ModelCapabilities {
 }
 
 type ListModelsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Capability    string                 `protobuf:"bytes,1,opt,name=capability,proto3" json:"capability,omitempty"` // optional filter: "chat" | "embed"
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Optional filter: a slot capability ("chat" | "embed" | "vision" |
+	// "transcribe"); returns the models that can fill at least one such slot.
+	Capability    string `protobuf:"bytes,1,opt,name=capability,proto3" json:"capability,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1224,7 +1254,7 @@ var File_modelconfig_v1_modelconfig_proto protoreflect.FileDescriptor
 
 const file_modelconfig_v1_modelconfig_proto_rawDesc = "" +
 	"\n" +
-	" modelconfig/v1/modelconfig.proto\x12\x0emodelconfig.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x7f\n" +
+	" modelconfig/v1/modelconfig.proto\x12\x0emodelconfig.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x99\x01\n" +
 	"\bFlowSlot\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1e\n" +
@@ -1232,7 +1262,8 @@ const file_modelconfig_v1_modelconfig_proto_rawDesc = "" +
 	"capability\x18\x03 \x01(\tR\n" +
 	"capability\x12\x1f\n" +
 	"\vglobal_only\x18\x04 \x01(\bR\n" +
-	"globalOnly\"j\n" +
+	"globalOnly\x12\x18\n" +
+	"\avendors\x18\x05 \x03(\tR\avendors\"j\n" +
 	"\x04Flow\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12.\n" +
@@ -1242,7 +1273,7 @@ const file_modelconfig_v1_modelconfig_proto_rawDesc = "" +
 	"\x05flows\x18\x01 \x03(\v2\x14.modelconfig.v1.FlowR\x05flows\"M\n" +
 	"\tModelRate\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12,\n" +
-	"\x12micros_per_million\x18\x02 \x01(\x03R\x10microsPerMillion\"\xfa\x01\n" +
+	"\x12micros_per_million\x18\x02 \x01(\x03R\x10microsPerMillion\"\xbe\x02\n" +
 	"\x11ModelCapabilities\x12\x14\n" +
 	"\x05tools\x18\x01 \x01(\bR\x05tools\x12+\n" +
 	"\x11structured_output\x18\x02 \x01(\bR\x10structuredOutput\x12\x1c\n" +
@@ -1251,7 +1282,10 @@ const file_modelconfig_v1_modelconfig_proto_rawDesc = "" +
 	"\x0econtext_window\x18\x05 \x01(\x05R\rcontextWindow\x12\x1d\n" +
 	"\n" +
 	"embed_dims\x18\x06 \x01(\x05R\tembedDims\x12\x12\n" +
-	"\x04live\x18\a \x01(\bR\x04live\"\xec\x01\n" +
+	"\x04live\x18\a \x01(\bR\x04live\x12!\n" +
+	"\fvision_input\x18\b \x01(\bR\vvisionInput\x12\x1f\n" +
+	"\vaudio_input\x18\t \x01(\bR\n" +
+	"audioInput\"\xec\x01\n" +
 	"\x05Model\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06vendor\x18\x02 \x01(\tR\x06vendor\x12\x1e\n" +

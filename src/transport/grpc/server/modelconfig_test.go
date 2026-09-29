@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -160,6 +161,55 @@ func TestListModelsVision(t *testing.T) {
 	}
 	if got["gemini-embedding-2"] {
 		t.Fatal("vision list includes the embedding model")
+	}
+}
+
+// TestWireCarriesSlotAssignability plays Harbor: it loads the unfiltered model
+// list and the flow catalog, then picks models per slot from wire fields alone.
+// Every slot must get a non-empty picker, and every model offered must pass the
+// server's own write-path check.
+func TestWireCarriesSlotAssignability(t *testing.T) {
+	s := newModelConfigAdminService(nil, nil)
+	ctx := context.Background()
+	fr, err := s.ListFlows(ctx, &modelconfigv1.ListFlowsRequest{})
+	if err != nil {
+		t.Fatalf("ListFlows: %v", err)
+	}
+	mr, err := s.ListModels(ctx, &modelconfigv1.ListModelsRequest{})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	fits := func(m *modelconfigv1.Model, sl *modelconfigv1.FlowSlot) bool {
+		caps := m.GetCapabilities()
+		var family bool
+		switch sl.GetCapability() {
+		case string(modelconfig.CapabilityVision):
+			family = m.GetCapability() == string(modelconfig.CapabilityChat) && caps.GetVisionInput()
+		case string(modelconfig.CapabilityTranscribe):
+			family = m.GetCapability() == string(modelconfig.CapabilityChat) && caps.GetAudioInput()
+		default:
+			family = m.GetCapability() == sl.GetCapability()
+		}
+		vendors := sl.GetVendors()
+		return family && (len(vendors) == 0 || slices.Contains(vendors, m.GetVendor()))
+	}
+	for _, f := range fr.GetFlows() {
+		for _, sl := range f.GetSlots() {
+			slot, _ := modelconfig.LookupSlot(f.GetKey(), sl.GetKey())
+			var offered []string
+			for _, m := range mr.GetModels() {
+				if !fits(m, sl) {
+					continue
+				}
+				offered = append(offered, m.GetId())
+				if u := unmetForSlot(slot, m.GetId()); len(u) != 0 {
+					t.Errorf("%s/%s: picker offers %s but the server rejects it: %v", f.GetKey(), sl.GetKey(), m.GetId(), u)
+				}
+			}
+			if len(offered) == 0 {
+				t.Errorf("%s/%s: picker is empty", f.GetKey(), sl.GetKey())
+			}
+		}
 	}
 }
 
