@@ -6,7 +6,12 @@ import (
 )
 
 func TestDisabledLocator(t *testing.T) {
-	for _, l := range []*Locator{nil, Open(""), Open("/nonexistent/city.mmdb")} {
+	for _, l := range []*Locator{
+		nil,
+		Open("", nil),
+		Open("/nonexistent/city.mmdb", []string{"/nonexistent/feed.csv"}),
+		Open("", []string{writeFeed(t, "# comments only\n")}),
+	} {
 		if l.Enabled() {
 			t.Fatal("a locator without a database must be disabled")
 		}
@@ -39,7 +44,7 @@ func TestLookupWithDatabase(t *testing.T) {
 	if path == "" {
 		t.Skip("GEOIP_TEST_DB not set")
 	}
-	l := Open(path)
+	l := Open(path, nil)
 	if !l.Enabled() {
 		t.Fatalf("could not open %s", path)
 	}

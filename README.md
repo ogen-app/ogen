@@ -489,6 +489,7 @@ All runtime knobs are env vars, loaded by
 | `RESEND_API_KEY` / `EMAIL_FROM` | empty / `Ogen <hello@getogen.com>` | Email delivery; empty disables sending. |
 | `TRUSTED_PROXIES` / `PROXY_HEADER` | empty / `X-Real-IP` | Comma-separated proxy IPs/CIDRs whose `PROXY_HEADER` carries the client IP. Empty uses the socket peer, which behind a proxy puts every caller in one rate-limit bucket. Railway: `100.0.0.0/8`. |
 | `GEOIP_DB_PATH` / `DEVICE_COOKIE_NAME` | empty (image: `/usr/share/geoip/dbip-city-lite.mmdb`) / `ogen_device` | Offline City database for the new-device login alert's location line, and the known-device cookie. A missing database only drops the location. |
+| `GEOIP_FEED_PATHS` | empty (image: Cloudflare + iCloud Private Relay egress feeds in `/usr/share/geoip/`) | Comma-separated RFC 8805 geofeeds checked before the City database, which places relay egress addresses only coarsely. The first feed wins on a shared prefix. |
 | `OGEN_KEK_PATH` | `./kek` | Directory holding `kek.v1` — losing it bricks every encrypted secret. |
 | `GRPC_ADDR` / `GRPC_AUTH_TOKEN` | `127.0.0.1:9091` / empty | Internal operator gRPC surface; starts only when both are set. |
 | `HARBOR_WEBHOOK_URL` / `HARBOR_WEBHOOK_SECRET` / `HARBOR_BASE_URL` | empty | New-tenant operator notification: Harbor inbound webhook, HMAC signing key, and "View in Harbor" deep-link base. Empty URL turns the feature off. |
