@@ -81,9 +81,13 @@ type Config struct {
 	// Known-device tracking for new-device login alerts. DeviceCookieName is
 	// the long-lived browser identifier. GeoIPDBPath points at an offline
 	// MaxMind-format City database (DB-IP City Lite ships in the image); empty
-	// or unreadable leaves the location out of the alert.
+	// or unreadable leaves the location out of the alert. GeoIPFeedPaths is a
+	// comma-separated list of RFC 8805 geofeeds (the image ships Cloudflare's
+	// and iCloud Private Relay's egress feeds) consulted before the database,
+	// which places relay egress addresses only coarsely.
 	DeviceCookieName string `envconfig:"DEVICE_COOKIE_NAME" default:"ogen_device"`
 	GeoIPDBPath      string `envconfig:"GEOIP_DB_PATH"      default:""`
+	GeoIPFeedPaths   string `envconfig:"GEOIP_FEED_PATHS"   default:""`
 
 	// Embeddings. Generated via the hosted Gemini Embedding 2 API
 	// (google.golang.org/genai through the Genkit googlegenai plugin).

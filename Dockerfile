@@ -42,6 +42,17 @@ RUN apk add --no-cache curl && \
     test -s /tmp/city.mmdb.gz && \
     gunzip -t /tmp/city.mmdb.gz && \
     mkdir -p /geoip && gunzip -c /tmp/city.mmdb.gz > /geoip/dbip-city-lite.mmdb
+# RFC 8805 geofeeds for Cloudflare (WARP and its Private Relay egress) and iCloud
+# Private Relay. Their egress addresses move between cities address by address,
+# which the Lite database cannot resolve (it put a Seville relay in Algiers), so
+# the app checks these first. Fetched after the database so a refreshed database
+# layer refreshes them too. Each must download and start with a CSV row.
+RUN for f in "cloudflare-egress.csv https://api.cloudflare.com/local-ip-ranges.csv" \
+             "icloud-private-relay-egress.csv https://mask-api.icloud.com/egress-ip-ranges.csv"; do \
+      set -- $f && \
+      curl -fsSL --retry 3 -o "/geoip/$1" "$2" && \
+      head -n 1 "/geoip/$1" | grep -Eq '^[0-9A-Fa-f.:]+/[0-9]+,[A-Za-z]{2},' || exit 1; \
+    done
 
 # ─── Stage 3: Alpine runtime ─────────────────────────────────────────────────
 # Alpine (not scratch) for ca-certificates/tzdata and su-exec. PDF parsing,
@@ -60,8 +71,9 @@ RUN apk add --no-cache ca-certificates tzdata su-exec && \
 COPY --from=go-builder /server /server
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-COPY --from=geoip /geoip/dbip-city-lite.mmdb /usr/share/geoip/dbip-city-lite.mmdb
-ENV GEOIP_DB_PATH=/usr/share/geoip/dbip-city-lite.mmdb
+COPY --from=geoip /geoip/ /usr/share/geoip/
+ENV GEOIP_DB_PATH=/usr/share/geoip/dbip-city-lite.mmdb \
+    GEOIP_FEED_PATHS=/usr/share/geoip/cloudflare-egress.csv,/usr/share/geoip/icloud-private-relay-egress.csv
 
 # The container starts as root so the entrypoint can chown the mounted KEK
 # volume (Railway/Docker mount it as root, shadowing the build-time chown); the

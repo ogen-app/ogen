@@ -236,7 +236,7 @@ func (d *deps) initServices(context.Context) error {
 
 	// Only request handlers look up locations, so the database closes with the
 	// other handler-only clients.
-	geo := geoip.Open(d.cfg.GeoIPDBPath)
+	geo := geoip.Open(d.cfg.GeoIPDBPath, splitCSV(d.cfg.GeoIPFeedPaths))
 	d.shutdown.add(stageIntegrations, geo.Close)
 	d.svc.loginSecurity = loginsecurity.New(loginsecurity.Deps{
 		DB:         d.db,
