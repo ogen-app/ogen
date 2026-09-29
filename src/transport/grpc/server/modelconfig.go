@@ -70,6 +70,7 @@ func (s *modelConfigAdminService) ListFlows(_ context.Context, _ *modelconfigv1.
 				Description: sl.Description,
 				Capability:  string(sl.Capability),
 				GlobalOnly:  sl.GlobalOnly,
+				Vendors:     sl.Vendors,
 			})
 		}
 		out = append(out, &modelconfigv1.Flow{Key: f.Key, Description: f.Description, Slots: slots})
@@ -104,6 +105,8 @@ func (s *modelConfigAdminService) ListModels(_ context.Context, req *modelconfig
 					MaxOutputTokens:  int32(caps.MaxOutputTokens),
 					ContextWindow:    int32(caps.ContextWindow),
 					EmbedDims:        int32(caps.EmbedDims),
+					VisionInput:      caps.VisionInput,
+					AudioInput:       caps.AudioInput,
 					// A model surfaced from the registry is registered + assignable;
 					// per-key liveness is verified at assign time by TestSlotModel.
 					Live: true,

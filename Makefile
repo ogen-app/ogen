@@ -86,10 +86,11 @@ lint:
 # (CON-297); image.v1 RejectedCode enum + rejected_code fields in v1.6.0 (CON-281);
 # email.v1 (EmailAdminService) in v1.7.0 (CON-298); announcements.v1
 # (AnnouncementAdminService) in v1.8.0 (CON-230); NotifyOperatorsTenantRegistered
-# on EmailAdminService in v1.9.0 (CON-229)
+# on EmailAdminService in v1.9.0 (CON-229); modelconfig.v1 in v1.10.0 (CON-308);
+# modelconfig.v1 vision_input/audio_input + FlowSlot.vendors in v1.11.0 (CON-310)
 # — publish the proto repo tag before `make proto` can resolve it.
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.10.0
+PROTO_VERSION := v1.11.0
 
 proto:
 	buf generate $(PROTO_MODULE):$(PROTO_VERSION)
