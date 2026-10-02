@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/update"
@@ -525,8 +527,8 @@ type PostsOptions struct {
 // decorateCovers fills each post's CoverURL from its first drawable
 // attachment, served from the public key the way assets are (decorateFile) —
 // a stored copy keeps working, unlike a presigned GET. Best-effort: a failed
-// lookup leaves the posts without covers rather than failing the read, since
-// the card simply falls back to no picture.
+// lookup is logged and leaves the posts without covers rather than failing the
+// read, since the card simply falls back to no picture.
 func (h *PostsHandler) decorateCovers(c *fiber.Ctx, posts []models.Post) {
 	if h.storage == nil || h.attachmentRepo == nil || len(posts) == 0 {
 		return
@@ -537,6 +539,8 @@ func (h *PostsHandler) decorateCovers(c *fiber.Ctx, posts []models.Post) {
 	}
 	keys, err := h.attachmentRepo.CoverKeysByPostIDs(reqCtx(c), ids)
 	if err != nil {
+		slog.WarnContext(reqCtx(c), "post cover lookup failed", logging.AttrComponent, "handlers.posts",
+			"posts", len(ids), logging.AttrError, err)
 		return
 	}
 	for i := range posts {
