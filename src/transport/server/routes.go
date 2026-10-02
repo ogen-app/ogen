@@ -181,7 +181,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, d.auth).Register(app)
 
 	handlers.NewImagesHandler(d.store, d.auth).Register(app)
-	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).Register(app)
+	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).WithContentBank(r.pieceRepo).Register(app)
 	handlers.NewPostNotesHandler(d.svc.notes, r.postRepo, d.auth, rec).Register(app)
 }
 

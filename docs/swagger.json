@@ -8140,6 +8140,122 @@
                 }
             }
         },
+        "/api/posts/{post_id}/attachments/from-asset": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Creates a post attachment from an existing `IMG` asset without\nre-uploading. The bank keeps the original upload (EXIF and\nall), so its bytes go through the same metadata strip a direct\nupload gets and land as the attachment's own object: deleting\nthe asset later leaves the post intact. The asset's alt text\nand its user-edited flag carry over unless `alt_text` is sent;\nan asset without alt text gets it generated as on upload. The\ncopy counts toward media_storage_bytes (402 when over).\nPer-platform caps are soft warnings in the response, exactly as\non upload. Image rejects use the upload's `{code, error}` shape.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "post-attachments"
+                ],
+                "summary": "Attach a content-bank image to a post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Asset to attach",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.attachFromAssetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.attachmentResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "media_storage_bytes limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "post or asset not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "post is in a terminal publishing state",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "asset is not an image",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/posts/{post_id}/attachments/presign": {
             "post": {
                 "security": [
@@ -10460,6 +10576,20 @@
             "properties": {
                 "instruction": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.attachFromAssetRequest": {
+            "type": "object",
+            "properties": {
+                "alt_text": {
+                    "type": "string"
+                },
+                "asset_id": {
+                    "type": "string"
+                },
+                "segment_index": {
+                    "type": "integer"
                 }
             }
         },

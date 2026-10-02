@@ -101,6 +101,9 @@ type PostAttachmentsHandler struct {
 	altTextMaxChars int
 	auth            fiber.Handler
 	limiter         *entitlements.Limiter // CON-295 media_storage_bytes quota (nil-safe)
+	// bank reads content-bank image assets for attach-from-asset. Nil disables
+	// that endpoint (503); set via WithContentBank.
+	bank BankAssetReader
 }
 
 func NewPostAttachmentsHandler(
@@ -138,6 +141,7 @@ func (h *PostAttachmentsHandler) Register(app *fiber.App) {
 	// before the /:id param route so they aren't captured as id="presign".
 	g.Post("/presign", h.PresignVideo)
 	g.Post("/finalize", h.FinalizeVideo)
+	g.Post("/from-asset", h.AttachFromAsset)
 	// Static /reorder is registered before the /:id param route so a PATCH to.
 	// ../attachments/reorder isn't captured as id="reorder".
 	g.Patch("/reorder", h.ReorderAll)
@@ -344,19 +348,23 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	if err != nil {
 		return attachmentError(c, err)
 	}
+	return h.createAttachment(c, post, att, thumbnail, up.quota, session.TenantID)
+}
+
+// createAttachment persists a prepared attachment and answers 201. Once the row
+// and its bytes exist it fires any near-limit quota crossing, and for an image
+// with no alt text it starts generation in the background: the request stays
+// fast, and the generator writes only where alt text is still un-edited.
+func (h *PostAttachmentsHandler) createAttachment(c *fiber.Ctx, post *models.Post, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID string) error {
 	if err := h.persistAttachment(reqCtx(c), att, thumbnail); err != nil {
 		return err
 	}
-	// The attachment (and its bytes) now exist — fire any near-limit crossing.
-	up.quota.dispatch(reqCtx(c))
+	quota.dispatch(reqCtx(c))
 
-	// Auto-generate alt text asynchronously for an image with no user-supplied
-	// one: the upload stays fast, and the generator writes only where alt text
-	// is still un-edited.
-	if up.kind != pdfprobe.MIME && att.AltText == "" && h.image != nil {
-		altCtx := detachedContext(c, session.TenantID)
+	if strings.HasPrefix(att.MimeType, "image/") && att.AltText == "" && h.image != nil {
+		altCtx := detachedContext(c, tenantID)
 		backgroundTasks.Go("post_attachments.alt_text", func() {
-			h.generateAttachmentAltText(altCtx, session.TenantID, att.ID, att.S3Key)
+			h.generateAttachmentAltText(altCtx, tenantID, att.ID, att.S3Key)
 		})
 	}
 
@@ -684,9 +692,7 @@ func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, 
 		return
 	}
 	// Guard the storage cap (runes) — the generation target is short, but stay safe.
-	if utf8.RuneCountInString(alt) > maxAltTextLen() {
-		alt = string([]rune(alt)[:maxAltTextLen()])
-	}
+	alt = truncateRunes(alt, maxAltTextLen())
 	if err := h.repo.SetGeneratedAltText(ctx, attID, alt); err != nil {
 		slog.WarnContext(ctx, "attachment alt-text persist failed", logging.AttrComponent, "post_attachments", "attachment_id", attID, logging.AttrError, err)
 	}
