@@ -448,7 +448,7 @@ const docTemplate = `{
                             "type": "string"
                         },
                         "collectionFormat": "multi",
-                        "description": "Zernio platform slug; repeat for a union (default every platform)",
+                        "description": "Zernio platform slug; repeat or comma-separate values for a union (default every platform)",
                         "name": "platform",
                         "in": "query"
                     }
@@ -528,7 +528,7 @@ const docTemplate = `{
                             "type": "string"
                         },
                         "collectionFormat": "multi",
-                        "description": "Zernio platform slug; repeat for a union (default every platform)",
+                        "description": "Zernio platform slug; repeat or comma-separate values for a union (default every platform)",
                         "name": "platform",
                         "in": "query"
                     }
@@ -614,7 +614,7 @@ const docTemplate = `{
                             "type": "string"
                         },
                         "collectionFormat": "multi",
-                        "description": "Zernio platform slug; repeat for a union (default every platform)",
+                        "description": "Zernio platform slug; repeat or comma-separate values for a union (default every platform)",
                         "name": "platform",
                         "in": "query"
                     }

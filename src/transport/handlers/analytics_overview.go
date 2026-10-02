@@ -31,7 +31,7 @@ import (
 // @Param        from         query string false "Inclusive start date YYYY-MM-DD (with to, overrides window)"
 // @Param        to           query string false "Inclusive end date YYYY-MM-DD"
 // @Param        granularity  query string false "day|week|month (default adaptive)"
-// @Param        platform     query []string false "Zernio platform slug; repeat for a union (default every platform)" collectionFormat(multi)
+// @Param        platform     query []string false "Zernio platform slug; repeat or comma-separate values for a union (default every platform)" collectionFormat(multi)
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
