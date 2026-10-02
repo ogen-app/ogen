@@ -196,16 +196,17 @@ func (r *postAttachmentRepository) CreateAtNextPosition(ctx context.Context, att
 		// segment_index is NULL for non-thread attachments; a nil
 		// *int binds as NULL, a non-nil pointer as the 0-based segment.
 		const q = `INSERT INTO post_attachments
-			(id, post_id, tenant_id, position, segment_index, mime_type, size_bytes, width, height,
-			 is_animated, page_count, checksum_sha256, s3_key, thumbnail_s3_key, created_by)
+			(id, post_id, tenant_id, position, segment_index, alt_text, alt_text_edited_by_user,
+			 mime_type, size_bytes, width, height, is_animated, page_count, duration_ms, codec,
+			 checksum_sha256, s3_key, thumbnail_s3_key, created_by)
 			VALUES (?, ?, ?, COALESCE((SELECT MAX(position)+1 FROM post_attachments WHERE post_id=? AND tenant_id=?), 0),
-			        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			RETURNING position`
 		return tx.NewRaw(q,
 			att.ID, att.PostID, tid, att.PostID, tid,
-			att.SegmentIndex,
-			att.MimeType, att.SizeBytes, att.Width, att.Height,
-			att.IsAnimated, att.PageCount, att.ChecksumSHA256, att.S3Key, thumb, att.CreatedBy,
+			att.SegmentIndex, att.AltText, att.AltTextEditedByUser,
+			att.MimeType, att.SizeBytes, att.Width, att.Height, att.IsAnimated, att.PageCount, att.DurationMs, att.Codec,
+			att.ChecksumSHA256, att.S3Key, thumb, att.CreatedBy,
 		).Scan(ctx, &att.Position)
 	})
 }

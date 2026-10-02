@@ -55,6 +55,37 @@ func TestCreateAtNextPositionRequiresParentPost(t *testing.T) {
 	}
 }
 
+// TestCreateAtNextPositionPersistsEveryField guards the raw INSERT's column
+// list: alt text, its edited flag and the video probe fields must reach the
+// row, not just the caller's struct.
+func TestCreateAtNextPositionPersistsEveryField(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewPostAttachmentRepository(db)
+	ctx := tenantCtx()
+
+	seedPost(t, db, "post-f", "", "", time.Now().UTC())
+
+	want := &models.PostAttachment{
+		ID: "att-f", PostID: "post-f", MimeType: "video/mp4", SizeBytes: 9,
+		Width: 1920, Height: 1080, DurationMs: 12_500, Codec: "h264",
+		AltText: "A sunrise", AltTextEditedByUser: true,
+		ChecksumSHA256: "f", S3Key: "kf", CreatedBy: "user-1",
+	}
+	if err := repo.CreateAtNextPosition(ctx, want); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := repo.GetByID(ctx, "att-f")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.AltText != want.AltText || !got.AltTextEditedByUser {
+		t.Errorf("alt text: got %q edited=%v, want %q edited=true", got.AltText, got.AltTextEditedByUser, want.AltText)
+	}
+	if got.DurationMs != want.DurationMs || got.Codec != want.Codec {
+		t.Errorf("video probe: got duration=%d codec=%q, want %d %q", got.DurationMs, got.Codec, want.DurationMs, want.Codec)
+	}
+}
+
 // TestReorderPositions verifies the transactional bulk renumber,
 // including the case the frontend workaround produces: starting positions that
 // have drifted into a non-contiguous high block rather than 0..n-1.

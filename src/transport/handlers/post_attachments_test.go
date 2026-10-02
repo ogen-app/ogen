@@ -670,6 +670,15 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 			Expect(key).NotTo(Equal(bankKey))
 			Expect(stub.objects).To(HaveKey(key))
 			Expect(stub.objects).To(HaveKey(bankKey))
+
+			// Re-read: the alt text is stored, not only echoed in the 201.
+			getReq := httptest.NewRequest("GET", "/api/posts/"+postID+"/attachments/"+got["id"].(string), nil)
+			getReq.AddCookie(authCookie)
+			getResp, err := app.Test(getReq)
+			Expect(err).NotTo(HaveOccurred())
+			stored := decode(getResp)
+			Expect(stored["alt_text"]).To(Equal("A red pixel"))
+			Expect(stored["alt_text_edited_by_user"]).To(BeTrue())
 		})
 
 		It("keeps a generated alt text un-edited", func() {
@@ -1156,6 +1165,15 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 			var got map[string]any
 			Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
 			Expect(got["alt_text"]).To(Equal("A blue sky"))
+
+			getReq := httptest.NewRequest("GET", "/api/posts/"+postID+"/attachments/"+got["id"].(string), nil)
+			getReq.AddCookie(authCookie)
+			getResp, err := app.Test(getReq)
+			Expect(err).NotTo(HaveOccurred())
+			var stored map[string]any
+			Expect(json.NewDecoder(getResp.Body).Decode(&stored)).To(Succeed())
+			Expect(stored["alt_text"]).To(Equal("A blue sky"))
+			Expect(stored["alt_text_edited_by_user"]).To(BeTrue())
 		})
 	})
 
