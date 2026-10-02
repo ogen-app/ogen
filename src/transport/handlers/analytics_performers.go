@@ -34,7 +34,7 @@ import (
 // @Param        to       query string false "Inclusive end date YYYY-MM-DD"
 // @Param        by       query string false "against_typical|reach|engagement_rate|interactions (default against_typical)"
 // @Param        limit    query int    false "Rows per list, default 5, clamped"
-// @Param        platform query []string false "Zernio platform slug; repeat for a union (default every platform)" collectionFormat(multi)
+// @Param        platform query []string false "Zernio platform slug; repeat or comma-separate values for a union (default every platform)" collectionFormat(multi)
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string

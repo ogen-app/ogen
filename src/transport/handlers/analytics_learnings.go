@@ -32,7 +32,7 @@ import (
 // @Param        since         query string false "Optional baseline lower bound YYYY-MM-DD (default all-time)"
 // @Param        trend_window  query string false "Fading comparison window, e.g. 90d/3mo/12w (default 90d)"
 // @Param        metric        query string false "reach|saves (default reach)"
-// @Param        platform      query []string false "Zernio platform slug; repeat for a union (default every platform)" collectionFormat(multi)
+// @Param        platform      query []string false "Zernio platform slug; repeat or comma-separate values for a union (default every platform)" collectionFormat(multi)
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
