@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"path"
 	"time"
 
@@ -115,9 +116,13 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 	}
 	// A manual retry of a previously-failed post still carries the prior
 	// attempt's PublisherPostID: Zernio's retry endpoint reuses that job
-	// identity instead of creating a duplicate post.
+	// identity instead of creating a duplicate post. When that post no
+	// longer exists, retryExisting clears the id and we fall through to a
+	// fresh create.
 	if post.PublisherPostID != "" {
-		return p.retryExisting(ctx, post)
+		if done, err := p.retryExisting(ctx, post); done {
+			return err
+		}
 	}
 
 	platform := post.Platform
@@ -162,17 +167,30 @@ func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) 
 }
 
 // retryExisting re-drives a prior Zernio job through POST /posts/:id/retry.
-func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Post) error {
+// It reports false when the Zernio post is gone (404): the stale identity has
+// been cleared and the caller should create a fresh post. A 404 means no
+// Zernio post exists, so creating one cannot duplicate it.
+func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Post) (bool, error) {
 	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
-		"calling Zernio POST /posts/:id/retry", logs.MarshalCapped(map[string]string{"publisher_post_id": post.PublisherPostID}))
-	job, err := p.Deps.Client.Retry(ctx, post.PublisherPostID)
-	if err == nil {
-		return p.persistSuccess(ctx, post, job, "")
+		"calling Zernio POST /posts/:id/retry", publisherPostIDPayload(post.PublisherPostID))
+	job, retryErr := p.Deps.Client.Retry(ctx, post.PublisherPostID)
+	switch {
+	case retryErr == nil:
+		return true, p.persistSuccess(ctx, post, job, "")
+	case zernio.IsStatus(retryErr, http.StatusNotFound):
+		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
+			"Zernio post no longer exists; submitting a fresh post", publisherPostIDPayload(post.PublisherPostID))
+		post.PublisherPostID = ""
+		post.PublisherStatus = ""
+		if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+			return true, fmt.Errorf("submit: clear stale publisher_post_id: %w", err)
+		}
+		return false, nil
+	case zernio.IsTerminalAPIError(retryErr):
+		return true, p.terminal(ctx, post, "zernio_retry_rejected", retryErr.Error())
+	default:
+		return true, p.transient(ctx, post, "transient Zernio retry error; River will retry", retryErr)
 	}
-	if zernio.IsTerminalAPIError(err) {
-		return p.terminal(ctx, post, "zernio_retry_rejected", err.Error())
-	}
-	return p.transient(ctx, post, "transient Zernio retry error; River will retry", err)
 }
 
 // buildVariant uploads the post's attachments to Zernio and returns the

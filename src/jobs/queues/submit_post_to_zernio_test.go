@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -407,6 +409,146 @@ func TestSubmitDedupeRecoveryAdoptsExistingJob(t *testing.T) {
 	got, _ := postRepo.GetByID(t.Context(), post.ID)
 	if got.PublisherPostID != "z-existing" {
 		t.Errorf("zernio_post_id: got %q want z-existing", got.PublisherPostID)
+	}
+}
+
+func TestSubmitRetryOfVanishedPostCreatesFreshPost(t *testing.T) {
+	// The stored Zernio post is gone (404 on retry): drop the stale id and
+	// create a new post instead of failing terminally.
+	stub := newStubZernio()
+	defer stub.Close()
+	stub.handle("POST", "/posts/z-stale/retry", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Post not found"})
+	})
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{
+			ID: "z-fresh", Status: zernio.JobStatusScheduled,
+		}})
+	})
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-1", Platform: "linkedin"}},
+	})
+	post := seedScheduledPost(postRepo)
+	post.PublisherPostID = "z-stale"
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
+	if got.Status != models.PostStatusScheduled {
+		t.Errorf("status: got %q want scheduled (reason %q)", got.Status, got.FailureReason)
+	}
+	if got.PublisherPostID != "z-fresh" {
+		t.Errorf("publisher_post_id: got %q want z-fresh", got.PublisherPostID)
+	}
+}
+
+func TestSubmitRetryRejectionStaysTerminal(t *testing.T) {
+	// Only a 404 means "gone"; any other 4xx on retry is still a rejection,
+	// and no fresh post is created behind it.
+	stub := newStubZernio()
+	defer stub.Close()
+	stub.handle("POST", "/posts/z-1/retry", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "post is not failed"})
+	})
+	var created atomic.Bool
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		created.Store(true)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{ID: "z-2"}})
+	})
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-1", Platform: "linkedin"}},
+	})
+	post := seedScheduledPost(postRepo)
+	post.PublisherPostID = "z-1"
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process should swallow terminal err: %v", err)
+	}
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
+	if got.Status != models.PostStatusFailed {
+		t.Errorf("status: got %q want failed", got.Status)
+	}
+	if !strings.HasPrefix(got.FailureReason, "zernio_retry_rejected") {
+		t.Errorf("failure_reason: got %q want zernio_retry_rejected…", got.FailureReason)
+	}
+	if created.Load() {
+		t.Error("a rejected retry must not create a fresh Zernio post")
+	}
+}
+
+func TestSubmitRetryTransientErrorBubbles(t *testing.T) {
+	stub := newStubZernio()
+	defer stub.Close()
+	stub.handle("POST", "/posts/z-1/retry", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "later"})
+	})
+	deps, postRepo, _ := makeDeps(stub, nil)
+	post := seedScheduledPost(postRepo)
+	post.PublisherPostID = "z-1"
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err == nil {
+		t.Fatal("expected non-nil error so River retries")
+	}
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
+	if got.Status != models.PostStatusScheduled || got.PublisherPostID != "z-1" {
+		t.Errorf("got status=%q id=%q, want scheduled with z-1 kept", got.Status, got.PublisherPostID)
+	}
+}
+
+func TestRescheduleAfterCancelCreatesFreshPost(t *testing.T) {
+	// schedule → unschedule → schedule: the second submit must create a new
+	// Zernio post rather than retry the one the cancel deleted.
+	stub := newStubZernio()
+	defer stub.Close()
+	var submits, retries atomic.Int32
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		n := submits.Add(1)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{
+			ID: fmt.Sprintf("z-%d", n), Status: zernio.JobStatusScheduled,
+		}})
+	})
+	stub.handle("DELETE", "/posts/z-1", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	stub.handle("POST", "/posts/z-1/retry", func(w http.ResponseWriter, r *http.Request) {
+		retries.Add(1)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Post not found"})
+	})
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-1", Platform: "linkedin"}},
+	})
+	post := seedScheduledPost(postRepo)
+	submit := &queues.SubmitPostProcessor{Deps: deps}
+	cancel := &queues.CancelZernioJobProcessor{Deps: deps}
+
+	if err := submit.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	if err := cancel.Process(t.Context(), queues.CancelZernioJobTask{
+		PostID: post.ID, Target: queues.CancelTargetReadyForPublish, Actor: "user-1",
+	}); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	got, _ := postRepo.GetByID(t.Context(), post.ID)
+	got.Status = models.PostStatusScheduled // the user schedules it again
+	postRepo.put(got)
+	if err := submit.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("second submit: %v", err)
+	}
+
+	got, _ = postRepo.GetByID(t.Context(), post.ID)
+	if got.Status != models.PostStatusScheduled || got.PublisherPostID != "z-2" {
+		t.Errorf("got status=%q id=%q (reason %q), want scheduled with z-2", got.Status, got.PublisherPostID, got.FailureReason)
+	}
+	if n := retries.Load(); n != 0 {
+		t.Errorf("retry endpoint called %d times; a cancelled post must not be retried", n)
 	}
 }
 
