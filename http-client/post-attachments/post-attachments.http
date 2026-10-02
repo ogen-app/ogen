@@ -24,6 +24,8 @@
 # post type).
 
 @postId = REPLACE_ME
+# An IMG asset from the content bank (content-bank/*.http), for from-asset.
+@assetId = REPLACE_ME
 
 ### Upload an image  [protected]
 POST {{baseUrl}}/api/posts/{{postId}}/attachments
@@ -39,6 +41,26 @@ Content-Type: image/png
 > {%
 client.global.set("attachmentId", response.body.id);
 %}
+
+### Attach a content-bank image  [protected]
+# No upload: the asset's stored bytes are EXIF-stripped into the post's own
+# object. alt_text is optional — omit it to carry the asset's alt text over.
+POST {{baseUrl}}/api/posts/{{postId}}/attachments/from-asset
+Content-Type: application/json
+
+{
+  "asset_id": "{{assetId}}"
+}
+
+### Attach a content-bank image — non-image asset (expects 422)  [protected]
+# Point @assetId at an MD/PDF/URL asset first.
+POST {{baseUrl}}/api/posts/{{postId}}/attachments/from-asset
+Content-Type: application/json
+
+{
+  "asset_id": "{{assetId}}",
+  "alt_text": "Written for this post"
+}
 
 ### List attachments for the post  [protected]
 GET {{baseUrl}}/api/posts/{{postId}}/attachments

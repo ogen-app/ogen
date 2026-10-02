@@ -14,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 
 	"github.com/gofiber/fiber/v2"
 	. "github.com/onsi/ginkgo/v2"
@@ -171,6 +172,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		db         *bun.DB
 		authCookie *http.Cookie
 		campaignID string
+		userID     string
 		stub       *stubStorage
 	)
 
@@ -209,9 +211,11 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		postVersionRepo := repository.NewPostVersionRepository(db)
 		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{Storage: stub}).Register(app)
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, 280, auth, nil).Register(app)
+		assetRepo := repository.NewAssetRepository(db, tagRepo, repository.NewAssetFileRepository(db))
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, 280, auth, nil).
+			WithContentBank(assetRepo).Register(app)
 
-		seedTenantUser(db, "Admin", "att@example.com", "att-password")
+		userID = seedTenantUser(db, "Admin", "att@example.com", "att-password").ID
 
 		loginBody, _ := json.Marshal(fiber.Map{"email": "att@example.com", "password": "att-password"})
 		loginReq := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(loginBody))
@@ -238,6 +242,8 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 	AfterEach(func() {
 		ctx := tenantCtx()
 		_, _ = db.NewDelete().TableExpr("post_attachments").Where("1 = 1").Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("asset_files").Where("1 = 1").Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("assets").Where("1 = 1").Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_assistant_messages").Where("1 = 1").Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_versions").Where("1 = 1").Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("posts").Where("1 = 1").Exec(ctx)
@@ -584,6 +590,181 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 					}
 				})
 			})
+		})
+	})
+
+	// ── POST /api/posts/:post_id/attachments/from-asset ──────────────────────
+
+	Describe("POST /api/posts/:post_id/attachments/from-asset", func() {
+		// seedBankImage stores an IMG asset whose original bytes sit in storage
+		// under the bank's key, as a content-bank upload leaves them.
+		seedBankImage := func(content []byte, name, mime, altText string, altEdited bool) (assetID, s3Key string) {
+			GinkgoHelper()
+			ctx := tenantCtx()
+			id, err := models.NewID()
+			Expect(err).NotTo(HaveOccurred())
+			fileID, err := models.NewID()
+			Expect(err).NotTo(HaveOccurred())
+			imgType := models.AssetTypeImage
+			_, err = db.NewInsert().Model(&models.Asset{
+				ID: id, Title: name, Status: models.AssetStatusReady, Type: &imgType,
+				AltText: altText, AltTextEditedByUser: altEdited,
+				TagIDs: models.StringSlice{}, CreatedBy: userID,
+			}).Exec(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			s3Key = "t/" + models.DefaultTenantID + "/assets/" + id + "/original" + filepath.Ext(name)
+			_, err = db.NewInsert().Model(&models.AssetFile{
+				ID: fileID, AssetID: id, OriginalName: name, MimeType: mime,
+				SizeBytes: int64(len(content)), S3Key: s3Key, ChecksumSHA256: "original-" + id,
+			}).Exec(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			stub.objects[s3Key] = content
+			return id, s3Key
+		}
+
+		attachFromAsset := func(postID string, body fiber.Map) *http.Response {
+			GinkgoHelper()
+			raw, _ := json.Marshal(body)
+			req := httptest.NewRequest("POST", "/api/posts/"+postID+"/attachments/from-asset", bytes.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req, 30000)
+			Expect(err).NotTo(HaveOccurred())
+			return resp
+		}
+
+		decode := func(resp *http.Response) map[string]any {
+			GinkgoHelper()
+			var got map[string]any
+			Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
+			return got
+		}
+
+		It("returns 401 when not authenticated", func() {
+			req := httptest.NewRequest("POST", "/api/posts/anything/attachments/from-asset", bytes.NewReader([]byte(`{}`)))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(401))
+		})
+
+		It("re-prepares the bank image into the post's own object and carries alt text over", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, bankKey := seedBankImage(minimalPNG(), "photo.png", "image/png", "A red pixel", true)
+
+			resp := attachFromAsset(postID, fiber.Map{"asset_id": assetID})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+			got := decode(resp)
+			Expect(got["post_id"]).To(Equal(postID))
+			Expect(got["mime_type"]).To(Equal("image/png"))
+			Expect(got["width"]).To(BeEquivalentTo(1))
+			Expect(got["height"]).To(BeEquivalentTo(1))
+			Expect(got["alt_text"]).To(Equal("A red pixel"))
+			Expect(got["alt_text_edited_by_user"]).To(BeTrue())
+			// The checksum is of the stripped bytes, not the bank original's.
+			Expect(got["checksum_sha256"]).NotTo(HavePrefix("original-"))
+			Expect(got["platform_validation"]).To(BeNil())
+
+			key := got["s3_key"].(string)
+			Expect(key).To(ContainSubstring("post-attachments/" + postID + "/"))
+			Expect(key).NotTo(Equal(bankKey))
+			Expect(stub.objects).To(HaveKey(key))
+			Expect(stub.objects).To(HaveKey(bankKey))
+		})
+
+		It("keeps a generated alt text un-edited", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, _ := seedBankImage(minimalPNG(), "photo.png", "image/png", "Generated description", false)
+
+			got := decode(attachFromAsset(postID, fiber.Map{"asset_id": assetID}))
+			Expect(got["alt_text"]).To(Equal("Generated description"))
+			Expect(got["alt_text_edited_by_user"]).To(BeFalse())
+		})
+
+		It("lets alt_text in the request replace the asset's", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, _ := seedBankImage(minimalPNG(), "photo.png", "image/png", "Generated description", false)
+
+			got := decode(attachFromAsset(postID, fiber.Map{"asset_id": assetID, "alt_text": "  Written for this post  "}))
+			Expect(got["alt_text"]).To(Equal("Written for this post"))
+			Expect(got["alt_text_edited_by_user"]).To(BeTrue())
+		})
+
+		It("surfaces platform rules as soft warnings, not a rejection", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, _ := seedBankImage(animatedGIF(), "anim.gif", "image/gif", "", false)
+
+			resp := attachFromAsset(postID, fiber.Map{"asset_id": assetID})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+			got := decode(resp)
+			Expect(got["is_animated"]).To(BeTrue())
+			Expect(got["platform_validation"]).NotTo(BeEmpty())
+		})
+
+		It("places the media on a thread segment", func() {
+			postID := createThreadPost()
+			assetID, _ := seedBankImage(minimalPNG(), "photo.png", "image/png", "", false)
+
+			resp := attachFromAsset(postID, fiber.Map{"asset_id": assetID, "segment_index": 1})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+			Expect(decode(resp)["segment_index"]).To(BeEquivalentTo(1))
+		})
+
+		It("rejects a segment_index on a non-thread post with 422", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, _ := seedBankImage(minimalPNG(), "photo.png", "image/png", "", false)
+
+			resp := attachFromAsset(postID, fiber.Map{"asset_id": assetID, "segment_index": 0})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusUnprocessableEntity))
+		})
+
+		It("returns 409 when the post is published", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, _ := seedBankImage(minimalPNG(), "photo.png", "image/png", "", false)
+			_, err := db.NewUpdate().Model((*models.Post)(nil)).
+				Set("status = ?", models.PostStatusPublished).
+				Where("id = ?", postID).Exec(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(attachFromAsset(postID, fiber.Map{"asset_id": assetID}).StatusCode).To(Equal(409))
+		})
+
+		It("returns 400 without an asset_id", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			Expect(attachFromAsset(postID, fiber.Map{}).StatusCode).To(Equal(400))
+		})
+
+		It("returns 404 for an unknown asset", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			Expect(attachFromAsset(postID, fiber.Map{"asset_id": "nope"}).StatusCode).To(Equal(404))
+		})
+
+		It("returns 422 for an asset that is not an image", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			id, err := models.NewID()
+			Expect(err).NotTo(HaveOccurred())
+			mdType := models.AssetTypeMarkdown
+			_, err = db.NewInsert().Model(&models.Asset{
+				ID: id, Title: "Notes", Content: "text", Status: models.AssetStatusReady, Type: &mdType,
+				TagIDs: models.StringSlice{}, CreatedBy: userID,
+			}).Exec(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(attachFromAsset(postID, fiber.Map{"asset_id": id}).StatusCode).To(Equal(fiber.StatusUnprocessableEntity))
+		})
+
+		It("passes an image-service reject through with its code and stores nothing", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, bankKey := seedBankImage(minimalPNG(), "photo.png", "image/png", "", false)
+			stub.objects[bankKey] = []byte("not an image at all")
+
+			resp := attachFromAsset(postID, fiber.Map{"asset_id": assetID})
+			Expect(resp.StatusCode).To(Equal(400))
+			Expect(decode(resp)["code"]).To(Equal(models.UploadCodeInvalidFile))
+
+			n, err := db.NewSelect().Model((*models.PostAttachment)(nil)).Where("post_id = ?", postID).Count(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(n).To(BeZero())
 		})
 	})
 
