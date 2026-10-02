@@ -176,6 +176,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 		Schedule:       d.svc.schedule,
 		Activity:       rec,
 		OnBeforeDelete: deleteAttachmentBlobs(d.store, r.postAttachmentRepo),
+		Storage:        d.store,
 	}).Register(app)
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, d.auth).Register(app)
 

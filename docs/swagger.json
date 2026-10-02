@@ -13212,6 +13212,10 @@
                 "content": {
                     "type": "string"
                 },
+                "cover_url": {
+                    "description": "CoverURL is the public URL of the picture a post card leads with — its\nfirst drawable attachment (see PostAttachmentRepository.CoverKeysByPostIDs).\nMinted per response by the posts handler and never accepted on writes, so\nunlike media_urls it cannot round-trip back into a PUT.",
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },

@@ -14,6 +14,13 @@ import (
 type PostAttachmentRepository interface {
 	ListByPostID(ctx context.Context, postID string) ([]models.PostAttachment, error)
 	ListS3KeysByPostID(ctx context.Context, postID string) ([]string, error)
+	// CoverKeysByPostIDs returns, per post, the storage key of the picture a
+	// post card leads with: the first attachment (thread root first, then by
+	// position) that a browser can draw — its rendered thumbnail (PDF first
+	// page, video poster) or, for a plain image, the image itself. Posts with
+	// no drawable attachment are absent from the map. One query for the whole
+	// list, so a calendar of N posts never costs N lookups.
+	CoverKeysByPostIDs(ctx context.Context, postIDs []string) (map[string]string, error)
 	GetByID(ctx context.Context, id string) (*models.PostAttachment, error)
 	// CreateAtNextPosition inserts att and assigns it the next free
 	// position for its post in a single atomic statement, so concurrent
@@ -95,6 +102,41 @@ func (r *postAttachmentRepository) GetByID(ctx context.Context, id string) (*mod
 		return nil, err
 	}
 	return att, nil
+}
+
+// coverImageMimes are the attachment image types a browser draws directly —
+// the publishable set (platforms.AttachmentKind), so no HEIC/TIFF original is
+// ever offered as a cover.
+var coverImageMimes = []string{"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+func (r *postAttachmentRepository) CoverKeysByPostIDs(ctx context.Context, postIDs []string) (map[string]string, error) {
+	if len(postIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	var rows []struct {
+		PostID string `bun:"post_id"`
+		Key    string `bun:"cover_key"`
+	}
+	err := r.db.NewSelect().
+		Model((*models.PostAttachment)(nil)).
+		DistinctOn("pa.post_id").
+		Column("pa.post_id").
+		ColumnExpr("COALESCE(NULLIF(pa.thumbnail_s3_key, ''), pa.s3_key) AS cover_key").
+		Where("pa.post_id IN (?)", bun.List(postIDs)).
+		WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
+			return q.Where("COALESCE(pa.thumbnail_s3_key, '') <> ''").
+				WhereOr("pa.mime_type IN (?)", bun.List(coverImageMimes))
+		}).
+		OrderExpr("pa.post_id, pa.segment_index ASC NULLS FIRST, pa.position ASC").
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]string, len(rows))
+	for _, row := range rows {
+		keys[row.PostID] = row.Key
+	}
+	return keys, nil
 }
 
 func (r *postAttachmentRepository) ListS3KeysByPostID(ctx context.Context, postID string) ([]string, error) {

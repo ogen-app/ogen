@@ -104,3 +104,81 @@ func TestReorderPositions(t *testing.T) {
 		}
 	}
 }
+
+// TestCoverKeysByPostIDs pins the cover pick: per post, the first drawable
+// attachment — thread root before other segments, then by position — using a
+// rendered thumbnail when there is one and the image itself otherwise. Media a
+// browser cannot draw (HEIC, a video with no poster) is passed over, a post with
+// nothing drawable is absent, and another tenant's posts are never returned.
+func TestCoverKeysByPostIDs(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewPostAttachmentRepository(db)
+	ctx := tenantCtx()
+
+	add := func(id, postID, mime, key, thumb string) {
+		t.Helper()
+		att := &models.PostAttachment{
+			ID: id, PostID: postID, MimeType: mime, SizeBytes: 1,
+			ChecksumSHA256: id, S3Key: key, ThumbnailS3Key: thumb, CreatedBy: "user-1",
+		}
+		if err := repo.CreateAtNextPosition(ctx, att); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"p-img", "p-pdf", "p-skip", "p-none", "p-thread", "p-bare"} {
+		seedPost(t, db, id, "", "", time.Now().UTC())
+	}
+
+	add("a1", "p-img", "image/png", "img-0.png", "")
+	add("a2", "p-img", "image/jpeg", "img-1.jpg", "")
+
+	add("b1", "p-pdf", "application/pdf", "deck.pdf", "deck.thumb.png")
+
+	add("c1", "p-skip", "image/heic", "raw.heic", "")
+	add("c2", "p-skip", "video/mp4", "clip.mp4", "")
+	add("c3", "p-skip", "video/mp4", "clip2.mp4", "clip2.thumb.png")
+
+	add("d1", "p-none", "image/heic", "only.heic", "")
+
+	// Thread: position 0 belongs to segment 1, position 1 to the root.
+	add("e1", "p-thread", "image/png", "reply.png", "")
+	add("e2", "p-thread", "image/png", "root.png", "")
+	if err := repo.Patch(ctx, "e1", repository.AttachmentPatch{SetSegmentIndex: true, SegmentIndex: new(1)}); err != nil {
+		t.Fatalf("segment e1: %v", err)
+	}
+	if err := repo.Patch(ctx, "e2", repository.AttachmentPatch{SetSegmentIndex: true, SegmentIndex: new(0)}); err != nil {
+		t.Fatalf("segment e2: %v", err)
+	}
+
+	got, err := repo.CoverKeysByPostIDs(ctx, []string{"p-img", "p-pdf", "p-skip", "p-none", "p-thread", "p-bare"})
+	if err != nil {
+		t.Fatalf("cover keys: %v", err)
+	}
+	want := map[string]string{
+		"p-img":    "img-0.png",
+		"p-pdf":    "deck.thumb.png",
+		"p-skip":   "clip2.thumb.png",
+		"p-thread": "root.png",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for id, key := range want {
+		if got[id] != key {
+			t.Errorf("%s: got %q, want %q", id, got[id], key)
+		}
+	}
+
+	other, err := repo.CoverKeysByPostIDs(tenantctx.With(t.Context(), "tenant-2"), []string{"p-img"})
+	if err != nil {
+		t.Fatalf("cross-tenant cover keys: %v", err)
+	}
+	if len(other) != 0 {
+		t.Errorf("another tenant must see no covers, got %v", other)
+	}
+
+	empty, err := repo.CoverKeysByPostIDs(ctx, nil)
+	if err != nil || len(empty) != 0 {
+		t.Errorf("no ids: got %v, %v", empty, err)
+	}
+}
