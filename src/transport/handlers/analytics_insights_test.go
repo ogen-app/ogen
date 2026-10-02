@@ -44,7 +44,7 @@ func insightApp(handler http.HandlerFunc, profileID func(context.Context) (strin
 	stub := httptest.NewServer(handler)
 	client := zernio.NewClient(zernio.StaticKey("k"), stub.URL, zernio.ClientOpts{Timeout: 5 * time.Second})
 	app := fiber.New()
-	handlers.NewAnalyticsHandler(nil, followerRepo, nil, nil, client, profileID, insightNoAuth).Register(app)
+	handlers.NewAnalyticsHandler(nil, followerRepo, nil, nil, nil, client, profileID, insightNoAuth).Register(app)
 	return app, stub
 }
 

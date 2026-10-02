@@ -198,6 +198,9 @@ type fakeAccountRepo struct {
 func (r *fakeAccountRepo) ListAll(context.Context, string) ([]models.SocialAccount, error) {
 	return nil, nil
 }
+func (r *fakeAccountRepo) ListByIDs(context.Context, []string) ([]models.SocialAccount, error) {
+	return nil, nil
+}
 func (r *fakeAccountRepo) ListActive(_ context.Context, profileID string) ([]models.SocialAccount, error) {
 	return r.accounts[profileID], nil
 }

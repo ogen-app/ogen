@@ -34,6 +34,12 @@ type SocialAccountRepository interface {
 	// to another profile. Backs validation of an explicit CON-150 selection.
 	GetActive(ctx context.Context, profileID, id string) (*models.SocialAccount, error)
 
+	// ListByIDs returns the caller tenant's rows with the given ids, including
+	// soft-deleted ones, so historical reads (analytics account labels) still
+	// resolve a since-disconnected account. Unknown ids are skipped; an empty
+	// ids slice returns nil without querying.
+	ListByIDs(ctx context.Context, ids []string) ([]models.SocialAccount, error)
+
 	// ListActiveTenantProfiles returns the distinct (tenant_id, profile_id)
 	// pairs across EVERY tenant with at least one active connected account.
 	// MUST be called under a system context (tenantctx.WithSystem) — the
@@ -154,6 +160,19 @@ func (r *socialAccountRepository) GetActive(ctx context.Context, profileID, id s
 		return nil, err
 	}
 	return acc, nil
+}
+
+func (r *socialAccountRepository) ListByIDs(ctx context.Context, ids []string) ([]models.SocialAccount, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var out []models.SocialAccount
+	if err := r.db.NewSelect().Model(&out).
+		Where("sa.id IN (?)", bun.List(ids)).
+		Scan(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *socialAccountRepository) SoftDelete(ctx context.Context, id string, now time.Time) (bool, error) {

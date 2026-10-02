@@ -3,7 +3,6 @@ package handlers
 import (
 	"errors"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -20,8 +19,8 @@ import (
 // + display fields come from post_analytics_current; the per-platform
 // expected-at-age baseline is computed from the snapshot history (join to
 // current for published_at). The account block carries username/id from the
-// current row's platform breakdown; display_name/avatar enrichment from
-// social_accounts is a follow-up (best-effort, username fallback per the PRD).
+// current row's platform breakdown, labelled with display_name/avatar_url from
+// social_accounts (best-effort, username fallback).
 //
 // Performers godoc
 // @Summary      Performers and outliers
@@ -83,6 +82,16 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 		return err
 	}
 
+	ids := make([]string, 0, len(cur))
+	seen := map[string]bool{}
+	for i := range cur {
+		if id, _ := accountRef(&cur[i]); id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	known := h.loadAccounts(ctx, ids)
+
 	now := time.Now().UTC()
 	cands := make([]performers.Candidate, 0, len(cur))
 	for i := range cur {
@@ -95,7 +104,7 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 			PublisherPostID: r.PublisherPostID,
 			Title:           r.Title,
 			Platform:        r.Platform,
-			Account:         accountFor(r),
+			Account:         performersAccount(&r, known),
 			Reach:           r.Reach,
 			Impressions:     r.Impressions,
 			Likes:           r.Likes,
@@ -120,20 +129,10 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 	}})
 }
 
-// accountFor pulls the owning account's username/id from the current row's
-// per-platform breakdown, preferring the entry that matches the row's platform.
-func accountFor(r models.PostAnalytics) performers.Account {
-	var username, id string
-	for _, pa := range r.PlatformAnalytics {
-		if strings.EqualFold(pa.Platform, r.Platform) {
-			username, id = pa.AccountUsername, pa.AccountID
-			break
-		}
-	}
-	if username == "" && len(r.PlatformAnalytics) > 0 {
-		username, id = r.PlatformAnalytics[0].AccountUsername, r.PlatformAnalytics[0].AccountID
-	}
-	return performers.Account{ID: id, Username: username, DisplayName: username}
+func performersAccount(r *models.PostAnalytics, known map[string]models.SocialAccount) performers.Account {
+	id, username := accountRef(r)
+	l := labelAccount(id, username, known)
+	return performers.Account{ID: l.ID, Username: l.Username, DisplayName: l.DisplayName, AvatarURL: l.AvatarURL}
 }
 
 func toPerfSamples(in []repository.ReachAgeSample) []performers.Sample {
