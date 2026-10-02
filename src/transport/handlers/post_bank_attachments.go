@@ -88,10 +88,6 @@ func (h *PostAttachmentsHandler) AttachFromAsset(c *fiber.Ctx) error {
 		return err
 	}
 
-	quota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", file.SizeBytes)
-	if err != nil {
-		return err
-	}
 	if h.image == nil {
 		return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
 	}
@@ -99,6 +95,14 @@ func (h *PostAttachmentsHandler) AttachFromAsset(c *fiber.Ctx) error {
 	prep, err := h.stripImage(reqCtx(c), file.S3Key, cleanKey, file.MimeType, file.OriginalName)
 	if err != nil {
 		return attachmentError(c, err)
+	}
+	// Gate on the stripped copy's size — what the attachment stores and the
+	// usage counter sums — not the bank original's. Nothing was uploaded, so
+	// the only cost of checking after the strip is dropping the copy on a deny.
+	quota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", prep.SizeBytes)
+	if err != nil {
+		_ = h.storage.Delete(reqCtx(c), cleanKey)
+		return err
 	}
 	att.MimeType = prep.Mime
 	att.SizeBytes = prep.SizeBytes
