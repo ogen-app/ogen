@@ -441,6 +441,16 @@ const docTemplate = `{
                         "description": "reach|saves (default reach)",
                         "name": "metric",
                         "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Zernio platform slug; repeat for a union (default every platform)",
+                        "name": "platform",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -510,6 +520,16 @@ const docTemplate = `{
                         "type": "string",
                         "description": "day|week|month (default adaptive)",
                         "name": "granularity",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Zernio platform slug; repeat for a union (default every platform)",
+                        "name": "platform",
                         "in": "query"
                     }
                 ],
@@ -589,8 +609,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "type": "string",
-                        "description": "Optional platform filter",
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "Zernio platform slug; repeat for a union (default every platform)",
                         "name": "platform",
                         "in": "query"
                     }

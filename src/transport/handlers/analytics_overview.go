@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"time"
@@ -30,6 +31,7 @@ import (
 // @Param        from         query string false "Inclusive start date YYYY-MM-DD (with to, overrides window)"
 // @Param        to           query string false "Inclusive end date YYYY-MM-DD"
 // @Param        granularity  query string false "day|week|month (default adaptive)"
+// @Param        platform     query []string false "Zernio platform slug; repeat for a union (default every platform)" collectionFormat(multi)
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
@@ -50,6 +52,10 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 		}
 	}
 	prev := rng.Previous()
+	scope, err := h.parsePlatformScope(c)
+	if err != nil {
+		return err
+	}
 	ctx := reqCtx(c)
 
 	curPosts, err := h.repo.PublishedBetween(ctx, rng.From, rng.To)
@@ -60,34 +66,23 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if err := h.filterRows(ctx, scope, &curPosts, &prevPosts); err != nil {
+		return err
+	}
 
 	var curPub, prevPub []time.Time
 	if h.posts != nil {
-		if curPub, err = h.posts.PublishedAtsBetween(ctx, rng.From, rng.To); err != nil {
+		if curPub, err = h.posts.PublishedAtsBetween(ctx, rng.From, rng.To, scope.platformIDs()); err != nil {
 			return err
 		}
-		if prevPub, err = h.posts.PublishedAtsBetween(ctx, prev.From, prev.To); err != nil {
+		if prevPub, err = h.posts.PublishedAtsBetween(ctx, prev.From, prev.To, scope.platformIDs()); err != nil {
 			return err
 		}
 	}
 
-	var folTotals []overview.FollowerDayTotal
-	var folNow int
-	if h.followerRepo != nil {
-		summary, err := h.followerRepo.Summary(ctx, "")
-		if err != nil {
-			return err
-		}
-		for _, a := range summary {
-			folNow += int(a.CurrentFollowers)
-		}
-		// One series spanning both windows lets Build derive current and previous
-		// follower levels without a second fetch.
-		pts, err := h.followerRepo.Series(ctx, repository.FollowerSeriesOptions{From: prev.From, To: rng.To})
-		if err != nil {
-			return err
-		}
-		folTotals = followerDailyTotals(pts)
+	folTotals, folNow, err := h.overviewFollowers(ctx, scope, prev.From, rng.To)
+	if err != nil {
+		return err
 	}
 
 	// Truly empty tenant (no analytics, no posts, no followers) → graceful no_data.
@@ -107,6 +102,36 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 		UpdatedAt:      maxLastChecked(curPosts, prevPosts),
 	})
 	return c.JSON(insightEnvelope{Available: true, Data: resp})
+}
+
+// overviewFollowers returns the daily follower totals over [from, to] and the
+// current follower level, summed over the in-scope accounts.
+func (h *AnalyticsHandler) overviewFollowers(ctx context.Context, scope *platformScope, from, to time.Time) ([]overview.FollowerDayTotal, int, error) {
+	if h.followerRepo == nil {
+		return nil, 0, nil
+	}
+	summary, err := h.followerRepo.Summary(ctx, "")
+	if err != nil {
+		return nil, 0, err
+	}
+	accounts := map[string]bool{}
+	var now int
+	for _, a := range summary {
+		if scope.allowsSlug(a.Platform) {
+			accounts[a.SocialAccountID] = true
+			now += int(a.CurrentFollowers)
+		}
+	}
+	// One series spanning both windows lets Build derive current and previous
+	// follower levels without a second fetch.
+	pts, err := h.followerRepo.Series(ctx, repository.FollowerSeriesOptions{From: from, To: to})
+	if err != nil {
+		return nil, 0, err
+	}
+	if scope != nil {
+		pts = slices.DeleteFunc(pts, func(p repository.FollowerSeriesPoint) bool { return !accounts[p.SocialAccountID] })
+	}
+	return followerDailyTotals(pts), now, nil
 }
 
 // toPostPoints maps current-state rows to the assembly input, folding the

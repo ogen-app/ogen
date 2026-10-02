@@ -34,7 +34,7 @@ import (
 // @Param        to       query string false "Inclusive end date YYYY-MM-DD"
 // @Param        by       query string false "against_typical|reach|engagement_rate|interactions (default against_typical)"
 // @Param        limit    query int    false "Rows per list, default 5, clamped"
-// @Param        platform query string false "Optional platform filter"
+// @Param        platform query []string false "Zernio platform slug; repeat for a union (default every platform)" collectionFormat(multi)
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
@@ -61,15 +61,18 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 			limit = n
 		}
 	}
-	platform := c.Query("platform")
+	scope, err := h.parsePlatformScope(c)
+	if err != nil {
+		return err
+	}
 
 	ctx := reqCtx(c)
 	cur, err := h.repo.PublishedBetween(ctx, rng.From, rng.To)
 	if err != nil {
 		return err
 	}
-	if platform != "" {
-		cur = filterByPlatform(cur, platform)
+	if err := h.filterRows(ctx, scope, &cur); err != nil {
+		return err
 	}
 	if len(cur) == 0 {
 		return c.JSON(insightEnvelope{Available: false, Reason: "no_data"})
@@ -115,16 +118,6 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 		"worst":       res.Worst,
 		"insights":    res.Insights,
 	}})
-}
-
-func filterByPlatform(rows []models.PostAnalytics, platform string) []models.PostAnalytics {
-	out := rows[:0:0]
-	for _, r := range rows {
-		if strings.EqualFold(r.Platform, platform) {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 // accountFor pulls the owning account's username/id from the current row's

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -74,7 +75,7 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 		ph.Register(app)
 		// GET /:id/analytics now lives on the insights handler.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, analyticsRepo, nil, nil, auth).Register(app)
-		handlers.NewAnalyticsHandler(analyticsRepo, nil, nil, nil, nil, auth).Register(app)
+		handlers.NewAnalyticsHandler(analyticsRepo, nil, postRepo, repository.NewPlatformRepository(db), nil, nil, auth).Register(app)
 
 		// Auth user + login.
 		createdUser := seedTenantUser(db, "Admin", "admin@example.com", "admin-password")
@@ -255,6 +256,126 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 
 		It("rejects an unknown order with 400", func() {
 			Expect(get("/api/analytics/posts?order=sideways").StatusCode).To(Equal(400))
+		})
+	})
+
+	Describe("platform filter on /overview, /performers, /learnings", func() {
+		const (
+			instagramSqid = "rzgpTkARLH0L"
+			xSqid         = "81mUCmc2xsKd"
+		)
+
+		// seedOn publishes one Zernio post on the given platform and writes its
+		// current analytics row under that platform's display name.
+		seedOn := func(id, platformID, displayName string, published time.Time, reach int) {
+			p := &models.Post{
+				ID: id, CampaignID: campaignID, PlatformID: platformID,
+				Title: "Post " + id, Content: "content " + id,
+				MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+				Status: models.PostStatusPublished, Publisher: models.PublisherZernio,
+				PublisherPostID: "z-" + id, CTAType: models.CTATypeNone,
+				CreatedBy: userID, PublishedAt: &published,
+			}
+			Expect(postRepo.Create(tenantCtx(), p)).To(Succeed())
+			now := time.Now().UTC()
+			Expect(analyticsRepo.Upsert(tenantCtx(), &models.PostAnalytics{
+				PostID: id, PublisherPostID: "z-" + id, Publisher: models.PublisherZernio,
+				Platform: displayName, PublishedAt: &published, Reach: reach, Impressions: reach,
+				SyncStatus: "synced", FirstSeenAt: now, LastChangedAt: now, LastCheckedAt: now,
+			})).To(Succeed())
+		}
+
+		seedThree := func() {
+			at := time.Now().UTC().Add(-48 * time.Hour)
+			seedOn("li-1", linkedinSqid, "LinkedIn", at, 100)
+			seedOn("ig-1", instagramSqid, "Instagram", at, 200)
+			seedOn("x-1", xSqid, "X (Twitter)", at, 400)
+		}
+
+		decode := func(resp *http.Response, into any) {
+			Expect(resp.StatusCode).To(Equal(200))
+			Expect(json.NewDecoder(resp.Body).Decode(into)).To(Succeed())
+		}
+
+		type performersBody struct {
+			Data struct {
+				TotalPosts int `json:"total_posts"`
+			} `json:"data"`
+		}
+
+		It("rejects an unknown slug with 400 on every endpoint", func() {
+			for _, path := range []string{"/api/analytics/overview", "/api/analytics/performers", "/api/analytics/learnings"} {
+				resp := get(path + "?platform=linkedin&platform=linkdin")
+				Expect(resp.StatusCode).To(Equal(400), path)
+				var body map[string]any
+				Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+				Expect(body["error"]).To(Equal("invalid_platform"))
+			}
+		})
+
+		It("narrows /performers to the union of the repeated slugs", func() {
+			seedThree()
+
+			var all, union, csv performersBody
+			decode(get("/api/analytics/performers"), &all)
+			decode(get("/api/analytics/performers?platform=linkedin&platform=instagram"), &union)
+			decode(get("/api/analytics/performers?platform=LinkedIn,instagram"), &csv)
+			Expect(all.Data.TotalPosts).To(Equal(3))
+			Expect(union.Data.TotalPosts).To(Equal(2))
+			Expect(csv.Data.TotalPosts).To(Equal(2))
+		})
+
+		It("matches by platform id, not display name", func() {
+			seedThree()
+			var body performersBody
+			decode(get("/api/analytics/performers?platform=twitter"), &body)
+			Expect(body.Data.TotalPosts).To(Equal(1))
+		})
+
+		It("narrows /overview reach and posts published", func() {
+			seedThree()
+			type card struct {
+				Metric string  `json:"metric"`
+				Value  float64 `json:"value"`
+			}
+			var body struct {
+				Data struct {
+					Cards []card `json:"cards"`
+				} `json:"data"`
+			}
+			decode(get("/api/analytics/overview?platform=instagram&platform=twitter"), &body)
+			values := map[string]float64{}
+			for _, c := range body.Data.Cards {
+				values[c.Metric] = c.Value
+			}
+			Expect(values["reach"]).To(Equal(600.0))
+			Expect(values["posts_published"]).To(Equal(2.0))
+		})
+
+		It("applies the /learnings minimum-support floor after narrowing", func() {
+			base := time.Now().UTC().Add(-30 * 24 * time.Hour)
+			for i := range 6 {
+				seedOn("li-"+strconv.Itoa(i), linkedinSqid, "LinkedIn", base.Add(time.Duration(i)*time.Hour), 100+i)
+			}
+			seedOn("ig-0", instagramSqid, "Instagram", base, 50)
+
+			type learningsBody struct {
+				Data struct {
+					Scope struct {
+						MeasuredPosts int `json:"measured_posts"`
+					} `json:"scope"`
+					Heatmap struct {
+						InsufficientHistory bool `json:"insufficient_history"`
+					} `json:"heatmap"`
+				} `json:"data"`
+			}
+			var all, ig learningsBody
+			decode(get("/api/analytics/learnings"), &all)
+			decode(get("/api/analytics/learnings?platform=instagram"), &ig)
+			Expect(all.Data.Scope.MeasuredPosts).To(Equal(7))
+			Expect(all.Data.Heatmap.InsufficientHistory).To(BeFalse())
+			Expect(ig.Data.Scope.MeasuredPosts).To(Equal(1))
+			Expect(ig.Data.Heatmap.InsufficientHistory).To(BeTrue())
 		})
 	})
 
