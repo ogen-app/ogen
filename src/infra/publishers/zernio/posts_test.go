@@ -127,7 +127,7 @@ func TestCancelHappyPath(t *testing.T) {
 	}
 }
 
-func TestCancel404TreatedAsAlreadyPublished(t *testing.T) {
+func TestCancel404IsPostNotFound(t *testing.T) {
 	s := newStub()
 	defer s.Close()
 	s.handle("DELETE", "/posts/gone", func(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +135,8 @@ func TestCancel404TreatedAsAlreadyPublished(t *testing.T) {
 	})
 	c := newClient(s)
 	err := c.Cancel(t.Context(), "gone")
-	if !errors.Is(err, ErrAlreadyPublished) {
-		t.Fatalf("expected ErrAlreadyPublished, got %v", err)
+	if !errors.Is(err, ErrPostNotFound) {
+		t.Fatalf("expected ErrPostNotFound, got %v", err)
 	}
 }
 

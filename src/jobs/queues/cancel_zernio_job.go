@@ -94,7 +94,10 @@ func init() {
 // Process executes one cancellation attempt.
 //
 // Outcome matrix:
-//   - Cancel succeeds → Post transitions to the chosen target.
+//   - Cancel succeeds → Post transitions to the chosen target and drops
+//     its publisher_post_id.
+//   - Cancel returns ErrPostNotFound → same as success: the Zernio post
+//     is already gone.
 //   - Cancel returns ErrAlreadyPublished → no transition; the next
 //     poll cycle will land Published per the normal success path.
 //   - Cancel returns transient error → return error so River
@@ -127,7 +130,15 @@ func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZerni
 	if cancelErr == nil {
 		jobs.ZernioCancelSucceeded.Add(1)
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
-			"Zernio cancel succeeded", `{}`)
+			"Zernio cancel succeeded", publisherPostIDPayload(post.PublisherPostID))
+		return p.transition(ctx, post, task)
+	}
+	if errors.Is(cancelErr, zernio.ErrPostNotFound) {
+		// Nothing left on Zernio to cancel or to publish: the local
+		// transition is all that remains.
+		jobs.ZernioCancelSucceeded.Add(1)
+		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
+			"Zernio post already gone; cancelling locally", publisherPostIDPayload(post.PublisherPostID))
 		return p.transition(ctx, post, task)
 	}
 	if errors.Is(cancelErr, zernio.ErrAlreadyPublished) {
@@ -150,12 +161,24 @@ func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZerni
 	return cancelErr
 }
 
+// transition lands the post on the cancel target. It is reached only once the
+// Zernio post is deleted (or never existed), so it also drops the publisher
+// identity: a later schedule must create a fresh Zernio post, not retry a
+// deleted one.
 func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.Post, task CancelZernioJobTask) error {
 	from := post.Status
 	to := task.Target.landingStatus()
+	hadIdentity := post.PublisherPostID != ""
+	post.PublisherPostID = ""
+	post.PublisherStatus = ""
 	if !from.CanTransition(to) {
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventStateTransitionBlocked, from, to,
 			"cancel target rejected by state machine", `{"reason":"invalid_transition"}`)
+		if hadIdentity {
+			if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+				return fmt.Errorf("cancel: clear publisher_post_id: %w", err)
+			}
+		}
 		return nil
 	}
 	// Converting to manual publishing keeps scheduled_at so the intended
@@ -181,6 +204,10 @@ func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.
 		activity.WithStatus(string(from)+"->"+string(to)),
 	)
 	return nil
+}
+
+func publisherPostIDPayload(id string) string {
+	return logs.MarshalCapped(map[string]string{"publisher_post_id": id})
 }
 
 // appendLogActor is the same as appendLog but lets a queue attribute

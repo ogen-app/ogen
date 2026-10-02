@@ -164,6 +164,12 @@ type Job struct {
 // case and the next poll will land Published on Ogen's side.
 var ErrAlreadyPublished = errors.New("zernio: job already published, cancel no-op")
 
+// ErrPostNotFound is returned by Cancel when Zernio holds no post under
+// the id — deleted by an earlier cancel, on Zernio's side, or with the
+// profile — so nothing is left to cancel or to publish. A published post
+// is not a 404: Zernio refuses to delete one with a 400.
+var ErrPostNotFound = errors.New("zernio: post not found")
+
 // ErrDuplicateContent is returned by Submit when Zernio rejects the
 // request as a same-content repeat within its 24h dedupe window. The
 // caller is expected to recover by calling FindByContent to locate
@@ -230,10 +236,10 @@ func (c *Client) Status(ctx context.Context, jobID string) (*Job, error) {
 }
 
 // Cancel removes a scheduled Zernio post via DELETE — Zernio's
-// documented cancellation path. Returns ErrAlreadyPublished when the
-// job has already crossed the publish boundary (404 or a 409 with the
-// "already published" message); the caller treats that as a no-op and
-// lets the next poll resolve Published.
+// documented cancellation path. Returns ErrAlreadyPublished on a 409
+// (the job crossed the publish boundary); the caller treats that as a
+// no-op and lets the next poll resolve Published. Returns ErrPostNotFound
+// on a 404: the post no longer exists on Zernio.
 func (c *Client) Cancel(ctx context.Context, jobID string) error {
 	if c == nil {
 		return errors.New("zernio: client is disabled")
@@ -248,9 +254,7 @@ func (c *Client) Cancel(ctx context.Context, jobID string) error {
 	if apiErr, ok := errors.AsType[*APIError](err); ok {
 		switch apiErr.Status {
 		case http.StatusNotFound:
-			// Job is gone — either already published or never existed.
-			// Either way, cancel is a no-op from Ogen's perspective.
-			return ErrAlreadyPublished
+			return ErrPostNotFound
 		case http.StatusConflict:
 			return ErrAlreadyPublished
 		}
