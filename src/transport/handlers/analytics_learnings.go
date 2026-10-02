@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 // @Param        since         query string false "Optional baseline lower bound YYYY-MM-DD (default all-time)"
 // @Param        trend_window  query string false "Fading comparison window, e.g. 90d/3mo/12w (default 90d)"
 // @Param        metric        query string false "reach|saves (default reach)"
+// @Param        platform      query []string false "Zernio platform slug; repeat for a union (default every platform)" collectionFormat(multi)
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
@@ -51,6 +53,10 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 	metric := c.Query("metric", learnings.MetricReach)
 	if metric != learnings.MetricReach && metric != learnings.MetricSaves {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid_param")
+	}
+	scope, err := h.parsePlatformScope(c)
+	if err != nil {
+		return err
 	}
 
 	ctx := reqCtx(c)
@@ -76,6 +82,7 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	posts, lifeSamples = narrowLearnings(scope, posts, lifeSamples)
 
 	facts := make([]learnings.PostFact, 0, len(posts))
 	for i := range posts {
@@ -110,6 +117,23 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 		UpdatedAt:       maxLastCheckedMap(current),
 	})
 	return c.JSON(insightEnvelope{Available: true, Data: resp})
+}
+
+// narrowLearnings drops the posts and lifespan samples outside the scope. It
+// runs before Build so each section's minimum-support floor applies to the
+// filtered sample: a thin single-platform history withdraws the section as
+// insufficient_history rather than serving a weak lesson.
+func narrowLearnings(scope *platformScope, posts []models.Post, samples []repository.LifespanSample) ([]models.Post, []repository.LifespanSample) {
+	if scope == nil {
+		return posts, samples
+	}
+	posts = slices.DeleteFunc(posts, func(p models.Post) bool { return !scope.allowsPlatformID(p.PlatformID) })
+	inScope := make(map[string]bool, len(posts))
+	for i := range posts {
+		inScope[posts[i].ID] = true
+	}
+	samples = slices.DeleteFunc(samples, func(s repository.LifespanSample) bool { return !inScope[s.PostID] })
+	return posts, samples
 }
 
 var trendWindowRe = regexp.MustCompile(`^(\d+)(d|w|mo)$`)

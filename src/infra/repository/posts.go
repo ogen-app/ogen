@@ -76,8 +76,13 @@ type PostRepository interface {
 	// Zernio-published posts in [from, to), ascending — the "posts published"
 	// metric for the CON-237 overview (count + cumulative-by-day series). Kept on
 	// the main DB (source of truth for what shipped), composed app-side with the
-	// analytics-DB series.
-	PublishedAtsBetween(ctx context.Context, from, to time.Time) ([]time.Time, error)
+	// analytics-DB series. A non-empty platformIDs narrows to those platforms.
+	PublishedAtsBetween(ctx context.Context, from, to time.Time, platformIDs []string) ([]time.Time, error)
+	// PlatformIDsByID maps each of the given post ids to its platform_id. Ids
+	// that don't resolve to a tenant post are absent from the map. Lets the
+	// analytics reads, whose rows carry only a display name, filter by the
+	// stable platform id.
+	PlatformIDsByID(ctx context.Context, ids []string) (map[string]string, error)
 	// ListPublishedSince returns the tenant's Zernio-published posts with
 	// published_at >= since (zero since = all-time), ascending, WITHOUT relation
 	// hydration — the CON-239 "what works / fading" miner reads only the scalar
@@ -121,20 +126,41 @@ func (r *postRepository) ListPublishedSince(ctx context.Context, since time.Time
 	return posts, nil
 }
 
-func (r *postRepository) PublishedAtsBetween(ctx context.Context, from, to time.Time) ([]time.Time, error) {
+func (r *postRepository) PublishedAtsBetween(ctx context.Context, from, to time.Time, platformIDs []string) ([]time.Time, error) {
 	var ats []time.Time
 	// BeforeSelect adds the tenant predicate. published_at IS NOT NULL is implied
 	// by the range bounds (NULL compares false), but stated for clarity.
-	if err := r.db.NewSelect().Model((*models.Post)(nil)).
+	q := r.db.NewSelect().Model((*models.Post)(nil)).
 		Column("published_at").
 		Where("po.publisher = ?", "zernio").
 		Where("po.published_at >= ?", from).
 		Where("po.published_at < ?", to).
-		OrderExpr("po.published_at ASC").
-		Scan(ctx, &ats); err != nil {
+		OrderExpr("po.published_at ASC")
+	if len(platformIDs) > 0 {
+		q = q.Where("po.platform_id IN (?)", bun.List(platformIDs))
+	}
+	if err := q.Scan(ctx, &ats); err != nil {
 		return nil, err
 	}
 	return ats, nil
+}
+
+func (r *postRepository) PlatformIDsByID(ctx context.Context, ids []string) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []models.Post
+	if err := r.db.NewSelect().Model(&rows).
+		Column("id", "platform_id").
+		Where("po.id IN (?)", bun.List(ids)).
+		Scan(ctx); err != nil {
+		return nil, err
+	}
+	for _, p := range rows {
+		out[p.ID] = p.PlatformID
+	}
+	return out, nil
 }
 
 func (r *postRepository) ListManualPublishDue(ctx context.Context, now time.Time, limit int) ([]models.Post, error) {
