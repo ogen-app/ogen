@@ -75,7 +75,7 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 		ph.Register(app)
 		// GET /:id/analytics now lives on the insights handler.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, analyticsRepo, nil, nil, auth).Register(app)
-		handlers.NewAnalyticsHandler(analyticsRepo, nil, postRepo, repository.NewPlatformRepository(db), nil, nil, auth).Register(app)
+		handlers.NewAnalyticsHandler(analyticsRepo, nil, postRepo, repository.NewPlatformRepository(db), socialAccountRepo, nil, nil, auth).Register(app)
 
 		// Auth user + login.
 		createdUser := seedTenantUser(db, "Admin", "admin@example.com", "admin-password")
@@ -376,6 +376,105 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 			Expect(all.Data.Heatmap.InsufficientHistory).To(BeFalse())
 			Expect(ig.Data.Scope.MeasuredPosts).To(Equal(1))
 			Expect(ig.Data.Heatmap.InsufficientHistory).To(BeTrue())
+		})
+	})
+
+	Describe("account labels on /performers and /analytics/posts/:id", func() {
+		seedLabelledAccount := func(id, username, displayName, avatar string, deleted bool) {
+			now := time.Now().UTC()
+			a := &models.SocialAccount{
+				ID: id, Platform: "linkedin", ProfileID: "prof-1",
+				Username: username, DisplayName: displayName, AvatarURL: avatar,
+				IsActive: true, RawJSON: "{}", ConnectedAt: now, LastSyncedAt: now,
+			}
+			if deleted {
+				a.DeletedAt = &now
+			}
+			_, err := db.NewInsert().Model(a).Exec(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		seedOwnedSnapshot := func(postID, pubPostID, accountID, username string, published time.Time) {
+			now := time.Now().UTC()
+			Expect(analyticsRepo.Upsert(tenantCtx(), &models.PostAnalytics{
+				PostID:          postID,
+				PublisherPostID: pubPostID,
+				Publisher:       models.PublisherZernio,
+				Platform:        "LinkedIn",
+				Impressions:     500,
+				Reach:           400,
+				Likes:           20,
+				PublishedAt:     &published,
+				PlatformAnalytics: models.PlatformAnalyticsList{{
+					Platform: "linkedin", SyncStatus: "synced",
+					AccountID: accountID, AccountUsername: username,
+				}},
+				SyncStatus:    "synced",
+				FirstSeenAt:   now,
+				LastChangedAt: now,
+				LastCheckedAt: now,
+			})).To(Succeed())
+		}
+
+		type account struct {
+			ID          string `json:"id"`
+			Username    string `json:"username"`
+			DisplayName string `json:"display_name"`
+			AvatarURL   string `json:"avatar_url"`
+		}
+
+		It("labels performers rows from social_accounts, keeping disconnected accounts and falling back on a missing row", func() {
+			published := time.Now().UTC().Add(-48 * time.Hour)
+			seedLabelledAccount("acc-live", "acme", "Acme Inc", "https://cdn/acme.png", false)
+			seedLabelledAccount("acc-gone", "oldco", "Old Co", "https://cdn/old.png", true)
+			for _, p := range []struct{ id, acc, user string }{
+				{"p-live", "acc-live", "acme"},
+				{"p-gone", "acc-gone", "oldco"},
+				{"p-unknown", "acc-unknown", "ghost"},
+			} {
+				seedPost(p.id, models.PublisherZernio, "z-"+p.id, published)
+				seedOwnedSnapshot(p.id, "z-"+p.id, p.acc, p.user, published)
+			}
+
+			resp := get("/api/analytics/performers?window=7d&by=reach&limit=10")
+			Expect(resp.StatusCode).To(Equal(200))
+			var body struct {
+				Available bool `json:"available"`
+				Data      struct {
+					Best []struct {
+						PostID  string  `json:"post_id"`
+						Account account `json:"account"`
+					} `json:"best"`
+				} `json:"data"`
+			}
+			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+			Expect(body.Available).To(BeTrue())
+			got := map[string]account{}
+			for _, r := range body.Data.Best {
+				got[r.PostID] = r.Account
+			}
+			Expect(got).To(HaveKeyWithValue("p-live", account{ID: "acc-live", Username: "acme", DisplayName: "Acme Inc", AvatarURL: "https://cdn/acme.png"}))
+			Expect(got).To(HaveKeyWithValue("p-gone", account{ID: "acc-gone", Username: "oldco", DisplayName: "Old Co", AvatarURL: "https://cdn/old.png"}))
+			Expect(got).To(HaveKeyWithValue("p-unknown", account{ID: "acc-unknown", Username: "ghost", DisplayName: "ghost"}))
+		})
+
+		It("labels the post-statistics header from social_accounts", func() {
+			published := time.Now().UTC().Add(-48 * time.Hour)
+			seedLabelledAccount("acc-live", "acme", "Acme Inc", "https://cdn/acme.png", false)
+			seedPost("p-stat", models.PublisherZernio, "z-stat", published)
+			seedOwnedSnapshot("p-stat", "z-stat", "acc-live", "acme", published)
+
+			resp := get("/api/analytics/posts/p-stat")
+			Expect(resp.StatusCode).To(Equal(200))
+			var body struct {
+				Data struct {
+					Post struct {
+						Account account `json:"account"`
+					} `json:"post"`
+				} `json:"data"`
+			}
+			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+			Expect(body.Data.Post.Account).To(Equal(account{ID: "acc-live", Username: "acme", DisplayName: "Acme Inc", AvatarURL: "https://cdn/acme.png"}))
 		})
 	})
 

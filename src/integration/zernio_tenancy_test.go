@@ -294,6 +294,30 @@ var _ = Describe("Zernio per-tenant profiles on one shared key (CON-102)", func(
 		}
 	})
 
+	It("resolves account labels by id within the caller tenant only, including disconnected accounts", func() {
+		rig := newZernioTenancyRig()
+		defer rig.stub.Close()
+
+		_, tidA := rig.signup("Acme", "a@acme.test")
+		_, tidB := rig.signup("Beta", "b@beta.test")
+		rig.seedAccount(tidA, "prof-A", "acct-A", "acme_li")
+		rig.seedAccount(tidA, "prof-A", "acct-A-gone", "acme_old")
+		rig.seedAccount(tidB, "prof-B", "acct-B", "beta_li")
+
+		ctxA := tenantctx.With(context.Background(), tidA)
+		ok, err := rig.accounts.SoftDelete(ctxA, "acct-A-gone", time.Now().UTC())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+
+		rows, err := rig.accounts.ListByIDs(ctxA, []string{"acct-A", "acct-A-gone", "acct-B", "acct-unknown"})
+		Expect(err).NotTo(HaveOccurred())
+		ids := make([]string, 0, len(rows))
+		for _, r := range rows {
+			ids = append(ids, r.ID)
+		}
+		Expect(ids).To(ConsistOf("acct-A", "acct-A-gone"), "another tenant's account must never resolve")
+	})
+
 	It("isolates each tenant under its own profile (FR12)", func() {
 		rig := newZernioTenancyRig()
 		defer rig.stub.Close()

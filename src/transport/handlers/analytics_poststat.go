@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -70,10 +71,10 @@ func (h *AnalyticsHandler) PostDetail(c *fiber.Ctx) error {
 		MediaFormat:     mediaFormat(*post),
 		Campaign:        campaignRef(post),
 	}
+	header.Account = h.poststatAccount(ctx, post, cur)
 	published := post.PublishedAt
 	if cur != nil {
 		header.Platform = cur.Platform
-		header.Account = poststatAccount(cur)
 		header.OpenURL = openURL(cur)
 		if cur.PublishedAt != nil {
 			published = cur.PublishedAt
@@ -163,21 +164,24 @@ func campaignRef(p *models.Post) *poststat.CampaignRef {
 	return &poststat.CampaignRef{ID: p.Campaign.ID, Name: p.Campaign.Name}
 }
 
-// poststatAccount pulls the owning account's username/id from the current row's
-// per-platform breakdown, preferring the entry matching the row's platform.
-// display_name defaults to the username; avatar enrichment is a follow-up.
-func poststatAccount(a *models.PostAnalytics) poststat.Account {
-	var username, id string
-	for _, pa := range a.PlatformAnalytics {
-		if strings.EqualFold(pa.Platform, a.Platform) {
-			username, id = pa.AccountUsername, pa.AccountID
-			break
-		}
+// poststatAccount labels the post's owning account: id/username from the
+// current row's platform breakdown, falling back to the post's own
+// social_account_id when the refresh hasn't recorded one, then
+// display_name/avatar_url from social_accounts (best-effort).
+func (h *AnalyticsHandler) poststatAccount(ctx context.Context, post *models.Post, cur *models.PostAnalytics) poststat.Account {
+	var id, username string
+	if cur != nil {
+		id, username = accountRef(cur)
 	}
-	if username == "" && len(a.PlatformAnalytics) > 0 {
-		username, id = a.PlatformAnalytics[0].AccountUsername, a.PlatformAnalytics[0].AccountID
+	if id == "" {
+		id = post.SocialAccountID
 	}
-	return poststat.Account{ID: id, Username: username, DisplayName: username}
+	var known map[string]models.SocialAccount
+	if id != "" {
+		known = h.loadAccounts(ctx, []string{id})
+	}
+	l := labelAccount(id, username, known)
+	return poststat.Account{ID: l.ID, Username: l.Username, DisplayName: l.DisplayName, AvatarURL: l.AvatarURL}
 }
 
 // openURL returns the "Open on {platform}" permalink, preferring the entry
