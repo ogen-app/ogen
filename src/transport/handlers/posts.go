@@ -17,6 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
@@ -87,6 +88,9 @@ type PostsHandler struct {
 	// 400. nil leaves it to the DB trigger, whose
 	// rejection is mapped to the same 400.
 	campaignRepo repository.CampaignRepository
+	// storage mints the public cover_url on read responses. nil leaves
+	// cover_url unset.
+	storage storage.Storage
 }
 
 // checkPhase reports whether a post's campaign_type_phase_id (when set) is a
@@ -495,6 +499,7 @@ func NewPostsHandler(
 		scheduleSvc:    opts.Schedule,
 		activity:       opts.Activity,
 		onBeforeDelete: opts.OnBeforeDelete,
+		storage:        opts.Storage,
 	}
 }
 
@@ -514,6 +519,43 @@ type PostsOptions struct {
 	Schedule       *schedule.Service
 	Activity       *activity.Recorder
 	OnBeforeDelete func(ctx context.Context, postID string) error
+	Storage        storage.Storage
+}
+
+// decorateCovers fills each post's CoverURL from its first drawable
+// attachment, served from the public key the way assets are (decorateFile) —
+// a stored copy keeps working, unlike a presigned GET. Best-effort: a failed
+// lookup leaves the posts without covers rather than failing the read, since
+// the card simply falls back to no picture.
+func (h *PostsHandler) decorateCovers(c *fiber.Ctx, posts []models.Post) {
+	if h.storage == nil || h.attachmentRepo == nil || len(posts) == 0 {
+		return
+	}
+	ids := make([]string, len(posts))
+	for i := range posts {
+		ids[i] = posts[i].ID
+	}
+	keys, err := h.attachmentRepo.CoverKeysByPostIDs(reqCtx(c), ids)
+	if err != nil {
+		return
+	}
+	for i := range posts {
+		if key, ok := keys[posts[i].ID]; ok {
+			u := h.storage.PublicURL(key)
+			posts[i].CoverURL = &u
+		}
+	}
+}
+
+// decorateCover is decorateCovers for a single-post response, so a client that
+// replaces its cached row with the returned post keeps the picture.
+func (h *PostsHandler) decorateCover(c *fiber.Ctx, post *models.Post) {
+	if post == nil {
+		return
+	}
+	posts := []models.Post{*post}
+	h.decorateCovers(c, posts)
+	post.CoverURL = posts[0].CoverURL
 }
 
 // postBrandRequest is the body of PUT /api/posts/:id/brand — a targeted set of
@@ -548,6 +590,7 @@ func (h *PostsHandler) SetBrand(c *fiber.Ctx) error {
 	if err := h.repo.Update(reqCtx(c), post); err != nil {
 		return err
 	}
+	h.decorateCover(c, post)
 	return c.JSON(post)
 }
 
@@ -603,6 +646,7 @@ func (h *PostsHandler) AddAssets(c *fiber.Ctx) error {
 		activity.WithEntity("post", updated.ID),
 		activity.WithStatus(string(updated.Status)),
 	)
+	h.decorateCover(c, updated)
 	return c.JSON(updated)
 }
 
@@ -648,6 +692,7 @@ func (h *PostsHandler) RemoveAsset(c *fiber.Ctx) error {
 		activity.WithEntity("post", updated.ID),
 		activity.WithStatus(string(updated.Status)),
 	)
+	h.decorateCover(c, updated)
 	return c.JSON(updated)
 }
 
@@ -879,6 +924,7 @@ func (h *PostsHandler) List(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	h.decorateCovers(c, posts)
 	return c.JSON(posts)
 }
 
@@ -897,6 +943,7 @@ func (h *PostsHandler) ListByCampaign(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	h.decorateCovers(c, posts)
 	return c.JSON(posts)
 }
 
@@ -1095,6 +1142,7 @@ func (h *PostsHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	h.decorateCover(c, post)
 	return c.JSON(post)
 }
 
@@ -1162,6 +1210,7 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		activity.WithEntity("post", post.ID),
 		activity.WithStatus(string(res.Post.Status)),
 	)
+	h.decorateCover(c, res.Post)
 	return c.JSON(res.Post)
 }
 

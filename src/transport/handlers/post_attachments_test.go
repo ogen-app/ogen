@@ -208,7 +208,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		postVersionRepo := repository.NewPostVersionRepository(db)
-		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{}).Register(app)
+		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{Storage: stub}).Register(app)
 		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, 280, auth, nil).Register(app)
 
 		seedTenantUser(db, "Admin", "att@example.com", "att-password")
@@ -630,6 +630,92 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 			Expect(atts).To(HaveLen(2))
 			Expect(atts[0].(map[string]any)["position"]).To(BeEquivalentTo(0))
 			Expect(atts[1].(map[string]any)["position"]).To(BeEquivalentTo(1))
+		})
+	})
+
+	// ── cover_url on post reads ─────────────────────────────────────────────
+
+	Describe("cover_url on post reads", func() {
+		getJSON := func(path string, out any) {
+			req := httptest.NewRequest("GET", path, nil)
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(200))
+			Expect(json.NewDecoder(resp.Body).Decode(out)).To(Succeed())
+		}
+		coverByID := func(posts []map[string]any) map[string]any {
+			out := map[string]any{}
+			for _, p := range posts {
+				out[p["id"].(string)] = p["cover_url"]
+			}
+			return out
+		}
+
+		It("carries the first image's public URL on the list rows, and nothing for a post without media", func() {
+			withMedia := createPostWithPlatform(linkedinPlatformID)
+			_, err := uploadPNG(withMedia, minimalPNG())
+			Expect(err).NotTo(HaveOccurred())
+			_, err = uploadPNG(withMedia, minimalJPEG())
+			Expect(err).NotTo(HaveOccurred())
+			bare := createPostWithPlatform(linkedinPlatformID)
+
+			var atts map[string]any
+			getJSON("/api/posts/"+withMedia+"/attachments", &atts)
+			first := atts["attachments"].([]any)[0].(map[string]any)
+			want := "https://pub.example.com/" + first["s3_key"].(string)
+
+			for _, path := range []string{"/api/posts", "/api/campaigns/" + campaignID + "/posts"} {
+				var posts []map[string]any
+				getJSON(path, &posts)
+				covers := coverByID(posts)
+				Expect(covers[withMedia]).To(Equal(want), path)
+				Expect(covers).To(HaveKeyWithValue(bare, BeNil()), path)
+			}
+
+			var one map[string]any
+			getJSON("/api/posts/"+withMedia, &one)
+			Expect(one["cover_url"]).To(Equal(want))
+		})
+
+		It("leads with a PDF's rendered first page, not the PDF itself", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			body, ct := multipartBodyAttachment("deck.pdf", minimalPDFWithPages(2))
+			req := httptest.NewRequest("POST", "/api/posts/"+postID+"/attachments", body)
+			req.Header.Set("Content-Type", ct)
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req, 30000)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+			var att map[string]any
+			Expect(json.NewDecoder(resp.Body).Decode(&att)).To(Succeed())
+			Expect(att["thumbnail_s3_key"]).NotTo(BeEmpty())
+
+			var one map[string]any
+			getJSON("/api/posts/"+postID, &one)
+			Expect(one["cover_url"]).To(Equal("https://pub.example.com/" + att["thumbnail_s3_key"].(string)))
+		})
+
+		It("is never written back: a PUT of the returned post does not persist it", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			_, err := uploadPNG(postID, minimalPNG())
+			Expect(err).NotTo(HaveOccurred())
+
+			var one map[string]any
+			getJSON("/api/posts/"+postID, &one)
+			Expect(one["cover_url"]).NotTo(BeNil())
+
+			b, _ := json.Marshal(one)
+			req := httptest.NewRequest("PUT", "/api/posts/"+postID, bytes.NewReader(b))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(200))
+			var updated map[string]any
+			Expect(json.NewDecoder(resp.Body).Decode(&updated)).To(Succeed())
+			Expect(updated["cover_url"]).To(Equal(one["cover_url"]))
+			Expect(updated["media_urls"]).To(BeEmpty())
 		})
 	})
 

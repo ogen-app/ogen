@@ -22,6 +22,9 @@ type fakeAttachmentRepo struct{ atts []models.PostAttachment }
 func (r *fakeAttachmentRepo) ListByPostID(context.Context, string) ([]models.PostAttachment, error) {
 	return r.atts, nil
 }
+func (r *fakeAttachmentRepo) CoverKeysByPostIDs(context.Context, []string) (map[string]string, error) {
+	return nil, nil
+}
 func (r *fakeAttachmentRepo) ListS3KeysByPostID(context.Context, string) ([]string, error) {
 	return nil, nil
 }

@@ -186,6 +186,11 @@ type Post struct {
 	SocialAccount     *SocialAccount     `bun:"-" json:"social_account,omitempty"`
 	UsedAssets        []Asset            `bun:"-" json:"used_assets"`
 	CampaignTypePhase *CampaignTypePhase `bun:"-" json:"campaign_type_phase,omitempty"`
+	// CoverURL is the public URL of the picture a post card leads with — its
+	// first drawable attachment (see PostAttachmentRepository.CoverKeysByPostIDs).
+	// Minted per response by the posts handler and never accepted on writes, so
+	// unlike media_urls it cannot round-trip back into a PUT.
+	CoverURL *string `bun:"-" json:"cover_url,omitempty"`
 }
 
 // IsThread reports whether this post publishes as a native thread — an ordered
