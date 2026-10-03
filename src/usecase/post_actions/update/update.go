@@ -80,6 +80,7 @@ type Input struct {
 	PlatformID       string
 	PlatformPostType string
 	Content          string
+	CTAUrl           string
 
 	// MutatesLockedContent reports whether the request changes content that
 	// is frozen once the post is submitted.
@@ -199,7 +200,7 @@ func (s *Service) checkReadyForPublish(ctx context.Context, in Input) error {
 	}
 	// Validate against what is about to be persisted: the incoming platform
 	// (a draft can switch platforms in the same save, and the row isn't
-	// written yet), post type and body, with thread segments derived using
+	// written yet), post type, body and link, with thread segments derived using
 	// that platform's per-segment limit.
 	platform := post.Platform
 	if in.PlatformID != "" && (platform == nil || platform.ID != in.PlatformID) && s.Platforms != nil {
@@ -210,6 +211,7 @@ func (s *Service) checkReadyForPublish(ctx context.Context, in Input) error {
 	incoming := *post
 	incoming.PlatformPostType = in.PlatformPostType
 	incoming.Content = in.Content
+	incoming.CTAUrl = in.CTAUrl
 	ApplyThreadSegments(&incoming, ThreadLimitOf(platform))
 	errsByPlatform := platforms.ValidatePublishReadiness(&incoming, platform, atts)
 

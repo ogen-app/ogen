@@ -2,6 +2,7 @@ package models
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -124,14 +125,29 @@ func (f ContentFormat) IsValid() bool {
 	return slices.Contains(ContentFormats, f)
 }
 
-// PostCTAType represents the call-to-action type attached to a post.
+// PostTypeLinkPost is the platform_post_type slug for a link post: the post
+// carries a target URL in CTAUrl, and the network builds a preview card from
+// that page's Open Graph tags. The URL publishes as part of the message (see
+// AppendLink) because the publisher has no separate link field.
+const PostTypeLinkPost = "link-post"
+
+// PostCTAType represents the call-to-action type attached to a post. It is
+// derived from CTAUrl (see CTATypeFor) rather than authored.
 type PostCTAType string
 
 const (
-	CTATypeLink   PostCTAType = "link"
-	CTATypeButton PostCTAType = "button"
-	CTATypeNone   PostCTAType = "none"
+	CTATypeLink PostCTAType = "link"
+	CTATypeNone PostCTAType = "none"
 )
+
+// CTATypeFor derives the CTA type from the post's link: a post carrying a URL
+// has a link CTA, any other has none.
+func CTATypeFor(ctaURL string) PostCTAType {
+	if strings.TrimSpace(ctaURL) != "" {
+		return CTATypeLink
+	}
+	return CTATypeNone
+}
 
 type Post struct {
 	bun.BaseModel `bun:"table:posts,alias:po" swaggerignore:"true"`
@@ -241,8 +257,30 @@ func (p *Post) IsThread() bool {
 // PostVersion. As of CON-284 R2, Content IS the canonical thread body — the whole
 // ordered chain (with "---" delimiters) lives there, and thread_segments is merely
 // derived from it — so the body is already self-contained and injective (distinct
-// threads have distinct bodies). There is nothing extra to serialise: the snapshot
-// is just Content for every post type, thread or not.
+// threads have distinct bodies). The snapshot is Content, plus a link post's
+// URL appended the way the publisher appends it, since the URL is part of what
+// went out.
 func (p *Post) SnapshotContent() string {
-	return p.Content
+	return p.AppendLink(p.Content)
+}
+
+// IsLinkPost reports whether this post publishes as a link post.
+func (p *Post) IsLinkPost() bool {
+	return p.PlatformPostType == PostTypeLinkPost
+}
+
+// AppendLink returns text with a link post's URL added as its last paragraph —
+// the message the network receives, since the URL travels inside it and the
+// network unfurls it into a card. Text that already contains the URL is
+// returned unchanged, as is the text of any other post type (a URL kept from
+// a type switch does not publish). An empty text yields the bare URL.
+func (p *Post) AppendLink(text string) string {
+	link := strings.TrimSpace(p.CTAUrl)
+	if !p.IsLinkPost() || link == "" || strings.Contains(text, link) {
+		return text
+	}
+	if strings.TrimSpace(text) == "" {
+		return link
+	}
+	return strings.TrimRight(text, " \t\n") + "\n\n" + link
 }

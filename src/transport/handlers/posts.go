@@ -37,12 +37,6 @@ var validPostStatuses = map[models.PostStatus]bool{
 	models.PostStatusNotPublished:              true,
 }
 
-var validCTATypes = map[models.PostCTAType]bool{
-	models.CTATypeLink:   true,
-	models.CTATypeButton: true,
-	models.CTATypeNone:   true,
-}
-
 type PostsHandler struct {
 	repo           repository.PostRepository
 	versionRepo    repository.PostVersionRepository
@@ -767,14 +761,18 @@ type postRequest struct {
 	// A client-sent value here is IGNORED — the field is retained only so existing
 	// callers that still send it don't error, and GET responses carry the derived
 	// list back on the Post model (not this request type).
-	ThreadSegments      models.ThreadSegments `json:"thread_segments"`
-	MediaURLs           models.StringSlice    `json:"media_urls"`
-	ScheduledAt         *time.Time            `json:"scheduled_at"`
-	PublishedAt         *time.Time            `json:"published_at"`
-	Status              models.PostStatus     `json:"status"`
-	CTAType             models.PostCTAType    `json:"cta_type"`
-	CTAUrl              string                `json:"cta_url"`
-	TargetAudienceNotes string                `json:"target_audience_notes"`
+	ThreadSegments models.ThreadSegments `json:"thread_segments"`
+	MediaURLs      models.StringSlice    `json:"media_urls"`
+	ScheduledAt    *time.Time            `json:"scheduled_at"`
+	PublishedAt    *time.Time            `json:"published_at"`
+	Status         models.PostStatus     `json:"status"`
+	// CTAType is accepted for compatibility and ignored: the stored value is
+	// derived from CTAUrl.
+	CTAType models.PostCTAType `json:"cta_type"`
+	// CTAUrl is the link a link-post publishes. Not validated on write, so an
+	// autosave of a half-typed URL is kept; the publish gate checks it.
+	CTAUrl              string `json:"cta_url"`
+	TargetAudienceNotes string `json:"target_audience_notes"`
 	// UsedAssetIDs is presence-aware: the sources have their own
 	// membership endpoints (POST/DELETE /posts/:id/assets), so an ordinary
 	// whole-record save that omits the key must leave the stored set alone rather
@@ -805,18 +803,11 @@ func (r *postRequest) toStatus() models.PostStatus {
 	return r.Status
 }
 
-func (r *postRequest) toCTAType() models.PostCTAType {
-	if r.CTAType == "" {
-		return models.CTATypeNone
-	}
-	return r.CTAType
-}
-
 // apply copies the mutable fields from a parsed request onto an
-// existing Post, including the resolved status/ctaType (passed
-// separately because they're already normalized by toStatus/toCTAType
-// and re-validated by the caller) and a fresh UpdatedAt.
-func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType models.PostCTAType) {
+// existing Post, including the resolved status (passed separately because
+// it's already normalized by toStatus and re-validated by the caller) and a
+// fresh UpdatedAt.
+func (r *postRequest) apply(post *models.Post, status models.PostStatus) {
 	post.CampaignID = r.CampaignID
 	post.PlatformID = r.PlatformID
 	post.PlatformPostType = r.PlatformPostType
@@ -832,8 +823,8 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType
 	post.ScheduledAt = r.ScheduledAt
 	post.PublishedAt = r.PublishedAt
 	post.Status = status
-	post.CTAType = ctaType
 	post.CTAUrl = r.CTAUrl
+	post.CTAType = models.CTATypeFor(r.CTAUrl)
 	post.CampaignTypePhaseID = r.CampaignTypePhaseID
 	post.TargetAudienceNotes = r.TargetAudienceNotes
 	// published_url stays writable after publish on purpose — recording
@@ -853,14 +844,15 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType
 
 // mutatesLockedContent reports whether the request would change any of the
 // content-identity fields CON-251 freezes once a post is submitted: the
-// body, title, media, platform, post type, format, or the sources it was
-// built from. The date and account are locked by the schedule/cancel flows that
+// body, title, link, media, platform, post type, format, or the sources it
+// was built from. The date and account are locked by the schedule/cancel flows that
 // own them, and a status-only transition (e.g. unschedule to edit) leaves
 // every field below equal, so neither is compared here — this gates the
 // silent-divergence edit, not the legitimate move off a submitted state.
 func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 	return r.Content != post.Content ||
 		r.Title != post.Title ||
+		r.CTAUrl != post.CTAUrl ||
 		r.PlatformID != post.PlatformID ||
 		r.PlatformPostType != post.PlatformPostType ||
 		!slices.Equal(nullSlice(r.MediaURLs), post.MediaURLs) ||
@@ -1088,10 +1080,6 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	if !validPostStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
-	ctaType := req.toCTAType()
-	if !validCTATypes[ctaType] {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid cta_type")
-	}
 	if err := req.validateContentFormat(); err != nil {
 		return err
 	}
@@ -1120,7 +1108,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		ScheduledAt:         req.ScheduledAt,
 		PublishedAt:         req.PublishedAt,
 		Status:              status,
-		CTAType:             ctaType,
+		CTAType:             models.CTATypeFor(req.CTAUrl),
 		CTAUrl:              req.CTAUrl,
 		TargetAudienceNotes: req.TargetAudienceNotes,
 		UsedAssetIDs:        nullSlice(req.UsedAssetIDs.orZero()),
@@ -1206,10 +1194,6 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	if !validPostStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
-	ctaType := req.toCTAType()
-	if !validCTATypes[ctaType] {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid cta_type")
-	}
 	if err := req.validateContentFormat(); err != nil {
 		return err
 	}
@@ -1226,12 +1210,13 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	res, err := h.updater().Update(reqCtx(c), update.Input{
 		Post:                 post,
 		Status:               status,
-		Apply:                func(p *models.Post) { req.apply(p, status, ctaType) },
+		Apply:                func(p *models.Post) { req.apply(p, status) },
 		CampaignID:           req.CampaignID,
 		PhaseID:              req.CampaignTypePhaseID,
 		PlatformID:           req.PlatformID,
 		PlatformPostType:     req.PlatformPostType,
 		Content:              req.Content,
+		CTAUrl:               req.CTAUrl,
 		MutatesLockedContent: req.mutatesLockedContent(post),
 		Omit:                 req.omitColumns(),
 		Actor:                cmp.Or(actorID(c), models.ActorSystem),

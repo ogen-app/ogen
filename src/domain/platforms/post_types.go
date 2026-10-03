@@ -20,8 +20,10 @@ import (
 // per-platform attachment validator still applies its own cap from
 // ImageConstraints.MaxAttachmentsPerPost. `AllowedKinds == nil` means
 // the rule does not restrict attachment kinds (only counts).
+// `RequiresLink` makes the post's CTAUrl mandatory and well-formed.
 type PostTypeRule struct {
 	RequiresContent bool
+	RequiresLink    bool
 	AllowedKinds    []string
 	MinAttachments  int
 	MaxAttachments  int
@@ -32,6 +34,11 @@ type PostTypeRule struct {
 // validation passes, and the platform handles the rest server-side.
 var postTypeRules = map[string]PostTypeRule{
 	"text-post": {MinAttachments: 0, MaxAttachments: 0},
+
+	// The network builds the card from the target page's Open Graph tags, and
+	// an attached image would replace the card rather than add to it. The
+	// message is optional: Facebook's feed API takes a link or a message.
+	models.PostTypeLinkPost: {RequiresLink: true, MinAttachments: 0, MaxAttachments: 0},
 
 	"image-post": {AllowedKinds: []string{KindImage}, MinAttachments: 1, MaxAttachments: -1},
 	"carousel":   {AllowedKinds: []string{KindImage}, MinAttachments: 2, MaxAttachments: -1},
@@ -101,6 +108,7 @@ type postTypeCheck func(post *models.Post, p *models.Platform, rule PostTypeRule
 // postTypeChecks run in order; their errors are concatenated.
 var postTypeChecks = []postTypeCheck{
 	checkRequiresContent,
+	checkLink,
 	checkAttachmentCount,
 	checkAttachmentKinds,
 	checkVideoTitle,
@@ -120,6 +128,33 @@ func checkRequiresContent(post *models.Post, p *models.Platform, rule PostTypeRu
 		Actual:   "empty",
 		Message:  fmt.Sprintf("post type %q requires non-empty content", post.PlatformPostType),
 	}}
+}
+
+// checkLink requires a well-formed link on post types that publish one.
+func checkLink(post *models.Post, p *models.Platform, rule PostTypeRule, _ []models.PostAttachment) []ValidationError {
+	if !rule.RequiresLink {
+		return nil
+	}
+	link := strings.TrimSpace(post.CTAUrl)
+	if link == "" {
+		return []ValidationError{{
+			Platform: p.ID,
+			Rule:     RuleRequiresLink,
+			Expected: "a link",
+			Actual:   "empty",
+			Message:  fmt.Sprintf("post type %q requires a link", post.PlatformPostType),
+		}}
+	}
+	if err := ValidateLink(link); err != nil {
+		return []ValidationError{{
+			Platform: p.ID,
+			Rule:     RuleInvalidLink,
+			Expected: "an absolute http(s) URL",
+			Actual:   link,
+			Message:  fmt.Sprintf("link is not a valid web address: %v", err),
+		}}
+	}
+	return nil
 }
 
 func checkAttachmentCount(post *models.Post, p *models.Platform, rule PostTypeRule, atts []models.PostAttachment) []ValidationError {
@@ -189,7 +224,7 @@ func checkVideoTitle(post *models.Post, p *models.Platform, rule PostTypeRule, _
 func checkCharLimits(post *models.Post, p *models.Platform, _ PostTypeRule, _ []models.PostAttachment) []ValidationError {
 	var errs []ValidationError
 	if limit := p.TextConstraints.ContentLimitFor(post.PlatformPostType); limit > 0 {
-		if n := VisibleLen(post.Content); n > limit {
+		if n := OutboundLen(post); n > limit {
 			errs = append(errs, ValidationError{
 				Platform: p.ID,
 				Rule:     RuleMaxContentChars,
@@ -378,10 +413,14 @@ func sortedSlugs(m models.PostTypeMap) []string {
 // it as no upper limit. AllowedKinds is always a non-nil slice so
 // clients can iterate without a nil check.
 type ResolvedPostTypeRule struct {
-	RequiresContent bool     `json:"requires_content"`
-	AllowedKinds    []string `json:"allowed_kinds"`
-	MinAttachments  int      `json:"min_attachments"`
-	MaxAttachments  *int     `json:"max_attachments"`
+	RequiresContent bool `json:"requires_content"`
+	// RequiresLink marks a post type that publishes a target URL (cta_url)
+	// the network unfurls into a preview card; the publish gate rejects an
+	// empty or malformed one.
+	RequiresLink   bool     `json:"requires_link"`
+	AllowedKinds   []string `json:"allowed_kinds"`
+	MinAttachments int      `json:"min_attachments"`
+	MaxAttachments *int     `json:"max_attachments"`
 	// MaxContentChars is the body-text ceiling for this post type, resolved
 	// from the platform's TextConstraints (per-post-type override, else the
 	// platform default). nil means unbounded — the UI shows no counter cap.
@@ -427,6 +466,7 @@ func ResolvePostTypeRules(p *models.Platform) []PostTypeRuleView {
 		}
 		view.Rule = &ResolvedPostTypeRule{
 			RequiresContent: rule.RequiresContent,
+			RequiresLink:    rule.RequiresLink,
 			AllowedKinds:    ensureKinds(rule.AllowedKinds),
 			MinAttachments:  rule.MinAttachments,
 			MaxAttachments:  resolveMaxAttachments(rule, p),

@@ -425,17 +425,20 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				Expect(resp.StatusCode).To(Equal(400))
 			})
 
-			It("returns 400 when cta_type is invalid", func() {
+			It("ignores a client-sent cta_type and derives it from cta_url", func() {
 				body, _ := json.Marshal(fiber.Map{
 					"campaign_id": campaignID, "platform_id": "AXqWG7U2qnpt",
-					"platform_post_type": "text-post", "title": "Bad CTA", "cta_type": "unknown",
+					"platform_post_type": "text-post", "title": "Stray CTA", "cta_type": "unknown",
 				})
 				req := httptest.NewRequest("POST", "/api/posts", bytes.NewReader(body))
 				req.Header.Set("Content-Type", "application/json")
 				req.AddCookie(authCookie)
 				resp, err := app.Test(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(400))
+				Expect(resp.StatusCode).To(Equal(201))
+				var got models.Post
+				Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
+				Expect(got.CTAType).To(Equal(models.CTATypeNone))
 			})
 		})
 	})
@@ -555,7 +558,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				Expect(got.Title).To(Equal("Updated Title"))
 				Expect(got.PlatformPostType).To(Equal("text-post"))
 				Expect(got.Status).To(Equal(models.PostStatusReadyForPublish))
-				Expect(got.CTAType).To(Equal(models.CTATypeButton))
+				Expect(got.CTAType).To(Equal(models.CTATypeLink), "cta_type is derived from cta_url; the sent value is ignored")
 				Expect(got.Campaign).NotTo(BeNil())
 				Expect(got.Platform).NotTo(BeNil())
 			})
@@ -1127,6 +1130,52 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				p := createPost("Text plus image", nil)
 				seedAttachment(p, "image/png")
 				resp := putReady(p.ID, readyBody(linkedInID, "text-post", "hi"))
+				Expect(resp.StatusCode).To(Equal(422))
+				Expect(decodeRules(resp)).To(ContainElement("max_attachments"))
+			})
+		})
+
+		Context("link-post", func() {
+			linkBody := func(content, link string) []byte {
+				body, _ := json.Marshal(fiber.Map{
+					"campaign_id":        campaignID,
+					"platform_id":        facebookID,
+					"platform_post_type": "link-post",
+					"content":            content,
+					"cta_url":            link,
+					"status":             "ready_for_publish",
+				})
+				return body
+			}
+
+			It("rejects a missing link", func() {
+				p := createPost("Link no url", nil)
+				resp := putReady(p.ID, linkBody("Read this", ""))
+				Expect(resp.StatusCode).To(Equal(422))
+				Expect(decodeRules(resp)).To(ConsistOf("requires_link"))
+			})
+
+			It("rejects a malformed link", func() {
+				p := createPost("Link bad url", nil)
+				resp := putReady(p.ID, linkBody("Read this", "example.com"))
+				Expect(resp.StatusCode).To(Equal(422))
+				Expect(decodeRules(resp)).To(ConsistOf("invalid_link"))
+			})
+
+			It("passes with a link and no message, deriving cta_type", func() {
+				p := createPost("Link only", nil)
+				resp := putReady(p.ID, linkBody("", "https://example.com/launch"))
+				Expect(resp.StatusCode).To(Equal(200))
+				var got models.Post
+				Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
+				Expect(got.CTAUrl).To(Equal("https://example.com/launch"))
+				Expect(got.CTAType).To(Equal(models.CTATypeLink))
+			})
+
+			It("rejects an attachment", func() {
+				p := createPost("Link plus image", nil)
+				seedAttachment(p, "image/png")
+				resp := putReady(p.ID, linkBody("hi", "https://example.com"))
 				Expect(resp.StatusCode).To(Equal(422))
 				Expect(decodeRules(resp)).To(ContainElement("max_attachments"))
 			})

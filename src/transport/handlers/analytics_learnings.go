@@ -188,7 +188,7 @@ func isVideoPost(platformPostType string) bool {
 }
 
 func hasLink(p models.Post) bool {
-	return p.CTAUrl != "" || strings.Contains(strings.ToLower(p.Content), "http")
+	return p.IsLinkPost() || strings.Contains(strings.ToLower(p.Content), "http")
 }
 
 func toLifespanPoints(in []repository.LifespanSample) []learnings.LifespanPoint {
