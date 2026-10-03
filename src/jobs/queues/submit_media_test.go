@@ -366,3 +366,81 @@ func TestSubmitFlattensThreadSegments(t *testing.T) {
 		t.Errorf("thread items not flattened: %+v", items)
 	}
 }
+
+// titledSubmitBody is the slice of the create-post body the title tests read:
+// the raw top-level title (which must stay absent) and each variant's extras.
+type titledSubmitBody struct {
+	Title     *string `json:"title"`
+	Platforms []struct {
+		Data map[string]any `json:"platformSpecificData"`
+	} `json:"platforms"`
+}
+
+// submitTitledPost publishes a titled post to platform and returns the
+// create-post body Zernio received.
+func submitTitledPost(t *testing.T, platform *models.Platform, zernioPlatform, title string) titledSubmitBody {
+	t.Helper()
+	stub := newStubZernio()
+	defer stub.Close()
+	var body titledSubmitBody
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{ID: "z-title", Status: zernio.JobStatusScheduled}})
+	})
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-1", Platform: zernioPlatform}},
+	})
+	now := time.Now().Add(-time.Minute).UTC()
+	post := &models.Post{
+		ID:          "post-title",
+		PlatformID:  platform.ID,
+		Title:       title,
+		Content:     "The description",
+		Status:      models.PostStatusScheduled,
+		ScheduledAt: &now,
+		Platform:    platform,
+	}
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(body.Platforms) != 1 {
+		t.Fatalf("platforms = %d, want 1", len(body.Platforms))
+	}
+	return body
+}
+
+// TestSubmitSendsTitleInPlatformSpecificData proves a YouTube post's title
+// reaches Zernio where it is read — the variant's platformSpecificData — and
+// not as a top-level field Zernio ignores.
+func TestSubmitSendsTitleInPlatformSpecificData(t *testing.T) {
+	youtube := &models.Platform{
+		ID: "8S8bWQTG6qD", Name: "YouTube",
+		TextConstraints: models.TextConstraints{MaxContentChars: 5000, MaxTitleChars: 100},
+	}
+	body := submitTitledPost(t, youtube, "youtube", "  My Video  ")
+
+	if body.Title != nil {
+		t.Errorf("top-level title sent: %q", *body.Title)
+	}
+	if got := body.Platforms[0].Data["title"]; got != "My Video" {
+		t.Errorf("platformSpecificData.title = %v, want trimmed %q", got, "My Video")
+	}
+}
+
+// TestSubmitDropsTitleForUntitledPlatform proves a platform with no title
+// limit gets no title and, with nothing else to carry, no
+// platformSpecificData key — its payload is unchanged.
+func TestSubmitDropsTitleForUntitledPlatform(t *testing.T) {
+	linkedin := &models.Platform{ID: "AXqWG7U2qnpt", Name: "LinkedIn"}
+	body := submitTitledPost(t, linkedin, "linkedin", "Stray title")
+
+	if body.Title != nil {
+		t.Errorf("top-level title sent: %q", *body.Title)
+	}
+	if body.Platforms[0].Data != nil {
+		t.Errorf("platformSpecificData sent for untitled platform: %v", body.Platforms[0].Data)
+	}
+}

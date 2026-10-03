@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -178,21 +179,33 @@ func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Po
 // buildVariant uploads the post's attachments to Zernio and returns the
 // platform variant plus the top-level mediaItems. A thread carries its media
 // inside per-segment threadItems; an ordinary post carries a flat mediaItems
-// array. An upload failure is transient: the post stays Scheduled and River
+// array. The post title rides in the variant's platformSpecificData, the only
+// place Zernio reads it. An upload failure is transient: the post stays Scheduled and River
 // retries.
 func (p *SubmitPostProcessor) buildVariant(ctx context.Context, post *models.Post, zernioPlatform, accountID string) (zernio.PlatformVariant, []map[string]any, error) {
 	variant := zernio.PlatformVariant{Platform: zernioPlatform, AccountID: accountID}
+	var data zernio.PlatformSpecificData
+	// Only platforms with a title limit take a title; for the rest a stray
+	// title would be noise in their platformSpecificData.
+	if post.Platform.TextConstraints.MaxTitleChars > 0 {
+		data.Title = strings.TrimSpace(post.Title)
+	}
+	var items []map[string]any
 	if post.IsThread() {
 		threadItems, err := p.buildThreadItems(ctx, post)
 		if err != nil {
 			return variant, nil, p.transient(ctx, post, "transient error uploading thread media to Zernio; River will retry", err)
 		}
-		variant.PlatformSpecificData = &zernio.PlatformSpecificData{ThreadItems: threadItems}
-		return variant, nil, nil
+		data.ThreadItems = threadItems
+	} else {
+		var err error
+		items, err = p.buildMediaItems(ctx, post)
+		if err != nil {
+			return variant, nil, p.transient(ctx, post, "transient error uploading media to Zernio; River will retry", err)
+		}
 	}
-	items, err := p.buildMediaItems(ctx, post)
-	if err != nil {
-		return variant, nil, p.transient(ctx, post, "transient error uploading media to Zernio; River will retry", err)
+	if data.Title != "" || len(data.ThreadItems) > 0 {
+		variant.PlatformSpecificData = &data
 	}
 	return variant, items, nil
 }
@@ -222,9 +235,6 @@ func (p *SubmitPostProcessor) buildRequest(ctx context.Context, post *models.Pos
 		ScheduledFor: when,
 		Timezone:     tzName,
 		MediaItems:   mediaItems,
-		// Platforms that need an explicit title (YouTube video) get it;
-		// omitempty drops it otherwise.
-		Title: post.Title,
 	}
 }
 
