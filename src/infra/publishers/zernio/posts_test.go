@@ -357,7 +357,7 @@ func TestSubmitTitleRidesInPlatformSpecificData(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var wire struct {
-		Title     *string                     `json:"title"`
+		Title     *string `json:"title"`
 		Platforms []struct {
 			Data map[string]any `json:"platformSpecificData"`
 		} `json:"platforms"`
