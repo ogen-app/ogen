@@ -125,7 +125,7 @@ func getRequestState(ctx context.Context) *requestState {
 
 // EnrichBriefInput is the input for the enrichBrief tool.
 type EnrichBriefInput struct {
-	Instruction string `json:"instruction,omitempty" jsonschema:"description=Optional freeform steering for the brief (e.g. make it more B2B and technical). Omit to enrich from the campaign's title and type alone."`
+	Instruction string `json:"instruction,omitempty" jsonschema:"description=Optional freeform steering for the brief (e.g. make it more B2B and technical). Omit to tighten the current brief as it stands."`
 }
 
 // EnrichBriefOutput is returned to the model after the brief is applied.
@@ -287,7 +287,9 @@ func defineTools(g *genkit.Genkit) *toolSet {
 
 	enrichBrief := genkit.DefineTool(g, "enrichBrief",
 		"Improves the campaign brief (description, target persona, key messages, tone guidelines) and saves it to the campaign automatically. "+
-			"Call this when the user asks to enrich, improve, refine, or rewrite the brief. Pass the user's steering as instruction when they give any. Returns the applied brief.",
+			"An existing brief is edited in place — its subject, voice and tone guidelines are kept; an empty brief is drafted from the campaign's title and type. "+
+			"Call this when the user asks to enrich, improve, refine, or rewrite the brief. Pass the user's steering as instruction when they give any. "+
+			"Returns the applied brief: compare it with the brief in your context before describing what changed.",
 		func(ctx *ai.ToolContext, in EnrichBriefInput) (*EnrichBriefOutput, error) {
 			return toolEnrichBrief(ctx, in)
 		},

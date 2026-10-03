@@ -142,7 +142,12 @@ func (t *turn) prepare(ctx context.Context, systemTmpl, contextTmpl *template.Te
 	if err != nil {
 		return ctx, fmt.Errorf("load history: %w", err)
 	}
-	t.history = flowkit.History(msgs, func(m models.CampaignAssistantMessage) (string, string) { return m.Role, m.Content })
+	t.history = flowkit.History(msgs, func(m models.CampaignAssistantMessage) (string, string) {
+		if m.Role == flowkit.RoleModel {
+			return m.Role, plannerTurn(m.Content)
+		}
+		return m.Role, m.Content
+	})
 	t.timer.lap("history")
 
 	t.st = &requestState{
@@ -240,8 +245,10 @@ func (t *turn) assembleResult(ctx context.Context) error {
 	r.Action, _ = vals["action"].(string)
 
 	t.outcomes = t.st.outcomes()
+	if action := turnAction(t.outcomes); action != "" {
+		r.Action = action
+	}
 	for _, o := range t.outcomes {
-		r.Action = o.action
 		o.attach(r)
 		if r.Explanation == "" {
 			r.Explanation = o.explanation
@@ -292,9 +299,10 @@ func isMaxTurnsExceeded(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "maximum tool call iterations")
 }
 
-// persistTurn stores the user instruction verbatim and the model turn as a
-// compact JSON envelope (no generated content) in one transaction, so a turn
-// never persists half-written.
+// persistTurn stores the user instruction verbatim and the model turn as the
+// same JSON the "complete" event carries, in one transaction, so a turn never
+// persists half-written. Tool results are summaries and review findings, never
+// generated post or brief content.
 func persistTurn(ctx context.Context, repos CampaignAssistantRepos, req CampaignAssistantRequest, result *CampaignAssistantResponse) error {
 	userMsgID, err := models.NewID()
 	if err != nil {
@@ -305,22 +313,7 @@ func persistTurn(ctx context.Context, repos CampaignAssistantRepos, req Campaign
 		return err
 	}
 
-	postCount := 0
-	if result.ContentPlan != nil {
-		postCount = result.ContentPlan.PostCount
-	}
-	briefApplied := result.Brief != nil && result.Brief.Applied
-	historyJSON, err := json.Marshal(struct {
-		Action       string `json:"action"`
-		Explanation  string `json:"explanation"`
-		PostCount    int    `json:"postCount,omitzero"`
-		BriefApplied bool   `json:"briefApplied,omitzero"`
-	}{
-		Action:       result.Action,
-		Explanation:  result.Explanation,
-		PostCount:    postCount,
-		BriefApplied: briefApplied,
-	})
+	historyJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal model history: %w", err)
 	}

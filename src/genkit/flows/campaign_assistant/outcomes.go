@@ -28,11 +28,15 @@ type outcome struct {
 	attach      func(*CampaignAssistantResponse)
 	event       SSEEventKind
 	payload     any
+	// readOnly marks a review that changed nothing. A turn that also wrote is
+	// labelled by the write, since the action is how a destructive change on a
+	// campaign (which has no version history) is recognised later.
+	readOnly bool
 }
 
-// outcomes lists the committed tool results in precedence order: when several
-// ran, the last one sets the action and the first one supplies the fallback
-// explanation. An empty slice means no tool committed anything.
+// outcomes lists the committed tool results in a fixed order. The first one
+// supplies the fallback explanation; turnAction picks the action. An empty
+// slice means no tool committed anything.
 func (st *requestState) outcomes() []outcome {
 	var out []outcome
 	if r := st.contentPlanResult; r != nil {
@@ -66,6 +70,19 @@ func (st *requestState) outcomes() []outcome {
 		out = append(out, postsReviewOutcome(r))
 	}
 	return out
+}
+
+// turnAction labels a turn by its last write, or by its last review when
+// nothing was written. "" means no tool committed anything.
+func turnAction(outs []outcome) string {
+	action, wrote := "", false
+	for _, o := range outs {
+		if !o.readOnly || !wrote {
+			action = o.action
+		}
+		wrote = wrote || !o.readOnly
+	}
+	return action
 }
 
 func contentPlanOutcome(r *ContentPlanResult) outcome {
@@ -149,6 +166,7 @@ func briefReviewOutcome(r *consistency.BriefReview) outcome {
 		attach:      func(resp *CampaignAssistantResponse) { resp.BriefReview = r },
 		event:       SSEEventCheckBriefComplete,
 		payload:     CheckBriefCompleteEventPayload{Consistent: r.Consistent, FindingCount: len(r.Findings)},
+		readOnly:    true,
 	}
 }
 
@@ -163,5 +181,6 @@ func postsReviewOutcome(r *consistency.PostsReview) outcome {
 		attach:      func(resp *CampaignAssistantResponse) { resp.PostsReview = r },
 		event:       SSEEventCheckPostsComplete,
 		payload:     CheckPostsCompleteEventPayload{Checked: r.Checked, Total: r.Total, Capped: r.Capped, DriftCount: len(r.Findings)},
+		readOnly:    true,
 	}
 }

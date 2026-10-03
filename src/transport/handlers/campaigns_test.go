@@ -1556,6 +1556,29 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				Expect(msgs[0].Content).To(Equal("generate a plan"))
 				Expect(msgs[1].Role).To(Equal("model"))
 			})
+
+			It("serves legacy flat model turns in the nested complete-event shape", func() {
+				a, msgRepo := buildMessagesApp()
+				ck := seedCookie(a, "msglegacy@example.com")
+				camp := createCampaignOn(a, ck, "Legacy Msgs Campaign", "Uk")
+
+				tctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+				mID, _ := models.NewID()
+				Expect(msgRepo.Create(tctx, &models.CampaignAssistantMessage{
+					ID: mID, CampaignID: camp.ID, Role: "model",
+					Content: `{"action":"brief_enriched","explanation":"Done.","briefApplied":true}`,
+				})).To(Succeed())
+
+				req := httptest.NewRequest("GET", "/api/campaigns/"+camp.ID+"/messages", nil)
+				req.AddCookie(ck)
+				resp, err := a.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(200))
+				var msgs []models.CampaignAssistantMessage
+				Expect(json.NewDecoder(resp.Body).Decode(&msgs)).To(Succeed())
+				Expect(msgs).To(HaveLen(1))
+				Expect(msgs[0].Content).To(MatchJSON(`{"action":"brief_enriched","explanation":"Done.","brief":{"applied":true}}`))
+			})
 		})
 	})
 

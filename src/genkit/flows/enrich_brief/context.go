@@ -3,115 +3,26 @@ package enrich_brief
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
-	"sync"
 	"text/template"
-	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 )
-
-// contextCacheTTL controls how long a cached context block stays valid.
-// Matches Anthropic's prompt-cache TTL so a repeated enrich (e.g. a retry)
-// reuses both our rendered context and the upstream cache window.
-const contextCacheTTL = 5 * time.Minute
 
 // briefContext holds the rendered prompts ready for the model call.
 type briefContext struct {
-	SystemPrompt string // system instructions (stable across calls)
-	ContextBlock string // campaign + type + phases + language + instruction
+	SystemPrompt string // system instructions; one variant per mode
+	ContextBlock string // campaign + current brief + brand + type + language + instruction
 }
 
-// contextCacheEntry is a cached briefContext keyed by campaign ID.
-// fingerprint captures every field the template renders — any change to it
-// invalidates the entry. Tracked explicitly (not field-by-field diffing)
-// so adding a new prompt field is a one-line update to briefFingerprint.
-type contextCacheEntry struct {
-	ctx         *briefContext
-	fingerprint string
-	expiresAt   time.Time
-}
-
-var (
-	contextCache   = map[string]*contextCacheEntry{}
-	contextCacheMu sync.Mutex
-)
-
-// briefFingerprint returns a stable string that changes whenever any
-// prompt-affecting input changes: the campaign title, its type (label +
-// description + phases), the output language, or the per-request
-// instruction. Missing a field here means a stale brief on the next call.
-func briefFingerprint(c *models.Campaign, instruction string) string {
-	var b strings.Builder
-	b.WriteString(c.Name)
-	b.WriteByte('\x1f')
-	b.WriteString(c.CampaignTypeID)
-	b.WriteByte('\x1f')
-	if c.CampaignType != nil {
-		b.WriteString(c.CampaignType.Label)
-		b.WriteByte('\x1f')
-		b.WriteString(c.CampaignType.Description)
-		b.WriteByte('\x1f')
-		for _, p := range c.CampaignType.Phases {
-			fmt.Fprintf(&b, "%d:%s:%s|", p.Sequence, p.Name, p.Purpose)
-		}
-	}
-	b.WriteByte('\x1f')
-	b.WriteString(c.Language)
-	b.WriteByte('\x1f')
-	b.WriteString(instruction)
-	return b.String()
-}
-
-// assembleContextCached returns the cached context for the campaign if the
-// fingerprint matches and the TTL hasn't expired. Otherwise it assembles a
-// fresh context, caches it, and returns it.
-func assembleContextCached(
-	ctx context.Context,
-	campaign *models.Campaign,
-	instruction string,
-	repos EnrichBriefRepos,
-	systemTmpl, contextTmpl *template.Template,
-) (*briefContext, error) {
-	fp := briefFingerprint(campaign, instruction)
-
-	contextCacheMu.Lock()
-	if entry, ok := contextCache[campaign.ID]; ok {
-		if time.Now().Before(entry.expiresAt) && entry.fingerprint == fp {
-			contextCacheMu.Unlock()
-			return entry.ctx, nil
-		}
-		delete(contextCache, campaign.ID)
-	}
-	contextCacheMu.Unlock()
-
-	bctx, err := assembleContext(ctx, campaign, instruction, repos, systemTmpl, contextTmpl)
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now()
-	contextCacheMu.Lock()
-	// Opportunistic eviction: drop every expired entry before inserting, so
-	// the map can't grow unbounded with stale entries for campaigns enriched
-	// once and never re-read. Inserts only happen on a cache miss (followed
-	// by a model call), so this O(n) sweep is negligible.
-	for id, e := range contextCache {
-		if now.After(e.expiresAt) {
-			delete(contextCache, id)
-		}
-	}
-	contextCache[campaign.ID] = &contextCacheEntry{
-		ctx:         bctx,
-		fingerprint: fp,
-		expiresAt:   now.Add(contextCacheTTL),
-	}
-	contextCacheMu.Unlock()
-
-	return bctx, nil
-}
-
+// assembleContext renders the prompts from the live campaign. It is rendered
+// on every call: the current brief is part of the prompt, and a brief the
+// assistant has just written must be what the next edit starts from.
 func assembleContext(
 	ctx context.Context,
 	campaign *models.Campaign,
@@ -134,7 +45,15 @@ func assembleContext(
 		CampaignName: campaign.Name,
 		Language:     campaign.Language,
 		Instruction:  instruction,
+		Brief: currentBrief{
+			Description:    strings.TrimSpace(campaign.Description),
+			TargetPersona:  strings.TrimSpace(campaign.TargetPersona),
+			KeyMessages:    strings.TrimSpace(campaign.KeyMessages),
+			ToneGuidelines: strings.TrimSpace(campaign.ToneGuidelines),
+		},
+		BrandBlock: brandBlock(ctx, repos.Brands, campaign),
 	}
+	data.HasBrief = data.Brief != currentBrief{}
 	if ct != nil {
 		data.TypeName = ct.Name
 		data.TypeLabel = ct.Label
@@ -164,6 +83,21 @@ func assembleContext(
 	}, nil
 }
 
+// brandBlock renders the workspace brand material the brief must stay inside.
+// The campaign's own tone guidelines and persona are already in the current
+// brief, so the legacy fallback is cleared to avoid rendering them twice.
+// Resolution fails open: a brand lookup error drops the block, not the call.
+func brandBlock(ctx context.Context, brands repository.BrandRepository, campaign *models.Campaign) string {
+	brand, err := brandresolve.Resolve(ctx, brands, campaign, nil)
+	if err != nil {
+		slog.WarnContext(ctx, "brand resolve failed; enriching without brand voice",
+			logging.AttrComponent, logComponent, "campaign_id", campaign.ID, logging.AttrError, err)
+	}
+	brand.LegacyTone = ""
+	brand.LegacyPersona = ""
+	return brand.PromptBlock("")
+}
+
 type contextTemplateData struct {
 	CampaignName    string
 	TypeName        string
@@ -172,6 +106,19 @@ type contextTemplateData struct {
 	Phases          []phaseInfo
 	Language        string
 	Instruction     string
+	// HasBrief selects edit mode: any non-empty brief field is edited in
+	// place rather than regenerated from the campaign type.
+	HasBrief   bool
+	Brief      currentBrief
+	BrandBlock string
+}
+
+// currentBrief is the brief as stored on the campaign.
+type currentBrief struct {
+	Description    string
+	TargetPersona  string
+	KeyMessages    string
+	ToneGuidelines string
 }
 
 type phaseInfo struct {

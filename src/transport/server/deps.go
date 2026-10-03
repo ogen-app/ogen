@@ -308,6 +308,7 @@ func (d *deps) genkitDeps() genkitDeps {
 		enrichBriefRepos: enrich_brief.EnrichBriefRepos{
 			Campaigns:     r.campaignRepo,
 			CampaignTypes: r.campaignTypeRepo,
+			Brands:        r.brandRepo,
 		},
 		campaignAssistRepos: campaign_assistant.CampaignAssistantRepos{
 			Messages:  r.campaignMessageRepo,
