@@ -65,13 +65,17 @@ type requestState struct {
 	checkBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 
-	// mu guards heavyReserved. genkit dispatches a turn's tool calls in parallel
+	// mu guards heavyReserved and writes. genkit dispatches a turn's tool calls in parallel
 	// goroutines, so the one-heavy-action-per-turn latch must be a synchronised
 	// reservation, not a read of the *Result fields below (which are written only
 	// after a sub-flow completes — a TOCTOU race + data race). See
 	// reserveHeavyAction.
 	mu            sync.Mutex
 	heavyReserved bool
+	// writes lists the actions of committed write tools in commit order. The
+	// cheap date tools skip the heavy reservation and may run in parallel, so
+	// the order they finish in is only known here.
+	writes []string
 
 	// Results set by tools, read by the runner after generation. Only the tool
 	// that won the heavy-action reservation writes a heavy result, so these need
@@ -111,6 +115,13 @@ func (st *requestState) reserveHeavyAction() bool {
 // already run this turn, rather than chaining a second expensive sub-flow. It is
 // surfaced to the model as an ordinary (non-error) tool result so the turn is
 // never aborted — genkit treats a tool that returns a Go error as fatal.
+// recordWrite notes that a write tool committed, in completion order.
+func (st *requestState) recordWrite(action string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.writes = append(st.writes, action)
+}
+
 const heavySkipNote = "A campaign action already ran in this turn. Do not call any more action tools now — reply to the user with a short summary of what was done, and offer to do anything else in a follow-up message."
 
 func withRequestState(ctx context.Context, s *requestState) context.Context {
@@ -432,6 +443,7 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 
 	res := &ContentPlanResult{PostCount: len(resp.Posts), Warnings: resp.Warnings, UsedAssets: used}
 	st.contentPlanResult = res
+	st.recordWrite(actionContentPlan)
 	return &RunContentPlanOutput{PostCount: res.PostCount, WarningCount: len(res.Warnings), UsedAssets: used}, nil
 }
 
@@ -494,6 +506,7 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 	}
 
 	st.briefResult = &BriefResult{Applied: true}
+	st.recordWrite(actionBriefEnriched)
 	return &EnrichBriefOutput{
 		Description:    resp.Description,
 		TargetPersona:  resp.TargetPersona,
@@ -630,6 +643,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 		Warnings:    resp.Warnings,
 		UsedAssets:  used,
 	}
+	st.recordWrite(actionPostsGenerated)
 	return &GeneratePostsOutput{
 		PostCount:      len(resp.Posts),
 		RequestedCount: requested,
@@ -778,6 +792,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 		Dates:       allDates,
 		Warnings:    allWarn,
 	}
+	st.recordWrite(actionPostDrafted)
 	return &DraftPostOutput{
 		PostCount:      total,
 		RequestedCount: requested,
@@ -1226,6 +1241,7 @@ func toolSetCampaignDates(ctx context.Context, in SetCampaignDatesInput) (*SetCa
 	}
 
 	st.datesResult = &DatesResult{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside}
+	st.recordWrite(actionDatesUpdated)
 	return &SetCampaignDatesOutput{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside}, nil
 }
 
@@ -1274,6 +1290,7 @@ func toolRedistributePosts(ctx context.Context) (*RedistributePostsOutput, error
 	}
 
 	st.redistributeResult = &RedistributeResult{PostsUpdated: len(changed), PhaseCount: len(phasesTouched)}
+	st.recordWrite(actionPostsRedistributed)
 	return &RedistributePostsOutput{PostsUpdated: len(changed), PhaseCount: len(phasesTouched)}, nil
 }
 

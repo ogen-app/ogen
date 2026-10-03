@@ -72,9 +72,14 @@ func (st *requestState) outcomes() []outcome {
 	return out
 }
 
-// turnAction labels a turn by its last write, or by its last review when
-// nothing was written. "" means no tool committed anything.
-func turnAction(outs []outcome) string {
+// turnAction labels a turn by its last committed write, or by its last review
+// when nothing was written. "" means no tool committed anything. writes is in
+// commit order; outs is in the fixed outcomes order and only decides the label
+// when no write was recorded.
+func turnAction(outs []outcome, writes []string) string {
+	if len(writes) > 0 {
+		return writes[len(writes)-1]
+	}
 	action, wrote := "", false
 	for _, o := range outs {
 		if !o.readOnly || !wrote {

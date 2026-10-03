@@ -245,7 +245,7 @@ func (t *turn) assembleResult(ctx context.Context) error {
 	r.Action, _ = vals["action"].(string)
 
 	t.outcomes = t.st.outcomes()
-	if action := turnAction(t.outcomes); action != "" {
+	if action := turnAction(t.outcomes, t.st.writes); action != "" {
 		r.Action = action
 	}
 	for _, o := range t.outcomes {
