@@ -98,10 +98,10 @@ func (r *fakePostRepo) CountPendingByAccount(context.Context, string) (int, erro
 func (r *fakePostRepo) ListManualPublishDue(context.Context, time.Time, int) ([]models.Post, error) {
 	return nil, nil
 }
-func (r *fakePostRepo) PublishedAtsBetween(context.Context, time.Time, time.Time, []string) ([]time.Time, error) {
+func (r *fakePostRepo) PublishedAtsBetween(context.Context, time.Time, time.Time, []string, string) ([]time.Time, error) {
 	return nil, nil
 }
-func (r *fakePostRepo) PlatformIDsByID(context.Context, []string) (map[string]string, error) {
+func (r *fakePostRepo) ScopeKeysByID(context.Context, []string) (map[string]repository.PostScopeKey, error) {
 	return nil, nil
 }
 func (r *fakePostRepo) ListPublishedSince(context.Context, time.Time) ([]models.Post, error) {

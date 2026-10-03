@@ -32,9 +32,11 @@ import (
 // @Param        to           query string false "Inclusive end date YYYY-MM-DD"
 // @Param        granularity  query string false "day|week|month (default adaptive)"
 // @Param        platform     query []string false "Zernio platform slug; repeat or comma-separate values for a union (default every platform)" collectionFormat(multi)
+// @Param        campaign_id  query string false "Narrow to one campaign (default the whole workspace); the followers card stays workspace-wide (followers_scope)"
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
+// @Failure      404 {object} map[string]string
 // @Router       /api/analytics/overview [get]
 func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 	if h.repo == nil {
@@ -52,7 +54,7 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 		}
 	}
 	prev := rng.Previous()
-	scope, err := h.parsePlatformScope(c)
+	scope, err := h.parseScope(c)
 	if err != nil {
 		return err
 	}
@@ -72,10 +74,10 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 
 	var curPub, prevPub []time.Time
 	if h.posts != nil {
-		if curPub, err = h.posts.PublishedAtsBetween(ctx, rng.From, rng.To, scope.platformIDs()); err != nil {
+		if curPub, err = h.posts.PublishedAtsBetween(ctx, rng.From, rng.To, scope.platformIDs(), scope.campaign()); err != nil {
 			return err
 		}
-		if prevPub, err = h.posts.PublishedAtsBetween(ctx, prev.From, prev.To, scope.platformIDs()); err != nil {
+		if prevPub, err = h.posts.PublishedAtsBetween(ctx, prev.From, prev.To, scope.platformIDs(), scope.campaign()); err != nil {
 			return err
 		}
 	}
@@ -101,12 +103,16 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 		FollowersNow:   folNow,
 		UpdatedAt:      maxLastChecked(curPosts, prevPosts),
 	})
+	if scope.campaign() != "" {
+		resp.FollowersScope = "workspace"
+	}
 	return c.JSON(insightEnvelope{Available: true, Data: resp})
 }
 
 // overviewFollowers returns the daily follower totals over [from, to] and the
-// current follower level, summed over the in-scope accounts.
-func (h *AnalyticsHandler) overviewFollowers(ctx context.Context, scope *platformScope, from, to time.Time) ([]overview.FollowerDayTotal, int, error) {
+// current follower level, summed over the in-scope accounts. Only the platform
+// part of the scope applies: followers have no campaign.
+func (h *AnalyticsHandler) overviewFollowers(ctx context.Context, scope *analyticsScope, from, to time.Time) ([]overview.FollowerDayTotal, int, error) {
 	if h.followerRepo == nil {
 		return nil, 0, nil
 	}
@@ -128,7 +134,7 @@ func (h *AnalyticsHandler) overviewFollowers(ctx context.Context, scope *platfor
 	if err != nil {
 		return nil, 0, err
 	}
-	if scope != nil {
+	if scope.narrowsPlatforms() {
 		pts = slices.DeleteFunc(pts, func(p repository.FollowerSeriesPoint) bool { return !accounts[p.SocialAccountID] })
 	}
 	return followerDailyTotals(pts), now, nil

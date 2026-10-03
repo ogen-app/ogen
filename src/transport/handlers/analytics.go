@@ -75,6 +75,7 @@ type AnalyticsHandler struct {
 	posts        repository.PostRepository          // main DB; CON-237 "posts published" count/series
 	platforms    repository.PlatformRepository      // resolves the `platform` filter's slugs
 	accounts     repository.SocialAccountRepository // main DB; account display_name/avatar_url labels
+	campaigns    repository.CampaignRepository      // validates the `campaign_id` filter
 	client       *zernio.Client
 	profileID    ProfileIDResolver
 	auth         fiber.Handler
@@ -86,8 +87,8 @@ type AnalyticsHandler struct {
 // nil followerRepo makes /followers return 503 — matching the existing
 // analytics-disabled behaviour. A nil accounts repo leaves account labels at
 // the username fallback.
-func NewAnalyticsHandler(repo repository.PostAnalyticsRepository, followerRepo repository.FollowerStatsRepository, posts repository.PostRepository, platforms repository.PlatformRepository, accounts repository.SocialAccountRepository, client *zernio.Client, profileID ProfileIDResolver, auth fiber.Handler) *AnalyticsHandler {
-	return &AnalyticsHandler{repo: repo, followerRepo: followerRepo, posts: posts, platforms: platforms, accounts: accounts, client: client, profileID: profileID, auth: auth}
+func NewAnalyticsHandler(repo repository.PostAnalyticsRepository, followerRepo repository.FollowerStatsRepository, posts repository.PostRepository, platforms repository.PlatformRepository, accounts repository.SocialAccountRepository, campaigns repository.CampaignRepository, client *zernio.Client, profileID ProfileIDResolver, auth fiber.Handler) *AnalyticsHandler {
+	return &AnalyticsHandler{repo: repo, followerRepo: followerRepo, posts: posts, platforms: platforms, accounts: accounts, campaigns: campaigns, client: client, profileID: profileID, auth: auth}
 }
 
 func (h *AnalyticsHandler) Register(app *fiber.App) {

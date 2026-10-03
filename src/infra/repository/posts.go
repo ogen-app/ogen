@@ -76,13 +76,14 @@ type PostRepository interface {
 	// Zernio-published posts in [from, to), ascending — the "posts published"
 	// metric for the CON-237 overview (count + cumulative-by-day series). Kept on
 	// the main DB (source of truth for what shipped), composed app-side with the
-	// analytics-DB series. A non-empty platformIDs narrows to those platforms.
-	PublishedAtsBetween(ctx context.Context, from, to time.Time, platformIDs []string) ([]time.Time, error)
-	// PlatformIDsByID maps each of the given post ids to its platform_id. Ids
-	// that don't resolve to a tenant post are absent from the map. Lets the
-	// analytics reads, whose rows carry only a display name, filter by the
-	// stable platform id.
-	PlatformIDsByID(ctx context.Context, ids []string) (map[string]string, error)
+	// analytics-DB series. A non-empty platformIDs narrows to those platforms, a
+	// non-empty campaignID to that campaign.
+	PublishedAtsBetween(ctx context.Context, from, to time.Time, platformIDs []string, campaignID string) ([]time.Time, error)
+	// ScopeKeysByID maps each of the given post ids to its platform and
+	// campaign. Ids that don't resolve to a tenant post are absent from the map.
+	// Lets the analytics reads, whose rows carry only a platform display name and
+	// no campaign, filter by the stable ids.
+	ScopeKeysByID(ctx context.Context, ids []string) (map[string]PostScopeKey, error)
 	// ListPublishedSince returns the tenant's Zernio-published posts with
 	// published_at >= since (zero since = all-time), ascending, WITHOUT relation
 	// hydration — the CON-239 "what works / fading" miner reads only the scalar
@@ -126,7 +127,13 @@ func (r *postRepository) ListPublishedSince(ctx context.Context, since time.Time
 	return posts, nil
 }
 
-func (r *postRepository) PublishedAtsBetween(ctx context.Context, from, to time.Time, platformIDs []string) ([]time.Time, error) {
+// PostScopeKey is what the analytics reads narrow a post by.
+type PostScopeKey struct {
+	PlatformID string
+	CampaignID string
+}
+
+func (r *postRepository) PublishedAtsBetween(ctx context.Context, from, to time.Time, platformIDs []string, campaignID string) ([]time.Time, error) {
 	var ats []time.Time
 	// BeforeSelect adds the tenant predicate. published_at IS NOT NULL is implied
 	// by the range bounds (NULL compares false), but stated for clarity.
@@ -139,26 +146,29 @@ func (r *postRepository) PublishedAtsBetween(ctx context.Context, from, to time.
 	if len(platformIDs) > 0 {
 		q = q.Where("po.platform_id IN (?)", bun.List(platformIDs))
 	}
+	if campaignID != "" {
+		q = q.Where("po.campaign_id = ?", campaignID)
+	}
 	if err := q.Scan(ctx, &ats); err != nil {
 		return nil, err
 	}
 	return ats, nil
 }
 
-func (r *postRepository) PlatformIDsByID(ctx context.Context, ids []string) (map[string]string, error) {
-	out := make(map[string]string, len(ids))
+func (r *postRepository) ScopeKeysByID(ctx context.Context, ids []string) (map[string]PostScopeKey, error) {
+	out := make(map[string]PostScopeKey, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
 	var rows []models.Post
 	if err := r.db.NewSelect().Model(&rows).
-		Column("id", "platform_id").
+		Column("id", "platform_id", "campaign_id").
 		Where("po.id IN (?)", bun.List(ids)).
 		Scan(ctx); err != nil {
 		return nil, err
 	}
 	for _, p := range rows {
-		out[p.ID] = p.PlatformID
+		out[p.ID] = PostScopeKey{PlatformID: p.PlatformID, CampaignID: p.CampaignID}
 	}
 	return out, nil
 }
