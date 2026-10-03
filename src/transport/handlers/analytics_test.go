@@ -617,6 +617,12 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
 			Expect(body["error"]).To(Equal("campaign_scope_unsupported"))
 		})
+
+		It("treats a blank campaign_id as no filter on every endpoint", func() {
+			for _, path := range []string{"/api/analytics/overview", "/api/analytics/performers", "/api/analytics/learnings"} {
+				Expect(get(path+"?campaign_id=%20").StatusCode).To(Equal(200), path)
+			}
+		})
 	})
 
 	Describe("POST /api/posts/:id/verify-external", func() {
