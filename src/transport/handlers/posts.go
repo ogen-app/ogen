@@ -25,6 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/update"
+	"github.com/ogen-app/ogen/src/usecase/series"
 )
 
 var validPostStatuses = map[models.PostStatus]bool{
@@ -87,6 +88,8 @@ type PostsHandler struct {
 	// storage mints the public cover_url on read responses. nil leaves
 	// cover_url unset.
 	storage storage.Storage
+	// series validates a post's series_id. nil skips validation.
+	series *series.Service
 }
 
 // checkPhase reports whether a post's campaign_type_phase_id (when set) is a
@@ -496,6 +499,7 @@ func NewPostsHandler(
 		activity:       opts.Activity,
 		onBeforeDelete: opts.OnBeforeDelete,
 		storage:        opts.Storage,
+		series:         opts.Series,
 	}
 }
 
@@ -516,6 +520,7 @@ type PostsOptions struct {
 	Activity       *activity.Recorder
 	OnBeforeDelete func(ctx context.Context, postID string) error
 	Storage        storage.Storage
+	Series         *series.Service
 }
 
 // decorateCovers fills each post's CoverURL from its first drawable
@@ -789,6 +794,10 @@ type postRequest struct {
 	// ContentFormat is presence-aware so an autosave from a client that predates
 	// the field can't wipe it: omitted leaves it alone, null clears it.
 	ContentFormat Optional[models.ContentFormat] `json:"content_format" swaggertype:"string" enums:"how-to,explainer,listicle,story,digest,opinion,question,announcement"`
+	// SeriesID is presence-aware like ContentFormat: omitted leaves it alone,
+	// null clears it. It must name a live library series or one local to the
+	// post's campaign.
+	SeriesID Optional[string] `json:"series_id" swaggertype:"string"`
 	// PublishedURL lets the front-end record a permalink for posts
 	// Zernio cannot verify (the CON-149 skip path — e.g. LinkedIn personal
 	// accounts) or correct a wrong one. Like every field on this whole-resource
@@ -836,6 +845,7 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus) {
 	r.BrandVoiceID.applyTo(&post.BrandVoiceID)
 	r.BrandAudienceID.applyTo(&post.BrandAudienceID)
 	r.ContentFormat.applyTo(&post.ContentFormat)
+	r.SeriesID.applyTo(&post.SeriesID)
 	// Presence-aware: omit to leave the sources alone (the membership
 	// endpoints own them), a present array to replace, an explicit null to clear.
 	applyOptionalSlice(r.UsedAssetIDs, &post.UsedAssetIDs)
@@ -844,8 +854,8 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus) {
 
 // mutatesLockedContent reports whether the request would change any of the
 // content-identity fields CON-251 freezes once a post is submitted: the
-// body, title, link, media, platform, post type, format, or the sources it
-// was built from. The date and account are locked by the schedule/cancel flows that
+// body, title, link, media, platform, post type, format, series, or the
+// sources it was built from. The date and account are locked by the schedule/cancel flows that
 // own them, and a status-only transition (e.g. unschedule to edit) leaves
 // every field below equal, so neither is compared here — this gates the
 // silent-divergence edit, not the legitimate move off a submitted state.
@@ -864,7 +874,8 @@ func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 		// so only a present-and-different value is a mutation of the locked content.
 		(r.UsedAssetIDs.Present && !slices.Equal(nullSlice(r.UsedAssetIDs.orZero()), post.UsedAssetIDs)) ||
 		// The shape a submitted post took is a fact about what went out.
-		(r.ContentFormat.Present && !equalPtr(r.ContentFormat.Value, post.ContentFormat))
+		(r.ContentFormat.Present && !equalPtr(r.ContentFormat.Value, post.ContentFormat)) ||
+		(r.SeriesID.Present && !equalPtr(r.SeriesID.Value, post.SeriesID))
 }
 
 // validateContentFormat rejects a present content_format that is not a known
@@ -875,6 +886,23 @@ func (r *postRequest) validateContentFormat() error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid content_format")
 	}
 	return nil
+}
+
+// seriesToCheck returns the series_id an update must validate: a newly set
+// one, or the kept one when the post moves campaign (a campaign-local series
+// may not follow it). An unchanged series on an unchanged campaign is not
+// re-checked, so an autosave of a post whose series was deleted still saves.
+func (r *postRequest) seriesToCheck(post *models.Post) (*string, bool) {
+	if r.SeriesID.Present && !equalPtr(r.SeriesID.Value, post.SeriesID) {
+		return r.SeriesID.Value, true
+	}
+	if r.CampaignID != post.CampaignID {
+		if r.SeriesID.Present {
+			return r.SeriesID.Value, true
+		}
+		return post.SeriesID, true
+	}
+	return nil, false
 }
 
 // equalPtr reports whether two optional values are both nil or both point to
@@ -1083,6 +1111,9 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	if err := req.validateContentFormat(); err != nil {
 		return err
 	}
+	if err := checkPostSeries(c, h.series, req.SeriesID.Value, req.CampaignID); err != nil {
+		return err
+	}
 	if err := update.RequirePlatformIfNotDraft(status, req.PlatformID, req.PlatformPostType); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
@@ -1114,6 +1145,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		UsedAssetIDs:        nullSlice(req.UsedAssetIDs.orZero()),
 		CampaignTypePhaseID: req.CampaignTypePhaseID,
 		ContentFormat:       req.ContentFormat.Value,
+		SeriesID:            req.SeriesID.Value,
 		CreatedBy:           session.UserID,
 		UsedAssets:          []models.Asset{},
 	}
@@ -1205,6 +1237,11 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	post, err := load(c, h.repo.GetByID, "post not found")
 	if err != nil {
 		return err
+	}
+	if seriesID, ok := req.seriesToCheck(post); ok {
+		if err := checkPostSeries(c, h.series, seriesID, req.CampaignID); err != nil {
+			return err
+		}
 	}
 
 	res, err := h.updater().Update(reqCtx(c), update.Input{

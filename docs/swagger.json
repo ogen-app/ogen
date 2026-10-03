@@ -3192,6 +3192,229 @@
                 }
             }
         },
+        "/api/campaigns/{id}/series": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "List the series a campaign runs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.CampaignSeries"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Idempotent: a series the campaign already runs keeps its rhythm. A new run starts at the series' default_rhythm.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "Attach a series to a campaign",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "the series to attach",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.attachSeriesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.CampaignSeries"
+                        }
+                    },
+                    "400": {
+                        "description": "series belongs to another campaign",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/campaigns/{id}/series/{seriesId}": {
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Touches one run. rhythm null is occasional: the series claims no plan slots.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "Set how often a campaign runs one of its series",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Series id",
+                        "name": "seriesId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "rhythm is required; null is occasional",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.seriesRhythmRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.CampaignSeries"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Detaching a series the campaign does not run returns the campaign unchanged.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "Detach a series from a campaign",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Series id",
+                        "name": "seriesId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.CampaignSeries"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/campaigns/{id}/unarchive": {
             "post": {
                 "security": [
@@ -8934,6 +9157,228 @@
                 }
             }
         },
+        "/api/series": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Every live series in the workspace: the library (campaign_id null) and the series defined inside campaigns.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "List series",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.seriesListResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "With campaign_id set the series is defined inside that campaign and the campaign runs it at its default_rhythm.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "Create a series",
+                "parameters": [
+                    {
+                        "description": "the series; name and supply are required",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.seriesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.Series"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "campaign not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/series/{id}": {
+            "put": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Replaces every editable field. campaign_id and usage are ignored: only promote changes the scope.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "Replace a series",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Series id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "the whole series",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.seriesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Series"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Removes the series and every campaign's run of it. Posts it produced keep their text and their series_id.",
+                "tags": [
+                    "series"
+                ],
+                "summary": "Delete a series",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Series id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/series/{id}/promote": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "One-way: there is no demote. Promoting a library series is a no-op.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "series"
+                ],
+                "summary": "Promote a campaign's series into the workspace library",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Series id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Series"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/sessions": {
             "post": {
                 "description": "Authenticates a user by email and password, sets a session cookie, and returns the created session. Failed attempts are rate-limited per client IP and per address; once a budget is exhausted the endpoint answers 429 with a Retry-After header (CON-162).",
@@ -10690,6 +11135,14 @@
                 }
             }
         },
+        "handlers.attachSeriesRequest": {
+            "type": "object",
+            "properties": {
+                "series_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.attachmentResponse": {
             "type": "object",
             "properties": {
@@ -11748,6 +12201,10 @@
                 "scheduled_at": {
                     "type": "string"
                 },
+                "series_id": {
+                    "description": "SeriesID is presence-aware like ContentFormat: omitted leaves it alone,\nnull clears it. It must name a live library series or one local to the\npost's campaign.",
+                    "type": "string"
+                },
                 "social_account_id": {
                     "description": "SocialAccountID names which same-platform account the post\npublishes to. Optional: omit it and the submit worker auto-selects the\nplatform's single account, or requires a choice when there are several.",
                     "type": "string"
@@ -11971,6 +12428,71 @@
             "properties": {
                 "targetId": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.seriesListResponse": {
+            "type": "object",
+            "properties": {
+                "series": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.Series"
+                    }
+                }
+            }
+        },
+        "handlers.seriesRequest": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "content_format": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "default_rhythm": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SeriesRhythm"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "name": {
+                    "type": "string"
+                },
+                "promise": {
+                    "type": "string"
+                },
+                "recipe": {
+                    "type": "string"
+                },
+                "supply": {
+                    "enum": [
+                        "self",
+                        "idea"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SeriesSupply"
+                        }
+                    ]
+                }
+            }
+        },
+        "handlers.seriesRhythmRequest": {
+            "type": "object",
+            "properties": {
+                "rhythm": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SeriesRhythm"
+                        }
+                    ],
+                    "x-nullable": true
                 }
             }
         },
@@ -12868,6 +13390,36 @@
                 }
             }
         },
+        "models.CampaignSeries": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.CampaignSeriesRun"
+                    }
+                }
+            }
+        },
+        "models.CampaignSeriesRun": {
+            "type": "object",
+            "properties": {
+                "rhythm": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SeriesRhythm"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "series_id": {
+                    "type": "string"
+                }
+            }
+        },
         "models.CampaignStatus": {
             "type": "string",
             "enum": [
@@ -13601,6 +14153,10 @@
                 "scheduled_at": {
                     "type": "string"
                 },
+                "series_id": {
+                    "description": "SeriesID is the series that produced the post. It survives the series\nbeing deleted (series are soft-deleted).",
+                    "type": "string"
+                },
                 "social_account": {
                     "$ref": "#/definitions/models.SocialAccount"
                 },
@@ -13910,6 +14466,96 @@
                     "type": "string"
                 },
                 "version_number": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.Series": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "content_format": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "default_rhythm": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SeriesRhythm"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "promise": {
+                    "type": "string"
+                },
+                "recipe": {
+                    "type": "string"
+                },
+                "supply": {
+                    "enum": [
+                        "self",
+                        "idea"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.SeriesSupply"
+                        }
+                    ]
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "usage": {
+                    "$ref": "#/definitions/models.SeriesUsage"
+                }
+            }
+        },
+        "models.SeriesRhythm": {
+            "type": "object",
+            "properties": {
+                "per": {
+                    "type": "string",
+                    "enum": [
+                        "week",
+                        "month"
+                    ]
+                },
+                "times": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.SeriesSupply": {
+            "type": "string",
+            "enum": [
+                "self",
+                "idea"
+            ],
+            "x-enum-varnames": [
+                "SeriesSupplySelf",
+                "SeriesSupplyIdea"
+            ]
+        },
+        "models.SeriesUsage": {
+            "type": "object",
+            "properties": {
+                "drafts": {
+                    "type": "integer"
+                },
+                "published": {
                     "type": "integer"
                 }
             }

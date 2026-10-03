@@ -35,6 +35,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/series"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
@@ -76,6 +77,7 @@ type services struct {
 	restore           *restore.Service
 	schedule          *schedule.Service
 	notes             *notes.Service
+	series            *series.Service
 	signup            *signup.Service
 	loginSecurity     *loginsecurity.Service
 }
@@ -218,6 +220,7 @@ func (d *deps) initServices(context.Context) error {
 		clone:   clone.New(d.db, r.postRepo, r.postVersionRepo, r.postAttachmentRepo, r.platformRepo, r.postLogRepo, d.store, d.hub),
 		restore: restore.New(d.db, r.postRepo, r.postVersionRepo, r.postLogRepo, d.hub),
 		notes:   notes.New(r.postNoteRepo),
+		series:  series.New(r.seriesRepo),
 	}
 
 	d.svc.schedule = schedule.New(d.db, r.postRepo, r.platformRepo, r.postAttachmentRepo, r.autoPublishAllowlistRepo, r.postLogRepo, d.enqueuer, d.hub)

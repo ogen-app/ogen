@@ -268,16 +268,36 @@ func (r *campaignRepository) RemoveAssetID(ctx context.Context, id, assetID stri
 // campaign does not exist (in this tenant) or was already deleted. The row is
 // retained as an operational safety net; there is no self-serve restore.
 func (r *campaignRepository) Delete(ctx context.Context, id string) (bool, error) {
-	res, err := r.db.NewUpdate().Model((*models.Campaign)(nil)).
-		Set("deleted_at = ?", time.Now().UTC()).
-		Where("id = ?", id).
-		Where("deleted_at IS NULL").
-		Exec(ctx)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	var deleted bool
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		now := time.Now().UTC()
+		res, err := tx.NewUpdate().Model((*models.Campaign)(nil)).
+			Set("deleted_at = ?", now).
+			Where("id = ?", id).
+			Where("deleted_at IS NULL").
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if deleted = n > 0; !deleted {
+			return nil
+		}
+		// The campaign's series runs go with it, and so do the series defined
+		// inside it. Those are soft-deleted so posts keep their series_id.
+		if _, err := tx.NewDelete().Model((*models.CampaignSeriesRun)(nil)).
+			Where("campaign_id = ?", id).
+			Exec(ctx); err != nil {
+			return err
+		}
+		_, err = tx.NewUpdate().Model((*models.Series)(nil)).
+			Set("deleted_at = ?", now).
+			Where("campaign_id = ?", id).
+			Where("deleted_at IS NULL").
+			Exec(ctx)
+		return err
+	})
+	return deleted, err
 }
 
 // Archive stamps archived_at, removing the campaign from the default active

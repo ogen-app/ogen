@@ -1,0 +1,103 @@
+@baseUrl = http://localhost:9001
+
+# Series: standing instructions for a recurring kind of post, and the campaign
+# runs of them. All endpoints require authentication. Run "Login" from
+# sessions/sessions.http first; the HTTP client keeps the cookie. Set campaignId
+# (e.g. from campaigns/campaigns.http) for the campaign flows.
+
+### List every series (library + campaign-local)  [protected]
+GET {{baseUrl}}/api/series
+Accept: application/json
+
+### Create a library series  [protected]
+# @name createSeries
+POST {{baseUrl}}/api/series
+Content-Type: application/json
+
+{
+  "name": "Weekly news digest",
+  "promise": "The week in five links, with why each matters",
+  "recipe": "Pick five stories from the week, one line of context each, end on the one to watch.",
+  "supply": "self",
+  "content_format": "digest",
+  "default_rhythm": { "times": 1, "per": "week" }
+}
+
+> {% client.global.set("seriesId", response.body.id) %}
+
+### Create a series inside a campaign (the campaign runs it at once)  [protected]
+# @name createLocalSeries
+POST {{baseUrl}}/api/series
+Content-Type: application/json
+
+{
+  "name": "People who made an impact",
+  "supply": "idea",
+  "content_format": "story",
+  "default_rhythm": { "times": 2, "per": "month" },
+  "campaign_id": "{{campaignId}}"
+}
+
+> {% client.global.set("localSeriesId", response.body.id) %}
+
+### Replace a series (campaign_id and usage are ignored)  [protected]
+PUT {{baseUrl}}/api/series/{{seriesId}}
+Content-Type: application/json
+
+{
+  "name": "Weekly news digest",
+  "promise": "The week in five links",
+  "recipe": "",
+  "supply": "self",
+  "content_format": null,
+  "default_rhythm": null
+}
+
+### Promote a campaign's series into the library (one-way)  [protected]
+POST {{baseUrl}}/api/series/{{localSeriesId}}/promote
+Accept: application/json
+
+### Which series a campaign runs  [protected]
+GET {{baseUrl}}/api/campaigns/{{campaignId}}/series
+Accept: application/json
+
+### Attach a series to a campaign (idempotent; keeps an existing rhythm)  [protected]
+POST {{baseUrl}}/api/campaigns/{{campaignId}}/series
+Content-Type: application/json
+
+{
+  "series_id": "{{seriesId}}"
+}
+
+### Set how often the campaign runs it  [protected]
+PUT {{baseUrl}}/api/campaigns/{{campaignId}}/series/{{seriesId}}
+Content-Type: application/json
+
+{
+  "rhythm": { "times": 2, "per": "week" }
+}
+
+### Make it occasional (claims no plan slots)  [protected]
+PUT {{baseUrl}}/api/campaigns/{{campaignId}}/series/{{seriesId}}
+Content-Type: application/json
+
+{
+  "rhythm": null
+}
+
+### Detach a series from the campaign  [protected]
+DELETE {{baseUrl}}/api/campaigns/{{campaignId}}/series/{{seriesId}}
+
+### Tag a post with a series (null clears it)  [protected]
+# PUT /api/posts/:id is a whole-resource write; send the post's other fields too.
+PUT {{baseUrl}}/api/posts/{{postId}}
+Content-Type: application/json
+
+{
+  "campaign_id": "{{campaignId}}",
+  "content": "This week: five links worth your time.",
+  "series_id": "{{seriesId}}"
+}
+
+### Delete a series (posts keep their series_id)  [protected]
+DELETE {{baseUrl}}/api/series/{{seriesId}}

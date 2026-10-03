@@ -142,6 +142,7 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).Register(app)
+	handlers.NewSeriesHandler(d.svc.series, d.auth, d.activity.recorder).Register(app)
 }
 
 // registerCampaignRoutes serves campaign types and campaigns. The read
@@ -183,6 +184,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 		Activity:       rec,
 		OnBeforeDelete: deleteAttachmentBlobs(d.store, r.postAttachmentRepo),
 		Storage:        d.store,
+		Series:         d.svc.series,
 	}).Register(app)
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, d.auth).Register(app)
 	handlers.NewLinkPreviewHandler(linkpreview.New(netguard.SafeClient(linkPreviewTimeout), netguard.ResolveAllowed), d.auth).Register(app)

@@ -14,6 +14,7 @@ const (
 	CategoryWorkspace      = "workspace"
 	CategoryBrand          = "brand"
 	CategoryIdea           = "idea"
+	CategorySeries         = "series"
 )
 
 // Source values name how an activity was triggered. Free-form is allowed, but
