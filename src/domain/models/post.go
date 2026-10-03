@@ -209,9 +209,12 @@ type Post struct {
 	// ContentFormat is the post's rhetorical shape, independent of its
 	// container (PlatformPostType). Nil means no format, the normal case.
 	ContentFormat *ContentFormat `bun:"content_format"                               json:"content_format"`
-	CreatedBy     string         `bun:"created_by,notnull"                           json:"created_by"`
-	CreatedAt     time.Time      `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt     time.Time      `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	// SeriesID is the series that produced the post. It survives the series
+	// being deleted (series are soft-deleted).
+	SeriesID  *string   `bun:"series_id"                                    json:"series_id"`
+	CreatedBy string    `bun:"created_by,notnull"                           json:"created_by"`
+	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 	// ClonedFromPostID links a clone back to the Post it was duplicated
 	// from. Nil for posts created directly. `nullzero` sends
 	// NULL (not "") so the lineage is a clean "has a source / does not".
