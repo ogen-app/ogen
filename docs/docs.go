@@ -5971,6 +5971,67 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/link-preview": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Fetches the page's Open Graph tags so the composer can render the\ncard a network builds for a link post. Approximate: the network\nreads the page itself at publish time. A page that can't be read\nstill returns 200 with only ` + "`" + `url` + "`" + ` and ` + "`" + `domain` + "`" + ` set.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Preview a link",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Absolute http(s) URL",
+                        "name": "url",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/linkpreview.Preview"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/me/entitlements": {
             "get": {
                 "security": [
@@ -11659,9 +11720,15 @@ const docTemplate = `{
                     ]
                 },
                 "cta_type": {
-                    "$ref": "#/definitions/models.PostCTAType"
+                    "description": "CTAType is accepted for compatibility and ignored: the stored value is\nderived from CTAUrl.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.PostCTAType"
+                        }
+                    ]
                 },
                 "cta_url": {
+                    "description": "CTAUrl is the link a link-post publishes. Not validated on write, so an\nautosave of a half-typed URL is kept; the publish gate checks it.",
                     "type": "string"
                 },
                 "media_urls": {
@@ -12174,6 +12241,32 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "post_id": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "linkpreview.Preview": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "final_url": {
+                    "type": "string"
+                },
+                "image_url": {
+                    "type": "string"
+                },
+                "site_name": {
+                    "type": "string"
+                },
+                "title": {
                     "type": "string"
                 },
                 "url": {
@@ -13610,12 +13703,10 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "link",
-                "button",
                 "none"
             ],
             "x-enum-varnames": [
                 "CTATypeLink",
-                "CTATypeButton",
                 "CTATypeNone"
             ]
         },
@@ -14378,6 +14469,10 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "requires_content": {
+                    "type": "boolean"
+                },
+                "requires_link": {
+                    "description": "RequiresLink marks a post type that publishes a target URL (cta_url)\nthe network unfurls into a preview card; the publish gate rejects an\nempty or malformed one.",
                     "type": "boolean"
                 },
                 "segmented": {

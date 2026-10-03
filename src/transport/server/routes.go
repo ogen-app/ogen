@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"expvar"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
@@ -11,9 +12,14 @@ import (
 	pubzernio "github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
+	"github.com/ogen-app/ogen/src/usecase/linkpreview"
 )
+
+// linkPreviewTimeout bounds one outbound page fetch for a link preview.
+const linkPreviewTimeout = 8 * time.Second
 
 // registerRoutes mounts every HTTP handler. The API serves only /api/* (plus
 // SSE and /debug/vars); the SPA is deployed separately.
@@ -179,6 +185,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 		Storage:        d.store,
 	}).Register(app)
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, d.auth).Register(app)
+	handlers.NewLinkPreviewHandler(linkpreview.New(netguard.SafeClient(linkPreviewTimeout), netguard.ResolveAllowed), d.auth).Register(app)
 
 	handlers.NewImagesHandler(d.store, d.auth).Register(app)
 	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).WithContentBank(r.pieceRepo).Register(app)
