@@ -150,7 +150,7 @@ func mediaFormat(p models.Post) string {
 		return "carousel"
 	case len(p.MediaURLs) == 1:
 		return "single_image"
-	case p.CTAUrl != "":
+	case p.IsLinkPost():
 		return "link"
 	default:
 		return "text"

@@ -690,3 +690,44 @@ func TestSubmitExplicitAccountUnavailableFails(t *testing.T) {
 		t.Errorf("failure_reason: got %q want account_unavailable prefix", got.FailureReason)
 	}
 }
+
+// A link post's URL has no field of its own on Zernio, so it is sent as the
+// last paragraph of the message, after the flattened body.
+func TestSubmitLinkPostSendsURLInContent(t *testing.T) {
+	stub := newStubZernio()
+	defer stub.Close()
+	var sent zernio.SubmitRequest
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{
+			ID: "z-1", Status: zernio.JobStatusScheduled,
+		}})
+	})
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-1", Platform: "facebook"}},
+	})
+	now := time.Now().Add(-time.Minute).UTC()
+	post := &models.Post{
+		ID:               "post-link",
+		PlatformID:       "zBU1zqVICGfk", // Facebook Sqid
+		PlatformPostType: models.PostTypeLinkPost,
+		Content:          "**Big** news",
+		CTAType:          models.CTATypeLink,
+		CTAUrl:           "https://example.com/launch",
+		Status:           models.PostStatusScheduled,
+		ScheduledAt:      &now,
+		Platform:         &models.Platform{ID: "zBU1zqVICGfk", Name: "Facebook"},
+	}
+	postRepo.put(post)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if want := "Big news\n\nhttps://example.com/launch"; sent.Content != want {
+		t.Errorf("content: got %q want %q", sent.Content, want)
+	}
+	if len(sent.MediaItems) != 0 {
+		t.Errorf("a link post sends no media, got %v", sent.MediaItems)
+	}
+}

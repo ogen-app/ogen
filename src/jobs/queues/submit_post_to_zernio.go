@@ -242,13 +242,14 @@ func (p *SubmitPostProcessor) buildRequest(ctx context.Context, post *models.Pos
 	// content must be just the root message, and the chain rides in
 	// ThreadItems. Networks render no Markdown, so the outbound copy is
 	// flattened to the plain text a caption shows; the dedupe recovery matches
-	// on this same flattened string.
-	topContent := post.Content
+	// on this same flattened string. A link post's URL rides in the message —
+	// Zernio has no separate link field, and the network unfurls it into a card.
+	content := platforms.OutboundText(post)
 	if post.IsThread() && len(post.ThreadSegments) > 0 {
-		topContent = post.ThreadSegments.RootContent()
+		content = platforms.FlattenSocialText(post.ThreadSegments.RootContent())
 	}
 	return zernio.SubmitRequest{
-		Content:      platforms.FlattenSocialText(topContent),
+		Content:      content,
 		Platforms:    []zernio.PlatformVariant{variant},
 		ScheduledFor: when,
 		Timezone:     tzName,

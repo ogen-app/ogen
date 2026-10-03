@@ -335,6 +335,9 @@ func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGloba
 	if strings.TrimSpace(pb.GetZernioId()) == "" {
 		return status.Error(codes.InvalidArgument, "zernio_id is required")
 	}
+	if err := validateSupportedPostTypes(pb.GetSupportedPostTypes()); err != nil {
+		return err
+	}
 	if img := pb.GetImageConstraints(); img != nil {
 		if err := checkFileSize("image", img.GetMaxFileSizeBytes(), limits.MaxImageUploadBytes); err != nil {
 			return err
@@ -352,6 +355,18 @@ func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGloba
 	}
 	if txt := pb.GetTextConstraints(); txt != nil {
 		return validateTextLimits(txt, pb.GetPostTypes())
+	}
+	return nil
+}
+
+// validateSupportedPostTypes rejects a publishable post type the publish gate
+// has no rule for. The client offers every supported type, and a type without a
+// rule would pass the gate unchecked.
+func validateSupportedPostTypes(slugs []string) error {
+	for _, slug := range slugs {
+		if _, ok := domainplatforms.RuleFor(slug); !ok {
+			return status.Errorf(codes.InvalidArgument, "supported post type %q has no publish rule in this build; it cannot be enabled", slug)
+		}
 	}
 	return nil
 }
