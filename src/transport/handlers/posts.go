@@ -788,6 +788,9 @@ type postRequest struct {
 	// stored ref untouched rather than null it. See Optional and apply.
 	BrandVoiceID    Optional[string] `json:"brand_voice_id"`
 	BrandAudienceID Optional[string] `json:"brand_audience_id"`
+	// ContentFormat is presence-aware so an autosave from a client that predates
+	// the field can't wipe it: omitted leaves it alone, null clears it.
+	ContentFormat Optional[models.ContentFormat] `json:"content_format" swaggertype:"string" enums:"how-to,explainer,listicle,story,digest,opinion,question,announcement"`
 	// PublishedURL lets the front-end record a permalink for posts
 	// Zernio cannot verify (the CON-149 skip path — e.g. LinkedIn personal
 	// accounts) or correct a wrong one. Like every field on this whole-resource
@@ -841,6 +844,7 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType
 	// place; an explicit null clears them.
 	r.BrandVoiceID.applyTo(&post.BrandVoiceID)
 	r.BrandAudienceID.applyTo(&post.BrandAudienceID)
+	r.ContentFormat.applyTo(&post.ContentFormat)
 	// Presence-aware: omit to leave the sources alone (the membership
 	// endpoints own them), a present array to replace, an explicit null to clear.
 	applyOptionalSlice(r.UsedAssetIDs, &post.UsedAssetIDs)
@@ -849,8 +853,8 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus, ctaType
 
 // mutatesLockedContent reports whether the request would change any of the
 // content-identity fields CON-251 freezes once a post is submitted: the
-// body, title, media, platform, post type, or the sources it was built
-// from. The date and account are locked by the schedule/cancel flows that
+// body, title, media, platform, post type, format, or the sources it was
+// built from. The date and account are locked by the schedule/cancel flows that
 // own them, and a status-only transition (e.g. unschedule to edit) leaves
 // every field below equal, so neither is compared here — this gates the
 // silent-divergence edit, not the legitimate move off a submitted state.
@@ -866,7 +870,28 @@ func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 		// separate segment comparison is needed.
 		// Sources are presence-aware: an omitted key preserves the set,
 		// so only a present-and-different value is a mutation of the locked content.
-		(r.UsedAssetIDs.Present && !slices.Equal(nullSlice(r.UsedAssetIDs.orZero()), post.UsedAssetIDs))
+		(r.UsedAssetIDs.Present && !slices.Equal(nullSlice(r.UsedAssetIDs.orZero()), post.UsedAssetIDs)) ||
+		// The shape a submitted post took is a fact about what went out.
+		(r.ContentFormat.Present && !equalPtr(r.ContentFormat.Value, post.ContentFormat))
+}
+
+// validateContentFormat rejects a present content_format that is not a known
+// slug. Absent and explicit null are both fine; "" is refused because "no
+// format" is null, never the empty string.
+func (r *postRequest) validateContentFormat() error {
+	if v := r.ContentFormat.Value; v != nil && !v.IsValid() {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid content_format")
+	}
+	return nil
+}
+
+// equalPtr reports whether two optional values are both nil or both point to
+// equal values.
+func equalPtr[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // omitColumns lists the presence-aware columns an omitted field must keep out
@@ -1067,6 +1092,9 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	if !validCTATypes[ctaType] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cta_type")
 	}
+	if err := req.validateContentFormat(); err != nil {
+		return err
+	}
 	if err := update.RequirePlatformIfNotDraft(status, req.PlatformID, req.PlatformPostType); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
@@ -1097,6 +1125,7 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		TargetAudienceNotes: req.TargetAudienceNotes,
 		UsedAssetIDs:        nullSlice(req.UsedAssetIDs.orZero()),
 		CampaignTypePhaseID: req.CampaignTypePhaseID,
+		ContentFormat:       req.ContentFormat.Value,
 		CreatedBy:           session.UserID,
 		UsedAssets:          []models.Asset{},
 	}
@@ -1180,6 +1209,9 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	ctaType := req.toCTAType()
 	if !validCTATypes[ctaType] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid cta_type")
+	}
+	if err := req.validateContentFormat(); err != nil {
+		return err
 	}
 
 	if err := validateBrandRefs(reqCtx(c), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {

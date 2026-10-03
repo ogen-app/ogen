@@ -279,6 +279,8 @@ func buildClone(src *models.Post, tgt target, opts Options, newID, content strin
 		PlatformPostType: tgt.postType,
 		Title:            title,
 		Content:          content,
+		// The body is copied, so its shape is too — even across platforms.
+		ContentFormat:    src.ContentFormat,
 		MediaURLs:        models.StringSlice{},
 		Status:           models.PostStatusDraft,
 		CTAType:          models.CTATypeNone,

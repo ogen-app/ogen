@@ -67,7 +67,7 @@ var (
 
 // postFingerprint returns a stable string that changes whenever any
 // prompt-affecting field of the post changes (content, attached assets,
-// phase). Asset IDs are joined without sorting so a reorder also busts
+// phase, format). Asset IDs are joined without sorting so a reorder also busts
 // the cache — the order is surfaced to the model via listAssets output.
 func postFingerprint(post *models.Post) string {
 	var b strings.Builder
@@ -82,7 +82,17 @@ func postFingerprint(post *models.Post) string {
 	if post.CampaignTypePhaseID != nil {
 		b.WriteString(*post.CampaignTypePhaseID)
 	}
+	b.WriteByte('\x1f')
+	b.WriteString(contentFormatLabel(post.ContentFormat))
 	return b.String()
+}
+
+// contentFormatLabel is the format slug, or "" when the post has none.
+func contentFormatLabel(f *models.ContentFormat) string {
+	if f == nil {
+		return ""
+	}
+	return string(*f)
 }
 
 // brandFingerprint captures the identity (id + updatedAt) of the resolved brand
@@ -240,6 +250,7 @@ func assembleContext(
 		Language:            campaign.Language,
 		PhaseName:           phaseName,
 		PhaseDescription:    phaseDescription,
+		ContentFormat:       contentFormatLabel(post.ContentFormat),
 		PostContent:         post.Content,
 		Assets:              summaries,
 		Platforms:           platforms,
@@ -274,11 +285,14 @@ type contextTemplateData struct {
 	Language         string
 	PhaseName        string
 	PhaseDescription string
-	PostContent      string
-	Assets           []assetSummary
-	Platforms        []platformOption
-	Versions         []versionSummary
-	Notes            []noteSummary
+	// ContentFormat is the post's format slug (e.g. "how-to"); the label alone
+	// carries the recipe, so no extra prompt material goes with it.
+	ContentFormat string
+	PostContent   string
+	Assets        []assetSummary
+	Platforms     []platformOption
+	Versions      []versionSummary
+	Notes         []noteSummary
 }
 
 // noteBodyPreviewChars bounds a single note's body in the context block so a
