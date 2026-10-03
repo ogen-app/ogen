@@ -97,6 +97,27 @@ func TestMutatesLockedContent(t *testing.T) {
 			t.Errorf("content_format %s: mutatesLockedContent = %v, want %v", tc.name, got, tc.want)
 		}
 	}
+	digestID, otherID := "series-1", "series-2"
+	inSeries := base()
+	inSeries.SeriesID = &digestID
+	seriesCases := []struct {
+		name   string
+		series Optional[string]
+		want   bool
+	}{
+		{"omitted", Optional[string]{}, false},
+		{"same", present(digestID), false},
+		{"changed", present(otherID), true},
+		{"cleared", Optional[string]{Present: true}, true},
+	}
+	for _, tc := range seriesCases {
+		r := reqFor(inSeries)
+		r.SeriesID = tc.series
+		if got := r.mutatesLockedContent(inSeries); got != tc.want {
+			t.Errorf("series_id %s: mutatesLockedContent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
 	setOnUnformatted := reqFor(p)
 	setOnUnformatted.ContentFormat = present(models.ContentFormatHowTo)
 	if !setOnUnformatted.mutatesLockedContent(p) {
