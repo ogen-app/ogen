@@ -197,6 +197,11 @@ Rules:
 ## Current phase
 **{{.PhaseName}}**{{if .PhaseDescription}}: {{.PhaseDescription}}{{end}}
 {{- end}}
+{{- if .ContentFormat}}
+
+## Content format
+This post is a **{{.ContentFormat}}**. Keep its structure true to that format.
+{{- end}}
 
 ## Current post content
 {{if .PostContent}}{{.PostContent}}{{else}}(empty — no content yet){{end}}

@@ -90,6 +90,40 @@ func (s PostStatus) CanTransition(next PostStatus) bool {
 // import cycle.
 const PostTypeThread = "thread"
 
+// ContentFormat is the rhetorical shape of a post (how-to, explainer, ...). It
+// is a fixed vocabulary shared with the UI and the writing prompts, not a
+// tenant-editable library: the bare label already tells a model the recipe.
+type ContentFormat string
+
+const (
+	ContentFormatHowTo        ContentFormat = "how-to"
+	ContentFormatExplainer    ContentFormat = "explainer"
+	ContentFormatListicle     ContentFormat = "listicle"
+	ContentFormatStory        ContentFormat = "story"
+	ContentFormatDigest       ContentFormat = "digest"
+	ContentFormatOpinion      ContentFormat = "opinion"
+	ContentFormatQuestion     ContentFormat = "question"
+	ContentFormatAnnouncement ContentFormat = "announcement"
+)
+
+// ContentFormats lists the vocabulary in the UI picker's order.
+var ContentFormats = []ContentFormat{
+	ContentFormatHowTo,
+	ContentFormatExplainer,
+	ContentFormatListicle,
+	ContentFormatStory,
+	ContentFormatDigest,
+	ContentFormatOpinion,
+	ContentFormatQuestion,
+	ContentFormatAnnouncement,
+}
+
+// IsValid reports whether f is one of the known formats. The empty string is
+// not: "no format" is NULL, never "".
+func (f ContentFormat) IsValid() bool {
+	return slices.Contains(ContentFormats, f)
+}
+
 // PostCTAType represents the call-to-action type attached to a post.
 type PostCTAType string
 
@@ -172,9 +206,12 @@ type Post struct {
 	BrandAudienceID     *string     `bun:"brand_audience_id"                            json:"brand_audience_id"`
 	UsedAssetIDs        StringSlice `bun:"used_asset_ids,notnull,type:jsonb"           json:"used_asset_ids"`
 	CampaignTypePhaseID *string     `bun:"campaign_type_phase_id"                       json:"campaign_type_phase_id"`
-	CreatedBy           string      `bun:"created_by,notnull"                           json:"created_by"`
-	CreatedAt           time.Time   `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt           time.Time   `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	// ContentFormat is the post's rhetorical shape, independent of its
+	// container (PlatformPostType). Nil means no format, the normal case.
+	ContentFormat *ContentFormat `bun:"content_format"                               json:"content_format"`
+	CreatedBy     string         `bun:"created_by,notnull"                           json:"created_by"`
+	CreatedAt     time.Time      `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt     time.Time      `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 	// ClonedFromPostID links a clone back to the Post it was duplicated
 	// from. Nil for posts created directly. `nullzero` sends
 	// NULL (not "") so the lineage is a clean "has a source / does not".

@@ -279,4 +279,17 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 		resp2, _ := clone(srcID, fiber.Map{"target_platform_id": "nope-not-real"})
 		Expect(resp2.StatusCode).To(Equal(fiber.StatusBadRequest))
 	})
+
+	It("#6 carries the content format across platforms", func() {
+		srcID := createPost(linkedinPlatformID, "text-post", "a how-to")
+		src, err := postRepo.GetByID(tenantCtx(), srcID)
+		Expect(err).NotTo(HaveOccurred())
+		howTo := models.ContentFormatHowTo
+		src.ContentFormat = &howTo
+		Expect(postRepo.Update(tenantCtx(), src)).To(Succeed())
+
+		resp, c := clone(srcID, fiber.Map{"target_platform_id": threadsPlatformID})
+		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+		Expect(c.ContentFormat).To(Equal(&howTo))
+	})
 })

@@ -11602,6 +11602,20 @@
                 "content": {
                     "type": "string"
                 },
+                "content_format": {
+                    "description": "ContentFormat is presence-aware so an autosave from a client that predates\nthe field can't wipe it: omitted leaves it alone, null clears it.",
+                    "type": "string",
+                    "enum": [
+                        "how-to",
+                        "explainer",
+                        "listicle",
+                        "story",
+                        "digest",
+                        "opinion",
+                        "question",
+                        "announcement"
+                    ]
+                },
                 "cta_type": {
                     "$ref": "#/definitions/models.PostCTAType"
                 },
@@ -12790,6 +12804,29 @@
                 }
             }
         },
+        "models.ContentFormat": {
+            "type": "string",
+            "enum": [
+                "how-to",
+                "explainer",
+                "listicle",
+                "story",
+                "digest",
+                "opinion",
+                "question",
+                "announcement"
+            ],
+            "x-enum-varnames": [
+                "ContentFormatHowTo",
+                "ContentFormatExplainer",
+                "ContentFormatListicle",
+                "ContentFormatStory",
+                "ContentFormatDigest",
+                "ContentFormatOpinion",
+                "ContentFormatQuestion",
+                "ContentFormatAnnouncement"
+            ]
+        },
         "models.EvaluationDimension": {
             "type": "object",
             "properties": {
@@ -13365,6 +13402,14 @@
                 },
                 "content": {
                     "type": "string"
+                },
+                "content_format": {
+                    "description": "ContentFormat is the post's rhetorical shape, independent of its\ncontainer (PlatformPostType). Nil means no format, the normal case.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.ContentFormat"
+                        }
+                    ]
                 },
                 "cover_url": {
                     "description": "CoverURL is the public URL of the picture a post card leads with — its\nfirst drawable attachment (see PostAttachmentRepository.CoverKeysByPostIDs).\nMinted per response by the posts handler and never accepted on writes, so\nunlike media_urls it cannot round-trip back into a PUT.",
@@ -14046,7 +14091,7 @@
                     "type": "integer"
                 },
                 "requires_video_title": {
-                    "description": "RequiresVideoTitle blocks publishing a video post whose title is empty.\nYouTube requires a title; most feed/Reel platforms derive\none from the caption, so this stays false for them.",
+                    "description": "RequiresVideoTitle blocks publishing a video post whose title is empty.\nA product rule for YouTube, where an untitled upload would be titled from\nthe description's first line or \"Untitled Video\"; feed/Reel platforms\nhave no separate title, so this stays false for them.",
                     "type": "boolean"
                 }
             }

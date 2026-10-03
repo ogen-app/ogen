@@ -72,6 +72,34 @@ func TestMutatesLockedContent(t *testing.T) {
 		t.Error("omitting used_asset_ids must not count as a content mutation")
 	}
 
+	// content_format is presence-aware: omitted preserves it, a present value
+	// different from the stored one (including null) is a mutation.
+	explainer := models.ContentFormatExplainer
+	withFormat := base()
+	withFormat.ContentFormat = &explainer
+	formatCases := []struct {
+		name   string
+		format Optional[models.ContentFormat]
+		want   bool
+	}{
+		{"omitted", Optional[models.ContentFormat]{}, false},
+		{"same", present(models.ContentFormatExplainer), false},
+		{"changed", present(models.ContentFormatHowTo), true},
+		{"cleared", Optional[models.ContentFormat]{Present: true}, true},
+	}
+	for _, tc := range formatCases {
+		r := reqFor(withFormat)
+		r.ContentFormat = tc.format
+		if got := r.mutatesLockedContent(withFormat); got != tc.want {
+			t.Errorf("content_format %s: mutatesLockedContent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	setOnUnformatted := reqFor(p)
+	setOnUnformatted.ContentFormat = present(models.ContentFormatHowTo)
+	if !setOnUnformatted.mutatesLockedContent(p) {
+		t.Error("setting a format on a post without one must count as a content mutation")
+	}
+
 	// Fields the lock deliberately does NOT own (date/account/CTA/notes/status
 	// are governed elsewhere) must not trip it — that's what lets a status-only
 	// unschedule through on a submitted post.
