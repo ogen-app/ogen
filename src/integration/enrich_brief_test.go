@@ -137,4 +137,30 @@ var _ = Describe("Enrich brief flow", Ordered, func() {
 		Expect(hasCyrillic(resp.Description)).To(BeTrue(),
 			"expected the description to be written in Ukrainian (Cyrillic), got: %s", resp.Description)
 	})
+
+	It("edits an existing brief instead of regenerating it from the type", func() {
+		id := seedCampaign("Practitioner AI", "English")
+		c, err := campaignRepo.GetByID(ctx, id)
+		Expect(err).NotTo(HaveOccurred())
+		c.Description = "A content programme to position Alec as a practitioner's voice on AI integration — " +
+			"someone who ships AI/ML systems for enterprise clients (Microsoft, Cambridge, financial institutions) " +
+			"rather than someone commenting on AI from the sidelines."
+		c.TargetPersona = "CTOs and heads of data at mid-size enterprises weighing their first production AI system."
+		c.KeyMessages = "Shipping beats speculating.\nIntegration is the hard part, not the model.\nEvidence over enthusiasm."
+		c.ToneGuidelines = "Anti-hype practitioner voice. British English. No second-person address."
+		Expect(campaignRepo.Update(ctx, c)).To(Succeed())
+
+		resp, err := callback(ctx, enrich_brief.EnrichBriefRequest{
+			CampaignID:  id,
+			Instruction: "Improve the brief. Keep the anti-hype practitioner voice and British English exactly as it is; just tighten it and make the key messages sharper.",
+		}, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp).NotTo(BeNil())
+		// The subject survives: the AI-integration practitioner is still who the
+		// campaign is about.
+		Expect(resp.Description).To(ContainSubstring("Alec"))
+		Expect(resp.Description).To(MatchRegexp(`(?i)\bAI\b`))
+		// The stored tone guideline ("No second-person address") binds the output.
+		Expect(resp.KeyMessages).NotTo(MatchRegexp(`(?i)\byou(r|'ll)?\b`))
+	})
 })

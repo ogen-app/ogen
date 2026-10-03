@@ -10,6 +10,7 @@ import (
 type EnrichBriefRequest struct {
 	CampaignID string `json:"campaignId"`
 	// Instruction is optional freeform steering ("B2B, technical tone").
+	// With an existing brief it says what to change; the rest is kept.
 	Instruction string `json:"instruction,omitempty"`
 }
 
@@ -28,10 +29,12 @@ type EnrichBriefResponse struct {
 // EnrichBriefRepos bundles the repository dependencies for the flow.
 // CampaignTypes is a fallback: CampaignRepository.GetByID already hydrates
 // the campaign's type (with phases), but the repo lets the flow resolve a
-// type directly if a future caller passes an un-hydrated campaign.
+// type directly if a future caller passes an un-hydrated campaign. Brands
+// supplies the brand voice and guardrails; nil skips them.
 type EnrichBriefRepos struct {
 	Campaigns     repository.CampaignRepository
 	CampaignTypes repository.CampaignTypeRepository
+	Brands        repository.BrandRepository
 }
 
 // EnrichBriefFlowConfig holds static settings for the flow.

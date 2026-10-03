@@ -2580,7 +2580,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Generates a campaign brief (description, target persona, key messages, tone guidelines)\nfrom the campaign's title and type, streaming progress via Server-Sent Events.\nPer-field \"*_delta\" events preview each value as it is written; a final \"complete\"\nevent carries the full EnrichBriefResponse and is the signal that the brief is ready.\nOn failure an \"error\" event carries {\"message\":\"\u003ctext\u003e\",\"code\":\u003chttp_code\u003e}.\nThe brief is returned as a suggestion only — it is not persisted to the campaign.",
+                "description": "Improves the campaign brief (description, target persona, key messages, tone guidelines),\nstreaming progress via Server-Sent Events. A non-empty brief is edited in place, keeping its\nsubject and honouring its tone guidelines and the brand voice; an empty brief is drafted\nfrom the campaign's title and type. The optional instruction says what to change.\nPer-field \"*_delta\" events preview each value as it is written; a final \"complete\"\nevent carries the full EnrichBriefResponse and is the signal that the brief is ready.\nOn failure an \"error\" event carries {\"message\":\"\u003ctext\u003e\",\"code\":\u003chttp_code\u003e}.\nThe brief is returned as a suggestion only — it is not persisted to the campaign.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2804,7 +2804,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns the most recent Campaign Assistant conversation messages for a campaign.",
+                "description": "Returns the most recent Campaign Assistant conversation messages for a campaign.\nA \"model\" message's content is the JSON of that turn's \"complete\" event: action,\nexplanation and the tool results (brief, briefReview with findings, contentPlan,\ngeneratedPosts, draftedPosts, dates, redistribute, postsReview).",
                 "produces": [
                     "application/json"
                 ],

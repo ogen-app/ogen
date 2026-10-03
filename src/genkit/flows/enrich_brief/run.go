@@ -54,7 +54,7 @@ func runEnrichBrief(
 	if err != nil {
 		return nil, err
 	}
-	bctx, err := assembleContextCached(ctx, campaign, req.Instruction, repos, systemTmpl, contextTmpl)
+	bctx, err := assembleContext(ctx, campaign, req.Instruction, repos, systemTmpl, contextTmpl)
 	if err != nil {
 		return nil, fmt.Errorf("assemble context: %w", err)
 	}

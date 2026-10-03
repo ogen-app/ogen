@@ -781,8 +781,10 @@ func (h *CampaignsHandler) GenerateDraft(c *fiber.Ctx) error {
 
 // EnrichBrief godoc
 // @Summary      Enrich campaign brief with AI (SSE)
-// @Description  Generates a campaign brief (description, target persona, key messages, tone guidelines)
-// @Description  from the campaign's title and type, streaming progress via Server-Sent Events.
+// @Description  Improves the campaign brief (description, target persona, key messages, tone guidelines),
+// @Description  streaming progress via Server-Sent Events. A non-empty brief is edited in place, keeping its
+// @Description  subject and honouring its tone guidelines and the brand voice; an empty brief is drafted
+// @Description  from the campaign's title and type. The optional instruction says what to change.
 // @Description  Per-field "*_delta" events preview each value as it is written; a final "complete"
 // @Description  event carries the full EnrichBriefResponse and is the signal that the brief is ready.
 // @Description  On failure an "error" event carries {"message":"<text>","code":<http_code>}.
@@ -918,6 +920,9 @@ func (h *CampaignsHandler) Assistant(c *fiber.Ctx) error {
 // ListMessages godoc
 // @Summary      List campaign assistant messages
 // @Description  Returns the most recent Campaign Assistant conversation messages for a campaign.
+// @Description  A "model" message's content is the JSON of that turn's "complete" event: action,
+// @Description  explanation and the tool results (brief, briefReview with findings, contentPlan,
+// @Description  generatedPosts, draftedPosts, dates, redistribute, postsReview).
 // @Tags         campaigns
 // @Produce      json
 // @Security     CookieAuth
@@ -937,6 +942,7 @@ func (h *CampaignsHandler) ListMessages(c *fiber.Ctx) error {
 	if msgs == nil {
 		msgs = []models.CampaignAssistantMessage{}
 	}
+	campaign_assistant.NormalizeHistory(msgs)
 	return c.JSON(msgs)
 }
 
