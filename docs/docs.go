@@ -451,6 +451,12 @@ const docTemplate = `{
                         "description": "Zernio platform slug; repeat or comma-separate values for a union (default every platform)",
                         "name": "platform",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Not supported: any value is rejected with 400 campaign_scope_unsupported (lessons are workspace-wide)",
+                        "name": "campaign_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -531,6 +537,12 @@ const docTemplate = `{
                         "description": "Zernio platform slug; repeat or comma-separate values for a union (default every platform)",
                         "name": "platform",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Narrow to one campaign (default the whole workspace); the followers card stays workspace-wide (followers_scope)",
+                        "name": "campaign_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -552,6 +564,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -617,6 +638,12 @@ const docTemplate = `{
                         "description": "Zernio platform slug; repeat or comma-separate values for a union (default every platform)",
                         "name": "platform",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Narrow the ranked posts to one campaign (default the whole workspace); typical stays workspace-wide",
+                        "name": "campaign_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -638,6 +665,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

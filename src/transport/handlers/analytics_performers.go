@@ -34,9 +34,11 @@ import (
 // @Param        by       query string false "against_typical|reach|engagement_rate|interactions (default against_typical)"
 // @Param        limit    query int    false "Rows per list, default 5, clamped"
 // @Param        platform query []string false "Zernio platform slug; repeat or comma-separate values for a union (default every platform)" collectionFormat(multi)
+// @Param        campaign_id query string false "Narrow the ranked posts to one campaign (default the whole workspace); typical stays workspace-wide"
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
+// @Failure      404 {object} map[string]string
 // @Router       /api/analytics/performers [get]
 func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 	if h.repo == nil {
@@ -60,7 +62,7 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 			limit = n
 		}
 	}
-	scope, err := h.parsePlatformScope(c)
+	scope, err := h.parseScope(c)
 	if err != nil {
 		return err
 	}
@@ -77,6 +79,9 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 		return c.JSON(insightEnvelope{Available: false, Reason: "no_data"})
 	}
 
+	// The typical-at-age baseline stays workspace-wide under any scope, so a
+	// campaign's posts are scored against the workspace's usual post rather than
+	// against each other.
 	samples, err := h.repo.ReachByAgeSamples(ctx)
 	if err != nil {
 		return err

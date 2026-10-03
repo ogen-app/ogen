@@ -95,6 +95,10 @@ type Response struct {
 	Cards     []Card             `json:"cards"`
 	Series    map[string]Series  `json:"series"`
 	Insights  []insights.Insight `json:"insights"`
+	// FollowersScope is "workspace" when the read is narrowed to a campaign:
+	// followers belong to accounts, not campaigns, so that card stays
+	// workspace-wide. Absent on an un-narrowed read.
+	FollowersScope string `json:"followers_scope,omitempty"`
 }
 
 type metricSpec struct {

@@ -132,7 +132,7 @@ var _ = Describe("Post analytics — CON-93", Ordered, func() {
 		postsHandler.Register(app)
 		// GET /:id/analytics now lives on the insights handler.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, analyticsRepo, nil, nil, auth).Register(app)
-		handlers.NewAnalyticsHandler(analyticsRepo, nil, nil, nil, nil, nil, nil, auth).Register(app)
+		handlers.NewAnalyticsHandler(analyticsRepo, nil, nil, nil, nil, nil, nil, nil, auth).Register(app)
 
 		u := seedTenantUser(db, "Admin", "analytics@example.com", "analytics-password")
 		userID = u.ID

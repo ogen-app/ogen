@@ -33,6 +33,7 @@ import (
 // @Param        trend_window  query string false "Fading comparison window, e.g. 90d/3mo/12w (default 90d)"
 // @Param        metric        query string false "reach|saves (default reach)"
 // @Param        platform      query []string false "Zernio platform slug; repeat or comma-separate values for a union (default every platform)" collectionFormat(multi)
+// @Param        campaign_id   query string false "Not supported: any value is rejected with 400 campaign_scope_unsupported (lessons are workspace-wide)"
 // @Success      200 {object} map[string]interface{}
 // @Failure      400 {object} map[string]string
 // @Failure      401 {object} map[string]string
@@ -53,6 +54,11 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 	metric := c.Query("metric", learnings.MetricReach)
 	if metric != learnings.MetricReach && metric != learnings.MetricSaves {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid_param")
+	}
+	// An all-time lesson mined from one campaign is a much thinner claim than a
+	// workspace lesson, so the campaign filter is refused rather than honoured.
+	if c.Query("campaign_id") != "" {
+		return fiber.NewError(fiber.StatusBadRequest, "campaign_scope_unsupported")
 	}
 	scope, err := h.parsePlatformScope(c)
 	if err != nil {
@@ -123,7 +129,7 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 // runs before Build so each section's minimum-support floor applies to the
 // filtered sample: a thin single-platform history withdraws the section as
 // insufficient_history rather than serving a weak lesson.
-func narrowLearnings(scope *platformScope, posts []models.Post, samples []repository.LifespanSample) ([]models.Post, []repository.LifespanSample) {
+func narrowLearnings(scope *analyticsScope, posts []models.Post, samples []repository.LifespanSample) ([]models.Post, []repository.LifespanSample) {
 	if scope == nil {
 		return posts, samples
 	}

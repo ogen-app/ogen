@@ -18,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/database"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
@@ -75,7 +76,7 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 		ph.Register(app)
 		// GET /:id/analytics now lives on the insights handler.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, analyticsRepo, nil, nil, auth).Register(app)
-		handlers.NewAnalyticsHandler(analyticsRepo, nil, postRepo, repository.NewPlatformRepository(db), socialAccountRepo, nil, nil, auth).Register(app)
+		handlers.NewAnalyticsHandler(analyticsRepo, nil, postRepo, repository.NewPlatformRepository(db), socialAccountRepo, campaignRepo, nil, nil, auth).Register(app)
 
 		// Auth user + login.
 		createdUser := seedTenantUser(db, "Admin", "admin@example.com", "admin-password")
@@ -475,6 +476,146 @@ var _ = Describe("Analytics endpoints", Ordered, func() {
 			}
 			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
 			Expect(body.Data.Post.Account).To(Equal(account{ID: "acc-live", Username: "acme", DisplayName: "Acme Inc", AvatarURL: "https://cdn/acme.png"}))
+		})
+	})
+
+	Describe("campaign filter on /overview, /performers, /learnings", func() {
+		const instagramSqid = "rzgpTkARLH0L"
+
+		createCampaign := func(name string) string {
+			body, _ := json.Marshal(fiber.Map{"name": name, "campaign_type_id": "Uk"})
+			req := httptest.NewRequest("POST", "/api/campaigns", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+			var c models.Campaign
+			Expect(json.NewDecoder(resp.Body).Decode(&c)).To(Succeed())
+			return c.ID
+		}
+
+		// seedIn publishes one Zernio post in the given campaign and platform and
+		// writes its current analytics row.
+		seedIn := func(id, campaign, platformID, displayName string, reach int) {
+			published := time.Now().UTC().Add(-48 * time.Hour)
+			p := &models.Post{
+				ID: id, CampaignID: campaign, PlatformID: platformID,
+				Title: "Post " + id, Content: "content " + id,
+				MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+				Status: models.PostStatusPublished, Publisher: models.PublisherZernio,
+				PublisherPostID: "z-" + id, CTAType: models.CTATypeNone,
+				CreatedBy: userID, PublishedAt: &published,
+			}
+			Expect(postRepo.Create(tenantCtx(), p)).To(Succeed())
+			now := time.Now().UTC()
+			Expect(analyticsRepo.Upsert(tenantCtx(), &models.PostAnalytics{
+				PostID: id, PublisherPostID: "z-" + id, Publisher: models.PublisherZernio,
+				Platform: displayName, PublishedAt: &published, Reach: reach, Impressions: reach,
+				SyncStatus: "synced", FirstSeenAt: now, LastChangedAt: now, LastCheckedAt: now,
+			})).To(Succeed())
+		}
+
+		decode := func(resp *http.Response, into any) {
+			Expect(resp.StatusCode).To(Equal(200))
+			Expect(json.NewDecoder(resp.Body).Decode(into)).To(Succeed())
+		}
+
+		type performersBody struct {
+			Data struct {
+				TotalPosts int `json:"total_posts"`
+			} `json:"data"`
+		}
+		type overviewBody struct {
+			Data struct {
+				Cards []struct {
+					Metric string  `json:"metric"`
+					Value  float64 `json:"value"`
+				} `json:"cards"`
+				FollowersScope *string `json:"followers_scope"`
+			} `json:"data"`
+		}
+		cardValues := func(b overviewBody) map[string]float64 {
+			out := map[string]float64{}
+			for _, c := range b.Data.Cards {
+				out[c.Metric] = c.Value
+			}
+			return out
+		}
+
+		var other string
+		BeforeEach(func() {
+			other = createCampaign("Other Campaign")
+			seedIn("a-li", campaignID, linkedinSqid, "LinkedIn", 100)
+			seedIn("a-ig", campaignID, instagramSqid, "Instagram", 200)
+			seedIn("b-li", other, linkedinSqid, "LinkedIn", 400)
+		})
+
+		It("narrows /performers to the campaign's posts", func() {
+			var all, a, b performersBody
+			decode(get("/api/analytics/performers"), &all)
+			decode(get("/api/analytics/performers?campaign_id="+campaignID), &a)
+			decode(get("/api/analytics/performers?campaign_id="+other), &b)
+			Expect(all.Data.TotalPosts).To(Equal(3))
+			Expect(a.Data.TotalPosts).To(Equal(2))
+			Expect(b.Data.TotalPosts).To(Equal(1))
+		})
+
+		It("narrows /overview reach and posts published, and marks followers as workspace-wide", func() {
+			var all, a overviewBody
+			decode(get("/api/analytics/overview"), &all)
+			decode(get("/api/analytics/overview?campaign_id="+campaignID), &a)
+			Expect(cardValues(all)["reach"]).To(Equal(700.0))
+			Expect(all.Data.FollowersScope).To(BeNil())
+			Expect(cardValues(a)["reach"]).To(Equal(300.0))
+			Expect(cardValues(a)["posts_published"]).To(Equal(2.0))
+			Expect(a.Data.FollowersScope).To(HaveValue(Equal("workspace")))
+		})
+
+		It("combines with the platform filter", func() {
+			var body performersBody
+			decode(get("/api/analytics/performers?platform=linkedin&campaign_id="+campaignID), &body)
+			Expect(body.Data.TotalPosts).To(Equal(1))
+		})
+
+		It("reports no_data for a campaign with nothing measured", func() {
+			empty := createCampaign("Empty Campaign")
+			var body struct {
+				Available bool   `json:"available"`
+				Reason    string `json:"reason"`
+			}
+			decode(get("/api/analytics/performers?campaign_id="+empty), &body)
+			Expect(body.Available).To(BeFalse())
+			Expect(body.Reason).To(Equal("no_data"))
+		})
+
+		It("404s an unknown or foreign campaign", func() {
+			foreignTenant := "tn-con288-foreign"
+			ctx := context.Background()
+			_, err := db.NewInsert().Model(&models.Tenant{
+				ID: foreignTenant, Name: foreignTenant, Slug: foreignTenant, TierID: models.DefaultTierID,
+			}).On("CONFLICT (id) DO NOTHING").Exec(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			foreignID, err := models.NewID()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = db.NewInsert().Model(&models.Campaign{
+				ID: foreignID, TenantScoped: models.TenantScoped{TenantID: foreignTenant},
+				Name: "Theirs", CampaignTypeID: "Uk", CreatedBy: userID,
+			}).Exec(tenantctx.With(ctx, foreignTenant))
+			Expect(err).NotTo(HaveOccurred())
+
+			for _, path := range []string{"/api/analytics/overview", "/api/analytics/performers"} {
+				Expect(get(path+"?campaign_id=nope").StatusCode).To(Equal(404), path)
+				Expect(get(path+"?campaign_id="+foreignID).StatusCode).To(Equal(404), path)
+			}
+		})
+
+		It("rejects campaign_id on /learnings", func() {
+			resp := get("/api/analytics/learnings?campaign_id=" + campaignID)
+			Expect(resp.StatusCode).To(Equal(400))
+			var body map[string]any
+			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+			Expect(body["error"]).To(Equal("campaign_scope_unsupported"))
 		})
 	})
 

@@ -190,7 +190,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 // aggregates live-proxied to Zernio) and the activity daily reports.
 func registerAnalyticsRoutes(app *fiber.App, d *deps) {
 	r := d.r
-	handlers.NewAnalyticsHandler(r.postAnalyticsRepo, r.followerStatsRepo, r.postRepo, r.platformRepo, r.socialAccountRepo, d.zernio.Integration.Client, d.zernioProfileID, d.auth).Register(app)
+	handlers.NewAnalyticsHandler(r.postAnalyticsRepo, r.followerStatsRepo, r.postRepo, r.platformRepo, r.socialAccountRepo, r.campaignRepo, d.zernio.Integration.Client, d.zernioProfileID, d.auth).Register(app)
 	handlers.NewActivityHandler(d.svc.activityReport, d.auth).Register(app)
 }
 
