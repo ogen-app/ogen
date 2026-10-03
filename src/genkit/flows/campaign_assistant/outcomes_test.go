@@ -38,6 +38,7 @@ func assembled(t *testing.T, st *requestState, envelope string) *CampaignAssista
 
 func TestAssembleResult_WriteOutranksReview(t *testing.T) {
 	st := &requestState{briefReviewResult: briefReview(), briefResult: &BriefResult{Applied: true}}
+	st.recordWrite(actionBriefEnriched)
 
 	r := assembled(t, st, `{"explanation":"Reviewed and improved the brief.","action":"brief_reviewed"}`)
 
@@ -55,21 +56,28 @@ func TestTurnAction(t *testing.T) {
 	enrich := outcome{action: actionBriefEnriched}
 	generate := outcome{action: actionPostsGenerated}
 
+	dates := outcome{action: actionDatesUpdated}
+	redistribute := outcome{action: actionPostsRedistributed}
+
 	tests := []struct {
-		name string
-		outs []outcome
-		want string
+		name   string
+		outs   []outcome
+		writes []string
+		want   string
 	}{
-		{"none", nil, ""},
-		{"review only", []outcome{review}, actionBriefReviewed},
-		{"write then review", []outcome{enrich, review}, actionBriefEnriched},
-		{"review then write", []outcome{postsReview, generate}, actionPostsGenerated},
-		{"two reviews", []outcome{review, postsReview}, actionPostsReviewed},
-		{"two writes", []outcome{enrich, generate}, actionPostsGenerated},
+		{"none", nil, nil, ""},
+		{"review only", []outcome{review}, nil, actionBriefReviewed},
+		{"write then review", []outcome{enrich, review}, []string{actionBriefEnriched}, actionBriefEnriched},
+		{"review then write", []outcome{postsReview, generate}, []string{actionPostsGenerated}, actionPostsGenerated},
+		{"two reviews", []outcome{review, postsReview}, nil, actionPostsReviewed},
+		{"writes without a recorded order", []outcome{enrich, generate}, nil, actionPostsGenerated},
+		// outcomes() always lists dates before redistribute; the commit order decides.
+		{"dates committed last", []outcome{dates, redistribute}, []string{actionPostsRedistributed, actionDatesUpdated}, actionDatesUpdated},
+		{"redistribute committed last", []outcome{dates, redistribute}, []string{actionDatesUpdated, actionPostsRedistributed}, actionPostsRedistributed},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := turnAction(tc.outs); got != tc.want {
+			if got := turnAction(tc.outs, tc.writes); got != tc.want {
 				t.Errorf("turnAction = %q, want %q", got, tc.want)
 			}
 		})
