@@ -57,7 +57,7 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 	}
 	// An all-time lesson mined from one campaign is a much thinner claim than a
 	// workspace lesson, so the campaign filter is refused rather than honoured.
-	if c.Query("campaign_id") != "" {
+	if strings.TrimSpace(c.Query("campaign_id")) != "" {
 		return fiber.NewError(fiber.StatusBadRequest, "campaign_scope_unsupported")
 	}
 	scope, err := h.parsePlatformScope(c)
