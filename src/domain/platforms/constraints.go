@@ -31,6 +31,8 @@ const (
 	RuleMaxAttachments      = "max_attachments"       // Too many attachments for the type
 	RuleAttachmentKind      = "attachment_kind"       // Wrong attachment kind for the type
 	RuleRequiresVideoTitle  = "requires_video_title"  // Platform needs a title for video (YouTube)
+	RuleRequiresLink        = "requires_link"         // Post type needs a link (cta_url)
+	RuleInvalidLink         = "invalid_link"          // Link is not an absolute http(s) URL
 	RuleMaxContentChars     = "max_content_chars"     // Body text exceeds the platform/post-type cap
 	RuleMaxTitleChars       = "max_title_chars"       // Title exceeds the platform cap
 	RuleThreadSegmentCount  = "thread_segment_count"  // A thread needs 2..MaxThreadSegments messages

@@ -9,7 +9,7 @@ import (
 
 // mutatesLockedContent is the pure comparison behind the submitted-
 // post 409 content lock. It must flag a change to any content-identity field
-// (body/title/media/platform/post-type/sources) and ignore everything else,
+// (body/title/link/media/platform/post-type/sources) and ignore everything else,
 // so a no-op save or a status-only transition off a submitted post still
 // passes. Pure logic — no DB needed.
 func TestMutatesLockedContent(t *testing.T) {
@@ -17,6 +17,7 @@ func TestMutatesLockedContent(t *testing.T) {
 		return &models.Post{
 			Content:          "hello world",
 			Title:            "a title",
+			CTAUrl:           "https://example.com/a",
 			PlatformID:       "plat_1",
 			PlatformPostType: "feed",
 			MediaURLs:        models.StringSlice{"a", "b"},
@@ -29,6 +30,7 @@ func TestMutatesLockedContent(t *testing.T) {
 		return postRequest{
 			Content:          p.Content,
 			Title:            p.Title,
+			CTAUrl:           p.CTAUrl,
 			PlatformID:       p.PlatformID,
 			PlatformPostType: p.PlatformPostType,
 			MediaURLs:        p.MediaURLs,
@@ -49,6 +51,7 @@ func TestMutatesLockedContent(t *testing.T) {
 	}{
 		{"content", func(r *postRequest) { r.Content = "rewritten" }},
 		{"title", func(r *postRequest) { r.Title = "new title" }},
+		{"link", func(r *postRequest) { r.CTAUrl = "https://example.com/b" }},
 		{"platform", func(r *postRequest) { r.PlatformID = "plat_2" }},
 		{"post_type", func(r *postRequest) { r.PlatformPostType = "story" }},
 		{"media_removed", func(r *postRequest) { r.MediaURLs = models.StringSlice{"a"} }},
@@ -100,16 +103,16 @@ func TestMutatesLockedContent(t *testing.T) {
 		t.Error("setting a format on a post without one must count as a content mutation")
 	}
 
-	// Fields the lock deliberately does NOT own (date/account/CTA/notes/status
+	// Fields the lock deliberately does NOT own (date/account/cta_type/notes/status
 	// are governed elsewhere) must not trip it — that's what lets a status-only
 	// unschedule through on a submitted post.
 	unlocked := reqFor(p)
 	unlocked.Status = models.PostStatusDraft
-	unlocked.CTAUrl = "https://example.com"
+	unlocked.CTAType = models.CTATypeNone
 	unlocked.TargetAudienceNotes = "reminder"
 	unlocked.SocialAccountID = "acct_9"
 	if unlocked.mutatesLockedContent(p) {
-		t.Error("changing only non-locked fields (status/cta/notes/account) must not count as a content mutation")
+		t.Error("changing only non-locked fields (status/cta_type/notes/account) must not count as a content mutation")
 	}
 }
 
