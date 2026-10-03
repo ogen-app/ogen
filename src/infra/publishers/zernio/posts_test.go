@@ -340,3 +340,38 @@ func TestSubmit400IsTerminal(t *testing.T) {
 		t.Errorf("error message should include zernio's reason: %v", err)
 	}
 }
+
+// TestSubmitTitleRidesInPlatformSpecificData pins the wire shape: Zernio reads
+// a title only from platforms[].platformSpecificData.title, and a variant with
+// no extras sends no platformSpecificData key at all.
+func TestSubmitTitleRidesInPlatformSpecificData(t *testing.T) {
+	req := SubmitRequest{
+		Content: "description",
+		Platforms: []PlatformVariant{
+			{Platform: "youtube", AccountID: "acc-yt", PlatformSpecificData: &PlatformSpecificData{Title: "My Video"}},
+			{Platform: "linkedin", AccountID: "acc-li"},
+		},
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire struct {
+		Title     *string                     `json:"title"`
+		Platforms []struct {
+			Data map[string]any `json:"platformSpecificData"`
+		} `json:"platforms"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if wire.Title != nil {
+		t.Errorf("top-level title present: %s", raw)
+	}
+	if got := wire.Platforms[0].Data["title"]; got != "My Video" {
+		t.Errorf("youtube platformSpecificData.title = %v, want My Video: %s", got, raw)
+	}
+	if wire.Platforms[1].Data != nil {
+		t.Errorf("plain variant carries platformSpecificData: %s", raw)
+	}
+}

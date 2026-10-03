@@ -40,16 +40,19 @@ func (s JobStatus) IsTerminal() bool {
 type PlatformVariant struct {
 	Platform  string `json:"platform"`
 	AccountID string `json:"accountId"`
-	// PlatformSpecificData carries per-platform extras — today only a native
-	// thread's ordered messages. A pointer so it (and its
-	// platformSpecificData key) is omitted entirely for ordinary posts, keeping
-	// their payload byte-identical to before.
+	// PlatformSpecificData carries per-platform extras — a native thread's
+	// ordered messages and the title of platforms that take one. A pointer so
+	// it (and its platformSpecificData key) is omitted entirely for posts that
+	// need neither.
 	PlatformSpecificData *PlatformSpecificData `json:"platformSpecificData,omitempty"`
 }
 
-// PlatformSpecificData is the per-variant extras bag. Serialised as
-// platformSpecificData; only ThreadItems is populated so far.
+// PlatformSpecificData is the per-variant extras bag, serialised as
+// platformSpecificData. Title is the explicit title for platforms that have
+// one (YouTube, Pinterest, Reddit); Zernio has no top-level title, and without
+// this it falls back to the first line of content.
 type PlatformSpecificData struct {
+	Title       string       `json:"title,omitempty"`
 	ThreadItems []ThreadItem `json:"threadItems,omitempty"`
 }
 
@@ -119,13 +122,6 @@ type SubmitRequest struct {
 	// as Zernio expects). Populated by the queue handler from the Post's
 	// PostAttachment rows.
 	MediaItems []map[string]any `json:"mediaItems,omitempty"`
-	// Title carries the post title for platforms that need one explicitly —
-	// principally YouTube video. Omitted when empty; platforms
-	// that derive a title from the caption ignore it. SPIKE-PENDING: the exact
-	// Zernio shape (top-level vs per-PlatformVariant, plus description/tags/
-	// privacy/thumbnail) is unconfirmed against docs.zernio.com — this is the
-	// minimal field; extend once the §6.6 spike lands.
-	Title string `json:"title,omitempty"`
 }
 
 // PostEnvelope mirrors Zernio's standard `{post: {...}}` response

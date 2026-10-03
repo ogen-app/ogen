@@ -45,8 +45,9 @@ UPDATE platforms SET video_constraints =
     WHERE id = '81mUCmc2xsKd';
 
 -- YouTube: long-form video + Shorts; mp4/mov/webm/avi/mkv; up to ~64 GB / 12 h.
--- requires_video_title: YouTube rejects an untitled upload, so publishing is
--- blocked until the post has a title (CON-148 §9).
+-- requires_video_title: a product rule, not a platform one. Zernio accepts an
+-- untitled upload but titles it from the first line of the description, else
+-- "Untitled Video", so publishing is blocked until the post has a title.
 UPDATE platforms SET video_constraints =
     '{"max_file_size_bytes":68719476736,"allowed_formats":["mp4","mov","webm","avi","mkv"],"max_duration_seconds":43200,"min_duration_seconds":0,"max_width":7680,"max_height":4320,"allowed_aspect_ratios":["16:9","9:16"],"max_attachments_per_post":1,"requires_video_title":true}'
     WHERE id = '8S8bWQTG6qD';

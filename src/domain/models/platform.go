@@ -120,8 +120,9 @@ type VideoConstraints struct {
 	AllowedAspectRatios   []string `json:"allowed_aspect_ratios"`
 	MaxAttachmentsPerPost int      `json:"max_attachments_per_post"` // usually 1
 	// RequiresVideoTitle blocks publishing a video post whose title is empty.
-	// YouTube requires a title; most feed/Reel platforms derive
-	// one from the caption, so this stays false for them.
+	// A product rule for YouTube, where an untitled upload would be titled from
+	// the description's first line or "Untitled Video"; feed/Reel platforms
+	// have no separate title, so this stays false for them.
 	RequiresVideoTitle bool `json:"requires_video_title"`
 }
 
