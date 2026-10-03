@@ -280,7 +280,9 @@ func buildClone(src *models.Post, tgt target, opts Options, newID, content strin
 		Title:            title,
 		Content:          content,
 		// The body is copied, so its shape is too — even across platforms.
-		ContentFormat:    src.ContentFormat,
+		ContentFormat: src.ContentFormat,
+		// Same campaign, so the series stays in scope.
+		SeriesID:         src.SeriesID,
 		MediaURLs:        models.StringSlice{},
 		Status:           models.PostStatusDraft,
 		CTAType:          models.CTATypeNone,

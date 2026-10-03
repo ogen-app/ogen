@@ -41,6 +41,7 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 		postAttRepo repository.PostAttachmentRepository
 		versionRepo repository.PostVersionRepository
 		logRepo     repository.PostLogRepository
+		seriesRepo  repository.SeriesRepository
 	)
 
 	BeforeAll(func() {
@@ -71,6 +72,7 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 		postAttRepo = repository.NewPostAttachmentRepository(db)
 		versionRepo = repository.NewPostVersionRepository(db)
 		logRepo = repository.NewPostLogRepository(db)
+		seriesRepo = repository.NewSeriesRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, "test_session")
 
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
@@ -129,7 +131,7 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 
 	AfterEach(func() {
 		ctx := tenantCtx()
-		for _, t := range []string{"post_attachments", "post_versions", "post_logs", "post_assistant_messages", "posts", "campaigns", "sessions", "users", "accounts"} {
+		for _, t := range []string{"post_attachments", "post_versions", "post_logs", "post_assistant_messages", "posts", "campaign_series", "brand_series", "campaigns", "sessions", "users", "accounts"} {
 			_, _ = db.NewDelete().TableExpr(t).Where("1 = 1").Exec(ctx)
 		}
 	})
@@ -291,5 +293,21 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 		resp, c := clone(srcID, fiber.Map{"target_platform_id": threadsPlatformID})
 		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
 		Expect(c.ContentFormat).To(Equal(&howTo))
+	})
+
+	It("#7 carries the series", func() {
+		srcID := createPost(linkedinPlatformID, "text-post", "a digest")
+		seriesID := "series-clone"
+		Expect(seriesRepo.Create(tenantCtx(), &models.Series{
+			ID: seriesID, Name: "Digest", Supply: models.SeriesSupplySelf,
+		})).To(Succeed())
+		src, err := postRepo.GetByID(tenantCtx(), srcID)
+		Expect(err).NotTo(HaveOccurred())
+		src.SeriesID = &seriesID
+		Expect(postRepo.Update(tenantCtx(), src)).To(Succeed())
+
+		resp, c := clone(srcID, fiber.Map{"target_platform_id": threadsPlatformID})
+		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+		Expect(c.SeriesID).To(Equal(&seriesID))
 	})
 })
