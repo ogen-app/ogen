@@ -199,6 +199,7 @@ src/
   usecase/                         # application orchestration / services — the one home for "where orchestration lives"
     post_actions/ campaign_actions/ scheduling/ campaigngoal/ notes/ settings/
     brandresolve/ notify/ accountselect/ tenant_actions/ activity/
+    ideas/ ingest/ connectlink/ loginsecurity/
   domain/                          # business core
     models/                        # bun-tagged record structs (single source of truth for the schema)
     platforms/                     # per-platform attachment + text validation rules, Markdown → social-text flattening
@@ -208,8 +209,8 @@ src/
     repository/                    # narrow per-aggregate persistence layer
     database/                      # bun.DB factories (control-plane + analytics) and migrations
     publishers/                    # Publisher abstraction; publishers/zernio is the concrete impl
-    storage/ secrets/ crypto/ email/ firecrawl/ embedding/ eventhub/ vendors/
-  kernel/                          # cross-cutting: config/ logging/ telemetry/ tenantctx/ netguard/ usage/ activity/
+    storage/ secrets/ crypto/ email/ firecrawl/ embedding/ eventhub/ vendors/ geoip/
+  kernel/                          # cross-cutting: config/ logging/ telemetry/ tenantctx/ netguard/ usage/ activity/ background/
   jobs/ jobs/queues/               # River runtime + workers (submit/poll/cancel/reconcile, analytics, PDF/URL, email)
   genkit/                          # Genkit AI flows (assistants, content plan, quality, embeddings)
   analytics/                       # post-analytics read models (overview / performers / lessons / per-post)
@@ -235,6 +236,7 @@ completed-job retention. Workers process `submit_post_to_zernio`,
 `process_url`, `process_audio` (on a dedicated `audio` queue so long
 transcriptions can't starve short ingestion), `process_image` (likewise on a
 dedicated `image` queue so heavy vision runs can't starve short ingestion),
+`reembed_image` (rebuilds an image's chunks after its description is edited),
 `send_email`, `bootstrap_zernio_profile` / `teardown_zernio_profile` (per-workspace
 Zernio profile on signup / workspace delete), `notify_harbor_tenant_registered`,
 plus periodic `reconcile_scheduled_posts`,
@@ -250,18 +252,19 @@ those tables directly.
 
 | Area | What's there |
 |------|--------------|
-| **Multi-tenancy** | Public SaaS signup mints a tenant; all domain rows are tenant-scoped and resolved per request. Users, sessions, invitations, and password reset are first-class. |
-| **Campaigns & posts** | Campaign types, campaigns, posts, post versions, notes, per-platform validation, quality scoring, and streaming AI assistants. |
+| **Multi-tenancy** | Public SaaS signup mints a tenant; all domain rows are tenant-scoped and resolved per request. Users, sessions, invitations, and password reset are first-class. Sign-ins from an unrecognised browser trigger a new-device email (offline GeoIP + relay geofeeds for the location line) whose "This wasn't me" link signs out every session. |
+| **Campaigns & posts** | Campaign types (shared defaults plus tenant-owned types), campaigns, posts, post versions, notes, per-platform validation, quality scoring, and streaming AI assistants. Posts carry an optional content format (how-to, explainer, listicle…) that the assistants respect. |
+| **Ideas** | A workspace Ideas backlog: capture, edit, and triage from an inbox to a verdict (yes / later with a reminder / no). |
 | **Content bank** | Markdown notes, PDF, office/text document, audio (transcribed to time-anchored chunks), image (vision-extracted to source-anchored blocks + alt text), and URL assets (scraped via Firecrawl), with paragraph-/source-aware chunking, Gemini embeddings, and pgvector similarity search used to ground the assistants. Document, audio, and image ingestion run in the `document-service` / `audio-service` / `image-service` sidecars. |
-| **Attachments** | Image, PDF, and video uploads on S3-compatible storage, processed by the `image-service` / `pdf-service` / `video-service` sidecars (EXIF/geo-strip + alt text, thumbnails, page counts, duration/codec/poster). Per-platform constraints surface as soft validation warnings. |
-| **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are River jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. Native threads on X and Threads; Markdown is flattened to platform text at egress and limits count visible length. Deleting a workspace tears down its Zernio profile. |
+| **Attachments** | Image, PDF, and video uploads on S3-compatible storage, processed by the `image-service` / `pdf-service` / `video-service` sidecars (EXIF/geo-strip + alt text, thumbnails, page counts, duration/codec/poster). A content-bank image can be attached to a post directly (re-stripped from the original). Post reads expose a `cover_url`. Per-platform constraints surface as soft validation warnings. |
+| **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are River jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. Native threads on X and Threads; YouTube titles go in `platformSpecificData`; a reschedule whose Zernio post is gone creates a fresh one. Markdown is flattened to platform text at egress and limits count visible length. Deleting a workspace tears down its Zernio profile. |
 | **Post Log** | Auditable per-post history — state transitions, validation outcomes, background-task lifecycle, Zernio interactions, reconciliation timeouts, user actions. Sanitized of secrets, size-capped, configurable retention. |
-| **Analytics** | Cumulative overview KPIs, best/worst performers with age-adjusted "against typical", all-time lessons (heatmap + lifespan curve), and per-post drill-down — backed by TimescaleDB continuous aggregates. |
+| **Analytics** | Cumulative overview KPIs, best/worst performers with age-adjusted "against typical", all-time lessons (heatmap + lifespan curve), and per-post drill-down — backed by TimescaleDB continuous aggregates. Filterable by platform (repeatable `?platform=`) and, on overview/performers, by `campaign_id`; accounts are labelled with display name + avatar. |
 | **Activity & notifications** | Durable per-user notification inbox (REST + SSE with `Last-Event-ID` replay), server-side Activity daily reports, and producers such as expiring connections and manual-publish-due posts. |
 | **Announcements** | Operator-authored in-app banners, targeted to all tenants or by tier or group, with per-user click/dismiss tracking. |
 | **Plans & entitlements** | Versioned tier entitlements (Trial / Pro / Max). A fail-open `Limiter` enforces standing caps (seats, campaigns, assets, storage, web imports → 402) and campaign-type gates (→ 403), and sends near-limit notifications. Live usage counts are returned by `GET /api/me/entitlements`. |
 | **Usage metering** | Per-tenant model/publisher cost metering with optional daily/monthly spend caps (enforce or warn), recorded to the analytics DB via a pluggable vendor registry. |
-| **Brand materials** | Voices, audiences, and guardrails bound to campaigns/posts and injected into the writing flows (precedence: post → campaign → default). |
+| **Brand materials** | Voices, audiences, and guardrails bound to campaigns/posts and injected into the writing flows (precedence: post → campaign → default), plus a facts ledger (about us / the problem / the opportunity) whose expired facts drop out of generation. |
 | **Email** | Transactional + drip email via Resend, with embedded templates, one-click unsubscribe, and delivery webhooks. Delivery events (delivered/opened/clicked/bounced…) and rendered bodies are persisted for the Harbor Emails tab. New-tenant signups notify operators via a signed Harbor webhook. |
 | **Secrets** | Envelope-encrypted at rest (per-secret DEK wrapped by an on-disk KEK). Rotatable via the operator gRPC surface without restart. |
 | **Operator surface** | Internal gRPC `SecretsService`, `TenantAdminService`, `PlanAdminService`, `PlatformAdminService`, `ModelConfigAdminService`, `EmailAdminService`, and `AnnouncementAdminService`, consumed by the Harbor ops dashboard over the private network. |
@@ -316,7 +319,7 @@ segment use the same model.
 | `process_image` (River, dedicated `image` queue) | Presigns the original + a normalized slot, runs the full `image-service` pipeline (normalize + EXIF-strip + classify + per-shape extraction + description + alt text), persists the extraction/blocks, embeds the searchable text, and snapshots cost. | Image asset upload. |
 | `content_plan` | Per-phase, per-platform post drafts for a campaign; parallel K-sized batches against Anthropic with SSE progress. | `POST /api/campaigns/:id/generate-draft` (SSE). |
 | `post_assistant` | Interactive post editor. Haiku planner loop + Sonnet `editPost` write-tool; streams `explanation_delta` / `content_delta`; tool use over the asset library. | `POST /api/posts/:id/assistant` (SSE). |
-| `campaign_assistant` | Campaign-level planning assistant; flows-as-tools (content plan, enrich brief, draft post, consistency check) under a Haiku orchestration loop. | Campaign assistant endpoint (SSE). |
+| `campaign_assistant` | Campaign-level planning assistant; flows-as-tools (content plan, enrich brief, draft post, consistency check) under a Haiku orchestration loop. `enrich_brief` edits the campaign's existing brief rather than rewriting it. | Campaign assistant endpoint (SSE). |
 | `post_quality` | Scores a post version across weighted per-platform dimensions. | Quality assessment. |
 
 ---
