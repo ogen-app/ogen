@@ -141,10 +141,15 @@ func TestThreadSegmentsValueScan(t *testing.T) {
 	}
 }
 
-// SnapshotContent is just Content for every post type — a thread's
-// Content is now the canonical full body (with "---" delimiters), so it already
-// records the whole chain and is injective on its own.
+// SnapshotContent is Content, plus a link post's URL. A thread's Content is the
+// canonical full body (with "---" delimiters), so it already records the whole
+// chain and is injective on its own.
 func TestSnapshotContent(t *testing.T) {
+	link := &Post{PlatformPostType: PostTypeLinkPost, Content: "read this", CTAUrl: "https://example.com"}
+	if got, want := link.SnapshotContent(), "read this\n\nhttps://example.com"; got != want {
+		t.Errorf("link post: SnapshotContent() = %q, want %q", got, want)
+	}
+
 	plain := &Post{PlatformPostType: "text-post", Content: "hello"}
 	if got := plain.SnapshotContent(); got != "hello" {
 		t.Errorf("ordinary post: SnapshotContent() = %q, want %q", got, "hello")
@@ -165,5 +170,31 @@ func TestSnapshotContent(t *testing.T) {
 	other := &Post{PlatformPostType: PostTypeThread, Content: "root\n\n---\n\ndifferent"}
 	if other.SnapshotContent() == thread.SnapshotContent() {
 		t.Error("distinct thread bodies produced identical SnapshotContent()")
+	}
+}
+
+func TestAppendLinkMatchesCompleteURL(t *testing.T) {
+	const link = "https://example.com"
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"exact URL", "see https://example.com", "see https://example.com"},
+		{"URL then sentence punctuation", "see https://example.com.", "see https://example.com."},
+		{"URL in parentheses", "(https://example.com) today", "(https://example.com) today"},
+		{"URL then comma", "https://example.com, then more", "https://example.com, then more"},
+		{"longer path", "see https://example.com/pricing", "see https://example.com/pricing\n\nhttps://example.com"},
+		{"longer host", "see https://example.com.evil.io", "see https://example.com.evil.io\n\nhttps://example.com"},
+		{"query string", "see https://example.com?ref=x", "see https://example.com?ref=x\n\nhttps://example.com"},
+		{"port", "see https://example.com:8080", "see https://example.com:8080\n\nhttps://example.com"},
+		{"prefixed token", "xhttps://example.com", "xhttps://example.com\n\nhttps://example.com"},
+		{"second occurrence is whole", "https://example.com/a and https://example.com", "https://example.com/a and https://example.com"},
+	}
+	for _, tc := range cases {
+		p := &Post{PlatformPostType: PostTypeLinkPost, CTAUrl: link}
+		if got := p.AppendLink(tc.text); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
