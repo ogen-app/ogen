@@ -148,7 +148,7 @@ func (s *Service) Create(ctx context.Context, in Input) (*models.Series, error) 
 		UpdatedAt:     now,
 	}
 	if err := s.repo.Create(ctx, series); err != nil {
-		return nil, err
+		return nil, repoError(err)
 	}
 	return series, nil
 }
@@ -223,24 +223,19 @@ func (s *Service) CampaignSeries(ctx context.Context, campaignID string) (*model
 // Attach adds one series to a campaign at the series' default rhythm.
 // Idempotent: a series the campaign already runs keeps its row and rhythm.
 func (s *Service) Attach(ctx context.Context, campaignID, seriesID string) (*models.CampaignSeries, error) {
-	if err := s.checkCampaign(ctx, campaignID); err != nil {
-		return nil, err
-	}
-	series, err := s.Get(ctx, seriesID)
+	err := s.repo.Attach(ctx, campaignID, seriesID, func(series *models.Series) (*models.CampaignSeriesRun, error) {
+		if series.CampaignID != nil && *series.CampaignID != campaignID {
+			return nil, ErrSeriesOutOfScope
+		}
+		return &models.CampaignSeriesRun{
+			CampaignID: campaignID,
+			SeriesID:   seriesID,
+			Rhythm:     series.DefaultRhythm,
+			CreatedAt:  s.stamp(),
+		}, nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	if series.CampaignID != nil && *series.CampaignID != campaignID {
-		return nil, ErrSeriesOutOfScope
-	}
-	run := &models.CampaignSeriesRun{
-		CampaignID: campaignID,
-		SeriesID:   seriesID,
-		Rhythm:     series.DefaultRhythm,
-		CreatedAt:  s.stamp(),
-	}
-	if err := s.repo.Attach(ctx, run); err != nil {
-		return nil, err
+		return nil, repoError(err)
 	}
 	return s.runs(ctx, campaignID)
 }
@@ -366,6 +361,18 @@ func validate(in Input) error {
 		return ErrInvalidRhythm
 	}
 	return nil
+}
+
+// repoError maps the repository's parent-row misses onto the service's 404s.
+func repoError(err error) error {
+	switch {
+	case errors.Is(err, repository.ErrCampaignNotLive):
+		return ErrCampaignNotFound
+	case errors.Is(err, repository.ErrSeriesNotLive):
+		return ErrNotFound
+	default:
+		return err
+	}
 }
 
 func notFound(err error) error {

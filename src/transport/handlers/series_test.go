@@ -50,8 +50,19 @@ var _ = Describe("SeriesHandler", Ordered, func() {
 		db       *bun.DB
 		admin    *http.Cookie
 		postRepo repository.PostRepository
+		svc      *series.Service
 		userID   string
+		// held are open transactions a spec may still hold locks with.
+		held []bun.Tx
 	)
+
+	// Runs before AfterEach's table cleanup, which would wait on a held lock.
+	JustAfterEach(func() {
+		for _, tx := range held {
+			_ = tx.Rollback()
+		}
+		held = nil
+	})
 
 	BeforeAll(func() {
 		db = mustOpenTestDBWithMigrations()
@@ -72,7 +83,7 @@ var _ = Describe("SeriesHandler", Ordered, func() {
 		campaignTypeRepo := repository.NewCampaignTypeRepository(db)
 		campaignRepo := repository.NewCampaignRepository(db, repository.NewTagRepository(db), repository.NewPlatformRepository(db), campaignTypeRepo)
 		postRepo = repository.NewPostRepository(db)
-		svc := series.New(repository.NewSeriesRepository(db))
+		svc = series.New(repository.NewSeriesRepository(db))
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 
 		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
@@ -452,6 +463,52 @@ var _ = Describe("SeriesHandler", Ordered, func() {
 		var kept *string
 		Expect(db.NewSelect().TableExpr("posts").Column("series_id").Where("id = ?", "p1").Scan(context.Background(), &kept)).To(Succeed())
 		Expect(kept).To(Equal(&local.ID))
+	})
+
+	// ── Concurrent deletes ───────────────────────────────────────────────────
+
+	// holdDelete soft-deletes a row in an open transaction, the way the series
+	// and campaign deletes do, and returns the commit. A spec that fails before
+	// committing rolls back, so the held lock never blocks cleanup.
+	holdDelete := func(table, id string) func() {
+		GinkgoHelper()
+		tx, err := db.BeginTx(context.Background(), nil)
+		Expect(err).NotTo(HaveOccurred())
+		held = append(held, tx)
+		_, err = tx.NewUpdate().TableExpr(table).Set("deleted_at = now()").Where("id = ?", id).Exec(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		return func() { Expect(tx.Commit()).To(Succeed()) }
+	}
+
+	It("orders attach behind a series delete in flight, so no run outlives the series", func() {
+		camp := createCampaign(admin, "Launch")
+		a := create(admin, digest(nil))
+		commit := holdDelete("brand_series", a.ID)
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := svc.Attach(tenantCtx(), camp, a.ID)
+			done <- err
+		}()
+		Consistently(done, "300ms").ShouldNot(Receive())
+		commit()
+		Eventually(done, "5s").Should(Receive(MatchError(series.ErrNotFound)))
+		Expect(runsOf(admin, camp).Runs).To(BeEmpty())
+	})
+
+	It("orders a campaign-local create behind a campaign delete in flight", func() {
+		camp := createCampaign(admin, "Launch")
+		commit := holdDelete("campaigns", camp)
+
+		done := make(chan error, 1)
+		go func() {
+			_, err := svc.Create(tenantCtx(), series.Input{Name: "Local", Supply: models.SeriesSupplySelf, CampaignID: &camp})
+			done <- err
+		}()
+		Consistently(done, "300ms").ShouldNot(Receive())
+		commit()
+		Eventually(done, "5s").Should(Receive(MatchError(series.ErrCampaignNotFound)))
+		Expect(list(admin)).To(BeEmpty())
 	})
 
 	// ── Usage ────────────────────────────────────────────────────────────────
