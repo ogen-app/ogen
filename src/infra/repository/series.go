@@ -11,6 +11,13 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
+// ErrCampaignNotLive and ErrSeriesNotLive report that a write's parent row is
+// unknown, in another tenant, or soft-deleted.
+var (
+	ErrCampaignNotLive = errors.New("campaign not live")
+	ErrSeriesNotLive   = errors.New("series not live")
+)
+
 // SeriesRepository persists series and the campaign runs of them. Every query
 // runs through bun's Model API so the TenantScoped hooks scope tenant_id, and
 // every read skips soft-deleted series.
@@ -21,7 +28,8 @@ type SeriesRepository interface {
 	// GetByID returns sql.ErrNoRows for an unknown, cross-tenant or deleted id.
 	GetByID(ctx context.Context, id string) (*models.Series, error)
 	// Create inserts the series. A campaign-local series is attached to its
-	// campaign at its default rhythm in the same transaction.
+	// campaign at its default rhythm in the same transaction, under a share
+	// lock on the live campaign row; ErrCampaignNotLive when it is gone.
 	Create(ctx context.Context, s *models.Series) error
 	// Update writes the named columns plus updated_at. Returns false when no
 	// live row matched.
@@ -34,8 +42,12 @@ type SeriesRepository interface {
 
 	// Runs returns the campaign's runs, oldest attach first. Never nil.
 	Runs(ctx context.Context, campaignID string) ([]models.CampaignSeriesRun, error)
-	// Attach inserts a run, leaving an existing one (and its rhythm) as it is.
-	Attach(ctx context.Context, run *models.CampaignSeriesRun) error
+	// Attach share-locks the live campaign and series rows, hands the series to
+	// build, and inserts the run build returns, leaving an existing one (and
+	// its rhythm) as it is. The locks order it against a concurrent soft
+	// delete of either parent: the delete waits and then removes the run, or
+	// commits first and Attach returns ErrCampaignNotLive / ErrSeriesNotLive.
+	Attach(ctx context.Context, campaignID, seriesID string, build func(*models.Series) (*models.CampaignSeriesRun, error)) error
 	Detach(ctx context.Context, campaignID, seriesID string) error
 	// SetRhythm returns false when the campaign does not run the series.
 	SetRhythm(ctx context.Context, campaignID, seriesID string, rhythm *models.SeriesRhythm) (bool, error)
@@ -81,6 +93,11 @@ func (r *seriesRepository) GetByID(ctx context.Context, id string) (*models.Seri
 
 func (r *seriesRepository) Create(ctx context.Context, s *models.Series) error {
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if s.CampaignID != nil {
+			if err := lockLiveCampaign(ctx, tx, *s.CampaignID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.NewInsert().Model(s).Exec(ctx); err != nil {
 			return err
 		}
@@ -177,11 +194,52 @@ func (r *seriesRepository) Runs(ctx context.Context, campaignID string) ([]model
 	return runs, nil
 }
 
-func (r *seriesRepository) Attach(ctx context.Context, run *models.CampaignSeriesRun) error {
-	_, err := r.db.NewInsert().
-		Model(run).
-		On("CONFLICT (campaign_id, series_id) DO NOTHING").
-		Exec(ctx)
+func (r *seriesRepository) Attach(ctx context.Context, campaignID, seriesID string, build func(*models.Series) (*models.CampaignSeriesRun, error)) error {
+	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := lockLiveCampaign(ctx, tx, campaignID); err != nil {
+			return err
+		}
+		series := new(models.Series)
+		err := tx.NewSelect().
+			Model(series).
+			Where("bs.id = ?", seriesID).
+			Where("bs.deleted_at IS NULL").
+			For("SHARE").
+			Scan(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSeriesNotLive
+		}
+		if err != nil {
+			return err
+		}
+		run, err := build(series)
+		if err != nil {
+			return err
+		}
+		_, err = tx.NewInsert().
+			Model(run).
+			On("CONFLICT (campaign_id, series_id) DO NOTHING").
+			Exec(ctx)
+		return err
+	})
+}
+
+// lockLiveCampaign share-locks a live campaign row for the rest of tx, so a
+// concurrent soft delete waits for tx to commit and then sees what it wrote.
+// Under READ COMMITTED a delete that committed first fails the deleted_at
+// recheck, which is ErrCampaignNotLive.
+func lockLiveCampaign(ctx context.Context, tx bun.Tx, campaignID string) error {
+	var id string
+	err := tx.NewSelect().
+		Model((*models.Campaign)(nil)).
+		Column("c.id").
+		Where("c.id = ?", campaignID).
+		Where("c.deleted_at IS NULL").
+		For("SHARE").
+		Scan(ctx, &id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrCampaignNotLive
+	}
 	return err
 }
 
