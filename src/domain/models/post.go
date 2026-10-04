@@ -271,16 +271,55 @@ func (p *Post) IsLinkPost() bool {
 
 // AppendLink returns text with a link post's URL added as its last paragraph —
 // the message the network receives, since the URL travels inside it and the
-// network unfurls it into a card. Text that already contains the URL is
-// returned unchanged, as is the text of any other post type (a URL kept from
-// a type switch does not publish). An empty text yields the bare URL.
+// network unfurls it into a card. Text that already contains the complete URL
+// is returned unchanged, as is the text of any other post type (a URL kept
+// from a type switch does not publish). A longer URL that merely starts with
+// the link does not count. An empty text yields the bare URL.
 func (p *Post) AppendLink(text string) string {
 	link := strings.TrimSpace(p.CTAUrl)
-	if !p.IsLinkPost() || link == "" || strings.Contains(text, link) {
+	if !p.IsLinkPost() || link == "" || containsURL(text, link) {
 		return text
 	}
 	if strings.TrimSpace(text) == "" {
 		return link
 	}
 	return strings.TrimRight(text, " \t\n") + "\n\n" + link
+}
+
+// containsURL reports whether text holds url as a whole token: preceded by the
+// start, whitespace or an opening bracket/quote, and followed by the end,
+// whitespace, a closing bracket/quote, or sentence punctuation that ends the
+// token. "https://a.com" is not contained in "https://a.com/b".
+func containsURL(text, url string) bool {
+	for from := 0; ; {
+		i := strings.Index(text[from:], url)
+		if i < 0 {
+			return false
+		}
+		start, end := from+i, from+i+len(url)
+		if urlStartsAt(text, start) && urlEndsAt(text, end) {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+func urlStartsAt(text string, i int) bool {
+	return i == 0 || strings.ContainsRune(" \t\r\n([<\"'", rune(text[i-1]))
+}
+
+func urlEndsAt(text string, i int) bool {
+	for ; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case strings.ContainsRune(" \t\r\n)]>\"'", rune(c)):
+			return true
+		case strings.ContainsRune(".,;:!?", rune(c)):
+			// Trailing punctuation ends the URL only if nothing URL-like follows.
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
