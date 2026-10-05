@@ -1,6 +1,8 @@
 package server
 
 import (
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
@@ -9,6 +11,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
 // repos is the API server's full data-access surface, built once by
@@ -177,6 +180,9 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 	// leaves CORS off entirely.
 	if cfg.CORSAllowedOrigins != "" {
 		app.Use(cors.New(cors.Config{
+			// Plugin routes answer their own preflights below; left to this
+			// policy, a plugin's preflight would be refused before reaching them.
+			Next:             isPluginRoute,
 			AllowOrigins:     cfg.CORSAllowedOrigins,
 			AllowCredentials: true,
 			AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
@@ -185,5 +191,22 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 			AllowHeaders: "Content-Type,sentry-trace,baggage,traceparent,tracestate",
 		}))
 	}
+	// Design-tool plugins call from an iframe whose origin is "null", which
+	// only a wildcard matches. A wildcard is safe here because these routes
+	// never read cookies: they authenticate by bearer plugin token alone.
+	// Mounted whether or not the UI policy above is on.
+	app.Use(handlers.PluginRoutePrefix, cors.New(cors.Config{
+		AllowOrigins:  "*",
+		AllowMethods:  "GET,POST,DELETE,OPTIONS",
+		AllowHeaders:  "Authorization,Content-Type",
+		ExposeHeaders: "Retry-After",
+		MaxAge:        600,
+	}))
 	return app
+}
+
+// isPluginRoute reports whether a request targets the plugin API, which runs
+// its own CORS policy.
+func isPluginRoute(c *fiber.Ctx) bool {
+	return strings.HasPrefix(c.Path(), handlers.PluginRoutePrefix+"/")
 }
