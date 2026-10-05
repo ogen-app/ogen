@@ -349,11 +349,19 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	return h.createAttachment(c, post, att, thumbnail, up.quota, session.TenantID)
 }
 
-// createAttachment persists a prepared attachment and answers 201. Once the row
-// and its bytes exist it fires any near-limit quota crossing, and for an image
-// with no alt text it starts generation in the background: the request stays
-// fast, and the generator writes only where alt text is still un-edited.
+// createAttachment persists a prepared attachment and answers 201.
 func (h *PostAttachmentsHandler) createAttachment(c *fiber.Ctx, post *models.Post, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID string) error {
+	if err := h.saveAttachment(c, att, thumbnail, quota, tenantID); err != nil {
+		return err
+	}
+	return h.respondAttachment(c, post, att)
+}
+
+// saveAttachment persists a prepared attachment. Once the row and its bytes
+// exist it fires any near-limit quota crossing, and for an image with no alt
+// text it starts generation in the background: the request stays fast, and
+// the generator writes only where alt text is still un-edited.
+func (h *PostAttachmentsHandler) saveAttachment(c *fiber.Ctx, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID string) error {
 	if err := h.persistAttachment(reqCtx(c), att, thumbnail); err != nil {
 		return err
 	}
@@ -365,7 +373,12 @@ func (h *PostAttachmentsHandler) createAttachment(c *fiber.Ctx, post *models.Pos
 			h.generateAttachmentAltText(altCtx, tenantID, att.ID, att.S3Key)
 		})
 	}
+	return nil
+}
 
+// respondAttachment answers 201 with a saved attachment and its per-platform
+// soft warnings.
+func (h *PostAttachmentsHandler) respondAttachment(c *fiber.Ctx, post *models.Post, att *models.PostAttachment) error {
 	h.hydratePresigned(c, att)
 	return c.Status(fiber.StatusCreated).JSON(attachmentResponse{
 		PostAttachment:     att,

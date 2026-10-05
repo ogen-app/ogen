@@ -79,22 +79,35 @@ func (h *PostAttachmentsHandler) AttachFromAsset(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	att, err := newBankAttachment(post, &req, session.UserID)
+	att, err := h.attachBankAsset(c, post, &req, session)
 	if err != nil {
-		return err
+		return attachmentError(c, err)
+	}
+	return h.respondAttachment(c, post, att)
+}
+
+// attachBankAsset copies a content-bank image onto post as a new attachment:
+// it validates the request, strips the bank original's metadata into the
+// attachment's own object, gates media_storage_bytes on the stripped size and
+// persists the row. The caller has checked the post is mutable. Image rejects
+// come back as *attachmentReject.
+func (h *PostAttachmentsHandler) attachBankAsset(c *fiber.Ctx, post *models.Post, req *attachFromAssetRequest, session *models.Session) (*models.PostAttachment, error) {
+	att, err := newBankAttachment(post, req, session.UserID)
+	if err != nil {
+		return nil, err
 	}
 	file, err := h.loadBankImage(reqCtx(c), req.AssetID, att, req.AltText == nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if h.image == nil {
-		return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
+		return nil, rejectUpload(fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
 	}
 	cleanKey := attachmentKey(reqCtx(c), att, strings.ToLower(filepath.Ext(file.S3Key)))
 	prep, err := h.stripImage(reqCtx(c), file.S3Key, cleanKey, file.MimeType, file.OriginalName)
 	if err != nil {
-		return attachmentError(c, err)
+		return nil, err
 	}
 	// Gate on the stripped copy's size — what the attachment stores and the
 	// usage counter sums — not the bank original's. Nothing was uploaded, so
@@ -102,7 +115,7 @@ func (h *PostAttachmentsHandler) AttachFromAsset(c *fiber.Ctx) error {
 	quota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", prep.SizeBytes)
 	if err != nil {
 		_ = h.storage.Delete(reqCtx(c), cleanKey)
-		return err
+		return nil, err
 	}
 	att.MimeType = prep.Mime
 	att.SizeBytes = prep.SizeBytes
@@ -111,7 +124,10 @@ func (h *PostAttachmentsHandler) AttachFromAsset(c *fiber.Ctx) error {
 	att.IsAnimated = prep.IsAnimated
 	att.ChecksumSHA256 = prep.ChecksumSHA256
 	att.S3Key = cleanKey
-	return h.createAttachment(c, post, att, nil, quota, session.TenantID)
+	if err := h.saveAttachment(c, att, nil, quota, session.TenantID); err != nil {
+		return nil, err
+	}
+	return att, nil
 }
 
 // newBankAttachment validates the request against the post and builds the row.
