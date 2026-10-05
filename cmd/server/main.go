@@ -8,6 +8,11 @@
 // @in                          cookie
 // @name                        c3_session
 // @description                 Session token obtained from POST /api/sessions (login).
+//
+// @securityDefinitions.apikey  PluginToken
+// @in                          header
+// @name                        Authorization
+// @description                 "Bearer ogp_…" plugin token collected through the plugin pairing flow.
 package main
 
 import (
