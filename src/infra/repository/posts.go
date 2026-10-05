@@ -18,6 +18,9 @@ import (
 type PostRepository interface {
 	List(ctx context.Context) ([]models.Post, error)
 	ListByCampaign(ctx context.Context, campaignID string) ([]models.Post, error)
+	// ListAttachTargets lists the posts that still accept attachments, for a
+	// picker; see posts_attach_targets.go.
+	ListAttachTargets(ctx context.Context, query string, limit int) ([]models.PostAttachTarget, error)
 	Create(ctx context.Context, post *models.Post) error
 	CreateBatch(ctx context.Context, posts []*models.Post) error
 	GetByID(ctx context.Context, id string) (*models.Post, error)

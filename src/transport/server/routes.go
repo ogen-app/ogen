@@ -105,7 +105,16 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 func registerIntegrationRoutes(app *fiber.App, d *deps) {
 	z, r := d.zernio, d.r
 	handlers.NewZernioHandler(z.Integration, z.Bootstrapper, z.Settings, r.platformRepo, r.socialAccountRepo, r.postRepo, z.Worker, z.RateLimiter, d.auth, r.zernioConnectSessionRepo, d.cipher, d.cfg.AppBaseURL).Register(app)
-	handlers.NewFigmaPluginHandler(d.svc.plugins, d.cfg.AppBaseURL).Register(app)
+	handlers.NewFigmaPluginHandler(handlers.FigmaPluginDeps{
+		Pairing:     d.svc.plugins,
+		AppBaseURL:  d.cfg.AppBaseURL,
+		Tokens:      r.pluginTokenRepo,
+		Users:       r.userRepo,
+		Posts:       r.postRepo,
+		Assets:      d.newAssetsHandler(),
+		Attachments: d.newPostAttachmentsHandler(),
+		Activity:    d.activity.recorder,
+	}).Register(app)
 	handlers.NewFigmaConnectionsHandler(d.svc.plugins, d.auth, d.activity.recorder).Register(app)
 	d.email.Handler.Register(app)
 	d.email.Webhook.Register(app)
@@ -118,30 +127,17 @@ func registerIntegrationRoutes(app *fiber.App, d *deps) {
 func registerContentBankRoutes(app *fiber.App, d *deps) {
 	r, in, lim := d.r, d.ingest, d.entitlements.limiter
 	var (
-		pdfJobs   handlers.PDFIngestEnqueuer
-		docJobs   handlers.DocumentIngestEnqueuer
 		imgJobs   handlers.ImageIngestEnqueuer
-		reembed   handlers.ImageReembedEnqueuer
 		audioJobs handlers.AudioIngestEnqueuer
 	)
-	if in.pdfOn {
-		pdfJobs = d.enqueuer
-	}
-	if in.documentOn {
-		docJobs = d.enqueuer
-	}
 	if in.imageOn {
-		imgJobs, reembed = d.enqueuer, d.enqueuer
+		imgJobs = d.enqueuer
 	}
 	if in.audioOn {
 		audioJobs = d.enqueuer
 	}
 
-	handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, d.store, d.db, pdfJobs, d.enqueuer, in.firecrawl, docJobs, imgJobs, d.auth, in.embedCallbacks.OnMarkdownSave, handlers.AssetsOptions{
-		Limiter:      lim,
-		Chunks:       r.chunksRepo,
-		ImageReembed: reembed,
-	}).Register(app)
+	d.newAssetsHandler().Register(app)
 	handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, d.store, d.db, audioJobs, d.auth, lim).Register(app)
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
@@ -194,7 +190,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 	handlers.NewLinkPreviewHandler(linkpreview.New(netguard.SafeClient(linkPreviewTimeout), netguard.ResolveAllowed), d.auth).Register(app)
 
 	handlers.NewImagesHandler(d.store, d.auth).Register(app)
-	handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).WithContentBank(r.pieceRepo).Register(app)
+	d.newPostAttachmentsHandler().Register(app)
 	handlers.NewPostNotesHandler(d.svc.notes, r.postRepo, d.auth, rec).Register(app)
 }
 
@@ -205,6 +201,41 @@ func registerAnalyticsRoutes(app *fiber.App, d *deps) {
 	r := d.r
 	handlers.NewAnalyticsHandler(r.postAnalyticsRepo, r.followerStatsRepo, r.postRepo, r.platformRepo, r.socialAccountRepo, r.campaignRepo, d.zernio.Integration.Client, d.zernioProfileID, d.auth).Register(app)
 	handlers.NewActivityHandler(d.svc.activityReport, d.auth).Register(app)
+}
+
+// newAssetsHandler builds the content-bank asset handler. A disabled ingestion
+// kind gets a true-nil enqueuer, so its upload fails fast (or, for PDF, the
+// asset stays pending) instead of stranding work. The handler holds no
+// per-instance state, so the plugin API builds its own for image ingest.
+func (d *deps) newAssetsHandler() *handlers.AssetsHandler {
+	r, in := d.r, d.ingest
+	var (
+		pdfJobs handlers.PDFIngestEnqueuer
+		docJobs handlers.DocumentIngestEnqueuer
+		imgJobs handlers.ImageIngestEnqueuer
+		reembed handlers.ImageReembedEnqueuer
+	)
+	if in.pdfOn {
+		pdfJobs = d.enqueuer
+	}
+	if in.documentOn {
+		docJobs = d.enqueuer
+	}
+	if in.imageOn {
+		imgJobs, reembed = d.enqueuer, d.enqueuer
+	}
+	return handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, d.store, d.db, pdfJobs, d.enqueuer, in.firecrawl, docJobs, imgJobs, d.auth, in.embedCallbacks.OnMarkdownSave, handlers.AssetsOptions{
+		Limiter:      d.entitlements.limiter,
+		Chunks:       r.chunksRepo,
+		ImageReembed: reembed,
+	})
+}
+
+// newPostAttachmentsHandler builds the post attachments handler with
+// attach-from-bank enabled. Stateless, so the plugin API builds its own.
+func (d *deps) newPostAttachmentsHandler() *handlers.PostAttachmentsHandler {
+	r := d.r
+	return handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).WithContentBank(r.pieceRepo)
 }
 
 // publishers lists the publishers the platforms handler reports on. The

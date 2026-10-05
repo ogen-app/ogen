@@ -25,6 +25,7 @@ const (
 	SourceAssistant = "assistant"
 	SourceJob       = "job"
 	SourceSystem    = "system"
+	SourcePlugin    = "plugin"
 )
 
 // Option customises an ActivityEvent before it is enqueued. Options are applied
