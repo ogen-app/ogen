@@ -463,19 +463,11 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 	for _, fh := range files {
 		res := uploadResult{Filename: fh.Filename}
 
-		// Each file becomes a content_bank_assets row, so gate every one.
 		// The processors below Create the asset synchronously, so the next
 		// iteration's count reflects the ones already stored.
-		fileQuota, qErr := requireQuota(c, h.limiter, "content_bank_assets")
+		quota, qErr := h.requireUploadQuota(c, fh.Size)
 		if qErr != nil {
-			results = append(results, res.fail(models.UploadCodeQuotaExceeded, "content bank asset limit reached"))
-			continue
-		}
-		// The file's bytes join media_storage_bytes ("all uploaded
-		// media"). Checked before storage so a denied file leaves no object.
-		mediaQuota, qErr := requireQuotaAmount(c, h.limiter, "media_storage_bytes", fh.Size)
-		if qErr != nil {
-			results = append(results, res.fail(models.UploadCodeQuotaExceeded, "media storage limit reached"))
+			results = append(results, res.fail(models.UploadCodeQuotaExceeded, qErr.Error()))
 			continue
 		}
 
@@ -493,13 +485,50 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 		}
 		// Only a stored asset counts — fire the crossing once we know it landed.
 		if res.Status == "created" {
-			fileQuota.dispatch(reqCtx(c))
-			mediaQuota.dispatch(reqCtx(c))
+			quota.dispatch(reqCtx(c))
 		}
 		results = append(results, res)
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(uploadResponse{Results: results})
+}
+
+// uploadQuota is the pair of quota grants one content-bank upload consumes.
+type uploadQuota struct {
+	assets, media quotaHold
+}
+
+// dispatch fires both grants' near-limit crossings. Call it only once the
+// asset was stored.
+func (q uploadQuota) dispatch(ctx context.Context) {
+	q.assets.dispatch(ctx)
+	q.media.dispatch(ctx)
+}
+
+// uploadQuotaError is a refused upload quota. Its message names the limit for
+// a batch result; it unwraps to the limiter's rejection for callers that
+// answer with the limiter's own 402/403.
+type uploadQuotaError struct {
+	msg string
+	err error
+}
+
+func (e *uploadQuotaError) Error() string { return e.msg }
+func (e *uploadQuotaError) Unwrap() error { return e.err }
+
+// requireUploadQuota gates one content-bank upload of size bytes: it becomes a
+// content_bank_assets row, and its bytes join media_storage_bytes ("all
+// uploaded media"). Checked before storage so a denied file leaves no object.
+func (h *AssetsHandler) requireUploadQuota(c *fiber.Ctx, size int64) (uploadQuota, error) {
+	assets, err := requireQuota(c, h.limiter, "content_bank_assets")
+	if err != nil {
+		return uploadQuota{}, &uploadQuotaError{msg: "content bank asset limit reached", err: err}
+	}
+	media, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", size)
+	if err != nil {
+		return uploadQuota{}, &uploadQuotaError{msg: "media storage limit reached", err: err}
+	}
+	return uploadQuota{assets: assets, media: media}, nil
 }
 
 type uploadKind int
@@ -736,18 +765,33 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 	if fail != nil {
 		return res.fail(fail.code, fail.msg)
 	}
+	return h.ingestImage(c, session, imageIngest{Filename: fh.Filename, MimeType: mimeType, Raw: raw})
+}
 
+// imageIngest is a validated image ready to become an IMG asset: the name it
+// was sent under, the MIME stored for it, and its original bytes.
+type imageIngest struct {
+	Filename string
+	MimeType string
+	Raw      []byte
+}
+
+// ingestImage stores a validated image as a pending IMG asset and enqueues its
+// process_image job in the same transaction, or returns the tenant's existing
+// asset with the same bytes.
+func (h *AssetsHandler) ingestImage(c *fiber.Ctx, session *models.Session, in imageIngest) uploadResult {
+	res := uploadResult{Filename: in.Filename}
 	ctx := reqCtx(c)
 	svc := h.ingester()
 	// Dedupe within the tenant: the same image uploaded twice returns the
 	// first asset instead of a near-duplicate.
-	checksum := ingest.Checksum(raw)
+	checksum := ingest.Checksum(in.Raw)
 	if a := svc.FindByChecksum(ctx, checksum); a != nil {
 		h.decorateFile(a)
 		return res.created(a)
 	}
 
-	asset, err := newUploadAsset(fh.Filename, models.AssetTypeImage, "", session.UserID) // description filled by the job
+	asset, err := newUploadAsset(in.Filename, models.AssetTypeImage, "", session.UserID) // description filled by the job
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
@@ -755,18 +799,18 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
-	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, strings.ToLower(filepath.Ext(fh.Filename)))
+	storageKey := fmt.Sprintf("assets/%s/original%s", asset.ID, strings.ToLower(filepath.Ext(in.Filename)))
 	// Width/Height/IsAnimated are stamped by the job from image-service.
 	file := &models.AssetFile{
 		ID:             fileID,
 		AssetID:        asset.ID,
-		OriginalName:   fh.Filename,
-		MimeType:       mimeType,
-		SizeBytes:      int64(len(raw)),
+		OriginalName:   in.Filename,
+		MimeType:       in.MimeType,
+		SizeBytes:      int64(len(in.Raw)),
 		S3Key:          storage.TenantKey(ctx, storageKey),
 		ChecksumSHA256: checksum,
 	}
-	blob, err := ingest.PutBlob(ctx, h.storage, file.S3Key, raw, mimeType)
+	blob, err := ingest.PutBlob(ctx, h.storage, file.S3Key, in.Raw, in.MimeType)
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not store image")
 	}
@@ -775,7 +819,7 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 		File:  file,
 		Blob:  blob,
 		Enqueue: func(ctx context.Context, tx *sql.Tx) error {
-			return h.imgJobs.EnqueueProcessImageTx(ctx, tx, asset.ID, session.TenantID, fh.Filename, mimeType, storageKey, "run-1", "")
+			return h.imgJobs.EnqueueProcessImageTx(ctx, tx, asset.ID, session.TenantID, in.Filename, in.MimeType, storageKey, "run-1", "")
 		},
 	})
 	if err != nil {
@@ -791,25 +835,12 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 // uploadFailure is a per-file reject: a stable code and its message.
 type uploadFailure struct{ code, msg string }
 
-// readImageUpload validates an image upload's type, the service wiring and its
-// size, then reads the original bytes, returning the MIME stored for it.
+// readImageUpload validates an image upload, then reads the original bytes,
+// returning the MIME stored for it.
 func (h *AssetsHandler) readImageUpload(fh *multipart.FileHeader) (string, []byte, *uploadFailure) {
-	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	if ext == ".svg" {
-		return "", nil, &uploadFailure{models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)"}
-	}
-	mimeType, ok := imageUploadMIMEs[ext]
-	if !ok {
-		// detectUploadKind already gated this; stay defensive.
-		return "", nil, &uploadFailure{models.UploadCodeUnsupportedMediaType, "unsupported image type"}
-	}
-	// image-service is a hard dependency: with imgJobs nil there is no local
-	// validation fallback.
-	if h.storage == nil || h.db == nil || h.imgJobs == nil {
-		return "", nil, &uploadFailure{models.UploadCodeServiceUnavailable, "image processing is not configured"}
-	}
-	if fh.Size > maxImageUploadBytes() {
-		return "", nil, &uploadFailure{models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadBytes()>>20)}
+	mimeType, fail := h.checkImageUpload(fh.Filename, fh.Size)
+	if fail != nil {
+		return "", nil, fail
 	}
 	raw, err := readFormFile(fh, maxImageUploadBytes())
 	if err != nil {
@@ -819,6 +850,29 @@ func (h *AssetsHandler) readImageUpload(fh *multipart.FileHeader) (string, []byt
 		return "", nil, &uploadFailure{models.UploadCodeEmptyFile, "file is empty"}
 	}
 	return mimeType, raw, nil
+}
+
+// checkImageUpload validates an image's type (by filename extension), the
+// service wiring and its size before its bytes are read, returning the MIME
+// stored for it.
+func (h *AssetsHandler) checkImageUpload(filename string, size int64) (string, *uploadFailure) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext == ".svg" {
+		return "", &uploadFailure{models.UploadCodeVectorRejected, "SVG / vector images are not supported — upload a raster image (JPEG, PNG, WebP, GIF, HEIC, AVIF, TIFF, or BMP)"}
+	}
+	mimeType, ok := imageUploadMIMEs[ext]
+	if !ok {
+		return "", &uploadFailure{models.UploadCodeUnsupportedMediaType, "unsupported image type"}
+	}
+	// image-service is a hard dependency: with imgJobs nil there is no local
+	// validation fallback.
+	if h.storage == nil || h.db == nil || h.imgJobs == nil {
+		return "", &uploadFailure{models.UploadCodeServiceUnavailable, "image processing is not configured"}
+	}
+	if size > maxImageUploadBytes() {
+		return "", &uploadFailure{models.UploadCodeTooLarge, fmt.Sprintf("file exceeds maximum size of %d MB", maxImageUploadBytes()>>20)}
+	}
+	return mimeType, nil
 }
 
 func readFormFile(fh *multipart.FileHeader, limit int64) ([]byte, error) {
