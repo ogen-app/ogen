@@ -36,7 +36,7 @@ Accept: application/json
 
 > {% client.global.set("connectionId", response.body.connection.id); %}
 
-### 4b. Web app: deny instead (the next poll gets 403 pairing_denied)  [protected]
+### 4b. ALTERNATIVE to 4 — skip it in a normal run (after 4 it answers 409 pairing_not_pending). Deny; the next poll gets 403 pairing_denied  [protected]
 POST {{baseUrl}}/api/integrations/figma/pairings/{{writeKey}}/deny
 
 ### 5. Plugin: collect the token (200 once; 410 pairing_expired after)
