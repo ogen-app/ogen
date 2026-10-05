@@ -97,12 +97,16 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 	}).Register(app)
 }
 
-// registerIntegrationRoutes serves the Zernio integration and the public email
-// endpoints (unsubscribe, Resend webhook). All are registered unconditionally
-// and report themselves disabled until their secret is set.
+// registerIntegrationRoutes serves the Zernio integration, the Figma plugin
+// (its own token-authenticated API plus the web app's approval and
+// connection routes) and the public email endpoints (unsubscribe, Resend
+// webhook). All are registered unconditionally and report themselves disabled
+// until their secret is set.
 func registerIntegrationRoutes(app *fiber.App, d *deps) {
 	z, r := d.zernio, d.r
 	handlers.NewZernioHandler(z.Integration, z.Bootstrapper, z.Settings, r.platformRepo, r.socialAccountRepo, r.postRepo, z.Worker, z.RateLimiter, d.auth, r.zernioConnectSessionRepo, d.cipher, d.cfg.AppBaseURL).Register(app)
+	handlers.NewFigmaPluginHandler(d.svc.plugins, d.cfg.AppBaseURL).Register(app)
+	handlers.NewFigmaConnectionsHandler(d.svc.plugins, d.auth, d.activity.recorder).Register(app)
 	d.email.Handler.Register(app)
 	d.email.Webhook.Register(app)
 }

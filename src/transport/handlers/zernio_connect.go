@@ -16,7 +16,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/infra/crypto/envelope"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -380,20 +379,12 @@ func (h *ZernioHandler) sealSecrets(s connectSecrets) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	rec, err := h.cipher.Encrypt(plain)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(rec)
+	return h.cipher.Seal(plain)
 }
 
 // openSecrets reverses sealSecrets.
 func (h *ZernioHandler) openSecrets(sealed []byte) (connectSecrets, error) {
-	var rec envelope.Record
-	if err := json.Unmarshal(sealed, &rec); err != nil {
-		return connectSecrets{}, err
-	}
-	plain, err := h.cipher.Decrypt(rec)
+	plain, err := h.cipher.Open(sealed)
 	if err != nil {
 		return connectSecrets{}, err
 	}

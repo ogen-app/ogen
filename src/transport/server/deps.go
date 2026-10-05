@@ -32,6 +32,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/loginsecurity"
 	"github.com/ogen-app/ogen/src/usecase/notes"
 	"github.com/ogen-app/ogen/src/usecase/notify"
+	"github.com/ogen-app/ogen/src/usecase/plugins"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
@@ -80,6 +81,7 @@ type services struct {
 	series            *series.Service
 	signup            *signup.Service
 	loginSecurity     *loginsecurity.Service
+	plugins           *plugins.Service
 }
 
 func newDeps(db, analyticsDB *bun.DB, cfg *config.Config, secretStore secrets.Store, cipher *envelope.Cipher, hub eventhub.Hub, plan *shutdownPlan) *deps {
@@ -252,6 +254,15 @@ func (d *deps) initServices(context.Context) error {
 		Emails:     d.enqueuer,
 		Activity:   d.activity.recorder,
 		AppBaseURL: d.cfg.AppBaseURL,
+	})
+
+	d.svc.plugins = plugins.New(plugins.Deps{
+		DB:       d.db,
+		Pairings: r.pluginPairingRepo,
+		Tokens:   r.pluginTokenRepo,
+		Users:    r.userRepo,
+		Cipher:   d.cipher,
+		Notifier: d.notifier,
 	})
 	return nil
 }

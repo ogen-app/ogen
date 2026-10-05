@@ -59,6 +59,8 @@ type repos struct {
 	followerStatsRepo        repository.FollowerStatsRepository
 	socialAccountRepo        repository.SocialAccountRepository
 	zernioConnectSessionRepo repository.ZernioConnectSessionRepository
+	pluginPairingRepo        repository.PluginPairingRepository
+	pluginTokenRepo          repository.PluginTokenRepository
 	autoPublishAllowlistRepo repository.AutoPublishAllowlistRepository
 	emailTemplateRepo        repository.EmailTemplateRepository
 	emailSuppressionRepo     repository.EmailSuppressionRepository
@@ -122,6 +124,8 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		postEvaluationRepo:       repository.NewPostEvaluationRepository(db),
 		socialAccountRepo:        repository.NewSocialAccountRepository(db),
 		zernioConnectSessionRepo: repository.NewZernioConnectSessionRepository(db),
+		pluginPairingRepo:        repository.NewPluginPairingRepository(db),
+		pluginTokenRepo:          repository.NewPluginTokenRepository(db),
 		autoPublishAllowlistRepo: repository.NewAutoPublishAllowlistRepository(db),
 		emailTemplateRepo:        repository.NewEmailTemplateRepository(db),
 		emailSuppressionRepo:     repository.NewEmailSuppressionRepository(db),
