@@ -57,6 +57,19 @@ func IsServiceIngestedAssetType(t *string) bool {
 	return false
 }
 
+// AssetOriginFigma marks an asset a Figma plugin sent.
+const AssetOriginFigma = "figma"
+
+// AssetOriginRef points an asset back at its source. For Figma: the node
+// (frame) id and name, the document name and, only from private org builds
+// that can read it, the file key.
+type AssetOriginRef struct {
+	NodeID   string `json:"node_id"`
+	NodeName string `json:"node_name"`
+	FileName string `json:"file_name,omitempty"`
+	FileKey  string `json:"file_key,omitempty"`
+}
+
 type Asset struct {
 	bun.BaseModel `bun:"table:assets,alias:a" swaggerignore:"true"`
 	TenantScoped  // tenant_id column + central scoping hooks
@@ -84,11 +97,17 @@ type Asset struct {
 	// models.UploadCode* plus tenant-visible prose. Set only while status is
 	// failed; any other status write clears them. Written for DOC assets —
 	// audio/image carry theirs on the extraction row.
-	FailureCode   string      `bun:"failure_code,notnull,default:''"              json:"failure_code,omitempty"`
-	FailureReason string      `bun:"failure_reason,notnull,default:''"            json:"failure_reason,omitempty"`
-	TagIDs        StringSlice `bun:"tag_ids,notnull,type:jsonb"                   json:"tag_ids"`
-	Tags          []Tag       `bun:"-"                                            json:"tags"`
-	File          *AssetFile  `bun:"-"                                            json:"file,omitempty"`
+	FailureCode   string `bun:"failure_code,notnull,default:''"              json:"failure_code,omitempty"`
+	FailureReason string `bun:"failure_reason,notnull,default:''"            json:"failure_reason,omitempty"`
+	// Origin is where the asset came from beyond a plain upload ('' for
+	// uploads, AssetOriginFigma for frames a Figma plugin sent); OriginRef is
+	// the origin-specific pointer back to the source. A checksum-dedupe hit
+	// keeps the first asset's provenance.
+	Origin    string          `bun:"origin,notnull,default:''"                    json:"origin"`
+	OriginRef *AssetOriginRef `bun:"origin_ref,type:jsonb"                        json:"origin_ref,omitempty"`
+	TagIDs    StringSlice     `bun:"tag_ids,notnull,type:jsonb"                   json:"tag_ids"`
+	Tags      []Tag           `bun:"-"                                            json:"tags"`
+	File      *AssetFile      `bun:"-"                                            json:"file,omitempty"`
 	// Images are the mirrored page images for URL assets, hydrated and
 	// URL-decorated by the handler layer. Not persisted on assets.
 	Images    []AssetImage `bun:"-" json:"images,omitempty"`
