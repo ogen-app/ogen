@@ -90,6 +90,10 @@ type Deps struct {
 	// headless-connect sessions). A nil repo makes the sweep a no-op.
 	ConnectSessionRepo repository.ZernioConnectSessionRepository
 
+	// The cleanup_plugin_pairings worker's repo. A nil repo makes the sweep a
+	// no-op.
+	PluginPairingRepo repository.PluginPairingRepository
+
 	// The cleanup_login_security sweep's repos. Nil repos skip their half.
 	KnownDeviceRepo     repository.KnownDeviceRepository
 	LoginAlertTokenRepo repository.LoginAlertTokenRepository
@@ -183,6 +187,8 @@ type PeriodicConfig struct {
 	// Expired headless-connect-session sweep. Gated on a configured
 	// interval so a zero value (e.g. in tests) can't create an invalid job.
 	ConnectSessionCleanupEvery time.Duration
+	// Expired plugin-pairing sweep. Positive-interval gated like the others.
+	PluginPairingCleanupEvery time.Duration
 	// Connection-health / expiry-notification sweep.
 	HealthCheckEvery        time.Duration
 	IncludeConnectionExpiry bool // only when the Zernio integration is configured
@@ -235,6 +241,11 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.ConnectSessionCleanupEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.ConnectSessionCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return CleanupZernioConnectSessionsTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.PluginPairingCleanupEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.PluginPairingCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return CleanupPluginPairingsTask{}, nil
 		}, runOnStart))
 	}
 	// Connection-health / expiry sweep. Also requires a positive

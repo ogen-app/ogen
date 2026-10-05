@@ -90,7 +90,7 @@ var _ = Describe("Figma plugin pairing", Ordered, func() {
 		svc := newTestPluginService(db)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewFigmaPluginHandler(handlers.FigmaPluginDeps{Pairing: svc, AppBaseURL: testAppBaseURL + "/", Tokens: tokens, Users: userRepo}).Register(app)
-		handlers.NewFigmaConnectionsHandler(svc, auth, nil).Register(app)
+		handlers.NewFigmaConnectionsHandler(svc, userRepo, auth, nil).Register(app)
 
 		jane = seedTenantUser(db, "Jane", "jane@example.com", "jane-password")
 		cookie = loginAs(app, "jane@example.com", "jane-password")

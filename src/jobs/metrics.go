@@ -81,6 +81,9 @@ var (
 	ZernioConnectSessionExpired   = expvar.NewInt("ogen_jobs_zernio_connect_session_expired")
 	ZernioConnectSessionsSwept    = expvar.NewInt("ogen_jobs_zernio_connect_sessions_swept")
 
+	// Expired plugin pairing sweep.
+	PluginPairingsSwept = expvar.NewInt("ogen_jobs_plugin_pairings_swept")
+
 	// Login-security retention sweep.
 	LoginAlertTokensSwept = expvar.NewInt("ogen_jobs_login_alert_tokens_swept")
 	KnownDevicesSwept     = expvar.NewInt("ogen_jobs_known_devices_swept")

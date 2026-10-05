@@ -115,7 +115,7 @@ func registerIntegrationRoutes(app *fiber.App, d *deps) {
 		Attachments: d.newPostAttachmentsHandler(),
 		Activity:    d.activity.recorder,
 	}).Register(app)
-	handlers.NewFigmaConnectionsHandler(d.svc.plugins, d.auth, d.activity.recorder).Register(app)
+	handlers.NewFigmaConnectionsHandler(d.svc.plugins, r.userRepo, d.auth, d.activity.recorder).Register(app)
 	d.email.Handler.Register(app)
 	d.email.Webhook.Register(app)
 }

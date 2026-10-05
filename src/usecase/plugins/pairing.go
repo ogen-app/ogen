@@ -100,6 +100,7 @@ func (s *Service) Start(ctx context.Context, client, label, ip string) (*Started
 	if err := s.d.Pairings.Create(ctx, p); err != nil {
 		return nil, err
 	}
+	PairingsStarted.Add(1)
 	return &Started{ReadKey: keys.ReadKey, WriteKey: keys.WriteKey, ExpiresAt: p.ExpiresAt}, nil
 }
 
@@ -159,6 +160,7 @@ func (s *Service) Approve(ctx context.Context, writeKey string, session *models.
 	if err != nil {
 		return nil, err
 	}
+	PairingsApproved.Add(1)
 	s.notifyConnected(ctx, tok)
 	return tok, nil
 }
@@ -176,6 +178,7 @@ func (s *Service) Deny(ctx context.Context, writeKey string) error {
 	if !ok {
 		return ErrPairingNotPending
 	}
+	PairingsDenied.Add(1)
 	return nil
 }
 
@@ -237,6 +240,7 @@ func (s *Service) Collect(ctx context.Context, readKey string) (*Collected, erro
 	} else if err != nil {
 		return nil, err
 	}
+	PairingsCollected.Add(1)
 	return &Collected{Token: string(plain), Connection: tok, User: user, Workspace: user.Tenant}, nil
 }
 
