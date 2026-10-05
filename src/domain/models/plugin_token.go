@@ -39,6 +39,14 @@ type PluginToken struct {
 	RevokedAt  *time.Time `bun:"revoked_at"                                   json:"-"`
 }
 
+// PluginConnection is a live plugin token with the member it acts as.
+type PluginConnection struct {
+	PluginToken `bun:",extend"`
+
+	UserName  string `bun:"user_name"`
+	UserEmail string `bun:"user_email"`
+}
+
 // NewPluginToken returns a fresh plugin token (the prefix plus 32 random
 // bytes, base64url) and the hash to store for it.
 func NewPluginToken() (token, hash string, err error) {
