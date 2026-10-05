@@ -11,9 +11,10 @@ import (
 // AccountHealth is one entry of Zernio's bulk account-health report
 // (GET /v1/accounts/health), the forward-looking connection signal CON-219 acts
 // on. Zernio derives Status/TokenValid/NeedsReconnect from the live OAuth token
-// and granted scopes; TokenExpiresAt is when the token lapses (absent — nil —
-// for platforms Zernio can't date, e.g. auto-refreshing ones or an
-// already-broken link). Only the fields Ogen consumes are decoded; the rest of
+// and granted scopes; TokenExpiresAt is when the current token lapses (nil when
+// Zernio can't date it). For platforms Zernio refreshes itself (YouTube, X, …)
+// it is the short-lived access token's expiry — always near and not a reconnect
+// signal on its own. Only the fields Ogen consumes are decoded; the rest of
 // the payload (permissions, canFetchAnalytics, …) is ignored.
 type AccountHealth struct {
 	AccountID      string     `json:"accountId"`

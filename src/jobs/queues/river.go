@@ -101,7 +101,8 @@ type Deps struct {
 
 	// The detect_expiring_connections sweep's extra deps. Users resolves
 	// the owner recipients; AppBaseURL builds the reconnect deep link;
-	// ExpiryLeadDays is the heads-up window (days before token expiry). The
+	// ExpiryLeadDays is the heads-up window (days before token expiry) used
+	// when Zernio reports no health status. The
 	// sweep's client/account repo come from Zernio and its email log repo from
 	// Email.Logs.
 	Users          repository.UserRepository

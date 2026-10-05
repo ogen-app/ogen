@@ -355,11 +355,12 @@ type Config struct {
 
 	// Connection-expiry notifications. The detect_expiring_connections
 	// queue reads each connected account's Zernio health on this cadence and
-	// emails workspace owners when a token is within ConnectionExpiryLeadDays of
-	// expiry (or already needs reconnecting). Profile-driven, so it no-ops when
-	// Zernio is unconfigured. A 6h cadence gives ~28 checks across a 7-day lead
-	// window; durable per-(account,stage,expiry,owner) dedupe (via email_logs)
-	// keeps that to one notification each.
+	// emails workspace owners when Zernio flags it warning (expiring soon) or
+	// error / needs-reconnect. ConnectionExpiryLeadDays only applies when Zernio
+	// reports no status and the token expiry is all there is to go on.
+	// Profile-driven, so it no-ops when Zernio is unconfigured. Durable
+	// per-(account,stage,episode,owner) dedupe (via email_logs) keeps each
+	// unhealthy episode to one notification per stage.
 	ZernioHealthCheckInterval time.Duration `envconfig:"ZERNIO_HEALTH_CHECK_INTERVAL" default:"6h"`
 	ConnectionExpiryLeadDays  int           `envconfig:"CONNECTION_EXPIRY_LEAD_DAYS"  default:"7"`
 

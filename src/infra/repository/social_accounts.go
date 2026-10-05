@@ -80,6 +80,9 @@ type SocialAccountHealth struct {
 	HealthStatus        string
 	NeedsReconnect      *bool
 	LastHealthCheckedAt time.Time
+	// UnhealthySince is the start of the current unhealthy episode; nil while
+	// the account is healthy.
+	UnhealthySince *time.Time
 }
 
 // TenantProfile pairs a tenant with its Zernio profile, derived from the
@@ -209,6 +212,7 @@ func (r *socialAccountRepository) UpdateHealth(ctx context.Context, id string, h
 		Set("health_status = ?", status).
 		Set("needs_reconnect = ?", h.NeedsReconnect).
 		Set("last_health_checked_at = ?", h.LastHealthCheckedAt).
+		Set("unhealthy_since = ?", h.UnhealthySince).
 		Where("id = ?", id).
 		Where("deleted_at IS NULL").
 		Exec(ctx)

@@ -35,10 +35,13 @@ type SocialAccount struct {
 	// the first sweep. TokenExpiresAt is the forward-looking token expiry that
 	// drives the "connection expiring" owner notification; HealthStatus is
 	// Zernio's healthy/warning/error verdict. Kept out of the reconciler's
-	// upsert set so a sync never overwrites them.
+	// upsert set so a sync never overwrites them. UnhealthySince marks the start
+	// of the current unhealthy episode (NULL while healthy) and anchors the
+	// notify-once dedupe.
 	TokenExpiresAt      *time.Time `bun:"token_expires_at,nullzero"       json:"token_expires_at,omitempty"`
 	TokenValid          *bool      `bun:"token_valid,nullzero"            json:"token_valid,omitempty"`
 	HealthStatus        string     `bun:"health_status,nullzero"          json:"health_status,omitempty"`
 	NeedsReconnect      *bool      `bun:"needs_reconnect,nullzero"        json:"needs_reconnect,omitempty"`
 	LastHealthCheckedAt *time.Time `bun:"last_health_checked_at,nullzero" json:"last_health_checked_at,omitempty"`
+	UnhealthySince      *time.Time `bun:"unhealthy_since,nullzero"        json:"unhealthy_since,omitempty"`
 }
