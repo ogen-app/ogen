@@ -89,7 +89,7 @@ var _ = Describe("Figma plugin pairing", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		svc := newTestPluginService(db)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewFigmaPluginHandler(svc, testAppBaseURL+"/").Register(app)
+		handlers.NewFigmaPluginHandler(handlers.FigmaPluginDeps{Pairing: svc, AppBaseURL: testAppBaseURL + "/", Tokens: tokens, Users: userRepo}).Register(app)
 		handlers.NewFigmaConnectionsHandler(svc, auth, nil).Register(app)
 
 		jane = seedTenantUser(db, "Jane", "jane@example.com", "jane-password")
@@ -308,7 +308,7 @@ var _ = Describe("Figma plugin pairing", Ordered, func() {
 		// A fresh handler: its limiters are per instance.
 		svc := newTestPluginService(db)
 		app = fiber.New()
-		handlers.NewFigmaPluginHandler(svc, testAppBaseURL).Register(app)
+		handlers.NewFigmaPluginHandler(handlers.FigmaPluginDeps{Pairing: svc, AppBaseURL: testAppBaseURL, Tokens: tokens, Users: repository.NewUserRepository(db)}).Register(app)
 		p := start(nil)
 		for range 60 {
 			status, _ := poll(p.ReadKey)

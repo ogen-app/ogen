@@ -9,6 +9,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/plugins"
 )
 
@@ -32,19 +34,48 @@ const (
 // unauthenticated (they are how a plugin gets a token); the rest take a
 // plugin token. CORS for these routes is set up in the server wiring.
 type FigmaPluginHandler struct {
-	pairing    *plugins.Service
-	appBaseURL string
+	pairing     *plugins.Service
+	appBaseURL  string
+	auth        fiber.Handler
+	users       repository.UserRepository
+	posts       repository.PostRepository
+	assets      *AssetsHandler
+	attachments *PostAttachmentsHandler
+	activity    *activity.Recorder
 
 	startLimiter *keyedRateLimiter
 	pollLimiter  *keyedRateLimiter
+	tokenLimiter *keyedRateLimiter
 }
 
-func NewFigmaPluginHandler(pairing *plugins.Service, appBaseURL string) *FigmaPluginHandler {
+// FigmaPluginDeps are the plugin API's collaborators. Assets and Attachments
+// supply the content bank's image ingest and bank-to-post attach, so a frame
+// sent by the plugin takes exactly the path an upload does. Activity may be
+// nil.
+type FigmaPluginDeps struct {
+	Pairing     *plugins.Service
+	AppBaseURL  string
+	Tokens      repository.PluginTokenRepository
+	Users       repository.UserRepository
+	Posts       repository.PostRepository
+	Assets      *AssetsHandler
+	Attachments *PostAttachmentsHandler
+	Activity    *activity.Recorder
+}
+
+func NewFigmaPluginHandler(d FigmaPluginDeps) *FigmaPluginHandler {
 	return &FigmaPluginHandler{
-		pairing:      pairing,
-		appBaseURL:   strings.TrimRight(appBaseURL, "/"),
+		pairing:      d.Pairing,
+		appBaseURL:   strings.TrimRight(d.AppBaseURL, "/"),
+		auth:         RequirePluginToken(d.Tokens, d.Users),
+		users:        d.Users,
+		posts:        d.Posts,
+		assets:       d.Assets,
+		attachments:  d.Attachments,
+		activity:     d.Activity,
 		startLimiter: newKeyedRateLimiter(pairingStartsPerMinute, time.Minute),
 		pollLimiter:  newKeyedRateLimiter(pairingPollsPerMinute, time.Minute),
+		tokenLimiter: newKeyedRateLimiter(pluginRequestsPerMinute, time.Minute),
 	}
 }
 
@@ -52,6 +83,12 @@ func (h *FigmaPluginHandler) Register(app *fiber.App) {
 	g := app.Group(PluginRoutePrefix + "/figma")
 	g.Post("/pairings", h.StartPairing)
 	g.Get("/pairings/:read_key", h.PollPairing)
+
+	authed := []fiber.Handler{h.auth, h.limitPerToken}
+	g.Get("/me", append(authed, h.Me)...)
+	g.Get("/posts", append(authed, h.ListPosts)...)
+	g.Post("/images", append(authed, h.SendImage)...)
+	g.Delete("/token", append(authed, h.RevokeToken)...)
 }
 
 type startPairingRequest struct {

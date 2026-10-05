@@ -410,6 +410,9 @@ type uploadResult struct {
 	// is unknown. Empty on a created result. See models.UploadCode*.
 	Code  string        `json:"code,omitempty"`
 	Asset *models.Asset `json:"asset,omitempty"`
+	// deduplicated marks a created result that is the tenant's existing asset
+	// with the same bytes rather than a new one.
+	deduplicated bool
 }
 
 // fail stamps a terminal per-file outcome with a machine-readable code and its
@@ -769,16 +772,21 @@ func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeade
 }
 
 // imageIngest is a validated image ready to become an IMG asset: the name it
-// was sent under, the MIME stored for it, and its original bytes.
+// was sent under, the MIME stored for it, and its original bytes. Origin,
+// OriginRef and a non-empty (user-written) AltText apply only when a new asset
+// is created.
 type imageIngest struct {
-	Filename string
-	MimeType string
-	Raw      []byte
+	Filename  string
+	MimeType  string
+	Raw       []byte
+	Origin    string
+	OriginRef *models.AssetOriginRef
+	AltText   string
 }
 
 // ingestImage stores a validated image as a pending IMG asset and enqueues its
 // process_image job in the same transaction, or returns the tenant's existing
-// asset with the same bytes.
+// asset with the same bytes (marked deduplicated, its provenance untouched).
 func (h *AssetsHandler) ingestImage(c *fiber.Ctx, session *models.Session, in imageIngest) uploadResult {
 	res := uploadResult{Filename: in.Filename}
 	ctx := reqCtx(c)
@@ -788,12 +796,18 @@ func (h *AssetsHandler) ingestImage(c *fiber.Ctx, session *models.Session, in im
 	checksum := ingest.Checksum(in.Raw)
 	if a := svc.FindByChecksum(ctx, checksum); a != nil {
 		h.decorateFile(a)
+		res.deduplicated = true
 		return res.created(a)
 	}
 
 	asset, err := newUploadAsset(in.Filename, models.AssetTypeImage, "", session.UserID) // description filled by the job
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
+	}
+	asset.Origin, asset.OriginRef = in.Origin, in.OriginRef
+	if in.AltText != "" {
+		// A user-written alt text: process_image leaves it in place.
+		asset.AltText, asset.AltTextEditedByUser = in.AltText, true
 	}
 	fileID, err := models.NewID()
 	if err != nil {
@@ -827,6 +841,8 @@ func (h *AssetsHandler) ingestImage(c *fiber.Ctx, session *models.Session, in im
 	}
 	if stored == asset {
 		asset.File = file
+	} else {
+		res.deduplicated = true // a concurrent upload of the same bytes won
 	}
 	h.decorateFile(stored)
 	return res.created(stored)
