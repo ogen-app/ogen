@@ -261,11 +261,9 @@ func (h *PostAttachmentsHandler) Get(c *fiber.Ctx) error {
 // stable, machine-readable code beside the human message. It mirrors
 // the batch content-bank upload's {code,error} shape so the front-end can match
 // on the code across both surfaces and fall back to the prose when it is
-// unknown. It returns nil because the response is already written — the central
-// error handler has no slot for a code, so it is intentionally bypassed (4xx
-// client rejections are not error-logged there anyway).
+// unknown.
 func rejectAttachment(c *fiber.Ctx, status int, code, msg string) error {
-	return c.Status(status).JSON(fiber.Map{"code": code, "error": msg})
+	return rejectCode(c, status, code, msg)
 }
 
 // imageRejectStatus is the HTTP status for a fine-grained image reject code

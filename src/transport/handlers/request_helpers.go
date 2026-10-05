@@ -10,6 +10,14 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
+// rejectCode writes a {code,error} rejection: a stable, machine-readable code
+// beside the human message. It returns nil because the response is already
+// written — the central error handler has no slot for a code, so it is
+// intentionally bypassed (4xx rejections are not error-logged there anyway).
+func rejectCode(c *fiber.Ctx, status int, code, msg string) error {
+	return c.Status(status).JSON(fiber.Map{"code": code, "error": msg})
+}
+
 // sessionFrom returns the session RequireAuth stored on the request, or a 401
 // when the route was reached without one.
 func sessionFrom(c *fiber.Ctx) (*models.Session, error) {

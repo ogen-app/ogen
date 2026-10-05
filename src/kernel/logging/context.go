@@ -32,6 +32,9 @@ const (
 	// call sites keep passing c.Context() with no span threading.
 	AttrTraceID = "trace_id"
 	AttrSpanID  = "span_id"
+	// AttrPluginTokenID names the plugin token (never the token itself) a
+	// plugin-authenticated request acts with.
+	AttrPluginTokenID = "plugin_token_id"
 )
 
 // ctxKey types are unexported so the correlation keys cannot collide with — or
@@ -41,6 +44,7 @@ type requestIDKey struct{}
 type userIDKey struct{}
 type traceIDKey struct{}
 type spanIDKey struct{}
+type pluginTokenIDKey struct{}
 
 // RequestIDKey and UserIDKey are the context (and Fiber Locals) keys under
 // which the request id and user id are stored. Exported as values of
@@ -51,6 +55,9 @@ var (
 	UserIDKey    = userIDKey{}
 	TraceIDKey   = traceIDKey{}
 	SpanIDKey    = spanIDKey{}
+	// PluginTokenIDKey holds the id of the plugin token authenticating a
+	// plugin API request.
+	PluginTokenIDKey = pluginTokenIDKey{}
 )
 
 // WithRequestID returns a copy of ctx carrying the given request id. Used on
@@ -118,6 +125,9 @@ func (h ContextHandler) Handle(ctx context.Context, r slog.Record) error {
 		}
 		if id, ok := SpanIDFrom(ctx); ok {
 			r.AddAttrs(slog.String(AttrSpanID, id))
+		}
+		if id, ok := ctx.Value(PluginTokenIDKey).(string); ok && id != "" {
+			r.AddAttrs(slog.String(AttrPluginTokenID, id))
 		}
 	}
 	return h.Handler.Handle(ctx, r)
