@@ -24,8 +24,8 @@ import (
 
 // DetectExpiringConnectionsQueue is the recurring connection-health sweep.
 // Each tick reads every connected account's Zernio health, persists
-// the token-expiry snapshot, and emails workspace owners when a token is within
-// the lead window of expiry (or already needs reconnecting). It mirrors the
+// the snapshot, and emails workspace owners once per unhealthy episode and stage
+// when Zernio flags the connection as expiring or needing a reconnect. It mirrors the
 // follower-refresh sweep: a marker payload, self-registering, gated on the
 // Zernio integration being configured, harmless no-op when it isn't.
 const DetectExpiringConnectionsQueue = "detect_expiring_connections"
@@ -200,14 +200,17 @@ func (p *DetectExpiringConnectionsProcessor) sweepTenant(ctx context.Context, te
 		}
 		res.checked++
 
-		if perr := p.persistHealth(ctx, h, now); perr != nil {
+		stage := classifyHealth(h, now, p.leadDays())
+		since := episodeStart(local.UnhealthySince, stage, now)
+		// The episode start must be stored before notifying: it is part of the
+		// dedupe key, so an unsaved one would re-notify on the next sweep.
+		if perr := p.persistHealth(ctx, h, since, now); perr != nil {
 			if firstErr == nil {
 				firstErr = perr
 			}
 			continue
 		}
 
-		stage := classifyHealth(h, now, p.leadDays())
 		switch stage {
 		case templates.StageExpiringSoon:
 			res.expiringSoon++
@@ -223,7 +226,7 @@ func (p *DetectExpiringConnectionsProcessor) sweepTenant(ctx context.Context, te
 			}
 			continue // can't notify without recipients
 		}
-		notified, nerr := p.notifyOwners(ctx, tenantID, owners, h, local, stage, now)
+		notified, nerr := p.notifyOwners(ctx, tenantID, owners, h, local, stage, *since, now)
 		res.notified += notified
 		if nerr != nil && firstErr == nil {
 			firstErr = nerr
@@ -232,8 +235,22 @@ func (p *DetectExpiringConnectionsProcessor) sweepTenant(ctx context.Context, te
 	return res, firstErr
 }
 
-// persistHealth writes the health snapshot onto the local account row.
-func (p *DetectExpiringConnectionsProcessor) persistHealth(ctx context.Context, h zernio.AccountHealth, now time.Time) error {
+// episodeStart returns when the account's current unhealthy episode began: the
+// stored start while it stays unhealthy, now when it just turned unhealthy, and
+// nil once it is healthy again (closing the episode).
+func episodeStart(prev *time.Time, stage string, now time.Time) *time.Time {
+	if stage == "" {
+		return nil
+	}
+	if prev != nil {
+		return prev
+	}
+	return &now
+}
+
+// persistHealth writes the health snapshot and episode start onto the local
+// account row.
+func (p *DetectExpiringConnectionsProcessor) persistHealth(ctx context.Context, h zernio.AccountHealth, unhealthySince *time.Time, now time.Time) error {
 	tokenValid := h.TokenValid
 	needsReconnect := h.NeedsReconnect
 	return p.Zernio.SocialAccountRepo.UpdateHealth(ctx, h.AccountID, repository.SocialAccountHealth{
@@ -242,12 +259,13 @@ func (p *DetectExpiringConnectionsProcessor) persistHealth(ctx context.Context, 
 		HealthStatus:        h.Status,
 		NeedsReconnect:      &needsReconnect,
 		LastHealthCheckedAt: now,
+		UnhealthySince:      unhealthySince,
 	})
 }
 
 // notifyOwners enqueues one connection_expiring email per owner, skipping any
-// (account, stage, expiry, owner) already notified. Returns the count enqueued.
-func (p *DetectExpiringConnectionsProcessor) notifyOwners(ctx context.Context, tenantID string, owners []models.User, h zernio.AccountHealth, local models.SocialAccount, stage string, now time.Time) (int, error) {
+// (account, stage, episode, owner) already notified. Returns the count enqueued.
+func (p *DetectExpiringConnectionsProcessor) notifyOwners(ctx context.Context, tenantID string, owners []models.User, h zernio.AccountHealth, local models.SocialAccount, stage string, since, now time.Time) (int, error) {
 	if len(owners) == 0 {
 		slog.WarnContext(ctx, "connection-health: no owners to notify", logging.AttrComponent, detectComp, "tenant_id", tenantID, "account_id", h.AccountID)
 		return 0, nil
@@ -255,7 +273,7 @@ func (p *DetectExpiringConnectionsProcessor) notifyOwners(ctx context.Context, t
 	notified := 0
 	var firstErr error
 	for _, owner := range owners {
-		key := expiryIdempotencyKey(h.AccountID, stage, h.TokenExpiresAt, owner.ID)
+		key := expiryIdempotencyKey(h.AccountID, stage, since, owner.ID)
 		if p.EmailLogs != nil {
 			exists, cerr := p.EmailLogs.ExistsByIdempotencyKey(ctx, key)
 			if cerr != nil {
@@ -265,11 +283,11 @@ func (p *DetectExpiringConnectionsProcessor) notifyOwners(ctx context.Context, t
 				continue
 			}
 			if exists {
-				continue // already notified this owner for this (account, stage, expiry)
+				continue // already notified this owner for this (account, stage, episode)
 			}
 		}
 		// Drop an in-app notification alongside the email, gated by the
-		// same once-per-(account,stage,expiry,owner) email dedupe above. Best-
+		// same once-per-(account,stage,episode,owner) email dedupe above. Best-
 		// effort — a notify failure never blocks the email or the sweep.
 		p.emitNotification(ctx, owner.ID, h, local, stage)
 		if eerr := p.enqueueEmail(ctx, owner, tenantID, h, local, stage, key, now); eerr != nil {
@@ -355,35 +373,38 @@ func (p *DetectExpiringConnectionsProcessor) leadDays() int {
 }
 
 // classifyHealth maps a Zernio health entry to a notify stage, or "" for
-// healthy. action_required wins over expiring_soon: an account that is both past
-// expiry and flagged warning is already broken. leadDays is the heads-up window
-// for a not-yet-expired token.
+// healthy. Zernio's verdict is authoritative: for platforms whose short-lived
+// access token Zernio refreshes itself (YouTube, X, …) tokenExpiresAt is always
+// hours away while the connection is perfectly healthy, so the token date only
+// decides the stage when Zernio sends no recognised status. action_required wins
+// over expiring_soon. leadDays is the heads-up window for that fallback.
 func classifyHealth(h zernio.AccountHealth, now time.Time, leadDays int) string {
-	expired := h.TokenExpiresAt != nil && !h.TokenExpiresAt.After(now)
-	if h.Status == "error" || h.NeedsReconnect || expired {
+	if h.Status == "error" || h.NeedsReconnect {
 		return templates.StageActionRequired
 	}
-	if h.Status == "warning" {
+	switch h.Status {
+	case "warning":
 		return templates.StageExpiringSoon
+	case "healthy":
+		return ""
 	}
-	if h.TokenExpiresAt != nil {
-		lead := time.Duration(leadDays) * 24 * time.Hour
-		if h.TokenExpiresAt.Sub(now) <= lead {
-			return templates.StageExpiringSoon
-		}
+	if h.TokenExpiresAt == nil {
+		return ""
+	}
+	if !h.TokenExpiresAt.After(now) {
+		return templates.StageActionRequired
+	}
+	if h.TokenExpiresAt.Sub(now) <= time.Duration(leadDays)*24*time.Hour {
+		return templates.StageExpiringSoon
 	}
 	return ""
 }
 
-// expiryIdempotencyKey keys notify-once on (account, stage, expiry date, owner)
-// so a moved expiry after a reconnect yields a fresh key and re-notifies
-// cleanly, while re-sweeping the same expiry window never re-sends.
-func expiryIdempotencyKey(accountID, stage string, expiresAt *time.Time, ownerID string) string {
-	date := "none"
-	if expiresAt != nil {
-		date = expiresAt.UTC().Format("2006-01-02")
-	}
-	return "conn_expiring:" + accountID + ":" + stage + ":" + date + ":" + ownerID
+// expiryIdempotencyKey keys notify-once on (account, stage, episode start,
+// owner): re-sweeping an ongoing episode never re-sends, even as the reported
+// token expiry moves, while a new episode after recovery yields a fresh key.
+func expiryIdempotencyKey(accountID, stage string, since time.Time, ownerID string) string {
+	return "conn_expiring:" + accountID + ":" + stage + ":" + since.UTC().Format(time.RFC3339) + ":" + ownerID
 }
 
 // accountLabel is the human name for an account, preferring the live health
