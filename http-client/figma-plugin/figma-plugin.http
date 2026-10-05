@@ -1,0 +1,120 @@
+@baseUrl = http://localhost:9001
+
+# The Figma "Send to Ogen" plugin, end to end.
+#
+# Pairing: the plugin opens a pairing (unauthenticated), the signed-in user
+# approves its write key in the web app (cookie auth — run "Login" from
+# sessions/sessions.http first), then the plugin's poll with its read key
+# collects the ogp_ token exactly once. Every /api/plugins/figma/* call after
+# that sends "Authorization: Bearer <token>"; cookies are ignored there.
+# Set postId (e.g. from posts/posts.http) for the attach flow.
+
+### 1. Plugin: open a pairing
+# @name startPairing
+POST {{baseUrl}}/api/plugins/figma/pairings
+Content-Type: application/json
+
+{
+  "client_label": "Figma · Jane Doe"
+}
+
+> {%
+client.global.set("readKey", response.body.read_key);
+client.global.set("writeKey", response.body.write_key);
+%}
+
+### 2. Plugin: poll before approval (expects 202 {"status":"pending"})
+GET {{baseUrl}}/api/plugins/figma/pairings/{{readKey}}
+
+### 3. Web app: preview the pairing on the approval page  [protected]
+GET {{baseUrl}}/api/integrations/figma/pairings/{{writeKey}}
+Accept: application/json
+
+### 4. Web app: allow it — binds to the active workspace (add X-Workspace-Id to pick one)  [protected]
+POST {{baseUrl}}/api/integrations/figma/pairings/{{writeKey}}/approve
+Accept: application/json
+
+> {% client.global.set("connectionId", response.body.connection.id); %}
+
+### 4b. Web app: deny instead (the next poll gets 403 pairing_denied)  [protected]
+POST {{baseUrl}}/api/integrations/figma/pairings/{{writeKey}}/deny
+
+### 5. Plugin: collect the token (200 once; 410 pairing_expired after)
+GET {{baseUrl}}/api/plugins/figma/pairings/{{readKey}}
+
+> {% client.global.set("pluginToken", response.body.token); %}
+
+### 6. Plugin: who am I
+GET {{baseUrl}}/api/plugins/figma/me
+Authorization: Bearer {{pluginToken}}
+
+### 7. Plugin: draft-post picker
+GET {{baseUrl}}/api/plugins/figma/posts?q=&limit=20
+Authorization: Bearer {{pluginToken}}
+
+### 8. Plugin: send a frame to the content bank
+POST {{baseUrl}}/api/plugins/figma/images
+Authorization: Bearer {{pluginToken}}
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="node_id"
+
+12:345
+--boundary
+Content-Disposition: form-data; name="node_name"
+
+Hero / Desktop
+--boundary
+Content-Disposition: form-data; name="file_name"
+
+Launch campaign
+--boundary
+Content-Disposition: form-data; name="file"; filename="hero.png"
+Content-Type: image/png
+
+< ./sample.png
+--boundary--
+
+### 9. Plugin: send a frame and attach it to a post (attach_error explains a refusal; the asset is kept)
+POST {{baseUrl}}/api/plugins/figma/images
+Authorization: Bearer {{pluginToken}}
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="node_id"
+
+12:346
+--boundary
+Content-Disposition: form-data; name="node_name"
+
+Hero / Mobile
+--boundary
+Content-Disposition: form-data; name="post_id"
+
+{{postId}}
+--boundary
+Content-Disposition: form-data; name="alt_text"
+
+Product hero on a phone screen
+--boundary
+Content-Disposition: form-data; name="file"; filename="hero-mobile.png"
+Content-Type: image/png
+
+< ./sample.png
+--boundary--
+
+### 10. Web app: list plugin connections (own; owners see everyone's)  [protected]
+GET {{baseUrl}}/api/integrations/figma/connections
+Accept: application/json
+
+### 11. Web app: disconnect a plugin  [protected]
+DELETE {{baseUrl}}/api/integrations/figma/connections/{{connectionId}}
+
+### 12. Plugin: disconnect itself
+DELETE {{baseUrl}}/api/plugins/figma/token
+Authorization: Bearer {{pluginToken}}
+
+### 13. Plugin: any call with a revoked token (expects 401 plugin_token_invalid)
+GET {{baseUrl}}/api/plugins/figma/me
+Authorization: Bearer {{pluginToken}}
