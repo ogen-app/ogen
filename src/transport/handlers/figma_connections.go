@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"errors"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/plugins"
 )
@@ -16,13 +18,14 @@ import (
 // workspace (X-Workspace-Id).
 type FigmaConnectionsHandler struct {
 	svc      *plugins.Service
+	users    repository.UserRepository
 	auth     fiber.Handler
 	activity *activity.Recorder
 }
 
 // NewFigmaConnectionsHandler builds the handler. A nil rec records nothing.
-func NewFigmaConnectionsHandler(svc *plugins.Service, auth fiber.Handler, rec *activity.Recorder) *FigmaConnectionsHandler {
-	return &FigmaConnectionsHandler{svc: svc, auth: auth, activity: rec}
+func NewFigmaConnectionsHandler(svc *plugins.Service, users repository.UserRepository, auth fiber.Handler, rec *activity.Recorder) *FigmaConnectionsHandler {
+	return &FigmaConnectionsHandler{svc: svc, users: users, auth: auth, activity: rec}
 }
 
 func (h *FigmaConnectionsHandler) Register(app *fiber.App) {
@@ -30,6 +33,8 @@ func (h *FigmaConnectionsHandler) Register(app *fiber.App) {
 	g.Get("/pairings/:write_key", h.PreviewPairing)
 	g.Post("/pairings/:write_key/approve", h.ApprovePairing)
 	g.Post("/pairings/:write_key/deny", h.DenyPairing)
+	g.Get("/connections", h.ListConnections)
+	g.Delete("/connections/:id", h.DeleteConnection)
 }
 
 func (h *FigmaConnectionsHandler) recordActivity(c *fiber.Ctx, typ string, tok *models.PluginToken) {
@@ -63,6 +68,10 @@ type pluginConnectionResponse struct {
 
 type approvePairingResponse struct {
 	Connection pluginConnectionResponse `json:"connection"`
+}
+
+type connectionsResponse struct {
+	Connections []pluginConnectionResponse `json:"connections"`
 }
 
 func connectionResponse(t *models.PluginToken) pluginConnectionResponse {
@@ -132,5 +141,61 @@ func (h *FigmaConnectionsHandler) DenyPairing(c *fiber.Ctx) error {
 	if err := h.svc.Deny(reqCtx(c), c.Params("write_key")); err != nil {
 		return pairingError(c, err)
 	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// ListConnections godoc
+// @Summary     List Figma plugin connections
+// @Description Live connections in the active workspace, newest first: a member sees their own, an owner sees everyone's. last_used_at is updated at most every 10 minutes.
+// @Tags        plugins
+// @Produce     json
+// @Security    CookieAuth
+// @Success     200 {object} connectionsResponse
+// @Failure     401 {object} map[string]string
+// @Router      /api/integrations/figma/connections [get]
+func (h *FigmaConnectionsHandler) ListConnections(c *fiber.Ctx) error {
+	caller, err := callerUser(c, h.users)
+	if err != nil {
+		return err
+	}
+	rows, err := h.svc.ListConnections(reqCtx(c), caller.TenantID, caller)
+	if err != nil {
+		return err
+	}
+	out := connectionsResponse{Connections: make([]pluginConnectionResponse, 0, len(rows))}
+	for i := range rows {
+		r := connectionResponse(&rows[i].PluginToken)
+		r.User = &pluginUser{ID: rows[i].UserID, Name: rows[i].UserName, Email: rows[i].UserEmail}
+		out.Connections = append(out.Connections, r)
+	}
+	return c.JSON(out)
+}
+
+// DeleteConnection godoc
+// @Summary     Disconnect a Figma plugin
+// @Description Revokes the connection; the plugin's next call gets 401 plugin_token_invalid. Members may disconnect their own connections, owners any in the workspace.
+// @Tags        plugins
+// @Security    CookieAuth
+// @Param       id path string true "connection id"
+// @Success     204
+// @Failure     401 {object} map[string]string
+// @Failure     403 {object} map[string]string
+// @Failure     404 {object} map[string]string
+// @Router      /api/integrations/figma/connections/{id} [delete]
+func (h *FigmaConnectionsHandler) DeleteConnection(c *fiber.Ctx) error {
+	caller, err := callerUser(c, h.users)
+	if err != nil {
+		return err
+	}
+	tok, err := h.svc.Disconnect(reqCtx(c), caller.TenantID, caller, c.Params("id"))
+	switch {
+	case errors.Is(err, plugins.ErrConnectionNotFound):
+		return fiber.NewError(fiber.StatusNotFound, err.Error())
+	case errors.Is(err, plugins.ErrConnectionForbidden):
+		return fiber.NewError(fiber.StatusForbidden, err.Error())
+	case err != nil:
+		return err
+	}
+	h.recordActivity(c, "plugin_revoked", tok)
 	return c.SendStatus(fiber.StatusNoContent)
 }

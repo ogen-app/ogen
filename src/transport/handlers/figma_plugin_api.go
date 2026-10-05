@@ -17,6 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/usecase/plugins"
 )
 
 // Plugin request limits.
@@ -254,6 +255,10 @@ func (h *FigmaPluginHandler) SendImage(c *fiber.Ctx) error {
 		return rejectCode(c, pluginUploadStatus(res.Code), res.Code, res.Error)
 	}
 	quota.dispatch(reqCtx(c))
+	plugins.ImagesSent.Add(1)
+	if res.deduplicated {
+		plugins.ImagesDeduplicated.Add(1)
+	}
 
 	out := pluginImageResponse{
 		Asset:        pluginAssetFrom(res.Asset),
