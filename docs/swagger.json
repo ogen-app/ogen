@@ -5337,6 +5337,262 @@
                 }
             }
         },
+        "/api/integrations/figma/connections": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Live connections in the active workspace, newest first: a member sees their own, an owner sees everyone's. last_used_at is updated at most every 10 minutes.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "List Figma plugin connections",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.connectionsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/integrations/figma/connections/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Revokes the connection; the plugin's next call gets 401 plugin_token_invalid. Members may disconnect their own connections, owners any in the workspace.",
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Disconnect a Figma plugin",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "connection id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/integrations/figma/pairings/{write_key}": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "What the approval page shows before the user allows or denies the plugin. 410 pairing_expired for an expired, unknown or already-collected key.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Show a plugin pairing awaiting approval",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "write key from the approve_url",
+                        "name": "write_key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pairingPreviewResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/integrations/figma/pairings/{write_key}/approve": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Creates the plugin connection in the active workspace (X-Workspace-Id) for the signed-in member; the plugin collects its token on its next poll. 409 pairing_not_pending when the request was already answered.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Allow a plugin to act for you in this workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "write key from the approve_url",
+                        "name": "write_key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.approvePairingResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/integrations/figma/pairings/{write_key}/deny": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Refuse a plugin pairing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "write key from the approve_url",
+                        "name": "write_key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/integrations/zernio/accounts": {
             "get": {
                 "security": [
@@ -6750,6 +7006,357 @@
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/plugins/figma/images": {
+            "post": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "One PNG or JPEG per request (type detected from the bytes). Stored as a pending IMG asset with origin figma and processed like any upload (alt text, description, embedding); identical bytes return the existing asset with deduplicated=true. With post_id the image is also attached to that post; if that fails the asset is still stored and attach_error says why (post_not_found, post_locked, quota_exceeded, or an image code).",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Send a rendered frame to the content bank",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "PNG or JPEG bytes",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Figma node id, e.g. 12:345",
+                        "name": "node_id",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "frame name; becomes the asset title",
+                        "name": "node_name",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Figma document name",
+                        "name": "file_name",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Figma file key (private builds only)",
+                        "name": "file_key",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
+                        "description": "attach to this post",
+                        "name": "post_id",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
+                        "description": "alt text written by the designer",
+                        "name": "alt_text",
+                        "in": "formData"
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginImageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "too_large, empty_file, invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "content-bank or media-storage limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "415": {
+                        "description": "vector_rejected, unsupported_media_type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "service_unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/plugins/figma/me": {
+            "get": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "The workspace and member a plugin token acts for, its connection, and the upload limits to check before exporting.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Who the plugin acts as",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginMeResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/plugins/figma/pairings": {
+            "post": {
+                "description": "Returns a read key the plugin keeps and polls with, and an approve_url (carrying the write key) to open in the browser. Expires after 10 minutes. Rate limited per client IP.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Open a plugin pairing",
+                "parameters": [
+                    {
+                        "description": "label shown on the approval page, 1-80 characters",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.startPairingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.startPairingResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/plugins/figma/pairings/{read_key}": {
+            "get": {
+                "description": "202 while waiting for approval; 200 with the plugin token exactly once after approval (the pairing is then gone); 403 pairing_denied; 410 pairing_expired for an expired, unknown or already-collected key. Rate limited per read key.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Poll a plugin pairing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "read key from POST /pairings",
+                        "name": "read_key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.collectPairingResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pairingStatusResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/plugins/figma/posts": {
+            "get": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "Posts not yet submitted to a publisher, newest edit first, without their body text. q filters by title.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Posts the plugin can attach images to",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "title contains (case-insensitive)",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "1-50, default 20",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginPostsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/plugins/figma/token": {
+            "delete": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "Revokes the calling plugin token (the plugin's \"Disconnect\").",
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Disconnect this plugin",
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -11079,6 +11686,14 @@
                 }
             }
         },
+        "handlers.approvePairingResponse": {
+            "type": "object",
+            "properties": {
+                "connection": {
+                    "$ref": "#/definitions/handlers.pluginConnectionResponse"
+                }
+            }
+        },
         "handlers.assetChunksResponse": {
             "type": "object",
             "properties": {
@@ -11588,6 +12203,20 @@
                 }
             }
         },
+        "handlers.collectPairingResponse": {
+            "type": "object",
+            "properties": {
+                "token": {
+                    "type": "string"
+                },
+                "user": {
+                    "$ref": "#/definitions/handlers.pluginUser"
+                },
+                "workspace": {
+                    "$ref": "#/definitions/handlers.pluginWorkspace"
+                }
+            }
+        },
         "handlers.connectLinkRequest": {
             "type": "object",
             "required": [
@@ -11610,6 +12239,17 @@
                 },
                 "platform": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.connectionsResponse": {
+            "type": "object",
+            "properties": {
+                "connections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.pluginConnectionResponse"
+                    }
                 }
             }
         },
@@ -11937,6 +12577,37 @@
                 }
             }
         },
+        "handlers.pairingPreviewResponse": {
+            "type": "object",
+            "properties": {
+                "client": {
+                    "type": "string"
+                },
+                "client_label": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_ip": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pairingStatusResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.passwordResetConfirmRequest": {
             "type": "object",
             "required": [
@@ -12087,6 +12758,192 @@
                     "items": {
                         "$ref": "#/definitions/handlers.platformInfo"
                     }
+                }
+            }
+        },
+        "handlers.pluginAsset": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "origin": {
+                    "type": "string"
+                },
+                "origin_ref": {
+                    "$ref": "#/definitions/models.AssetOriginRef"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginAttachError": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginAttachment": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "post_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginConnectionResponse": {
+            "type": "object",
+            "properties": {
+                "client": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "last_used_at": {
+                    "type": "string"
+                },
+                "user": {
+                    "$ref": "#/definitions/handlers.pluginUser"
+                }
+            }
+        },
+        "handlers.pluginImageResponse": {
+            "type": "object",
+            "properties": {
+                "asset": {
+                    "$ref": "#/definitions/handlers.pluginAsset"
+                },
+                "attach_error": {
+                    "$ref": "#/definitions/handlers.pluginAttachError"
+                },
+                "attachment": {
+                    "$ref": "#/definitions/handlers.pluginAttachment"
+                },
+                "deduplicated": {
+                    "type": "boolean"
+                },
+                "open_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginLimits": {
+            "type": "object",
+            "properties": {
+                "max_image_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.pluginMeResponse": {
+            "type": "object",
+            "properties": {
+                "connection": {
+                    "$ref": "#/definitions/handlers.pluginConnectionResponse"
+                },
+                "limits": {
+                    "$ref": "#/definitions/handlers.pluginLimits"
+                },
+                "user": {
+                    "$ref": "#/definitions/handlers.pluginUser"
+                },
+                "workspace": {
+                    "$ref": "#/definitions/handlers.pluginWorkspace"
+                }
+            }
+        },
+        "handlers.pluginPost": {
+            "type": "object",
+            "properties": {
+                "attachment_count": {
+                    "type": "integer"
+                },
+                "campaign": {
+                    "$ref": "#/definitions/handlers.pluginPostCampaign"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginPostCampaign": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginPostsResponse": {
+            "type": "object",
+            "properties": {
+                "posts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.pluginPost"
+                    }
+                }
+            }
+        },
+        "handlers.pluginUser": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginWorkspace": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },
@@ -12561,6 +13418,34 @@
                 }
             }
         },
+        "handlers.startPairingRequest": {
+            "type": "object",
+            "properties": {
+                "client_label": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.startPairingResponse": {
+            "type": "object",
+            "properties": {
+                "approve_url": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "poll_interval_ms": {
+                    "type": "integer"
+                },
+                "read_key": {
+                    "type": "string"
+                },
+                "write_key": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.tagRequest": {
             "type": "object",
             "required": [
@@ -12865,6 +13750,13 @@
                         "$ref": "#/definitions/models.AssetImage"
                     }
                 },
+                "origin": {
+                    "description": "Origin is where the asset came from beyond a plain upload ('' for\nuploads, AssetOriginFigma for frames a Figma plugin sent); OriginRef is\nthe origin-specific pointer back to the source. A checksum-dedupe hit\nkeeps the first asset's provenance.",
+                    "type": "string"
+                },
+                "origin_ref": {
+                    "$ref": "#/definitions/models.AssetOriginRef"
+                },
                 "source_url": {
                     "description": "SourceURL is the origin URL for URL-scraped assets; nil for\nMD/PDF/text assets. Unique per tenant, so re-submitting a URL refreshes\nthe same asset instead of duplicating it.",
                     "type": "string"
@@ -13030,6 +13922,23 @@
                 },
                 "url": {
                     "description": "URL is a transient public URL rendered from S3Key by the handler layer\nbefore serialization. Not persisted.",
+                    "type": "string"
+                }
+            }
+        },
+        "models.AssetOriginRef": {
+            "type": "object",
+            "properties": {
+                "file_key": {
+                    "type": "string"
+                },
+                "file_name": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "string"
+                },
+                "node_name": {
                     "type": "string"
                 }
             }
@@ -15521,6 +16430,12 @@
             "type": "apiKey",
             "name": "c3_session",
             "in": "cookie"
+        },
+        "PluginToken": {
+            "description": "\"Bearer ogp_…\" plugin token collected through the plugin pairing flow.",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
         }
     }
 }
