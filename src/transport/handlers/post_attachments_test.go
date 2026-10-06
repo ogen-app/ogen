@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 	"github.com/ogen-app/ogen/src/transport/handlers"
@@ -174,6 +175,8 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		campaignID string
 		userID     string
 		stub       *stubStorage
+		hub        eventhub.Hub
+		imgPrep    *fakeImagePreparer
 	)
 
 	const linkedinPlatformID = "AXqWG7U2qnpt"
@@ -212,8 +215,10 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		postVersionRepo := repository.NewPostVersionRepository(db)
 		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{Storage: stub}).Register(app)
 		assetRepo := repository.NewAssetRepository(db, tagRepo, repository.NewAssetFileRepository(db))
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, 280, auth, nil).
-			WithContentBank(assetRepo).Register(app)
+		hub = eventhub.New(eventhub.Config{})
+		imgPrep = &fakeImagePreparer{store: stub}
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, imgPrep, nil, 280, auth, nil).
+			WithContentBank(assetRepo).WithEventHub(hub).Register(app)
 
 		userID = seedTenantUser(db, "Admin", "att@example.com", "att-password").ID
 
@@ -646,6 +651,21 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 			resp, err := app.Test(req)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(401))
+		})
+
+		It("announces the attachment with the bank as its source", func() {
+			teammate := subscribePostEvents(hub, models.DefaultTenantID, "teammate")
+			postID := createPostWithPlatform(linkedinPlatformID)
+			assetID, _ := seedBankImage(minimalPNG(), "photo.png", "image/png", "A red pixel", true)
+
+			resp := attachFromAsset(postID, fiber.Map{"asset_id": assetID})
+			Expect(resp.StatusCode).To(Equal(201))
+			got := decode(resp)
+
+			payload := attachmentEventPayload(nextAttachmentEvent(teammate))
+			Expect(payload).To(HaveKeyWithValue("action", "created"))
+			Expect(payload).To(HaveKeyWithValue("source", "bank"))
+			Expect(payload).To(HaveKeyWithValue("attachment_id", got["id"]))
 		})
 
 		It("re-prepares the bank image into the post's own object and carries alt text over", func() {
@@ -1252,6 +1272,101 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 	})
 
 	// ── png helper kept here so it stays in the same package ─────────────────
+
+	Describe("post.attachments.changed events", func() {
+		var teammate, outsider <-chan eventhub.Event
+
+		BeforeEach(func() {
+			// A teammate in the uploader's workspace, and someone in another one.
+			teammate = subscribePostEvents(hub, models.DefaultTenantID, "teammate")
+			outsider = subscribePostEvents(hub, "other-tenant", "outsider")
+		})
+
+		sendJSON := func(method, path string, body any) int {
+			GinkgoHelper()
+			raw, _ := json.Marshal(body)
+			req := httptest.NewRequest(method, path, bytes.NewReader(raw))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			return resp.StatusCode
+		}
+
+		It("tells every member of the workspace about an upload, and no other workspace", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			attID := uploadAttID(postID)
+
+			ev := nextAttachmentEvent(teammate)
+			Expect(ev.Topic).To(Equal("entity:post:" + postID))
+			Expect(ev.TenantID).To(Equal(models.DefaultTenantID))
+			Expect(ev.UserID).To(BeEmpty())
+			Expect(attachmentEventPayload(ev)).To(Equal(map[string]any{
+				"post_id":       postID,
+				"attachment_id": attID,
+				"action":        "created",
+				"source":        "editor",
+			}))
+			expectNoPostEvent(outsider)
+		})
+
+		It("announces updates, reorders and deletes", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			a := uploadAttID(postID)
+			b := uploadAttID(postID)
+			nextAttachmentEvent(teammate)
+			nextAttachmentEvent(teammate)
+
+			Expect(sendJSON("PATCH", "/api/posts/"+postID+"/attachments/"+a, fiber.Map{"alt_text": "A red pixel"})).To(Equal(200))
+			payload := attachmentEventPayload(nextAttachmentEvent(teammate))
+			Expect(payload).To(HaveKeyWithValue("action", "updated"))
+			Expect(payload).To(HaveKeyWithValue("attachment_id", a))
+
+			Expect(sendJSON("PATCH", "/api/posts/"+postID+"/attachments/reorder", fiber.Map{"ids": []string{b, a}})).To(Equal(200))
+			payload = attachmentEventPayload(nextAttachmentEvent(teammate))
+			Expect(payload).To(HaveKeyWithValue("action", "reordered"))
+			Expect(payload).To(HaveKeyWithValue("attachment_id", ""))
+
+			req := httptest.NewRequest("DELETE", "/api/posts/"+postID+"/attachments/"+b, nil)
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(204))
+			payload = attachmentEventPayload(nextAttachmentEvent(teammate))
+			Expect(payload).To(HaveKeyWithValue("action", "deleted"))
+			Expect(payload).To(HaveKeyWithValue("attachment_id", b))
+			expectNoPostEvent(outsider)
+		})
+
+		It("announces nothing for a write the post refuses", func() {
+			postID := createPostWithPlatform(linkedinPlatformID)
+			_, err := db.NewUpdate().Model((*models.Post)(nil)).
+				Set("status = ?", models.PostStatusScheduled).
+				Where("id = ?", postID).Exec(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+
+			resp, err := uploadPNG(postID, minimalPNG())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(409))
+			expectNoPostEvent(teammate)
+		})
+
+		It("announces generated alt text once it is stored", func() {
+			imgPrep.altText = "A red pixel"
+			postID := createPostWithPlatform(linkedinPlatformID)
+			attID := uploadAttID(postID)
+
+			Expect(attachmentEventPayload(nextAttachmentEvent(teammate))).To(HaveKeyWithValue("action", "created"))
+			payload := attachmentEventPayload(nextAttachmentEvent(teammate))
+			Expect(payload).To(HaveKeyWithValue("action", "updated"))
+			Expect(payload).To(HaveKeyWithValue("source", "alt_text"))
+			Expect(payload).To(HaveKeyWithValue("attachment_id", attID))
+
+			var att models.PostAttachment
+			Expect(db.NewSelect().Model(&att).Where("id = ?", attID).Scan(tenantCtx())).To(Succeed())
+			Expect(att.AltText).To(Equal("A red pixel"))
+		})
+	})
 
 	Describe("png decoder fixture", func() {
 		It("emits a parseable PNG", func() {
