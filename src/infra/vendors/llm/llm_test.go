@@ -55,6 +55,15 @@ func TestGeminiEmbedPricing(t *testing.T) {
 	}
 }
 
+func TestGeminiFlashPricing(t *testing.T) {
+	// 1M input @ $0.75/1M = 750_000 micros; 1M output @ $3.75/1M = 3_750_000.
+	cost, _, ok := vendors.CostOf(llm.VendorGemini, "gemini-3.8-flash",
+		vendors.Usage{vendors.KindInput: 1_000_000, vendors.KindOutput: 1_000_000})
+	if !ok || cost != 4_500_000 {
+		t.Errorf("gemini-3.8-flash cost = %d (priced %v), want 4500000", cost, ok)
+	}
+}
+
 func TestGenkitGenerateMeter(t *testing.T) {
 	d, _ := vendors.Get(llm.VendorAnthropic)
 	resp := &ai.ModelResponse{Usage: &ai.GenerationUsage{
