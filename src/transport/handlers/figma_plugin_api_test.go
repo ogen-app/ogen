@@ -421,10 +421,19 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 	})
 
 	It("rate-limits each token", func() {
+		// The bucket holds 120 requests and refills at 2/s, so a slow run (race
+		// detector, parallel suites) earns back a few before the burst ends.
+		// Assert the full burst passes and the limit then bites, not the exact
+		// request it bites on.
 		for range 120 {
 			Expect(call(fiber.MethodGet, "/api/plugins/figma/me", nil, "").StatusCode).To(Equal(fiber.StatusOK))
 		}
-		resp := call(fiber.MethodGet, "/api/plugins/figma/me", nil, "")
+		var resp *http.Response
+		for range 200 {
+			if resp = call(fiber.MethodGet, "/api/plugins/figma/me", nil, ""); resp.StatusCode != fiber.StatusOK {
+				break
+			}
+		}
 		Expect(resp.StatusCode).To(Equal(fiber.StatusTooManyRequests))
 		Expect(resp.Header.Get(fiber.HeaderRetryAfter)).NotTo(BeEmpty())
 	})
