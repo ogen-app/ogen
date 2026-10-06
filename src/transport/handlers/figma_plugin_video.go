@@ -99,7 +99,7 @@ func (h *FigmaPluginHandler) PresignVideo(c *fiber.Ctx) error {
 
 // FinalizeVideo godoc
 // @Summary     Attach an uploaded video to a post
-// @Description Probes the object PUT through the presigned URL (duration, size, poster frame) and attaches it to the post. platform_validation lists the platform and post-type rules this video breaks, as warnings; the attachment is still created. Repeating a finalize for an s3_key already attached returns that attachment with 200. A refused object is deleted.
+// @Description Probes the object PUT through the presigned URL (duration, size, poster frame) and attaches it to the post. platform_validation lists the platform and post-type rules this video breaks, as warnings; the attachment is still created. Repeating a finalize for an s3_key already attached returns that attachment with 200, even once the post has been sent for publishing. A refused object is deleted.
 // @Tags        plugins
 // @Accept      json
 // @Produce     json
@@ -126,7 +126,7 @@ func (h *FigmaPluginHandler) FinalizeVideo(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	post, err := h.pluginTargetPost(c)
+	post, err := h.pluginPost(c)
 	if err != nil {
 		return attachmentError(c, err)
 	}
@@ -135,12 +135,18 @@ func (h *FigmaPluginHandler) FinalizeVideo(c *fiber.Ctx) error {
 		return err
 	}
 
+	// An already-attached key answers before the lock check: a retry whose
+	// first response was lost still gets its attachment after the post was
+	// scheduled.
 	existing, err := h.attachments.repo.ListByPostID(reqCtx(c), post.ID)
 	if err != nil {
 		return err
 	}
 	if i := slices.IndexFunc(existing, func(a models.PostAttachment) bool { return a.S3Key == req.S3Key }); i >= 0 {
 		return c.JSON(h.videoResponse(c, post, &existing[i], existing))
+	}
+	if ensureMutable(post) != nil {
+		return attachmentError(c, errPluginPostLocked())
 	}
 
 	att, err := h.attachments.finalizeVideoUpload(c, post, req.S3Key, req.AltText, h.maxVideoBytes(), session, attachmentSourceFigmaPlugin)
@@ -157,20 +163,32 @@ func (h *FigmaPluginHandler) FinalizeVideo(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(h.videoResponse(c, post, att, append(existing, *att)))
 }
 
-// pluginTargetPost loads the :post_id post and refuses one already sent for
-// publishing, with the codes the plugin matches on.
-func (h *FigmaPluginHandler) pluginTargetPost(c *fiber.Ctx) (*models.Post, error) {
+// pluginPost loads the :post_id post, answering post_not_found when this
+// workspace has no such post.
+func (h *FigmaPluginHandler) pluginPost(c *fiber.Ctx) (*models.Post, error) {
 	post, err := h.posts.GetByID(reqCtx(c), c.Params("post_id"))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, rejectUpload(fiber.StatusNotFound, CodePostNotFound, "post not found in this workspace")
 	}
+	return post, err
+}
+
+// pluginTargetPost is pluginPost refusing a post already sent for publishing.
+func (h *FigmaPluginHandler) pluginTargetPost(c *fiber.Ctx) (*models.Post, error) {
+	post, err := h.pluginPost(c)
 	if err != nil {
 		return nil, err
 	}
 	if ensureMutable(post) != nil {
-		return nil, rejectUpload(fiber.StatusConflict, CodePostLocked, "the post was already sent for publishing and can't take new media")
+		return nil, errPluginPostLocked()
 	}
 	return post, nil
+}
+
+// errPluginPostLocked is the post_locked reject for new media on a post
+// already sent for publishing.
+func errPluginPostLocked() error {
+	return rejectUpload(fiber.StatusConflict, CodePostLocked, "the post was already sent for publishing and can't take new media")
 }
 
 // readPluginFinalizeVideo parses and bounds the finalize body.
