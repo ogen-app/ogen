@@ -69,6 +69,9 @@ func (r *fakePostRepo) ListSummaryProjections(context.Context) ([]models.Post, e
 func (r *fakePostRepo) ListAttachTargets(context.Context, string, int) ([]models.PostAttachTarget, error) {
 	return nil, nil
 }
+func (r *fakePostRepo) ListCampaignPostTree(context.Context, int, int) ([]models.CampaignPostTree, error) {
+	return nil, nil
+}
 func (r *fakePostRepo) UpdateScheduledAtBatch(context.Context, []*models.Post) error { return nil }
 func (r *fakePostRepo) AddUsedAssetIDs(context.Context, string, []string) (*models.Post, error) {
 	return nil, nil
