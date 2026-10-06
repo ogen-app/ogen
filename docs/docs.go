@@ -7828,7 +7828,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Submitted content locked, or code use_cancel_endpoint: a scheduled post can only leave scheduled via POST /cancel or /convert-to-manual, and its date and account can't change",
+                        "description": "Submitted content locked, or code use_cancel_endpoint: a scheduled post can only leave scheduled via POST /cancel or /convert-to-manual, and its date and account can't change; or code schedule_changed: it was cancelled or published while the edit was in flight",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

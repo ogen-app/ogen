@@ -1223,7 +1223,7 @@ func (h *PostsHandler) Get(c *fiber.Ctx) error {
 // @Failure      400   {object}  map[string]string
 // @Failure      401   {object}  map[string]string
 // @Failure      404   {object}  map[string]string
-// @Failure      409   {object}  map[string]string  "Submitted content locked, or code use_cancel_endpoint: a scheduled post can only leave scheduled via POST /cancel or /convert-to-manual, and its date and account can't change"
+// @Failure      409   {object}  map[string]string  "Submitted content locked, or code use_cancel_endpoint: a scheduled post can only leave scheduled via POST /cancel or /convert-to-manual, and its date and account can't change; or code schedule_changed: it was cancelled or published while the edit was in flight"
 // @Router       /api/posts/{id} [put]
 func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	var req postRequest
@@ -1293,6 +1293,9 @@ func postUpdateError(c *fiber.Ctx, err error) error {
 	if e, ok := errors.AsType[*update.LeaveScheduledError](err); ok {
 		return rejectCoded(c, fiber.StatusConflict, codeUseCancelEndpoint, e.Error(), nil)
 	}
+	if errors.Is(err, update.ErrScheduleChanged) {
+		return rejectCoded(c, fiber.StatusConflict, codeScheduleChanged, err.Error(), nil)
+	}
 	if e, ok := errors.AsType[*update.ValidationError](err); ok {
 		return fiber.NewError(fiber.StatusBadRequest, e.Msg)
 	}
@@ -1342,6 +1345,10 @@ func (h *PostsHandler) Delete(c *fiber.Ctx) error {
 		}
 	}
 	deleted, err := h.deletePost(c, post)
+	if errors.Is(err, withdraw.ErrPublished) {
+		// Published between the load above and the delete.
+		return rejectCoded(c, fiber.StatusConflict, codePostPublished, err.Error(), nil)
+	}
 	if err != nil {
 		return err
 	}
@@ -1352,11 +1359,13 @@ func (h *PostsHandler) Delete(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// 409 codes: deleting a published post, and moving a scheduled post off
-// scheduled by a PUT instead of the cancel endpoint.
+// 409 codes: deleting a published post, moving a scheduled post off scheduled
+// by a PUT instead of the cancel endpoint, and editing a scheduled post that a
+// cancel or publish moved on mid-request.
 const (
 	codePostPublished     = "post_published"
 	codeUseCancelEndpoint = "use_cancel_endpoint"
+	codeScheduleChanged   = "schedule_changed"
 )
 
 func (h *PostsHandler) deletePost(c *fiber.Ctx, post *models.Post) (bool, error) {

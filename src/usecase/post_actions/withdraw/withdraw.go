@@ -51,26 +51,40 @@ func New(db *bun.DB, posts repository.PostRepository, campaigns repository.Campa
 // partial publish) or already being withdrawn by the reconciler. A published
 // post is refused with ErrPublished. Reports false when the post was already
 // gone.
+//
+// Every decision is made on the row the delete itself removed, not on post: a
+// schedule or publish landing after the caller loaded post would otherwise go
+// unseen, and the delete would leave its Zernio copy queued or drop a live
+// post.
 func (s *Service) DeletePost(ctx context.Context, post *models.Post, actor string) (bool, error) {
 	if post.Status == models.PostStatusPublished {
 		return false, ErrPublished
 	}
 	var deleted bool
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		var err error
-		deleted, err = s.posts.DeleteTx(ctx, tx, post.ID)
-		if err != nil || !deleted || post.Status != models.PostStatusScheduled || post.PublisherPostID == "" {
+		row, err := s.posts.DeleteTx(ctx, tx, post.ID)
+		if err != nil || row == nil {
 			return err
 		}
+		if row.Status == models.PostStatusPublished {
+			return ErrPublished // rolls the delete back
+		}
+		deleted = true
+		if row.Status != models.PostStatusScheduled || row.PublisherPostID == "" {
+			return nil
+		}
 		return s.jobs.EnqueueWithdrawTx(ctx, tx.Tx, queues.WithdrawZernioPostTask{
-			PublisherPostID: post.PublisherPostID,
-			PostID:          post.ID,
-			TenantID:        post.TenantID,
+			PublisherPostID: row.PublisherPostID,
+			PostID:          row.ID,
+			TenantID:        row.TenantID,
 			Reason:          queues.WithdrawReasonPostDeleted,
 			Actor:           actor,
 		})
 	})
-	return deleted, err
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
 }
 
 // DeleteCampaign soft-deletes the campaign and unschedules its posts: each

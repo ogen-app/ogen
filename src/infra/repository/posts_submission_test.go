@@ -152,3 +152,51 @@ func TestPostUnscheduleByCampaignTx(t *testing.T) {
 		}
 	}
 }
+
+func TestPostDeleteTxReturnsTheDeletedRow(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewPostRepository(db)
+	post := seedSubmissionPost(t, repo, "camp-1", models.PostStatusScheduled, "z-1")
+
+	row, err := repo.DeleteTx(ctx, db, post.ID)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if row == nil || row.ID != post.ID || row.Status != models.PostStatusScheduled || row.PublisherPostID != "z-1" || row.TenantID == "" {
+		t.Fatalf("returned row = %+v", row)
+	}
+	if row, err := repo.DeleteTx(ctx, db, post.ID); err != nil || row != nil {
+		t.Fatalf("second delete: row=%+v err=%v, want nil, nil", row, err)
+	}
+}
+
+func TestPostUpdateWhileScheduled(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewPostRepository(db)
+	post := seedSubmissionPost(t, repo, "camp-1", models.PostStatusScheduled, "z-1")
+
+	edit := *post
+	edit.Title = "edited"
+	if ok, err := repo.UpdateWhileScheduled(ctx, &edit, "z-1", "used_asset_ids"); err != nil || !ok {
+		t.Fatalf("edit of a scheduled post: ok=%v err=%v", ok, err)
+	}
+
+	// A cancel lands: the post leaves scheduled and drops its Zernio id.
+	cancelled, _ := repo.GetByID(ctx, post.ID)
+	cancelled.Status = models.PostStatusReadyForPublish
+	cancelled.PublisherPostID = ""
+	if err := repo.Update(ctx, cancelled); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	stale := edit
+	stale.Title = "stale edit"
+	if ok, _ := repo.UpdateWhileScheduled(ctx, &stale, "z-1"); ok {
+		t.Fatal("a stale edit must not restore a cancelled post")
+	}
+	got, _ := repo.GetByID(ctx, post.ID)
+	if got.Status != models.PostStatusReadyForPublish || got.Title != "edited" {
+		t.Fatalf("status=%q title=%q", got.Status, got.Title)
+	}
+}
