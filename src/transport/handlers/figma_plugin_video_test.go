@@ -350,6 +350,21 @@ var _ = Describe("Figma plugin video API", Ordered, func() {
 		Expect(attachmentCount(postID)).To(Equal(1))
 	})
 
+	It("answers a repeated finalize after the post was sent for publishing", func() {
+		key := upload(postID, 1024)
+		_, first := finalize(postID, frame(key))
+		unattached := upload(postID, 1024)
+		lockPost(postID)
+
+		again, out := finalize(postID, frame(key))
+		Expect(again.StatusCode).To(Equal(fiber.StatusOK))
+		Expect(out.Attachment.ID).To(Equal(first.Attachment.ID))
+
+		fresh, refused := finalize(postID, frame(unattached))
+		Expect(fresh.StatusCode).To(Equal(fiber.StatusConflict))
+		Expect(refused.Code).To(Equal(handlers.CodePostLocked))
+	})
+
 	It("reports the video's own rule failures", func() {
 		prober.result.DurationMs = 1000 // Instagram has a 3s floor
 		_, out := finalize(postID, frame(upload(postID, 1024)))
