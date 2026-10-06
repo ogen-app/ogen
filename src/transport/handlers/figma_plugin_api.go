@@ -16,6 +16,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/plugins"
@@ -57,7 +58,9 @@ type pluginMeResponse struct {
 }
 
 type pluginLimits struct {
-	MaxImageBytes int64 `json:"max_image_bytes"`
+	MaxImageBytes     int64    `json:"max_image_bytes"`
+	MaxVideoBytes     int64    `json:"max_video_bytes"`
+	VideoContentTypes []string `json:"video_content_types"`
 }
 
 type pluginPostCampaign struct {
@@ -89,9 +92,31 @@ type pluginCampaignPost struct {
 	Title           string          `json:"title"`
 	Status          string          `json:"status"`
 	Platform        *pluginPlatform `json:"platform"`
+	PostType        string          `json:"post_type"`
 	ScheduledAt     *time.Time      `json:"scheduled_at"`
 	AttachmentCount int             `json:"attachment_count"`
+	VideoCount      int             `json:"video_count"`
 	Attachable      bool            `json:"attachable"`
+}
+
+// pluginPlatformRules are the media rules of one platform, for checking a
+// send before rendering it. Video is nil when the platform takes no video.
+type pluginPlatformRules struct {
+	Name      string                       `json:"name"`
+	Video     *pluginVideoRules            `json:"video"`
+	PostTypes []platforms.PostTypeRuleView `json:"post_types"`
+}
+
+type pluginVideoRules struct {
+	MaxFileSizeBytes      int64    `json:"max_file_size_bytes"`
+	AllowedFormats        []string `json:"allowed_formats"`
+	MinDurationSeconds    int      `json:"min_duration_seconds"`
+	MaxDurationSeconds    int      `json:"max_duration_seconds"`
+	MaxWidth              int      `json:"max_width"`
+	MaxHeight             int      `json:"max_height"`
+	AllowedAspectRatios   []string `json:"allowed_aspect_ratios"`
+	MaxAttachmentsPerPost int      `json:"max_attachments_per_post"`
+	RequiresVideoTitle    bool     `json:"requires_video_title"`
 }
 
 type pluginCampaign struct {
@@ -106,6 +131,9 @@ type pluginCampaign struct {
 
 type pluginCampaignsResponse struct {
 	Campaigns []pluginCampaign `json:"campaigns"`
+	// Platforms holds the rules of every platform a listed post is on, by
+	// platform id.
+	Platforms map[string]pluginPlatformRules `json:"platforms"`
 }
 
 type pluginAsset struct {
@@ -176,7 +204,11 @@ func (h *FigmaPluginHandler) Me(c *fiber.Ctx) error {
 		Workspace:  workspace,
 		User:       pluginUser{ID: user.ID, Name: user.Name},
 		Connection: connectionResponse(tok),
-		Limits:     pluginLimits{MaxImageBytes: maxImageUploadBytes()},
+		Limits: pluginLimits{
+			MaxImageBytes:     maxImageUploadBytes(),
+			MaxVideoBytes:     h.maxVideoBytes(),
+			VideoContentTypes: pluginVideoContentTypes,
+		},
 	})
 }
 
@@ -212,7 +244,7 @@ func (h *FigmaPluginHandler) ListPosts(c *fiber.Ctx) error {
 
 // ListCampaigns godoc
 // @Summary     Campaigns and their posts, for the plugin's "Send to" picker
-// @Description Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored ("" = UTC).
+// @Description Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored ("" = UTC). post_type is the post's platform post type slug ("" until chosen); video_count counts its video attachments. platforms carries, by platform id, the media rules of every platform a listed post is on (video is null where the platform takes no video), for warning before a send; the server still validates.
 // @Tags        plugins
 // @Produce     json
 // @Security    PluginToken
@@ -225,6 +257,7 @@ func (h *FigmaPluginHandler) ListCampaigns(c *fiber.Ctx) error {
 		return err
 	}
 	out := pluginCampaignsResponse{Campaigns: make([]pluginCampaign, 0, len(rows))}
+	used := map[string]bool{}
 	for _, r := range rows {
 		camp := pluginCampaign{
 			ID: r.ID, Name: r.Name, Status: string(r.Status), Timezone: r.Timezone,
@@ -233,17 +266,51 @@ func (h *FigmaPluginHandler) ListCampaigns(c *fiber.Ctx) error {
 		}
 		for _, p := range r.Posts {
 			post := pluginCampaignPost{
-				ID: p.ID, Title: p.Title, Status: string(p.Status), ScheduledAt: p.ScheduledAt,
-				AttachmentCount: p.AttachmentCount, Attachable: !p.Status.IsSubmitted(),
+				ID: p.ID, Title: p.Title, Status: string(p.Status), PostType: p.PlatformPostType, ScheduledAt: p.ScheduledAt,
+				AttachmentCount: p.AttachmentCount, VideoCount: p.VideoCount, Attachable: !p.Status.IsSubmitted(),
 			}
 			if p.PlatformID != "" {
 				post.Platform = &pluginPlatform{ID: p.PlatformID, Name: p.PlatformName}
+				used[p.PlatformID] = true
 			}
 			camp.Posts = append(camp.Posts, post)
 		}
 		out.Campaigns = append(out.Campaigns, camp)
 	}
+	if out.Platforms, err = h.platformRules(c, used); err != nil {
+		return err
+	}
 	return c.JSON(out)
+}
+
+// platformRules returns the media rules of the platforms in ids. Disabled
+// platforms are included: a post on one is still listed.
+func (h *FigmaPluginHandler) platformRules(c *fiber.Ctx, ids map[string]bool) (map[string]pluginPlatformRules, error) {
+	out := map[string]pluginPlatformRules{}
+	if h.platforms == nil || len(ids) == 0 {
+		return out, nil
+	}
+	all, err := h.platforms.List(reqCtx(c))
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		p := &all[i]
+		if !ids[p.ID] {
+			continue
+		}
+		rules := pluginPlatformRules{Name: p.Name, PostTypes: platforms.ResolvePostTypeRules(p)}
+		if v := p.VideoConstraints; !v.IsZero() {
+			rules.Video = &pluginVideoRules{
+				MaxFileSizeBytes: v.MaxFileSizeBytes, AllowedFormats: v.AllowedFormats,
+				MinDurationSeconds: v.MinDurationSeconds, MaxDurationSeconds: v.MaxDurationSeconds,
+				MaxWidth: v.MaxWidth, MaxHeight: v.MaxHeight, AllowedAspectRatios: v.AllowedAspectRatios,
+				MaxAttachmentsPerPost: v.MaxAttachmentsPerPost, RequiresVideoTitle: v.RequiresVideoTitle,
+			}
+		}
+		out[p.ID] = rules
+	}
+	return out, nil
 }
 
 // RevokeToken godoc

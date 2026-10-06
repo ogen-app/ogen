@@ -39,6 +39,7 @@ type FigmaPluginHandler struct {
 	auth        fiber.Handler
 	users       repository.UserRepository
 	posts       repository.PostRepository
+	platforms   repository.PlatformRepository
 	assets      *AssetsHandler
 	attachments *PostAttachmentsHandler
 	activity    *activity.Recorder
@@ -53,13 +54,16 @@ type FigmaPluginHandler struct {
 // FigmaPluginDeps are the plugin API's collaborators. Assets and Attachments
 // supply the content bank's image ingest and bank-to-post attach, so a frame
 // sent by the plugin takes exactly the path an upload does. Activity may be
-// nil. MaxVideoBytes caps one video send (0 = the web app's video cap).
+// nil. Platforms supplies the media rules the campaign tree carries for
+// pre-flight checks; nil leaves them out. MaxVideoBytes caps one video send
+// (0 = the web app's video cap).
 type FigmaPluginDeps struct {
 	Pairing       *plugins.Service
 	AppBaseURL    string
 	Tokens        repository.PluginTokenRepository
 	Users         repository.UserRepository
 	Posts         repository.PostRepository
+	Platforms     repository.PlatformRepository
 	Assets        *AssetsHandler
 	Attachments   *PostAttachmentsHandler
 	Activity      *activity.Recorder
@@ -73,6 +77,7 @@ func NewFigmaPluginHandler(d FigmaPluginDeps) *FigmaPluginHandler {
 		auth:                RequirePluginToken(d.Tokens, d.Users),
 		users:               d.Users,
 		posts:               d.Posts,
+		platforms:           d.Platforms,
 		assets:              d.Assets,
 		attachments:         d.Attachments,
 		activity:            d.Activity,

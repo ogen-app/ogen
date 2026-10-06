@@ -14,15 +14,18 @@ type CampaignPostTree struct {
 	Posts     []CampaignTreePost `bun:"-"`
 }
 
-// CampaignTreePost is one post under a CampaignPostTree. PlatformID and
-// PlatformName are empty when the post has no platform yet.
+// CampaignTreePost is one post under a CampaignPostTree. PlatformID,
+// PlatformName and PlatformPostType are empty until the post has them.
+// VideoCount is how many of its attachments are videos.
 type CampaignTreePost struct {
-	ID              string     `bun:"id"`
-	CampaignID      string     `bun:"campaign_id"`
-	Title           string     `bun:"title"`
-	Status          PostStatus `bun:"status"`
-	PlatformID      string     `bun:"platform_id"`
-	PlatformName    string     `bun:"platform_name"`
-	ScheduledAt     *time.Time `bun:"scheduled_at"`
-	AttachmentCount int        `bun:"attachment_count"`
+	ID               string     `bun:"id"`
+	CampaignID       string     `bun:"campaign_id"`
+	Title            string     `bun:"title"`
+	Status           PostStatus `bun:"status"`
+	PlatformID       string     `bun:"platform_id"`
+	PlatformName     string     `bun:"platform_name"`
+	PlatformPostType string     `bun:"platform_post_type"`
+	ScheduledAt      *time.Time `bun:"scheduled_at"`
+	AttachmentCount  int        `bun:"attachment_count"`
+	VideoCount       int        `bun:"video_count"`
 }

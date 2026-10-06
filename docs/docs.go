@@ -7029,7 +7029,7 @@ const docTemplate = `{
                         "PluginToken": []
                     }
                 ],
-                "description": "Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored (\"\" = UTC).",
+                "description": "Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored (\"\" = UTC). post_type is the post's platform post type slug (\"\" until chosen); video_count counts its video attachments. platforms carries, by platform id, the media rules of every platform a listed post is on (video is null where the platform takes no video), for warning before a send; the server still validates.",
                 "produces": [
                     "application/json"
                 ],
@@ -13160,6 +13160,9 @@ const docTemplate = `{
                 "platform": {
                     "$ref": "#/definitions/handlers.pluginPlatform"
                 },
+                "post_type": {
+                    "type": "string"
+                },
                 "scheduled_at": {
                     "type": "string"
                 },
@@ -13168,6 +13171,9 @@ const docTemplate = `{
                 },
                 "title": {
                     "type": "string"
+                },
+                "video_count": {
+                    "type": "integer"
                 }
             }
         },
@@ -13178,6 +13184,13 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/handlers.pluginCampaign"
+                    }
+                },
+                "platforms": {
+                    "description": "Platforms holds the rules of every platform a listed post is on, by\nplatform id.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.pluginPlatformRules"
                     }
                 }
             }
@@ -13250,6 +13263,15 @@ const docTemplate = `{
             "properties": {
                 "max_image_bytes": {
                     "type": "integer"
+                },
+                "max_video_bytes": {
+                    "type": "integer"
+                },
+                "video_content_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -13278,6 +13300,23 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.pluginPlatformRules": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "post_types": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/platforms.PostTypeRuleView"
+                    }
+                },
+                "video": {
+                    "$ref": "#/definitions/handlers.pluginVideoRules"
                 }
             }
         },
@@ -13397,6 +13436,44 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/platforms.ValidationError"
                     }
+                }
+            }
+        },
+        "handlers.pluginVideoRules": {
+            "type": "object",
+            "properties": {
+                "allowed_aspect_ratios": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowed_formats": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "max_attachments_per_post": {
+                    "type": "integer"
+                },
+                "max_duration_seconds": {
+                    "type": "integer"
+                },
+                "max_file_size_bytes": {
+                    "type": "integer"
+                },
+                "max_height": {
+                    "type": "integer"
+                },
+                "max_width": {
+                    "type": "integer"
+                },
+                "min_duration_seconds": {
+                    "type": "integer"
+                },
+                "requires_video_title": {
+                    "type": "boolean"
                 }
             }
         },
