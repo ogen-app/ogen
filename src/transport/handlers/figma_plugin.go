@@ -87,6 +87,7 @@ func (h *FigmaPluginHandler) Register(app *fiber.App) {
 	authed := []fiber.Handler{h.auth, h.limitPerToken}
 	g.Get("/me", append(authed, h.Me)...)
 	g.Get("/posts", append(authed, h.ListPosts)...)
+	g.Get("/campaigns", append(authed, h.ListCampaigns)...)
 	g.Post("/images", append(authed, h.SendImage)...)
 	g.Delete("/token", append(authed, h.RevokeToken)...)
 }

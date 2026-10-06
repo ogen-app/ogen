@@ -16,6 +16,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/plugins"
 )
@@ -76,6 +77,35 @@ type pluginPost struct {
 
 type pluginPostsResponse struct {
 	Posts []pluginPost `json:"posts"`
+}
+
+type pluginPlatform struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type pluginCampaignPost struct {
+	ID              string          `json:"id"`
+	Title           string          `json:"title"`
+	Status          string          `json:"status"`
+	Platform        *pluginPlatform `json:"platform"`
+	ScheduledAt     *time.Time      `json:"scheduled_at"`
+	AttachmentCount int             `json:"attachment_count"`
+	Attachable      bool            `json:"attachable"`
+}
+
+type pluginCampaign struct {
+	ID        string               `json:"id"`
+	Name      string               `json:"name"`
+	Status    string               `json:"status"`
+	Timezone  string               `json:"timezone"`
+	StartDate *time.Time           `json:"start_date"`
+	EndDate   *time.Time           `json:"end_date"`
+	Posts     []pluginCampaignPost `json:"posts"`
+}
+
+type pluginCampaignsResponse struct {
+	Campaigns []pluginCampaign `json:"campaigns"`
 }
 
 type pluginAsset struct {
@@ -176,6 +206,42 @@ func (h *FigmaPluginHandler) ListPosts(c *fiber.Ctx) error {
 			p.Campaign = &pluginPostCampaign{ID: r.CampaignID, Name: r.CampaignName}
 		}
 		out.Posts = append(out.Posts, p)
+	}
+	return c.JSON(out)
+}
+
+// ListCampaigns godoc
+// @Summary     Campaigns and their posts, for the plugin's "Send to" picker
+// @Description Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored ("" = UTC).
+// @Tags        plugins
+// @Produce     json
+// @Security    PluginToken
+// @Success     200 {object} pluginCampaignsResponse
+// @Failure     401 {object} map[string]string "plugin_token_invalid"
+// @Router      /api/plugins/figma/campaigns [get]
+func (h *FigmaPluginHandler) ListCampaigns(c *fiber.Ctx) error {
+	rows, err := h.posts.ListCampaignPostTree(reqCtx(c), repository.MaxTreeCampaigns, repository.MaxTreePostsPerCampaign)
+	if err != nil {
+		return err
+	}
+	out := pluginCampaignsResponse{Campaigns: make([]pluginCampaign, 0, len(rows))}
+	for _, r := range rows {
+		camp := pluginCampaign{
+			ID: r.ID, Name: r.Name, Status: string(r.Status), Timezone: r.Timezone,
+			StartDate: r.StartDate, EndDate: r.EndDate,
+			Posts: make([]pluginCampaignPost, 0, len(r.Posts)),
+		}
+		for _, p := range r.Posts {
+			post := pluginCampaignPost{
+				ID: p.ID, Title: p.Title, Status: string(p.Status), ScheduledAt: p.ScheduledAt,
+				AttachmentCount: p.AttachmentCount, Attachable: !p.Status.IsSubmitted(),
+			}
+			if p.PlatformID != "" {
+				post.Platform = &pluginPlatform{ID: p.PlatformID, Name: p.PlatformName}
+			}
+			camp.Posts = append(camp.Posts, post)
+		}
+		out.Campaigns = append(out.Campaigns, camp)
 	}
 	return c.JSON(out)
 }

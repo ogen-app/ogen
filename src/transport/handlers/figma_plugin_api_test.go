@@ -316,6 +316,92 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(out.Posts).To(BeEmpty())
 	})
 
+	It("lists campaigns with their posts for the send-to picker", func() {
+		resp := call(fiber.MethodGet, "/api/plugins/figma/campaigns", nil, "")
+		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+		raw, _ := io.ReadAll(resp.Body)
+		Expect(string(raw)).NotTo(ContainSubstring("secret body copy"))
+		Expect(string(raw)).NotTo(ContainSubstring(`"content"`))
+
+		type treeWire struct {
+			Campaigns []struct {
+				ID        string  `json:"id"`
+				Name      string  `json:"name"`
+				Status    string  `json:"status"`
+				Timezone  *string `json:"timezone"`
+				StartDate *string `json:"start_date"`
+				EndDate   *string `json:"end_date"`
+				Posts     []struct {
+					ID       string `json:"id"`
+					Title    string `json:"title"`
+					Status   string `json:"status"`
+					Platform *struct {
+						ID   string `json:"id"`
+						Name string `json:"name"`
+					} `json:"platform"`
+					ScheduledAt     *string `json:"scheduled_at"`
+					AttachmentCount *int    `json:"attachment_count"`
+					Attachable      bool    `json:"attachable"`
+				} `json:"posts"`
+			} `json:"campaigns"`
+		}
+		var out treeWire
+		Expect(json.Unmarshal(raw, &out)).To(Succeed())
+		Expect(out.Campaigns).To(HaveLen(1))
+		camp := out.Campaigns[0]
+		Expect(camp.Name).To(Equal("Launch"))
+		Expect(camp.Status).NotTo(BeEmpty())
+		Expect(camp.Timezone).NotTo(BeNil())
+		Expect(camp.Posts).To(HaveLen(1))
+		post := camp.Posts[0]
+		Expect(post.ID).To(Equal(postID))
+		Expect(post.Title).To(Equal("Hero announcement"))
+		Expect(post.Status).To(Equal(string(models.PostStatusDraft)))
+		Expect(post.Platform).NotTo(BeNil())
+		Expect(post.Platform.ID).To(Equal("AXqWG7U2qnpt"))
+		Expect(post.Platform.Name).To(Equal("LinkedIn"))
+		Expect(post.ScheduledAt).To(BeNil())
+		Expect(post.AttachmentCount).To(Equal(new(0)))
+		Expect(post.Attachable).To(BeTrue())
+
+		_, err := db.NewUpdate().TableExpr("posts").Set("status = ?", models.PostStatusScheduled).Where("id = ?", postID).Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		resp = call(fiber.MethodGet, "/api/plugins/figma/campaigns", nil, "")
+		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+		out = treeWire{}
+		Expect(json.NewDecoder(resp.Body).Decode(&out)).To(Succeed())
+		Expect(out.Campaigns[0].Posts).To(HaveLen(1))
+		Expect(out.Campaigns[0].Posts[0].Status).To(Equal(string(models.PostStatusScheduled)))
+		Expect(out.Campaigns[0].Posts[0].Attachable).To(BeFalse())
+	})
+
+	It("serializes empty campaigns and post lists as arrays", func() {
+		_, err := db.NewDelete().TableExpr("posts").Where("1 = 1").Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		resp := call(fiber.MethodGet, "/api/plugins/figma/campaigns", nil, "")
+		raw, _ := io.ReadAll(resp.Body)
+		Expect(string(raw)).To(ContainSubstring(`"posts":[]`))
+
+		_, err = db.NewDelete().TableExpr("campaigns").Where("1 = 1").Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		resp = call(fiber.MethodGet, "/api/plugins/figma/campaigns", nil, "")
+		raw, _ = io.ReadAll(resp.Body)
+		Expect(strings.TrimSpace(string(raw))).To(Equal(`{"campaigns":[]}`))
+	})
+
+	It("refuses the campaign tree without a valid plugin token", func() {
+		req := httptest.NewRequest(fiber.MethodGet, "/api/plugins/figma/campaigns", nil)
+		resp, err := app.Test(req, -1)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(fiber.StatusUnauthorized))
+
+		req = httptest.NewRequest(fiber.MethodGet, "/api/plugins/figma/campaigns", nil)
+		req.Header.Set(fiber.HeaderAuthorization, "Bearer ogp_not-a-real-token")
+		resp, err = app.Test(req, -1)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(fiber.StatusUnauthorized))
+	})
+
 	It("disconnects itself", func() {
 		Expect(call(fiber.MethodDelete, "/api/plugins/figma/token", nil, "").StatusCode).To(Equal(fiber.StatusNoContent))
 		Expect(call(fiber.MethodGet, "/api/plugins/figma/me", nil, "").StatusCode).To(Equal(fiber.StatusUnauthorized))
