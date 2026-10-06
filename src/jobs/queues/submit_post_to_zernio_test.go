@@ -123,8 +123,8 @@ func (r *fakePostRepo) CreatedProjectionBetween(context.Context, time.Time, time
 func (r *fakePostRepo) Create(context.Context, *models.Post) error        { return nil }
 func (r *fakePostRepo) CreateBatch(context.Context, []*models.Post) error { return nil }
 func (r *fakePostRepo) Delete(context.Context, string) (bool, error)      { return false, nil }
-func (r *fakePostRepo) DeleteTx(context.Context, bun.IDB, string) (bool, error) {
-	return false, nil
+func (r *fakePostRepo) DeleteTx(context.Context, bun.IDB, string) (*models.Post, error) {
+	return nil, nil
 }
 func (r *fakePostRepo) UnscheduleByCampaignTx(context.Context, bun.IDB, string) ([]models.Post, error) {
 	return nil, nil
@@ -142,6 +142,9 @@ func (r *fakePostRepo) UpdateSubmission(_ context.Context, p *models.Post, heldI
 	cp := *p
 	r.posts[p.ID] = &cp
 	return true, nil
+}
+func (r *fakePostRepo) UpdateWhileScheduled(ctx context.Context, p *models.Post, heldID string, _ ...string) (bool, error) {
+	return r.UpdateSubmission(ctx, p, heldID)
 }
 func (r *fakePostRepo) ListByPublisherPostIDs(_ context.Context, ids []string) ([]models.Post, error) {
 	r.mu.Lock()

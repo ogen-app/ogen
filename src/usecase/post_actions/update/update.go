@@ -19,6 +19,10 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 )
 
+// ErrScheduleChanged means a scheduled post was cancelled, published or
+// resubmitted while the edit was in flight, so the edit was not applied.
+var ErrScheduleChanged = errors.New("the post's schedule changed while it was being edited; reload it and try again")
+
 // ErrInvalidPhase means the post's campaign_type_phase_id is not a phase of
 // its campaign's type.
 var ErrInvalidPhase = errors.New("campaign_type_phase_id is not a phase of the campaign's type")
@@ -123,18 +127,29 @@ func (s *Service) Update(ctx context.Context, in Input) (Result, error) {
 	}
 	post := in.Post
 	prev := post.Status
+	held := post.PublisherPostID
 	in.Apply(post)
 	s.DeriveThreadSegments(ctx, post)
 
 	var res Result
 	var err error
-	if prev == models.PostStatusReadyForPublish && in.Status == models.PostStatusScheduled && s.Schedule != nil {
+	switch {
+	case prev == models.PostStatusReadyForPublish && in.Status == models.PostStatusScheduled && s.Schedule != nil:
 		// The schedule service consults the auto-publish allowlist and persists
 		// status, audit log and the submit job in one transaction, so the
-		// REST/assistant/PUT scheduling paths can't drift.
+		// REST/assistant/PUT scheduling paths can't drift. It logs the
+		// transition itself.
 		res.AutoPublishDecision, err = s.Schedule.RouteAndPersist(ctx, post, prev, in.Actor)
-	} else if err = s.Posts.Update(ctx, post, in.Omit...); err == nil {
-		s.logTransition(ctx, in.Actor, post, prev, in.Status)
+	case prev == models.PostStatusScheduled:
+		// A cancel or publish can land while the request is in flight; the
+		// whole-record write would then restore the stale scheduled post.
+		if err = s.updateWhileScheduled(ctx, post, held, in.Omit); err == nil {
+			s.logTransition(ctx, in.Actor, post, prev, in.Status)
+		}
+	default:
+		if err = s.Posts.Update(ctx, post, in.Omit...); err == nil {
+			s.logTransition(ctx, in.Actor, post, prev, in.Status)
+		}
 	}
 	if err != nil {
 		if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
@@ -193,6 +208,20 @@ func (s *Service) checkScheduled(ctx context.Context, in Input) error {
 	}
 	if !sameSecond(in.ScheduledAt, post.ScheduledAt) || in.SocialAccountID != post.SocialAccountID {
 		return &ContentLockedError{Status: post.Status}
+	}
+	return nil
+}
+
+// updateWhileScheduled writes the edit only if the post is still scheduled
+// under the submission the request loaded, and reports ErrScheduleChanged
+// otherwise.
+func (s *Service) updateWhileScheduled(ctx context.Context, post *models.Post, held string, omit []string) error {
+	ok, err := s.Posts.UpdateWhileScheduled(ctx, post, held, omit...)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrScheduleChanged
 	}
 	return nil
 }

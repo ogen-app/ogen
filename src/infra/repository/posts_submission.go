@@ -32,6 +32,29 @@ func (r *postRepository) UpdateSubmission(ctx context.Context, post *models.Post
 	return n == 1, nil
 }
 
+// UpdateWhileScheduled writes the whole record (less excludeColumns) under the
+// same condition as UpdateSubmission: the row is still scheduled and still
+// holds heldID. It backs an edit of a scheduled post, which must not restore
+// the post if a cancel or publish landed while the edit was in flight.
+func (r *postRepository) UpdateWhileScheduled(ctx context.Context, post *models.Post, heldID string, excludeColumns ...string) (bool, error) {
+	q := r.db.NewUpdate().Model(post).
+		Where("status = ?", models.PostStatusScheduled).
+		Where("COALESCE(publisher_post_id, '') = ?", heldID).
+		WherePK()
+	if len(excludeColumns) > 0 {
+		q = q.ExcludeColumn(excludeColumns...)
+	}
+	res, err := q.Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 // ListByPublisherPostIDs returns id, tenant_id, status and publisher_post_id of
 // the posts holding any of the given publisher post ids. Ids no post holds are
 // absent from the result.
@@ -51,14 +74,24 @@ func (r *postRepository) ListByPublisherPostIDs(ctx context.Context, ids []strin
 	return posts, nil
 }
 
-// DeleteTx hard-deletes one post on db, which may be a transaction.
-func (r *postRepository) DeleteTx(ctx context.Context, db bun.IDB, id string) (bool, error) {
-	res, err := db.NewDelete().Model((*models.Post)(nil)).Where("id = ?", id).Exec(ctx)
+// DeleteTx hard-deletes one post on db, which may be a transaction, and returns
+// its id, tenant_id, status and publisher_post_id as they were at the moment of
+// the delete, or nil when no such post exists. Callers decide what the delete
+// orphans from this row, not from an earlier read a concurrent schedule or
+// publish may have overtaken.
+func (r *postRepository) DeleteTx(ctx context.Context, db bun.IDB, id string) (*models.Post, error) {
+	var deleted []models.Post
+	err := db.NewDelete().Model(&deleted).
+		Where("id = ?", id).
+		Returning("id, tenant_id, status, publisher_post_id").
+		Scan(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if len(deleted) == 0 {
+		return nil, nil
+	}
+	return &deleted[0], nil
 }
 
 // UnscheduleByCampaignTx moves every scheduled or manually-scheduled post of a

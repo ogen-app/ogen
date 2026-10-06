@@ -15,12 +15,22 @@ type fakePosts struct {
 	repository.PostRepository
 	updated []*models.Post
 	omit    []string
+	// movedOn makes UpdateWhileScheduled find the post no longer scheduled,
+	// as if a cancel landed mid-request.
+	movedOn bool
 }
 
 func (f *fakePosts) Update(_ context.Context, p *models.Post, omit ...string) error {
 	f.updated = append(f.updated, p)
 	f.omit = omit
 	return nil
+}
+
+func (f *fakePosts) UpdateWhileScheduled(ctx context.Context, p *models.Post, _ string, omit ...string) (bool, error) {
+	if f.movedOn {
+		return false, nil
+	}
+	return true, f.Update(ctx, p, omit...)
 }
 
 func (f *fakePosts) GetByID(_ context.Context, id string) (*models.Post, error) {
@@ -217,6 +227,19 @@ func TestUpdateScheduledNoOpSavePasses(t *testing.T) {
 	}
 	if len(posts.updated) != 1 {
 		t.Fatal("a no-op save of a scheduled post must persist")
+	}
+}
+
+func TestUpdateScheduledRejectedWhenCancelLandsMidRequest(t *testing.T) {
+	posts, logs := &fakePosts{movedOn: true}, &fakeLogs{}
+	svc := &Service{Posts: posts, Logs: logs}
+	post := &models.Post{ID: "p", Status: models.PostStatusScheduled}
+	_, err := svc.Update(t.Context(), input(post, models.PostStatusScheduled))
+	if !errors.Is(err, ErrScheduleChanged) {
+		t.Fatalf("err = %v, want ErrScheduleChanged", err)
+	}
+	if len(posts.updated) != 0 || len(logs.entries) != 0 {
+		t.Fatalf("a rejected edit must not persist or log: updated=%d logs=%d", len(posts.updated), len(logs.entries))
 	}
 }
 

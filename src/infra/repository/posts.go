@@ -48,13 +48,15 @@ type PostRepository interface {
 	// UpdateSubmission is the publish workers' compare-and-set write; see
 	// posts_submission.go.
 	UpdateSubmission(ctx context.Context, post *models.Post, heldID string, columns ...string) (bool, error)
+	// UpdateWhileScheduled is the same guard for a whole-record edit.
+	UpdateWhileScheduled(ctx context.Context, post *models.Post, heldID string, excludeColumns ...string) (bool, error)
 	// ListByPublisherPostIDs projects the posts holding the given publisher
 	// post ids, for the Zernio orphan sweep.
 	ListByPublisherPostIDs(ctx context.Context, ids []string) ([]models.Post, error)
 	Delete(ctx context.Context, id string) (bool, error)
 	// DeleteTx and UnscheduleByCampaignTx run on a caller's transaction so a
 	// delete commits atomically with the Zernio withdrawals it enqueues.
-	DeleteTx(ctx context.Context, db bun.IDB, id string) (bool, error)
+	DeleteTx(ctx context.Context, db bun.IDB, id string) (*models.Post, error)
 	UnscheduleByCampaignTx(ctx context.Context, db bun.IDB, campaignID string) ([]models.Post, error)
 	// ListScheduledByPlatform returns every post in status='scheduled'
 	// for the given platform id (Sqid) — the posts that still carry a
@@ -460,7 +462,8 @@ func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*mo
 }
 
 func (r *postRepository) Delete(ctx context.Context, id string) (bool, error) {
-	return r.DeleteTx(ctx, r.db, id)
+	deleted, err := r.DeleteTx(ctx, r.db, id)
+	return deleted != nil, err
 }
 
 // ListStuckScheduled returns Posts in status='scheduled' whose
