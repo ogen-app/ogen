@@ -108,6 +108,40 @@ Content-Type: image/png
 < ./sample.png
 --boundary--
 
+### 9b. Plugin: start sending a rendered video to a post (MP4 or WebM; size_bytes = the export's byte length)
+# Needs a short MP4 at ./sample.mp4 (not committed). Steps 9b-9d run as one unit.
+POST {{baseUrl}}/api/plugins/figma/posts/{{postId}}/videos/presign
+Authorization: Bearer {{pluginToken}}
+Content-Type: application/json
+
+{
+  "content_type": "video/mp4",
+  "size_bytes": 1048576
+}
+
+> {%
+client.global.set("videoUploadUrl", response.body.upload_url);
+client.global.set("videoKey", response.body.s3_key);
+%}
+
+### 9c. Plugin: PUT the bytes straight to storage (no Authorization header; same Content-Type)
+PUT {{videoUploadUrl}}
+Content-Type: video/mp4
+
+< ./sample.mp4
+
+### 9d. Plugin: attach the uploaded video (repeat it: 200 with the same attachment)
+POST {{baseUrl}}/api/plugins/figma/posts/{{postId}}/videos/finalize
+Authorization: Bearer {{pluginToken}}
+Content-Type: application/json
+
+{
+  "s3_key": "{{videoKey}}",
+  "node_id": "12:347",
+  "node_name": "Hero / Reel",
+  "file_name": "Launch campaign"
+}
+
 ### 10. Web app: list plugin connections (own; owners see everyone's)  [protected]
 GET {{baseUrl}}/api/integrations/figma/connections
 Accept: application/json
