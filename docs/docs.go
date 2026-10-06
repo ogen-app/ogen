@@ -7022,6 +7022,40 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/plugins/figma/campaigns": {
+            "get": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored (\"\" = UTC).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Campaigns and their posts, for the plugin's \"Send to\" picker",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginCampaignsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/plugins/figma/images": {
             "post": {
                 "security": [
@@ -12812,6 +12846,72 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.pluginCampaign": {
+            "type": "object",
+            "properties": {
+                "end_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "posts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.pluginCampaignPost"
+                    }
+                },
+                "start_date": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timezone": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginCampaignPost": {
+            "type": "object",
+            "properties": {
+                "attachable": {
+                    "type": "boolean"
+                },
+                "attachment_count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "platform": {
+                    "$ref": "#/definitions/handlers.pluginPlatform"
+                },
+                "scheduled_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginCampaignsResponse": {
+            "type": "object",
+            "properties": {
+                "campaigns": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.pluginCampaign"
+                    }
+                }
+            }
+        },
         "handlers.pluginConnectionResponse": {
             "type": "object",
             "properties": {
@@ -12877,6 +12977,17 @@ const docTemplate = `{
                 },
                 "workspace": {
                     "$ref": "#/definitions/handlers.pluginWorkspace"
+                }
+            }
+        },
+        "handlers.pluginPlatform": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },
@@ -15550,11 +15661,14 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "token_expires_at": {
-                    "description": "Health snapshot. Populated by the detect_expiring_connections\nsweep from Zernio's GET /v1/accounts/health; all nullable and NULL until\nthe first sweep. TokenExpiresAt is the forward-looking token expiry that\ndrives the \"connection expiring\" owner notification; HealthStatus is\nZernio's healthy/warning/error verdict. Kept out of the reconciler's\nupsert set so a sync never overwrites them.",
+                    "description": "Health snapshot. Populated by the detect_expiring_connections\nsweep from Zernio's GET /v1/accounts/health; all nullable and NULL until\nthe first sweep. TokenExpiresAt is the forward-looking token expiry that\ndrives the \"connection expiring\" owner notification; HealthStatus is\nZernio's healthy/warning/error verdict. Kept out of the reconciler's\nupsert set so a sync never overwrites them. UnhealthySince marks the start\nof the current unhealthy episode (NULL while healthy) and anchors the\nnotify-once dedupe.",
                     "type": "string"
                 },
                 "token_valid": {
                     "type": "boolean"
+                },
+                "unhealthy_since": {
+                    "type": "string"
                 },
                 "username": {
                     "type": "string"
