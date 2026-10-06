@@ -78,6 +78,16 @@ func (h *EventsHandler) Register(app *fiber.App) {
 // @Description  Subscribers are disconnected if their per-connection buffer
 // @Description  overflows (the client should reconnect and reconcile via REST).
 // @Description
+// @Description  `post.attachments.changed` on `entity:post:<id>` follows every
+// @Description  committed attachment write: upload, video finalize, attach from
+// @Description  the content bank or an integration (Figma plugin), update,
+// @Description  reorder, delete, and generated alt text landing. Its data is a
+// @Description  refetch hint, never attachment data or URLs:
+// @Description  `{post_id, attachment_id, action, source}`, where action is
+// @Description  created|updated|reordered|deleted (attachment_id is empty for
+// @Description  reordered) and source is editor|bank|figma_plugin|alt_text.
+// @Description  Every member of the workspace receives it, including the actor.
+// @Description
 // @Description  The `Last-Event-ID` request header is currently accepted
 // @Description  and ignored — reserved for future replay support.
 // @Tags         events
