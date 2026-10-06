@@ -21,6 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/storage/pdfprobe"
@@ -104,6 +105,9 @@ type PostAttachmentsHandler struct {
 	// bank reads content-bank image assets for attach-from-asset. Nil disables
 	// that endpoint (503); set via WithContentBank.
 	bank BankAssetReader
+	// hub receives post.attachments.changed after each committed write. Nil
+	// disables eventing; set via WithEventHub.
+	hub eventhub.Hub
 }
 
 func NewPostAttachmentsHandler(
@@ -346,31 +350,33 @@ func (h *PostAttachmentsHandler) Upload(c *fiber.Ctx) error {
 	if err != nil {
 		return attachmentError(c, err)
 	}
-	return h.createAttachment(c, post, att, thumbnail, up.quota, session.TenantID)
+	return h.createAttachment(c, post, att, thumbnail, up.quota, session.TenantID, attachmentSourceEditor)
 }
 
 // createAttachment persists a prepared attachment and answers 201.
-func (h *PostAttachmentsHandler) createAttachment(c *fiber.Ctx, post *models.Post, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID string) error {
-	if err := h.saveAttachment(c, att, thumbnail, quota, tenantID); err != nil {
+func (h *PostAttachmentsHandler) createAttachment(c *fiber.Ctx, post *models.Post, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID, source string) error {
+	if err := h.saveAttachment(c, att, thumbnail, quota, tenantID, source); err != nil {
 		return err
 	}
 	return h.respondAttachment(c, post, att)
 }
 
 // saveAttachment persists a prepared attachment. Once the row and its bytes
-// exist it fires any near-limit quota crossing, and for an image with no alt
-// text it starts generation in the background: the request stays fast, and
-// the generator writes only where alt text is still un-edited.
-func (h *PostAttachmentsHandler) saveAttachment(c *fiber.Ctx, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID string) error {
+// exist it fires any near-limit quota crossing, announces the new attachment
+// (source names the entry point), and for an image with no alt text it starts
+// generation in the background: the request stays fast, and the generator
+// writes only where alt text is still un-edited.
+func (h *PostAttachmentsHandler) saveAttachment(c *fiber.Ctx, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID, source string) error {
 	if err := h.persistAttachment(reqCtx(c), att, thumbnail); err != nil {
 		return err
 	}
 	quota.dispatch(reqCtx(c))
+	h.publishAttachmentsChanged(reqCtx(c), att.PostID, att.ID, attachmentActionCreated, source)
 
 	if strings.HasPrefix(att.MimeType, "image/") && att.AltText == "" && h.image != nil {
 		altCtx := detachedContext(c, tenantID)
 		backgroundTasks.Go("post_attachments.alt_text", func() {
-			h.generateAttachmentAltText(altCtx, tenantID, att.ID, att.S3Key)
+			h.generateAttachmentAltText(altCtx, tenantID, att.PostID, att.ID, att.S3Key)
 		})
 	}
 	return nil
@@ -668,10 +674,11 @@ func (h *PostAttachmentsHandler) persistAttachment(ctx context.Context, att *mod
 // generateAttachmentAltText runs image-service's GenerateAltText for a freshly
 // uploaded image attachment and stores the result. Fire-and-forget:
 // it runs in its own goroutine off a detached context, meters the vision call,
-// and persists only where the user hasn't edited the alt text (D5).
+// persists only where the user hasn't edited the alt text (D5), and announces
+// the write so an open editor fills the field in.
 // Best-effort throughout — a failure just leaves the attachment without alt text
 // (regeneration is a separate, explicit action).
-func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, tenantID, attID, s3Key string) {
+func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, tenantID, postID, attID, s3Key string) {
 	if h.image == nil || h.storage == nil {
 		return
 	}
@@ -706,7 +713,9 @@ func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, 
 	alt = truncateRunes(alt, maxAltTextLen())
 	if err := h.repo.SetGeneratedAltText(ctx, attID, alt); err != nil {
 		slog.WarnContext(ctx, "attachment alt-text persist failed", logging.AttrComponent, "post_attachments", "attachment_id", attID, logging.AttrError, err)
+		return
 	}
+	h.publishAttachmentsChanged(ctx, postID, attID, attachmentActionUpdated, attachmentSourceAltText)
 }
 
 // parseSegmentIndex parses the optional segment_index form/JSON value for a
@@ -836,6 +845,7 @@ func (h *PostAttachmentsHandler) Update(c *fiber.Ctx) error {
 		}
 		return err
 	}
+	h.publishAttachmentsChanged(reqCtx(c), post.ID, att.ID, attachmentActionUpdated, attachmentSourceEditor)
 
 	updated, err := h.repo.GetByID(reqCtx(c), att.ID)
 	if err != nil {
@@ -915,6 +925,7 @@ func (h *PostAttachmentsHandler) ReorderAll(c *fiber.Ctx) error {
 	if err := h.repo.ReorderPositions(reqCtx(c), post.ID, req.IDs); err != nil {
 		return err
 	}
+	h.publishAttachmentsChanged(reqCtx(c), post.ID, "", attachmentActionReordered, attachmentSourceEditor)
 
 	updated, err := h.repo.ListByPostID(reqCtx(c), post.ID)
 	if err != nil {
@@ -990,5 +1001,6 @@ func (h *PostAttachmentsHandler) Delete(c *fiber.Ctx) error {
 	if !deleted {
 		return fiber.NewError(fiber.StatusNotFound, "attachment not found")
 	}
+	h.publishAttachmentsChanged(reqCtx(c), post.ID, att.ID, attachmentActionDeleted, attachmentSourceEditor)
 	return c.SendStatus(fiber.StatusNoContent)
 }

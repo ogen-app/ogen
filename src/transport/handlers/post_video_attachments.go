@@ -221,6 +221,7 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 	if err := h.persistAttachment(reqCtx(c), att, poster); err != nil {
 		return err
 	}
+	h.publishAttachmentsChanged(reqCtx(c), post.ID, att.ID, attachmentActionCreated, attachmentSourceEditor)
 
 	h.hydratePresigned(c, att)
 	return c.Status(fiber.StatusCreated).JSON(attachmentResponse{

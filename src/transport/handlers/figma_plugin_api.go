@@ -445,7 +445,7 @@ func (h *FigmaPluginHandler) attachToPost(c *fiber.Ctx, session *models.Session,
 	if meta.altText != "" {
 		req.AltText = &meta.altText
 	}
-	att, err := h.attachments.attachBankAsset(c, post, req, session)
+	att, err := h.attachments.attachBankAsset(c, post, req, session, attachmentSourceFigmaPlugin)
 	if err != nil {
 		return nil, pluginAttachErrorFrom(err)
 	}
