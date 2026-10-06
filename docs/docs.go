@@ -9032,7 +9032,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Probes the uploaded object via video-service (duration, codec,\nresolution, poster frame), validates it against the post's\nplatform, and persists the attachment row (CON-148). Corrupt\nor unreadable video is a terminal 400; an unrecognised\ncontainer/codec is 415. If video-service is unreachable the\nattachment is still created, unprobed (no duration/poster,\nweaker validation).",
+                "description": "Probes the uploaded object via video-service (duration, codec,\nresolution, poster frame), validates it against the post's\nplatform, and persists the attachment row (CON-148). Corrupt\nor unreadable video is a terminal 400; an unrecognised\ncontainer/codec is 415. If video-service is unreachable the\nattachment is still created, unprobed (no duration/poster,\nweaker validation). The object's real size is checked against\nthe media storage quota; over it, the object is deleted (402).",
                 "consumes": [
                     "application/json"
                 ],
@@ -9069,7 +9069,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "too_large, empty_file, invalid_file, invalid request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9084,6 +9084,13 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "402": {
+                        "description": "media-storage limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "404": {
@@ -9105,7 +9112,7 @@ const docTemplate = `{
                         }
                     },
                     "415": {
-                        "description": "Unsupported Media Type",
+                        "description": "unsupported_media_type",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9248,7 +9255,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns a short-lived PUT URL the client uses to upload video\nbytes straight to object storage, bypassing the API process so\nmulti-GB files never buffer in memory (CON-148). The client\nthen calls finalize with the returned ` + "`" + `s3_key` + "`" + `. Only video\ncontent types are accepted here; images/PDFs use the direct\nupload endpoint. Hard cap: 5 GiB.",
+                "description": "Returns a short-lived PUT URL the client uses to upload video\nbytes straight to object storage, bypassing the API process so\nmulti-GB files never buffer in memory (CON-148). The client\nthen calls finalize with the returned ` + "`" + `s3_key` + "`" + `. Only video\ncontent types are accepted here; images/PDFs use the direct\nupload endpoint. Hard cap: 5 GiB. The declared size is checked\nagainst the workspace's media storage quota (402 when over).",
                 "consumes": [
                     "application/json"
                 ],
@@ -9285,7 +9292,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "too_large, invalid request",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9300,6 +9307,13 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    "402": {
+                        "description": "media-storage limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "404": {
@@ -9321,7 +9335,7 @@ const docTemplate = `{
                         }
                     },
                     "415": {
-                        "description": "Unsupported Media Type",
+                        "description": "unsupported_media_type",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
