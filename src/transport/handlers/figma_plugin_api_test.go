@@ -19,6 +19,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
@@ -55,6 +56,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		token    string
 		postID   string
 		otherPNG string
+		hub      eventhub.Hub
 	)
 	ctx := context.Background()
 
@@ -92,8 +94,9 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		imgEnq = &fakeImageEnqueuer{}
 
 		assets := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, nil, imgEnq, auth, nil, handlers.AssetsOptions{})
+		hub = eventhub.New(eventhub.Config{})
 		attachments := handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, &fakeImagePreparer{store: store}, nil, 280, auth, nil).
-			WithContentBank(assetRepo)
+			WithContentBank(assetRepo).WithEventHub(hub)
 
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
@@ -263,11 +266,19 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 	})
 
 	It("attaches the frame to a post when asked", func() {
+		editor := subscribePostEvents(hub, models.DefaultTenantID, jane.ID)
 		resp, out := sendImage("f.png", otherPNG, frame(map[string]string{"post_id": postID}))
 		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
 		Expect(out.AttachError).To(BeNil())
 		Expect(out.Attachment).NotTo(BeNil())
 		Expect(out.Attachment.PostID).To(Equal(postID))
+
+		// The sender's own open editor hears about it: actor events are not dropped.
+		ev := nextAttachmentEvent(editor)
+		Expect(ev.Topic).To(Equal("entity:post:" + postID))
+		payload := attachmentEventPayload(ev)
+		Expect(payload).To(HaveKeyWithValue("source", "figma_plugin"))
+		Expect(payload).To(HaveKeyWithValue("attachment_id", out.Attachment.ID))
 
 		var att models.PostAttachment
 		Expect(db.NewSelect().Model(&att).Where("id = ?", out.Attachment.ID).Scan(tenantCtx())).To(Succeed())
@@ -276,6 +287,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 	})
 
 	It("keeps the asset and reports why when the post can't take it", func() {
+		editor := subscribePostEvents(hub, models.DefaultTenantID, jane.ID)
 		resp, out := sendImage("f.png", otherPNG, frame(map[string]string{"post_id": "no-such-post"}))
 		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
 		Expect(out.Attachment).To(BeNil())
@@ -288,6 +300,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
 		Expect(out.AttachError.Code).To(Equal(handlers.CodePostLocked))
 		loadAsset(out.Asset.ID)
+		expectNoPostEvent(editor)
 	})
 
 	It("lists attachable posts without their body", func() {

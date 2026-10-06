@@ -22,7 +22,12 @@ import (
 // "cleaned" (pixel-identical) copy to the destination key, and returns metadata —
 // so the attachment light-path can be exercised without a live service. Alt-text
 // generation returns empty so the async generator is a no-op in tests.
-type fakeImagePreparer struct{ store *stubStorage }
+type fakeImagePreparer struct {
+	store *stubStorage
+	// altText is what GenerateAltText returns. Empty (the default) makes the
+	// async generator write nothing.
+	altText string
+}
 
 func (f *fakeImagePreparer) PrepareAttachment(_ context.Context, opts imageclient.PrepareAttachmentOptions) (*imageclient.PrepareAttachmentResult, error) {
 	srcKey := strings.TrimPrefix(opts.SourceURL, "https://pub.example.com/signed/")
@@ -60,7 +65,8 @@ func (f *fakeImagePreparer) PrepareAttachment(_ context.Context, opts imageclien
 }
 
 func (f *fakeImagePreparer) GenerateAltText(_ context.Context, _ imageclient.GenerateAltTextOptions) (*imageclient.GenerateAltTextResult, error) {
-	// Empty alt → the async attachment generator writes nothing (keeps tests
-	// deterministic; no post-response DB mutation to race with AfterEach).
-	return &imageclient.GenerateAltTextResult{}, nil
+	// Empty alt (the default) → the async attachment generator writes nothing
+	// (keeps tests deterministic; no post-response DB mutation to race with
+	// AfterEach). A test that sets altText waits for the write itself.
+	return &imageclient.GenerateAltTextResult{AltText: f.altText}, nil
 }
