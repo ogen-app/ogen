@@ -705,7 +705,14 @@ func (h *PostAttachmentsHandler) generateAttachmentAltText(ctx context.Context, 
 	for _, u := range res.Usage {
 		h.recorder.RecordResp(ctx, llm.VendorGemini, u.Model, "alt_text", llm.VisionUsage{Step: u.Step, InputTokens: u.Input, OutputTokens: u.Output})
 	}
-	alt := strings.TrimSpace(res.AltText)
+	h.storeGeneratedAltText(ctx, postID, attID, res.AltText)
+}
+
+// storeGeneratedAltText persists generated alt text (where the user hasn't
+// edited it) and announces the write so an open editor fills the field in.
+// Blank text is dropped.
+func (h *PostAttachmentsHandler) storeGeneratedAltText(ctx context.Context, postID, attID, generated string) {
+	alt := strings.TrimSpace(generated)
 	if alt == "" {
 		return
 	}

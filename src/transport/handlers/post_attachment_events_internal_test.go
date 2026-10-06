@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/infra/eventhub"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
@@ -45,6 +47,53 @@ func TestPublishAttachmentsChanged_ScopesToTenantNotUser(t *testing.T) {
 	}
 	if ev.Topic != "entity:post:p1" || ev.Type != EventPostAttachmentsChanged || ev.ID == "" {
 		t.Errorf("unexpected envelope %+v", ev)
+	}
+}
+
+// altTextRepo records SetGeneratedAltText; any other repository call panics.
+type altTextRepo struct {
+	repository.PostAttachmentRepository
+	stored string
+	err    error
+}
+
+func (r *altTextRepo) SetGeneratedAltText(_ context.Context, _ string, alt string) error {
+	r.stored = alt
+	return r.err
+}
+
+func TestStoreGeneratedAltText_AnnouncesTheWrite(t *testing.T) {
+	hub, repo := &recordingHub{}, &altTextRepo{}
+	h := (&PostAttachmentsHandler{repo: repo}).WithEventHub(hub)
+
+	h.storeGeneratedAltText(tenantctx.With(context.Background(), "tn-1"), "p1", "a1", "  A red pixel  ")
+	if repo.stored != "A red pixel" {
+		t.Fatalf("stored %q, want trimmed alt text", repo.stored)
+	}
+	if len(hub.events) != 1 {
+		t.Fatalf("published %d events, want 1", len(hub.events))
+	}
+	payload := hub.events[0].Payload.(map[string]any)
+	if payload["action"] != attachmentActionUpdated || payload["source"] != attachmentSourceAltText || payload["attachment_id"] != "a1" {
+		t.Errorf("unexpected payload %v", payload)
+	}
+}
+
+func TestStoreGeneratedAltText_SilentWhenNothingStored(t *testing.T) {
+	ctx := tenantctx.With(context.Background(), "tn-1")
+
+	// Blank generation: no write, no event.
+	hub, repo := &recordingHub{}, &altTextRepo{}
+	(&PostAttachmentsHandler{repo: repo}).WithEventHub(hub).storeGeneratedAltText(ctx, "p1", "a1", "   ")
+	if repo.stored != "" || len(hub.events) != 0 {
+		t.Errorf("blank alt text: stored %q, %d events; want neither", repo.stored, len(hub.events))
+	}
+
+	// Failed write: no event.
+	hub, repo = &recordingHub{}, &altTextRepo{err: errors.New("db down")}
+	(&PostAttachmentsHandler{repo: repo}).WithEventHub(hub).storeGeneratedAltText(ctx, "p1", "a1", "A red pixel")
+	if len(hub.events) != 0 {
+		t.Errorf("failed write published %d events, want 0", len(hub.events))
 	}
 }
 
