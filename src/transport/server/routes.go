@@ -106,14 +106,15 @@ func registerIntegrationRoutes(app *fiber.App, d *deps) {
 	z, r := d.zernio, d.r
 	handlers.NewZernioHandler(z.Integration, z.Bootstrapper, z.Settings, r.platformRepo, r.socialAccountRepo, r.postRepo, z.Worker, z.RateLimiter, d.auth, r.zernioConnectSessionRepo, d.cipher, d.cfg.AppBaseURL).Register(app)
 	handlers.NewFigmaPluginHandler(handlers.FigmaPluginDeps{
-		Pairing:     d.svc.plugins,
-		AppBaseURL:  d.cfg.AppBaseURL,
-		Tokens:      r.pluginTokenRepo,
-		Users:       r.userRepo,
-		Posts:       r.postRepo,
-		Assets:      d.newAssetsHandler(),
-		Attachments: d.newPostAttachmentsHandler(),
-		Activity:    d.activity.recorder,
+		Pairing:       d.svc.plugins,
+		AppBaseURL:    d.cfg.AppBaseURL,
+		Tokens:        r.pluginTokenRepo,
+		Users:         r.userRepo,
+		Posts:         r.postRepo,
+		Assets:        d.newAssetsHandler(),
+		Attachments:   d.newPostAttachmentsHandler(),
+		Activity:      d.activity.recorder,
+		MaxVideoBytes: d.cfg.PluginMaxVideoBytes,
 	}).Register(app)
 	handlers.NewFigmaConnectionsHandler(d.svc.plugins, r.userRepo, d.auth, d.activity.recorder).Register(app)
 	d.email.Handler.Register(app)

@@ -7379,6 +7379,244 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/plugins/figma/posts/{post_id}/videos/finalize": {
+            "post": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "Probes the object PUT through the presigned URL (duration, size, poster frame) and attaches it to the post. platform_validation lists the platform and post-type rules this video breaks, as warnings; the attachment is still created. Repeating a finalize for an s3_key already attached returns that attachment with 200. A refused object is deleted.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Attach an uploaded video to a post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "post the video was presigned for",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "the presigned key and the frame it was rendered from",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginFinalizeVideoRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "already attached",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginVideoResponse"
+                        }
+                    },
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginVideoResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "too_large, empty_file, invalid_file, invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "media-storage limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "post_not_found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "post_locked",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "unsupported_media_type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/plugins/figma/posts/{post_id}/videos/presign": {
+            "post": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "Returns a presigned PUT URL valid for 30 minutes. PUT the MP4 or WebM bytes to upload_url with the same Content-Type and no Authorization header, then call finalize with s3_key. size_bytes is checked against limits.max_video_bytes from /me and against the workspace's media storage quota.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "Start sending a rendered video to a post",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "post to attach the video to",
+                        "name": "post_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "declared upload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginPresignVideoRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.presignVideoResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "too_large, invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "media-storage limit reached",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "post_not_found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "post_locked",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "415": {
+                        "description": "unsupported_media_type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/plugins/figma/token": {
             "delete": {
                 "security": [
@@ -12967,6 +13205,26 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.pluginFinalizeVideoRequest": {
+            "type": "object",
+            "properties": {
+                "alt_text": {
+                    "type": "string"
+                },
+                "file_name": {
+                    "type": "string"
+                },
+                "node_id": {
+                    "type": "string"
+                },
+                "node_name": {
+                    "type": "string"
+                },
+                "s3_key": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.pluginImageResponse": {
             "type": "object",
             "properties": {
@@ -13071,6 +13329,17 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.pluginPresignVideoRequest": {
+            "type": "object",
+            "properties": {
+                "content_type": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.pluginUser": {
             "type": "object",
             "properties": {
@@ -13082,6 +13351,52 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.pluginVideoAttachment": {
+            "type": "object",
+            "properties": {
+                "duration_ms": {
+                    "type": "integer"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "post_id": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "thumbnail_url": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.pluginVideoResponse": {
+            "type": "object",
+            "properties": {
+                "attachment": {
+                    "$ref": "#/definitions/handlers.pluginVideoAttachment"
+                },
+                "open_url": {
+                    "type": "string"
+                },
+                "platform_validation": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/platforms.ValidationError"
+                    }
                 }
             }
         },

@@ -528,6 +528,12 @@ type Config struct {
 	// PostLogRetentionDays.
 	NotificationsCleanupEvery  time.Duration `envconfig:"NOTIFICATIONS_CLEANUP_EVERY"  default:"24h"`
 	NotificationsRetentionDays int           `envconfig:"NOTIFICATIONS_RETENTION_DAYS" default:"90"`
+
+	// PluginMaxVideoBytes caps one video sent by a design-tool plugin. The
+	// export is held in memory in the plugin's iframe before upload, so this
+	// sits far below the web app's video limit, which still applies when
+	// smaller. 0 leaves only the web app's limit.
+	PluginMaxVideoBytes int64 `envconfig:"PLUGIN_MAX_VIDEO_BYTES" default:"524288000"`
 }
 
 func Load() (*Config, error) {

@@ -11,4 +11,6 @@ var (
 	ConnectionsRevoked = expvar.NewInt("ogen_plugin_connections_revoked")
 	ImagesSent         = expvar.NewInt("ogen_plugin_images_sent")
 	ImagesDeduplicated = expvar.NewInt("ogen_plugin_images_deduplicated")
+	VideosSent         = expvar.NewInt("ogen_plugin_videos_sent")
+	VideosRejected     = expvar.NewInt("ogen_plugin_videos_rejected")
 )

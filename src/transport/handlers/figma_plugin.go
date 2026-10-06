@@ -42,6 +42,8 @@ type FigmaPluginHandler struct {
 	assets      *AssetsHandler
 	attachments *PostAttachmentsHandler
 	activity    *activity.Recorder
+	// maxPluginVideoBytes caps one plugin video; 0 leaves the web app's cap.
+	maxPluginVideoBytes int64
 
 	startLimiter *keyedRateLimiter
 	pollLimiter  *keyedRateLimiter
@@ -51,31 +53,33 @@ type FigmaPluginHandler struct {
 // FigmaPluginDeps are the plugin API's collaborators. Assets and Attachments
 // supply the content bank's image ingest and bank-to-post attach, so a frame
 // sent by the plugin takes exactly the path an upload does. Activity may be
-// nil.
+// nil. MaxVideoBytes caps one video send (0 = the web app's video cap).
 type FigmaPluginDeps struct {
-	Pairing     *plugins.Service
-	AppBaseURL  string
-	Tokens      repository.PluginTokenRepository
-	Users       repository.UserRepository
-	Posts       repository.PostRepository
-	Assets      *AssetsHandler
-	Attachments *PostAttachmentsHandler
-	Activity    *activity.Recorder
+	Pairing       *plugins.Service
+	AppBaseURL    string
+	Tokens        repository.PluginTokenRepository
+	Users         repository.UserRepository
+	Posts         repository.PostRepository
+	Assets        *AssetsHandler
+	Attachments   *PostAttachmentsHandler
+	Activity      *activity.Recorder
+	MaxVideoBytes int64
 }
 
 func NewFigmaPluginHandler(d FigmaPluginDeps) *FigmaPluginHandler {
 	return &FigmaPluginHandler{
-		pairing:      d.Pairing,
-		appBaseURL:   strings.TrimRight(d.AppBaseURL, "/"),
-		auth:         RequirePluginToken(d.Tokens, d.Users),
-		users:        d.Users,
-		posts:        d.Posts,
-		assets:       d.Assets,
-		attachments:  d.Attachments,
-		activity:     d.Activity,
-		startLimiter: newKeyedRateLimiter(pairingStartsPerMinute, time.Minute),
-		pollLimiter:  newKeyedRateLimiter(pairingPollsPerMinute, time.Minute),
-		tokenLimiter: newKeyedRateLimiter(pluginRequestsPerMinute, time.Minute),
+		pairing:             d.Pairing,
+		appBaseURL:          strings.TrimRight(d.AppBaseURL, "/"),
+		auth:                RequirePluginToken(d.Tokens, d.Users),
+		users:               d.Users,
+		posts:               d.Posts,
+		assets:              d.Assets,
+		attachments:         d.Attachments,
+		activity:            d.Activity,
+		maxPluginVideoBytes: d.MaxVideoBytes,
+		startLimiter:        newKeyedRateLimiter(pairingStartsPerMinute, time.Minute),
+		pollLimiter:         newKeyedRateLimiter(pairingPollsPerMinute, time.Minute),
+		tokenLimiter:        newKeyedRateLimiter(pluginRequestsPerMinute, time.Minute),
 	}
 }
 
@@ -89,6 +93,8 @@ func (h *FigmaPluginHandler) Register(app *fiber.App) {
 	g.Get("/posts", append(authed, h.ListPosts)...)
 	g.Get("/campaigns", append(authed, h.ListCampaigns)...)
 	g.Post("/images", append(authed, h.SendImage)...)
+	g.Post("/posts/:post_id/videos/presign", append(authed, h.PresignVideo)...)
+	g.Post("/posts/:post_id/videos/finalize", append(authed, h.FinalizeVideo)...)
 	g.Delete("/token", append(authed, h.RevokeToken)...)
 }
 
