@@ -21,6 +21,9 @@ type PostRepository interface {
 	// ListAttachTargets lists the posts that still accept attachments, for a
 	// picker; see posts_attach_targets.go.
 	ListAttachTargets(ctx context.Context, query string, limit int) ([]models.PostAttachTarget, error)
+	// ListCampaignPostTree lists live campaigns with their posts nested, for
+	// a picker; see posts_campaign_tree.go.
+	ListCampaignPostTree(ctx context.Context, maxCampaigns, maxPostsPerCampaign int) ([]models.CampaignPostTree, error)
 	Create(ctx context.Context, post *models.Post) error
 	CreateBatch(ctx context.Context, posts []*models.Post) error
 	GetByID(ctx context.Context, id string) (*models.Post, error)
