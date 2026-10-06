@@ -2270,7 +2270,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Soft-deletes a campaign by Sqid. The row is retained as a safety net (no self-serve restore); it disappears from lists and reads.",
+                "description": "Soft-deletes a campaign by Sqid. The row is retained as a safety net (no self-serve restore); it disappears from lists and reads.\nIts scheduled and manually-scheduled posts go back to draft, and any copy queued in Zernio is withdrawn, so nothing of a deleted campaign publishes.",
                 "tags": [
                     "campaigns"
                 ],
@@ -7826,6 +7826,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "409": {
+                        "description": "Submitted content locked, or code use_cancel_endpoint: a scheduled post can only leave scheduled via POST /cancel or /convert-to-manual, and its date and account can't change",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             },
@@ -7835,7 +7844,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a post by Sqid.",
+                "description": "Deletes a post by Sqid. A scheduled post's copy queued in Zernio is withdrawn,\nso it no longer publishes. A published post can't be deleted (409 post_published):\nit is live on the network and anchors its analytics.",
                 "tags": [
                     "posts"
                 ],
@@ -7864,6 +7873,15 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
