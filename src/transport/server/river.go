@@ -56,6 +56,7 @@ func periodicConfig(cfg *config.Config) queues.PeriodicConfig {
 		NotificationCleanupEvery:   cfg.NotificationsCleanupEvery,
 		ManualPublishDueEvery:      cfg.ManualPublishDueSweepEvery,
 		LoginSecurityCleanupEvery:  24 * time.Hour,
+		OrphanSweepEvery:           cfg.ZernioOrphanSweepInterval,
 	}
 }
 
@@ -63,9 +64,13 @@ func periodicConfig(cfg *config.Config) queues.PeriodicConfig {
 func queueDeps(d *deps) queues.Deps {
 	cfg, r := d.cfg, d.r
 	return queues.Deps{
-		Zernio:              zernioQueueDeps(d),
-		PostLogRetention:    time.Duration(cfg.PostLogRetentionDays) * 24 * time.Hour,
-		ReconcileGrace:      cfg.ReconcileGrace,
+		Zernio:           zernioQueueDeps(d),
+		PostLogRetention: time.Duration(cfg.PostLogRetentionDays) * 24 * time.Hour,
+		ReconcileGrace:   cfg.ReconcileGrace,
+		OrphanSweep: queues.OrphanSweepConfig{
+			Live:   cfg.ZernioOrphanSweepLive,
+			MinAge: cfg.ZernioOrphanSweepMinAge,
+		},
 		AnalyticsSettings:   d.zernio.Settings,
 		AnalyticsHub:        d.hub,
 		AnalyticsWindowDays: cfg.ZernioAnalyticsWindowDays,

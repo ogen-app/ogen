@@ -45,7 +45,17 @@ type PostRepository interface {
 	// UpdateScheduledAtBatch updates only the scheduled_at (+ updated_at)
 	// column of several posts atomically (CON-115 redistribution).
 	UpdateScheduledAtBatch(ctx context.Context, posts []*models.Post) error
+	// UpdateSubmission is the publish workers' compare-and-set write; see
+	// posts_submission.go.
+	UpdateSubmission(ctx context.Context, post *models.Post, heldID string, columns ...string) (bool, error)
+	// ListByPublisherPostIDs projects the posts holding the given publisher
+	// post ids, for the Zernio orphan sweep.
+	ListByPublisherPostIDs(ctx context.Context, ids []string) ([]models.Post, error)
 	Delete(ctx context.Context, id string) (bool, error)
+	// DeleteTx and UnscheduleByCampaignTx run on a caller's transaction so a
+	// delete commits atomically with the Zernio withdrawals it enqueues.
+	DeleteTx(ctx context.Context, db bun.IDB, id string) (bool, error)
+	UnscheduleByCampaignTx(ctx context.Context, db bun.IDB, campaignID string) ([]models.Post, error)
 	// ListScheduledByPlatform returns every post in status='scheduled'
 	// for the given platform id (Sqid) — the posts that still carry a
 	// live auto-publish Zernio job. CON-130 uses it to convert all of a
@@ -450,12 +460,7 @@ func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*mo
 }
 
 func (r *postRepository) Delete(ctx context.Context, id string) (bool, error) {
-	res, err := r.db.NewDelete().Model((*models.Post)(nil)).Where("id = ?", id).Exec(ctx)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	return r.DeleteTx(ctx, r.db, id)
 }
 
 // ListStuckScheduled returns Posts in status='scheduled' whose

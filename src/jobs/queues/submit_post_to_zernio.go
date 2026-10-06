@@ -181,10 +181,16 @@ func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Po
 	case zernio.IsStatus(retryErr, http.StatusNotFound):
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
 			"Zernio post no longer exists; submitting a fresh post", publisherPostIDPayload(post.PublisherPostID))
+		held := post.PublisherPostID
 		post.PublisherPostID = ""
 		post.PublisherStatus = ""
-		if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+		post.UpdatedAt = time.Now().UTC()
+		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held, "publisher_post_id", "publisher_status", "updated_at")
+		if err != nil {
 			return true, fmt.Errorf("submit: clear stale publisher_post_id: %w", err)
+		}
+		if !ok {
+			return true, p.movedOn(ctx, post)
 		}
 		return false, nil
 	case zernio.IsTerminalAPIError(retryErr):
@@ -346,12 +352,23 @@ func (p *SubmitPostProcessor) resolveAccountID(ctx context.Context, post *models
 	}
 }
 
+// persistSuccess records the Zernio post on the Ogen post. The write only
+// lands while the post is still scheduled under the submission this job
+// loaded; if the user unscheduled or deleted it while the submit was in flight,
+// the Zernio post just created belongs to nothing and is withdrawn instead.
 func (p *SubmitPostProcessor) persistSuccess(ctx context.Context, post *models.Post, job *zernio.Job, accountID string) error {
+	held := post.PublisherPostID
 	post.Publisher = zernio.PublisherID
 	post.PublisherPostID = job.ID
 	post.PublisherStatus = string(job.Status)
-	if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+	post.UpdatedAt = time.Now().UTC()
+	ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held,
+		"publisher", "publisher_post_id", "publisher_status", "updated_at")
+	if err != nil {
 		return fmt.Errorf("submit: persist publisher_post_id: %w", err)
+	}
+	if !ok {
+		return p.withdrawLanded(ctx, post, job.ID)
 	}
 	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, post.Status, post.Status,
 		"Zernio submit succeeded; polling scheduled", logs.MarshalCapped(map[string]any{
@@ -511,7 +528,8 @@ func (p *SubmitPostProcessor) enqueuePoll(ctx context.Context, post *models.Post
 	if post.ScheduledAt != nil && post.ScheduledAt.After(time.Now()) {
 		when = post.ScheduledAt.Add(p.pollLead())
 	}
-	if _, err := client.Insert(ctx, PollZernioStatusTask{PostID: post.ID}, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: when})); err != nil {
+	task := PollZernioStatusTask{PostID: post.ID, PublisherPostID: post.PublisherPostID}
+	if _, err := client.Insert(ctx, task, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: when})); err != nil {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskFailed, post.Status, post.Status,
 			"failed to enqueue poll_zernio_status", errPayload(err))
 	}
@@ -531,8 +549,15 @@ func (p *SubmitPostProcessor) terminal(ctx context.Context, post *models.Post, r
 	from := post.Status
 	post.Status = models.PostStatusFailed
 	post.FailureReason = reason + ": " + msg
-	if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+	post.UpdatedAt = time.Now().UTC()
+	ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, post.PublisherPostID, "status", "failure_reason", "updated_at")
+	if err != nil {
 		return fmt.Errorf("submit: mark Failed: %w", err)
+	}
+	if !ok {
+		// The user unscheduled or deleted the post meanwhile; failing it
+		// would overwrite the status they chose.
+		return p.movedOn(ctx, post)
 	}
 	to := post.Status
 	appendLog(ctx, p.Deps, post.ID, models.PostLogEventStateTransition, from, to,
@@ -542,6 +567,39 @@ func (p *SubmitPostProcessor) terminal(ctx context.Context, post *models.Post, r
 		}))
 	// Tell the whole workspace it failed to publish.
 	emitPublishNotification(ctx, p.Notifier, p.Members, post, false)
+	return nil
+}
+
+// movedOn ends a submit whose write found the post no longer scheduled under
+// the submission it loaded.
+func (p *SubmitPostProcessor) movedOn(ctx context.Context, post *models.Post) error {
+	appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, models.PostStatusScheduled, models.PostStatusScheduled,
+		"submit aborted: post left Scheduled while submitting", `{"reason":"status_changed"}`)
+	return nil
+}
+
+// withdrawLanded deletes a Zernio post whose Ogen post left scheduled while
+// the submit creating it was in flight. A failed withdrawal is queued for
+// retry; if even that fails the orphan sweep finds the post later.
+func (p *SubmitPostProcessor) withdrawLanded(ctx context.Context, post *models.Post, publisherPostID string) error {
+	task := WithdrawZernioPostTask{
+		PublisherPostID: publisherPostID,
+		PostID:          post.ID,
+		TenantID:        post.TenantID,
+		Reason:          WithdrawReasonUnscheduled,
+		Actor:           models.ActorSystem,
+	}
+	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, models.PostStatusScheduled, models.PostStatusScheduled,
+		"submit landed after the post left Scheduled; withdrawing the Zernio post", withdrawPayload(task))
+	_, err := withdraw(ctx, p.Deps, task)
+	if err == nil {
+		return nil
+	}
+	if qerr := enqueueWithdraw(ctx, task); qerr != nil {
+		slog.ErrorContext(ctx, "could not withdraw or queue the withdrawal of an orphaned Zernio post",
+			logging.AttrComponent, "jobs.submit", "post_id", post.ID,
+			"publisher_post_id", publisherPostID, logging.AttrError, errors.Join(err, qerr))
+	}
 	return nil
 }
 

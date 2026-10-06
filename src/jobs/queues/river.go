@@ -35,9 +35,11 @@ import (
 // cleanup/reconcile repos are the same instances already held by the Zernio
 // bundle, so they aren't duplicated here.
 type Deps struct {
-	Zernio              ZernioDeps
-	PostLogRetention    time.Duration
-	ReconcileGrace      time.Duration
+	Zernio           ZernioDeps
+	PostLogRetention time.Duration
+	ReconcileGrace   time.Duration
+	// OrphanSweep tunes the Zernio orphan sweep; zero value is a dry run.
+	OrphanSweep         OrphanSweepConfig
 	AnalyticsSettings   zernio.SettingsStore
 	AnalyticsHub        eventhub.Hub
 	AnalyticsWindowDays int
@@ -200,6 +202,8 @@ type PeriodicConfig struct {
 	ManualPublishDueEvery time.Duration
 	// Login-security retention sweep. Positive-interval gated like the others.
 	LoginSecurityCleanupEvery time.Duration
+	// Zernio orphan sweep. Positive-interval gated like the others.
+	OrphanSweepEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -274,6 +278,11 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.LoginSecurityCleanupEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.LoginSecurityCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return CleanupLoginSecurityTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.OrphanSweepEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.OrphanSweepEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return SweepZernioOrphansTask{}, nil
 		}, runOnStart))
 	}
 	return jobs
@@ -362,6 +371,17 @@ func (e *Enqueuer) EnqueueSubmitTx(ctx context.Context, tx *sql.Tx, postID strin
 		return nil
 	}
 	_, err := e.Client.InsertTx(ctx, tx, SubmitPostTask{PostID: postID}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueWithdrawTx enqueues a Zernio withdrawal inside the given transaction,
+// so it commits atomically with the delete or unschedule that orphaned the
+// Zernio post: a committed change always gets its withdrawal.
+func (e *Enqueuer) EnqueueWithdrawTx(ctx context.Context, tx *sql.Tx, task WithdrawZernioPostTask) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, task, insertOptsWithRequestID(ctx, nil))
 	return err
 }
 

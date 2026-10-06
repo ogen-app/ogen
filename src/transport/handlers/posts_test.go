@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/transport/handlers"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 )
 
 // fakeCancelEnqueuer records EnqueueCancel calls so the convert-to-manual
@@ -55,13 +58,45 @@ func (f *fakeCancelEnqueuer) targets() map[string]queues.CancelTarget {
 	return out
 }
 
+// recordedWithdrawals captures the Zernio withdrawals a delete enqueues in its
+// transaction.
+type recordedWithdrawals struct {
+	mu    sync.Mutex
+	tasks []queues.WithdrawZernioPostTask
+}
+
+func (r *recordedWithdrawals) EnqueueWithdrawTx(_ context.Context, _ *sql.Tx, task queues.WithdrawZernioPostTask) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tasks = append(r.tasks, task)
+	return nil
+}
+
+func (r *recordedWithdrawals) all() []queues.WithdrawZernioPostTask {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.tasks)
+}
+
 var _ = Describe("PostsHandler", Ordered, func() {
 	var (
-		app        *fiber.App
-		db         *bun.DB
-		authCookie *http.Cookie
-		campaignID string
+		app         *fiber.App
+		db          *bun.DB
+		authCookie  *http.Cookie
+		campaignID  string
+		withdrawals *recordedWithdrawals
 	)
+
+	// markSubmitted puts a post straight into a submitted state, as the
+	// schedule and publish workers would.
+	markSubmitted := func(id string, status models.PostStatus, publisherPostID string) {
+		_, err := db.NewUpdate().Table("posts").
+			Set("status = ?", status).
+			Set("publisher_post_id = ?", publisherPostID).
+			Where("id = ?", id).
+			Exec(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+	}
 
 	BeforeAll(func() {
 		db = mustOpenTestDBWithMigrations()
@@ -89,11 +124,13 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
-		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 		postLogRepo := repository.NewPostLogRepository(db)
+		withdrawals = &recordedWithdrawals{}
+		withdrawSvc := withdraw.New(db, postRepo, campaignRepo, postLogRepo, withdrawals)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{Withdraw: withdrawSvc}).Register(app)
+		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 		// Wire the audit log so transition tests can read it back.
-		ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{PostLogs: postLogRepo})
+		ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{PostLogs: postLogRepo, Withdraw: withdrawSvc})
 		ph.Register(app)
 		// Assess/assessment/analytics live on the insights handler. Wired
 		// with nil deps here (matching the old shared PostsHandler) so the routes
@@ -690,22 +727,42 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(Equal(200))
 
-				// scheduled -> published
-				body, _ = json.Marshal(fiber.Map{
-					"campaign_id": campaignID, "platform_id": "AXqWG7U2qnpt",
-					"platform_post_type": "text-post", "title": "Lifecycle Post",
-					"status": "published",
-				})
-				req = httptest.NewRequest("PUT", "/api/posts/"+p.ID, bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(authCookie)
-				resp, err = app.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-
 				var got models.Post
 				Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
-				Expect(got.Status).To(Equal(models.PostStatusPublished))
+				Expect(got.Status).To(Equal(models.PostStatusScheduled))
+			})
+
+			It("refuses to move a scheduled post off scheduled, or retime it, by an edit", func() {
+				// Zernio holds the scheduled post's copy: leaving scheduled here
+				// would leave that copy queued to publish. /cancel withdraws it.
+				p := createPost("Queued Post", nil)
+				markSubmitted(p.ID, models.PostStatusScheduled, "z-queued")
+
+				put := func(fields fiber.Map) *http.Response {
+					payload := fiber.Map{
+						"campaign_id": campaignID, "platform_id": "AXqWG7U2qnpt",
+						"platform_post_type": "text-post", "title": "Queued Post",
+						"scheduled_at": p.ScheduledAt,
+					}
+					maps.Copy(payload, fields)
+					body, _ := json.Marshal(payload)
+					req := httptest.NewRequest("PUT", "/api/posts/"+p.ID, bytes.NewReader(body))
+					req.Header.Set("Content-Type", "application/json")
+					req.AddCookie(authCookie)
+					resp, err := app.Test(req)
+					Expect(err).NotTo(HaveOccurred())
+					return resp
+				}
+
+				for _, to := range []string{"ready_for_publish", "draft", "published"} {
+					resp := put(fiber.Map{"status": to})
+					Expect(resp.StatusCode).To(Equal(409), to)
+					var e map[string]string
+					Expect(json.NewDecoder(resp.Body).Decode(&e)).To(Succeed())
+					Expect(e["code"]).To(Equal("use_cancel_endpoint"), to)
+				}
+				Expect(put(fiber.Map{"status": "scheduled", "scheduled_at": "2031-01-01T09:00:00Z"}).StatusCode).To(Equal(409))
+				Expect(put(fiber.Map{"status": "scheduled"}).StatusCode).To(Equal(200), "a no-op save still passes")
 			})
 
 			It("clears the title when omitted", func() {
@@ -777,33 +834,18 @@ var _ = Describe("PostsHandler", Ordered, func() {
 			})
 
 			// ── CON-69 §9: cancellation transitions ───────────────────────────
-			It("allows scheduled → ready_for_publish (cancellation back to RFP)", func() {
-				p := createPost("Cancel-to-RFP", nil)
-
-				// draft → ready_for_publish → scheduled
+			// The scheduled → ready_for_publish / draft edges belong to the
+			// cancel worker, which deletes the Zernio copy first. A PUT taking
+			// them would leave that copy queued to publish.
+			It("sends scheduled → ready_for_publish / draft through the cancel endpoint", func() {
+				p := createPost("Cancel-by-PUT", nil)
 				putStatus(app, authCookie, campaignID, p.ID, models.PostStatusReadyForPublish)
 				putStatus(app, authCookie, campaignID, p.ID, models.PostStatusScheduled)
 
-				// scheduled → ready_for_publish (the new transition)
-				resp := putStatus(app, authCookie, campaignID, p.ID, models.PostStatusReadyForPublish)
-				Expect(resp.StatusCode).To(Equal(200))
-
-				var got models.Post
-				Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
-				Expect(got.Status).To(Equal(models.PostStatusReadyForPublish))
-			})
-
-			It("allows scheduled → draft (cancellation back to Draft)", func() {
-				p := createPost("Cancel-to-Draft", nil)
-				putStatus(app, authCookie, campaignID, p.ID, models.PostStatusReadyForPublish)
-				putStatus(app, authCookie, campaignID, p.ID, models.PostStatusScheduled)
-
-				resp := putStatus(app, authCookie, campaignID, p.ID, models.PostStatusDraft)
-				Expect(resp.StatusCode).To(Equal(200))
-
-				var got models.Post
-				Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
-				Expect(got.Status).To(Equal(models.PostStatusDraft))
+				for _, to := range []models.PostStatus{models.PostStatusReadyForPublish, models.PostStatusDraft} {
+					resp := putStatus(app, authCookie, campaignID, p.ID, to)
+					Expect(resp.StatusCode).To(Equal(409), string(to))
+				}
 			})
 
 			// ── CON-69 §4: validation gate ────────────────────────────────────
@@ -1430,6 +1472,71 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(Equal(404))
 			})
+
+			It("withdraws a scheduled post's Zernio copy with the delete", func() {
+				p := createPost("Queued Then Deleted", nil)
+				markSubmitted(p.ID, models.PostStatusScheduled, "z-del")
+
+				req := httptest.NewRequest("DELETE", "/api/posts/"+p.ID, nil)
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(204))
+
+				tasks := withdrawals.all()
+				Expect(tasks).To(HaveLen(1))
+				Expect(tasks[0].PublisherPostID).To(Equal("z-del"))
+				Expect(tasks[0].PostID).To(Equal(p.ID))
+				Expect(tasks[0].Reason).To(Equal(queues.WithdrawReasonPostDeleted))
+			})
+
+			It("refuses to delete a published post", func() {
+				p := createPost("Live Post", nil)
+				markSubmitted(p.ID, models.PostStatusPublished, "z-live")
+
+				req := httptest.NewRequest("DELETE", "/api/posts/"+p.ID, nil)
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(409))
+				var e map[string]string
+				Expect(json.NewDecoder(resp.Body).Decode(&e)).To(Succeed())
+				Expect(e["code"]).To(Equal("post_published"))
+				Expect(withdrawals.all()).To(BeEmpty())
+			})
+		})
+	})
+
+	Describe("DELETE /api/campaigns/:id with scheduled posts", func() {
+		It("unschedules the campaign's posts and withdraws their Zernio copies", func() {
+			queued := createPost("Queued In Campaign", nil)
+			markSubmitted(queued.ID, models.PostStatusScheduled, "z-camp")
+			kept := createPost("Draft In Campaign", nil)
+
+			req := httptest.NewRequest("DELETE", "/api/campaigns/"+campaignID, nil)
+			req.AddCookie(authCookie)
+			resp, err := app.Test(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(204))
+
+			tasks := withdrawals.all()
+			Expect(tasks).To(HaveLen(1))
+			Expect(tasks[0].PublisherPostID).To(Equal("z-camp"))
+			Expect(tasks[0].Reason).To(Equal(queues.WithdrawReasonCampaignDeleted))
+
+			var rows []struct {
+				ID              string         `bun:"id"`
+				Status          string         `bun:"status"`
+				PublisherPostID sql.NullString `bun:"publisher_post_id"`
+			}
+			Expect(db.NewSelect().Table("posts").Column("id", "status", "publisher_post_id").
+				Where("id IN (?)", bun.List([]string{queued.ID, kept.ID})).
+				Scan(context.Background(), &rows)).To(Succeed())
+			Expect(rows).To(HaveLen(2))
+			for _, r := range rows {
+				Expect(r.Status).To(Equal(string(models.PostStatusDraft)), r.ID)
+				Expect(r.PublisherPostID.Valid).To(BeFalse(), r.ID)
+			}
 		})
 	})
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,6 +123,44 @@ func (r *fakePostRepo) CreatedProjectionBetween(context.Context, time.Time, time
 func (r *fakePostRepo) Create(context.Context, *models.Post) error        { return nil }
 func (r *fakePostRepo) CreateBatch(context.Context, []*models.Post) error { return nil }
 func (r *fakePostRepo) Delete(context.Context, string) (bool, error)      { return false, nil }
+func (r *fakePostRepo) DeleteTx(context.Context, bun.IDB, string) (bool, error) {
+	return false, nil
+}
+func (r *fakePostRepo) UnscheduleByCampaignTx(context.Context, bun.IDB, string) ([]models.Post, error) {
+	return nil, nil
+}
+
+// UpdateSubmission mirrors the real compare-and-set: the write lands only
+// while the stored post is scheduled and still holds heldID.
+func (r *fakePostRepo) UpdateSubmission(_ context.Context, p *models.Post, heldID string, _ ...string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cur, ok := r.posts[p.ID]
+	if !ok || cur.Status != models.PostStatusScheduled || cur.PublisherPostID != heldID {
+		return false, nil
+	}
+	cp := *p
+	r.posts[p.ID] = &cp
+	return true, nil
+}
+func (r *fakePostRepo) ListByPublisherPostIDs(_ context.Context, ids []string) ([]models.Post, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []models.Post
+	for _, p := range r.posts {
+		if p.PublisherPostID != "" && slices.Contains(ids, p.PublisherPostID) {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+
+// remove deletes a post, as a user delete would mid-job.
+func (r *fakePostRepo) remove(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.posts, id)
+}
 func (r *fakePostRepo) ListStuckScheduled(context.Context, time.Time, int) ([]models.Post, error) {
 	return nil, nil
 }
@@ -181,6 +220,13 @@ func (r *fakeLogRepo) eventTypes() []string {
 		out = append(out, string(e.EventType))
 	}
 	return out
+}
+
+// hasSummary reports whether any recorded entry carries summary.
+func (r *fakeLogRepo) hasSummary(summary string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.ContainsFunc(r.entries, func(e *models.PostLog) bool { return e.Summary == summary })
 }
 
 // hasTransitionTo reports whether any recorded state_transition landed

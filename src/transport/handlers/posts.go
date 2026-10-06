@@ -25,6 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/update"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 	"github.com/ogen-app/ogen/src/usecase/series"
 )
 
@@ -53,6 +54,9 @@ type PostsHandler struct {
 	// from S3 immediately as part of the same operation"). nil is
 	// treated as no-op for fixtures that don't care about attachments.
 	onBeforeDelete func(ctx context.Context, postID string) error
+	// withdraw deletes a post together with its queued Zernio copy. nil
+	// (fixtures) falls back to the bare row delete.
+	withdraw *withdraw.Service
 	// postLogRepo records every meaningful operation against a Post.
 	// nil makes log writes no-ops so legacy fixtures stay
 	// green.
@@ -500,6 +504,7 @@ func NewPostsHandler(
 		onBeforeDelete: opts.OnBeforeDelete,
 		storage:        opts.Storage,
 		series:         opts.Series,
+		withdraw:       opts.Withdraw,
 	}
 }
 
@@ -521,6 +526,9 @@ type PostsOptions struct {
 	OnBeforeDelete func(ctx context.Context, postID string) error
 	Storage        storage.Storage
 	Series         *series.Service
+	// Withdraw deletes a post together with its queued Zernio copy; nil
+	// falls back to the bare row delete.
+	Withdraw *withdraw.Service
 }
 
 // decorateCovers fills each post's CoverURL from its first drawable
@@ -855,10 +863,9 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus) {
 // mutatesLockedContent reports whether the request would change any of the
 // content-identity fields CON-251 freezes once a post is submitted: the
 // body, title, link, media, platform, post type, format, series, or the
-// sources it was built from. The date and account are locked by the schedule/cancel flows that
-// own them, and a status-only transition (e.g. unschedule to edit) leaves
-// every field below equal, so neither is compared here — this gates the
-// silent-divergence edit, not the legitimate move off a submitted state.
+// sources it was built from. A scheduled post's date and account, and its
+// status, are guarded separately by the update use case (they only move
+// through the schedule and cancel flows), so they aren't compared here.
 func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 	return r.Content != post.Content ||
 		r.Title != post.Title ||
@@ -1216,6 +1223,7 @@ func (h *PostsHandler) Get(c *fiber.Ctx) error {
 // @Failure      400   {object}  map[string]string
 // @Failure      401   {object}  map[string]string
 // @Failure      404   {object}  map[string]string
+// @Failure      409   {object}  map[string]string  "Submitted content locked, or code use_cancel_endpoint: a scheduled post can only leave scheduled via POST /cancel or /convert-to-manual, and its date and account can't change"
 // @Router       /api/posts/{id} [put]
 func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	var req postRequest
@@ -1254,6 +1262,8 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 		PlatformPostType:     req.PlatformPostType,
 		Content:              req.Content,
 		CTAUrl:               req.CTAUrl,
+		ScheduledAt:          req.ScheduledAt,
+		SocialAccountID:      req.SocialAccountID,
 		MutatesLockedContent: req.mutatesLockedContent(post),
 		Omit:                 req.omitColumns(),
 		Actor:                cmp.Or(actorID(c), models.ActorSystem),
@@ -1280,6 +1290,9 @@ func postUpdateError(c *fiber.Ctx, err error) error {
 	if e, ok := errors.AsType[*update.ContentLockedError](err); ok {
 		return submittedLockError(e.Status)
 	}
+	if e, ok := errors.AsType[*update.LeaveScheduledError](err); ok {
+		return rejectCoded(c, fiber.StatusConflict, codeUseCancelEndpoint, e.Error(), nil)
+	}
 	if e, ok := errors.AsType[*update.ValidationError](err); ok {
 		return fiber.NewError(fiber.StatusBadRequest, e.Msg)
 	}
@@ -1300,34 +1313,57 @@ func postUpdateError(c *fiber.Ctx, err error) error {
 
 // Delete godoc
 // @Summary      Delete post
-// @Description  Deletes a post by Sqid.
+// @Description  Deletes a post by Sqid. A scheduled post's copy queued in Zernio is withdrawn,
+// @Description  so it no longer publishes. A published post can't be deleted (409 post_published):
+// @Description  it is live on the network and anchors its analytics.
 // @Tags         posts
 // @Security     CookieAuth
 // @Param        id   path  string  true  "Post Sqid"
 // @Success      204
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]string
 // @Router       /api/posts/{id} [delete]
 func (h *PostsHandler) Delete(c *fiber.Ctx) error {
-	id := c.Params("id")
+	post, err := load(c, h.repo.GetByID, "post not found")
+	if err != nil {
+		return err
+	}
+	if post.Status == models.PostStatusPublished {
+		return rejectCoded(c, fiber.StatusConflict, codePostPublished, withdraw.ErrPublished.Error(), nil)
+	}
 	// Run the before-delete hook (S3 cleanup) before the row is
 	// dropped — the hook needs the s3_keys, which the FK cascade will
 	// erase on row delete. A hook error fails the whole DELETE so the
 	// caller can retry; we don't end up with an orphaned bucket.
 	if h.onBeforeDelete != nil {
-		if err := h.onBeforeDelete(reqCtx(c), id); err != nil {
+		if err := h.onBeforeDelete(reqCtx(c), post.ID); err != nil {
 			return err
 		}
 	}
-	deleted, err := h.repo.Delete(reqCtx(c), id)
+	deleted, err := h.deletePost(c, post)
 	if err != nil {
 		return err
 	}
 	if !deleted {
 		return fiber.NewError(fiber.StatusNotFound, "post not found")
 	}
-	h.recordActivity(c, "post_deleted", activity.WithEntity("post", id))
+	h.recordActivity(c, "post_deleted", activity.WithEntity("post", post.ID))
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// 409 codes: deleting a published post, and moving a scheduled post off
+// scheduled by a PUT instead of the cancel endpoint.
+const (
+	codePostPublished     = "post_published"
+	codeUseCancelEndpoint = "use_cancel_endpoint"
+)
+
+func (h *PostsHandler) deletePost(c *fiber.Ctx, post *models.Post) (bool, error) {
+	if h.withdraw == nil {
+		return h.repo.Delete(reqCtx(c), post.ID)
+	}
+	return h.withdraw.DeletePost(reqCtx(c), post, cmp.Or(actorID(c), models.ActorSystem))
 }
 
 // ── Versions ─────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
@@ -67,6 +68,7 @@ func input(post *models.Post, to models.PostStatus) Input {
 func TestUpdateRejections(t *testing.T) {
 	ctx := t.Context()
 	phase, other := "ph1", "ph2"
+	at := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name   string
 		post   models.Post
@@ -88,9 +90,54 @@ func TestUpdateRejections(t *testing.T) {
 		{
 			name: "content locked",
 			post: models.Post{ID: "p", Status: models.PostStatusScheduled},
-			in:   func(in Input) Input { in.MutatesLockedContent = true; return in },
+			in: func(in Input) Input {
+				in.Status = models.PostStatusScheduled
+				in.MutatesLockedContent = true
+				return in
+			},
 			check: func(t *testing.T, err error) {
 				if e, ok := errors.AsType[*ContentLockedError](err); !ok || e.Status != models.PostStatusScheduled {
+					t.Fatalf("got %v", err)
+				}
+			},
+		},
+		{
+			// Zernio still holds the post: leaving scheduled by a PUT would
+			// leave that copy queued to publish.
+			name: "scheduled can't be unscheduled by an edit",
+			post: models.Post{ID: "p", Status: models.PostStatusScheduled},
+			in:   func(in Input) Input { in.Status = models.PostStatusReadyForPublish; return in },
+			check: func(t *testing.T, err error) {
+				if e, ok := errors.AsType[*LeaveScheduledError](err); !ok || e.To != models.PostStatusReadyForPublish {
+					t.Fatalf("got %v", err)
+				}
+			},
+		},
+		{
+			name: "scheduled can't be retimed by an edit",
+			post: models.Post{ID: "p", Status: models.PostStatusScheduled, ScheduledAt: &at},
+			in: func(in Input) Input {
+				in.Status = models.PostStatusScheduled
+				in.ScheduledAt = new(at.Add(time.Hour))
+				return in
+			},
+			check: func(t *testing.T, err error) {
+				if _, ok := errors.AsType[*ContentLockedError](err); !ok {
+					t.Fatalf("got %v", err)
+				}
+			},
+		},
+		{
+			name: "scheduled can't change account by an edit",
+			post: models.Post{ID: "p", Status: models.PostStatusScheduled, ScheduledAt: &at, SocialAccountID: "acc-1"},
+			in: func(in Input) Input {
+				in.Status = models.PostStatusScheduled
+				in.ScheduledAt = &at
+				in.SocialAccountID = "acc-2"
+				return in
+			},
+			check: func(t *testing.T, err error) {
+				if _, ok := errors.AsType[*ContentLockedError](err); !ok {
 					t.Fatalf("got %v", err)
 				}
 			},
@@ -141,6 +188,35 @@ func TestUpdateTransitionBlockedIsLogged(t *testing.T) {
 	_, _ = svc.Update(t.Context(), input(post, models.PostStatusPublished))
 	if len(logs.entries) != 1 || logs.entries[0].EventType != models.PostLogEventStateTransitionBlocked || logs.entries[0].Actor != "u1" {
 		t.Fatalf("entries = %+v", logs.entries)
+	}
+}
+
+func TestUpdateLeaveScheduledIsLogged(t *testing.T) {
+	logs := &fakeLogs{}
+	svc := &Service{Posts: &fakePosts{}, Logs: logs}
+	post := &models.Post{ID: "p", Status: models.PostStatusScheduled}
+	_, _ = svc.Update(t.Context(), input(post, models.PostStatusDraft))
+	if len(logs.entries) != 1 || logs.entries[0].EventType != models.PostLogEventStateTransitionBlocked ||
+		logs.entries[0].Payload != `{"reason":"use_cancel_endpoint"}` {
+		t.Fatalf("entries = %+v", logs.entries)
+	}
+}
+
+func TestUpdateScheduledNoOpSavePasses(t *testing.T) {
+	// A client echoing the post back unchanged, its timestamp at millisecond
+	// precision, isn't an edit of the locked date.
+	posts := &fakePosts{}
+	svc := &Service{Posts: posts}
+	at := time.Date(2026, 10, 8, 9, 0, 0, 123456000, time.UTC)
+	post := &models.Post{ID: "p", Status: models.PostStatusScheduled, ScheduledAt: &at, SocialAccountID: "acc-1"}
+	in := input(post, models.PostStatusScheduled)
+	in.ScheduledAt = new(at.Truncate(time.Millisecond))
+	in.SocialAccountID = "acc-1"
+	if _, err := svc.Update(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	if len(posts.updated) != 1 {
+		t.Fatal("a no-op save of a scheduled post must persist")
 	}
 }
 
