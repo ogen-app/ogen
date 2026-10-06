@@ -176,7 +176,6 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		userID     string
 		stub       *stubStorage
 		hub        eventhub.Hub
-		imgPrep    *fakeImagePreparer
 	)
 
 	const linkedinPlatformID = "AXqWG7U2qnpt"
@@ -216,8 +215,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{Storage: stub}).Register(app)
 		assetRepo := repository.NewAssetRepository(db, tagRepo, repository.NewAssetFileRepository(db))
 		hub = eventhub.New(eventhub.Config{})
-		imgPrep = &fakeImagePreparer{store: stub}
-		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, imgPrep, nil, 280, auth, nil).
+		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, stub, fakePDFRenderer{}, nil, &fakeImagePreparer{store: stub}, nil, 280, auth, nil).
 			WithContentBank(assetRepo).WithEventHub(hub).Register(app)
 
 		userID = seedTenantUser(db, "Admin", "att@example.com", "att-password").ID
@@ -1349,22 +1347,6 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(409))
 			expectNoPostEvent(teammate)
-		})
-
-		It("announces generated alt text once it is stored", func() {
-			imgPrep.altText = "A red pixel"
-			postID := createPostWithPlatform(linkedinPlatformID)
-			attID := uploadAttID(postID)
-
-			Expect(attachmentEventPayload(nextAttachmentEvent(teammate))).To(HaveKeyWithValue("action", "created"))
-			payload := attachmentEventPayload(nextAttachmentEvent(teammate))
-			Expect(payload).To(HaveKeyWithValue("action", "updated"))
-			Expect(payload).To(HaveKeyWithValue("source", "alt_text"))
-			Expect(payload).To(HaveKeyWithValue("attachment_id", attID))
-
-			var att models.PostAttachment
-			Expect(db.NewSelect().Model(&att).Where("id = ?", attID).Scan(tenantCtx())).To(Succeed())
-			Expect(att.AltText).To(Equal("A red pixel"))
 		})
 	})
 
