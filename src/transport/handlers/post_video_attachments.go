@@ -11,7 +11,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/video"
@@ -56,7 +55,8 @@ type presignVideoResponse struct {
 // @Description  multi-GB files never buffer in memory (CON-148). The client
 // @Description  then calls finalize with the returned `s3_key`. Only video
 // @Description  content types are accepted here; images/PDFs use the direct
-// @Description  upload endpoint. Hard cap: 5 GiB.
+// @Description  upload endpoint. Hard cap: 5 GiB. The declared size is checked
+// @Description  against the workspace's media storage quota (402 when over).
 // @Tags         post-attachments
 // @Accept       json
 // @Produce      json
@@ -64,38 +64,54 @@ type presignVideoResponse struct {
 // @Param        post_id  path      string               true  "Post Sqid"
 // @Param        body     body      presignVideoRequest  true  "Declared upload"
 // @Success      200      {object}  presignVideoResponse
-// @Failure      400      {object}  map[string]string
+// @Failure      400      {object}  map[string]string "too_large, invalid request"
 // @Failure      401      {object}  map[string]string
+// @Failure      402      {object}  map[string]any    "media-storage limit reached"
 // @Failure      404      {object}  map[string]string
 // @Failure      409      {object}  map[string]string
-// @Failure      415      {object}  map[string]string
+// @Failure      415      {object}  map[string]string "unsupported_media_type"
 // @Failure      503      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments/presign [post]
 func (h *PostAttachmentsHandler) PresignVideo(c *fiber.Ctx) error {
-	if h.storage == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
-	}
 	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if err := ensureMutable(post); err != nil {
-		return err
-	}
-
 	var req presignVideoRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	req.ContentType = strings.TrimSpace(strings.ToLower(req.ContentType))
-	if !strings.HasPrefix(req.ContentType, "video/") {
-		return fiber.NewError(fiber.StatusUnsupportedMediaType, "presign accepts video content types only; use the direct upload endpoint for images and PDFs")
+	out, err := h.presignVideoUpload(c, post, req.ContentType, req.SizeBytes, maxVideoUploadBytes())
+	if err != nil {
+		return attachmentError(c, err)
 	}
-	if req.SizeBytes <= 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "size_bytes is required and must be positive")
+	return c.JSON(out)
+}
+
+// presignVideoUpload mints a presigned PUT for a declared video upload of at
+// most maxBytes. The declared size is checked against media_storage_bytes up
+// front so a workspace over its plan never uploads; finalize re-checks the
+// real size. Upload rejects come back as *attachmentReject.
+func (h *PostAttachmentsHandler) presignVideoUpload(c *fiber.Ctx, post *models.Post, contentType string, size, maxBytes int64) (*presignVideoResponse, error) {
+	if h.storage == nil {
+		return nil, fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
 	}
-	if req.SizeBytes > maxVideoUploadBytes() {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes()>>30))
+	if err := ensureMutable(post); err != nil {
+		return nil, err
+	}
+	contentType = strings.TrimSpace(strings.ToLower(contentType))
+	if !strings.HasPrefix(contentType, "video/") {
+		return nil, rejectUpload(fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType,
+			"presign accepts video content types only; use the direct upload endpoint for images and PDFs")
+	}
+	if size <= 0 {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "size_bytes is required and must be positive")
+	}
+	if size > maxBytes {
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeTooLarge, videoTooLargeMessage(maxBytes))
+	}
+	if _, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", size); err != nil {
+		return nil, err
 	}
 
 	// A random token, not the eventual row id, gives the key uniqueness — the
@@ -103,19 +119,33 @@ func (h *PostAttachmentsHandler) PresignVideo(c *fiber.Ctx) error {
 	// finalize can prove ownership by prefix.
 	token, err := models.NewID()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	key := storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/"+token+videoContentTypeToExt(req.ContentType))
+	key := videoKeyPrefix(c, post) + token + videoContentTypeToExt(contentType)
 
-	url, err := h.storage.PresignedPutURL(reqCtx(c), key, req.ContentType, presignPutTTL)
+	url, err := h.storage.PresignedPutURL(reqCtx(c), key, contentType, presignPutTTL)
 	if err != nil {
-		return fmt.Errorf("post_attachments: presign put: %w", err)
+		return nil, fmt.Errorf("post_attachments: presign put: %w", err)
 	}
-	return c.JSON(presignVideoResponse{
+	return &presignVideoResponse{
 		UploadURL: url,
 		S3Key:     key,
 		ExpiresIn: int(presignPutTTL / time.Second),
-	})
+	}, nil
+}
+
+// videoKeyPrefix is the storage prefix a post's presigned video uploads live
+// under.
+func videoKeyPrefix(c *fiber.Ctx, post *models.Post) string {
+	return storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/")
+}
+
+// videoTooLargeMessage words a size-cap reject in the largest whole unit.
+func videoTooLargeMessage(maxBytes int64) string {
+	if maxBytes >= 1<<30 {
+		return fmt.Sprintf("video exceeds upload limit of %d GB", maxBytes>>30)
+	}
+	return fmt.Sprintf("video exceeds upload limit of %d MB", maxBytes>>20)
 }
 
 // finalizeVideoRequest finalizes a previously-presigned upload.
@@ -132,7 +162,8 @@ type finalizeVideoRequest struct {
 // @Description  or unreadable video is a terminal 400; an unrecognised
 // @Description  container/codec is 415. If video-service is unreachable the
 // @Description  attachment is still created, unprobed (no duration/poster,
-// @Description  weaker validation).
+// @Description  weaker validation). The object's real size is checked against
+// @Description  the media storage quota; over it, the object is deleted (402).
 // @Tags         post-attachments
 // @Accept       json
 // @Produce      json
@@ -140,76 +171,93 @@ type finalizeVideoRequest struct {
 // @Param        post_id  path      string                true  "Post Sqid"
 // @Param        body     body      finalizeVideoRequest  true  "Finalize body"
 // @Success      201      {object}  attachmentResponse
-// @Failure      400      {object}  map[string]string
+// @Failure      400      {object}  map[string]string "too_large, empty_file, invalid_file, invalid request"
 // @Failure      401      {object}  map[string]string
+// @Failure      402      {object}  map[string]any    "media-storage limit reached"
 // @Failure      404      {object}  map[string]string
 // @Failure      409      {object}  map[string]string
-// @Failure      415      {object}  map[string]string
+// @Failure      415      {object}  map[string]string "unsupported_media_type"
 // @Failure      503      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments/finalize [post]
 func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
-	if h.storage == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
-	}
 	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
 	if err != nil {
 		return err
 	}
-	if err := ensureMutable(post); err != nil {
-		return err
-	}
-
 	var req finalizeVideoRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	if req.S3Key == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "s3_key is required")
-	}
-	// Ownership: the key must sit under this tenant+post prefix, exactly as
-	// PresignVideo minted it. This blocks finalizing an arbitrary object (or
-	// another post's / tenant's upload).
-	if !strings.HasPrefix(req.S3Key, storage.TenantKey(reqCtx(c), "post-attachments/"+post.ID+"/")) {
-		return fiber.NewError(fiber.StatusBadRequest, "s3_key does not belong to this post")
-	}
-
-	altText, err := normalizeAltText(req.AltText)
-	if err != nil {
-		return err
-	}
-	info, err := h.statVideoUpload(reqCtx(c), req.S3Key)
-	if err != nil {
-		return err
-	}
-
 	session, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
+	att, err := h.finalizeVideoUpload(c, post, req.S3Key, req.AltText, maxVideoUploadBytes(), session, attachmentSourceEditor)
+	if err != nil {
+		return attachmentError(c, err)
+	}
+	return h.respondAttachment(c, post, att)
+}
+
+// finalizeVideoUpload turns an object PUT through a presigned URL into a post
+// attachment: it proves the key belongs to the post, reads the object's real
+// size, clears it against media_storage_bytes, probes it and saves the row,
+// announcing it with source. A rejected object is deleted. Upload rejects come
+// back as *attachmentReject.
+func (h *PostAttachmentsHandler) finalizeVideoUpload(c *fiber.Ctx, post *models.Post, key, altText string, maxBytes int64, session *models.Session, source string) (*models.PostAttachment, error) {
+	if h.storage == nil {
+		return nil, fiber.NewError(fiber.StatusServiceUnavailable, "storage not configured")
+	}
+	if err := ensureMutable(post); err != nil {
+		return nil, err
+	}
+	if key == "" {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "s3_key is required")
+	}
+	// Ownership: the key must sit under this tenant+post prefix, exactly as
+	// presign minted it. This blocks finalizing an arbitrary object (or
+	// another post's / tenant's upload).
+	if !strings.HasPrefix(key, videoKeyPrefix(c, post)) {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "s3_key does not belong to this post")
+	}
+	altText, err := normalizeAltText(altText)
+	if err != nil {
+		return nil, err
+	}
+	info, err := h.statVideoUpload(reqCtx(c), key, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	quota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", info.Size)
+	if err != nil {
+		_ = h.storage.Delete(reqCtx(c), key)
+		return nil, err
+	}
+
 	id, err := models.NewID()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	att := &models.PostAttachment{
 		ID:        id,
 		PostID:    post.ID,
 		AltText:   altText,
 		SizeBytes: info.Size,
-		S3Key:     req.S3Key,
+		S3Key:     key,
 		CreatedBy: session.UserID,
 	}
 
 	probe, err := h.probeVideo(reqCtx(c), att)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Resolve the MIME so kind detection routes this to the video validator:
 	// the probed container, else the stored content type, else the key
 	// extension. No video type means the container is unsupported.
-	att.MimeType = resolveVideoMIME(probe, info.ContentType, req.S3Key)
+	att.MimeType = resolveVideoMIME(probe, info.ContentType, key)
 	if !strings.HasPrefix(att.MimeType, "video/") {
-		_ = h.storage.Delete(reqCtx(c), req.S3Key)
-		return fiber.NewError(fiber.StatusUnsupportedMediaType, "unsupported video container or codec")
+		_ = h.storage.Delete(reqCtx(c), key)
+		return nil, rejectUpload(fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported video container or codec")
 	}
 
 	// The poster frame becomes the thumbnail, stored before the insert so
@@ -218,32 +266,26 @@ func (h *PostAttachmentsHandler) FinalizeVideo(c *fiber.Ctx) error {
 	if probe != nil {
 		poster = probe.PosterPNG
 	}
-	if err := h.persistAttachment(reqCtx(c), att, poster); err != nil {
-		return err
+	if err := h.saveAttachment(c, att, poster, quota, session.TenantID, source); err != nil {
+		return nil, err
 	}
-	h.publishAttachmentsChanged(reqCtx(c), post.ID, att.ID, attachmentActionCreated, attachmentSourceEditor)
-
-	h.hydratePresigned(c, att)
-	return c.Status(fiber.StatusCreated).JSON(attachmentResponse{
-		PostAttachment:     att,
-		PlatformValidation: platforms.ValidateAttachment(att, post.Platform),
-	})
+	return att, nil
 }
 
 // statVideoUpload reads the uploaded object's authoritative size (never the
-// client's claim), deleting an empty or oversized object.
-func (h *PostAttachmentsHandler) statVideoUpload(ctx context.Context, key string) (*storage.ObjectInfo, error) {
+// client's claim), deleting an empty object or one over maxBytes.
+func (h *PostAttachmentsHandler) statVideoUpload(ctx context.Context, key string, maxBytes int64) (*storage.ObjectInfo, error) {
 	info, err := h.storage.Head(ctx, key)
 	if err != nil {
 		return nil, fiber.NewError(fiber.StatusBadRequest, "uploaded object not found; PUT the bytes to the presigned URL first")
 	}
 	if info.Size == 0 {
 		_ = h.storage.Delete(ctx, key)
-		return nil, fiber.NewError(fiber.StatusBadRequest, "uploaded object is empty")
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeEmptyFile, "uploaded object is empty")
 	}
-	if info.Size > maxVideoUploadBytes() {
+	if info.Size > maxBytes {
 		_ = h.storage.Delete(ctx, key)
-		return nil, fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("video exceeds upload limit of %d GB", maxVideoUploadBytes()>>30))
+		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeTooLarge, videoTooLargeMessage(maxBytes))
 	}
 	return info, nil
 }
@@ -272,7 +314,7 @@ func (h *PostAttachmentsHandler) probeVideo(ctx context.Context, att *models.Pos
 	if err != nil {
 		if video.IsInvalidVideo(err) {
 			_ = h.storage.Delete(ctx, att.S3Key)
-			return nil, fiber.NewError(fiber.StatusBadRequest, "uploaded file is not a readable video")
+			return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable video")
 		}
 		slog.WarnContext(ctx, "video probe failed", logging.AttrComponent, "post_attachments", "key", att.S3Key, logging.AttrError, err)
 		return nil, nil
