@@ -398,6 +398,41 @@ var _ = Describe("Figma plugin video API", Ordered, func() {
 		Expect(attachmentCount(postID)).To(BeZero())
 	})
 
+	It("publishes the plugin cap and counts the post's videos for pre-flight checks", func() {
+		get := func(path string, into any) {
+			GinkgoHelper()
+			req := httptest.NewRequest(fiber.MethodGet, path, nil)
+			req.Header.Set(fiber.HeaderAuthorization, "Bearer "+token)
+			resp, err := app.Test(req, -1)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+			Expect(json.NewDecoder(resp.Body).Decode(into)).To(Succeed())
+		}
+		var me struct {
+			Limits struct {
+				MaxVideoBytes int64 `json:"max_video_bytes"`
+			} `json:"limits"`
+		}
+		get("/api/plugins/figma/me", &me)
+		Expect(me.Limits.MaxVideoBytes).To(BeEquivalentTo(pluginCap))
+
+		_, _ = finalize(postID, frame(upload(postID, 1024)))
+		var tree struct {
+			Campaigns []struct {
+				Posts []struct {
+					ID         string `json:"id"`
+					PostType   string `json:"post_type"`
+					VideoCount int    `json:"video_count"`
+				} `json:"posts"`
+			} `json:"campaigns"`
+		}
+		get("/api/plugins/figma/campaigns", &tree)
+		Expect(tree.Campaigns).To(HaveLen(1))
+		Expect(tree.Campaigns[0].Posts).To(ContainElement(SatisfyAll(
+			HaveField("ID", postID), HaveField("PostType", "reel"), HaveField("VideoCount", 1),
+		)))
+	})
+
 	It("refuses a request without a plugin token", func() {
 		resp := callAs("", "/api/plugins/figma/posts/"+postID+"/videos/presign", fiber.Map{"content_type": "video/mp4", "size_bytes": 1024})
 		Expect(resp.StatusCode).To(Equal(fiber.StatusUnauthorized))

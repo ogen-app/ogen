@@ -70,8 +70,10 @@ func (r *postRepository) ListCampaignPostTree(ctx context.Context, maxCampaigns,
 	posts := []models.CampaignTreePost{}
 	err = r.db.NewSelect().Model((*models.Post)(nil)).
 		ColumnExpr("po.id, po.campaign_id, po.title, po.status, po.platform_id, po.scheduled_at").
+		ColumnExpr("COALESCE(po.platform_post_type, '') AS platform_post_type").
 		ColumnExpr("COALESCE(pl.name, '') AS platform_name").
 		ColumnExpr("(SELECT count(*) FROM post_attachments AS pa WHERE pa.post_id = po.id) AS attachment_count").
+		ColumnExpr("(SELECT count(*) FROM post_attachments AS pa WHERE pa.post_id = po.id AND pa.mime_type LIKE 'video/%') AS video_count").
 		Join(`JOIN (SELECT p2.id, row_number() OVER (
 				PARTITION BY p2.campaign_id
 				ORDER BY p2.scheduled_at ASC NULLS LAST, p2.created_at, p2.id

@@ -72,9 +72,19 @@ func TestListCampaignPostTree(t *testing.T) {
 	seedPost(own, "p-tie-a", "c-active-new", "", models.PostStatusFailed, at(2*time.Hour), 0)
 	seedPost(own, "p-shelved", "c-archived-at", "", models.PostStatusDraft, nil, 0)
 	seedPost("t-other", "p-theirs", "c-theirs", "", models.PostStatusDraft, nil, 0)
-	if _, err := db.NewInsert().Model(&models.PostAttachment{ID: "att-1", PostID: "p-early", MimeType: "image/png", S3Key: "k", CreatedBy: "user-1"}).
-		Exec(tenantCtx()); err != nil {
-		t.Fatalf("seed attachment: %v", err)
+	for i, att := range []models.PostAttachment{
+		{ID: "att-1", PostID: "p-early", MimeType: "image/png", S3Key: "k"},
+		{ID: "att-2", PostID: "p-late", MimeType: "video/mp4", S3Key: "k2"},
+		{ID: "att-3", PostID: "p-late", MimeType: "image/png", S3Key: "k3"},
+	} {
+		att.Position, att.CreatedBy = i, "user-1"
+		if _, err := db.NewInsert().Model(&att).Exec(tenantCtx()); err != nil {
+			t.Fatalf("seed attachment: %v", err)
+		}
+	}
+	if _, err := db.NewUpdate().Model((*models.Post)(nil)).Set("platform_post_type = ?", "video").
+		Where("id = ?", "p-late").Exec(tenantCtx()); err != nil {
+		t.Fatalf("set post type: %v", err)
 	}
 
 	got, err := repo.ListCampaignPostTree(tenantCtx(), 0, 0)
@@ -109,9 +119,12 @@ func TestListCampaignPostTree(t *testing.T) {
 		t.Fatalf("posts = %v, want %v (scheduled_at asc nulls last, then created_at)", postIDs, wantPosts)
 	}
 	early := top.Posts[0]
-	if early.PlatformID != linkedIn || early.PlatformName != "LinkedIn" || early.AttachmentCount != 1 ||
-		early.Status != models.PostStatusScheduled || early.Title != "Title p-early" || early.ScheduledAt == nil {
+	if early.PlatformID != linkedIn || early.PlatformName != "LinkedIn" || early.AttachmentCount != 1 || early.VideoCount != 0 ||
+		early.PlatformPostType != "" || early.Status != models.PostStatusScheduled || early.Title != "Title p-early" || early.ScheduledAt == nil {
 		t.Fatalf("early post = %+v", early)
+	}
+	if late := top.Posts[3]; late.PlatformPostType != "video" || late.AttachmentCount != 2 || late.VideoCount != 1 {
+		t.Fatalf("late post = %+v", late)
 	}
 	if u := top.Posts[4]; u.PlatformID != "" || u.PlatformName != "" || u.ScheduledAt != nil || u.AttachmentCount != 0 {
 		t.Fatalf("unscheduled post = %+v", u)

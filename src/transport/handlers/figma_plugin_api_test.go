@@ -108,6 +108,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 			Tokens:      repository.NewPluginTokenRepository(db),
 			Users:       userRepo,
 			Posts:       postRepo,
+			Platforms:   platformRepo,
 			Assets:      assets,
 			Attachments: attachments,
 		}).Register(app)
@@ -196,7 +197,9 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 			User       struct{ ID, Name string }
 			Connection struct{ ID, Label string }
 			Limits     struct {
-				MaxImageBytes int64 `json:"max_image_bytes"`
+				MaxImageBytes     int64    `json:"max_image_bytes"`
+				MaxVideoBytes     int64    `json:"max_video_bytes"`
+				VideoContentTypes []string `json:"video_content_types"`
 			}
 		}
 		Expect(json.NewDecoder(resp.Body).Decode(&me)).To(Succeed())
@@ -205,6 +208,9 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(me.User.ID).To(Equal(jane.ID))
 		Expect(me.Connection.Label).To(Equal("Figma · Jane"))
 		Expect(me.Limits.MaxImageBytes).To(BeNumerically(">", 0))
+		// No plugin cap configured here, so the web app's video limit applies.
+		Expect(me.Limits.MaxVideoBytes).To(BeNumerically("==", models.DefaultPlatformGlobalLimits().MaxVideoUploadBytes))
+		Expect(me.Limits.VideoContentTypes).To(ConsistOf("video/mp4", "video/webm"))
 	})
 
 	It("stores a frame as a pending figma image asset and enqueues processing", func() {
@@ -352,11 +358,28 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 						ID   string `json:"id"`
 						Name string `json:"name"`
 					} `json:"platform"`
+					PostType        string  `json:"post_type"`
 					ScheduledAt     *string `json:"scheduled_at"`
 					AttachmentCount *int    `json:"attachment_count"`
+					VideoCount      *int    `json:"video_count"`
 					Attachable      bool    `json:"attachable"`
 				} `json:"posts"`
 			} `json:"campaigns"`
+			Platforms map[string]struct {
+				Name  string `json:"name"`
+				Video *struct {
+					AllowedFormats        []string `json:"allowed_formats"`
+					MaxDurationSeconds    int      `json:"max_duration_seconds"`
+					AllowedAspectRatios   []string `json:"allowed_aspect_ratios"`
+					MaxAttachmentsPerPost int      `json:"max_attachments_per_post"`
+				} `json:"video"`
+				PostTypes []struct {
+					Slug string `json:"slug"`
+					Rule *struct {
+						AllowedKinds []string `json:"allowed_kinds"`
+					} `json:"rule"`
+				} `json:"post_types"`
+			} `json:"platforms"`
 		}
 		var out treeWire
 		Expect(json.Unmarshal(raw, &out)).To(Succeed())
@@ -375,7 +398,22 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(post.Platform.Name).To(Equal("LinkedIn"))
 		Expect(post.ScheduledAt).To(BeNil())
 		Expect(post.AttachmentCount).To(Equal(new(0)))
+		Expect(post.VideoCount).To(Equal(new(0)))
+		Expect(post.PostType).To(Equal("image-post"))
 		Expect(post.Attachable).To(BeTrue())
+
+		Expect(out.Platforms).To(HaveLen(1))
+		linkedIn := out.Platforms["AXqWG7U2qnpt"]
+		Expect(linkedIn.Name).To(Equal("LinkedIn"))
+		Expect(linkedIn.Video).NotTo(BeNil())
+		Expect(linkedIn.Video.AllowedFormats).To(ContainElement("mp4"))
+		Expect(linkedIn.Video.MaxDurationSeconds).To(BeNumerically(">", 0))
+		Expect(linkedIn.Video.AllowedAspectRatios).NotTo(BeEmpty())
+		Expect(linkedIn.Video.MaxAttachmentsPerPost).To(Equal(1))
+		Expect(linkedIn.PostTypes).To(ContainElement(SatisfyAll(
+			HaveField("Slug", "image-post"),
+			HaveField("Rule.AllowedKinds", ConsistOf("image")),
+		)))
 
 		_, err := db.NewUpdate().TableExpr("posts").Set("status = ?", models.PostStatusScheduled).Where("id = ?", postID).Exec(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -399,7 +437,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		resp = call(fiber.MethodGet, "/api/plugins/figma/campaigns", nil, "")
 		raw, _ = io.ReadAll(resp.Body)
-		Expect(strings.TrimSpace(string(raw))).To(Equal(`{"campaigns":[]}`))
+		Expect(strings.TrimSpace(string(raw))).To(Equal(`{"campaigns":[],"platforms":{}}`))
 	})
 
 	It("refuses the campaign tree without a valid plugin token", func() {

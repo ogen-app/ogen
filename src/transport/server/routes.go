@@ -111,6 +111,7 @@ func registerIntegrationRoutes(app *fiber.App, d *deps) {
 		Tokens:        r.pluginTokenRepo,
 		Users:         r.userRepo,
 		Posts:         r.postRepo,
+		Platforms:     r.platformRepo,
 		Assets:        d.newAssetsHandler(),
 		Attachments:   d.newPostAttachmentsHandler(),
 		Activity:      d.activity.recorder,
