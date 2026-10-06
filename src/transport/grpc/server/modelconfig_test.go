@@ -134,6 +134,14 @@ func TestUnmetForSlot(t *testing.T) {
 	if u := unmetForSlot(transcribe, "gemini-2.5-flash"); len(u) != 0 {
 		t.Errorf("gemini-2.5-flash→transcribe unmet=%v, want none", u)
 	}
+	for _, sr := range modelconfig.AllSlots() {
+		if sr.FlowKey != modelconfig.FlowVision && sr.FlowKey != modelconfig.FlowTranscribe {
+			continue
+		}
+		if u := unmetForSlot(sr.Slot, "gemini-3.8-flash"); len(u) != 0 {
+			t.Errorf("gemini-3.8-flash→%s/%s unmet=%v, want none", sr.FlowKey, sr.Slot.Key, u)
+		}
+	}
 	if u := unmetForSlot(extract, "claude-sonnet-4-5-20250929"); len(u) == 0 {
 		t.Error("Claude model accepted into a vision slot")
 	}
@@ -156,8 +164,8 @@ func TestListModelsVision(t *testing.T) {
 			t.Errorf("vision list includes %s (vendor %s)", m.GetId(), m.GetVendor())
 		}
 	}
-	if !got["gemini-2.5-flash"] || !got["gemini-2.5-pro"] {
-		t.Fatalf("vision list = %v, want gemini-2.5-flash and gemini-2.5-pro", got)
+	if !got["gemini-2.5-flash"] || !got["gemini-2.5-pro"] || !got["gemini-3.8-flash"] {
+		t.Fatalf("vision list = %v, want gemini-2.5-flash, gemini-2.5-pro and gemini-3.8-flash", got)
 	}
 	if got["gemini-embedding-2"] {
 		t.Fatal("vision list includes the embedding model")

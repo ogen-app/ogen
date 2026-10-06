@@ -32,8 +32,11 @@ const (
 // Expanded 2026-09-23: added the current Anthropic chat catalog —
 // Opus 4.6/4.7/4.8 ($5/$25), Sonnet 4.6 ($3/$15), Fable 5 ($10/$50) — from the
 // Claude API model catalog, so operators can assign any of them per flow.
+// Expanded 2026-10-06: added Gemini 3.8 Flash ($0.75/1M input, one rate for
+// text/image/audio; $3.75/1M output) after Google closed the 2.5 models to new
+// API users. The 2.5 rates stay so runs recorded on them keep their price.
 // Re-verify against platform.claude.com/pricing before trusting for billing.
-const priceVersion = "2026-09-23"
+const priceVersion = "2026-10-06"
 
 func init() {
 	vendors.Register(vendors.Descriptor{
@@ -135,6 +138,12 @@ func init() {
 					vendors.KindInput:  1_250_000,
 					vendors.KindOutput: 10_000_000,
 				},
+				// Current vision/transcribe model. Google bills image and audio
+				// input at the same rate, so KindInput is exact for both services.
+				"gemini-3.8-flash": {
+					vendors.KindInput:  750_000,
+					vendors.KindOutput: 3_750_000,
+				},
 			},
 		},
 		Capabilities: map[string]modelconfig.ModelCapabilities{
@@ -144,6 +153,7 @@ func init() {
 			// Anthropic-only, so these only fill vision/transcribe slots.
 			"gemini-2.5-flash": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576, VisionInput: true, AudioInput: true},
 			"gemini-2.5-pro":   {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576, VisionInput: true, AudioInput: true},
+			"gemini-3.8-flash": {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 65536, ContextWindow: 1048576, VisionInput: true, AudioInput: true},
 		},
 	})
 }
