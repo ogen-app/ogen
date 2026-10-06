@@ -52,6 +52,10 @@ Authorization: Bearer {{pluginToken}}
 GET {{baseUrl}}/api/plugins/figma/posts?q=&limit=20
 Authorization: Bearer {{pluginToken}}
 
+### 7b. Plugin: "Send to" picker — live campaigns with their posts (all statuses; attachable=false once submitted)
+GET {{baseUrl}}/api/plugins/figma/campaigns
+Authorization: Bearer {{pluginToken}}
+
 ### 8. Plugin: send a frame to the content bank
 POST {{baseUrl}}/api/plugins/figma/images
 Authorization: Bearer {{pluginToken}}
