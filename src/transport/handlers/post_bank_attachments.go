@@ -79,7 +79,7 @@ func (h *PostAttachmentsHandler) AttachFromAsset(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	att, err := h.attachBankAsset(c, post, &req, session)
+	att, err := h.attachBankAsset(c, post, &req, session, attachmentSourceBank)
 	if err != nil {
 		return attachmentError(c, err)
 	}
@@ -89,9 +89,10 @@ func (h *PostAttachmentsHandler) AttachFromAsset(c *fiber.Ctx) error {
 // attachBankAsset copies a content-bank image onto post as a new attachment:
 // it validates the request, strips the bank original's metadata into the
 // attachment's own object, gates media_storage_bytes on the stripped size and
-// persists the row. The caller has checked the post is mutable. Image rejects
-// come back as *attachmentReject.
-func (h *PostAttachmentsHandler) attachBankAsset(c *fiber.Ctx, post *models.Post, req *attachFromAssetRequest, session *models.Session) (*models.PostAttachment, error) {
+// persists the row. The caller has checked the post is mutable; source names
+// the entry point on the post.attachments.changed event. Image rejects come
+// back as *attachmentReject.
+func (h *PostAttachmentsHandler) attachBankAsset(c *fiber.Ctx, post *models.Post, req *attachFromAssetRequest, session *models.Session, source string) (*models.PostAttachment, error) {
 	att, err := newBankAttachment(post, req, session.UserID)
 	if err != nil {
 		return nil, err
@@ -124,7 +125,7 @@ func (h *PostAttachmentsHandler) attachBankAsset(c *fiber.Ctx, post *models.Post
 	att.IsAnimated = prep.IsAnimated
 	att.ChecksumSHA256 = prep.ChecksumSHA256
 	att.S3Key = cleanKey
-	if err := h.saveAttachment(c, att, nil, quota, session.TenantID); err != nil {
+	if err := h.saveAttachment(c, att, nil, quota, session.TenantID, source); err != nil {
 		return nil, err
 	}
 	return att, nil

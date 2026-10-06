@@ -232,10 +232,10 @@ func (d *deps) newAssetsHandler() *handlers.AssetsHandler {
 }
 
 // newPostAttachmentsHandler builds the post attachments handler with
-// attach-from-bank enabled. Stateless, so the plugin API builds its own.
+// attach-from-bank and attachment events enabled. Stateless, so the plugin API builds its own.
 func (d *deps) newPostAttachmentsHandler() *handlers.PostAttachmentsHandler {
 	r := d.r
-	return handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).WithContentBank(r.pieceRepo)
+	return handlers.NewPostAttachmentsHandler(r.postAttachmentRepo, r.postRepo, d.store, d.clients.pdfRenderer(), d.clients.videoProber(), d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth, d.entitlements.limiter).WithContentBank(r.pieceRepo).WithEventHub(d.hub)
 }
 
 // publishers lists the publishers the platforms handler reports on. The
