@@ -20,10 +20,14 @@ import (
 // PollZernioStatusQueue is the River queue name.
 const PollZernioStatusQueue = "poll_zernio_status"
 
-// PollZernioStatusTask carries the Ogen post id; the worker re-loads
-// the row each cycle.
+// PollZernioStatusTask carries the Ogen post id and the Zernio post the poll
+// was enqueued for; the worker re-loads the row each cycle. A post returns to
+// scheduled on every reschedule, so status alone can't tell a poll its
+// submission is gone: PublisherPostID can. Empty only on polls enqueued before
+// the field existed.
 type PollZernioStatusTask struct {
-	PostID string `json:"post_id"`
+	PostID          string `json:"post_id"`
+	PublisherPostID string `json:"publisher_post_id,omitempty"`
 }
 
 // Kind implements river.JobArgs.
@@ -32,9 +36,12 @@ func (PollZernioStatusTask) Kind() string { return PollZernioStatusQueue }
 // InsertOpts sets per-kind defaults: 3 total attempts for transient errors.
 // The non-terminal cadence is driven by river.JobSnooze in Process, not by
 // retries (snooze bumps max_attempts so it never consumes the retry budget).
-// Per-attempt timeout lives on the worker.
+// Per-attempt timeout lives on the worker. Uniqueness by args over the active
+// states keeps one live poll per submission however often submit re-enqueues.
 func (PollZernioStatusTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 3}
+	unique := periodicUniqueOpts()
+	unique.ByArgs = true
+	return river.InsertOpts{MaxAttempts: 3, UniqueOpts: unique}
 }
 
 // PollZernioStatusProcessor implements the recurring poll. The
@@ -94,6 +101,19 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 			"poll exited: publisher_post_id is empty", `{}`)
 		return nil
 	}
+	if task.PublisherPostID != "" && task.PublisherPostID != post.PublisherPostID {
+		// The post was unscheduled and scheduled again: this poll belongs to a
+		// Zernio post that no longer exists, and the new submission has its own.
+		jobs.ZernioPollSuperseded.Add(1)
+		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, post.Status, post.Status,
+			"poll exited: superseded by a newer submission", logs.MarshalCapped(map[string]string{
+				"reason":                    "superseded",
+				"task_publisher_post_id":    task.PublisherPostID,
+				"current_publisher_post_id": post.PublisherPostID,
+			}))
+		return nil
+	}
+	held := post.PublisherPostID
 
 	apiStart := time.Now()
 	job, statusErr := p.Deps.Client.Status(ctx, post.PublisherPostID)
@@ -118,8 +138,12 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 	// Persist Zernio's view of status so subsequent polls / debugging
 	// can see what we last saw. Always write — cheap and useful.
 	post.PublisherStatus = string(job.Status)
+	post.UpdatedAt = time.Now().UTC()
 	if !job.Status.IsTerminal() {
-		_ = p.Deps.PostRepo.Update(ctx, post)
+		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held, "publisher_status", "updated_at")
+		if err == nil && !ok {
+			return p.movedOn(ctx, post)
+		}
 		// Not terminal yet — snooze this same job per the cadence rule.
 		// JobSnooze reschedules without consuming a retry attempt.
 		return river.JobSnooze(p.intervalFor(post))
@@ -145,8 +169,13 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 				break
 			}
 		}
-		if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held,
+			"status", "published_at", "published_results", "published_url", "publisher_status", "updated_at")
+		if err != nil {
 			return fmt.Errorf("poll: persist Published: %w", err)
+		}
+		if !ok {
+			return p.movedOn(ctx, post)
 		}
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventStateTransition, from, post.Status,
 			"Zernio reported published", logs.MarshalCapped(map[string]any{
@@ -169,8 +198,13 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 		post.FailureReason = "zernio_terminal: " + string(job.Status)
 		results, _ := json.Marshal(job.Platforms)
 		post.PublishedResults = string(results)
-		if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held,
+			"status", "failure_reason", "published_results", "publisher_status", "updated_at")
+		if err != nil {
 			return fmt.Errorf("poll: persist Failed: %w", err)
+		}
+		if !ok {
+			return p.movedOn(ctx, post)
 		}
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventStateTransition, from, post.Status,
 			fmt.Sprintf("Zernio reported %s", job.Status), logs.MarshalCapped(map[string]any{
@@ -190,6 +224,15 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
 			"unknown Zernio terminal status — ignoring", logs.MarshalCapped(map[string]string{"zernio_status": string(job.Status)}))
 	}
+	return nil
+}
+
+// movedOn ends a poll whose write found the post no longer scheduled under
+// this submission: it was cancelled, deleted, or another poll already landed
+// the outcome. Writing anyway would restore a stale copy of the post.
+func (p *PollZernioStatusProcessor) movedOn(ctx context.Context, post *models.Post) error {
+	appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, models.PostStatusScheduled, models.PostStatusScheduled,
+		"poll exited: post moved on while polling", `{"reason":"status_changed"}`)
 	return nil
 }
 

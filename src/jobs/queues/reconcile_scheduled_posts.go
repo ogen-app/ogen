@@ -56,6 +56,10 @@ type ReconcileScheduledPostsProcessor struct {
 	Activity *activity.Recorder // CON-125 reconciliation_timeout events; nil = no-op
 	Grace    time.Duration      // how long after scheduled_at before timing out
 	Limit    int                // max posts to process per tick (defaults to 100)
+	// Withdraw queues the removal of a timed-out post's Zernio copy, so a
+	// late publish can't contradict the failed status. Nil inserts on the
+	// worker's own River client.
+	Withdraw func(context.Context, WithdrawZernioPostTask) error
 }
 
 // Work is the River entrypoint; it delegates to Process.
@@ -149,12 +153,38 @@ func (p *ReconcileScheduledPostsProcessor) Process(ctx context.Context, _ Reconc
 			activity.WithSource(activity.SourceJob),
 			activity.WithStatus(string(from)+"->"+string(to)),
 		)
+		p.withdraw(pctx, post)
 	}
 	if len(stuck) > 0 {
 		jobs.ReconciliationTimeouts.Add(int64(len(stuck)))
 		slog.InfoContext(ctx, "forced posts failed on reconciliation timeout", logging.AttrComponent, "jobs.reconcile", "count", len(stuck))
 	}
 	return nil
+}
+
+// withdraw queues the deletion of a timed-out post's Zernio copy. The id stays
+// on the row for diagnosis; once the Zernio post is gone, a reopen and
+// reschedule takes the fresh-create path instead of retrying it. A failed
+// enqueue is logged and left to the orphan sweep.
+func (p *ReconcileScheduledPostsProcessor) withdraw(ctx context.Context, post *models.Post) {
+	if post.PublisherPostID == "" {
+		return
+	}
+	enqueue := p.Withdraw
+	if enqueue == nil {
+		enqueue = enqueueWithdraw
+	}
+	task := WithdrawZernioPostTask{
+		PublisherPostID: post.PublisherPostID,
+		PostID:          post.ID,
+		TenantID:        post.TenantID,
+		Reason:          WithdrawReasonReconcile,
+		Actor:           models.ActorSystem,
+	}
+	if err := enqueue(ctx, task); err != nil {
+		slog.ErrorContext(ctx, "failed to queue Zernio withdrawal for timed-out post", logging.AttrComponent, "jobs.reconcile",
+			"post_id", post.ID, "publisher_post_id", post.PublisherPostID, logging.AttrError, err)
+	}
 }
 
 func fmtTime(t *time.Time) string {

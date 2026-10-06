@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
@@ -37,6 +38,16 @@ type ContentLockedError struct{ Status models.PostStatus }
 
 func (e *ContentLockedError) Error() string {
 	return "post has been submitted (" + string(e.Status) + ") and its content is locked; unschedule to edit"
+}
+
+// LeaveScheduledError is a PUT moving a scheduled post to another status. Its
+// copy is queued in Zernio, so it has to leave through POST /cancel or
+// /convert-to-manual, which withdraw that copy first.
+type LeaveScheduledError struct{ To models.PostStatus }
+
+func (e *LeaveScheduledError) Error() string {
+	return "a scheduled post can't be moved to " + string(e.To) +
+		" by an edit; unschedule it with POST /api/posts/:id/cancel (or convert it to manual publishing)"
 }
 
 // ValidationError is a request that is malformed for the target status.
@@ -81,6 +92,10 @@ type Input struct {
 	PlatformPostType string
 	Content          string
 	CTAUrl           string
+	// ScheduledAt and SocialAccountID are the incoming date and account,
+	// which Zernio has already taken for a scheduled post.
+	ScheduledAt     *time.Time
+	SocialAccountID string
 
 	// MutatesLockedContent reports whether the request changes content that
 	// is frozen once the post is submitted.
@@ -143,8 +158,12 @@ func (s *Service) check(ctx context.Context, in Input) error {
 		)
 		return &TransitionError{From: from, To: to}
 	}
-	// A status-only transition (unschedule to edit) and a no-op save still
-	// pass; only a real content change is rejected.
+	if post.Status == models.PostStatusScheduled {
+		if err := s.checkScheduled(ctx, in); err != nil {
+			return err
+		}
+	}
+	// A no-op save still passes; only a real content change is rejected.
 	if post.Status.IsSubmitted() && in.MutatesLockedContent {
 		return &ContentLockedError{Status: post.Status}
 	}
@@ -155,6 +174,36 @@ func (s *Service) check(ctx context.Context, in Input) error {
 		return err
 	}
 	return s.checkReadyForPublish(ctx, in)
+}
+
+// checkScheduled guards a scheduled post, whose copy Zernio already holds with
+// its date and account. Moving it off scheduled here would leave that copy
+// queued to publish, so only the cancel and convert-to-manual flows, which
+// withdraw it first, may. Retiming or re-accounting it would change what Ogen
+// shows and not what publishes.
+func (s *Service) checkScheduled(ctx context.Context, in Input) error {
+	post := in.Post
+	if in.Status != models.PostStatusScheduled {
+		from, to := post.Status, in.Status
+		s.LogEvent(ctx, in.Actor, post.ID, models.PostLogEventStateTransitionBlocked, &from, &to,
+			"leaving scheduled must go through the cancel endpoint",
+			logs.MarshalCapped(map[string]any{"reason": "use_cancel_endpoint"}),
+		)
+		return &LeaveScheduledError{To: to}
+	}
+	if !sameSecond(in.ScheduledAt, post.ScheduledAt) || in.SocialAccountID != post.SocialAccountID {
+		return &ContentLockedError{Status: post.Status}
+	}
+	return nil
+}
+
+// sameSecond compares two optional instants at second precision, so a client
+// echoing back a timestamp at millisecond precision isn't read as a change.
+func sameSecond(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Truncate(time.Second).Equal(b.Truncate(time.Second))
 }
 
 // checkPhase verifies a (re)assigned phase — or a move to another campaign

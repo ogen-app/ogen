@@ -473,6 +473,14 @@ type Config struct {
 	// reconciliation_timeout from a Zernio-reported failure.
 	ReconcileGrace time.Duration `envconfig:"RECONCILE_GRACE" default:"1h"`
 
+	// Zernio orphan sweep: posts still queued in Zernio that no scheduled
+	// Ogen post holds. Off-live by default — it logs and counts what it would
+	// withdraw until ZERNIO_ORPHAN_SWEEP_LIVE=true. MinAge leaves young Zernio
+	// posts alone so an in-flight submit is never taken for an orphan.
+	ZernioOrphanSweepInterval time.Duration `envconfig:"ZERNIO_ORPHAN_SWEEP_INTERVAL" default:"1h"`
+	ZernioOrphanSweepLive     bool          `envconfig:"ZERNIO_ORPHAN_SWEEP_LIVE" default:"false"`
+	ZernioOrphanSweepMinAge   time.Duration `envconfig:"ZERNIO_ORPHAN_SWEEP_MIN_AGE" default:"1h"`
+
 	// PostLog retention. Older entries are removed by the
 	// cleanup_post_logs recurring task. 0 disables cleanup entirely.
 	PostLogRetentionDays int `envconfig:"POSTLOG_RETENTION_DAYS" default:"90"`

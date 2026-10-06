@@ -157,6 +157,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 		Limiter:  d.entitlements.limiter,
 		Activity: rec,
 		Brands:   r.brandRepo,
+		Withdraw: d.svc.withdraw,
 	}).Register(app)
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, rec, d.auth).Register(app)
 }
@@ -185,6 +186,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 		OnBeforeDelete: deleteAttachmentBlobs(d.store, r.postAttachmentRepo),
 		Storage:        d.store,
 		Series:         d.svc.series,
+		Withdraw:       d.svc.withdraw,
 	}).Register(app)
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, d.auth).Register(app)
 	handlers.NewLinkPreviewHandler(linkpreview.New(netguard.SafeClient(linkPreviewTimeout), netguard.ResolveAllowed), d.auth).Register(app)

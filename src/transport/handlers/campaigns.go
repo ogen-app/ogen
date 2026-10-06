@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
@@ -60,6 +62,9 @@ type CampaignsHandler struct {
 	// activity records CON-125 user-activity events (campaign_created,
 	// content_generated, …). nil is a no-op (analytics disabled / fixtures).
 	activity *activity.Recorder
+	// withdraw unschedules a deleted campaign's posts and withdraws their
+	// Zernio copies. nil (fixtures) leaves the posts untouched.
+	withdraw *withdraw.Service
 }
 
 // CampaignsOptions carries the handler's nil-safe collaborators.
@@ -68,6 +73,9 @@ type CampaignsOptions struct {
 	Activity *activity.Recorder
 	// Brands tenant-validates brand_voice_id/brand_audience_id; nil skips it.
 	Brands repository.BrandRepository
+	// Withdraw deletes a campaign together with its posts' Zernio copies;
+	// nil falls back to the bare soft delete.
+	Withdraw *withdraw.Service
 }
 
 // baselineCampaignTypeSlug is the one system campaign type every tier can use;
@@ -124,6 +132,7 @@ func NewCampaignsHandler(
 		limiter:            opts.Limiter,
 		activity:           opts.Activity,
 		brandRepo:          opts.Brands,
+		withdraw:           opts.Withdraw,
 		repo:               repo,
 		campaignTypeRepo:   campaignTypeRepo,
 		auth:               auth,
@@ -651,6 +660,7 @@ func (h *CampaignsHandler) RemoveAsset(c *fiber.Ctx) error {
 // Delete godoc
 // @Summary      Delete campaign
 // @Description  Soft-deletes a campaign by Sqid. The row is retained as a safety net (no self-serve restore); it disappears from lists and reads.
+// @Description  Its scheduled and manually-scheduled posts go back to draft, and any copy queued in Zernio is withdrawn, so nothing of a deleted campaign publishes.
 // @Tags         campaigns
 // @Security     CookieAuth
 // @Param        id   path  string  true  "Campaign Sqid"
@@ -659,7 +669,7 @@ func (h *CampaignsHandler) RemoveAsset(c *fiber.Ctx) error {
 // @Failure      404  {object}  map[string]string
 // @Router       /api/campaigns/{id} [delete]
 func (h *CampaignsHandler) Delete(c *fiber.Ctx) error {
-	deleted, err := h.repo.Delete(reqCtx(c), c.Params("id"))
+	deleted, unscheduled, err := h.deleteCampaign(c)
 	if err != nil {
 		return err
 	}
@@ -668,8 +678,17 @@ func (h *CampaignsHandler) Delete(c *fiber.Ctx) error {
 	}
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_deleted",
 		activity.WithEntity("campaign", c.Params("id")),
+		activity.WithPayload(map[string]any{"posts_unscheduled": unscheduled}),
 	)
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *CampaignsHandler) deleteCampaign(c *fiber.Ctx) (bool, int, error) {
+	if h.withdraw == nil {
+		deleted, err := h.repo.Delete(reqCtx(c), c.Params("id"))
+		return deleted, 0, err
+	}
+	return h.withdraw.DeleteCampaign(reqCtx(c), c.Params("id"), cmp.Or(actorID(c), models.ActorSystem))
 }
 
 // Archive godoc

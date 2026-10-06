@@ -151,6 +151,7 @@ type Job struct {
 	Content      string            `json:"content"`
 	ScheduledFor *time.Time        `json:"scheduledFor,omitempty"`
 	PublishedAt  *time.Time        `json:"publishedAt,omitempty"`
+	CreatedAt    *time.Time        `json:"createdAt,omitempty"`
 	Timezone     string            `json:"timezone,omitempty"`
 	Platforms    []PlatformOutcome `json:"platforms"`
 }
@@ -323,4 +324,35 @@ func (c *Client) FindByContent(ctx context.Context, content string, lookback tim
 		}
 	}
 	return nil, nil
+}
+
+// ListScheduled returns the profile's posts still queued in Zernio (status
+// scheduled), at most maxPages pages of 100. Scoping by profile keeps the
+// result to posts this Ogen environment created: another environment sharing
+// the Zernio account has its own profiles.
+func (c *Client) ListScheduled(ctx context.Context, profileID string, maxPages int) ([]Job, error) {
+	if c == nil {
+		return nil, errors.New("zernio: client is disabled")
+	}
+	if profileID == "" {
+		return nil, errors.New("zernio: profileID is required")
+	}
+	var out []Job
+	for page := 1; page <= maxPages; page++ {
+		q := url.Values{}
+		q.Set("profileId", profileID)
+		q.Set("status", string(JobStatusScheduled))
+		q.Set("limit", "100")
+		q.Set("page", strconv.Itoa(page))
+
+		var env listEnvelope
+		if err := c.do(ctx, http.MethodGet, "/posts", q, nil, &env); err != nil {
+			return nil, err
+		}
+		out = append(out, env.Posts...)
+		if env.Pagination.Pages == 0 || page >= env.Pagination.Pages {
+			break
+		}
+	}
+	return out, nil
 }

@@ -24,11 +24,24 @@ var (
 	ZernioPollSucceeded = expvar.NewInt("ogen_jobs_zernio_poll_succeeded")
 	ZernioPollFailed    = expvar.NewInt("ogen_jobs_zernio_poll_failed")
 	ZernioPollRetried   = expvar.NewInt("ogen_jobs_zernio_poll_retried")
+	// A poll that woke for a submission the post no longer holds.
+	ZernioPollSuperseded = expvar.NewInt("ogen_jobs_zernio_poll_superseded")
 
 	// Cancel lifecycle.
 	ZernioCancelSucceeded        = expvar.NewInt("ogen_jobs_zernio_cancel_succeeded")
 	ZernioCancelAlreadyPublished = expvar.NewInt("ogen_jobs_zernio_cancel_already_published")
 	ZernioCancelFailed           = expvar.NewInt("ogen_jobs_zernio_cancel_failed")
+
+	// Withdrawals: Zernio posts deleted because Ogen no longer schedules them.
+	// TooLate counts those Zernio had already published.
+	ZernioWithdrawSucceeded = expvar.NewInt("ogen_jobs_zernio_withdraw_succeeded")
+	ZernioWithdrawTooLate   = expvar.NewInt("ogen_jobs_zernio_withdraw_too_late")
+	ZernioWithdrawFailed    = expvar.NewInt("ogen_jobs_zernio_withdraw_failed")
+
+	// Orphan sweep: Zernio-queued posts no scheduled Ogen post holds. Found
+	// counts them in dry-run too; Cancelled only when the sweep is live.
+	ZernioOrphansFound     = expvar.NewInt("ogen_jobs_zernio_orphans_found")
+	ZernioOrphansCancelled = expvar.NewInt("ogen_jobs_zernio_orphans_cancelled")
 
 	// Reconciliation.
 	ReconciliationTimeouts = expvar.NewInt("ogen_jobs_reconciliation_timeouts")

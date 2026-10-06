@@ -28,6 +28,9 @@ type CampaignRepository interface {
 	// (asset_ids / use_assets) doesn't clobber a concurrent membership write.
 	Update(ctx context.Context, campaign *models.Campaign, excludeColumns ...string) error
 	Delete(ctx context.Context, id string) (bool, error)
+	// DeleteTx is Delete on a caller's transaction, so the delete commits
+	// together with whatever the caller unschedules alongside it.
+	DeleteTx(ctx context.Context, db bun.IDB, id string) (bool, error)
 	Archive(ctx context.Context, id string) (bool, error)
 	Unarchive(ctx context.Context, id string) (bool, error)
 	// AddAssetIDs / RemoveAssetID are the membership write path: they mutate
@@ -270,34 +273,40 @@ func (r *campaignRepository) RemoveAssetID(ctx context.Context, id, assetID stri
 func (r *campaignRepository) Delete(ctx context.Context, id string) (bool, error) {
 	var deleted bool
 	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		now := time.Now().UTC()
-		res, err := tx.NewUpdate().Model((*models.Campaign)(nil)).
-			Set("deleted_at = ?", now).
-			Where("id = ?", id).
-			Where("deleted_at IS NULL").
-			Exec(ctx)
-		if err != nil {
-			return err
-		}
-		n, _ := res.RowsAffected()
-		if deleted = n > 0; !deleted {
-			return nil
-		}
-		// The campaign's series runs go with it, and so do the series defined
-		// inside it. Those are soft-deleted so posts keep their series_id.
-		if _, err := tx.NewDelete().Model((*models.CampaignSeriesRun)(nil)).
-			Where("campaign_id = ?", id).
-			Exec(ctx); err != nil {
-			return err
-		}
-		_, err = tx.NewUpdate().Model((*models.Series)(nil)).
-			Set("deleted_at = ?", now).
-			Where("campaign_id = ?", id).
-			Where("deleted_at IS NULL").
-			Exec(ctx)
+		var err error
+		deleted, err = r.DeleteTx(ctx, tx, id)
 		return err
 	})
 	return deleted, err
+}
+
+// DeleteTx soft-deletes the campaign and its series on db.
+func (r *campaignRepository) DeleteTx(ctx context.Context, db bun.IDB, id string) (bool, error) {
+	now := time.Now().UTC()
+	res, err := db.NewUpdate().Model((*models.Campaign)(nil)).
+		Set("deleted_at = ?", now).
+		Where("id = ?", id).
+		Where("deleted_at IS NULL").
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	// The campaign's series runs go with it, and so do the series defined
+	// inside it. Those are soft-deleted so posts keep their series_id.
+	if _, err := db.NewDelete().Model((*models.CampaignSeriesRun)(nil)).
+		Where("campaign_id = ?", id).
+		Exec(ctx); err != nil {
+		return false, err
+	}
+	_, err = db.NewUpdate().Model((*models.Series)(nil)).
+		Set("deleted_at = ?", now).
+		Where("campaign_id = ?", id).
+		Where("deleted_at IS NULL").
+		Exec(ctx)
+	return err == nil, err
 }
 
 // Archive stamps archived_at, removing the campaign from the default active

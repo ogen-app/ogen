@@ -36,6 +36,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 	"github.com/ogen-app/ogen/src/usecase/series"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
@@ -82,6 +83,7 @@ type services struct {
 	signup            *signup.Service
 	loginSecurity     *loginsecurity.Service
 	plugins           *plugins.Service
+	withdraw          *withdraw.Service
 }
 
 func newDeps(db, analyticsDB *bun.DB, cfg *config.Config, secretStore secrets.Store, cipher *envelope.Cipher, hub eventhub.Hub, plan *shutdownPlan) *deps {
@@ -231,6 +233,10 @@ func (d *deps) initServices(context.Context) error {
 	d.svc.schedule.SetAccountGate(r.socialAccountRepo, d.zernioProfileID)
 	// Keeps a durable record of the content submitted to Zernio.
 	d.svc.schedule.SetVersionSnapshot(r.postVersionRepo)
+
+	// Deleting a post or campaign withdraws its Zernio copies in the same
+	// transaction.
+	d.svc.withdraw = withdraw.New(d.db, r.postRepo, r.campaignRepo, r.postLogRepo, d.enqueuer)
 
 	d.svc.signup = signup.New(d.db, r.accountRepo, r.tenantRepo, d.enqueuer)
 	d.svc.signup.SetEmailEnqueuer(d.enqueuer)
