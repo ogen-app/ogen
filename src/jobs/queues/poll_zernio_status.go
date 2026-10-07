@@ -270,13 +270,21 @@ func cancelPolls(ctx context.Context, postID, publisherPostID string) (int, erro
 		return 0, fmt.Errorf("list polls of post %s: %w", postID, err)
 	}
 	cancelled := 0
+	defer func() { jobs.ZernioPollCancelled.Add(int64(cancelled)) }()
 	for _, job := range res.Jobs {
-		if _, err := client.JobCancel(ctx, job.ID); err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+		row, err := client.JobCancel(ctx, job.ID)
+		if errors.Is(err, rivertype.ErrNotFound) {
+			continue
+		}
+		if err != nil {
 			return cancelled, fmt.Errorf("cancel poll job %d: %w", job.ID, err)
 		}
-		cancelled++
+		// A running poll stays running until its attempt ends; only count
+		// the ones River cancelled outright.
+		if row.State == rivertype.JobStateCancelled {
+			cancelled++
+		}
 	}
-	jobs.ZernioPollCancelled.Add(int64(cancelled))
 	return cancelled, nil
 }
 
