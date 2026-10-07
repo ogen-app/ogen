@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -12,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 )
@@ -168,16 +170,17 @@ func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZerni
 func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.Post, task CancelZernioJobTask) error {
 	from := post.Status
 	to := task.Target.landingStatus()
-	hadIdentity := post.PublisherPostID != ""
+	heldID := post.PublisherPostID
 	post.PublisherPostID = ""
 	post.PublisherStatus = ""
 	if !from.CanTransition(to) {
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventStateTransitionBlocked, from, to,
 			"cancel target rejected by state machine", `{"reason":"invalid_transition"}`)
-		if hadIdentity {
+		if heldID != "" {
 			if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
 				return fmt.Errorf("cancel: clear publisher_post_id: %w", err)
 			}
+			p.dropPolls(ctx, post, heldID, task.Actor)
 		}
 		return nil
 	}
@@ -188,6 +191,9 @@ func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.
 	post.Status = to
 	if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
 		return fmt.Errorf("cancel: persist new status: %w", err)
+	}
+	if heldID != "" {
+		p.dropPolls(ctx, post, heldID, task.Actor)
 	}
 	summary, action := "post cancelled and transitioned", "publish_cancelled"
 	if task.Target == CancelTargetManualPublish {
@@ -204,6 +210,26 @@ func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.
 		activity.WithStatus(string(from)+"->"+string(to)),
 	)
 	return nil
+}
+
+// dropPolls cancels the status polls still queued for the Zernio post the
+// cancel just deleted. Best effort: a poll left behind exits on its own when
+// it wakes to a post that is no longer scheduled under that submission.
+func (p *CancelZernioJobProcessor) dropPolls(ctx context.Context, post *models.Post, heldID, actor string) {
+	n, err := cancelPolls(ctx, post.ID, heldID)
+	if err != nil {
+		slog.WarnContext(ctx, "could not cancel the status polls of an unscheduled post",
+			logging.AttrComponent, "jobs.cancel", "post_id", post.ID,
+			"publisher_post_id", heldID, logging.AttrError, err)
+		return
+	}
+	if n > 0 {
+		appendLogActor(ctx, p.Deps, post.ID, actor, models.PostLogEventTaskSucceeded, post.Status, post.Status,
+			"pending status polls cancelled", logs.MarshalCapped(map[string]any{
+				"publisher_post_id": heldID,
+				"cancelled_polls":   n,
+			}))
+	}
 }
 
 func publisherPostIDPayload(id string) string {

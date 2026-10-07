@@ -2,11 +2,14 @@ package queues
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -234,6 +237,47 @@ func (p *PollZernioStatusProcessor) movedOn(ctx context.Context, post *models.Po
 	appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, models.PostStatusScheduled, models.PostStatusScheduled,
 		"poll exited: post moved on while polling", `{"reason":"status_changed"}`)
 	return nil
+}
+
+// pollLiveStates are the states a poll job can still run (or snooze back) from.
+var pollLiveStates = []rivertype.JobState{
+	rivertype.JobStateAvailable,
+	rivertype.JobStatePending,
+	rivertype.JobStateRetryable,
+	rivertype.JobStateRunning,
+	rivertype.JobStateScheduled,
+}
+
+// cancelPolls cancels the live poll_zernio_status jobs of one submission, so a
+// withdrawn Zernio post leaves no poll waiting in the queue for it. Polls of a
+// newer submission (another publisher_post_id) are kept; polls enqueued before
+// the task carried publisher_post_id match any. A running poll is cancelled
+// once its attempt ends. It runs inside a worker, on that worker's River
+// client, and reports how many jobs it cancelled.
+func cancelPolls(ctx context.Context, postID, publisherPostID string) (int, error) {
+	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
+	if err != nil {
+		return 0, err
+	}
+	params := river.NewJobListParams().
+		Kinds(PollZernioStatusQueue).
+		States(pollLiveStates...).
+		Where("args->>'post_id' = @post_id AND COALESCE(args->>'publisher_post_id', '') IN ('', @publisher_post_id)",
+			river.NamedArgs{"post_id": postID, "publisher_post_id": publisherPostID}).
+		First(100)
+	res, err := client.JobList(ctx, params)
+	if err != nil {
+		return 0, fmt.Errorf("list polls of post %s: %w", postID, err)
+	}
+	cancelled := 0
+	for _, job := range res.Jobs {
+		if _, err := client.JobCancel(ctx, job.ID); err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+			return cancelled, fmt.Errorf("cancel poll job %d: %w", job.ID, err)
+		}
+		cancelled++
+	}
+	jobs.ZernioPollCancelled.Add(int64(cancelled))
+	return cancelled, nil
 }
 
 func (p *PollZernioStatusProcessor) intervalFor(post *models.Post) time.Duration {

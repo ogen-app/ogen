@@ -92,10 +92,25 @@ func (p *WithdrawZernioPostProcessor) Process(ctx context.Context, task Withdraw
 	if err != nil {
 		return err
 	}
+	p.dropPolls(ctx, task)
 	if published {
 		p.notifyTooLate(ctx, task)
 	}
 	return nil
+}
+
+// dropPolls cancels the status polls still queued for the withdrawn post, so
+// none wakes for a post that is gone or no longer scheduled. Best effort: a
+// poll left behind exits on its own when it runs.
+func (p *WithdrawZernioPostProcessor) dropPolls(ctx context.Context, task WithdrawZernioPostTask) {
+	if task.PostID == "" {
+		return
+	}
+	if _, err := cancelPolls(ctx, task.PostID, task.PublisherPostID); err != nil {
+		slog.WarnContext(ctx, "could not cancel the status polls of a withdrawn post",
+			logging.AttrComponent, "jobs.withdraw", "post_id", task.PostID,
+			"publisher_post_id", task.PublisherPostID, logging.AttrError, err)
+	}
 }
 
 // notifyTooLate tells the workspace that a post it had unscheduled or deleted
