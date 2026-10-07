@@ -26,6 +26,8 @@ var (
 	ZernioPollRetried   = expvar.NewInt("ogen_jobs_zernio_poll_retried")
 	// A poll that woke for a submission the post no longer holds.
 	ZernioPollSuperseded = expvar.NewInt("ogen_jobs_zernio_poll_superseded")
+	// Polls cancelled before they ran because their submission was withdrawn.
+	ZernioPollCancelled = expvar.NewInt("ogen_jobs_zernio_poll_cancelled")
 
 	// Cancel lifecycle.
 	ZernioCancelSucceeded        = expvar.NewInt("ogen_jobs_zernio_cancel_succeeded")
