@@ -120,13 +120,17 @@ type pluginVideoRules struct {
 }
 
 type pluginCampaign struct {
-	ID        string               `json:"id"`
-	Name      string               `json:"name"`
-	Status    string               `json:"status"`
-	Timezone  string               `json:"timezone"`
-	StartDate *time.Time           `json:"start_date"`
-	EndDate   *time.Time           `json:"end_date"`
-	Posts     []pluginCampaignPost `json:"posts"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"`
+	Timezone  string     `json:"timezone"`
+	StartDate *time.Time `json:"start_date"`
+	EndDate   *time.Time `json:"end_date"`
+	// PostsChangedAt moves forward whenever a post is created, deleted,
+	// moved, rescheduled, retitled, or has its platform, post type or status
+	// changed; null if the campaign never had a post.
+	PostsChangedAt *time.Time           `json:"posts_changed_at"`
+	Posts          []pluginCampaignPost `json:"posts"`
 }
 
 type pluginCampaignsResponse struct {
@@ -244,7 +248,7 @@ func (h *FigmaPluginHandler) ListPosts(c *fiber.Ctx) error {
 
 // ListCampaigns godoc
 // @Summary     Campaigns and their posts, for the plugin's "Send to" picker
-// @Description Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored ("" = UTC). post_type is the post's platform post type slug ("" until chosen); video_count counts its video attachments. platforms carries, by platform id, the media rules of every platform a listed post is on (video is null where the platform takes no video), for warning before a send; the server still validates.
+// @Description Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored ("" = UTC). post_type is the post's platform post type slug ("" until chosen); video_count counts its video attachments. posts_changed_at is when the campaign's posts last changed in a way a board shows (a post created, deleted, moved, rescheduled, retitled, or its platform, post type or status changed); null if it never had a post. platforms carries, by platform id, the media rules of every platform a listed post is on (video is null where the platform takes no video), for warning before a send; the server still validates.
 // @Tags        plugins
 // @Produce     json
 // @Security    PluginToken
@@ -261,7 +265,7 @@ func (h *FigmaPluginHandler) ListCampaigns(c *fiber.Ctx) error {
 	for _, r := range rows {
 		camp := pluginCampaign{
 			ID: r.ID, Name: r.Name, Status: string(r.Status), Timezone: r.Timezone,
-			StartDate: r.StartDate, EndDate: r.EndDate,
+			StartDate: r.StartDate, EndDate: r.EndDate, PostsChangedAt: r.PostsChangedAt,
 			Posts: make([]pluginCampaignPost, 0, len(r.Posts)),
 		}
 		for _, p := range r.Posts {

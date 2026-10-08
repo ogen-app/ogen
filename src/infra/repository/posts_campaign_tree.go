@@ -42,7 +42,7 @@ func (r *postRepository) ListCampaignPostTree(ctx context.Context, maxCampaigns,
 
 	campaigns := []models.CampaignPostTree{}
 	err := r.db.NewSelect().Model((*models.Campaign)(nil)).
-		ColumnExpr("c.id, c.name, c.status, c.timezone, c.start_date, c.end_date").
+		ColumnExpr("c.id, c.name, c.status, c.timezone, c.start_date, c.end_date, c.posts_changed_at").
 		Where("c.deleted_at IS NULL").
 		Where("c.archived_at IS NULL").
 		Where("c.status <> ?", models.StatusArchived).

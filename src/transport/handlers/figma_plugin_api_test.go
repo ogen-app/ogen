@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	. "github.com/onsi/ginkgo/v2"
@@ -344,13 +345,14 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 
 		type treeWire struct {
 			Campaigns []struct {
-				ID        string  `json:"id"`
-				Name      string  `json:"name"`
-				Status    string  `json:"status"`
-				Timezone  *string `json:"timezone"`
-				StartDate *string `json:"start_date"`
-				EndDate   *string `json:"end_date"`
-				Posts     []struct {
+				ID             string     `json:"id"`
+				Name           string     `json:"name"`
+				Status         string     `json:"status"`
+				Timezone       *string    `json:"timezone"`
+				StartDate      *string    `json:"start_date"`
+				EndDate        *string    `json:"end_date"`
+				PostsChangedAt *time.Time `json:"posts_changed_at"`
+				Posts          []struct {
 					ID       string `json:"id"`
 					Title    string `json:"title"`
 					Status   string `json:"status"`
@@ -378,6 +380,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 					Rule *struct {
 						AllowedKinds []string `json:"allowed_kinds"`
 					} `json:"rule"`
+					Canvas *models.Canvas `json:"canvas"`
 				} `json:"post_types"`
 			} `json:"platforms"`
 		}
@@ -388,6 +391,8 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(camp.Name).To(Equal("Launch"))
 		Expect(camp.Status).NotTo(BeEmpty())
 		Expect(camp.Timezone).NotTo(BeNil())
+		Expect(camp.PostsChangedAt).NotTo(BeNil())
+		createdAt := *camp.PostsChangedAt
 		Expect(camp.Posts).To(HaveLen(1))
 		post := camp.Posts[0]
 		Expect(post.ID).To(Equal(postID))
@@ -413,6 +418,11 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(linkedIn.PostTypes).To(ContainElement(SatisfyAll(
 			HaveField("Slug", "image-post"),
 			HaveField("Rule.AllowedKinds", ConsistOf("image")),
+			HaveField("Canvas", Equal(&models.Canvas{Width: 1200, Height: 627})),
+		)))
+		Expect(linkedIn.PostTypes).To(ContainElement(SatisfyAll(
+			HaveField("Slug", "text-post"),
+			HaveField("Canvas", BeNil()),
 		)))
 
 		_, err := db.NewUpdate().TableExpr("posts").Set("status = ?", models.PostStatusScheduled).Where("id = ?", postID).Exec(ctx)
@@ -424,6 +434,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(out.Campaigns[0].Posts).To(HaveLen(1))
 		Expect(out.Campaigns[0].Posts[0].Status).To(Equal(string(models.PostStatusScheduled)))
 		Expect(out.Campaigns[0].Posts[0].Attachable).To(BeFalse())
+		Expect(*out.Campaigns[0].PostsChangedAt).To(BeTemporally(">", createdAt))
 	})
 
 	It("serializes empty campaigns and post lists as arrays", func() {
