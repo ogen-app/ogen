@@ -739,6 +739,134 @@ func (x *GenerateAltTextResponse) GetUsage() []*TokenUsage {
 	return nil
 }
 
+type RenderPreviewRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SourceUrl     string                 `protobuf:"bytes,1,opt,name=source_url,json=sourceUrl,proto3" json:"source_url,omitempty"`          // presigned GET (a stored image or video poster)
+	DestPutUrl    string                 `protobuf:"bytes,2,opt,name=dest_put_url,json=destPutUrl,proto3" json:"dest_put_url,omitempty"`     // presigned PUT, not bound to a Content-Type
+	MaxLongEdge   int32                  `protobuf:"varint,3,opt,name=max_long_edge,json=maxLongEdge,proto3" json:"max_long_edge,omitempty"` // cap on the longer side in px (0 -> 4096)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenderPreviewRequest) Reset() {
+	*x = RenderPreviewRequest{}
+	mi := &file_image_v1_image_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenderPreviewRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenderPreviewRequest) ProtoMessage() {}
+
+func (x *RenderPreviewRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_image_v1_image_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenderPreviewRequest.ProtoReflect.Descriptor instead.
+func (*RenderPreviewRequest) Descriptor() ([]byte, []int) {
+	return file_image_v1_image_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RenderPreviewRequest) GetSourceUrl() string {
+	if x != nil {
+		return x.SourceUrl
+	}
+	return ""
+}
+
+func (x *RenderPreviewRequest) GetDestPutUrl() string {
+	if x != nil {
+		return x.DestPutUrl
+	}
+	return ""
+}
+
+func (x *RenderPreviewRequest) GetMaxLongEdge() int32 {
+	if x != nil {
+		return x.MaxLongEdge
+	}
+	return 0
+}
+
+type RenderPreviewResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mime          string                 `protobuf:"bytes,1,opt,name=mime,proto3" json:"mime,omitempty"`    // "image/jpeg" or "image/png"
+	Width         int32                  `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"` // of the written preview
+	Height        int32                  `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenderPreviewResponse) Reset() {
+	*x = RenderPreviewResponse{}
+	mi := &file_image_v1_image_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenderPreviewResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenderPreviewResponse) ProtoMessage() {}
+
+func (x *RenderPreviewResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_image_v1_image_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenderPreviewResponse.ProtoReflect.Descriptor instead.
+func (*RenderPreviewResponse) Descriptor() ([]byte, []int) {
+	return file_image_v1_image_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RenderPreviewResponse) GetMime() string {
+	if x != nil {
+		return x.Mime
+	}
+	return ""
+}
+
+func (x *RenderPreviewResponse) GetWidth() int32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *RenderPreviewResponse) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *RenderPreviewResponse) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
 // TokenUsage is one Gemini vision call's token count, priced by ogen via the
 // existing gemini vendor (CON-86). step names the pipeline stage
 // (vision_classify / vision_extract / describe / alt_text).
@@ -754,7 +882,7 @@ type TokenUsage struct {
 
 func (x *TokenUsage) Reset() {
 	*x = TokenUsage{}
-	mi := &file_image_v1_image_proto_msgTypes[6]
+	mi := &file_image_v1_image_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -766,7 +894,7 @@ func (x *TokenUsage) String() string {
 func (*TokenUsage) ProtoMessage() {}
 
 func (x *TokenUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[6]
+	mi := &file_image_v1_image_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -779,7 +907,7 @@ func (x *TokenUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenUsage.ProtoReflect.Descriptor instead.
 func (*TokenUsage) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{6}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TokenUsage) GetModel() string {
@@ -823,7 +951,7 @@ type NormalizedMeta struct {
 
 func (x *NormalizedMeta) Reset() {
 	*x = NormalizedMeta{}
-	mi := &file_image_v1_image_proto_msgTypes[7]
+	mi := &file_image_v1_image_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -835,7 +963,7 @@ func (x *NormalizedMeta) String() string {
 func (*NormalizedMeta) ProtoMessage() {}
 
 func (x *NormalizedMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[7]
+	mi := &file_image_v1_image_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -848,7 +976,7 @@ func (x *NormalizedMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NormalizedMeta.ProtoReflect.Descriptor instead.
 func (*NormalizedMeta) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{7}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *NormalizedMeta) GetMime() string {
@@ -906,7 +1034,7 @@ type Block struct {
 
 func (x *Block) Reset() {
 	*x = Block{}
-	mi := &file_image_v1_image_proto_msgTypes[8]
+	mi := &file_image_v1_image_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -918,7 +1046,7 @@ func (x *Block) String() string {
 func (*Block) ProtoMessage() {}
 
 func (x *Block) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[8]
+	mi := &file_image_v1_image_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -931,7 +1059,7 @@ func (x *Block) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Block.ProtoReflect.Descriptor instead.
 func (*Block) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{8}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Block) GetKind() string {
@@ -994,7 +1122,7 @@ type Cell struct {
 
 func (x *Cell) Reset() {
 	*x = Cell{}
-	mi := &file_image_v1_image_proto_msgTypes[9]
+	mi := &file_image_v1_image_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1006,7 +1134,7 @@ func (x *Cell) String() string {
 func (*Cell) ProtoMessage() {}
 
 func (x *Cell) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[9]
+	mi := &file_image_v1_image_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1019,7 +1147,7 @@ func (x *Cell) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cell.ProtoReflect.Descriptor instead.
 func (*Cell) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{9}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Cell) GetRow() int32 {
@@ -1111,7 +1239,19 @@ const file_image_v1_image_proto_rawDesc = "" +
 	"\x05model\x18\x03 \x01(\tR\x05model\"`\n" +
 	"\x17GenerateAltTextResponse\x12\x19\n" +
 	"\balt_text\x18\x01 \x01(\tR\aaltText\x12*\n" +
-	"\x05usage\x18\x02 \x03(\v2\x14.image.v1.TokenUsageR\x05usage\"d\n" +
+	"\x05usage\x18\x02 \x03(\v2\x14.image.v1.TokenUsageR\x05usage\"{\n" +
+	"\x14RenderPreviewRequest\x12\x1d\n" +
+	"\n" +
+	"source_url\x18\x01 \x01(\tR\tsourceUrl\x12 \n" +
+	"\fdest_put_url\x18\x02 \x01(\tR\n" +
+	"destPutUrl\x12\"\n" +
+	"\rmax_long_edge\x18\x03 \x01(\x05R\vmaxLongEdge\"x\n" +
+	"\x15RenderPreviewResponse\x12\x12\n" +
+	"\x04mime\x18\x01 \x01(\tR\x04mime\x12\x14\n" +
+	"\x05width\x18\x02 \x01(\x05R\x05width\x12\x16\n" +
+	"\x06height\x18\x03 \x01(\x05R\x06height\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\"d\n" +
 	"\n" +
 	"TokenUsage\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12\x12\n" +
@@ -1152,11 +1292,12 @@ const file_image_v1_image_proto_rawDesc = "" +
 	"\x14REJECTED_CODE_VECTOR\x10\x02\x12\x1b\n" +
 	"\x17REJECTED_CODE_TOO_LARGE\x10\x03\x12%\n" +
 	"!REJECTED_CODE_DIMENSIONS_EXCEEDED\x10\x04\x12\x19\n" +
-	"\x15REJECTED_CODE_CORRUPT\x10\x052\x84\x02\n" +
+	"\x15REJECTED_CODE_CORRUPT\x10\x052\xd6\x02\n" +
 	"\fImageService\x12>\n" +
 	"\aExtract\x12\x18.image.v1.ExtractRequest\x1a\x19.image.v1.ExtractResponse\x12\\\n" +
 	"\x11PrepareAttachment\x12\".image.v1.PrepareAttachmentRequest\x1a#.image.v1.PrepareAttachmentResponse\x12V\n" +
-	"\x0fGenerateAltText\x12 .image.v1.GenerateAltTextRequest\x1a!.image.v1.GenerateAltTextResponseB\x8a\x01\n" +
+	"\x0fGenerateAltText\x12 .image.v1.GenerateAltTextRequest\x1a!.image.v1.GenerateAltTextResponse\x12P\n" +
+	"\rRenderPreview\x12\x1e.image.v1.RenderPreviewRequest\x1a\x1f.image.v1.RenderPreviewResponseB\x8a\x01\n" +
 	"\fcom.image.v1B\n" +
 	"ImageProtoP\x01Z-github.com/ogen-app/ogen/gen/image/v1;imagev1\xa2\x02\x03IXX\xaa\x02\bImage.V1\xca\x02\bImage\\V1\xe2\x02\x14Image\\V1\\GPBMetadata\xea\x02\tImage::V1b\x06proto3"
 
@@ -1173,7 +1314,7 @@ func file_image_v1_image_proto_rawDescGZIP() []byte {
 }
 
 var file_image_v1_image_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_image_v1_image_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_image_v1_image_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_image_v1_image_proto_goTypes = []any{
 	(Shape)(0),                        // 0: image.v1.Shape
 	(RejectedCode)(0),                 // 1: image.v1.RejectedCode
@@ -1183,31 +1324,35 @@ var file_image_v1_image_proto_goTypes = []any{
 	(*PrepareAttachmentResponse)(nil), // 5: image.v1.PrepareAttachmentResponse
 	(*GenerateAltTextRequest)(nil),    // 6: image.v1.GenerateAltTextRequest
 	(*GenerateAltTextResponse)(nil),   // 7: image.v1.GenerateAltTextResponse
-	(*TokenUsage)(nil),                // 8: image.v1.TokenUsage
-	(*NormalizedMeta)(nil),            // 9: image.v1.NormalizedMeta
-	(*Block)(nil),                     // 10: image.v1.Block
-	(*Cell)(nil),                      // 11: image.v1.Cell
-	(*v1.Anchor)(nil),                 // 12: documents.v1.Anchor
+	(*RenderPreviewRequest)(nil),      // 8: image.v1.RenderPreviewRequest
+	(*RenderPreviewResponse)(nil),     // 9: image.v1.RenderPreviewResponse
+	(*TokenUsage)(nil),                // 10: image.v1.TokenUsage
+	(*NormalizedMeta)(nil),            // 11: image.v1.NormalizedMeta
+	(*Block)(nil),                     // 12: image.v1.Block
+	(*Cell)(nil),                      // 13: image.v1.Cell
+	(*v1.Anchor)(nil),                 // 14: documents.v1.Anchor
 }
 var file_image_v1_image_proto_depIdxs = []int32{
 	0,  // 0: image.v1.ExtractResponse.shape:type_name -> image.v1.Shape
-	10, // 1: image.v1.ExtractResponse.blocks:type_name -> image.v1.Block
-	9,  // 2: image.v1.ExtractResponse.normalized:type_name -> image.v1.NormalizedMeta
-	8,  // 3: image.v1.ExtractResponse.usage:type_name -> image.v1.TokenUsage
+	12, // 1: image.v1.ExtractResponse.blocks:type_name -> image.v1.Block
+	11, // 2: image.v1.ExtractResponse.normalized:type_name -> image.v1.NormalizedMeta
+	10, // 3: image.v1.ExtractResponse.usage:type_name -> image.v1.TokenUsage
 	1,  // 4: image.v1.ExtractResponse.rejected_code:type_name -> image.v1.RejectedCode
-	8,  // 5: image.v1.PrepareAttachmentResponse.usage:type_name -> image.v1.TokenUsage
+	10, // 5: image.v1.PrepareAttachmentResponse.usage:type_name -> image.v1.TokenUsage
 	1,  // 6: image.v1.PrepareAttachmentResponse.rejected_code:type_name -> image.v1.RejectedCode
-	8,  // 7: image.v1.GenerateAltTextResponse.usage:type_name -> image.v1.TokenUsage
-	11, // 8: image.v1.Block.cells:type_name -> image.v1.Cell
-	12, // 9: image.v1.Block.anchor:type_name -> documents.v1.Anchor
+	10, // 7: image.v1.GenerateAltTextResponse.usage:type_name -> image.v1.TokenUsage
+	13, // 8: image.v1.Block.cells:type_name -> image.v1.Cell
+	14, // 9: image.v1.Block.anchor:type_name -> documents.v1.Anchor
 	2,  // 10: image.v1.ImageService.Extract:input_type -> image.v1.ExtractRequest
 	4,  // 11: image.v1.ImageService.PrepareAttachment:input_type -> image.v1.PrepareAttachmentRequest
 	6,  // 12: image.v1.ImageService.GenerateAltText:input_type -> image.v1.GenerateAltTextRequest
-	3,  // 13: image.v1.ImageService.Extract:output_type -> image.v1.ExtractResponse
-	5,  // 14: image.v1.ImageService.PrepareAttachment:output_type -> image.v1.PrepareAttachmentResponse
-	7,  // 15: image.v1.ImageService.GenerateAltText:output_type -> image.v1.GenerateAltTextResponse
-	13, // [13:16] is the sub-list for method output_type
-	10, // [10:13] is the sub-list for method input_type
+	8,  // 13: image.v1.ImageService.RenderPreview:input_type -> image.v1.RenderPreviewRequest
+	3,  // 14: image.v1.ImageService.Extract:output_type -> image.v1.ExtractResponse
+	5,  // 15: image.v1.ImageService.PrepareAttachment:output_type -> image.v1.PrepareAttachmentResponse
+	7,  // 16: image.v1.ImageService.GenerateAltText:output_type -> image.v1.GenerateAltTextResponse
+	9,  // 17: image.v1.ImageService.RenderPreview:output_type -> image.v1.RenderPreviewResponse
+	14, // [14:18] is the sub-list for method output_type
+	10, // [10:14] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
 	10, // [10:10] is the sub-list for extension extendee
 	0,  // [0:10] is the sub-list for field type_name
@@ -1224,7 +1369,7 @@ func file_image_v1_image_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_image_v1_image_proto_rawDesc), len(file_image_v1_image_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

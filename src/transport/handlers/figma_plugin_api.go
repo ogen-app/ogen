@@ -144,8 +144,22 @@ type pluginCampaignsResponse struct {
 	Platforms map[string]pluginPlatformRules `json:"platforms"`
 }
 
+// pluginCampaignDetail is a campaign as GET /campaigns/{id} returns it: its
+// posts carry their media.
+type pluginCampaignDetail struct {
+	pluginCampaign
+	Posts []pluginCampaignDetailPost `json:"posts"`
+}
+
+type pluginCampaignDetailPost struct {
+	pluginCampaignPost
+	// Media lists the post's attachments: whole-post media first, then each
+	// thread segment's, each by position.
+	Media []pluginMedia `json:"media"`
+}
+
 type pluginCampaignResponse struct {
-	Campaign pluginCampaign `json:"campaign"`
+	Campaign pluginCampaignDetail `json:"campaign"`
 	// Platforms holds the rules of every platform one of its posts is on, by
 	// platform id.
 	Platforms map[string]pluginPlatformRules `json:"platforms"`
@@ -284,7 +298,7 @@ func (h *FigmaPluginHandler) ListCampaigns(c *fiber.Ctx) error {
 
 // GetCampaign godoc
 // @Summary     One campaign with all of its posts, for re-syncing a Figma board
-// @Description The campaign in the same shape as one entry of GET /api/plugins/figma/campaigns, with every one of its posts (no cap) in scheduled order, unscheduled last. Archived campaigns are returned with their status. A post that isn't listed was deleted or moved to another campaign. platforms carries the media rules of every platform one of its posts is on.
+// @Description The campaign in the same shape as one entry of GET /api/plugins/figma/campaigns, with every one of its posts (no cap) in scheduled order, unscheduled last. Archived campaigns are returned with their status. A post that isn't listed was deleted or moved to another campaign. platforms carries the media rules of every platform one of its posts is on. Each post also carries media: its attachments (kind image, video or pdf), whole-post media first, then each thread segment's (segment_index), each by position. preview_url is a presigned GET (valid 15 minutes) for a JPEG, PNG or GIF of at most 4096 px on the long edge, ready for figma.createImage: the image itself when it already qualifies, otherwise a scaled JPEG/PNG copy (made once, then reused); for a video, its poster. preview_url, preview_width and preview_height are null for PDFs, videos without a poster, and previews that couldn't be made (retried on the next read).
 // @Tags        plugins
 // @Produce     json
 // @Security    PluginToken
@@ -302,7 +316,25 @@ func (h *FigmaPluginHandler) GetCampaign(c *fiber.Ctx) error {
 		return err
 	}
 	used := map[string]bool{}
-	out := pluginCampaignResponse{Campaign: toPluginCampaign(row, used)}
+	camp := toPluginCampaign(row, used)
+	postIDs := make([]string, len(camp.Posts))
+	for i := range camp.Posts {
+		postIDs[i] = camp.Posts[i].ID
+	}
+	media, err := h.media.mediaByPost(reqCtx(c), postIDs)
+	if err != nil {
+		return err
+	}
+	out := pluginCampaignResponse{Campaign: pluginCampaignDetail{
+		pluginCampaign: camp, Posts: make([]pluginCampaignDetailPost, len(camp.Posts)),
+	}}
+	for i, p := range camp.Posts {
+		m := media[p.ID]
+		if m == nil {
+			m = []pluginMedia{}
+		}
+		out.Campaign.Posts[i] = pluginCampaignDetailPost{pluginCampaignPost: p, Media: m}
+	}
 	if out.Platforms, err = h.platformRules(c, used); err != nil {
 		return err
 	}

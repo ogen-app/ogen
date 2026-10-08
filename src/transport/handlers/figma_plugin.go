@@ -10,6 +10,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/plugins"
 )
@@ -43,6 +44,7 @@ type FigmaPluginHandler struct {
 	assets      *AssetsHandler
 	attachments *PostAttachmentsHandler
 	activity    *activity.Recorder
+	media       *pluginMediaResolver
 	// maxPluginVideoBytes caps one plugin video; 0 leaves the web app's cap.
 	maxPluginVideoBytes int64
 
@@ -56,7 +58,10 @@ type FigmaPluginHandler struct {
 // sent by the plugin takes exactly the path an upload does. Activity may be
 // nil. Platforms supplies the media rules the campaign tree carries for
 // pre-flight checks; nil leaves them out. MaxVideoBytes caps one video send
-// (0 = the web app's video cap).
+// (0 = the web app's video cap). PostAttachments, MediaPreviews, Storage and
+// Previews supply the post media of a single campaign: without Storage no
+// previews are signed, without Previews (image-service) only media that Figma
+// takes as stored get one.
 type FigmaPluginDeps struct {
 	Pairing       *plugins.Service
 	AppBaseURL    string
@@ -68,19 +73,27 @@ type FigmaPluginDeps struct {
 	Attachments   *PostAttachmentsHandler
 	Activity      *activity.Recorder
 	MaxVideoBytes int64
+
+	PostAttachments repository.PostAttachmentRepository
+	MediaPreviews   repository.MediaPreviewRepository
+	Storage         storage.Storage
+	Previews        PreviewRenderer
 }
 
 func NewFigmaPluginHandler(d FigmaPluginDeps) *FigmaPluginHandler {
 	return &FigmaPluginHandler{
-		pairing:             d.Pairing,
-		appBaseURL:          strings.TrimRight(d.AppBaseURL, "/"),
-		auth:                RequirePluginToken(d.Tokens, d.Users),
-		users:               d.Users,
-		posts:               d.Posts,
-		platforms:           d.Platforms,
-		assets:              d.Assets,
-		attachments:         d.Attachments,
-		activity:            d.Activity,
+		pairing:     d.Pairing,
+		appBaseURL:  strings.TrimRight(d.AppBaseURL, "/"),
+		auth:        RequirePluginToken(d.Tokens, d.Users),
+		users:       d.Users,
+		posts:       d.Posts,
+		platforms:   d.Platforms,
+		assets:      d.Assets,
+		attachments: d.Attachments,
+		activity:    d.Activity,
+		media: &pluginMediaResolver{
+			attachments: d.PostAttachments, previews: d.MediaPreviews, store: d.Storage, renderer: d.Previews,
+		},
 		maxPluginVideoBytes: d.MaxVideoBytes,
 		startLimiter:        newKeyedRateLimiter(pairingStartsPerMinute, time.Minute),
 		pollLimiter:         newKeyedRateLimiter(pairingPollsPerMinute, time.Minute),

@@ -17,6 +17,9 @@ type stubAttRepo struct{ atts []models.PostAttachment }
 func (s stubAttRepo) ListByPostID(context.Context, string) ([]models.PostAttachment, error) {
 	return s.atts, nil
 }
+func (s stubAttRepo) ListByPostIDs(context.Context, []string) ([]models.PostAttachment, error) {
+	return nil, nil
+}
 func (s stubAttRepo) CoverKeysByPostIDs(context.Context, []string) (map[string]string, error) {
 	return nil, nil
 }

@@ -13,6 +13,10 @@ import (
 // PostAttachmentRepository persists image attachments bound to a Post.
 type PostAttachmentRepository interface {
 	ListByPostID(ctx context.Context, postID string) ([]models.PostAttachment, error)
+	// ListByPostIDs returns the attachments of every post in postIDs in one
+	// query, per post with the whole-post media first, then thread segments in
+	// order, each by position.
+	ListByPostIDs(ctx context.Context, postIDs []string) ([]models.PostAttachment, error)
 	ListS3KeysByPostID(ctx context.Context, postID string) ([]string, error)
 	// CoverKeysByPostIDs returns, per post, the storage key of the picture a
 	// post card leads with: the first attachment (thread root first, then by
@@ -76,6 +80,22 @@ func (r *postAttachmentRepository) ListByPostID(ctx context.Context, postID stri
 		Model(&atts).
 		Where("pa.post_id = ?", postID).
 		OrderExpr("position ASC").
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return atts, nil
+}
+
+func (r *postAttachmentRepository) ListByPostIDs(ctx context.Context, postIDs []string) ([]models.PostAttachment, error) {
+	if len(postIDs) == 0 {
+		return nil, nil
+	}
+	var atts []models.PostAttachment
+	err := r.db.NewSelect().
+		Model(&atts).
+		Where("pa.post_id IN (?)", bun.List(postIDs)).
+		OrderExpr("pa.post_id, pa.segment_index ASC NULLS FIRST, pa.position ASC").
 		Scan(ctx)
 	if err != nil {
 		return nil, err

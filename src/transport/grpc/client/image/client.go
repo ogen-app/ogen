@@ -1,8 +1,9 @@
 // Package image is a thin gRPC client for the image-service: the
 // single authority for every image in the platform. It owns the connection, the
 // raised receive limit, and per-call deadlines, and presents image compute as
-// three narrow unary calls: Extract (full content-bank pipeline), PrepareAttachment
-// (light post-attachment path), and GenerateAltText.
+// four narrow unary calls: Extract (full content-bank pipeline), PrepareAttachment
+// (light post-attachment path), GenerateAltText, and RenderPreview (a scaled
+// JPEG/PNG copy of a stored image).
 //
 // Like audio/video — and unlike pdf/documents which client-stream the file bytes
 // — image hands the service short-lived presigned URLs (GET for the source, PUT
@@ -240,6 +241,21 @@ type GenerateAltTextResult struct {
 	Usage   []TokenUsage
 }
 
+// RenderPreviewOptions controls a single RenderPreview call.
+type RenderPreviewOptions struct {
+	SourceURL   string // presigned GET (a stored image or video poster)
+	DestPutURL  string // presigned PUT, not bound to a Content-Type
+	MaxLongEdge int    // cap on the longer side in px
+}
+
+// RenderPreviewResult describes the preview written to DestPutURL.
+type RenderPreviewResult struct {
+	Mime      string // "image/jpeg" or "image/png"
+	Width     int
+	Height    int
+	SizeBytes int64
+}
+
 // Config wires a Client.
 type Config struct {
 	Addr         string        // gRPC target (private-network host:port); empty disables
@@ -395,6 +411,31 @@ func (c *Client) GenerateAltText(ctx context.Context, opts GenerateAltTextOption
 		return nil, fmt.Errorf("image: generate alt text: %w", err)
 	}
 	return &GenerateAltTextResult{AltText: resp.GetAltText(), Usage: toUsage(resp.GetUsage())}, nil
+}
+
+// RenderPreview writes a still JPEG/PNG copy of the image at opts.SourceURL,
+// scaled to fit opts.MaxLongEdge, to opts.DestPutURL.
+func (c *Client) RenderPreview(ctx context.Context, opts RenderPreviewOptions) (*RenderPreviewResult, error) {
+	if c == nil {
+		return nil, ErrDisabled
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	resp, err := c.rpc.RenderPreview(ctx, &imagev1.RenderPreviewRequest{
+		SourceUrl:   opts.SourceURL,
+		DestPutUrl:  opts.DestPutURL,
+		MaxLongEdge: int32(opts.MaxLongEdge),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("image: render preview: %w", err)
+	}
+	return &RenderPreviewResult{
+		Mime:      resp.GetMime(),
+		Width:     int(resp.GetWidth()),
+		Height:    int(resp.GetHeight()),
+		SizeBytes: resp.GetSizeBytes(),
+	}, nil
 }
 
 func toUsage(in []*imagev1.TokenUsage) []TokenUsage {

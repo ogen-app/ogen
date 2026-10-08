@@ -52,6 +52,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		app      *fiber.App
 		db       *bun.DB
 		imgEnq   *fakeImageEnqueuer
+		renderer *fakePreviewRenderer
 		jane     *models.User
 		cookie   *http.Cookie
 		token    string
@@ -93,6 +94,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		store := &stubStorage{returnURL: "https://pub.example.com/x", objects: map[string][]byte{}}
 		imgEnq = &fakeImageEnqueuer{}
+		renderer = &fakePreviewRenderer{}
 
 		assets := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, nil, imgEnq, auth, nil, handlers.AssetsOptions{})
 		hub = eventhub.New(eventhub.Config{})
@@ -112,6 +114,11 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 			Platforms:   platformRepo,
 			Assets:      assets,
 			Attachments: attachments,
+
+			PostAttachments: postAttRepo,
+			MediaPreviews:   repository.NewMediaPreviewRepository(db),
+			Storage:         store,
+			Previews:        renderer,
 		}).Register(app)
 
 		jane = seedTenantUser(db, "Jane", "jane@example.com", "jane-password")
@@ -140,7 +147,7 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 	})
 
 	AfterEach(func() {
-		for _, tbl := range []string{"post_attachments", "asset_files", "assets", "post_versions", "posts", "campaigns", "plugin_tokens", "sessions", "users", "accounts"} {
+		for _, tbl := range []string{"media_previews", "post_attachments", "asset_files", "assets", "post_versions", "posts", "campaigns", "plugin_tokens", "sessions", "users", "accounts"} {
 			_, err := db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(ctx)
 			Expect(err).NotTo(HaveOccurred())
 		}
@@ -521,6 +528,103 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
 			Expect(body.Code).To(Equal(handlers.CodeCampaignNotFound))
 		}
+	})
+
+	It("lists each post's media with Figma-ready previews", func() {
+		var campID string
+		Expect(db.NewSelect().TableExpr("posts").Column("campaign_id").Where("id = ?", postID).Scan(ctx, &campID)).To(Succeed())
+		seg0 := 0
+		seed := func(pos int, seg *int, mime string, w, h int, sum, key, thumb string) string {
+			GinkgoHelper()
+			id, err := models.NewID()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = db.NewInsert().Model(&models.PostAttachment{
+				ID: id, PostID: postID, Position: pos, SegmentIndex: seg, MimeType: mime, SizeBytes: 10,
+				Width: w, Height: h, ChecksumSHA256: sum, S3Key: key, ThumbnailS3Key: thumb, CreatedBy: jane.ID,
+			}).Exec(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+			return id
+		}
+		// The thread segment's media comes after the whole post's, though its
+		// position is lower.
+		segment := seed(0, &seg0, "image/jpeg", 800, 600, "sum-seg", "k/seg.jpg", "")
+		jpeg := seed(1, nil, "image/jpeg", 2160, 2700, "sum-jpeg", "k/a.jpg", "")
+		webp := seed(2, nil, "image/webp", 1000, 800, "sum-webp", "k/b.webp", "")
+		huge := seed(3, nil, "image/png", 6000, 3000, "sum-huge", "k/c.png", "")
+		again := seed(4, nil, "image/webp", 1000, 800, "sum-webp", "k/d.webp", "")
+		video := seed(5, nil, "video/mp4", 1920, 1080, "", "k/e.mp4", "k/e-poster.png")
+		bare := seed(6, nil, "video/mp4", 1920, 1080, "", "k/f.mp4", "")
+		pdf := seed(7, nil, "application/pdf", 0, 0, "sum-pdf", "k/g.pdf", "k/g.png")
+		broken := seed(8, nil, "image/webp", 500, 500, "sum-broken", "k/broken.webp", "")
+		renderer.sizes = map[string][2]int{
+			"k/b.webp": {1000, 800}, "k/c.png": {4096, 2048}, "k/e-poster.png": {1080, 1920},
+		}
+
+		type mediaWire struct {
+			ID            string  `json:"id"`
+			Kind          string  `json:"kind"`
+			SegmentIndex  *int    `json:"segment_index"`
+			PreviewURL    *string `json:"preview_url"`
+			PreviewWidth  *int    `json:"preview_width"`
+			PreviewHeight *int    `json:"preview_height"`
+		}
+		get := func() []mediaWire {
+			GinkgoHelper()
+			resp := call(fiber.MethodGet, "/api/plugins/figma/campaigns/"+campID, nil, "")
+			Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+			var out struct {
+				Campaign struct {
+					Posts []struct {
+						Media []mediaWire `json:"media"`
+					} `json:"posts"`
+				} `json:"campaign"`
+			}
+			Expect(json.NewDecoder(resp.Body).Decode(&out)).To(Succeed())
+			Expect(out.Campaign.Posts).To(HaveLen(1))
+			return out.Campaign.Posts[0].Media
+		}
+		preview := func(m mediaWire) []any {
+			if m.PreviewURL == nil {
+				return nil
+			}
+			return []any{*m.PreviewURL, *m.PreviewWidth, *m.PreviewHeight}
+		}
+		signed := "https://pub.example.com/signed/"
+
+		media := get()
+		ids := make([]string, len(media))
+		for i, m := range media {
+			ids[i] = m.ID
+		}
+		Expect(ids).To(Equal([]string{jpeg, webp, huge, again, video, bare, pdf, broken, segment}))
+		Expect(media[8].SegmentIndex).To(Equal(&seg0))
+		Expect(media[0].Kind).To(Equal("image"))
+		Expect(media[4].Kind).To(Equal("video"))
+		Expect(media[6].Kind).To(Equal("pdf"))
+
+		// A JPEG that fits is served as stored.
+		Expect(preview(media[0])).To(Equal([]any{signed + "k/a.jpg", 2160, 2700}))
+		// WebP, an oversized PNG and a poster are copied, the WebP once for
+		// both attachments with its bytes.
+		Expect(*media[1].PreviewURL).To(HavePrefix(signed + "t/" + models.DefaultTenantID + "/media-previews/"))
+		Expect(preview(media[1])[1:]).To(Equal([]any{1000, 800}))
+		Expect(preview(media[3])).To(Equal(preview(media[1])))
+		Expect(preview(media[2])[1:]).To(Equal([]any{4096, 2048}))
+		Expect(preview(media[4])[1:]).To(Equal([]any{1080, 1920}))
+		// No poster, a PDF, or a failed render: no preview.
+		Expect(media[5].PreviewURL).To(BeNil())
+		Expect(media[6].PreviewURL).To(BeNil())
+		Expect(media[7].PreviewURL).To(BeNil())
+		Expect(renderer.sources()).To(ConsistOf("k/b.webp", "k/c.png", "k/e-poster.png", "k/broken.webp"))
+
+		// The next read reuses the copies and retries only the failed one.
+		Expect(get()[2]).To(Equal(media[2]))
+		Expect(renderer.sources()).To(ConsistOf("k/b.webp", "k/c.png", "k/e-poster.png", "k/broken.webp", "k/broken.webp"))
+
+		// The campaign list carries no media.
+		resp := call(fiber.MethodGet, "/api/plugins/figma/campaigns", nil, "")
+		raw, _ := io.ReadAll(resp.Body)
+		Expect(string(raw)).NotTo(ContainSubstring(`"media"`))
 	})
 
 	It("refuses the campaign tree without a valid plugin token", func() {
