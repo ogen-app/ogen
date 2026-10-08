@@ -13464,17 +13464,21 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "preview_height": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "preview_url": {
                     "description": "PreviewURL is a presigned GET for a JPEG, PNG or GIF of at most 4096 px\non the long edge: the image itself, a scaled copy of it, or a video's\nposter. Null for PDFs, videos without a poster, and previews that\ncouldn't be made.",
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "preview_width": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "segment_index": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "width": {
                     "type": "integer"

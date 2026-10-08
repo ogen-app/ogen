@@ -45,16 +45,16 @@ type pluginMedia struct {
 	ID           string `json:"id"`
 	Kind         string `json:"kind" enums:"image,video,pdf"`
 	Position     int    `json:"position"`
-	SegmentIndex *int   `json:"segment_index"`
+	SegmentIndex *int   `json:"segment_index" extensions:"x-nullable"`
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
 	// PreviewURL is a presigned GET for a JPEG, PNG or GIF of at most 4096 px
 	// on the long edge: the image itself, a scaled copy of it, or a video's
 	// poster. Null for PDFs, videos without a poster, and previews that
 	// couldn't be made.
-	PreviewURL    *string `json:"preview_url"`
-	PreviewWidth  *int    `json:"preview_width"`
-	PreviewHeight *int    `json:"preview_height"`
+	PreviewURL    *string `json:"preview_url"    extensions:"x-nullable"`
+	PreviewWidth  *int    `json:"preview_width"  extensions:"x-nullable"`
+	PreviewHeight *int    `json:"preview_height" extensions:"x-nullable"`
 }
 
 // pluginMediaResolver lists campaign post media with Figma-ready previews.
@@ -212,7 +212,8 @@ func (r *pluginMediaResolver) renderAll(ctx context.Context, missing []models.Me
 	if r.renderer == nil || len(missing) == 0 {
 		return
 	}
-	deadline := time.Now().Add(previewRenderBudget)
+	scheduling, cancel := context.WithTimeout(ctx, previewRenderBudget)
+	defer cancel()
 	jobs := make(chan models.MediaPreviewKey)
 	var (
 		mu sync.Mutex
@@ -233,11 +234,14 @@ func (r *pluginMediaResolver) renderAll(ctx context.Context, missing []models.Me
 			}
 		})
 	}
+	// A worker may be busy, so the send itself must give up at the budget.
+schedule:
 	for _, k := range missing {
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			break
+		select {
+		case jobs <- k:
+		case <-scheduling.Done():
+			break schedule
 		}
-		jobs <- k
 	}
 	close(jobs)
 	wg.Wait()
