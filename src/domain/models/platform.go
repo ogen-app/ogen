@@ -234,6 +234,47 @@ func (c TextConstraints) ContentLimitFor(slug string) int {
 	return c.MaxContentChars
 }
 
+// Canvas is a recommended pixel size for a post type's artwork.
+type Canvas struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// PostTypeCanvases maps a post-type slug to its recommended canvas — e.g.
+// Instagram {"story": 1080×1920}. Only media-bearing types carry one; a slug
+// that is absent has no recommendation.
+type PostTypeCanvases map[string]Canvas
+
+func (m PostTypeCanvases) Value() (driver.Value, error) {
+	if m == nil {
+		return "{}", nil
+	}
+	b, err := json.Marshal(m)
+	return string(b), err
+}
+
+func (m *PostTypeCanvases) Scan(src any) error {
+	// Start from an empty map: json.Unmarshal merges into an existing one, so a
+	// reused receiver would otherwise keep slugs from a prior scan.
+	*m = PostTypeCanvases{}
+	switch v := src.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return json.Unmarshal([]byte(v), m)
+	case []byte:
+		if len(v) == 0 {
+			return nil
+		}
+		return json.Unmarshal(v, m)
+	case nil:
+		return nil
+	default:
+		return fmt.Errorf("PostTypeCanvases: cannot scan %T", src)
+	}
+}
+
 type Platform struct {
 	bun.BaseModel `bun:"table:platforms,alias:pl" swaggerignore:"true"`
 
@@ -263,6 +304,10 @@ type Platform struct {
 	PDFConstraints     PDFConstraints   `bun:"pdf_constraints,notnull,type:jsonb"           json:"pdf_constraints"`
 	VideoConstraints   VideoConstraints `bun:"video_constraints,notnull,type:jsonb"         json:"video_constraints"`
 	TextConstraints    TextConstraints  `bun:"text_constraints,notnull,type:jsonb"          json:"text_constraints"`
+	// PostTypeCanvases is the recommended artwork size per media-bearing
+	// post-type slug, surfaced on the post-type rules (composer hints, the
+	// Figma plugin's board frames).
+	PostTypeCanvases PostTypeCanvases `bun:"post_type_canvases,notnull,type:jsonb" json:"post_type_canvases"`
 	// SortOrder drives composer/picker ordering.
 	SortOrder int       `bun:"sort_order,notnull,default:0"                 json:"sort_order"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`

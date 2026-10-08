@@ -436,11 +436,14 @@ type ResolvedPostTypeRule struct {
 // PostTypeRuleView is one entry in the platform-scoped rules response.
 // Rule is nil for whitelist-only slugs (e.g. live-video, event) — the
 // platform accepts them but Ogen enforces no structural rules.
+// Canvas is the recommended artwork size; nil for text-only types and for
+// slugs the catalog has no size for.
 type PostTypeRuleView struct {
 	Slug          string                `json:"slug"`
 	Label         string                `json:"label"`
 	WhitelistOnly bool                  `json:"whitelist_only"`
 	Rule          *ResolvedPostTypeRule `json:"rule"`
+	Canvas        *models.Canvas        `json:"canvas"`
 }
 
 // ResolvePostTypeRules returns the per-slug rules for a platform with
@@ -473,6 +476,7 @@ func ResolvePostTypeRules(p *models.Platform) []PostTypeRuleView {
 			MaxContentChars: resolveMaxContentChars(slug, p),
 			Segmented:       slug == models.PostTypeThread,
 		}
+		view.Canvas = resolveCanvas(slug, rule, p)
 		out = append(out, view)
 	}
 	return out
@@ -508,6 +512,19 @@ func resolveMaxContentChars(slug string, p *models.Platform) *int {
 		return &limit
 	}
 	return nil
+}
+
+// resolveCanvas returns the platform's recommended canvas for slug, or nil
+// when the type takes no artwork or the catalog has no size for it.
+func resolveCanvas(slug string, rule PostTypeRule, p *models.Platform) *models.Canvas {
+	if !slices.Contains(rule.AllowedKinds, KindImage) && !slices.Contains(rule.AllowedKinds, KindVideo) {
+		return nil
+	}
+	c, ok := p.PostTypeCanvases[slug]
+	if !ok || c.Width <= 0 || c.Height <= 0 {
+		return nil
+	}
+	return &c
 }
 
 func kindLabel(kind string) string {
