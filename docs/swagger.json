@@ -7057,7 +7057,7 @@
                         "PluginToken": []
                     }
                 ],
-                "description": "The campaign in the same shape as one entry of GET /api/plugins/figma/campaigns, with every one of its posts (no cap) in scheduled order, unscheduled last. Archived campaigns are returned with their status. A post that isn't listed was deleted or moved to another campaign. platforms carries the media rules of every platform one of its posts is on.",
+                "description": "The campaign in the same shape as one entry of GET /api/plugins/figma/campaigns, with every one of its posts (no cap) in scheduled order, unscheduled last. Archived campaigns are returned with their status. A post that isn't listed was deleted or moved to another campaign. platforms carries the media rules of every platform one of its posts is on. Each post also carries media: its attachments (kind image, video or pdf), whole-post media first, then each thread segment's (segment_index), each by position. preview_url is a presigned GET (valid 15 minutes) for a JPEG, PNG or GIF of at most 4096 px on the long edge, ready for figma.createImage: the image itself when it already qualifies, otherwise a scaled JPEG/PNG copy (made once, then reused); for a video, its poster. preview_url, preview_width and preview_height are null for PDFs, videos without a poster, and previews that couldn't be made (retried on the next read).",
                 "produces": [
                     "application/json"
                 ],
@@ -13203,6 +13203,78 @@
                 }
             }
         },
+        "handlers.pluginCampaignDetail": {
+            "type": "object",
+            "properties": {
+                "end_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "posts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.pluginCampaignDetailPost"
+                    }
+                },
+                "posts_changed_at": {
+                    "description": "PostsChangedAt moves forward whenever a post is created, deleted,\nmoved, rescheduled, retitled, or has its platform, post type or status\nchanged; null if the campaign never had a post.",
+                    "type": "string"
+                },
+                "start_date": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timezone": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.pluginCampaignDetailPost": {
+            "type": "object",
+            "properties": {
+                "attachable": {
+                    "type": "boolean"
+                },
+                "attachment_count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "media": {
+                    "description": "Media lists the post's attachments: whole-post media first, then each\nthread segment's, each by position.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.pluginMedia"
+                    }
+                },
+                "platform": {
+                    "$ref": "#/definitions/handlers.pluginPlatform"
+                },
+                "post_type": {
+                    "type": "string"
+                },
+                "scheduled_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "video_count": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.pluginCampaignPost": {
             "type": "object",
             "properties": {
@@ -13239,7 +13311,7 @@
             "type": "object",
             "properties": {
                 "campaign": {
-                    "$ref": "#/definitions/handlers.pluginCampaign"
+                    "$ref": "#/definitions/handlers.pluginCampaignDetail"
                 },
                 "platforms": {
                     "description": "Platforms holds the rules of every platform one of its posts is on, by\nplatform id.",
@@ -13362,6 +13434,44 @@
                 },
                 "workspace": {
                     "$ref": "#/definitions/handlers.pluginWorkspace"
+                }
+            }
+        },
+        "handlers.pluginMedia": {
+            "type": "object",
+            "properties": {
+                "height": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "image",
+                        "video",
+                        "pdf"
+                    ]
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "preview_height": {
+                    "type": "integer"
+                },
+                "preview_url": {
+                    "description": "PreviewURL is a presigned GET for a JPEG, PNG or GIF of at most 4096 px\non the long edge: the image itself, a scaled copy of it, or a video's\nposter. Null for PDFs, videos without a poster, and previews that\ncouldn't be made.",
+                    "type": "string"
+                },
+                "preview_width": {
+                    "type": "integer"
+                },
+                "segment_index": {
+                    "type": "integer"
+                },
+                "width": {
+                    "type": "integer"
                 }
             }
         },

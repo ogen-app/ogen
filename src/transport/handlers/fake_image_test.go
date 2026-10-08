@@ -8,7 +8,9 @@ import (
 	"image"
 	"image/gif"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -63,4 +65,30 @@ func (f *fakeImagePreparer) GenerateAltText(_ context.Context, _ imageclient.Gen
 	// Empty alt → the async attachment generator writes nothing (keeps tests
 	// deterministic; no post-response DB mutation to race with AfterEach).
 	return &imageclient.GenerateAltTextResult{}, nil
+}
+
+// fakePreviewRenderer records each source it renders and reports the size in
+// sizes; a source containing "broken" fails.
+type fakePreviewRenderer struct {
+	mu    sync.Mutex
+	calls []string
+	sizes map[string][2]int
+}
+
+func (f *fakePreviewRenderer) RenderPreview(_ context.Context, opts imageclient.RenderPreviewOptions) (*imageclient.RenderPreviewResult, error) {
+	src := strings.TrimPrefix(opts.SourceURL, "https://pub.example.com/signed/")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, src)
+	if strings.Contains(src, "broken") {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "not a readable image")
+	}
+	size := f.sizes[src]
+	return &imageclient.RenderPreviewResult{Mime: "image/jpeg", Width: size[0], Height: size[1], SizeBytes: 10}, nil
+}
+
+func (f *fakePreviewRenderer) sources() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }

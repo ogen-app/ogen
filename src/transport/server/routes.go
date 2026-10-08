@@ -116,6 +116,11 @@ func registerIntegrationRoutes(app *fiber.App, d *deps) {
 		Attachments:   d.newPostAttachmentsHandler(),
 		Activity:      d.activity.recorder,
 		MaxVideoBytes: d.cfg.PluginMaxVideoBytes,
+
+		PostAttachments: r.postAttachmentRepo,
+		MediaPreviews:   r.mediaPreviewRepo,
+		Storage:         d.store,
+		Previews:        d.clients.previewRenderer(),
 	}).Register(app)
 	handlers.NewFigmaConnectionsHandler(d.svc.plugins, r.userRepo, d.auth, d.activity.recorder).Register(app)
 	d.email.Handler.Register(app)

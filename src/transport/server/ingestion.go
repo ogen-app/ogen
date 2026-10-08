@@ -108,6 +108,13 @@ func (c grpcClients) imagePreparer() handlers.ImagePreparer {
 	return c.image
 }
 
+func (c grpcClients) previewRenderer() handlers.PreviewRenderer {
+	if c.image == nil {
+		return nil
+	}
+	return c.image
+}
+
 // ingestion is the content-bank ingestion wiring. A file kind is enabled when
 // its parser client and object storage are both configured; a disabled kind's
 // worker deps keep a nil Client so the worker no-ops. Embedder availability is
