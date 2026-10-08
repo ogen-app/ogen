@@ -7029,7 +7029,7 @@ const docTemplate = `{
                         "PluginToken": []
                     }
                 ],
-                "description": "Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored (\"\" = UTC). post_type is the post's platform post type slug (\"\" until chosen); video_count counts its video attachments. platforms carries, by platform id, the media rules of every platform a listed post is on (video is null where the platform takes no video), for warning before a send; the server still validates.",
+                "description": "Live campaigns (archived and deleted ones left out), active first, then scheduled, draft, paused and completed; newest start date first within a status, undated last. Up to 100 campaigns, each with up to 300 posts of every status in scheduled order (unscheduled last), without their body text. attachable is false for posts already submitted to a publisher. timezone is the campaign's IANA zone as stored (\"\" = UTC). post_type is the post's platform post type slug (\"\" until chosen); video_count counts its video attachments. posts_changed_at is when the campaign's posts last changed in a way a board shows (a post created, deleted, moved, rescheduled, retitled, or its platform, post type or status changed); null if it never had a post. platforms carries, by platform id, the media rules of every platform a listed post is on (video is null where the platform takes no video), for warning before a send; the server still validates.",
                 "produces": [
                     "application/json"
                 ],
@@ -13141,6 +13141,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.pluginCampaignPost"
                     }
+                },
+                "posts_changed_at": {
+                    "description": "PostsChangedAt moves forward whenever a post is created, deleted,\nmoved, rescheduled, retitled, or has its platform, post type or status\nchanged; null if the campaign never had a post.",
+                    "type": "string"
                 },
                 "start_date": {
                     "type": "string"

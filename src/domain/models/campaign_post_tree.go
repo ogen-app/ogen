@@ -5,13 +5,16 @@ import "time"
 // CampaignPostTree is a campaign as a "send to" picker shows it: enough to
 // recognise and order it, with its posts nested beneath. Never a post's body.
 type CampaignPostTree struct {
-	ID        string             `bun:"id"`
-	Name      string             `bun:"name"`
-	Status    CampaignStatus     `bun:"status"`
-	Timezone  string             `bun:"timezone"`
-	StartDate *time.Time         `bun:"start_date"`
-	EndDate   *time.Time         `bun:"end_date"`
-	Posts     []CampaignTreePost `bun:"-"`
+	ID        string         `bun:"id"`
+	Name      string         `bun:"name"`
+	Status    CampaignStatus `bun:"status"`
+	Timezone  string         `bun:"timezone"`
+	StartDate *time.Time     `bun:"start_date"`
+	EndDate   *time.Time     `bun:"end_date"`
+	// PostsChangedAt is when a post was last created, deleted, moved or had
+	// a field a Figma board shows changed; nil if none ever was.
+	PostsChangedAt *time.Time         `bun:"posts_changed_at"`
+	Posts          []CampaignTreePost `bun:"-"`
 }
 
 // CampaignTreePost is one post under a CampaignPostTree. PlatformID,
