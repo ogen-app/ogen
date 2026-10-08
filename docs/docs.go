@@ -13025,6 +13025,14 @@ const docTemplate = `{
                 "pdf_constraints": {
                     "$ref": "#/definitions/models.PDFConstraints"
                 },
+                "post_type_canvases": {
+                    "description": "PostTypeCanvases is the recommended artwork size per media-bearing\npost-type slug, surfaced on the post-type rules (composer hints, the\nFigma plugin's board frames).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.PostTypeCanvases"
+                        }
+                    ]
+                },
                 "post_types": {
                     "$ref": "#/definitions/models.PostTypeMap"
                 },
@@ -14935,6 +14943,17 @@ const docTemplate = `{
                 }
             }
         },
+        "models.Canvas": {
+            "type": "object",
+            "properties": {
+                "height": {
+                    "type": "integer"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.ContentFormat": {
             "type": "string",
             "enum": [
@@ -15471,6 +15490,14 @@ const docTemplate = `{
                 "pdf_constraints": {
                     "$ref": "#/definitions/models.PDFConstraints"
                 },
+                "post_type_canvases": {
+                    "description": "PostTypeCanvases is the recommended artwork size per media-bearing\npost-type slug, surfaced on the post-type rules (composer hints, the\nFigma plugin's board frames).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.PostTypeCanvases"
+                        }
+                    ]
+                },
                 "post_types": {
                     "$ref": "#/definitions/models.PostTypeMap"
                 },
@@ -15887,6 +15914,12 @@ const docTemplate = `{
                 "PostStatusPublished",
                 "PostStatusNotPublished"
             ]
+        },
+        "models.PostTypeCanvases": {
+            "type": "object",
+            "additionalProperties": {
+                "$ref": "#/definitions/models.Canvas"
+            }
         },
         "models.PostTypeMap": {
             "type": "object",
@@ -16528,6 +16561,9 @@ const docTemplate = `{
         "platforms.PostTypeRuleView": {
             "type": "object",
             "properties": {
+                "canvas": {
+                    "$ref": "#/definitions/models.Canvas"
+                },
                 "label": {
                     "type": "string"
                 },

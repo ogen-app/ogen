@@ -184,6 +184,9 @@ func (s *platformAdminService) UpdatePlatform(ctx context.Context, req *platform
 	m := platformFromProto(pb)
 	m.ID = id
 	m.CreatedAt = existing.CreatedAt
+	// The admin contract doesn't carry canvases yet, so keep the stored ones
+	// rather than wiping them on every edit.
+	m.PostTypeCanvases = existing.PostTypeCanvases
 	m.UpdatedAt = time.Now().UTC()
 	if err := s.platformRepo.Update(ctx, &m); err != nil {
 		if pgCode(err) == pgUniqueViolation {
