@@ -7050,6 +7050,58 @@
                 }
             }
         },
+        "/api/plugins/figma/campaigns/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "PluginToken": []
+                    }
+                ],
+                "description": "The campaign in the same shape as one entry of GET /api/plugins/figma/campaigns, with every one of its posts (no cap) in scheduled order, unscheduled last. Archived campaigns are returned with their status. A post that isn't listed was deleted or moved to another campaign. platforms carries the media rules of every platform one of its posts is on.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "plugins"
+                ],
+                "summary": "One campaign with all of its posts, for re-syncing a Figma board",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "campaign id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.pluginCampaignResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "plugin_token_invalid",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "campaign_not_found: deleted, or not in this workspace",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/plugins/figma/images": {
             "post": {
                 "security": [
@@ -13180,6 +13232,21 @@
                 },
                 "video_count": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.pluginCampaignResponse": {
+            "type": "object",
+            "properties": {
+                "campaign": {
+                    "$ref": "#/definitions/handlers.pluginCampaign"
+                },
+                "platforms": {
+                    "description": "Platforms holds the rules of every platform one of its posts is on, by\nplatform id.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.pluginPlatformRules"
+                    }
                 }
             }
         },

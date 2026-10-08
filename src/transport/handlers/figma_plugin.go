@@ -97,6 +97,7 @@ func (h *FigmaPluginHandler) Register(app *fiber.App) {
 	g.Get("/me", append(authed, h.Me)...)
 	g.Get("/posts", append(authed, h.ListPosts)...)
 	g.Get("/campaigns", append(authed, h.ListCampaigns)...)
+	g.Get("/campaigns/:id", append(authed, h.GetCampaign)...)
 	g.Post("/images", append(authed, h.SendImage)...)
 	g.Post("/posts/:post_id/videos/presign", append(authed, h.PresignVideo)...)
 	g.Post("/posts/:post_id/videos/finalize", append(authed, h.FinalizeVideo)...)

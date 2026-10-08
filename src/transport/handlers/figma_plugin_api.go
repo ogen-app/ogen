@@ -42,6 +42,10 @@ const (
 	CodeAttachFailed = "attach_failed"
 )
 
+// CodeCampaignNotFound is the 404 for a campaign that was deleted or isn't in
+// the token's workspace.
+const CodeCampaignNotFound = "campaign_not_found"
+
 // pluginSniffedExts maps the image types a design-tool export produces to the
 // extension the asset is stored under. Detected from the bytes, not the
 // client's filename.
@@ -136,6 +140,13 @@ type pluginCampaign struct {
 type pluginCampaignsResponse struct {
 	Campaigns []pluginCampaign `json:"campaigns"`
 	// Platforms holds the rules of every platform a listed post is on, by
+	// platform id.
+	Platforms map[string]pluginPlatformRules `json:"platforms"`
+}
+
+type pluginCampaignResponse struct {
+	Campaign pluginCampaign `json:"campaign"`
+	// Platforms holds the rules of every platform one of its posts is on, by
 	// platform id.
 	Platforms map[string]pluginPlatformRules `json:"platforms"`
 }
@@ -262,29 +273,62 @@ func (h *FigmaPluginHandler) ListCampaigns(c *fiber.Ctx) error {
 	}
 	out := pluginCampaignsResponse{Campaigns: make([]pluginCampaign, 0, len(rows))}
 	used := map[string]bool{}
-	for _, r := range rows {
-		camp := pluginCampaign{
-			ID: r.ID, Name: r.Name, Status: string(r.Status), Timezone: r.Timezone,
-			StartDate: r.StartDate, EndDate: r.EndDate, PostsChangedAt: r.PostsChangedAt,
-			Posts: make([]pluginCampaignPost, 0, len(r.Posts)),
-		}
-		for _, p := range r.Posts {
-			post := pluginCampaignPost{
-				ID: p.ID, Title: p.Title, Status: string(p.Status), PostType: p.PlatformPostType, ScheduledAt: p.ScheduledAt,
-				AttachmentCount: p.AttachmentCount, VideoCount: p.VideoCount, Attachable: !p.Status.IsSubmitted(),
-			}
-			if p.PlatformID != "" {
-				post.Platform = &pluginPlatform{ID: p.PlatformID, Name: p.PlatformName}
-				used[p.PlatformID] = true
-			}
-			camp.Posts = append(camp.Posts, post)
-		}
-		out.Campaigns = append(out.Campaigns, camp)
+	for i := range rows {
+		out.Campaigns = append(out.Campaigns, toPluginCampaign(&rows[i], used))
 	}
 	if out.Platforms, err = h.platformRules(c, used); err != nil {
 		return err
 	}
 	return c.JSON(out)
+}
+
+// GetCampaign godoc
+// @Summary     One campaign with all of its posts, for re-syncing a Figma board
+// @Description The campaign in the same shape as one entry of GET /api/plugins/figma/campaigns, with every one of its posts (no cap) in scheduled order, unscheduled last. Archived campaigns are returned with their status. A post that isn't listed was deleted or moved to another campaign. platforms carries the media rules of every platform one of its posts is on.
+// @Tags        plugins
+// @Produce     json
+// @Security    PluginToken
+// @Param       id path string true "campaign id"
+// @Success     200 {object} pluginCampaignResponse
+// @Failure     401 {object} map[string]string "plugin_token_invalid"
+// @Failure     404 {object} map[string]string "campaign_not_found: deleted, or not in this workspace"
+// @Router      /api/plugins/figma/campaigns/{id} [get]
+func (h *FigmaPluginHandler) GetCampaign(c *fiber.Ctx) error {
+	row, err := h.posts.GetCampaignPostTree(reqCtx(c), c.Params("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		return rejectCode(c, fiber.StatusNotFound, CodeCampaignNotFound, "campaign not found in this workspace")
+	}
+	if err != nil {
+		return err
+	}
+	used := map[string]bool{}
+	out := pluginCampaignResponse{Campaign: toPluginCampaign(row, used)}
+	if out.Platforms, err = h.platformRules(c, used); err != nil {
+		return err
+	}
+	return c.JSON(out)
+}
+
+// toPluginCampaign maps a campaign tree to its wire shape, marking in used
+// every platform one of its posts is on.
+func toPluginCampaign(r *models.CampaignPostTree, used map[string]bool) pluginCampaign {
+	camp := pluginCampaign{
+		ID: r.ID, Name: r.Name, Status: string(r.Status), Timezone: r.Timezone,
+		StartDate: r.StartDate, EndDate: r.EndDate, PostsChangedAt: r.PostsChangedAt,
+		Posts: make([]pluginCampaignPost, 0, len(r.Posts)),
+	}
+	for _, p := range r.Posts {
+		post := pluginCampaignPost{
+			ID: p.ID, Title: p.Title, Status: string(p.Status), PostType: p.PlatformPostType, ScheduledAt: p.ScheduledAt,
+			AttachmentCount: p.AttachmentCount, VideoCount: p.VideoCount, Attachable: !p.Status.IsSubmitted(),
+		}
+		if p.PlatformID != "" {
+			post.Platform = &pluginPlatform{ID: p.PlatformID, Name: p.PlatformName}
+			used[p.PlatformID] = true
+		}
+		camp.Posts = append(camp.Posts, post)
+	}
+	return camp
 }
 
 // platformRules returns the media rules of the platforms in ids. Disabled

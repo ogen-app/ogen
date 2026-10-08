@@ -451,6 +451,78 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(strings.TrimSpace(string(raw))).To(Equal(`{"campaigns":[],"platforms":{}}`))
 	})
 
+	It("returns one campaign with all its posts for a board re-sync", func() {
+		var campID string
+		Expect(db.NewSelect().TableExpr("posts").Column("campaign_id").Where("id = ?", postID).Scan(ctx, &campID)).To(Succeed())
+
+		type campaignWire struct {
+			Campaign struct {
+				ID             string     `json:"id"`
+				Status         string     `json:"status"`
+				PostsChangedAt *time.Time `json:"posts_changed_at"`
+				Posts          []struct {
+					ID       string `json:"id"`
+					PostType string `json:"post_type"`
+				} `json:"posts"`
+			} `json:"campaign"`
+			Platforms map[string]struct {
+				PostTypes []struct {
+					Slug   string         `json:"slug"`
+					Canvas *models.Canvas `json:"canvas"`
+				} `json:"post_types"`
+			} `json:"platforms"`
+		}
+		get := func() campaignWire {
+			GinkgoHelper()
+			resp := call(fiber.MethodGet, "/api/plugins/figma/campaigns/"+campID, nil, "")
+			Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+			raw, _ := io.ReadAll(resp.Body)
+			Expect(string(raw)).NotTo(ContainSubstring("secret body copy"))
+			var out campaignWire
+			Expect(json.Unmarshal(raw, &out)).To(Succeed())
+			return out
+		}
+
+		out := get()
+		Expect(out.Campaign.ID).To(Equal(campID))
+		Expect(out.Campaign.Posts).To(HaveLen(1))
+		Expect(out.Campaign.Posts[0].ID).To(Equal(postID))
+		Expect(out.Campaign.Posts[0].PostType).To(Equal("image-post"))
+		Expect(out.Campaign.PostsChangedAt).NotTo(BeNil())
+		Expect(out.Platforms["AXqWG7U2qnpt"].PostTypes).To(ContainElement(SatisfyAll(
+			HaveField("Slug", "image-post"),
+			HaveField("Canvas", Equal(&models.Canvas{Width: 1200, Height: 627})),
+		)))
+		createdAt := *out.Campaign.PostsChangedAt
+
+		// Archived campaigns are still served, with their status.
+		_, err := db.NewUpdate().TableExpr("campaigns").Set("status = ?", models.StatusArchived).Set("archived_at = now()").
+			Where("id = ?", campID).Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(get().Campaign.Status).To(Equal(string(models.StatusArchived)))
+
+		// A deleted post drops out, and the campaign records the change.
+		_, err = db.NewDelete().TableExpr("posts").Where("id = ?", postID).Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		out = get()
+		Expect(out.Campaign.Posts).To(BeEmpty())
+		Expect(*out.Campaign.PostsChangedAt).To(BeTemporally(">", createdAt))
+		Expect(out.Platforms).To(BeEmpty())
+
+		// A deleted campaign, or one that doesn't exist here, is a coded 404.
+		_, err = db.NewUpdate().TableExpr("campaigns").Set("deleted_at = now()").Where("id = ?", campID).Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		for _, id := range []string{campID, "no-such-campaign"} {
+			resp := call(fiber.MethodGet, "/api/plugins/figma/campaigns/"+id, nil, "")
+			Expect(resp.StatusCode).To(Equal(fiber.StatusNotFound))
+			var body struct {
+				Code string `json:"code"`
+			}
+			Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+			Expect(body.Code).To(Equal(handlers.CodeCampaignNotFound))
+		}
+	})
+
 	It("refuses the campaign tree without a valid plugin token", func() {
 		req := httptest.NewRequest(fiber.MethodGet, "/api/plugins/figma/campaigns", nil)
 		resp, err := app.Test(req, -1)

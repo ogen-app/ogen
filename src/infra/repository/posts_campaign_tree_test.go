@@ -1,6 +1,9 @@
 package repository_test
 
 import (
+	"database/sql"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -149,5 +152,100 @@ func TestListCampaignPostTree(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != "c-theirs" || len(got[0].Posts) != 1 || got[0].Posts[0].ID != "p-theirs" {
 		t.Fatalf("other tenant tree = %+v", got)
+	}
+}
+
+func TestGetCampaignPostTree(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewPostRepository(db)
+	base := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+
+	seedCampaign := func(tenantID, id string, status models.CampaignStatus, archived, deleted bool) {
+		t.Helper()
+		c := &models.Campaign{
+			ID: id, Name: "Campaign " + id, TargetPlatforms: models.CampaignPlatforms{}, PublishingDays: models.StringSlice{},
+			TagIDs: models.StringSlice{}, AssetIDs: models.StringSlice{}, Status: status, Timezone: "Europe/Kyiv",
+			CreatedBy: "user-1", CreatedAt: base, UpdatedAt: base,
+		}
+		if archived {
+			c.ArchivedAt = &base
+		}
+		if deleted {
+			c.DeletedAt = &base
+		}
+		if _, err := db.NewInsert().Model(c).Exec(tenantctx.With(t.Context(), tenantID)); err != nil {
+			t.Fatalf("seed campaign %s: %v", id, err)
+		}
+	}
+	own := models.DefaultTenantID
+	seedCampaign(own, "c-big", models.StatusActive, false, false)
+	seedCampaign(own, "c-archived", models.StatusArchived, true, false)
+	seedCampaign(own, "c-empty", models.StatusDraft, false, false)
+	seedCampaign(own, "c-deleted", models.StatusActive, false, true)
+	seedCampaign("t-other", "c-theirs", models.StatusActive, false, false)
+
+	// More posts than the listing's per-campaign cap, scheduled in reverse
+	// creation order so the result must be re-sorted.
+	const n = repository.MaxTreePostsPerCampaign + 5
+	posts := make([]*models.Post, 0, n)
+	for i := range n {
+		at := base.Add(time.Duration(n-i) * time.Hour)
+		posts = append(posts, &models.Post{
+			ID: fmt.Sprintf("p-%03d", i), CampaignID: "c-big", Title: "t", Content: "body",
+			MediaURLs: models.StringSlice{}, Status: models.PostStatusDraft, ScheduledAt: &at, CTAType: models.CTATypeNone,
+			CreatedBy: "user-1", CreatedAt: base, UpdatedAt: base,
+		})
+	}
+	if _, err := db.NewInsert().Model(&posts).Exec(tenantCtx()); err != nil {
+		t.Fatalf("seed posts: %v", err)
+	}
+	shelved := &models.Post{
+		ID: "p-shelved", CampaignID: "c-archived", Title: "t", MediaURLs: models.StringSlice{}, Status: models.PostStatusPublished,
+		CTAType: models.CTATypeNone, CreatedBy: "user-1", CreatedAt: base, UpdatedAt: base,
+	}
+	if _, err := db.NewInsert().Model(shelved).Exec(tenantCtx()); err != nil {
+		t.Fatalf("seed post: %v", err)
+	}
+	changed := base.Add(time.Minute)
+	if _, err := db.NewUpdate().Model((*models.Campaign)(nil)).Set("posts_changed_at = ?", changed).
+		Where("id = ?", "c-big").Exec(tenantCtx()); err != nil {
+		t.Fatalf("set posts_changed_at: %v", err)
+	}
+
+	got, err := repo.GetCampaignPostTree(tenantCtx(), "c-big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "c-big" || got.Status != models.StatusActive || got.Timezone != "Europe/Kyiv" ||
+		got.PostsChangedAt == nil || !got.PostsChangedAt.Equal(changed) {
+		t.Fatalf("campaign row = %+v", got)
+	}
+	if len(got.Posts) != n {
+		t.Fatalf("posts = %d, want all %d", len(got.Posts), n)
+	}
+	if got.Posts[0].ID != fmt.Sprintf("p-%03d", n-1) || got.Posts[n-1].ID != "p-000" {
+		t.Fatalf("posts not in scheduled order: first %s, last %s", got.Posts[0].ID, got.Posts[n-1].ID)
+	}
+
+	got, err = repo.GetCampaignPostTree(tenantCtx(), "c-archived")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != models.StatusArchived || len(got.Posts) != 1 || got.Posts[0].ID != "p-shelved" || got.PostsChangedAt != nil {
+		t.Fatalf("archived campaign = %+v", got)
+	}
+
+	got, err = repo.GetCampaignPostTree(tenantCtx(), "c-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Posts == nil || len(got.Posts) != 0 {
+		t.Fatalf("empty campaign posts = %#v, want empty non-nil", got.Posts)
+	}
+
+	for _, id := range []string{"c-deleted", "c-theirs", "no-such-campaign"} {
+		if _, err := repo.GetCampaignPostTree(tenantCtx(), id); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("%s: err = %v, want sql.ErrNoRows", id, err)
+		}
 	}
 }

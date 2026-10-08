@@ -24,6 +24,9 @@ type PostRepository interface {
 	// ListCampaignPostTree lists live campaigns with their posts nested, for
 	// a picker; see posts_campaign_tree.go.
 	ListCampaignPostTree(ctx context.Context, maxCampaigns, maxPostsPerCampaign int) ([]models.CampaignPostTree, error)
+	// GetCampaignPostTree returns one campaign, archived included, with all
+	// of its posts; see posts_campaign_tree.go.
+	GetCampaignPostTree(ctx context.Context, id string) (*models.CampaignPostTree, error)
 	Create(ctx context.Context, post *models.Post) error
 	CreateBatch(ctx context.Context, posts []*models.Post) error
 	GetByID(ctx context.Context, id string) (*models.Post, error)
