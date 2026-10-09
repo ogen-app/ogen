@@ -532,7 +532,14 @@ func (p *SubmitPostProcessor) uploadAll(ctx context.Context, post *models.Post, 
 				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID, "mime", att.MimeType)
 			continue
 		}
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			// Off River's goroutine an unrecovered panic would crash the
+			// process; it fails this attempt instead, and River retries.
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("submit: upload media %s panicked: %v", att.ID, r)
+				}
+			}()
 			item, err := p.uploadMedia(gctx, post, att, mediaType)
 			items[i] = item
 			return err

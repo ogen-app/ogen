@@ -1,11 +1,11 @@
 package queues
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -108,25 +108,24 @@ func (p *RefreshZernioFollowersProcessor) refresh(ctx context.Context, now time.
 		return 0, fmt.Errorf("refresh followers: list tenant profiles: %w", err)
 	}
 
-	var (
-		mu       sync.Mutex
-		total    int
-		firstErr error
-	)
-	forEachTenant(ctx, pairs, func(ctx context.Context, tp repository.TenantProfile) {
+	counts, errs := forEachTenant(ctx, pairs, func(ctx context.Context, tp repository.TenantProfile) (int, error) {
 		tctx := tenantctx.With(ctx, tp.TenantID)
 		n, terr := p.refreshTenant(tctx, tp.ProfileID, now)
-		p.recordStatus(context.WithoutCancel(tctx), terr)
-		mu.Lock()
-		defer mu.Unlock()
-		total += n
-		if terr != nil {
-			if firstErr == nil {
-				firstErr = terr
-			}
-			slog.ErrorContext(tctx, "follower refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_followers", "tenant_id", tp.TenantID, logging.AttrError, terr)
-		}
+		sctx, cancel := statusWriteContext(tctx)
+		p.recordStatus(sctx, terr)
+		cancel()
+		return n, terr
 	})
+	total := 0
+	var firstErr error
+	for i, terr := range errs {
+		total += counts[i]
+		if terr == nil {
+			continue
+		}
+		firstErr = cmp.Or(firstErr, terr)
+		slog.ErrorContext(tenantctx.With(ctx, pairs[i].TenantID), "follower refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_followers", "tenant_id", pairs[i].TenantID, logging.AttrError, terr)
+	}
 	return total, firstErr
 }
 

@@ -1,6 +1,7 @@
 package queues
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -8,7 +9,6 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -142,24 +142,19 @@ func (p *DetectExpiringConnectionsProcessor) sweep(ctx context.Context, now time
 		return res, fmt.Errorf("detect expiring connections: list tenant profiles: %w", err)
 	}
 
-	var (
-		mu       sync.Mutex
-		firstErr error
-	)
-	forEachTenant(ctx, pairs, func(ctx context.Context, tp repository.TenantProfile) {
-		tctx := tenantctx.With(ctx, tp.TenantID)
-		tres, terr := p.sweepTenant(tctx, tp.TenantID, tp.ProfileID, now)
-		mu.Lock()
-		defer mu.Unlock()
-		res.add(tres)
-		if terr != nil {
-			if firstErr == nil {
-				firstErr = terr
-			}
-			slog.ErrorContext(tctx, "connection-health sweep: tenant failed", logging.AttrComponent, detectComp,
-				"tenant_id", tp.TenantID, logging.AttrError, terr)
-		}
+	results, errs := forEachTenant(ctx, pairs, func(ctx context.Context, tp repository.TenantProfile) (sweepResult, error) {
+		return p.sweepTenant(tenantctx.With(ctx, tp.TenantID), tp.TenantID, tp.ProfileID, now)
 	})
+	var firstErr error
+	for i, terr := range errs {
+		res.add(results[i])
+		if terr == nil {
+			continue
+		}
+		firstErr = cmp.Or(firstErr, terr)
+		slog.ErrorContext(tenantctx.With(ctx, pairs[i].TenantID), "connection-health sweep: tenant failed", logging.AttrComponent, detectComp,
+			"tenant_id", pairs[i].TenantID, logging.AttrError, terr)
+	}
 	return res, firstErr
 }
 

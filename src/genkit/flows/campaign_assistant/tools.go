@@ -22,6 +22,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
@@ -1025,41 +1026,12 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 
 // readyCampaignAssetIDs resolves the campaign's attached, ready asset IDs — the
 // explicit AssetIDs list when set, otherwise all tenant-ready assets — excluding
-// failed/partial. Mirrors content_plan's candidate resolution. It does
+// failed/partial — the same resolution content_plan uses. It does
 // NOT require campaign.UseAssets: that flag governs automatic inclusion during
 // generation, whereas Q&A is an explicit request to consult the assets.
 func readyCampaignAssetIDs(ctx context.Context, campaign *models.Campaign, assets repository.AssetRepository) ([]string, error) {
-	bad := func(status string) bool {
-		return status == models.AssetStatusFailed || status == models.AssetStatusPartial
-	}
-	if len(campaign.AssetIDs) > 0 {
-		metas, err := assets.ListMeta(ctx, campaign.AssetIDs)
-		if err != nil {
-			return nil, err
-		}
-		status := make(map[string]string, len(metas))
-		for _, a := range metas {
-			status[a.ID] = a.Status
-		}
-		out := make([]string, 0, len(campaign.AssetIDs))
-		for _, id := range campaign.AssetIDs {
-			if s, ok := status[id]; ok && !bad(s) {
-				out = append(out, id)
-			}
-		}
-		return out, nil
-	}
-	all, err := assets.ListMeta(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(all))
-	for _, a := range all {
-		if !bad(a.Status) {
-			out = append(out, a.ID)
-		}
-	}
-	return out, nil
+	ready, _, err := flowkit.ReadyCampaignAssetIDs(ctx, assets, campaign)
+	return ready, err
 }
 
 // ensureCampaignAssetUse turns on asset-sourced content generation when the

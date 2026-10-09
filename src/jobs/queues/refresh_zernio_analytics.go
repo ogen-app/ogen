@@ -1,12 +1,12 @@
 package queues
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -184,30 +184,30 @@ func (p *RefreshZernioAnalyticsProcessor) refresh(ctx context.Context, now time.
 
 	// Tenants are independent, so they refresh in parallel, each under its own
 	// deadline.
-	var (
-		mu       sync.Mutex
-		total    int
-		firstErr error
-	)
-	forEachTenant(ctx, sortedTenantIDs(byTenant), func(ctx context.Context, tenantID string) {
+	tenants := sortedTenantIDs(byTenant)
+	counts, errs := forEachTenant(ctx, tenants, func(ctx context.Context, tenantID string) (int, error) {
 		tctx := tenantctx.With(ctx, tenantID)
 		n, swept, terr := p.refreshTenant(tctx, byTenant[tenantID], platformName, now)
 		// Only record health for tenants we actually swept (or that errored);
 		// a profile-less tenant is skipped entirely, so writing "ok" would
 		// misreport an unconfigured tenant as healthy.
 		if swept || terr != nil {
-			p.recordStatus(context.WithoutCancel(tctx), terr)
+			sctx, cancel := statusWriteContext(tctx)
+			p.recordStatus(sctx, terr)
+			cancel()
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		total += n
-		if terr != nil {
-			if firstErr == nil {
-				firstErr = terr
-			}
-			slog.ErrorContext(tctx, "analytics refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_analytics", "tenant_id", tenantID, logging.AttrError, terr)
-		}
+		return n, terr
 	})
+	total := 0
+	var firstErr error
+	for i, terr := range errs {
+		total += counts[i]
+		if terr == nil {
+			continue
+		}
+		firstErr = cmp.Or(firstErr, terr)
+		slog.ErrorContext(tenantctx.With(ctx, tenants[i]), "analytics refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_analytics", "tenant_id", tenants[i], logging.AttrError, terr)
+	}
 	return total, firstErr
 }
 

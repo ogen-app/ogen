@@ -418,6 +418,14 @@ func (p *ProcessURLProcessor) mirrorImages(ctx context.Context, assetID, markdow
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
+			// A panic on one scraped image fails that image, not the process.
+			defer func() {
+				if rec := recover(); rec != nil {
+					slog.ErrorContext(ctx, "image mirror panicked", logging.AttrComponent, "jobs.process_url",
+						"asset_id", assetID, "url", r.url, logging.AttrError, fmt.Errorf("%v", rec))
+					results[i] = mirrored{failed: true}
+				}
+			}()
 			img, publicURL, ok := p.mirrorImage(ctx, assetID, i, r.url, r.alt)
 			results[i] = mirrored{img: img, publicURL: publicURL, failed: !ok}
 		})
