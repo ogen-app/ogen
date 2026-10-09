@@ -20,6 +20,11 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
+// IngestQueue is the dedicated River queue PDF, document and URL ingestion run
+// on: their parse, scrape and embed steps take minutes, and on the default
+// queue a few bulk uploads would hold up post publishing and email.
+const IngestQueue = "ingest"
+
 // chunkSource is one text an asset processor hands to the shared embed step,
 // with the position and citation metadata its persisted chunk carries.
 type chunkSource struct {
