@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/uptrace/bun"
 
@@ -39,6 +40,9 @@ type PostAttachmentRepository interface {
 	// not edited it (alt_text_edited_by_user = false), and does not flip the flag.
 	// The async attachment alt-text generator uses it.
 	SetGeneratedAltText(ctx context.Context, id string, altText string) error
+	// SetPublisherMedia records the Zernio public URL the attachment was just
+	// uploaded to, and when.
+	SetPublisherMedia(ctx context.Context, id, url string, uploadedAt time.Time) error
 	// ReorderPositions renumbers the post's attachments to 0..n-1 to match
 	// orderedIDs, in one transaction, without tripping UNIQUE(post_id, position).
 	// Callers must pass every current attachment of the post exactly
@@ -255,6 +259,16 @@ func (r *postAttachmentRepository) SetGeneratedAltText(ctx context.Context, id s
 		Set("alt_text = ?", altText).
 		Where("id = ?", id).
 		Where("alt_text_edited_by_user = false").
+		Exec(ctx)
+	return err
+}
+
+func (r *postAttachmentRepository) SetPublisherMedia(ctx context.Context, id, url string, uploadedAt time.Time) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.PostAttachment)(nil)).
+		Set("publisher_media_url = ?", url).
+		Set("publisher_media_uploaded_at = ?", uploadedAt).
+		Where("id = ?", id).
 		Exec(ctx)
 	return err
 }

@@ -54,7 +54,7 @@ func (c *Client) UploadMedia(ctx context.Context, uploadURL, contentType string,
 	if size > 0 {
 		req.ContentLength = size
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.uploadClient.Do(req)
 	if err != nil {
 		return err
 	}

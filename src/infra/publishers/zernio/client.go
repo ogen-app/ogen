@@ -68,9 +68,13 @@ func StaticKey(key string) KeyResolver {
 // debug surfaces. All outbound requests carry the bearer header;
 // non-2xx responses are returned as a typed *APIError.
 type Client struct {
-	httpClient  *http.Client
-	baseURL     string
-	keyResolver KeyResolver
+	httpClient *http.Client
+	// uploadClient PUTs media bytes to presigned storage URLs. It has no
+	// overall timeout: a large video needs longer than an API call, so the
+	// caller's context bounds the upload instead.
+	uploadClient *http.Client
+	baseURL      string
+	keyResolver  KeyResolver
 	// redirectURL is the post-OAuth landing target sent on every
 	// connect-link request. Empty means "use Zernio's default success
 	// page". See ClientOpts.RedirectURL for semantics.
@@ -111,10 +115,11 @@ func NewClient(resolver KeyResolver, baseURL string, opts ClientOpts) *Client {
 		timeout = defaultTimeout
 	}
 	return &Client{
-		httpClient:  &http.Client{Timeout: timeout},
-		baseURL:     strings.TrimRight(baseURL, "/"),
-		keyResolver: resolver,
-		redirectURL: opts.RedirectURL,
+		httpClient:   &http.Client{Timeout: timeout},
+		uploadClient: &http.Client{},
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		keyResolver:  resolver,
+		redirectURL:  opts.RedirectURL,
 	}
 }
 
