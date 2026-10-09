@@ -3,6 +3,7 @@ package platforms
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -149,6 +150,12 @@ func autoSplit(content string, limit int) []string {
 // is broken down by overflow, whose leading pieces are flushed and whose last
 // piece stays open so the following unit can pack onto it.
 func packUnits(units []string, limit int, joiner string, overflow func(string) []string) []string {
+	// Flattening never lengthens text (every rule drops or swaps characters
+	// one for one), so a chunk whose raw rune count fits needs no flattening to
+	// know it fits; only chunks near the limit pay for VisibleLen.
+	fits := func(s string) bool {
+		return utf8.RuneCountInString(s) <= limit || VisibleLen(s) <= limit
+	}
 	var out []string
 	var cur string
 	flush := func() {
@@ -165,12 +172,12 @@ func packUnits(units []string, limit int, joiner string, overflow func(string) [
 		if cur != "" {
 			candidate = cur + joiner + u
 		}
-		if VisibleLen(candidate) <= limit {
+		if fits(candidate) {
 			cur = candidate
 			continue
 		}
 		flush()
-		if VisibleLen(u) <= limit {
+		if fits(u) {
 			cur = u
 			continue
 		}

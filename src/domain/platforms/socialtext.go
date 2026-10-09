@@ -58,17 +58,41 @@ func FlattenSocialText(markdown string) string {
 			continue
 		}
 
-		line = reHeading.ReplaceAllString(line, "")       // heading marker
-		line = reBlockquote.ReplaceAllString(line, "")    // blockquote marker
-		line = reBullet.ReplaceAllString(line, "$1• ")    // bullet list
-		line = reOrdered.ReplaceAllString(line, "$1$2. ") // ordered list
+		if mayHaveBlockMarker(line) {
+			line = reHeading.ReplaceAllString(line, "")       // heading marker
+			line = reBlockquote.ReplaceAllString(line, "")    // blockquote marker
+			line = reBullet.ReplaceAllString(line, "$1• ")    // bullet list
+			line = reOrdered.ReplaceAllString(line, "$1$2. ") // ordered list
+		}
 
 		out = append(out, inlineToText(line))
 	}
 
 	// Blank runs collapse to one empty line: Markdown needs the double newline
 	// between blocks, a feed post does not.
-	return strings.TrimSpace(reBlankRuns.ReplaceAllString(strings.Join(out, "\n"), "\n\n"))
+	text := strings.Join(out, "\n")
+	if strings.Contains(text, "\n\n\n") {
+		text = reBlankRuns.ReplaceAllString(text, "\n\n")
+	}
+	return strings.TrimSpace(text)
+}
+
+// inlineMarkers are the characters some inline rule needs to match: escapes,
+// images, links, autolinks, code, emphasis and strikethrough. A line without
+// any of them is already plain text.
+const inlineMarkers = "\\![<`*_~"
+
+// mayHaveBlockMarker reports whether a heading, blockquote or list rule could
+// match line: each needs its marker (#, >, -, *, + or a digit) as the first
+// non-space character. The auto-split measures every candidate chunk through
+// FlattenSocialText, so plain lines skip the four regexes.
+func mayHaveBlockMarker(line string) bool {
+	t := strings.TrimLeft(line, " \t\n\v\f\r")
+	if t == "" {
+		return false
+	}
+	c := t[0]
+	return strings.IndexByte("#>-*+", c) >= 0 || (c >= '0' && c <= '9')
 }
 
 // VisibleLen is the rune length of the text as it will publish — the flattened
@@ -134,6 +158,9 @@ var (
 // inlineToText strips inline Markdown from a single line, leaving the text a
 // caption will display. Mirrors socialText.ts inlineToText rule-for-rule.
 func inlineToText(input string) string {
+	if !strings.ContainsAny(input, inlineMarkers) {
+		return input
+	}
 	s := reEscaped.ReplaceAllStringFunc(input, func(m string) string {
 		// m is `\X`; X is the escaped ASCII-punctuation byte.
 		return maskChar + strconv.Itoa(int(m[1])) + maskChar
