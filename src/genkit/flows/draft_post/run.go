@@ -30,8 +30,9 @@ import (
 const logComponent = "genkit.draft_post"
 
 // defaultMaxOutputTokens caps a single draft generation when the config leaves
-// it at 0. Enough for a handful of full-length posts.
-const defaultMaxOutputTokens int64 = 8192
+// it at 0. Enough for a handful of full-length posts plus the thinking that
+// Claude 5.x models do by default, which counts toward the cap.
+const defaultMaxOutputTokens int64 = 16384
 
 // contextTemplateData is the view model passed to both prompt blocks.
 type contextTemplateData struct {
@@ -117,6 +118,7 @@ func runDraftPost(
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(systemPrompt),
 		ai.WithPrompt(contextBlock),
+		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowDraftPost)),
 		cfg.Provider.CallConfig(maxTokens),
 	); err != nil {
 		return nil, err

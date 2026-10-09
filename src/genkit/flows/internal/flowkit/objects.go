@@ -40,7 +40,7 @@ func StreamObjects(
 			out.Response = result.Response
 			return out, nil
 		}
-		text := result.Chunk.Text()
+		text := chunkText(result.Chunk)
 		out.Chunks++
 		out.Bytes += len(text)
 		for _, raw := range splitter.Push(text) {
@@ -50,4 +50,20 @@ func StreamObjects(
 		}
 	}
 	return out, nil
+}
+
+// chunkText joins a chunk's text parts. ai.ModelResponseChunk.Text returns a
+// lone part's text whatever its kind, which would feed a thinking delta into
+// the JSON stream.
+func chunkText(c *ai.ModelResponseChunk) string {
+	if c == nil {
+		return ""
+	}
+	var text string
+	for _, p := range c.Content {
+		if p.IsText() {
+			text += p.Text
+		}
+	}
+	return text
 }

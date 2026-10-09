@@ -178,9 +178,12 @@ func generatePosts(
 		g:            g,
 		modelName:    mc.Ref,
 		systemPrompt: systemPrompt,
-		modelCfg:     cfg.Provider.CallConfig(cmp.Or(cfg.MaxOutputTokens, 8192)),
-		usage:        flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "content_plan", Component: logComponent},
-		validate:     newPostValidator(platforms, phaseIDSet(scope.phases), data.StartDate, data.EndDate),
+		modelOpts: []ai.GenerateOption{
+			ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowContentPlan)),
+			cfg.Provider.CallConfig(cmp.Or(cfg.MaxOutputTokens, 8192)),
+		},
+		usage:    flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "content_plan", Component: logComponent},
+		validate: newPostValidator(platforms, phaseIDSet(scope.phases), data.StartDate, data.EndDate),
 		// Snapping stays inside the active window, so a targeted run never
 		// schedules a post outside it.
 		persist: func(ctx context.Context, dp *DraftPost) (string, error) {
@@ -330,7 +333,7 @@ type postGenerator struct {
 	g            *genkit.Genkit
 	modelName    string
 	systemPrompt string
-	modelCfg     ai.GenerateOption
+	modelOpts    []ai.GenerateOption // middleware + call config, shared by every call
 	usage        flowkit.Usage
 	validate     postValidator
 	// persist writes one post and returns its row id.
@@ -345,12 +348,11 @@ type postGenerator struct {
 // persist; 0 is uncapped. Whatever was persisted is returned even on error,
 // so work survives a failed call.
 func (gen *postGenerator) stream(ctx context.Context, userPrompt string, startIndex, expected int, onEvent OnEventFunc) ([]DraftPost, error) {
-	opts := []ai.GenerateOption{
+	opts := append([]ai.GenerateOption{
 		ai.WithModelName(gen.modelName),
 		ai.WithSystem(gen.systemPrompt),
 		ai.WithPrompt(userPrompt),
-		gen.modelCfg,
-	}
+	}, gen.modelOpts...)
 	sink := &postSink{gen: gen, startIndex: startIndex, expected: expected, onEvent: onEvent, persisted: map[int]bool{}}
 	res, err := flowkit.StreamObjects(ctx, gen.g, func(pos int, raw string) {
 		post, ok := parseAndTrimPost(raw)

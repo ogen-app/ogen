@@ -2,6 +2,7 @@ package post_quality
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -27,9 +29,10 @@ const retryBackoff = 2 * time.Second
 // issues a NON-streaming GenerateData call. The Anthropic SDK rejects a
 // non-streaming request whose max_tokens implies a >10-minute run — its
 // estimate is 1h × max_tokens/128000, so anything above ~21k tokens is
-// refused (and Opus-tier models cap non-streaming at 8192). 8192 stays
-// under every limit while leaving ample headroom for the response.
-const defaultMaxOutputTokens = 8192
+// refused (and the retired Opus 4/4.1 capped non-streaming at 8192; no model
+// in the registry does). 16384 stays under that limit while leaving room for
+// the thinking Claude 5.x models do by default, which counts toward the cap.
+const defaultMaxOutputTokens = 16384
 
 // dimensionTargets enumerates the four dimensions and the label shown to the
 // model. The order matches the assembly in evaluate.
@@ -140,12 +143,16 @@ func evaluateDimension(
 			ai.WithModelName(modelName),
 			ai.WithSystem("%s", prompts.system),
 			ai.WithPrompt("%s", userPrompt),
+			ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowPostQuality)),
 			cfg.Provider.CallConfig(maxTokens),
 		)
 		u.WarnIfTruncated(ctx, resp, maxTokens)
 		if err != nil {
 			lastErr = fmt.Errorf("model call: %w", err)
 			slog.ErrorContext(ctx, "attempt failed", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1, logging.AttrError, lastErr)
+			if errors.Is(err, llm.ErrRefused) {
+				break // the same request would be refused again
+			}
 			continue
 		}
 		// Record every completed call (one per dimension, plus any empty-rationale
