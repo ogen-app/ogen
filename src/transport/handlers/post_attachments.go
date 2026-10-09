@@ -581,7 +581,13 @@ func (h *PostAttachmentsHandler) prepareImage(ctx context.Context, up *attachmen
 	if err != nil {
 		return fmt.Errorf("post_attachments: read image: %w", err)
 	}
+	return h.storeImage(ctx, att, raw, mime, ext, fh.Filename)
+}
 
+// storeImage stages the original, has image-service write its metadata-stripped
+// copy to the attachment's own key, and fills att from the result. The original
+// is always discarded.
+func (h *PostAttachmentsHandler) storeImage(ctx context.Context, att *models.PostAttachment, raw []byte, mime, ext, filename string) error {
 	cleanKey := attachmentKey(ctx, att, ext)
 	orig, err := ingest.PutBlob(ctx, h.storage, attachmentKey(ctx, att, ".orig"+ext), raw, mime)
 	if err != nil {
@@ -589,7 +595,7 @@ func (h *PostAttachmentsHandler) prepareImage(ctx context.Context, up *attachmen
 	}
 	defer orig.Discard(ctx)
 
-	prep, err := h.stripImage(ctx, orig.Key(), cleanKey, mime, fh.Filename)
+	prep, err := h.stripImage(ctx, orig.Key(), cleanKey, mime, filename)
 	if err != nil {
 		return err
 	}
