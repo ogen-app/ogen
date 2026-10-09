@@ -204,3 +204,87 @@ func TestCostOf_SnapshotIsPure(t *testing.T) {
 		t.Fatalf("captured snapshot changed to %d, want 3000000", snapshot)
 	}
 }
+
+func TestCostOf_LongPromptTier(t *testing.T) {
+	clearRegistry()
+	Register(Descriptor{
+		Name:   "anthropic",
+		Family: FamilyModel,
+		Prices: PriceTable{
+			Version: "v",
+			Models: map[string]Rates{
+				"tiered": {KindInput: 100_000, KindOutput: 500_000, KindCacheRead: 10_000},
+				"flat":   {KindInput: 100_000, KindOutput: 500_000},
+			},
+			LongPrompt: map[string]PromptTier{
+				"tiered": {Threshold: 100_000, Rates: Rates{KindInput: 500_000, KindOutput: 2_500_000, KindCacheRead: 50_000}},
+			},
+		},
+	})
+
+	tests := []struct {
+		name  string
+		model string
+		u     Usage
+		want  int64
+	}{
+		{
+			name:  "at threshold stays on base rates",
+			model: "tiered",
+			u:     Usage{KindInput: 100_000, KindOutput: 1_000_000},
+			want:  10_000 + 500_000,
+		},
+		{
+			name:  "over threshold reprices the whole request, output included",
+			model: "tiered",
+			u:     Usage{KindInput: 100_001, KindOutput: 1_000_000},
+			want:  50_000 + 2_500_000,
+		},
+		{
+			name:  "cache reads count toward the prompt length",
+			model: "tiered",
+			u:     Usage{KindInput: 1_000, KindCacheRead: 99_001},
+			want:  500 + 4950,
+		},
+		{
+			name:  "cache writes count toward the prompt length",
+			model: "tiered",
+			u:     Usage{KindInput: 2, KindCacheCreation: 100_000},
+			want:  1, // tier input rate; the tier has no cache_creation rate
+		},
+		{
+			name:  "model without a tier ignores prompt length",
+			model: "flat",
+			u:     Usage{KindInput: 1_000_000},
+			want:  100_000,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, ok := CostOf("anthropic", tc.model, tc.u)
+			if !ok || got != tc.want {
+				t.Fatalf("CostOf = (%d, %v), want (%d, true)", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestMergePrices_KeepsLongPromptTiers(t *testing.T) {
+	clearRegistry()
+	tier := PromptTier{Threshold: 10, Rates: Rates{KindInput: 9}}
+	Register(Descriptor{
+		Name:   "v",
+		Family: FamilyModel,
+		Prices: PriceTable{
+			Version:    "base",
+			Models:     map[string]Rates{"a": {KindInput: 1}},
+			LongPrompt: map[string]PromptTier{"a": tier},
+		},
+	})
+	MergePrices("v", "ovr", map[string]Rates{"a": {KindInput: 2}})
+
+	d, _ := Get("v")
+	if !reflect.DeepEqual(d.Prices.LongPrompt["a"], tier) {
+		t.Fatalf("long-prompt tier lost on merge: %+v", d.Prices.LongPrompt)
+	}
+}

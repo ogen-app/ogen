@@ -70,6 +70,37 @@ type Rates map[Kind]int64
 type PriceTable struct {
 	Version string           // e.g. "anthropic-2026-06"
 	Models  map[string]Rates // model id / sku -> per-kind rates
+	// LongPrompt holds, per model id, the rate set that replaces Models[id]
+	// for a request whose prompt exceeds the tier's threshold. Optional: a
+	// model absent here is priced at Models[id] regardless of prompt length.
+	LongPrompt map[string]PromptTier
+}
+
+// PromptTier prices a whole request at Rates — output included — once its
+// prompt (input + cache-read + cache-write tokens) exceeds Threshold tokens.
+type PromptTier struct {
+	Threshold int64
+	Rates     Rates
+}
+
+// RatesFor returns the rates that price usage u on model. ok is false when the
+// model has no entry in Models.
+func (p PriceTable) RatesFor(model string, u Usage) (Rates, bool) {
+	rates, ok := p.Models[model]
+	if !ok {
+		return nil, false
+	}
+	if tier, ok := p.LongPrompt[model]; ok && promptTokens(u) > tier.Threshold {
+		return tier.Rates, true
+	}
+	return rates, true
+}
+
+// promptTokens is the prompt length a long-prompt tier is measured against:
+// every input token the request sent, whether fresh, read from cache or
+// written to it.
+func promptTokens(u Usage) int64 {
+	return u[KindInput] + u[KindCacheRead] + u[KindCacheCreation]
 }
 
 const perMillion = 1_000_000

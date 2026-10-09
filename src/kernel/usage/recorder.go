@@ -234,7 +234,7 @@ func costFor(d vendors.Descriptor, model string, u vendors.Usage) (micros int64,
 	if len(d.Prices.Models) == 0 {
 		return 0, true
 	}
-	rates, ok := d.Prices.Models[model]
+	rates, ok := d.Prices.RatesFor(model, u)
 	if !ok {
 		return 0, false
 	}
