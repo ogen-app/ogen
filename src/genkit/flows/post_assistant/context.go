@@ -435,14 +435,11 @@ func buildAssetSummaries(ctx context.Context, assetIDs []string, repos PostAssis
 			if err != nil {
 				return
 			}
-			chunks, err := repos.Chunks.GetByAssetID(ctx, assetID)
+			chunkCount, first, err := repos.Chunks.PreviewByAssetID(ctx, assetID)
 			if err != nil {
 				return
 			}
-			preview := ""
-			if len(chunks) > 0 {
-				preview = truncateRunes(chunks[0].Content, previewChars)
-			}
+			preview := truncateRunes(first, previewChars)
 			assetType := ""
 			if asset.Type != nil {
 				assetType = *asset.Type
@@ -453,7 +450,7 @@ func buildAssetSummaries(ctx context.Context, assetIDs []string, repos PostAssis
 					ID:         asset.ID,
 					Name:       asset.Title,
 					Type:       assetType,
-					ChunkCount: len(chunks),
+					ChunkCount: chunkCount,
 					Preview:    preview,
 				},
 				ok: true,

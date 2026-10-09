@@ -17,21 +17,25 @@ import (
 type AssetChunksRepository interface {
 	// UpsertChunks atomically replaces all chunks for the given asset.
 	UpsertChunks(ctx context.Context, assetID string, chunks []models.AssetChunk) error
-	// GetByAssetID returns all chunks for an asset, ordered by chunk_index.
+	// GetByAssetID returns all chunks for an asset, ordered by chunk_index,
+	// without the embedding vector.
 	GetByAssetID(ctx context.Context, assetID string) ([]models.AssetChunk, error)
+	// PreviewByAssetID returns an asset's chunk count and the content of its
+	// first chunk ("" when it has none) in one query.
+	PreviewByAssetID(ctx context.Context, assetID string) (count int, first string, err error)
 	// ListPageByAssetID returns one page of an asset's chunks ordered by
 	// chunk_index, without the embedding vector, plus the asset's total chunk
 	// count — the REST chunk view.
 	ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error)
-	// SearchSimilar returns embedded chunks ordered by cosine similarity to
-	// query (closest first), keeping only those scoring >= minScore. When
+	// SearchSimilar returns embedded chunks (without the embedding vector)
+	// ordered by cosine similarity to query (closest first), keeping only those scoring >= minScore. When
 	// assetIDs is non-empty the search is scoped to those assets; limit <= 0
 	// means no row cap. Backed by the pgvector HNSW index (embedding <=> query).
 	SearchSimilar(ctx context.Context, query pgvector.HalfVector, assetIDs []string, minScore float64, limit int) ([]models.AssetChunk, error)
 	// DeleteByAssetID removes all chunks for an asset.
 	DeleteByAssetID(ctx context.Context, assetID string) error
 	// GetByIDs returns chunks matching the given primary-key IDs, ordered by
-	// asset_id then chunk_index.
+	// asset_id then chunk_index, without the embedding vector.
 	GetByIDs(ctx context.Context, ids []string) ([]models.AssetChunk, error)
 }
 
@@ -78,10 +82,21 @@ func (r *assetChunksRepository) GetByAssetID(ctx context.Context, assetID string
 	var chunks []models.AssetChunk
 	err := r.db.NewSelect().
 		Model(&chunks).
+		ExcludeColumn("embedding").
 		Where("ac.asset_id = ?", assetID).
 		OrderExpr("ac.chunk_index ASC").
 		Scan(ctx)
 	return chunks, err
+}
+
+func (r *assetChunksRepository) PreviewByAssetID(ctx context.Context, assetID string) (count int, first string, err error) {
+	err = r.db.NewSelect().
+		Model((*models.AssetChunk)(nil)).
+		ColumnExpr("count(*)").
+		ColumnExpr("coalesce((array_agg(ac.content ORDER BY ac.chunk_index))[1], '')").
+		Where("ac.asset_id = ?", assetID).
+		Scan(ctx, &count, &first)
+	return count, first, err
 }
 
 func (r *assetChunksRepository) ListPageByAssetID(ctx context.Context, assetID string, offset, limit int) ([]models.AssetChunk, int, error) {
@@ -104,6 +119,7 @@ func (r *assetChunksRepository) SearchSimilar(ctx context.Context, query pgvecto
 	// closest-first ordering both key off the same expression.
 	q := r.db.NewSelect().
 		Model(&chunks).
+		ExcludeColumn("embedding").
 		Where("ac.embedding IS NOT NULL").
 		Where("(1 - (ac.embedding <=> ?)) >= ?", query, minScore).
 		OrderExpr("ac.embedding <=> ?", query)
@@ -134,6 +150,7 @@ func (r *assetChunksRepository) GetByIDs(ctx context.Context, ids []string) ([]m
 	var chunks []models.AssetChunk
 	err := r.db.NewSelect().
 		Model(&chunks).
+		ExcludeColumn("embedding").
 		Where("ac.id IN (?)", bun.List(ids)).
 		OrderExpr("ac.asset_id ASC, ac.chunk_index ASC").
 		Scan(ctx)

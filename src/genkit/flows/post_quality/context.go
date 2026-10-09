@@ -138,8 +138,8 @@ func buildAssetContexts(ctx context.Context, assetIDs []string, repos PostQualit
 				return
 			}
 			preview := truncateRunes(asset.Content, previewChars)
-			if chunks, err := repos.Chunks.GetByAssetID(ctx, assetID); err == nil && len(chunks) > 0 {
-				preview = truncateRunes(chunks[0].Content, previewChars)
+			if n, first, err := repos.Chunks.PreviewByAssetID(ctx, assetID); err == nil && n > 0 {
+				preview = truncateRunes(first, previewChars)
 			}
 			results[idx] = result{summary: assetContext{Title: asset.Title, Preview: preview}, ok: true}
 		})
