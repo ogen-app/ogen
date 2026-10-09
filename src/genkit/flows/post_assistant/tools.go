@@ -405,7 +405,7 @@ func toolListAssets(ctx context.Context) ([]AssetInfo, error) {
 		if err != nil {
 			continue
 		}
-		chunks, err := st.repos.Chunks.GetByAssetID(ctx, id)
+		chunkCount, _, err := st.repos.Chunks.PreviewByAssetID(ctx, id)
 		if err != nil {
 			continue
 		}
@@ -417,7 +417,7 @@ func toolListAssets(ctx context.Context) ([]AssetInfo, error) {
 			ID:         asset.ID,
 			Name:       asset.Title,
 			Type:       assetType,
-			ChunkCount: len(chunks),
+			ChunkCount: chunkCount,
 		})
 	}
 	return result, nil
