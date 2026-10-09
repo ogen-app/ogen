@@ -35,8 +35,16 @@ const (
 // Expanded 2026-10-06: added Gemini 3.8 Flash ($0.75/1M input, one rate for
 // text/image/audio; $3.75/1M output) after Google closed the 2.5 models to new
 // API users. The 2.5 rates stay so runs recorded on them keep their price.
+// Expanded 2026-10-09: added the Claude 5.x lineup — Haiku 5.5 ($0.10/$0.50 up
+// to a 100K-token prompt, $0.50/$2.50 above it), Sonnet 5 and 5.5 ($2/$10),
+// Opus 5 ($5/$25), Opus 5.5 ($4/$20) and Fable 5.1 ($10/$50). Cache reads are
+// 0.1× input except Sonnet 5.5 and Opus 5.5 (0.05×) and Fable 5.1 (0.025×).
 // Re-verify against platform.claude.com/pricing before trusting for billing.
-const priceVersion = "2026-10-06"
+const priceVersion = "2026-10-09"
+
+// haikuLongPromptThreshold is the prompt length, in tokens, above which Claude
+// Haiku 5.5 prices the whole request at its long-prompt rates.
+const haikuLongPromptThreshold = 100_000
 
 func init() {
 	vendors.Register(vendors.Descriptor{
@@ -93,6 +101,55 @@ func init() {
 					vendors.KindCacheRead:     1_000_000,
 					vendors.KindCacheCreation: 12_500_000,
 				},
+				"claude-fable-5-1": {
+					vendors.KindInput:         10_000_000,
+					vendors.KindOutput:        50_000_000,
+					vendors.KindCacheRead:     250_000,
+					vendors.KindCacheCreation: 12_500_000,
+				},
+				"claude-opus-5-5": {
+					vendors.KindInput:         4_000_000,
+					vendors.KindOutput:        20_000_000,
+					vendors.KindCacheRead:     200_000,
+					vendors.KindCacheCreation: 5_000_000,
+				},
+				"claude-opus-5": {
+					vendors.KindInput:         5_000_000,
+					vendors.KindOutput:        25_000_000,
+					vendors.KindCacheRead:     500_000,
+					vendors.KindCacheCreation: 6_250_000,
+				},
+				"claude-sonnet-5-5": {
+					vendors.KindInput:         2_000_000,
+					vendors.KindOutput:        10_000_000,
+					vendors.KindCacheRead:     100_000,
+					vendors.KindCacheCreation: 2_500_000,
+				},
+				"claude-sonnet-5": {
+					vendors.KindInput:         2_000_000,
+					vendors.KindOutput:        10_000_000,
+					vendors.KindCacheRead:     200_000,
+					vendors.KindCacheCreation: 2_500_000,
+				},
+				// Rates for a prompt up to haikuLongPromptThreshold tokens; the
+				// LongPrompt tier below prices longer ones.
+				"claude-haiku-5-5": {
+					vendors.KindInput:         100_000,
+					vendors.KindOutput:        500_000,
+					vendors.KindCacheRead:     10_000,
+					vendors.KindCacheCreation: 125_000,
+				},
+			},
+			LongPrompt: map[string]vendors.PromptTier{
+				"claude-haiku-5-5": {
+					Threshold: haikuLongPromptThreshold,
+					Rates: vendors.Rates{
+						vendors.KindInput:         500_000,
+						vendors.KindOutput:        2_500_000,
+						vendors.KindCacheRead:     50_000,
+						vendors.KindCacheCreation: 625_000,
+					},
+				},
 			},
 		},
 		Capabilities: map[string]modelconfig.ModelCapabilities{
@@ -103,6 +160,12 @@ func init() {
 			"claude-opus-4-6":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 			"claude-sonnet-4-6":          {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 			"claude-fable-5":             {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-fable-5-1":           {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-opus-5-5":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-opus-5":              {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-sonnet-5-5":          {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-sonnet-5":            {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
+			"claude-haiku-5-5":           {Capability: modelconfig.CapabilityChat, Tools: true, StructuredOutput: true, Streaming: true, MaxOutputTokens: 128000, ContextWindow: 1000000},
 		},
 	})
 

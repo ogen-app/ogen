@@ -46,6 +46,59 @@ func TestAnthropicPricing(t *testing.T) {
 	}
 }
 
+func TestHaiku55PricingByPromptLength(t *testing.T) {
+	tests := []struct {
+		name string
+		u    vendors.Usage
+		want int64
+	}{
+		{
+			// 100K input @ $0.10/1M + 1M output @ $0.50/1M.
+			name: "prompt at the threshold",
+			u:    vendors.Usage{vendors.KindInput: 100_000, vendors.KindOutput: 1_000_000},
+			want: 10_000 + 500_000,
+		},
+		{
+			// Same request one token over: everything at $0.50/$2.50.
+			name: "prompt over the threshold",
+			u:    vendors.Usage{vendors.KindInput: 100_001, vendors.KindOutput: 1_000_000},
+			want: 50_000 + 2_500_000,
+		},
+		{
+			// 20K fresh + 90K cache-read is a 110K prompt: $0.50 input, $0.05 cache-read.
+			name: "cache reads push the prompt over",
+			u:    vendors.Usage{vendors.KindInput: 20_000, vendors.KindCacheRead: 90_000},
+			want: 10_000 + 4_500,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cost, _, ok := vendors.CostOf(llm.VendorAnthropic, "claude-haiku-5-5", tc.u)
+			if !ok || cost != tc.want {
+				t.Fatalf("cost = %d (priced %v), want %d", cost, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaude5CacheReadRates(t *testing.T) {
+	// 1M cache-read tokens per model: 0.1× input, except Sonnet/Opus 5.5
+	// (0.05×) and Fable 5.1 (0.025×).
+	want := map[string]int64{
+		"claude-sonnet-5":   200_000,
+		"claude-sonnet-5-5": 100_000,
+		"claude-opus-5":     500_000,
+		"claude-opus-5-5":   200_000,
+		"claude-fable-5-1":  250_000,
+	}
+	for model, micros := range want {
+		cost, _, ok := vendors.CostOf(llm.VendorAnthropic, model, vendors.Usage{vendors.KindCacheRead: 1_000_000})
+		if !ok || cost != micros {
+			t.Errorf("%s cache-read cost = %d (priced %v), want %d", model, cost, ok, micros)
+		}
+	}
+}
+
 func TestGeminiEmbedPricing(t *testing.T) {
 	// 1M embed input @ $0.15/1M = 150_000 micros.
 	cost, _, ok := vendors.CostOf(llm.VendorGemini, "gemini-embedding-2",
