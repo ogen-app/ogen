@@ -99,7 +99,7 @@ func (ProcessPDFTask) Kind() string { return ProcessPDFQueue }
 // DeadlineExceeded, embedder outage) retry with backoff; terminal ones (corrupt
 // PDF) short-circuit to "failed" inside Work.
 func (ProcessPDFTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 5}
+	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
 }
 
 type ProcessPDFProcessor struct {

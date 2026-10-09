@@ -464,6 +464,10 @@ type Config struct {
 	// the worker pool on the default queue; River owns leasing, retry/
 	// backoff, and completed-job retention internally.
 	JobWorkers int `envconfig:"JOB_WORKERS" default:"4"`
+	// IngestJobWorkers sizes the dedicated `ingest` queue, where PDF, document
+	// and URL ingestion run, so minutes-long parses and embeds never hold the
+	// default queue's workers.
+	IngestJobWorkers int `envconfig:"INGEST_JOB_WORKERS" default:"2"`
 	// Graceful-shutdown wait for in-flight jobs to finish.
 	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"30s"`
 

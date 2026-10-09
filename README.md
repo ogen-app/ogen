@@ -498,7 +498,8 @@ All runtime knobs are env vars, loaded by
 | `GRPC_ADDR` / `GRPC_AUTH_TOKEN` | `127.0.0.1:9091` / empty | Internal operator gRPC surface; starts only when both are set. |
 | `HARBOR_WEBHOOK_URL` / `HARBOR_WEBHOOK_SECRET` / `HARBOR_BASE_URL` | empty | New-tenant operator notification: Harbor inbound webhook, HMAC signing key, and "View in Harbor" deep-link base. Empty URL turns the feature off. |
 | `SENTRY_DSN` | empty | Turns on error monitoring + OTel tracing; empty disables all telemetry. Also `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, `SENTRY_TRACES_SAMPLE_RATE` (`0.1`), `OTEL_SERVICE_NAME` (`ogen-api`). |
-| `JOB_WORKERS` / `JOB_SHUTDOWN_TIMEOUT` | 4 / 30s | River worker pool + graceful-shutdown wait. |
+| `JOB_WORKERS` / `JOB_SHUTDOWN_TIMEOUT` | 4 / 30s | River default-queue worker pool + graceful-shutdown wait. |
+| `INGEST_JOB_WORKERS` | 2 | Worker pool of the `ingest` queue (PDF, document and URL ingestion). |
 | `RECONCILE_GRACE` | `1h` | Reconciliation timeout for stuck Scheduled posts. |
 | `ZERNIO_ORPHAN_SWEEP_INTERVAL` / `ZERNIO_ORPHAN_SWEEP_LIVE` / `ZERNIO_ORPHAN_SWEEP_MIN_AGE` | `1h` / `false` / `1h` | Sweep for posts still queued in Zernio that no scheduled Ogen post holds. Dry run (logs + `ogen_jobs_zernio_orphans_found`) until `LIVE=true`, then withdraws them. Only profiles of this environment's tenants are listed; posts younger than `MIN_AGE` are left alone. |
 | `POSTLOG_RETENTION_DAYS` | `90` | Post Log retention window. |

@@ -54,7 +54,7 @@ func TestEveryInsertQueueIsConfigured(t *testing.T) {
 		})
 	}
 
-	configured := QueueConfigs(1, 1, 1)
+	configured := QueueConfigs(1, 1, 1, 1)
 	var seen int
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {

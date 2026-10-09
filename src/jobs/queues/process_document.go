@@ -80,7 +80,7 @@ func (ProcessDocumentTask) Kind() string { return ProcessDocumentQueue }
 // DeadlineExceeded, embedder outage) retry with backoff; terminal ones
 // (unsupported/corrupt/encrypted document) short-circuit to "failed" inside Work.
 func (ProcessDocumentTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 5}
+	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
 }
 
 type ProcessDocumentProcessor struct {

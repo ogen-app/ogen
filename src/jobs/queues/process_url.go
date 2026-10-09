@@ -117,7 +117,7 @@ func (ProcessURLTask) Kind() string { return ProcessURLQueue }
 // outage) retry with backoff; terminal ones (4xx, unscrapeable page)
 // short-circuit to "failed" inside Work.
 func (ProcessURLTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 5}
+	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
 }
 
 type ProcessURLProcessor struct {

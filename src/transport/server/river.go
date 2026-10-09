@@ -29,9 +29,10 @@ func newRiverClient(ctx context.Context, d *deps) (*river.Client[*sql.Tx], error
 		// Each job runs in a root tracing span; exhausted-retry failures are
 		// reported to Sentry.
 		Middleware: jobs.Middleware(),
-		// Dedicated audio and image queues keep long transcription/vision runs
-		// from starving short jobs on the default queue.
-		Queues:       queues.QueueConfigs(d.cfg.JobWorkers, d.cfg.AudioJobWorkers, d.cfg.ImageJobWorkers),
+		// Dedicated audio, image and ingest queues keep long transcription, vision
+		// and document runs from starving short jobs (publishing, email) on the
+		// default queue.
+		Queues:       queues.QueueConfigs(d.cfg.JobWorkers, d.cfg.AudioJobWorkers, d.cfg.ImageJobWorkers, d.cfg.IngestJobWorkers),
 		Workers:      workers,
 		PeriodicJobs: periodicConfig(d.cfg).PeriodicJobs(),
 	})
