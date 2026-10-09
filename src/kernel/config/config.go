@@ -143,8 +143,8 @@ type Config struct {
 	// routes cheaply on Haiku while the heavy writing stays capable.
 	PlanningModelID string `envconfig:"PLANNING_MODEL_ID" default:"claude-haiku-4-5-20251001"` // Seed-only (see ModelID)
 
-	// 64K is within every registered Claude model's max output (64K–128K).
-	// Anthropic charges only for tokens actually emitted, so a generous cap costs nothing on
+	// Each call clamps this to its model's max output (64K on Claude 4.x, 128K
+	// on 5.x), so tiers on either family share one setting. Anthropic charges only for tokens actually emitted, so a generous cap costs nothing on
 	// short responses but prevents truncation on long rewrites (assistant
 	// flow with explanation + full post content + tool inputs combined).
 	MaxOutputTokens int64 `envconfig:"MAX_OUTPUT_TOKENS"     default:"64000"`

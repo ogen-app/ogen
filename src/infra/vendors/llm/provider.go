@@ -10,6 +10,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 
+	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -42,9 +43,21 @@ func (p *Provider) Vendor() string {
 // being set twice, so a flow must pass exactly one CallConfig per call.
 //
 // The cap covers thinking as well as the answer: Claude 5.x models think by
-// default, and their thinking tokens count toward max_tokens.
-func (p *Provider) CallConfig(maxTokens int64) ai.GenerateOption {
-	return ai.WithConfig(anthropic.MessageNewParams{MaxTokens: maxTokens})
+// default, and their thinking tokens count toward max_tokens. It is clamped to
+// model's max output, so one flow cap serves every tier whatever Claude family
+// it runs (64K on 4.x, 128K on 5.x) instead of failing the call on the smaller.
+func (p *Provider) CallConfig(model string, maxTokens int64) ai.GenerateOption {
+	return ai.WithConfig(anthropic.MessageNewParams{MaxTokens: clampMaxTokens(model, maxTokens)})
+}
+
+// clampMaxTokens caps maxTokens at model's declared max output. An unknown
+// model is left as asked.
+func clampMaxTokens(model string, maxTokens int64) int64 {
+	caps, ok := vendors.CapabilitiesOf(VendorAnthropic, model)
+	if !ok || caps.MaxOutputTokens <= 0 {
+		return maxTokens
+	}
+	return min(maxTokens, int64(caps.MaxOutputTokens))
 }
 
 // RefusalGuard returns model middleware that fails a call with ErrRefused when

@@ -315,7 +315,7 @@ func (t *turn) callModel(ctx context.Context, p loopParams) error {
 		ai.WithMaxTurns(p.maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
 		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.RefusalGuard(modelconfig.FlowPostAssistant)),
-		t.cfg.Provider.CallConfig(p.maxTokens),
+		t.cfg.Provider.CallConfig(mc.Model, p.maxTokens),
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "post_id", t.req.PostID, "duration_ms", time.Since(t.start).Milliseconds(), logging.AttrError, err)

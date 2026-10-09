@@ -123,7 +123,7 @@ func generateBrief(
 		ai.WithPrompt(bctx.ContextBlock),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: scanner.Push})),
 		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowEnrichBrief)),
-		cfg.Provider.CallConfig(maxTokens),
+		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "campaign_id", campaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)

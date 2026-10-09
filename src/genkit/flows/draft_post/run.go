@@ -119,7 +119,7 @@ func runDraftPost(
 		ai.WithSystem(systemPrompt),
 		ai.WithPrompt(contextBlock),
 		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowDraftPost)),
-		cfg.Provider.CallConfig(maxTokens),
+		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	); err != nil {
 		return nil, err
 	}

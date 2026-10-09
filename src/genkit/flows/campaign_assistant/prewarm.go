@@ -28,13 +28,14 @@ func prewarmToolCache(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, t *tool
 	defer cancel()
 
 	start := time.Now()
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)
 	_, err := genkit.Generate(ctx, g,
-		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)),
+		ai.WithModelName(mc.Ref),
 		ai.WithSystem("warmup"),
 		ai.WithPrompt("warmup"),
 		ai.WithTools(t.all()...),
 		ai.WithMaxTurns(1),
-		cfg.Provider.CallConfig(1), // max_tokens: 1 — grammar compiles during prep
+		cfg.Provider.CallConfig(mc.Model, 1), // max_tokens: 1 — grammar compiles during prep
 	)
 	if err != nil {
 		slog.Warn("campaign_assistant tool-cache prewarm failed (non-fatal)",
