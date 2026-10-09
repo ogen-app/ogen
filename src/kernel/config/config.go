@@ -132,7 +132,7 @@ type Config struct {
 	// global-default rows for any (flow, slot) missing one; the DB (Harbor-edited
 	// via ModelConfigAdminService) is authoritative thereafter. Safe to remove
 	// once every environment has seeded its global-default model rows.
-	ModelID          string `envconfig:"MODEL_ID"              default:"claude-sonnet-4-5-20250929"`
+	ModelID          string `envconfig:"MODEL_ID"              default:"claude-sonnet-5-5"`
 	MaxContextAssets int    `envconfig:"MAX_ASSET_CONTEXT"     default:"15"`
 	MaxContextChars  int    `envconfig:"MAX_CONTEXT_CHARS"     default:"10000"`
 
@@ -143,8 +143,8 @@ type Config struct {
 	// routes cheaply on Haiku while the heavy writing stays capable.
 	PlanningModelID string `envconfig:"PLANNING_MODEL_ID" default:"claude-haiku-4-5-20251001"` // Seed-only (see ModelID)
 
-	// 64K matches Claude 4.x Haiku/Sonnet's max output. Anthropic charges
-	// only for tokens actually emitted, so a generous cap costs nothing on
+	// 64K is within every registered Claude model's max output (64K–128K).
+	// Anthropic charges only for tokens actually emitted, so a generous cap costs nothing on
 	// short responses but prevents truncation on long rewrites (assistant
 	// flow with explanation + full post content + tool inputs combined).
 	MaxOutputTokens int64 `envconfig:"MAX_OUTPUT_TOKENS"     default:"64000"`
@@ -188,15 +188,15 @@ type Config struct {
 	// brief consistency check analyzes in a single model call.
 	ConsistencyPostsMax int `envconfig:"CONSISTENCY_POSTS_MAX" default:"20"`
 
-	// Post quality assessment. Scoring runs on Sonnet 4.5 by
-	// default — Haiku underdelivered (terse, omitting per-dimension prose) —
+	// Post quality assessment. Scoring runs on Sonnet by
+	// default — Haiku 4.5 underdelivered (terse, omitting per-dimension prose) —
 	// specified separately from ModelID so the scoring model can be tuned
 	// independently. QualityWeightProfiles is an optional JSON override for
 	// the per-PlatformPostType weight profiles; empty uses the built-in
 	// defaults (post_quality.DefaultWeights). Each profile's four weights
 	// must sum to 1.0. Example:
 	//   {"profiles":{"reel":{"correctness":0.2,"clarity":0.15,"engagement":0.4,"delivery":0.25}}}
-	QualityModelID        string `envconfig:"QUALITY_MODEL_ID"        default:"claude-sonnet-4-5-20250929"` // Seed-only (see ModelID)
+	QualityModelID        string `envconfig:"QUALITY_MODEL_ID"        default:"claude-sonnet-5-5"` // Seed-only (see ModelID)
 	QualityWeightProfiles string `envconfig:"QUALITY_WEIGHT_PROFILES" default:""`
 
 	// Object storage (S3-compatible: Cloudflare R2, DigitalOcean Spaces, AWS S3).
