@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"embed"
 	"fmt"
 	"log/slog"
@@ -39,7 +38,7 @@ const (
 // failure here must never take down the request path — callers treat an
 // error as "analytics disabled" and proceed (fail-open, CON-86 FR10).
 func NewAnalytics(dsn string, debug bool) (*bun.DB, error) {
-	sqldb, err := sql.Open("pgx", dsn)
+	sqldb, err := openPool(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open analytics postgres: %w", err)
 	}
