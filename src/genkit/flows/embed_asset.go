@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -54,6 +55,8 @@ type embedScheduler struct {
 	slots     chan struct{}
 	assetRepo repository.AssetRepository // optional; when set, used to flip asset.status
 	embedder  ai.Embedder                // set by Init; used to skip when no key
+	// onEmbedded runs after an asset's embed settles it ready; nil skips it.
+	onEmbedded atomic.Pointer[func(ctx context.Context, tenantID, assetID string)]
 }
 
 // maxConcurrentEmbeds caps how many asset embeds run at once.
@@ -116,6 +119,9 @@ func (s *embedScheduler) run(assetID string) {
 			s.setStatus(ctx, in.AssetID, models.AssetStatusFailed)
 		} else {
 			s.setStatus(ctx, in.AssetID, models.AssetStatusReady)
+			if fn := s.onEmbedded.Load(); fn != nil {
+				(*fn)(ctx, in.TenantID, in.AssetID)
+			}
 		}
 		cancel()
 		<-s.slots
@@ -132,6 +138,16 @@ func (s *embedScheduler) setStatus(ctx context.Context, assetID, status string) 
 }
 
 var defaultEmbedScheduler = newEmbedScheduler()
+
+// SetOnAssetEmbedded registers fn to run each time an authored asset's embed
+// settles it ready, e.g. to queue its analysis. nil clears it.
+func SetOnAssetEmbedded(fn func(ctx context.Context, tenantID, assetID string)) {
+	if fn == nil {
+		defaultEmbedScheduler.onEmbedded.Store(nil)
+		return
+	}
+	defaultEmbedScheduler.onEmbedded.Store(&fn)
+}
 
 // NewAssetOnSaveCallback returns a fire-and-forget callback that schedules an
 // embed of the asset. Concurrent saves of the same asset are serialised — at

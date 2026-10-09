@@ -12,6 +12,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/anthropic"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -64,6 +65,7 @@ type genkitRuntime struct {
 	generatePostsFn     func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	checkBriefFn        func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPostsFn        func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
+	analyzeAssetFn      func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error)
 
 	cfg                 *config.Config
 	hub                 eventhub.Hub
@@ -261,6 +263,18 @@ func (r *genkitRuntime) CheckPosts(ctx context.Context, req consistency.PostsChe
 	return fn(ctx, req, onEvent)
 }
 
+// AnalyzeAsset runs the asset analysis flow. The analysis jobs treat
+// ErrAnthropicUnavailable as transient and retry.
+func (r *genkitRuntime) AnalyzeAsset(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error) {
+	r.mu.RLock()
+	fn := r.analyzeAssetFn
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil, ErrAnthropicUnavailable
+	}
+	return fn(ctx, req)
+}
+
 // rebuild fetches the current Anthropic key (if any), constructs a
 // fresh Genkit instance with a fresh Anthropic plugin, re-registers
 // the two flows, and atomically swaps the cached callbacks. Holding
@@ -288,6 +302,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		r.generatePostsFn = nil
 		r.checkBriefFn = nil
 		r.checkPostsFn = nil
+		r.analyzeAssetFn = nil
 		r.g = nil
 		r.plugin = nil
 		return nil
@@ -342,8 +357,14 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		return fmt.Errorf("init campaign assistant: %w", err)
 	}
 
+	analyzeAssetFn, err := initAssetAnalysis(g, r.cfg, provider, r.recorder, r.checker)
+	if err != nil {
+		return fmt.Errorf("init asset analysis: %w", err)
+	}
+
 	r.g = g
 	r.plugin = plugin
+	r.analyzeAssetFn = analyzeAssetFn
 	r.contentPlanFn = contentPlanFn
 	r.postAssistantFn = postAssistantFn
 	r.postQualityFn = postQualityFn

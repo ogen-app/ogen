@@ -27,6 +27,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
+	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
 	"github.com/ogen-app/ogen/src/usecase/loginsecurity"
@@ -65,6 +66,7 @@ type deps struct {
 	ingest       ingestion
 	email        emailRuntime
 	enqueuer     *queues.Enqueuer
+	analysis     *assetanalysis.Service
 	svc          services
 	genkit       *genkitRuntime
 }
@@ -198,11 +200,15 @@ func (d *deps) initRiver(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The analysis service enqueues from inside River workers, so it is built
+	// over the enqueuer before the client exists; the client is attached below.
+	d.enqueuer = &queues.Enqueuer{}
+	d.analysis = newAssetAnalysis(d)
 	client, err := newRiverClient(ctx, d)
 	if err != nil {
 		return err
 	}
-	d.enqueuer = &queues.Enqueuer{Client: client}
+	d.enqueuer.Client = client
 	if err := client.Start(ctx); err != nil {
 		return err
 	}
@@ -282,6 +288,7 @@ func (d *deps) initGenkit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.analysis.SetAnalyzer(d.genkit.AnalyzeAsset)
 	slog.Info("genkit flows registered", logging.AttrComponent, "genkit")
 	return nil
 }

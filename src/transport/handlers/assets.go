@@ -131,6 +131,7 @@ type URLScrapeGate interface {
 }
 
 type AssetsHandler struct {
+	analyses  repository.AssetAnalysisRepository
 	repo      repository.AssetRepository
 	fileRepo  repository.AssetFileRepository
 	imageRepo repository.AssetImageRepository
@@ -169,6 +170,8 @@ type AssetsOptions struct {
 	// ImageReembed re-embeds an image asset after its description is edited;
 	// nil skips it (image ingestion not configured).
 	ImageReembed ImageReembedEnqueuer
+	// Analyses fills analysis_status on reads; nil leaves it null.
+	Analyses repository.AssetAnalysisRepository
 }
 
 func NewAssetsHandler(
@@ -190,6 +193,7 @@ func NewAssetsHandler(
 		limiter:    opts.Limiter,
 		chunks:     opts.Chunks,
 		imgReembed: opts.ImageReembed,
+		analyses:   opts.Analyses,
 		repo:       repo,
 		fileRepo:   fileRepo,
 		imageRepo:  imageRepo,
@@ -260,7 +264,29 @@ func (h *AssetsHandler) List(c *fiber.Ctx) error {
 		h.decorateFile(&assets[i])
 	}
 	h.decorateImagesBatch(reqCtx(c), assets)
+	h.decorateAnalysisStatus(reqCtx(c), assets)
 	return c.JSON(assets)
+}
+
+// decorateAnalysisStatus sets each asset's workspace analysis status in one
+// query. Best effort: a failed read leaves the status null.
+func (h *AssetsHandler) decorateAnalysisStatus(ctx context.Context, assets []models.Asset) {
+	if h.analyses == nil || len(assets) == 0 {
+		return
+	}
+	ids := make([]string, len(assets))
+	for i := range assets {
+		ids[i] = assets[i].ID
+	}
+	statuses, err := h.analyses.WorkspaceStatuses(ctx, ids)
+	if err != nil {
+		return
+	}
+	for i := range assets {
+		if st, ok := statuses[assets[i].ID]; ok {
+			assets[i].AnalysisStatus = &st
+		}
+	}
 }
 
 // decorateImagesBatch hydrates mirrored images for a list of assets in one query,
@@ -1083,7 +1109,9 @@ func (h *AssetsHandler) Get(c *fiber.Ctx) error {
 	}
 	h.decorateFile(asset)
 	h.decorateImages(reqCtx(c), asset)
-	return c.JSON(asset)
+	one := []models.Asset{*asset}
+	h.decorateAnalysisStatus(reqCtx(c), one)
+	return c.JSON(one[0])
 }
 
 // Update godoc

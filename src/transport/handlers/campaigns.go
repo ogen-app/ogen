@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,6 +66,16 @@ type CampaignsHandler struct {
 	// withdraw unschedules a deleted campaign's posts and withdraws their
 	// Zernio copies. nil (fixtures) leaves the posts untouched.
 	withdraw *withdraw.Service
+	// analysis keeps asset analyses in step with the campaign; nil skips it.
+	analysis AssetAnalysisTriggers
+}
+
+// AssetAnalysisTriggers keeps the campaign lenses of asset analyses in step
+// with campaign writes. *assetanalysis.Service implements it.
+type AssetAnalysisTriggers interface {
+	ScheduleAttached(ctx context.Context, tenantID, campaignID string, assetIDs []string)
+	Detach(ctx context.Context, tenantID, campaignID string, assetIDs []string)
+	ScheduleRebrief(ctx context.Context, tenantID, campaignID string)
 }
 
 // CampaignsOptions carries the handler's nil-safe collaborators.
@@ -76,6 +87,9 @@ type CampaignsOptions struct {
 	// Withdraw deletes a campaign together with its posts' Zernio copies;
 	// nil falls back to the bare soft delete.
 	Withdraw *withdraw.Service
+	// Analysis re-runs asset analyses on attach, detach and brief edits; nil
+	// skips them.
+	Analysis AssetAnalysisTriggers
 }
 
 // baselineCampaignTypeSlug is the one system campaign type every tier can use;
@@ -133,6 +147,7 @@ func NewCampaignsHandler(
 		activity:           opts.Activity,
 		brandRepo:          opts.Brands,
 		withdraw:           opts.Withdraw,
+		analysis:           opts.Analysis,
 		repo:               repo,
 		campaignTypeRepo:   campaignTypeRepo,
 		auth:               auth,
@@ -449,6 +464,7 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	}
 	// The campaign now exists — fire any near-limit crossing.
 	campaignQuota.dispatch(reqCtx(c))
+	h.analysisAttached(c, campaign.ID, campaign.AssetIDs)
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_created",
 		activity.WithEntity("campaign", campaign.ID),
 		activity.WithPayload(map[string]any{"status": string(campaign.Status), "campaign_type_id": campaign.CampaignTypeID}),
@@ -530,6 +546,7 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	// Snapshot the fields we emit change-events for before overwriting them.
 	prevStatus := campaign.Status
 	prevStart, prevEnd := campaign.StartDate, campaign.EndDate
+	prevAssets, prevBrief := slices.Clone(campaign.AssetIDs), analysisBrief(campaign)
 
 	req.applyTo(campaign, status, sched)
 	campaign.UpdatedAt = time.Now().UTC()
@@ -552,7 +569,54 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 		)
 	}
 	h.recordCampaignUpdated(c, campaign, prevStatus, datesChanged)
+	h.analysisUpdated(c, campaign, prevAssets, prevBrief)
 	return c.JSON(campaign)
+}
+
+// analysisBrief is what a campaign lens reads of the campaign; a change to any
+// of it re-runs the campaign's asset analyses.
+func analysisBrief(c *models.Campaign) [9]string {
+	return [9]string{
+		c.Name, c.Description, c.TargetPersona, c.KeyMessages, c.ToneGuidelines, c.Language,
+		c.CampaignTypeID, ptrOr(c.BrandVoiceID), ptrOr(c.BrandAudienceID),
+	}
+}
+
+func ptrOr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// analysisUpdated queues the lenses of newly attached assets, drops those of
+// detached ones and, when the brief changed, a debounced re-run of the rest.
+func (h *CampaignsHandler) analysisUpdated(c *fiber.Ctx, campaign *models.Campaign, prevAssets []string, prevBrief [9]string) {
+	if h.analysis == nil {
+		return
+	}
+	tenantID, ok := tenantctx.From(reqCtx(c))
+	if !ok {
+		return
+	}
+	added := slices.DeleteFunc(slices.Clone(campaign.AssetIDs), func(id string) bool { return slices.Contains(prevAssets, id) })
+	removed := slices.DeleteFunc(slices.Clone(prevAssets), func(id string) bool { return slices.Contains(campaign.AssetIDs, id) })
+	h.analysis.Detach(reqCtx(c), tenantID, campaign.ID, removed)
+	h.analysis.ScheduleAttached(reqCtx(c), tenantID, campaign.ID, added)
+	if analysisBrief(campaign) != prevBrief {
+		h.analysis.ScheduleRebrief(reqCtx(c), tenantID, campaign.ID)
+	}
+}
+
+// analysisAttached queues the campaign lenses of assets just attached. One
+// already analysed for this campaign finishes without a model call.
+func (h *CampaignsHandler) analysisAttached(c *fiber.Ctx, campaignID string, assetIDs []string) {
+	if h.analysis == nil || len(assetIDs) == 0 {
+		return
+	}
+	if tenantID, ok := tenantctx.From(reqCtx(c)); ok {
+		h.analysis.ScheduleAttached(reqCtx(c), tenantID, campaignID, assetIDs)
+	}
 }
 
 // checkTypeChange guards a campaign-type switch. Once posts are planned
@@ -622,6 +686,9 @@ func (h *CampaignsHandler) AddAssets(c *fiber.Ctx) error {
 	if err != nil {
 		return notFound(err, "campaign not found")
 	}
+	h.analysisAttached(c, campaign.ID, slices.DeleteFunc(slices.Clone(req.AssetIDs), func(id string) bool {
+		return !slices.Contains(campaign.AssetIDs, id)
+	}))
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_updated",
 		activity.WithEntity("campaign", campaign.ID),
 		activity.WithStatus(string(campaign.Status)),
@@ -649,6 +716,9 @@ func (h *CampaignsHandler) RemoveAsset(c *fiber.Ctx) error {
 	campaign, err := h.repo.RemoveAssetID(reqCtx(c), c.Params("id"), c.Params("assetId"))
 	if err != nil {
 		return notFound(err, "campaign not found")
+	}
+	if tenantID, ok := tenantctx.From(reqCtx(c)); ok && h.analysis != nil {
+		h.analysis.Detach(reqCtx(c), tenantID, campaign.ID, []string{c.Params("assetId")})
 	}
 	h.recordActivity(c, activity.CategoryCampaign, "campaign_updated",
 		activity.WithEntity("campaign", campaign.ID),

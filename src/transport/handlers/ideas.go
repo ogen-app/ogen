@@ -127,7 +127,10 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Produce  json
 // @Security CookieAuth
 // @Param    campaign_id query string false "only ideas attached to this campaign, or `none` for workspace-wide ideas"
+// @Param    origin      query string false "only ideas of this origin" Enums(manual, asset_analysis)
+// @Param    asset_id    query string false "only ideas an analysis of this asset distilled"
 // @Success  200 {object} ideaListResponse
+// @Failure  400 {object} map[string]string
 // @Router   /api/ideas [get]
 func (h *IdeasHandler) List(c *fiber.Ctx) error {
 	var filter repository.IdeaListFilter
@@ -138,6 +141,16 @@ func (h *IdeasHandler) List(c *fiber.Ctx) error {
 	default:
 		filter.CampaignID = campaignID
 	}
+	switch origin := c.Query("origin"); origin {
+	case "":
+	case "manual":
+		filter.Origin = new(models.IdeaOriginManual)
+	case string(models.IdeaOriginAssetAnalysis):
+		filter.Origin = new(models.IdeaOriginAssetAnalysis)
+	default:
+		return fiber.NewError(fiber.StatusBadRequest, "origin must be manual or asset_analysis")
+	}
+	filter.AssetID = c.Query("asset_id")
 	list, err := h.svc.List(reqCtx(c), filter)
 	if err != nil {
 		return err

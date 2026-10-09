@@ -99,6 +99,7 @@ func queueDeps(d *deps) queues.Deps {
 		Audio:                 d.ingest.audio,
 		Image:                 d.ingest.image,
 		URL:                   d.ingest.url,
+		Analysis:              queues.AnalysisDeps{Runner: d.analysis, Tenants: r.tenantRepo},
 		Email:                 d.email.Deps,
 		ConnectSessionRepo:    r.zernioConnectSessionRepo,
 		PluginPairingRepo:     r.pluginPairingRepo,
