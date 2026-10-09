@@ -28,8 +28,9 @@ type VendorFunc func(model string) (vendor string, ok bool)
 // closure that also looks the tier up from the tenant.
 type TierFunc func(ctx context.Context) (tierID string, ok bool)
 
-// Defaults are the boot-reconcile seed models for the global-default rows,
-// sourced from the legacy config fields so day-one behaviour is unchanged.
+// Defaults are the boot-reconcile seed models for the global-default rows.
+// They only fill a slot that has no row yet (a fresh database or a new slot);
+// after that, Harbor owns every assignment.
 type Defaults struct {
 	Generation     string // chat generation flows (incl. post_assistant writer)
 	Quality        string // post_quality
@@ -41,7 +42,20 @@ type Defaults struct {
 	Transcribe     string // transcribe
 }
 
-// For maps a (flow, slot) to its legacy default model id.
+// SeedDefaults are the models a slot with no row starts on. Every id must be
+// registered in the vendor catalog (src/infra/vendors/llm). Embed is left
+// empty: the embedder runs EMBED_MODEL, so the caller seeds that slot with it.
+var SeedDefaults = Defaults{
+	Generation:     "claude-sonnet-5-5",
+	Quality:        "claude-sonnet-5-5",
+	Planning:       "claude-haiku-4-5-20251001",
+	VisionClassify: "gemini-3.8-flash",
+	VisionExtract:  "gemini-3.8-flash",
+	VisionEscalate: "gemini-3.8-flash",
+	Transcribe:     "gemini-3.8-flash",
+}
+
+// For maps a (flow, slot) to its default model id.
 func (d Defaults) For(flowKey, slotKey string) string {
 	switch {
 	case flowKey == FlowEmbed:

@@ -14,8 +14,8 @@ import (
 
 // initDraftPost registers the draftPost generation flow on the shared
 // Genkit instance and returns an SSE-capable callback for the campaign assistant
-// tool. Copywriting runs on the generation role (Sonnet-tier, cfg.ModelID), like
-// content_plan; MaxOutputTokens is left at 0 so the flow uses its own default.
+// tool. Copywriting runs on the draft_post/main slot's model; MaxOutputTokens is
+// left at 0 so the flow uses its own default.
 func initDraftPost(
 	g *genkit.Genkit,
 	cfg *config.Config,

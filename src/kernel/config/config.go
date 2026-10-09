@@ -127,39 +127,29 @@ type Config struct {
 	// Anthropic config.
 	// todo: remove from config entirely
 	AnthropicAPIKey string `envconfig:"ANTHROPIC_API_KEY"     default:""`
-	// Deprecated: ModelID / PlanningModelID / QualityModelID are
-	// SEED-ONLY — read once at boot to seed the modelconfig resolver's
-	// global-default rows for any (flow, slot) missing one; the DB (Harbor-edited
-	// via ModelConfigAdminService) is authoritative thereafter. Safe to remove
-	// once every environment has seeded its global-default model rows.
-	ModelID          string `envconfig:"MODEL_ID"              default:"claude-sonnet-5-5"`
-	MaxContextAssets int    `envconfig:"MAX_ASSET_CONTEXT"     default:"15"`
-	MaxContextChars  int    `envconfig:"MAX_CONTEXT_CHARS"     default:"10000"`
+	// Models are not configured here: every flow slot's model is assigned in
+	// Harbor (ModelConfigAdminService); modelconfig.SeedDefaults only fills a
+	// slot that has no row yet.
+	MaxContextAssets int `envconfig:"MAX_ASSET_CONTEXT"     default:"15"`
+	MaxContextChars  int `envconfig:"MAX_CONTEXT_CHARS"     default:"10000"`
 
-	// PlanningModelID backs the cheap/fast "planning" role used by
-	// the Campaign Assistant's orchestration + intent-routing loop. Prose
-	// generation happens inside the content_plan / enrich_brief sub-flows it
-	// invokes as tools, which stay on ModelID (Sonnet-tier) — so the assistant
-	// routes cheaply on Haiku while the heavy writing stays capable.
-	PlanningModelID string `envconfig:"PLANNING_MODEL_ID" default:"claude-haiku-4-5-20251001"` // Seed-only (see ModelID)
-
-	// Each call clamps this to its model's max output (64K on Claude 4.x, 128K
-	// on 5.x), so tiers on either family share one setting. Anthropic charges only for tokens actually emitted, so a generous cap costs nothing on
-	// short responses but prevents truncation on long rewrites (assistant
+	// Each call clamps this to its model's max output (64K on Claude 4.x,
+	// 128K on 5.x), so tiers on either family share one setting. Anthropic
+	// charges only for tokens actually emitted, so a generous cap costs nothing
+	// on short responses but prevents truncation on long rewrites (assistant
 	// flow with explanation + full post content + tool inputs combined).
 	MaxOutputTokens int64 `envconfig:"MAX_OUTPUT_TOKENS"     default:"64000"`
 
 	// PostAssistantPlanner enables the hybrid model split for the
-	// Post Assistant: the orchestration/routing loop runs on the cheap
-	// PlanningModelID (Haiku) while the actual copywriting is delegated to a
-	// Sonnet (ModelID) editPost write-tool. Default on. Set to false to force
-	// the whole assistant back onto the proven single-Sonnet path (loop on
-	// ModelID, no editPost tool, inline content) — the instant rollback lever
-	// if Haiku routing regresses. Model ids stay tunable via MODEL_ID /
-	// PLANNING_MODEL_ID regardless.
+	// Post Assistant: the orchestration/routing loop runs on the cheap planner
+	// slot while the actual copywriting is delegated to the writer slot's
+	// editPost write-tool. Default on. Set to false to force the whole
+	// assistant back onto the proven single-model path (loop on the writer
+	// slot, no editPost tool, inline content) — the instant rollback lever if
+	// planner routing regresses.
 	PostAssistantPlanner bool `envconfig:"POST_ASSISTANT_PLANNER" default:"true"`
 
-	// PostAssistantPlannerMaxOutputTokens caps the Haiku planner turn's output.
+	// PostAssistantPlannerMaxOutputTokens caps the planner turn's output.
 	// The planner only emits a short envelope (explanation + action
 	// + saveVersion + versionNote) plus tool inputs, so a small cap is plenty;
 	// the full post is produced by the writer sub-call under MaxOutputTokens.
@@ -188,15 +178,11 @@ type Config struct {
 	// brief consistency check analyzes in a single model call.
 	ConsistencyPostsMax int `envconfig:"CONSISTENCY_POSTS_MAX" default:"20"`
 
-	// Post quality assessment. Scoring runs on Sonnet by
-	// default — Haiku 4.5 underdelivered (terse, omitting per-dimension prose) —
-	// specified separately from ModelID so the scoring model can be tuned
-	// independently. QualityWeightProfiles is an optional JSON override for
-	// the per-PlatformPostType weight profiles; empty uses the built-in
-	// defaults (post_quality.DefaultWeights). Each profile's four weights
-	// must sum to 1.0. Example:
+	// Post quality assessment. QualityWeightProfiles is an optional JSON
+	// override for the per-PlatformPostType weight profiles; empty uses the
+	// built-in defaults (post_quality.DefaultWeights). Each profile's four
+	// weights must sum to 1.0. Example:
 	//   {"profiles":{"reel":{"correctness":0.2,"clarity":0.15,"engagement":0.4,"delivery":0.25}}}
-	QualityModelID        string `envconfig:"QUALITY_MODEL_ID"        default:"claude-sonnet-5-5"` // Seed-only (see ModelID)
 	QualityWeightProfiles string `envconfig:"QUALITY_WEIGHT_PROFILES" default:""`
 
 	// Object storage (S3-compatible: Cloudflare R2, DigitalOcean Spaces, AWS S3).
@@ -262,8 +248,7 @@ type Config struct {
 	// single job attempt (checkpointed, so a longer run resumes). Segmentation:
 	// AudioSegmentMaxMs windows + AudioSegmentOverlapMs overlap. AudioMaxDurationMs
 	// is the pre-spend max-duration tier gate (0 = no cap; a CON-208 tier lowers
-	// it). TranscribeModel is seed-only (see ModelID): it seeds the
-	// transcribe/main global-default row; the DB is authoritative after boot.
+	// it). The transcription model is the transcribe/main slot, set in Harbor.
 	// Raw-audio embedding is deferred (CON-282 PRD); it gets a flag when it is
 	// built, not before (CON-312 removed the unused stub).
 	AudioJobWorkers       int           `envconfig:"AUDIO_JOB_WORKERS"        default:"2"`
@@ -271,7 +256,6 @@ type Config struct {
 	AudioSegmentMaxMs     int64         `envconfig:"AUDIO_SEGMENT_MAX_MS"     default:"300000"`
 	AudioSegmentOverlapMs int64         `envconfig:"AUDIO_SEGMENT_OVERLAP_MS" default:"5000"`
 	AudioMaxDurationMs    int64         `envconfig:"AUDIO_MAX_DURATION_MS"    default:"14400000"`
-	TranscribeModel       string        `envconfig:"TRANSCRIBE_MODEL"         default:"gemini-2.5-flash"`
 
 	// Image microservice, mirroring audio/document-service. image-service
 	// is the SINGLE image ingress: both content-bank IMG assets and post-attachment
@@ -298,16 +282,11 @@ type Config struct {
 	// single content-bank Extract job attempt.
 	ImageJobWorkers int           `envconfig:"IMAGE_JOB_WORKERS" default:"2"`
 	ImageJobTimeout time.Duration `envconfig:"IMAGE_JOB_TIMEOUT" default:"10m"`
-	// Vision model ids are seed-only (see ModelID): they seed the vision/*
-	// global-default rows (alt_text from VisionClassifyModel); the DB is
-	// authoritative after boot. classify runs at low media_resolution on a
-	// cheaper model; extract/escalate at high resolution on a stronger one.
-	// VisionConfidenceThreshold gates the one-shot escalation and stays config.
+	// Vision models are the vision/* slots, set in Harbor. classify runs at
+	// low media_resolution; extract/escalate at high resolution.
+	// VisionConfidenceThreshold gates the one-shot escalation.
 	// AltTextGenMaxChars is the generation TARGET length (short, social-friendly);
 	// the stored value is still bounded by the CON-292 alt-text cap as a guard.
-	VisionClassifyModel       string  `envconfig:"VISION_CLASSIFY_MODEL"       default:"gemini-2.5-flash"`
-	VisionExtractModel        string  `envconfig:"VISION_EXTRACT_MODEL"        default:"gemini-2.5-pro"`
-	VisionEscalateModel       string  `envconfig:"VISION_ESCALATE_MODEL"       default:"gemini-2.5-pro"`
 	VisionConfidenceThreshold float64 `envconfig:"VISION_CONFIDENCE_THRESHOLD" default:"0.6"`
 	AltTextGenMaxChars        int     `envconfig:"ALT_TEXT_GEN_MAX_CHARS"      default:"280"`
 

@@ -180,9 +180,9 @@ func init() {
 			Models: map[string]vendors.Rates{
 				"gemini-embedding-2": {vendors.KindEmbedInput: 150_000},
 				// Audio transcription reuses the gemini vendor with a new
-				// model id + input/output token rates (no new vendor). The model id
-				// is config (TRANSCRIBE_MODEL); keep this key in sync so runs are
-				// priced rather than counted as unknown-model (cost stays 0). Input
+				// model id + input/output token rates (no new vendor). Every model a
+				// transcribe slot can run must be keyed here so runs are priced
+				// rather than counted as unknown-model (cost stays 0). Input
 				// is billed at the AUDIO rate ($1.00/1M) — a transcription request's
 				// prompt tokens are almost entirely the segment audio.
 				"gemini-2.5-flash": {
