@@ -11,7 +11,7 @@ import (
 )
 
 // backfillCutoff is a far-future upper bound for the tests: every fixture row
-// predates it, so the backfill's [watermark, before) window includes them all —
+// predates it, so the backfill's [epoch, before) window includes them all —
 // preserving the pre-cutoff behaviour. TestBackfillPostLogsToActivity_ExcludesAtOrAfterCutoff
 // exercises the bound itself.
 var backfillCutoff = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -34,42 +34,59 @@ func seedPostLog(t *testing.T, db *bun.DB, id, postID string, evt models.PostLog
 	}
 }
 
-// TestBackfillPostLogsToActivity_WatermarkTie proves the watermark window is
-// `>= watermark` (not `>`): a new meaningful post_log added at the EXACT
-// watermark timestamp is still migrated on a re-run, while the row that set the
-// watermark is not duplicated (seen-map dedup).
-func TestBackfillPostLogsToActivity_WatermarkTie(t *testing.T) {
+// TestBackfillPostLogsToActivity_RunsOnce proves the migration runs once: a
+// post_log written after the first run is the live path's to record, so a
+// later boot migrates nothing (a re-run used to duplicate such rows).
+func TestBackfillPostLogsToActivity_RunsOnce(t *testing.T) {
 	db := openMigratedDB(t)
 	ctx := tenantCtx()
 
 	draft := models.PostStatusDraft
 	ready := models.PostStatusReadyForPublish
 	t0 := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
-	watermarkTS := t0.Add(time.Minute)
 
 	seedPostLog(t, db, "w1", "post-1", models.PostLogEventStateTransition, "user-1", &draft, &ready, t0, "")
-	seedPostLog(t, db, "w2", "post-1", models.PostLogEventPostCloned, "user-1", nil, nil, watermarkTS, "") // sets the watermark
+	seedPostLog(t, db, "w2", "post-1", models.PostLogEventPostCloned, "user-1", nil, nil, t0.Add(time.Minute), "")
 
 	if n, err := repository.BackfillPostLogsToActivity(ctx, db, db, backfillCutoff); err != nil || n != 2 {
 		t.Fatalf("first run: n=%d err=%v want 2", n, err)
 	}
 
-	// A NEW meaningful row at the exact watermark timestamp (a tie).
-	seedPostLog(t, db, "w3", "post-1", models.PostLogEventPostRestored, "user-1", nil, nil, watermarkTS, "")
+	seedPostLog(t, db, "w3", "post-1", models.PostLogEventPostRestored, "user-1", nil, nil, t0.Add(2*time.Minute), "")
+	if n, err := repository.BackfillPostLogsToActivity(ctx, db, db, backfillCutoff); err != nil || n != 0 {
+		t.Fatalf("re-run: n=%d err=%v, want 0 (already migrated)", n, err)
+	}
+	var ids []string
+	if err := db.NewSelect().Model((*models.ActivityEvent)(nil)).Column("id").Scan(ctx, &ids); err != nil {
+		t.Fatalf("list activity ids: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("activity rows after re-run = %v, want only the first run's two", ids)
+	}
+}
 
-	n, err := repository.BackfillPostLogsToActivity(ctx, db, db, backfillCutoff)
-	if err != nil {
-		t.Fatalf("re-run: %v", err)
+// TestBackfillPostLogsToActivity_MarksPriorMigrationDone proves a database that
+// was migrated before the done-marker existed is marked done without being
+// migrated again.
+func TestBackfillPostLogsToActivity_MarksPriorMigrationDone(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+
+	t0 := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	prior := &models.ActivityEvent{
+		ID: "plog_old", Category: "post", Type: "post_cloned", EntityType: "post", EntityID: "post-1",
+		Source: "job", Tags: models.StringSlice{}, Payload: models.JSONMap{}, OccurredAt: t0,
 	}
-	if n != 1 {
-		t.Fatalf("tie row migrated %d, want 1 (>= watermark + seen-map dedup)", n)
+	if _, err := db.NewInsert().Model(prior).Exec(ctx); err != nil {
+		t.Fatalf("seed prior migration: %v", err)
 	}
-	count, err := db.NewSelect().Model((*models.ActivityEvent)(nil)).Count(ctx)
-	if err != nil {
-		t.Fatalf("count: %v", err)
+	seedPostLog(t, db, "new", "post-1", models.PostLogEventPostRestored, "user-1", nil, nil, t0.Add(time.Hour), "")
+
+	if n, err := repository.BackfillPostLogsToActivity(ctx, db, db, backfillCutoff); err != nil || n != 0 {
+		t.Fatalf("n=%d err=%v, want 0 (a prior migration is not repeated)", n, err)
 	}
-	if count != 3 {
-		t.Fatalf("rows after tie = %d, want 3 (w2 not duplicated, w3 added)", count)
+	if n, err := repository.BackfillPostLogsToActivity(ctx, db, db, backfillCutoff); err != nil || n != 0 {
+		t.Fatalf("second boot: n=%d err=%v, want 0", n, err)
 	}
 }
 
@@ -180,15 +197,5 @@ func TestBackfillPostLogsToActivity(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("activity rows after re-run = %d want 2", count)
-	}
-
-	// A new post_log added after the first migration IS picked up on the next run.
-	seedPostLog(t, db, "l4", "post-1", models.PostLogEventPostCloned, "user-7", nil, nil, base.Add(time.Hour), "cloned")
-	n3, err := repository.BackfillPostLogsToActivity(ctx, db, db, backfillCutoff)
-	if err != nil {
-		t.Fatalf("third run: %v", err)
-	}
-	if n3 != 1 {
-		t.Errorf("third run migrated %d, want 1 (the new post_cloned)", n3)
 	}
 }

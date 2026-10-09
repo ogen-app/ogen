@@ -1,7 +1,6 @@
 package queues
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -131,16 +130,17 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 	}
 
 	key := storage.TenantKey(ctx, in.StorageKey)
-	data, err := downloadOriginal(ctx, p.Deps.Storage, "process_document", in.AssetID, key, "document")
+	original, err := openOriginal(ctx, p.Deps.Storage, "process_document", in.AssetID, key)
 	if err != nil {
 		return err
 	}
 	// Unsupported/corrupt/encrypted documents are terminal; service-down and
 	// deadline errors retry.
-	res, err := p.Deps.Client.Parse(ctx, bytes.NewReader(data), documents.Options{
+	res, err := p.Deps.Client.Parse(ctx, original, documents.Options{
 		Filename:    in.OriginalName,
 		ContentType: in.MimeType,
 	})
+	_ = original.Close()
 	if err != nil {
 		if isTerminalParseErr(err) {
 			slog.WarnContext(ctx, "unparseable document", logging.AttrComponent, "jobs.process_document", "asset_id", in.AssetID, logging.AttrError, err)
@@ -154,7 +154,7 @@ func (p *ProcessDocumentProcessor) process(ctx context.Context, in ProcessDocume
 		return err
 	}
 	// The file row is retried so the asset never lands "ready" without it.
-	if err := p.persistFile(ctx, in, key, len(data)); err != nil {
+	if err := p.persistFile(ctx, in, key, original.N()); err != nil {
 		return err
 	}
 

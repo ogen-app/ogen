@@ -291,6 +291,7 @@ func reconcileFacts(ctx context.Context, tx bun.Tx, want []string, author *strin
 	if err != nil {
 		return rec, err
 	}
+	var add []*models.BrandFact
 	for _, s := range want {
 		if have[s] {
 			continue
@@ -301,8 +302,8 @@ func reconcileFacts(ctx context.Context, tx bun.Tx, want []string, author *strin
 		}
 		// Space the new rows a microsecond apart so the ledger keeps the
 		// order the list arrived in.
-		at := now.Add(time.Duration(rec.Added) * time.Microsecond)
-		f := &models.BrandFact{
+		at := now.Add(time.Duration(len(add)) * time.Microsecond)
+		add = append(add, &models.BrandFact{
 			ID:            id,
 			Statement:     s,
 			Subject:       models.FactSubjectUs,
@@ -311,11 +312,13 @@ func reconcileFacts(ctx context.Context, tx bun.Tx, want []string, author *strin
 			CreatedByName: name,
 			CreatedAt:     at,
 			UpdatedAt:     at,
-		}
-		if _, err := tx.NewInsert().Model(f).Exec(ctx); err != nil {
+		})
+	}
+	if len(add) > 0 {
+		if _, err := tx.NewInsert().Model(&add).Exec(ctx); err != nil {
 			return rec, err
 		}
-		rec.Added++
+		rec.Added = len(add)
 	}
 	return rec, nil
 }

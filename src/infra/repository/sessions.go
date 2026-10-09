@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/uptrace/bun"
 
@@ -41,6 +42,21 @@ type SessionRepository interface {
 	// exceptSessionID ("" keeps none), returning how many it removed. db lets it
 	// join the caller's transaction; nil uses the repository's DB.
 	DeleteAllForAccount(ctx context.Context, db bun.IDB, accountID, exceptSessionID string) (int, error)
+	// DeleteExpiredBefore removes sessions that expired before cutoff and
+	// reports how many. Expired sessions are already refused at auth; this only
+	// keeps the table from growing forever.
+	DeleteExpiredBefore(ctx context.Context, cutoff time.Time) (int, error)
+}
+
+func (r *sessionRepository) DeleteExpiredBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	res, err := r.db.NewDelete().Model((*models.Session)(nil)).
+		Where("expires_at < ?", cutoff).
+		Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 type sessionRepository struct {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -298,16 +299,15 @@ func (r *postAttachmentRepository) ReorderPositions(ctx context.Context, postID 
 			Exec(ctx); err != nil {
 			return err
 		}
-		for i, id := range orderedIDs {
-			if _, err := tx.NewUpdate().
-				Model((*models.PostAttachment)(nil)).
-				Set("position = ?", i).
-				Where("id = ?", id).
-				Exec(ctx); err != nil {
-				return err
-			}
-		}
-		return nil
+		// One statement renumbers every listed attachment to its index in
+		// orderedIDs.
+		_, err := tx.NewUpdate().
+			Model((*models.PostAttachment)(nil)).
+			Set("position = array_position(?::text[], id) - 1", pgdialect.Array(orderedIDs)).
+			Where("post_id = ?", postID).
+			Where("id = ANY(?)", pgdialect.Array(orderedIDs)).
+			Exec(ctx)
+		return err
 	})
 }
 

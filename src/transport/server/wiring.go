@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/uptrace/bun"
@@ -213,6 +214,10 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 		ExposeHeaders: "Retry-After",
 		MaxAge:        600,
 	}))
+	// The UI reaches the API through its Caddy proxy, which gzips responses;
+	// plugins call the API directly, and their campaign reads carry every post,
+	// so their responses are compressed here. No plugin route streams.
+	app.Use(handlers.PluginRoutePrefix, compress.New())
 	return app
 }
 

@@ -168,6 +168,10 @@ func TestProcessPDF_Success(t *testing.T) {
 		files.got.ThumbnailS3Key == nil || files.got.OriginalName != "x.pdf" {
 		t.Fatalf("asset file not persisted as expected: %+v", files.got)
 	}
+	// The original is streamed to the parser; its size is what was read.
+	if files.got.SizeBytes != int64(len("%PDF-1.7 body")) {
+		t.Fatalf("persisted size = %d, want %d", files.got.SizeBytes, len("%PDF-1.7 body"))
+	}
 	if status.last() != models.AssetStatusReady {
 		t.Fatalf("final status = %q, want ready (saw %v)", status.last(), status.all)
 	}

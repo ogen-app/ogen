@@ -149,16 +149,17 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	}
 
 	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original.pdf", in.AssetID))
-	data, err := downloadOriginal(ctx, p.Deps.Storage, "process_pdf", in.AssetID, key, "pdf")
+	original, err := openOriginal(ctx, p.Deps.Storage, "process_pdf", in.AssetID, key)
 	if err != nil {
 		return err
 	}
 	// Corrupt/unsupported PDFs are terminal; service-down/deadline retry.
-	res, err := p.Deps.Client.Parse(ctx, bytes.NewReader(data), pdf.Options{
+	res, err := p.Deps.Client.Parse(ctx, original, pdf.Options{
 		Filename:        in.OriginalName,
 		RenderThumbnail: true,
 		ThumbnailDPI:    p.thumbnailDPI(),
 	})
+	_ = original.Close()
 	if err != nil {
 		if isTerminalParseErr(err) {
 			slog.WarnContext(ctx, "unparseable pdf", logging.AttrComponent, "jobs.process_pdf", "asset_id", in.AssetID, logging.AttrError, err)
@@ -175,7 +176,7 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	// The thumbnail is non-fatal; the file row is retried so the asset never
 	// lands "ready" without its file row, page count or thumbnail.
 	thumbKey := p.uploadThumbnail(ctx, in.AssetID, res.ThumbnailPNG)
-	if err := p.persistFile(ctx, in, key, thumbKey, len(data), res.PageCount); err != nil {
+	if err := p.persistFile(ctx, in, key, thumbKey, original.N(), res.PageCount); err != nil {
 		return err
 	}
 

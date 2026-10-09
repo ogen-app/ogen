@@ -465,30 +465,33 @@ func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*mo
 		return nil
 	}
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		for _, p := range posts {
-			// Only the schedule columns are written; the TenantScoped hook adds
-			// the tenant predicate, WherePK adds the id. The status guard limits
-			// the write to still-eligible posts, so a post that was concurrently
-			// published, scheduled, or already redistributed matches zero rows,
-			// and the exactly-one-row check fails the whole transaction rather
-			// than clobbering a schedule that moved out from under us.
-			res, err := tx.NewUpdate().Model(p).
-				Column("scheduled_at", "updated_at").
-				Where("status IN (?)", bun.List([]models.PostStatus{
-					models.PostStatusDraft, models.PostStatusReadyForPublish,
-				})).
-				WherePK().
-				Exec(ctx)
-			if err != nil {
-				return err
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if n != 1 {
-				return fmt.Errorf("post %s is no longer eligible for redistribution (status changed or removed)", p.ID)
-			}
+		// One UPDATE … FROM (VALUES …) writes every post's schedule columns;
+		// the TenantScoped hook adds the tenant predicate. The status guard
+		// limits the write to still-eligible posts, so a post that was
+		// concurrently published, scheduled, or already redistributed matches
+		// no row, and the row-count check fails the whole transaction rather
+		// than clobbering a schedule that moved out from under us.
+		values := tx.NewValues(&posts).Column("id", "scheduled_at", "updated_at")
+		res, err := tx.NewUpdate().
+			With("_data", values).
+			Model((*models.Post)(nil)).
+			TableExpr("_data").
+			Set("scheduled_at = _data.scheduled_at").
+			Set("updated_at = _data.updated_at").
+			Where("po.id = _data.id").
+			Where("po.status IN (?)", bun.List([]models.PostStatus{
+				models.PostStatusDraft, models.PostStatusReadyForPublish,
+			})).
+			Exec(ctx)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if int(n) != len(posts) {
+			return fmt.Errorf("%d of %d posts are no longer eligible for redistribution (status changed or removed)", len(posts)-int(n), len(posts))
 		}
 		return nil
 	})

@@ -98,6 +98,7 @@ type Deps struct {
 
 	// The cleanup_login_security sweep's repos. Nil repos skip their half.
 	KnownDeviceRepo     repository.KnownDeviceRepository
+	SessionRepo         repository.SessionRepository
 	LoginAlertTokenRepo repository.LoginAlertTokenRepository
 
 	// Reads a tenant's lifecycle status so per-tenant jobs (publish,

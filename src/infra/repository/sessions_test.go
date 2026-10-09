@@ -10,6 +10,32 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
+func TestSessionRepositoryDeleteExpiredBefore(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewSessionRepository(db)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	for _, s := range []models.Session{
+		{ID: "live", AccountID: "acc", UserID: "u", TenantID: "t", ExpiresAt: now.Add(time.Hour)},
+		{ID: "expired", AccountID: "acc", UserID: "u", TenantID: "t", ExpiresAt: now.Add(-time.Hour)},
+	} {
+		if err := repo.Create(ctx, &s); err != nil {
+			t.Fatalf("seed %s: %v", s.ID, err)
+		}
+	}
+	n, err := repo.DeleteExpiredBefore(ctx, now)
+	if err != nil || n != 1 {
+		t.Fatalf("deleted %d err=%v, want 1", n, err)
+	}
+	if _, err := repo.GetByID(ctx, "live"); err != nil {
+		t.Fatalf("live session must survive: %v", err)
+	}
+	if _, err := repo.GetByID(ctx, "expired"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expired session: err = %v, want sql.ErrNoRows", err)
+	}
+}
+
 // TestSessionRepositoryGetForAuth checks the one-query auth lookup resolves the
 // same membership GetMembership would: the session default when no workspace
 // is named, the named workspace when the account belongs to it, and none for a
