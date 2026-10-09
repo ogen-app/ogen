@@ -711,18 +711,21 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 	}
 
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter)
+	record := func(ctx context.Context, resp *ai.ModelResponse) {
+		st.recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant_edit", resp)
+	}
 	resp, err := genkit.Generate(ctx, st.g,
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(st.writerSystem),
 		ai.WithPrompt(composeWriterInstruction(instruction, st.retrieved)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: onText})),
-		ai.WithMiddleware(st.provider.RefusalGuard(modelconfig.FlowPostAssistant)),
+		ai.WithMiddleware(st.provider.CallMiddleware(modelconfig.FlowPostAssistant, record)),
 		st.provider.CallConfig(mc.Model, cmp.Or(st.writerMaxTokens, 64000)),
 	)
 	if err != nil {
 		return "", err
 	}
-	st.recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant_edit", resp)
+	record(ctx, resp)
 
 	content := strings.TrimSpace(buf.String())
 	if content == "" {

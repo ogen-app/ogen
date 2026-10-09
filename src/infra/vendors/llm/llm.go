@@ -226,9 +226,9 @@ func init() {
 // genkit model vendors; only the price table differs per vendor.
 //
 // genkit's normalized usage exposes cache_read (as CachedContentTokens) but
-// NOT cache_creation (the Anthropic plugin drops it), so cache_creation is
-// left unset (0) and understates cached-write cost until a raw-response path
-// lands.
+// NOT cache_creation (the Anthropic plugin drops it). Calls made through
+// Provider.CallMiddleware carry it in Usage.Custom[UsageCacheCreation],
+// recovered from the raw HTTP response; other calls meter it as 0.
 type genkitGenerateMeter struct{}
 
 func (genkitGenerateMeter) Extract(resp any) (string, vendors.Usage, bool) {
@@ -241,6 +241,7 @@ func (genkitGenerateMeter) Extract(resp any) (string, vendors.Usage, bool) {
 	addToken(u, vendors.KindOutput, mr.Usage.OutputTokens)
 	addToken(u, vendors.KindCacheRead, mr.Usage.CachedContentTokens)
 	addToken(u, vendors.KindReasoning, mr.Usage.ThoughtsTokens)
+	addToken(u, vendors.KindCacheCreation, int(mr.Usage.Custom[UsageCacheCreation]))
 	if len(u) == 0 {
 		return "", nil, false
 	}

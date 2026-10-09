@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
@@ -174,15 +176,16 @@ func generatePosts(
 	// Posts are bound only to the retrieved assets the model reported using,
 	// so a hallucinated id never persists and a post citing none records none.
 	grounded := idSet(assetIDsOf(assets))
+	usage := flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "content_plan", Component: logComponent}
 	gen := &postGenerator{
 		g:            g,
 		modelName:    mc.Ref,
 		systemPrompt: systemPrompt,
 		modelOpts: []ai.GenerateOption{
-			ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowContentPlan)),
+			ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowContentPlan, usage.Record)),
 			cfg.Provider.CallConfig(mc.Model, cmp.Or(cfg.MaxOutputTokens, 8192)),
 		},
-		usage:    flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "content_plan", Component: logComponent},
+		usage:    usage,
 		validate: newPostValidator(platforms, phaseIDSet(scope.phases), data.StartDate, data.EndDate),
 		// Snapping stays inside the active window, so a targeted run never
 		// schedules a post outside it.
@@ -363,6 +366,10 @@ func (gen *postGenerator) stream(ctx context.Context, userPrompt string, startIn
 		}
 		sink.add(ctx, post, pos)
 	}, opts...)
+	if errors.Is(err, llm.ErrRefused) {
+		// The blocking retry would be refused (and billed) again.
+		return sink.posts, &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
+	}
 	if err != nil {
 		return gen.fallback(ctx, sink, res.Objects, err, opts)
 	}

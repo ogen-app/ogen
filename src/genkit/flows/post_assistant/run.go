@@ -314,7 +314,7 @@ func (t *turn) callModel(ctx context.Context, p loopParams) error {
 		ai.WithTools(p.tools...),
 		ai.WithMaxTurns(p.maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
-		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.RefusalGuard(modelconfig.FlowPostAssistant)),
+		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.CallMiddleware(modelconfig.FlowPostAssistant, usage.Record)),
 		t.cfg.Provider.CallConfig(mc.Model, p.maxTokens),
 	)
 	if err != nil {

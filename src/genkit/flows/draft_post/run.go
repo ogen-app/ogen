@@ -20,6 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/notes"
@@ -118,7 +119,7 @@ func runDraftPost(
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(systemPrompt),
 		ai.WithPrompt(contextBlock),
-		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowDraftPost)),
+		ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowDraftPost, u.Record)),
 		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	); err != nil {
 		return nil, err
@@ -261,6 +262,10 @@ func (s *draftSink) generate(ctx context.Context, g *genkit.Genkit, u flowkit.Us
 		u.LogTokens(ctx, "tokens", res.Response)
 		u.Record(ctx, res.Response)
 		return nil
+	}
+	if errors.Is(streamErr, llm.ErrRefused) {
+		// The blocking retry would be refused (and billed) again.
+		return &AIError{Msg: fmt.Sprintf("model call failed: %v", streamErr)}
 	}
 	return s.fallback(ctx, g, u, res.Objects, streamErr, opts)
 }
