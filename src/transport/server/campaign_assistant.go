@@ -48,8 +48,9 @@ func initCampaignAssistant(
 		Checker:  checker,
 		Embedder: embedder,
 		// Router slimming: the planner only emits a short JSON envelope
-		// (explanation + action) plus tool calls, so 2048 is ample and bounds
-		// worst-case streaming.
+		// (explanation + action) plus tool calls. The cap also covers the
+		// thinking Claude 5.x models do by default, so it leaves room for that
+		// on top of the envelope.
 		//
 		// MaxTurns bounds tool-use round-trips only, not heavy sub-flow cost:
 		// the cheap Haiku planner legitimately chains a couple of read tools
@@ -58,7 +59,7 @@ func initCampaignAssistant(
 		// the read chain room; the real cost guard — "at most one heavy Sonnet
 		// sub-flow per turn" — is enforced precisely inside the tools
 		// themselves (see requestState.reserveHeavyAction), not via a blunt turn cap.
-		MaxOutputTokens: 2048,
+		MaxOutputTokens: 8192,
 		MaxTurns:        4,
 		Hub:             hub,
 		Notifier:        notifier,

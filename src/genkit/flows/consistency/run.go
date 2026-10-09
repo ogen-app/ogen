@@ -51,10 +51,7 @@ func runCheckBrief(
 		return nil, err
 	}
 
-	maxTokens := cfg.MaxOutputTokens
-	if maxTokens == 0 {
-		maxTokens = 8192
-	}
+	maxTokens := maxOutputTokens(cfg)
 	// WithSystem/WithPrompt Sprintf their first arg; pass text as a "%s" value
 	// so a brief containing "%" verbs is never interpreted (mirrors post_quality).
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowConsistency, modelconfig.SlotMain)
@@ -62,6 +59,7 @@ func runCheckBrief(
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem("%s", systemPrompt),
 		ai.WithPrompt("%s", userPrompt),
+		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowConsistency)),
 		cfg.Provider.CallConfig(maxTokens),
 	)
 	if err != nil {
@@ -160,6 +158,7 @@ func runCheckPosts(
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem("%s", systemPrompt),
 		ai.WithPrompt("%s", userPrompt),
+		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowConsistency)),
 		cfg.Provider.CallConfig(maxOutputTokens(cfg)),
 	)
 	if err != nil {
@@ -204,9 +203,12 @@ func runCheckPosts(
 	}, nil
 }
 
+// maxOutputTokens is the review call's cap. The default leaves room for the
+// thinking Claude 5.x models do by default, which counts toward the cap, while
+// staying under the ~21K the SDK allows a non-streaming request.
 func maxOutputTokens(cfg ConsistencyFlowConfig) int64 {
 	if cfg.MaxOutputTokens == 0 {
-		return 8192
+		return 16384
 	}
 	return cfg.MaxOutputTokens
 }

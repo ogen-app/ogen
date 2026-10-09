@@ -166,6 +166,30 @@ func TestStreamObjects(t *testing.T) {
 	}
 }
 
+func TestStreamObjects_IgnoresThinking(t *testing.T) {
+	g := genkit.Init(t.Context())
+	genkit.DefineModel(g, "test/thinker", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+		func(ctx context.Context, _ *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			for _, c := range []*ai.ModelResponseChunk{
+				{Content: []*ai.Part{ai.NewReasoningPart(`[{"x":0}]`, nil)}},
+				{Content: []*ai.Part{ai.NewTextPart(`[{"a":1}]`)}},
+			} {
+				if err := cb(ctx, c); err != nil {
+					return nil, err
+				}
+			}
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage(`[{"a":1}]`)}, nil
+		})
+	var got []string
+	if _, err := StreamObjects(t.Context(), g, func(_ int, raw string) { got = append(got, raw) },
+		ai.WithModelName("test/thinker"), ai.WithPrompt("go")); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{`{"a":1}`}; !slices.Equal(got, want) {
+		t.Fatalf("objects = %q, want %q", got, want)
+	}
+}
+
 func TestStreamObjects_Error(t *testing.T) {
 	g := fakeModel(t, []string{`[{"a":1},{"b":`}, errors.New("boom"))
 	var n int

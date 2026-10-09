@@ -122,6 +122,7 @@ func generateBrief(
 		ai.WithSystem(bctx.SystemPrompt),
 		ai.WithPrompt(bctx.ContextBlock),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: scanner.Push})),
+		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowEnrichBrief)),
 		cfg.Provider.CallConfig(maxTokens),
 	)
 	if err != nil {

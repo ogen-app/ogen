@@ -2,7 +2,7 @@
 // model call used by ModelConfigAdminService.TestSlotModel to verify a candidate
 // model actually works — catching what the static requirements match cannot
 // (missing/rotated API key, plugin not registered, unknown model id, region
-// gating, wrong embedding dimensionality). Chat slots run a 1-token Anthropic
+// gating, wrong embedding dimensionality). Chat slots run a one-word Anthropic
 // generation; embed slots run a real Gemini embedding and check the returned
 // dimensionality. Vision and transcribe slots run inside image-service /
 // audio-service, so they report ErrProbeUnsupported and keep the static verdict.
@@ -35,6 +35,11 @@ var ErrProbeUnsupported = errors.New("modelprobe: no live probe for this slot")
 
 // probeTimeout bounds a single probe so a hung provider can't stall the operator.
 const probeTimeout = 15 * time.Second
+
+// probeMaxTokens caps the chat probe's output. Claude 5.x models think by
+// default and their thinking counts toward max_tokens, so the cap leaves room
+// for a short thought before the one-word reply.
+const probeMaxTokens = 1024
 
 // Runner builds a throwaway genkit instance per probe from the current API key
 // in the secrets store (mirroring the flow runtime / embedder rebuild), so a key
@@ -70,7 +75,7 @@ func (r *Runner) Probe(ctx context.Context, flowKey, slotKey, modelID string) (s
 	return r.probeChat(ctx, vendor, modelID)
 }
 
-// probeChat runs a 1-token generation. v1 chat is Anthropic-only.
+// probeChat runs a one-word generation. v1 chat is Anthropic-only.
 func (r *Runner) probeChat(ctx context.Context, vendor, modelID string) (string, int64, error) {
 	if vendor != llm.VendorAnthropic {
 		return "", 0, fmt.Errorf("chat probe supports Anthropic models only (got vendor %q)", vendor)
@@ -87,7 +92,7 @@ func (r *Runner) probeChat(ctx context.Context, vendor, modelID string) (string,
 	resp, err := genkit.Generate(pctx, g,
 		ai.WithModelName(vendor+"/"+modelID),
 		ai.WithPrompt("Reply with the single word: ok"),
-		ai.WithConfig(anthropic.MessageNewParams{MaxTokens: 16}),
+		ai.WithConfig(anthropic.MessageNewParams{MaxTokens: probeMaxTokens}),
 	)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {

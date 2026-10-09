@@ -716,6 +716,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		ai.WithSystem(st.writerSystem),
 		ai.WithPrompt(composeWriterInstruction(instruction, st.retrieved)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: onText})),
+		ai.WithMiddleware(st.provider.RefusalGuard(modelconfig.FlowPostAssistant)),
 		st.provider.CallConfig(cmp.Or(st.writerMaxTokens, 64000)),
 	)
 	if err != nil {
