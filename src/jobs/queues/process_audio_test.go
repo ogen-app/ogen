@@ -51,13 +51,20 @@ func (f *fakeAudioClient) TranscribeSegment(_ context.Context, opts audio.Transc
 }
 
 // presignBlob satisfies audioBlobStore — presign is a pure string op here.
-type presignBlob struct{}
+// Deleted keys are recorded when deleted is set.
+type presignBlob struct{ deleted *[]string }
 
 func (presignBlob) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://get/" + key, nil
 }
 func (presignBlob) PresignedPutURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
 	return "https://put/" + key, nil
+}
+func (b presignBlob) Delete(_ context.Context, key string) error {
+	if b.deleted != nil {
+		*b.deleted = append(*b.deleted, key)
+	}
+	return nil
 }
 
 type fakeExtractions struct {
@@ -215,6 +222,33 @@ func TestProcessAudio_Success_TimeAnchoredChunks(t *testing.T) {
 	}
 	if got.CostMicros <= 0 || got.PriceVersion == "" {
 		t.Fatalf("cost not snapshotted: micros=%d ver=%q", got.CostMicros, got.PriceVersion)
+	}
+}
+
+// TestProcessAudio_CompleteDeletesNormalized: a completed run drops its
+// per-run normalized derivative and clears the key; the original stays.
+func TestProcessAudio_CompleteDeletesNormalized(t *testing.T) {
+	client := &fakeAudioClient{
+		probe: &audio.ProbeResult{DurationMs: 60_000},
+		norm:  &audio.NormalizeResult{DurationMs: 60_000},
+		transcribe: &audio.TranscribeSegmentResult{Utterances: []audio.Utterance{
+			{Text: "hello world", StartMs: 0, EndMs: 2_000, IsSpeech: true},
+		}},
+	}
+	ext := &fakeExtractions{}
+	var deleted []string
+	d := baseAudioDeps(client, ext, &fakeSegments{}, &fakeUtterances{}, &fakeStatus{}, &fakeChunks{})
+	d.Storage = presignBlob{deleted: &deleted}
+
+	task := ProcessAudioTask{AssetID: "a1", RunKey: "run-1", StorageKey: "assets/a1/original.mp3"}
+	if err := newAudioProc(d).process(t.Context(), task, false); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !slices.Equal(deleted, []string{"assets/a1/normalized-run-1.opus"}) {
+		t.Fatalf("deleted = %v, want only the run's normalized derivative", deleted)
+	}
+	if got := ext.m["a1|run-1"]; got.Status != models.AudioExtractionStatusComplete || got.NormalizedS3Key != nil {
+		t.Fatalf("extraction end state wrong: status=%q normalized=%v", got.Status, got.NormalizedS3Key)
 	}
 }
 
@@ -454,7 +488,10 @@ func TestProcessAudio_PartialOnLastAttempt(t *testing.T) {
 		transcribeErr: grpcstatus.Error(codes.Unavailable, "gemini down"),
 	}
 	ext, status, chunks := &fakeExtractions{}, &fakeStatus{}, &fakeChunks{}
-	p := newAudioProc(baseAudioDeps(client, ext, &fakeSegments{}, &fakeUtterances{}, status, chunks))
+	var deleted []string
+	d := baseAudioDeps(client, ext, &fakeSegments{}, &fakeUtterances{}, status, chunks)
+	d.Storage = presignBlob{deleted: &deleted}
+	p := newAudioProc(d)
 	if err := p.process(t.Context(), ProcessAudioTask{AssetID: "a6", RunKey: "run-1", StorageKey: "assets/a6/original.mp3"}, true); err != nil {
 		t.Fatalf("last attempt should settle (not error): %v", err)
 	}
@@ -466,6 +503,10 @@ func TestProcessAudio_PartialOnLastAttempt(t *testing.T) {
 	}
 	if ext.m["a6|run-1"].Status != models.AudioExtractionStatusPartial {
 		t.Fatalf("extraction not marked partial")
+	}
+	// Retry re-reads the normalized derivative, so a partial run keeps it.
+	if len(deleted) != 0 || ext.m["a6|run-1"].NormalizedS3Key == nil {
+		t.Fatalf("partial run must keep its normalized derivative (deleted=%v)", deleted)
 	}
 }
 

@@ -1237,42 +1237,39 @@ func (h *AssetsHandler) BulkTag(c *fiber.Ctx) error {
 
 // Delete godoc
 // @Summary      Delete asset
-// @Description  Deletes a content bank asset by Sqid.
+// @Description  Deletes a content bank asset by Sqid, with every object it stored. When storage
+// @Description  cleanup fails the asset is kept and 502 is returned so the caller can retry.
 // @Tags         content-bank
 // @Security     CookieAuth
 // @Param        id   path  string  true  "Asset Sqid"
 // @Success      204
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      502  {object}  map[string]string
 // @Router       /api/content-bank/assets/{id} [delete]
 func (h *AssetsHandler) Delete(c *fiber.Ctx) error {
-	id := c.Params("id")
-
-	// Capture the object keys before the row goes: the cascade drops the file
-	// and image rows that name them.
-	keysToDelete, err := h.ingester().ObjectKeys(reqCtx(c), id)
+	ctx := reqCtx(c)
+	asset, err := h.repo.GetByID(ctx, c.Params("id"))
 	if err != nil {
-		return err
+		return notFound(err, "asset not found")
 	}
 
-	deleted, err := h.repo.Delete(reqCtx(c), id)
+	// Storage goes before the row: the cascade drops the file and image rows
+	// that name the objects, so a failure after it could never be retried.
+	if h.storage != nil {
+		if err := h.ingester().DeleteObjects(ctx, h.storage, asset.ID); err != nil {
+			slog.WarnContext(ctx, "delete asset objects", logging.AttrComponent, "handlers.assets",
+				"asset_id", asset.ID, logging.AttrError, err)
+			return fiber.NewError(fiber.StatusBadGateway, "failed to delete files from storage; please retry")
+		}
+	}
+
+	deleted, err := h.repo.Delete(ctx, asset.ID)
 	if err != nil {
 		return err
 	}
 	if !deleted {
 		return fiber.NewError(fiber.StatusNotFound, "asset not found")
 	}
-
-	// Best-effort S3 cleanup. Logged but not surfaced — the row is gone
-	// and orphaned objects are tolerable.
-	if h.storage != nil {
-		for _, k := range keysToDelete {
-			if err := h.storage.Delete(reqCtx(c), k); err != nil {
-				slog.WarnContext(reqCtx(c), "delete asset object", logging.AttrComponent, "handlers.assets",
-					"key", k, logging.AttrError, err)
-			}
-		}
-	}
-
 	return c.SendStatus(fiber.StatusNoContent)
 }

@@ -46,6 +46,11 @@ type Storage interface {
 	Copy(ctx context.Context, srcKey, dstKey string) error
 	// Delete removes the object at key. Returns nil when the object does not exist.
 	Delete(ctx context.Context, key string) error
+	// DeletePrefix removes every object whose key starts with prefix, which
+	// must be a non-empty folder ending in "/". Used to drop everything an
+	// asset or post owns, including objects no row records (an original whose
+	// ingestion never finished, a presigned upload never finalized).
+	DeletePrefix(ctx context.Context, prefix string) error
 	// PublicURL returns the public URL for an object at key.
 	PublicURL(key string) string
 	// PresignedGetURL returns a short-lived signed GET URL for the object
@@ -134,6 +139,30 @@ func (s *s3Storage) Delete(ctx context.Context, key string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("storage: delete %s: %w", key, err)
+	}
+	return nil
+}
+
+func (s *s3Storage) DeletePrefix(ctx context.Context, prefix string) error {
+	if !strings.HasSuffix(prefix, "/") || strings.Trim(prefix, "/") == "" {
+		return fmt.Errorf("storage: delete prefix %q: must be a non-empty folder ending in /", prefix)
+	}
+	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("storage: list %s: %w", prefix, err)
+		}
+		// One DeleteObject per key: R2 and other S3-compatibles disagree on
+		// the checksum headers the batch DeleteObjects call requires.
+		for _, obj := range page.Contents {
+			if err := s.Delete(ctx, aws.ToString(obj.Key)); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

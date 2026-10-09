@@ -55,6 +55,7 @@ func (s *fakeStorage) Upload(context.Context, string, io.Reader, int64, string) 
 }
 func (s *fakeStorage) Copy(context.Context, string, string) error { return nil }
 func (s *fakeStorage) Delete(context.Context, string) error       { return nil }
+func (s *fakeStorage) DeletePrefix(context.Context, string) error { return nil }
 func (s *fakeStorage) PublicURL(string) string                    { return "" }
 func (s *fakeStorage) PresignedGetURL(context.Context, string, time.Duration) (string, error) {
 	return "", nil

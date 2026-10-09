@@ -4047,7 +4047,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Deletes a content bank asset by Sqid.",
+                "description": "Deletes a content bank asset by Sqid, with every object it stored. When storage\ncleanup fails the asset is kept and 502 is returned so the caller can retry.",
                 "tags": [
                     "content-bank"
                 ],
@@ -4076,6 +4076,15 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
