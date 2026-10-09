@@ -32,10 +32,11 @@ func (f *fakeParser) Parse(_ context.Context, r io.Reader, opts pdf.Options) (*p
 }
 
 // fakeEmbedder returns one 4-dim embedding per input. failAll fails every call;
-// failCalls fails specific 1-based call indices (to model some-fail-some-pass).
+// failTexts fails any request containing one of these texts (to model
+// some-fail-some-pass whether chunks are embedded singly or in batches).
 type fakeEmbedder struct {
 	failAll   bool
-	failCalls map[int]bool
+	failTexts map[string]bool
 	calls     int
 }
 
@@ -43,11 +44,14 @@ func (f *fakeEmbedder) Name() string { return "fake-embedder" }
 
 func (f *fakeEmbedder) Embed(_ context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 	f.calls++
-	if f.failAll || f.failCalls[f.calls] {
+	if f.failAll {
 		return nil, errors.New("embed: unavailable")
 	}
 	embs := make([]*ai.Embedding, 0, len(req.Input))
-	for range req.Input {
+	for _, d := range req.Input {
+		if f.failTexts[d.Content[0].Text] {
+			return nil, errors.New("embed: rejected input")
+		}
 		embs = append(embs, &ai.Embedding{Embedding: []float32{0.1, 0.2, 0.3, 0.4}})
 	}
 	return &ai.EmbedResponse{Embeddings: embs}, nil
@@ -213,7 +217,7 @@ func TestProcessPDF_PartialOnSomeEmbedFailures(t *testing.T) {
 	}}}
 	status := &fakeStatus{}
 	chunks := &fakeChunks{}
-	p := newProc(PDFDeps{Client: parser, Embedder: &fakeEmbedder{failCalls: map[int]bool{2: true}},
+	p := newProc(PDFDeps{Client: parser, Embedder: &fakeEmbedder{failTexts: map[string]bool{"bad chunk": true}},
 		Storage: &fakeBlob{data: []byte("pdf")}, Assets: status, Chunks: chunks, Files: &fakeFiles{}})
 
 	if err := p.process(t.Context(), ProcessPDFTask{AssetID: "a2"}, false); err != nil {

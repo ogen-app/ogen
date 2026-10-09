@@ -61,6 +61,17 @@ func TestAssetChunks_ReadsSkipEmbedding(t *testing.T) {
 		t.Fatalf("preview = (%d, %q), want (3, \"chunk 0\")", n, first)
 	}
 
+	stored, err := repo.EmbeddingsByContent(ctx, assetID, "m", []string{"chunk 1", "not a chunk"})
+	if err != nil {
+		t.Fatalf("embeddings by content: %v", err)
+	}
+	if len(stored) != 1 || len(stored["chunk 1"].Slice()) != len(vec) {
+		t.Fatalf("embeddings by content = %d entries, want chunk 1 only", len(stored))
+	}
+	if other, err := repo.EmbeddingsByContent(ctx, assetID, "other-model", []string{"chunk 1"}); err != nil || len(other) != 0 {
+		t.Fatalf("embeddings from another model = (%d, %v), want none", len(other), err)
+	}
+
 	byAsset, err := repo.GetByAssetID(ctx, assetID)
 	if err != nil {
 		t.Fatalf("get by asset: %v", err)

@@ -32,6 +32,10 @@ type AssetChunksRepository interface {
 	// assetIDs is non-empty the search is scoped to those assets; limit <= 0
 	// means no row cap. Backed by the pgvector HNSW index (embedding <=> query).
 	SearchSimilar(ctx context.Context, query pgvector.HalfVector, assetIDs []string, minScore float64, limit int) ([]models.AssetChunk, error)
+	// EmbeddingsByContent returns the stored embedding of each of the asset's
+	// chunks whose content is in contents and which model embedded, keyed by
+	// content, so a re-embed can skip text that hasn't changed.
+	EmbeddingsByContent(ctx context.Context, assetID, model string, contents []string) (map[string]pgvector.HalfVector, error)
 	// DeleteByAssetID removes all chunks for an asset.
 	DeleteByAssetID(ctx context.Context, assetID string) error
 	// GetByIDs returns chunks matching the given primary-key IDs, ordered by
@@ -133,6 +137,29 @@ func (r *assetChunksRepository) SearchSimilar(ctx context.Context, query pgvecto
 		return nil, err
 	}
 	return chunks, nil
+}
+
+func (r *assetChunksRepository) EmbeddingsByContent(ctx context.Context, assetID, model string, contents []string) (map[string]pgvector.HalfVector, error) {
+	if len(contents) == 0 {
+		return nil, nil
+	}
+	var rows []models.AssetChunk
+	err := r.db.NewSelect().
+		Model(&rows).
+		Column("content", "embedding").
+		Where("ac.asset_id = ?", assetID).
+		Where("ac.model = ?", model).
+		Where("ac.embedding IS NOT NULL").
+		Where("ac.content IN (?)", bun.List(contents)).
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]pgvector.HalfVector, len(rows))
+	for i := range rows {
+		out[rows[i].Content] = rows[i].Embedding
+	}
+	return out, nil
 }
 
 func (r *assetChunksRepository) DeleteByAssetID(ctx context.Context, assetID string) error {
