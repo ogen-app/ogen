@@ -814,7 +814,7 @@ type postRequest struct {
 	PublishedURL string `json:"published_url"`
 	// FirstComment and FirstCommentDelayMinutes are presence-aware like
 	// ContentFormat: omitted leaves them alone; a null or "" comment clears it.
-	FirstComment             Optional[string] `json:"first_comment" swaggertype:"string"`
+	FirstComment             Optional[string] `json:"first_comment" swaggertype:"string" extensions:"x-nullable"`
 	FirstCommentDelayMinutes Optional[int]    `json:"first_comment_delay_minutes" swaggertype:"integer" enums:"0,1,3,5,10"`
 }
 
