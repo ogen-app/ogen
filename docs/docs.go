@@ -13773,6 +13773,20 @@ const docTemplate = `{
                     "description": "CTAUrl is the link a link-post publishes. Not validated on write, so an\nautosave of a half-typed URL is kept; the publish gate checks it.",
                     "type": "string"
                 },
+                "first_comment": {
+                    "description": "FirstComment and FirstCommentDelayMinutes are presence-aware like\nContentFormat: omitted leaves them alone; a null or \"\" comment clears it.",
+                    "type": "string"
+                },
+                "first_comment_delay_minutes": {
+                    "type": "integer",
+                    "enum": [
+                        0,
+                        1,
+                        3,
+                        5,
+                        10
+                    ]
+                },
                 "media_urls": {
                     "type": "array",
                     "items": {
@@ -15273,6 +15287,23 @@ const docTemplate = `{
                 "FactSubjectOpportunity"
             ]
         },
+        "models.FirstCommentStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "delegated",
+                "posted",
+                "failed",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "FirstCommentPending",
+                "FirstCommentDelegated",
+                "FirstCommentPosted",
+                "FirstCommentFailed",
+                "FirstCommentSkipped"
+            ]
+        },
         "models.GuardrailsStance": {
             "type": "object",
             "properties": {
@@ -15777,6 +15808,30 @@ const docTemplate = `{
                 "failure_reason": {
                     "type": "string"
                 },
+                "first_comment": {
+                    "description": "FirstComment is posted under the live post, FirstCommentDelayMinutes\nafter it publishes (0 = with the post). Empty means no comment.",
+                    "type": "string"
+                },
+                "first_comment_delay_minutes": {
+                    "type": "integer"
+                },
+                "first_comment_error": {
+                    "type": "string"
+                },
+                "first_comment_id": {
+                    "type": "string"
+                },
+                "first_comment_posted_at": {
+                    "type": "string"
+                },
+                "first_comment_status": {
+                    "description": "The first comment's outcome, written by the publish workers only. Nil\nstatus means no comment went out with this post (yet).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.FirstCommentStatus"
+                        }
+                    ]
+                },
                 "id": {
                     "type": "string"
                 },
@@ -16015,6 +16070,7 @@ const docTemplate = `{
                 "zernio_poll",
                 "zernio_cancel",
                 "zernio_retry",
+                "zernio_first_comment",
                 "reconciliation_timeout",
                 "user_schedule",
                 "user_cancel",
@@ -16039,6 +16095,7 @@ const docTemplate = `{
                 "PostLogEventZernioPoll",
                 "PostLogEventZernioCancel",
                 "PostLogEventZernioRetry",
+                "PostLogEventZernioFirstComment",
                 "PostLogEventReconciliationTimeout",
                 "PostLogEventUserSchedule",
                 "PostLogEventUserCancel",
@@ -16443,8 +16500,19 @@ const docTemplate = `{
         "models.TextConstraints": {
             "type": "object",
             "properties": {
+                "first_comment_per_post_type": {
+                    "description": "FirstCommentPerPostType overrides MaxFirstCommentChars per slug; 0\nturns the first comment off for that type (e.g. stories).",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
                 "max_content_chars": {
                     "description": "MaxContentChars is the default body-text ceiling applied to every post\ntype that PerPostType doesn't override. 0 = unbounded.",
+                    "type": "integer"
+                },
+                "max_first_comment_chars": {
+                    "description": "MaxFirstCommentChars caps a post's first comment. 0 = the platform\ntakes no first comment.",
                     "type": "integer"
                 },
                 "max_title_chars": {
@@ -16755,6 +16823,10 @@ const docTemplate = `{
                 },
                 "label": {
                     "type": "string"
+                },
+                "max_first_comment_chars": {
+                    "description": "MaxFirstCommentChars caps the post type's first comment; 0 means the\ntype takes none and the composer hides the field.",
+                    "type": "integer"
                 },
                 "rule": {
                     "$ref": "#/definitions/platforms.ResolvedPostTypeRule"

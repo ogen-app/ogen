@@ -1,6 +1,7 @@
 package queues
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -172,8 +173,10 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 				break
 			}
 		}
+		post.FirstCommentStatus = firstCommentOnPublish(post)
 		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held,
-			"status", "published_at", "published_results", "published_url", "publisher_status", "updated_at")
+			"status", "published_at", "published_results", "published_url", "publisher_status",
+			"first_comment_status", "updated_at")
 		if err != nil {
 			return fmt.Errorf("poll: persist Published: %w", err)
 		}
@@ -192,6 +195,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 		)
 		// Tell the whole workspace it's live.
 		emitPublishNotification(ctx, p.Notifier, p.Members, post, true)
+		p.scheduleFirstComment(ctx, post, cmp.Or(job.PublishedAt, &now))
 	case zernio.JobStatusFailed, zernio.JobStatusPartial:
 		// `partial` = some platforms succeeded, others failed. Per
 		// CON-69 we treat this as Failed for the MVP; per-platform
@@ -201,8 +205,13 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 		post.FailureReason = "zernio_terminal: " + string(job.Status)
 		results, _ := json.Marshal(job.Platforms)
 		post.PublishedResults = string(results)
+		post.FirstCommentStatus = nil
+		if post.SendsFirstComment() {
+			post.FirstCommentStatus = new(models.FirstCommentSkipped)
+		}
 		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held,
-			"status", "failure_reason", "published_results", "publisher_status", "updated_at")
+			"status", "failure_reason", "published_results", "publisher_status",
+			"first_comment_status", "updated_at")
 		if err != nil {
 			return fmt.Errorf("poll: persist Failed: %w", err)
 		}
@@ -228,6 +237,36 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 			"unknown Zernio terminal status — ignoring", logs.MarshalCapped(map[string]string{"zernio_status": string(job.Status)}))
 	}
 	return nil
+}
+
+// firstCommentOnPublish is the first-comment status of a post going live: sent
+// with the post when it has no delay, pending when Ogen posts it later, nil
+// when the post sends none.
+func firstCommentOnPublish(post *models.Post) *models.FirstCommentStatus {
+	switch {
+	case !post.SendsFirstComment():
+		return nil
+	case post.FirstCommentDelayMinutes == 0:
+		return new(models.FirstCommentDelegated)
+	default:
+		return new(models.FirstCommentPending)
+	}
+}
+
+// scheduleFirstComment queues the delayed first comment of a post that just
+// went live. A comment that can't be queued is settled as failed rather than
+// left pending forever.
+func (p *PollZernioStatusProcessor) scheduleFirstComment(ctx context.Context, post *models.Post, publishedAt *time.Time) {
+	if post.FirstCommentStatus == nil || *post.FirstCommentStatus != models.FirstCommentPending {
+		return
+	}
+	if err := enqueueFirstComment(ctx, post, *publishedAt); err != nil {
+		fc := &PostFirstCommentProcessor{Deps: p.Deps, Notifier: p.Notifier}
+		if ferr := fc.fail(ctx, post, "could not schedule the first comment: "+err.Error()); ferr != nil {
+			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskFailed, post.Status, post.Status,
+				"failed to settle unscheduled first comment", errPayload(ferr))
+		}
+	}
 }
 
 // movedOn ends a poll whose write found the post no longer scheduled under

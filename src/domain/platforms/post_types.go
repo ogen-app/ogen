@@ -378,24 +378,63 @@ func validateThreadAttachments(p *models.Platform, atts []models.PostAttachment,
 // (ValidateForPublish) plus the per-post-type rules (ValidatePostType); for a
 // thread post it runs ONLY the per-segment gate, because the
 // whole-post media caps would wrongly count every segment's media against one
-// per-post limit. Returns the per-platform error map (keyed by platform.ID);
+// per-post limit. Both kinds then run the first-comment rules. Returns the
+// per-platform error map (keyed by platform.ID);
 // empty when the post passes or platform is nil.
 func ValidatePublishReadiness(post *models.Post, platform *models.Platform, atts []models.PostAttachment) map[string][]ValidationError {
 	if platform == nil {
 		return map[string][]ValidationError{}
 	}
-	if post != nil && post.IsThread() {
-		out := map[string][]ValidationError{}
-		if errs := ValidatePostType(post, platform, atts); len(errs) > 0 {
-			out[platform.ID] = errs
-		}
-		return out
+	out := map[string][]ValidationError{}
+	if post == nil || !post.IsThread() {
+		out = ValidateForPublish(atts, []*models.Platform{platform})
 	}
-	out := ValidateForPublish(atts, []*models.Platform{platform})
 	if typeErrs := ValidatePostType(post, platform, atts); len(typeErrs) > 0 {
 		out[platform.ID] = append(out[platform.ID], typeErrs...)
 	}
+	if fcErrs := checkFirstComment(post, platform); len(fcErrs) > 0 {
+		out[platform.ID] = append(out[platform.ID], fcErrs...)
+	}
 	return out
+}
+
+// checkFirstComment rejects a first comment the platform or post type can't
+// take, one over the platform's comment limit, and a delay off the menu. The
+// comment is counted like the body: as the flattened text that publishes.
+func checkFirstComment(post *models.Post, p *models.Platform) []ValidationError {
+	if post == nil || !post.HasFirstComment() {
+		return nil
+	}
+	limit := p.TextConstraints.FirstCommentLimitFor(post.PlatformPostType)
+	if limit <= 0 {
+		return []ValidationError{{
+			Platform: p.ID,
+			Rule:     RuleFirstCommentUnsupported,
+			Expected: "no first comment",
+			Actual:   "first comment set",
+			Message:  fmt.Sprintf("%s %s posts can't take a first comment", p.Name, post.PlatformPostType),
+		}}
+	}
+	var errs []ValidationError
+	if n := VisibleLen(post.FirstComment); n > limit {
+		errs = append(errs, ValidationError{
+			Platform: p.ID,
+			Rule:     RuleMaxFirstCommentChars,
+			Expected: fmt.Sprintf("<= %d characters", limit),
+			Actual:   strconv.Itoa(n),
+			Message:  fmt.Sprintf("%s first comment allows up to %d characters; comment is %d", p.Name, limit, n),
+		})
+	}
+	if !models.ValidFirstCommentDelay(post.FirstCommentDelayMinutes) {
+		errs = append(errs, ValidationError{
+			Platform: p.ID,
+			Rule:     RuleFirstCommentDelay,
+			Expected: "one of 0, 1, 3, 5, 10 minutes",
+			Actual:   strconv.Itoa(post.FirstCommentDelayMinutes),
+			Message:  "first comment delay must be 0, 1, 3, 5 or 10 minutes",
+		})
+	}
+	return errs
 }
 
 func sortedSlugs(m models.PostTypeMap) []string {
@@ -444,6 +483,9 @@ type PostTypeRuleView struct {
 	WhitelistOnly bool                  `json:"whitelist_only"`
 	Rule          *ResolvedPostTypeRule `json:"rule"`
 	Canvas        *models.Canvas        `json:"canvas"`
+	// MaxFirstCommentChars caps the post type's first comment; 0 means the
+	// type takes none and the composer hides the field.
+	MaxFirstCommentChars int `json:"max_first_comment_chars"`
 }
 
 // ResolvePostTypeRules returns the per-slug rules for a platform with
@@ -458,8 +500,9 @@ func ResolvePostTypeRules(p *models.Platform) []PostTypeRuleView {
 	out := make([]PostTypeRuleView, 0, len(slugs))
 	for _, slug := range slugs {
 		view := PostTypeRuleView{
-			Slug:  slug,
-			Label: p.PostTypes[slug],
+			Slug:                 slug,
+			Label:                p.PostTypes[slug],
+			MaxFirstCommentChars: p.TextConstraints.FirstCommentLimitFor(slug),
 		}
 		rule, ok := postTypeRules[slug]
 		if !ok {

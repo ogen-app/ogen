@@ -51,6 +51,9 @@ type PostRepository interface {
 	// UpdateSubmission is the publish workers' compare-and-set write; see
 	// posts_submission.go.
 	UpdateSubmission(ctx context.Context, post *models.Post, heldID string, columns ...string) (bool, error)
+	// SettleFirstComment is the first-comment worker's compare-and-set write;
+	// see posts_submission.go.
+	SettleFirstComment(ctx context.Context, post *models.Post, columns ...string) (bool, error)
 	// UpdateWhileScheduled is the same guard for a whole-record edit.
 	UpdateWhileScheduled(ctx context.Context, post *models.Post, heldID string, excludeColumns ...string) (bool, error)
 	// ListByPublisherPostIDs projects the posts holding the given publisher

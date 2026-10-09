@@ -36,6 +36,8 @@ const (
 	PostLogEventZernioPoll   PostLogEventType = "zernio_poll"
 	PostLogEventZernioCancel PostLogEventType = "zernio_cancel"
 	PostLogEventZernioRetry  PostLogEventType = "zernio_retry"
+	// The live post's first comment was posted, or failed to be.
+	PostLogEventZernioFirstComment PostLogEventType = "zernio_first_comment"
 
 	// Reconciliation
 	PostLogEventReconciliationTimeout PostLogEventType = "reconciliation_timeout"

@@ -228,7 +228,12 @@ func (p *SubmitPostProcessor) buildVariant(ctx context.Context, post *models.Pos
 			return variant, nil, p.transient(ctx, post, "transient error uploading media to Zernio; River will retry", err)
 		}
 	}
-	if data.Title != "" || len(data.ThreadItems) > 0 {
+	// A first comment without a delay rides the publish request; a delayed
+	// one is posted by PostFirstCommentProcessor once the post is live.
+	if post.SendsFirstComment() && post.FirstCommentDelayMinutes == 0 {
+		data.FirstComment = platforms.FlattenSocialText(post.FirstComment)
+	}
+	if data.Title != "" || len(data.ThreadItems) > 0 || data.FirstComment != "" {
 		variant.PlatformSpecificData = &data
 	}
 	return variant, items, nil

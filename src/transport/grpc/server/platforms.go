@@ -187,6 +187,8 @@ func (s *platformAdminService) UpdatePlatform(ctx context.Context, req *platform
 	// The admin contract doesn't carry canvases yet, so keep the stored ones
 	// rather than wiping them on every edit.
 	m.PostTypeCanvases = existing.PostTypeCanvases
+	// Nor the first-comment limits.
+	m.TextConstraints = m.TextConstraints.WithFirstCommentOf(existing.TextConstraints)
 	m.UpdatedAt = time.Now().UTC()
 	if err := s.platformRepo.Update(ctx, &m); err != nil {
 		if pgCode(err) == pgUniqueViolation {

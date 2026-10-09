@@ -29,6 +29,11 @@ var (
 	// Polls cancelled before they ran because their submission was withdrawn.
 	ZernioPollCancelled = expvar.NewInt("ogen_jobs_zernio_poll_cancelled")
 
+	// Delayed first comments posted under live posts.
+	ZernioFirstCommentPosted  = expvar.NewInt("ogen_jobs_zernio_first_comment_posted")
+	ZernioFirstCommentFailed  = expvar.NewInt("ogen_jobs_zernio_first_comment_failed")
+	ZernioFirstCommentRetried = expvar.NewInt("ogen_jobs_zernio_first_comment_retried")
+
 	// Cancel lifecycle.
 	ZernioCancelSucceeded        = expvar.NewInt("ogen_jobs_zernio_cancel_succeeded")
 	ZernioCancelAlreadyPublished = expvar.NewInt("ogen_jobs_zernio_cancel_already_published")

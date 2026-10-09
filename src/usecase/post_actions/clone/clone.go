@@ -296,6 +296,12 @@ func buildClone(src *models.Post, tgt target, opts Options, newID, content strin
 	if keepThread {
 		clone.ThreadSegments = append(models.ThreadSegments{}, src.ThreadSegments...)
 	}
+	// A first comment is written for its platform; one carried to another
+	// platform could be unsupported there and would block publishing.
+	if tgt.platformID == src.PlatformID {
+		clone.FirstComment = src.FirstComment
+		clone.FirstCommentDelayMinutes = src.FirstCommentDelayMinutes
+	}
 	if opts.CopyMedia {
 		clone.MediaURLs = append(models.StringSlice{}, src.MediaURLs...)
 	}
