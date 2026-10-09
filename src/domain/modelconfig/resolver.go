@@ -66,6 +66,8 @@ func (d Defaults) For(flowKey, slotKey string) string {
 		return d.Planning
 	case flowKey == FlowCampaignAssistant && slotKey == SlotOrchestrator:
 		return d.Planning
+	case flowKey == FlowAssetAnalysis && slotKey == SlotMap:
+		return d.Planning
 	case flowKey == FlowVision && slotKey == SlotExtract:
 		return d.VisionExtract
 	case flowKey == FlowVision && slotKey == SlotEscalate:

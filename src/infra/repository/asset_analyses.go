@@ -1,0 +1,245 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"time"
+
+	"github.com/uptrace/bun"
+
+	"github.com/ogen-app/ogen/src/domain/models"
+)
+
+// AssetAnalysisRepository persists asset analyses, one row per lens: the
+// workspace lens (nil campaign) and one lens per campaign the asset is in.
+// Every query runs through the bun Model API so TenantScoped scopes it.
+//
+// A campaign lens whose campaign is soft-deleted stays in the table until the
+// campaign is purged but is hidden from every read.
+type AssetAnalysisRepository interface {
+	// Ensure inserts a pending lens when none exists and returns the lens.
+	Ensure(ctx context.Context, db bun.IDB, assetID string, campaignID *string) (*models.AssetAnalysis, error)
+	// GetLens returns sql.ErrNoRows for an absent lens or a deleted campaign.
+	GetLens(ctx context.Context, assetID string, campaignID *string) (*models.AssetAnalysis, error)
+	// LockLens reads the lens FOR UPDATE inside tx; sql.ErrNoRows when absent.
+	LockLens(ctx context.Context, tx bun.Tx, assetID string, campaignID *string) (*models.AssetAnalysis, error)
+	// ListByAsset returns the workspace lens first, then the campaign lenses.
+	ListByAsset(ctx context.Context, assetID string) ([]models.AssetAnalysis, error)
+	// ListByCampaign returns the campaign's lenses, most relevant first.
+	ListByCampaign(ctx context.Context, campaignID string) ([]models.AssetAnalysis, error)
+	// WorkspaceStatuses maps each asset id to its workspace lens status;
+	// assets without one are absent.
+	WorkspaceStatuses(ctx context.Context, assetIDs []string) (map[string]models.AssetAnalysisStatus, error)
+	// SetStatus writes status with its failure code and reason (both empty
+	// unless failed or skipped).
+	SetStatus(ctx context.Context, db bun.IDB, id string, status models.AssetAnalysisStatus, code, reason string) error
+	// SaveResult writes a finished analysis and replaces its untriaged ideas
+	// with ideas. Triaged ideas are never touched. It must run inside the tx
+	// that locked the lens.
+	SaveResult(ctx context.Context, tx bun.Tx, a *models.AssetAnalysis, ideas []models.Idea) error
+	// DeleteLens removes a campaign lens and its untriaged ideas.
+	DeleteLens(ctx context.Context, db bun.IDB, assetID, campaignID string) error
+	// DeleteUntriagedIdeasForAsset removes the untriaged ideas of every lens
+	// of the asset, ahead of the asset delete that cascades the lenses.
+	DeleteUntriagedIdeasForAsset(ctx context.Context, db bun.IDB, assetID string) error
+	// RecordRun logs one run of the analysis against the monthly cap.
+	RecordRun(ctx context.Context, analysisID string) error
+	// CountRunsSince counts the tenant's runs at or after since.
+	CountRunsSince(ctx context.Context, since time.Time) (int64, error)
+}
+
+type assetAnalysisRepository struct {
+	db *bun.DB
+}
+
+func NewAssetAnalysisRepository(db *bun.DB) AssetAnalysisRepository {
+	return &assetAnalysisRepository{db: db}
+}
+
+// whereLens narrows q to one lens of an asset.
+func whereLens(q *bun.SelectQuery, assetID string, campaignID *string) *bun.SelectQuery {
+	q = q.Where("aa.asset_id = ?", assetID)
+	if campaignID == nil {
+		return q.Where("aa.campaign_id IS NULL")
+	}
+	return q.Where("aa.campaign_id = ?", *campaignID)
+}
+
+// selectLive reads lenses with their campaign name, dropping lenses of
+// soft-deleted campaigns.
+func (r *assetAnalysisRepository) selectLive(db bun.IDB, model any) *bun.SelectQuery {
+	return db.NewSelect().
+		Model(model).
+		ColumnExpr("aa.*").
+		ColumnExpr("c.name AS campaign_name").
+		Join("LEFT JOIN campaigns AS c ON c.id = aa.campaign_id").
+		Where("aa.campaign_id IS NULL OR c.deleted_at IS NULL")
+}
+
+func (r *assetAnalysisRepository) Ensure(ctx context.Context, db bun.IDB, assetID string, campaignID *string) (*models.AssetAnalysis, error) {
+	id, err := models.NewID()
+	if err != nil {
+		return nil, err
+	}
+	a := &models.AssetAnalysis{
+		ID:         id,
+		AssetID:    assetID,
+		CampaignID: campaignID,
+		Status:     models.AssetAnalysisStatusPending,
+	}
+	if _, err := db.NewInsert().
+		Model(a).
+		On("CONFLICT (asset_id, (COALESCE(campaign_id, ''))) DO NOTHING").
+		Exec(ctx); err != nil {
+		return nil, err
+	}
+	existing := new(models.AssetAnalysis)
+	if err := whereLens(db.NewSelect().Model(existing), assetID, campaignID).Scan(ctx); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
+func (r *assetAnalysisRepository) GetLens(ctx context.Context, assetID string, campaignID *string) (*models.AssetAnalysis, error) {
+	a := new(models.AssetAnalysis)
+	if err := whereLens(r.selectLive(r.db, a), assetID, campaignID).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	return a, nil
+}
+
+func (r *assetAnalysisRepository) LockLens(ctx context.Context, tx bun.Tx, assetID string, campaignID *string) (*models.AssetAnalysis, error) {
+	a := new(models.AssetAnalysis)
+	if err := whereLens(tx.NewSelect().Model(a), assetID, campaignID).For("UPDATE").Scan(ctx); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+func (r *assetAnalysisRepository) ListByAsset(ctx context.Context, assetID string) ([]models.AssetAnalysis, error) {
+	out := []models.AssetAnalysis{}
+	err := r.selectLive(r.db, &out).
+		Where("aa.asset_id = ?", assetID).
+		OrderExpr("aa.campaign_id IS NOT NULL, c.name ASC, aa.id ASC").
+		Scan(ctx)
+	return out, err
+}
+
+func (r *assetAnalysisRepository) ListByCampaign(ctx context.Context, campaignID string) ([]models.AssetAnalysis, error) {
+	out := []models.AssetAnalysis{}
+	err := r.selectLive(r.db, &out).
+		Where("aa.campaign_id = ?", campaignID).
+		OrderExpr("(aa.result->'relevance'->>'score')::int DESC NULLS LAST, aa.id ASC").
+		Scan(ctx)
+	return out, err
+}
+
+func (r *assetAnalysisRepository) WorkspaceStatuses(ctx context.Context, assetIDs []string) (map[string]models.AssetAnalysisStatus, error) {
+	out := make(map[string]models.AssetAnalysisStatus, len(assetIDs))
+	if len(assetIDs) == 0 {
+		return out, nil
+	}
+	var rows []models.AssetAnalysis
+	if err := r.db.NewSelect().
+		Model(&rows).
+		Column("aa.asset_id", "aa.status").
+		Where("aa.asset_id IN (?)", bun.List(assetIDs)).
+		Where("aa.campaign_id IS NULL").
+		Scan(ctx); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.AssetID] = row.Status
+	}
+	return out, nil
+}
+
+func (r *assetAnalysisRepository) SetStatus(ctx context.Context, db bun.IDB, id string, status models.AssetAnalysisStatus, code, reason string) error {
+	_, err := db.NewUpdate().
+		Model((*models.AssetAnalysis)(nil)).
+		Set("status = ?", status).
+		Set("failure_code = ?", code).
+		Set("failure_reason = ?", reason).
+		Set("updated_at = ?", time.Now().UTC()).
+		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+func (r *assetAnalysisRepository) SaveResult(ctx context.Context, tx bun.Tx, a *models.AssetAnalysis, ideas []models.Idea) error {
+	a.UpdatedAt = time.Now().UTC()
+	if _, err := tx.NewUpdate().
+		Model(a).
+		Column("status", "strategy", "summary", "result", "language", "partial_source", "truncated",
+			"source_tokens", "context_fingerprint", "model_id", "failure_code", "failure_reason",
+			"analyzed_at", "updated_at").
+		WherePK().
+		Exec(ctx); err != nil {
+		return err
+	}
+	if err := deleteUntriagedIdeas(ctx, tx, "asset_analysis_id = ?", a.ID); err != nil {
+		return err
+	}
+	if len(ideas) == 0 {
+		return nil
+	}
+	_, err := tx.NewInsert().Model(&ideas).Exec(ctx)
+	return err
+}
+
+func (r *assetAnalysisRepository) DeleteLens(ctx context.Context, db bun.IDB, assetID, campaignID string) error {
+	lensIDs := db.NewSelect().
+		Model((*models.AssetAnalysis)(nil)).
+		Column("aa.id").
+		Where("aa.asset_id = ?", assetID).
+		Where("aa.campaign_id = ?", campaignID)
+	if err := deleteUntriagedIdeas(ctx, db, "asset_analysis_id IN (?)", lensIDs); err != nil {
+		return err
+	}
+	_, err := db.NewDelete().
+		Model((*models.AssetAnalysis)(nil)).
+		Where("asset_id = ?", assetID).
+		Where("campaign_id = ?", campaignID).
+		Exec(ctx)
+	return err
+}
+
+func (r *assetAnalysisRepository) DeleteUntriagedIdeasForAsset(ctx context.Context, db bun.IDB, assetID string) error {
+	lensIDs := db.NewSelect().
+		Model((*models.AssetAnalysis)(nil)).
+		Column("aa.id").
+		Where("aa.asset_id = ?", assetID)
+	return deleteUntriagedIdeas(ctx, db, "asset_analysis_id IN (?)", lensIDs)
+}
+
+func (r *assetAnalysisRepository) RecordRun(ctx context.Context, analysisID string) error {
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	_, err = r.db.NewInsert().Model(&models.AssetAnalysisRun{ID: id, AnalysisID: analysisID}).Exec(ctx)
+	return err
+}
+
+// CountRunsSince uses Count, which unlike Exists runs the TenantScoped hook.
+func (r *assetAnalysisRepository) CountRunsSince(ctx context.Context, since time.Time) (int64, error) {
+	n, err := r.db.NewSelect().
+		Model((*models.AssetAnalysisRun)(nil)).
+		Where("aar.created_at >= ?", since).
+		Count(ctx)
+	return int64(n), err
+}
+
+// deleteUntriagedIdeas deletes the inbox (verdict NULL) ideas matching where.
+func deleteUntriagedIdeas(ctx context.Context, db bun.IDB, where string, args ...any) error {
+	_, err := db.NewDelete().
+		Model((*models.Idea)(nil)).
+		Where(where, args...).
+		Where("verdict IS NULL").
+		Exec(ctx)
+	return err
+}

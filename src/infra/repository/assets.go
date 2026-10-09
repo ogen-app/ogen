@@ -398,6 +398,14 @@ func (r *assetRepository) Delete(ctx context.Context, id string) (bool, error) {
 			return err
 		}
 
+		// The delete cascades the asset's analyses, which nulls the link on
+		// their ideas; the inbox ones go with the asset, triaged ones stay.
+		if err := deleteUntriagedIdeas(ctx, tx,
+			"tenant_id = ? AND asset_analysis_id IN (SELECT id FROM asset_analyses WHERE asset_id = ?)",
+			tenantID, id); err != nil {
+			return err
+		}
+
 		res, err := tx.NewDelete().Model((*models.Asset)(nil)).Where("id = ?", id).Exec(ctx)
 		if err != nil {
 			return err
