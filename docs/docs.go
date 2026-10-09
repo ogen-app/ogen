@@ -13775,7 +13775,8 @@ const docTemplate = `{
                 },
                 "first_comment": {
                     "description": "FirstComment and FirstCommentDelayMinutes are presence-aware like\nContentFormat: omitted leaves them alone; a null or \"\" comment clears it.",
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "first_comment_delay_minutes": {
                     "type": "integer",
