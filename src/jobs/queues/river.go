@@ -39,7 +39,11 @@ type Deps struct {
 	PostLogRetention time.Duration
 	ReconcileGrace   time.Duration
 	// OrphanSweep tunes the Zernio orphan sweep; zero value is a dry run.
-	OrphanSweep         OrphanSweepConfig
+	OrphanSweep OrphanSweepConfig
+	// PendingUploadSweep tunes the abandoned-upload sweep; zero value is a
+	// dry run.
+	PendingUploadSweep  PendingUploadSweepConfig
+	PendingUploadRepo   repository.PendingUploadRepository
 	AnalyticsSettings   zernio.SettingsStore
 	AnalyticsHub        eventhub.Hub
 	AnalyticsWindowDays int
@@ -206,6 +210,8 @@ type PeriodicConfig struct {
 	LoginSecurityCleanupEvery time.Duration
 	// Zernio orphan sweep. Positive-interval gated like the others.
 	OrphanSweepEvery time.Duration
+	// Abandoned-upload sweep. Positive-interval gated like the others.
+	PendingUploadSweepEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -285,6 +291,11 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.OrphanSweepEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.OrphanSweepEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return SweepZernioOrphansTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.PendingUploadSweepEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.PendingUploadSweepEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return SweepPendingUploadsTask{}, nil
 		}, runOnStart))
 	}
 	return jobs
