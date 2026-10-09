@@ -40,6 +40,7 @@ import (
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/memlimit"
 	"github.com/ogen-app/ogen/src/kernel/telemetry"
 	grpcserver "github.com/ogen-app/ogen/src/transport/grpc/server"
 	"github.com/ogen-app/ogen/src/transport/server"
@@ -57,6 +58,9 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 	logging.New(cfg)
+	if limit := memlimit.Apply(); limit > 0 {
+		slog.Info("go memory limit set from cgroup", logging.AttrComponent, "boot", "limit_bytes", limit)
+	}
 
 	if err := run(cfg); err != nil {
 		slog.Error("server exited", logging.AttrComponent, "boot", logging.AttrError, err)

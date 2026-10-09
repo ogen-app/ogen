@@ -3,11 +3,12 @@ package server
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
-	sentryfiber "github.com/getsentry/sentry-go/fiber"
+	"github.com/getsentry/sentry-go"
 	"github.com/gofiber/contrib/otelfiber/v2"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/recover"
+	fiberrecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -24,20 +25,70 @@ import (
 //     c.UserContext(). Metrics off; traces only.
 //  2. injectTraceIDs — trace/span ids into Locals for log correlation.
 //  3. recover        — renders a 500 and flags the request already-reported.
-//  4. sentryfiber    — captures panics at recovery time (stack + trace link) and
-//     re-panics so recover (registered outside it) renders the 500.
+//  4. sentryScope    — binds a per-request Sentry hub, captures panics at
+//     recovery time (stack + trace link) and re-panics so recover (registered
+//     outside it) renders the 500.
 //
-// All effectively no-ops when SENTRY_DSN is unset: no exporter runs and Sentry
-// capture has no client, leaving only the cheap local span + recover.
+// All effectively no-ops when SENTRY_DSN is unset: no exporter runs and
+// sentryScope passes straight through, leaving only the cheap local span +
+// recover.
 func useObservability(app *fiber.App) {
 	app.Use(otelfiber.Middleware(otelfiber.WithoutMetrics(true)))
 	app.Use(injectTraceIDs)
-	app.Use(recover.New(recover.Config{EnableStackTrace: true, StackTraceHandler: markPanicReported}))
-	app.Use(sentryfiber.New(sentryfiber.Options{Repanic: true}))
+	app.Use(fiberrecover.New(fiberrecover.Config{EnableStackTrace: true, StackTraceHandler: markPanicReported}))
+	app.Use(sentryScope)
+}
+
+// sentryScope gives each request its own Sentry hub on c.UserContext(), tagged
+// with the request's method, URL and a few non-sensitive headers, and reports a
+// panic to it before re-panicking.
+//
+// The request snapshot is copied strings only, never the body: fasthttp reuses
+// the request buffers once the handler returns, and error events drop the body
+// anyway (see telemetry.scrubEvent).
+func sentryScope(c *fiber.Ctx) error {
+	parent := sentry.CurrentHub()
+	if parent.Client() == nil {
+		return c.Next()
+	}
+	hub := parent.Clone()
+	req := sentryRequest(c)
+	hub.Scope().AddEventProcessor(func(e *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+		if e.Request == nil {
+			r := req
+			e.Request = &r
+		}
+		return e
+	})
+
+	saved := c.UserContext()
+	c.SetUserContext(sentry.SetHubOnContext(saved, hub))
+	defer c.SetUserContext(saved)
+	defer func() {
+		if err := recover(); err != nil {
+			hub.RecoverWithContext(c.UserContext(), err)
+			panic(err)
+		}
+	}()
+	return c.Next()
+}
+
+func sentryRequest(c *fiber.Ctx) sentry.Request {
+	headers := make(map[string]string, 2)
+	for _, h := range []string{fiber.HeaderUserAgent, fiber.HeaderContentType} {
+		if v := c.Get(h); v != "" {
+			headers[h] = strings.Clone(v)
+		}
+	}
+	return sentry.Request{
+		URL:     strings.Clone(c.BaseURL() + c.Path()),
+		Method:  strings.Clone(c.Method()),
+		Headers: headers,
+	}
 }
 
 // panicReportedKey marks (in request Locals) that a panic was already captured
-// to Sentry by the sentryfiber recovery, so defaultErrorHandler does not report
+// to Sentry by sentryScope, so defaultErrorHandler does not report
 // the same failure a second time when the recovered 500 flows through it.
 type panicReportedKey struct{}
 
@@ -55,7 +106,7 @@ func injectTraceIDs(c *fiber.Ctx) error {
 }
 
 // markPanicReported is the recover middleware's StackTraceHandler. By the time
-// it runs, sentryfiber (registered inside recover) has already captured the
+// it runs, sentryScope (registered inside recover) has already captured the
 // panic to Sentry with its stack and trace link and re-panicked; here we flag
 // the request so the error handler skips a duplicate capture, and log it —
 // panics bypass the access-log line, so this is the one structured record of it.
@@ -93,6 +144,6 @@ func reportServerError(c *fiber.Ctx, err error, status int) {
 	}
 	// c.UserContext() still carries the otel span + per-request Sentry hub here:
 	// the access log invokes the error handler from inside the middleware chain,
-	// before otelfiber/sentryfiber restore the context on unwind.
+	// before otelfiber/sentryScope restore the context on unwind.
 	telemetry.CaptureError(c.UserContext(), err, attrs...)
 }

@@ -2,11 +2,13 @@ package server
 
 import (
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/uptrace/bun"
+	"github.com/valyala/fasthttp"
 
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/config"
@@ -162,11 +164,14 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 		// WriteTimeout 0 disables the per-response write deadline so that SSE
 		// streams (e.g. /generate-draft) are not forcibly closed mid-flight.
 		WriteTimeout: 0,
-		// Allow batched markdown uploads (up to 10 MB per file).
-		BodyLimit: 100 << 20,
+		ReadTimeout:  readTimeout,
+		IdleTimeout:  idleTimeout,
+		// Upper bound only; requestLimits lowers it for non-upload requests.
+		BodyLimit: maxUploadBodyBytes,
 	}
 	applyProxyConfig(&fcfg, cfg)
 	app := fiber.New(fcfg)
+	app.Server().HeaderReceived = requestLimits
 
 	// Tracing, panic recovery and error capture, outermost. See
 	// useObservability.
@@ -209,6 +214,31 @@ func newFiberApp(cfg *config.Config) *fiber.App {
 		MaxAge:        600,
 	}))
 	return app
+}
+
+const (
+	// maxUploadBodyBytes allows batched markdown uploads (up to 10 MB per file)
+	// and single 50 MB PDF/document uploads.
+	maxUploadBodyBytes = 100 << 20
+	// maxBodyBytes caps every other body. It matches the markdown file cap, so a
+	// text asset fits whether it is pasted as JSON or uploaded as a file.
+	maxBodyBytes = 10 << 20
+
+	readTimeout = time.Minute
+	// uploadReadTimeout leaves room for a 100 MB multipart body on a slow link.
+	uploadReadTimeout = 15 * time.Minute
+	idleTimeout       = 2 * time.Minute
+)
+
+// requestLimits runs once the request headers are read and before fasthttp
+// buffers the body, so only multipart uploads may send (and wait on) a large
+// body; a JSON or unauthenticated request over maxBodyBytes is refused with 413
+// without being read into memory.
+func requestLimits(h *fasthttp.RequestHeader) fasthttp.RequestConfig {
+	if len(h.MultipartFormBoundary()) > 0 {
+		return fasthttp.RequestConfig{MaxRequestBodySize: maxUploadBodyBytes, ReadTimeout: uploadReadTimeout}
+	}
+	return fasthttp.RequestConfig{MaxRequestBodySize: maxBodyBytes}
 }
 
 // isPluginRoute reports whether a request targets the plugin API, which runs
