@@ -371,7 +371,7 @@ func (h *PostAttachmentsHandler) createAttachment(c *fiber.Ctx, post *models.Pos
 // generation in the background: the request stays fast, and the generator
 // writes only where alt text is still un-edited.
 func (h *PostAttachmentsHandler) saveAttachment(c *fiber.Ctx, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID, source string) error {
-	return h.saveAttachmentWith(c, att, thumbnail, quota, tenantID, source, h.repo.CreateAtNextPosition)
+	return h.saveAttachmentWith(c, att, thumbnail, quota, tenantID, source, h.insertAttachment)
 }
 
 // saveAttachmentWith is saveAttachment with the row written by insert.
@@ -672,14 +672,24 @@ func imagePrepareReject(err error) error {
 	}
 }
 
-// attachmentInsert writes an attachment row at the post's next position.
+// attachmentInsert writes an attachment row at the post's next position. If
+// the write fails it disposes of att.S3Key as the upload's source requires.
 type attachmentInsert func(context.Context, *models.PostAttachment) error
+
+// insertAttachment writes the row of an upload this request stored, deleting
+// the object if the write fails: without the row it is undiscoverable dead
+// weight.
+func (h *PostAttachmentsHandler) insertAttachment(ctx context.Context, att *models.PostAttachment) error {
+	if err := h.repo.CreateAtNextPosition(ctx, att); err != nil {
+		_ = h.storage.Delete(ctx, att.S3Key)
+		return err
+	}
+	return nil
+}
 
 // persistAttachment stores the thumbnail (best-effort — the attachment is
 // valid without one) and inserts the row with insert. If the insert fails the
-// stored objects are deleted: without the row they are undiscoverable dead
-// weight. The one exception is an upload an earlier finalize already
-// attached, whose object that attachment holds.
+// thumbnail is deleted; insert has already disposed of the upload itself.
 func (h *PostAttachmentsHandler) persistAttachment(ctx context.Context, att *models.PostAttachment, thumbnail []byte, insert attachmentInsert) error {
 	if len(thumbnail) > 0 {
 		thumbKey := attachmentKey(ctx, att, ".thumb.png")
@@ -688,9 +698,6 @@ func (h *PostAttachmentsHandler) persistAttachment(ctx context.Context, att *mod
 		}
 	}
 	if err := insert(ctx, att); err != nil {
-		if !errors.Is(err, repository.ErrUploadAlreadyAttached) {
-			_ = h.storage.Delete(ctx, att.S3Key)
-		}
 		if att.ThumbnailS3Key != "" {
 			_ = h.storage.Delete(ctx, att.ThumbnailS3Key)
 		}

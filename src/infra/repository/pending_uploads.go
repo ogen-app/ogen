@@ -38,9 +38,13 @@ const (
 // finalized can be swept.
 type PendingUploadRepository interface {
 	Create(ctx context.Context, u *models.PendingUpload) error
-	// DeleteByKey drops the row of an upload finalize rejected after deleting
-	// its object.
-	DeleteByKey(ctx context.Context, key string) error
+	// Discard disposes of an upload finalize refused, in the ctx tenant. It
+	// locks the key's record, waiting out a concurrent finalize, and leaves
+	// the object alone if that finalize attached it. Otherwise remove deletes
+	// the object and the record goes with it; a remove error rolls back and
+	// keeps the record for the sweep. A key with no record is still removed:
+	// no finalize can attach it any more.
+	Discard(ctx context.Context, key string, remove func(context.Context) error) error
 	// ListExpired returns up to limit uploads that expired before cutoff,
 	// oldest first. Under a system context it spans every tenant.
 	ListExpired(ctx context.Context, cutoff time.Time, limit int) ([]models.PendingUpload, error)
@@ -64,12 +68,27 @@ func (r *pendingUploadRepository) Create(ctx context.Context, u *models.PendingU
 	return err
 }
 
-func (r *pendingUploadRepository) DeleteByKey(ctx context.Context, key string) error {
-	_, err := r.db.NewDelete().
-		Model((*models.PendingUpload)(nil)).
-		Where("s3_key = ?", key).
-		Exec(ctx)
-	return err
+func (r *pendingUploadRepository) Discard(ctx context.Context, key string, remove func(context.Context) error) error {
+	tid, err := writeTenantID(ctx, "")
+	if err != nil {
+		return err
+	}
+	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var locked []string
+		if err := tx.NewRaw(`SELECT id FROM pending_uploads WHERE s3_key = ? AND tenant_id = ? FOR UPDATE`, key, tid).
+			Scan(ctx, &locked); err != nil {
+			return err
+		}
+		attached, err := keyAttached(ctx, tx, key, tid)
+		if err != nil || attached {
+			return err
+		}
+		if err := remove(ctx); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM pending_uploads WHERE s3_key = ? AND tenant_id = ?`, key, tid)
+		return err
+	})
 }
 
 func (r *pendingUploadRepository) ListExpired(ctx context.Context, cutoff time.Time, limit int) ([]models.PendingUpload, error) {
