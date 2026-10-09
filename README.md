@@ -502,6 +502,7 @@ All runtime knobs are env vars, loaded by
 | `INGEST_JOB_WORKERS` | 2 | Worker pool of the `ingest` queue (PDF, document and URL ingestion). |
 | `RECONCILE_GRACE` | `1h` | Reconciliation timeout for stuck Scheduled posts. |
 | `ZERNIO_ORPHAN_SWEEP_INTERVAL` / `ZERNIO_ORPHAN_SWEEP_LIVE` / `ZERNIO_ORPHAN_SWEEP_MIN_AGE` | `1h` / `false` / `1h` | Sweep for posts still queued in Zernio that no scheduled Ogen post holds. Dry run (logs + `ogen_jobs_zernio_orphans_found`) until `LIVE=true`, then withdraws them. Only profiles of this environment's tenants are listed; posts younger than `MIN_AGE` are left alone. |
+| `PENDING_UPLOAD_SWEEP_INTERVAL` / `PENDING_UPLOAD_SWEEP_GRACE` / `PENDING_UPLOAD_SWEEP_LIVE` | `1h` / `2h` / `false` | Sweep for presigned video uploads (web app and Figma plugin) never finalized. A record past its URL's expiry plus `GRACE` has its object deleted. Dry run (logs + `ogen_jobs_pending_uploads_found`) until `LIVE=true`; deletions count in `ogen_jobs_pending_uploads_swept`. Covers every tenant. |
 | `POSTLOG_RETENTION_DAYS` | `90` | Post Log retention window. |
 
 ### Testing

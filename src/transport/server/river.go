@@ -58,6 +58,7 @@ func periodicConfig(cfg *config.Config) queues.PeriodicConfig {
 		ManualPublishDueEvery:      cfg.ManualPublishDueSweepEvery,
 		LoginSecurityCleanupEvery:  24 * time.Hour,
 		OrphanSweepEvery:           cfg.ZernioOrphanSweepInterval,
+		PendingUploadSweepEvery:    cfg.PendingUploadSweepInterval,
 	}
 }
 
@@ -72,6 +73,11 @@ func queueDeps(d *deps) queues.Deps {
 			Live:   cfg.ZernioOrphanSweepLive,
 			MinAge: cfg.ZernioOrphanSweepMinAge,
 		},
+		PendingUploadSweep: queues.PendingUploadSweepConfig{
+			Live:  cfg.PendingUploadSweepLive,
+			Grace: cfg.PendingUploadSweepGrace,
+		},
+		PendingUploadRepo:   r.pendingUploadRepo,
 		AnalyticsSettings:   d.zernio.Settings,
 		AnalyticsHub:        d.hub,
 		AnalyticsWindowDays: cfg.ZernioAnalyticsWindowDays,

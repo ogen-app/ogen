@@ -50,6 +50,11 @@ var (
 	ZernioOrphansFound     = expvar.NewInt("ogen_jobs_zernio_orphans_found")
 	ZernioOrphansCancelled = expvar.NewInt("ogen_jobs_zernio_orphans_cancelled")
 
+	// Abandoned-upload sweep: presigned uploads never finalized. Found counts
+	// them in dry-run too; Swept only objects deleted while live.
+	PendingUploadsFound = expvar.NewInt("ogen_jobs_pending_uploads_found")
+	PendingUploadsSwept = expvar.NewInt("ogen_jobs_pending_uploads_swept")
+
 	// Reconciliation.
 	ReconciliationTimeouts = expvar.NewInt("ogen_jobs_reconciliation_timeouts")
 

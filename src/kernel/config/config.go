@@ -487,6 +487,14 @@ type Config struct {
 	ZernioOrphanSweepLive     bool          `envconfig:"ZERNIO_ORPHAN_SWEEP_LIVE" default:"false"`
 	ZernioOrphanSweepMinAge   time.Duration `envconfig:"ZERNIO_ORPHAN_SWEEP_MIN_AGE" default:"1h"`
 
+	// Abandoned-upload sweep: presigned video uploads never finalized. A
+	// record past its URL's expiry plus Grace has its object deleted. Off-live
+	// by default — it logs and counts what it would delete until
+	// PENDING_UPLOAD_SWEEP_LIVE=true.
+	PendingUploadSweepInterval time.Duration `envconfig:"PENDING_UPLOAD_SWEEP_INTERVAL" default:"1h"`
+	PendingUploadSweepGrace    time.Duration `envconfig:"PENDING_UPLOAD_SWEEP_GRACE" default:"2h"`
+	PendingUploadSweepLive     bool          `envconfig:"PENDING_UPLOAD_SWEEP_LIVE" default:"false"`
+
 	// PostLog retention. Older entries are removed by the
 	// cleanup_post_logs recurring task. 0 disables cleanup entirely.
 	PostLogRetentionDays int `envconfig:"POSTLOG_RETENTION_DAYS" default:"90"`
