@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -33,11 +34,21 @@ var validInsightSource = map[string]bool{"all": true, "late": true, "external": 
 
 var validFollowerGranularity = map[string]bool{"daily": true, "weekly": true, "monthly": true}
 
+const (
+	// insightCacheTTL is how long a live insight read is reused. The insights
+	// aggregate weeks of engagement, so a few minutes of staleness is invisible,
+	// while one analytics page view otherwise makes three upstream calls.
+	insightCacheTTL     = 10 * time.Minute
+	insightCacheEntries = 2048
+)
+
 // serveInsight runs the shared live-proxy flow for the three aggregate
 // endpoints: resolve the tenant profile, validate the shared query params,
 // call fetch, and wrap the result in the graceful envelope. fetch is the
-// per-endpoint Zernio call; it returns the JSON `data` payload.
-func (h *AnalyticsHandler) serveInsight(c *fiber.Ctx, fetch func(ctx context.Context, q zernio.InsightQuery) (any, error)) error {
+// per-endpoint Zernio call; it returns the JSON `data` payload. Results are
+// cached per endpoint, profile and filter for insightCacheTTL, and concurrent
+// requests for the same one share a single upstream call.
+func (h *AnalyticsHandler) serveInsight(c *fiber.Ctx, endpoint string, fetch func(ctx context.Context, q zernio.InsightQuery) (any, error)) error {
 	if h.client == nil {
 		return c.JSON(insightEnvelope{Available: false, Reason: reasonNotConfigured})
 	}
@@ -52,11 +63,15 @@ func (h *AnalyticsHandler) serveInsight(c *fiber.Ctx, fetch func(ctx context.Con
 	if source != "" && !validInsightSource[source] {
 		return fiber.NewError(fiber.StatusBadRequest, "source must be all, late, or external")
 	}
-	data, err := fetch(reqCtx(c), zernio.InsightQuery{
+	q := zernio.InsightQuery{
 		ProfileID: profileID,
 		Platform:  c.Query("platform"),
 		AccountID: c.Query("account_id"),
 		Source:    source,
+	}
+	key := strings.Join([]string{endpoint, q.ProfileID, q.Platform, q.AccountID, q.Source}, "\x00")
+	data, err := h.insights.get(reqCtx(c), key, func(ctx context.Context) (any, error) {
+		return fetch(ctx, q)
 	})
 	if err != nil {
 		if errors.Is(err, zernio.ErrAnalyticsUnavailable) {
@@ -91,7 +106,7 @@ func (h *AnalyticsHandler) resolveProfile(ctx context.Context) (string, error) {
 // @Failure      502  {object}  map[string]string
 // @Router       /api/analytics/best-times [get]
 func (h *AnalyticsHandler) BestTimes(c *fiber.Ctx) error {
-	return h.serveInsight(c, func(ctx context.Context, q zernio.InsightQuery) (any, error) {
+	return h.serveInsight(c, "best-times", func(ctx context.Context, q zernio.InsightQuery) (any, error) {
 		out, err := h.client.GetBestTimes(ctx, q)
 		if err != nil {
 			return nil, err
@@ -115,7 +130,7 @@ func (h *AnalyticsHandler) BestTimes(c *fiber.Ctx) error {
 // @Failure      502  {object}  map[string]string
 // @Router       /api/analytics/content-decay [get]
 func (h *AnalyticsHandler) ContentDecay(c *fiber.Ctx) error {
-	return h.serveInsight(c, func(ctx context.Context, q zernio.InsightQuery) (any, error) {
+	return h.serveInsight(c, "content-decay", func(ctx context.Context, q zernio.InsightQuery) (any, error) {
 		out, err := h.client.GetContentDecay(ctx, q)
 		if err != nil {
 			return nil, err
@@ -139,7 +154,7 @@ func (h *AnalyticsHandler) ContentDecay(c *fiber.Ctx) error {
 // @Failure      502  {object}  map[string]string
 // @Router       /api/analytics/posting-frequency [get]
 func (h *AnalyticsHandler) PostingFrequency(c *fiber.Ctx) error {
-	return h.serveInsight(c, func(ctx context.Context, q zernio.InsightQuery) (any, error) {
+	return h.serveInsight(c, "posting-frequency", func(ctx context.Context, q zernio.InsightQuery) (any, error) {
 		out, err := h.client.GetPostingFrequency(ctx, q)
 		if err != nil {
 			return nil, err

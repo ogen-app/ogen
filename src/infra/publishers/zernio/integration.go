@@ -32,9 +32,11 @@ const (
 type Integration struct {
 	Client *Client
 
-	mu        sync.RWMutex
-	state     State
-	fastUntil time.Time // worker reads via FastUntil() to switch cadence
+	mu    sync.RWMutex
+	state State
+	// fastUntil is each tenant's fast-polling deadline; the worker syncs those
+	// tenants on the fast cadence until it passes.
+	fastUntil map[string]time.Time
 }
 
 // NewIntegration wires a fresh controller around c. The initial state is
@@ -95,22 +97,34 @@ func (i *Integration) Enabled() bool {
 	return i != nil && i.Client != nil && i.State() != StateDisabled
 }
 
-// BumpFastUntil extends the fast-polling deadline so the background
-// sync worker (Phase 5) tightens its cadence after a connect link is
-// issued. Bumping past the existing deadline wins; bumps to an earlier
-// time are ignored. Safe to call from any goroutine.
-func (i *Integration) BumpFastUntil(deadline time.Time) {
+// BumpFastUntil extends tenantID's fast-polling deadline so the background
+// sync worker syncs that tenant on the fast cadence after a connect link is
+// issued; other tenants keep the regular one. Bumping past the existing
+// deadline wins; bumps to an earlier time are ignored. Safe to call from any
+// goroutine.
+func (i *Integration) BumpFastUntil(tenantID string, deadline time.Time) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if deadline.After(i.fastUntil) {
-		i.fastUntil = deadline
+	if i.fastUntil == nil {
+		i.fastUntil = map[string]time.Time{}
+	}
+	if deadline.After(i.fastUntil[tenantID]) {
+		i.fastUntil[tenantID] = deadline
 	}
 }
 
-// FastUntil returns the current fast-polling deadline. The zero time
-// means "no fast-polling window active".
-func (i *Integration) FastUntil() time.Time {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	return i.fastUntil
+// FastTenants returns the tenants whose fast-polling window is open at now,
+// dropping the ones whose window has closed.
+func (i *Integration) FastTenants(now time.Time) []string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var out []string
+	for tid, until := range i.fastUntil {
+		if now.Before(until) {
+			out = append(out, tid)
+		} else {
+			delete(i.fastUntil, tid)
+		}
+	}
+	return out
 }

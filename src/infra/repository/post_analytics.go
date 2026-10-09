@@ -68,6 +68,9 @@ type PostAnalyticsRepository interface {
 	// than appending. tenant_id is stamped by the TenantScoped hook. Used on the
 	// unchanged path (bump last_checked_at only).
 	Upsert(ctx context.Context, a *models.PostAnalytics) error
+	// TouchChecked moves a current-state row's last_checked_at only, for a
+	// refresh that found nothing else changed.
+	TouchChecked(ctx context.Context, postID string, at time.Time) error
 	// AppendSnapshot appends one point to the trend history (only when
 	// the metrics changed). ID + OccurredAt are set by the caller.
 	AppendSnapshot(ctx context.Context, s *models.PostAnalyticsSnapshot) error
@@ -230,6 +233,14 @@ func (r *postAnalyticsRepository) LifespanSamples(ctx context.Context, since tim
 
 func (r *postAnalyticsRepository) Upsert(ctx context.Context, a *models.PostAnalytics) error {
 	_, err := upsertCurrentQuery(r.db, a).Exec(ctx)
+	return err
+}
+
+func (r *postAnalyticsRepository) TouchChecked(ctx context.Context, postID string, at time.Time) error {
+	_, err := r.db.NewUpdate().Model((*models.PostAnalytics)(nil)).
+		Set("last_checked_at = ?", at).
+		Where("post_id = ?", postID).
+		Exec(ctx)
 	return err
 }
 

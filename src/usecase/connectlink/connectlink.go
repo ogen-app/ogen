@@ -69,7 +69,9 @@ func (s *Service) Create(ctx context.Context, platform string) (*Link, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.Integration.BumpFastUntil(time.Now().Add(s.FastPollWindow))
+	if tid, ok := tenantctx.From(ctx); ok {
+		s.Integration.BumpFastUntil(tid, time.Now().Add(s.FastPollWindow))
+	}
 	if err := s.markConnectInitiated(ctx); err != nil {
 		return nil, err
 	}

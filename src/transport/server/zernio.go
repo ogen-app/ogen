@@ -55,6 +55,7 @@ func initZernio(
 	accountRepo repository.SocialAccountRepository,
 	hub eventhub.Hub,
 	recorder *usage.Recorder,
+	sweepLock func(context.Context) (release func(), ok bool),
 ) zernioRuntime {
 	// 30s in-process TTL cache around zernio.* setting reads. All
 	// downstream callers (handlers, bootstrap, worker) share this
@@ -82,6 +83,8 @@ func initZernio(
 	worker := zernio.NewWorker(integ, accountRepo, store, hub, bootstrapper, recorder, cfg.ZernioSyncInterval, cfg.ZernioSyncIntervalFast, func(ctx context.Context) ([]string, error) {
 		return settingRepo.ListTenantIDsByKey(ctx, zernio.SettingConnectInitiatedAt)
 	})
+	// Every replica runs a worker; the lock lets one sweep at a time.
+	worker.SetSweepLock(sweepLock)
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	// The Zernio bootstrap + sync worker run outside any request and

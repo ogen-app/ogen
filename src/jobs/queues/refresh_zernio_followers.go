@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -61,7 +63,7 @@ func (p *RefreshZernioFollowersProcessor) Work(ctx context.Context, job *river.J
 }
 
 func (p *RefreshZernioFollowersProcessor) Timeout(*river.Job[RefreshZernioFollowersTask]) time.Duration {
-	return 60 * time.Second
+	return tenantSweepJobTimeout
 }
 
 func init() {
@@ -106,20 +108,25 @@ func (p *RefreshZernioFollowersProcessor) refresh(ctx context.Context, now time.
 		return 0, fmt.Errorf("refresh followers: list tenant profiles: %w", err)
 	}
 
-	total := 0
-	var firstErr error
-	for _, tp := range pairs {
+	var (
+		mu       sync.Mutex
+		total    int
+		firstErr error
+	)
+	forEachTenant(ctx, pairs, func(ctx context.Context, tp repository.TenantProfile) {
 		tctx := tenantctx.With(ctx, tp.TenantID)
 		n, terr := p.refreshTenant(tctx, tp.ProfileID, now)
+		p.recordStatus(context.WithoutCancel(tctx), terr)
+		mu.Lock()
+		defer mu.Unlock()
 		total += n
-		p.recordStatus(tctx, terr)
 		if terr != nil {
 			if firstErr == nil {
 				firstErr = terr
 			}
 			slog.ErrorContext(tctx, "follower refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_followers", "tenant_id", tp.TenantID, logging.AttrError, terr)
 		}
-	}
+	})
 	return total, firstErr
 }
 

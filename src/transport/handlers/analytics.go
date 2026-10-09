@@ -79,6 +79,8 @@ type AnalyticsHandler struct {
 	client       *zernio.Client
 	profileID    ProfileIDResolver
 	auth         fiber.Handler
+	// insights caches the live Zernio insight reads (see serveInsight).
+	insights *ttlCache[any]
 }
 
 // NewAnalyticsHandler wires the handler. followerRepo/client/profileID are
@@ -88,7 +90,11 @@ type AnalyticsHandler struct {
 // analytics-disabled behaviour. A nil accounts repo leaves account labels at
 // the username fallback.
 func NewAnalyticsHandler(repo repository.PostAnalyticsRepository, followerRepo repository.FollowerStatsRepository, posts repository.PostRepository, platforms repository.PlatformRepository, accounts repository.SocialAccountRepository, campaigns repository.CampaignRepository, client *zernio.Client, profileID ProfileIDResolver, auth fiber.Handler) *AnalyticsHandler {
-	return &AnalyticsHandler{repo: repo, followerRepo: followerRepo, posts: posts, platforms: platforms, accounts: accounts, campaigns: campaigns, client: client, profileID: profileID, auth: auth}
+	return &AnalyticsHandler{
+		repo: repo, followerRepo: followerRepo, posts: posts, platforms: platforms, accounts: accounts, campaigns: campaigns,
+		client: client, profileID: profileID, auth: auth,
+		insights: newTTLCache[any](insightCacheTTL, insightCacheEntries),
+	}
 }
 
 func (h *AnalyticsHandler) Register(app *fiber.App) {

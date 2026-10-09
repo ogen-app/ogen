@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -74,7 +75,7 @@ func (p *DetectExpiringConnectionsProcessor) Work(ctx context.Context, job *rive
 }
 
 func (p *DetectExpiringConnectionsProcessor) Timeout(*river.Job[DetectExpiringConnectionsTask]) time.Duration {
-	return 60 * time.Second
+	return tenantSweepJobTimeout
 }
 
 func init() {
@@ -141,10 +142,15 @@ func (p *DetectExpiringConnectionsProcessor) sweep(ctx context.Context, now time
 		return res, fmt.Errorf("detect expiring connections: list tenant profiles: %w", err)
 	}
 
-	var firstErr error
-	for _, tp := range pairs {
+	var (
+		mu       sync.Mutex
+		firstErr error
+	)
+	forEachTenant(ctx, pairs, func(ctx context.Context, tp repository.TenantProfile) {
 		tctx := tenantctx.With(ctx, tp.TenantID)
 		tres, terr := p.sweepTenant(tctx, tp.TenantID, tp.ProfileID, now)
+		mu.Lock()
+		defer mu.Unlock()
 		res.add(tres)
 		if terr != nil {
 			if firstErr == nil {
@@ -153,7 +159,7 @@ func (p *DetectExpiringConnectionsProcessor) sweep(ctx context.Context, now time
 			slog.ErrorContext(tctx, "connection-health sweep: tenant failed", logging.AttrComponent, detectComp,
 				"tenant_id", tp.TenantID, logging.AttrError, terr)
 		}
-	}
+	})
 	return res, firstErr
 }
 

@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -90,9 +94,38 @@ type Worker struct {
 	trigger chan struct{}
 	done    chan struct{}
 
+	// sweepLock, when set, must be held for a sweep to run, so only one
+	// replica sweeps at a time. ok=false skips the sweep.
+	sweepLock func(context.Context) (release func(), ok bool)
+
+	// lastFull is when the last sweep over every tenant ran. Read and written
+	// only by the Run goroutine.
+	lastFull time.Time
+
 	// rateLimitUntil is set by tick() when Zernio returns 429; the
 	// next iteration sleeps until at least this instant.
+	rlMu           sync.Mutex
 	rateLimitUntil time.Time
+
+	// profileRefreshed records, per tenant, when the profile meta was last
+	// re-read from Zernio (see refreshProfileMeta).
+	profileMu        sync.Mutex
+	profileRefreshed map[string]time.Time
+}
+
+const (
+	// syncParallelism caps how many tenants one sweep syncs at once.
+	syncParallelism = 4
+	// profileRefreshEvery bounds how often a tenant's profile meta is re-read;
+	// it changes only when the profile is renamed.
+	profileRefreshEvery = time.Hour
+)
+
+// SetSweepLock makes every sweep run only while lock is held (for example a
+// Postgres advisory lock), so replicas don't each sweep every tenant. A nil
+// lock (the default) always sweeps.
+func (w *Worker) SetSweepLock(lock func(context.Context) (release func(), ok bool)) {
+	w.sweepLock = lock
 }
 
 func NewWorker(
@@ -123,6 +156,7 @@ func NewWorker(
 		fastInterval:       fastInterval,
 		trigger:            make(chan struct{}, 1),
 		done:               make(chan struct{}),
+		profileRefreshed:   map[string]time.Time{},
 	}
 }
 
@@ -134,6 +168,8 @@ func (w *Worker) Run(ctx context.Context) {
 		logging.AttrComponent, "zernio.worker",
 		"interval", w.interval,
 		"fast_interval", w.fastInterval)
+	// The first sweep, and one after every trigger, covers every tenant.
+	full := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -146,13 +182,18 @@ func (w *Worker) Run(ctx context.Context) {
 		if !w.shouldTick() {
 			// Bootstrap not done yet, or integration disabled — wait
 			// out one full interval before checking again.
-			if !w.sleep(ctx, w.interval) {
+			ok, triggered := w.sleep(ctx, w.interval)
+			if !ok {
 				return
 			}
+			full = full || triggered
 			continue
 		}
 
-		if err := w.syncAllTenants(ctx); err != nil {
+		// Between full sweeps on the regular interval, the fast cadence syncs
+		// only the tenants with a connect in flight.
+		full = full || time.Since(w.lastFull) >= w.interval
+		if err := w.sweep(ctx, full); err != nil {
 			if IsStatus(err, http.StatusUnauthorized) {
 				slog.WarnContext(ctx, "401 from zernio; disabling integration",
 					logging.AttrComponent, "zernio.worker")
@@ -164,9 +205,11 @@ func (w *Worker) Run(ctx context.Context) {
 				logging.AttrError, err)
 		}
 
-		if !w.sleep(ctx, w.nextInterval()) {
+		ok, triggered := w.sleep(ctx, w.nextInterval())
+		if !ok {
 			return
 		}
+		full = triggered
 	}
 }
 
@@ -190,7 +233,7 @@ func (w *Worker) shouldTick() bool {
 	if !w.integ.Enabled() || w.integ.State() == StateDisabled {
 		return false
 	}
-	if time.Now().Before(w.rateLimitUntil) {
+	if w.rateLimited(time.Now()) {
 		return false
 	}
 	// Per-tenant profile presence is decided per sweep by tenantsWithProfile;
@@ -198,54 +241,80 @@ func (w *Worker) shouldTick() bool {
 	return true
 }
 
-// syncAllTenants enumerates the tenants that have a Zernio profile and runs one
-// reconciliation tick per tenant, scoped to it. The enumeration is
+// sweep runs one reconciliation tick per tenant with a Zernio profile — all of
+// them when full, otherwise only those inside a fast-polling window — up to
+// syncParallelism at a time, each scoped to its tenant. The enumeration is
 // cross-tenant (system context); each tick runs under tenantctx.With so account
 // upserts, last_sync_* settings, and SSE events land in the right tenant. A 401
 // propagates (the shared key is bad → disable instance-wide); a 429 sets the
-// shared rate-limit backoff inside tick and stops the sweep early.
-func (w *Worker) syncAllTenants(ctx context.Context) error {
+// shared rate-limit backoff inside tick and the remaining tenants wait for the
+// next sweep. With a sweep lock set, a sweep another replica holds is skipped.
+func (w *Worker) sweep(ctx context.Context, full bool) error {
+	if w.sweepLock != nil {
+		release, ok := w.sweepLock(ctx)
+		if !ok {
+			return nil
+		}
+		defer release()
+	}
 	tenants, err := w.tenantsWithProfile(tenantctx.WithSystem(ctx))
 	if err != nil {
 		return fmt.Errorf("list tenants with zernio profile: %w", err)
 	}
-	for _, tid := range tenants {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-		if time.Now().Before(w.rateLimitUntil) {
-			break // shared rate limit hit earlier this sweep — retry next interval
-		}
-		if err := w.tick(tenantctx.With(ctx, tid)); err != nil {
-			if IsStatus(err, http.StatusUnauthorized) {
-				return err // bad shared key — disable instance-wide
-			}
-			slog.ErrorContext(ctx, "sync tenant failed",
-				logging.AttrComponent, "zernio.worker",
-				"tenant_id", tid,
-				logging.AttrError, err)
-		}
+	now := time.Now()
+	if full {
+		w.lastFull = now
+	} else {
+		fast := w.integ.FastTenants(now)
+		tenants = slices.DeleteFunc(tenants, func(tid string) bool { return !slices.Contains(fast, tid) })
 	}
-	return nil
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(syncParallelism)
+	for _, tid := range tenants {
+		g.Go(func() error {
+			if gctx.Err() != nil || w.rateLimited(time.Now()) {
+				return nil // cancelled, or rate-limited earlier this sweep — next sweep retries
+			}
+			if err := w.tick(tenantctx.With(gctx, tid)); err != nil {
+				if IsStatus(err, http.StatusUnauthorized) {
+					return err // bad shared key — disable instance-wide
+				}
+				slog.ErrorContext(ctx, "sync tenant failed",
+					logging.AttrComponent, "zernio.worker",
+					"tenant_id", tid,
+					logging.AttrError, err)
+			}
+			return nil
+		})
+	}
+	return g.Wait()
 }
 
-// SyncOnce runs a single per-tenant sync sweep synchronously and returns. Used
-// by tests and available for a synchronous trigger path.
+// SyncOnce runs a single sync sweep over every tenant synchronously and
+// returns. Used by tests and available for a synchronous trigger path.
 func (w *Worker) SyncOnce(ctx context.Context) error {
-	return w.syncAllTenants(ctx)
+	return w.sweep(ctx, true)
+}
+
+func (w *Worker) rateLimited(now time.Time) bool {
+	w.rlMu.Lock()
+	defer w.rlMu.Unlock()
+	return now.Before(w.rateLimitUntil)
 }
 
 // nextInterval returns the delay before the next tick, honouring fast
 // cadence and any active rate-limit backoff. The floor still applies.
 func (w *Worker) nextInterval() time.Duration {
 	now := time.Now()
-	if rl := w.rateLimitUntil; rl.After(now) {
+	w.rlMu.Lock()
+	rl := w.rateLimitUntil
+	w.rlMu.Unlock()
+	if rl.After(now) {
 		return rl.Sub(now)
 	}
 	d := w.interval
-	if now.Before(w.integ.FastUntil()) {
+	if len(w.integ.FastTenants(now)) > 0 {
 		d = w.fastInterval
 	}
 	if d < SyncIntervalFloor {
@@ -259,21 +328,21 @@ func (w *Worker) nextInterval() time.Duration {
 	return d
 }
 
-// sleep blocks for d, returning false when ctx fires (so the caller
-// can exit promptly) or when triggered (which short-circuits the wait).
-func (w *Worker) sleep(ctx context.Context, d time.Duration) bool {
+// sleep blocks for d. ok is false when ctx fires (so the caller can exit
+// promptly); triggered reports that TriggerNow cut the wait short.
+func (w *Worker) sleep(ctx context.Context, d time.Duration) (ok, triggered bool) {
 	if d <= 0 {
-		return true
+		return true, false
 	}
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
-		return false
+		return false, false
 	case <-t.C:
-		return true
+		return true, false
 	case <-w.trigger:
-		return true
+		return true, true
 	}
 }
 
@@ -393,7 +462,9 @@ func (w *Worker) tick(ctx context.Context) error {
 // handleRateLimit doubles the next interval, capped at the documented 5m.
 func (w *Worker) handleRateLimit() {
 	delay := min(w.interval*2, rateLimitBackoffCap)
+	w.rlMu.Lock()
 	w.rateLimitUntil = time.Now().Add(delay)
+	w.rlMu.Unlock()
 	slog.Warn("rate-limited; backing off",
 		logging.AttrComponent, "zernio.worker",
 		"backoff", delay)
@@ -404,27 +475,44 @@ func (w *Worker) handleRateLimit() {
 // failure shouldn't suppress the underlying tick error.
 func (w *Worker) recordSyncStatus(ctx context.Context, syncErr error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := w.settings.Set(ctx, SettingLastSyncAt, now); err != nil {
-		slog.WarnContext(ctx, "write setting failed",
-			logging.AttrComponent, "zernio.worker",
-			"setting", SettingLastSyncAt,
-			logging.AttrError, err)
-	}
+	w.setSetting(ctx, SettingLastSyncAt, now)
 	status := SyncStatusOK
 	if syncErr != nil {
 		status = syncErrorPrefix + truncate(syncErr.Error(), 200)
 	}
-	if err := w.settings.Set(ctx, SettingLastSyncStatus, status); err != nil {
+	w.setSettingIfChanged(ctx, SettingLastSyncStatus, status)
+}
+
+// setSetting writes one setting, logging (not returning) a failure.
+func (w *Worker) setSetting(ctx context.Context, key, value string) {
+	if err := w.settings.Set(ctx, key, value); err != nil {
 		slog.WarnContext(ctx, "write setting failed",
 			logging.AttrComponent, "zernio.worker",
-			"setting", SettingLastSyncStatus,
+			"setting", key,
 			logging.AttrError, err)
 	}
 }
 
+// setSettingIfChanged skips the write when the stored value already matches,
+// so a steady sync does not rewrite the same rows every interval.
+func (w *Worker) setSettingIfChanged(ctx context.Context, key, value string) {
+	if cur, found, err := w.settings.Get(ctx, key); err == nil && found && cur == value {
+		return
+	}
+	w.setSetting(ctx, key, value)
+}
+
 // refreshProfileMeta re-reads the profile from Zernio and updates the
-// settings cache. Best-effort: failure is logged and swallowed.
+// settings cache, at most once per profileRefreshEvery per tenant (the profile
+// changes only when renamed). Best-effort: failure is logged and swallowed.
 func (w *Worker) refreshProfileMeta(ctx context.Context, profileID string) {
+	tid, _ := tenantctx.From(ctx)
+	w.profileMu.Lock()
+	last, seen := w.profileRefreshed[tid]
+	w.profileMu.Unlock()
+	if seen && time.Since(last) < profileRefreshEvery {
+		return
+	}
 	profile, err := w.integ.Client.GetProfile(ctx, profileID)
 	if err != nil {
 		slog.WarnContext(ctx, "refresh profile meta failed",
@@ -442,18 +530,11 @@ func (w *Worker) refreshProfileMeta(ctx context.Context, profileID string) {
 			return
 		}
 	}
-	if err := w.settings.Set(ctx, SettingProfileMeta, string(raw)); err != nil {
-		slog.WarnContext(ctx, "write setting failed",
-			logging.AttrComponent, "zernio.worker",
-			"setting", SettingProfileMeta,
-			logging.AttrError, err)
-	}
-	if err := w.settings.Set(ctx, SettingProfileName, profile.Name); err != nil {
-		slog.WarnContext(ctx, "write setting failed",
-			logging.AttrComponent, "zernio.worker",
-			"setting", SettingProfileName,
-			logging.AttrError, err)
-	}
+	w.setSettingIfChanged(ctx, SettingProfileMeta, string(raw))
+	w.setSettingIfChanged(ctx, SettingProfileName, profile.Name)
+	w.profileMu.Lock()
+	w.profileRefreshed[tid] = time.Now()
+	w.profileMu.Unlock()
 }
 
 // recordAccountConnect emits a CON-86 account_connect usage event when a social
