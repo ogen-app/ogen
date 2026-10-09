@@ -298,9 +298,9 @@ and transcribe slots accept only Gemini models, because `image-service` and
 
 | Flow | Slot(s) | Seed default |
 |------|---------|--------------|
-| `content_plan`, `draft_post`, `enrich_brief`, `consistency` | `main` | Claude Sonnet 4.5 (`MODEL_ID`) |
-| `post_quality` | `main` | Claude Sonnet 4.5 (`QUALITY_MODEL_ID`) |
-| `post_assistant` | `planner` / `writer` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) / Sonnet 4.5 (`MODEL_ID`) |
+| `content_plan`, `draft_post`, `enrich_brief`, `consistency` | `main` | Claude Sonnet 5.5 (`MODEL_ID`) |
+| `post_quality` | `main` | Claude Sonnet 5.5 (`QUALITY_MODEL_ID`) |
+| `post_assistant` | `planner` / `writer` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) / Sonnet 5.5 (`MODEL_ID`) |
 | `campaign_assistant` | `orchestrator` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) |
 | `embed` | `main` (global only, no tier override) | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) |
 | `vision` (`image-service`) | `classify` / `extract` / `escalate` / `alt_text` | Gemini 2.5 Flash (`VISION_CLASSIFY_MODEL`) / 2.5 Pro (`VISION_EXTRACT_MODEL`) / 2.5 Pro (`VISION_ESCALATE_MODEL`) / 2.5 Flash (`VISION_CLASSIFY_MODEL`) |
@@ -484,8 +484,8 @@ All runtime knobs are env vars, loaded by
 | `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 25 | Shared pool sizing for HTTP + River workers; idle connections close after 5 minutes unused. |
 | `GEMINI_API_KEY` | empty | Gemini Embedding 2 key — first-boot seed; rotate via the operator surface. Empty disables embedding/RAG. |
 | `EMBED_MODEL` / `EMBED_DIMENSIONS` | `gemini-embedding-2` / `3072` | Embedding model + vector width (must match `assets_chunks.embedding`). |
-| `ANTHROPIC_API_KEY` / `MODEL_ID` | empty / `claude-sonnet-4-5-20250929` | Claude key (first-boot seed) + generation model (**seed-only**; see [AI flows](#ai-flows-genkit)). |
-| `PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` | Haiku 4.5 / Sonnet 4.5 | Routing + quality-scoring models (**seed-only**; Harbor-managed after first boot). |
+| `ANTHROPIC_API_KEY` / `MODEL_ID` | empty / `claude-sonnet-5-5` | Claude key (first-boot seed) + generation model (**seed-only**; see [AI flows](#ai-flows-genkit)). |
+| `PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` | Haiku 4.5 / Sonnet 5.5 | Routing + quality-scoring models (**seed-only**; Harbor-managed after first boot). |
 | `STORAGE_*` | empty | S3-compatible storage (R2/MinIO/AWS); empty disables uploads. |
 | `PDF_SERVICE_ADDR` / `VIDEO_SERVICE_ADDR` / `DOCUMENTS_SERVICE_ADDR` / `AUDIO_SERVICE_ADDR` / `IMAGE_SERVICE_ADDR` | empty | gRPC sidecar addresses (`*.railway.internal:50051` in prod). Empty disables that pipeline. |
 | `ZERNIO_API_KEY` / `ZERNIO_BASE_URL` | empty / `https://zernio.com/api/v1` | Zernio integration; key resolved per call, so rotations land without restart. |
