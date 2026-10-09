@@ -26,8 +26,9 @@ var installAnthropicToolOrderOnce sync.Once
 //
 // When cachePrefixModel is non-empty, requests for that model also get an
 // ephemeral cache_control breakpoint on the last system block, caching the
-// tool schemas and system prompt together. Pass "" to disable. Prefixes under
-// the model's caching minimum are silently not cached.
+// tool schemas and system prompt together, and one on the last message, so a
+// tool loop's rounds reuse the conversation so far. Pass "" to disable.
+// Prefixes under the model's caching minimum are silently not cached.
 //
 // Must be installed before the plugin builds its client. Idempotent;
 // non-Anthropic traffic passes through untouched.
@@ -75,6 +76,11 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 		if cached, ok := addAnthropicSystemCacheControl(out); ok {
 			out, changed = cached, true
 			slog.Debug("anthropic system cache breakpoint added",
+				logging.AttrComponent, "anthropic.http")
+		}
+		if cached, ok := addAnthropicHistoryCacheControl(out); ok {
+			out, changed = cached, true
+			slog.Debug("anthropic history cache breakpoint added",
 				logging.AttrComponent, "anthropic.http")
 		}
 	}
@@ -163,6 +169,82 @@ func addAnthropicSystemCacheControl(body []byte) (out []byte, changed bool) {
 		return body, false
 	}
 	return rewritten, true
+}
+
+// addAnthropicHistoryCacheControl puts an ephemeral cache_control breakpoint on
+// the last content block of the last message. In a tool loop every round
+// resends the whole conversation; with the breakpoint, round N+1 reads rounds
+// 1..N from the cache Anthropic wrote for round N instead of paying full input
+// price for them again. Together with the system breakpoint this uses two of
+// the four allowed. A string content is promoted to one text block. changed is
+// false when there are no messages, the last one is empty, or its last block
+// already has a breakpoint or cannot carry one (thinking blocks).
+func addAnthropicHistoryCacheControl(body []byte) (out []byte, changed bool) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return body, false
+	}
+	var msgs []json.RawMessage
+	if err := json.Unmarshal(top["messages"], &msgs); err != nil || len(msgs) == 0 {
+		return body, false
+	}
+	var last map[string]json.RawMessage
+	if err := json.Unmarshal(msgs[len(msgs)-1], &last); err != nil {
+		return body, false
+	}
+	content, ok := cacheMarkedContent(last["content"])
+	if !ok {
+		return body, false
+	}
+	last["content"] = content
+	nm, err := json.Marshal(last)
+	if err != nil {
+		return body, false
+	}
+	msgs[len(msgs)-1] = nm
+	newMsgs, err := json.Marshal(msgs)
+	if err != nil {
+		return body, false
+	}
+	top["messages"] = newMsgs
+	rewritten, err := json.Marshal(top)
+	if err != nil {
+		return body, false
+	}
+	return rewritten, true
+}
+
+// cacheMarkedContent returns a message's content with cache_control on its last
+// block, or false when there is nothing to mark.
+func cacheMarkedContent(raw json.RawMessage) (json.RawMessage, bool) {
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		if asString == "" {
+			return nil, false
+		}
+		out, err := json.Marshal([]any{map[string]any{
+			"type":          "text",
+			"text":          asString,
+			"cache_control": map[string]string{"type": "ephemeral"},
+		}})
+		return out, err == nil
+	}
+	var blocks []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil || len(blocks) == 0 {
+		return nil, false
+	}
+	lastBlock := blocks[len(blocks)-1]
+	if _, exists := lastBlock["cache_control"]; exists {
+		return nil, false
+	}
+	var kind string
+	_ = json.Unmarshal(lastBlock["type"], &kind)
+	if kind == "thinking" || kind == "redacted_thinking" {
+		return nil, false
+	}
+	lastBlock["cache_control"] = json.RawMessage(`{"type":"ephemeral"}`)
+	out, err := json.Marshal(blocks)
+	return out, err == nil
 }
 
 // sortAnthropicToolsByName returns the body with its top-level `tools` array

@@ -269,6 +269,18 @@ func runContentPlan(
 	slog.InfoContext(ctx, "validateInput done", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "campaign", campaign.Name, "platforms", len(campaign.TargetPlatforms))
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateInput", Status: "done"})
 
+	// Platform resolution doesn't depend on the assets, so it runs while
+	// resolveAssets waits on its embed and vector search; step 3 collects it.
+	type platformsResult struct {
+		platforms []resolvedPlatform
+		err       error
+	}
+	platformsCh := make(chan platformsResult, 1)
+	go func() {
+		p, err := resolvePlatforms(ctx, campaign.TargetPlatforms, repos.Platforms)
+		platformsCh <- platformsResult{p, err}
+	}()
+
 	// ── Step 2: resolveAssets ─────────────────────────────────────────────────
 	slog.InfoContext(ctx, "step 2/6 resolveAssets", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "use_assets", campaign.UseAssets)
 	assets, assetWarnings, err := resolveAssets(ctx, campaign, cfg, repos)
@@ -282,7 +294,8 @@ func runContentPlan(
 
 	// ── Step 3: resolvePlatforms ──────────────────────────────────────────────
 	slog.InfoContext(ctx, "step 3/6 resolvePlatforms", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID)
-	platforms, err := resolvePlatforms(ctx, campaign.TargetPlatforms, repos.Platforms)
+	pr := <-platformsCh
+	platforms, err := pr.platforms, pr.err
 	if err != nil {
 		slog.ErrorContext(ctx, "resolvePlatforms failed", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
 		return nil, err

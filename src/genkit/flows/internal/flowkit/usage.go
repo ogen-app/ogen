@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -33,6 +34,33 @@ func (u Usage) Finish(ctx context.Context, resp *ai.ModelResponse, maxTokens int
 	u.WarnIfTruncated(ctx, resp, maxTokens)
 	u.LogTokens(ctx, "tokens", resp)
 	u.Record(ctx, resp)
+}
+
+// Meter returns model middleware that records the usage of every model call it
+// wraps. genkit's tool loop returns only its final round's response, so
+// recording that alone (Finish) misses every earlier round; a flow that passes
+// ai.WithMiddleware(u.Meter()) meters each round and ends with FinishMetered.
+func (u Usage) Meter() ai.ModelMiddleware {
+	return func(next core.StreamingFunc[*ai.ModelRequest, *ai.ModelResponse, *ai.ModelResponseChunk]) core.StreamingFunc[*ai.ModelRequest, *ai.ModelResponse, *ai.ModelResponseChunk] {
+		return func(ctx context.Context, req *ai.ModelRequest, cb core.StreamCallback[*ai.ModelResponseChunk]) (*ai.ModelResponse, error) {
+			resp, err := next(ctx, req, cb)
+			if err == nil {
+				u.Record(ctx, resp)
+			}
+			return resp, err
+		}
+	}
+}
+
+// FinishMetered is Finish for a call whose rounds Meter already recorded: it
+// warns on truncation and logs the final round's tokens, without recording
+// them a second time.
+func (u Usage) FinishMetered(ctx context.Context, resp *ai.ModelResponse, maxTokens int64) {
+	if resp == nil {
+		return
+	}
+	u.WarnIfTruncated(ctx, resp, maxTokens)
+	u.LogTokens(ctx, "tokens", resp)
 }
 
 // WarnIfTruncated logs when resp stopped at the output-token cap, so the cap
