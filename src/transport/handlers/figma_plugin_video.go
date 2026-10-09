@@ -99,7 +99,7 @@ func (h *FigmaPluginHandler) PresignVideo(c *fiber.Ctx) error {
 
 // FinalizeVideo godoc
 // @Summary     Attach an uploaded video to a post
-// @Description Probes the object PUT through the presigned URL (duration, size, poster frame) and attaches it to the post. platform_validation lists the platform and post-type rules this video breaks, as warnings; the attachment is still created. Repeating a finalize for an s3_key already attached returns that attachment with 200, even once the post has been sent for publishing. A refused object is deleted.
+// @Description Probes the object PUT through the presigned URL (duration, size, poster frame) and attaches it to the post. platform_validation lists the platform and post-type rules this video breaks, as warnings; the attachment is still created. Repeating a finalize for an s3_key already attached returns that attachment with 200, even once the post has been sent for publishing. A refused object is deleted. An upload not finalized within two hours of its URL expiring is swept from storage, and finalizing it then answers 410 upload_expired.
 // @Tags        plugins
 // @Accept      json
 // @Produce     json
@@ -113,6 +113,7 @@ func (h *FigmaPluginHandler) PresignVideo(c *fiber.Ctx) error {
 // @Failure     402 {object} map[string]any    "media-storage limit reached"
 // @Failure     404 {object} map[string]string "post_not_found"
 // @Failure     409 {object} map[string]string "post_locked"
+// @Failure     410 {object} map[string]string "upload_expired"
 // @Failure     415 {object} map[string]string "unsupported_media_type"
 // @Failure     429 {object} map[string]string
 // @Failure     503 {object} map[string]string

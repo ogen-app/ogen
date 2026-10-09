@@ -2,15 +2,18 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/video"
@@ -32,6 +35,14 @@ const probeGetTTL = 5 * time.Minute
 // probing — uploads are accepted unprobed).
 type VideoProber interface {
 	Probe(ctx context.Context, opts video.ProbeOptions) (*video.ProbeResult, error)
+}
+
+// WithPendingUploads records every presigned upload until finalize consumes
+// it, so the sweep can delete the ones never finalized. With it set, finalize
+// only accepts a key whose record is still there.
+func (h *PostAttachmentsHandler) WithPendingUploads(pending repository.PendingUploadRepository) *PostAttachmentsHandler {
+	h.pending = pending
+	return h
 }
 
 // presignVideoRequest is the presign body: the client declares what it is
@@ -127,6 +138,20 @@ func (h *PostAttachmentsHandler) presignVideoUpload(c *fiber.Ctx, post *models.P
 	if err != nil {
 		return nil, fmt.Errorf("post_attachments: presign put: %w", err)
 	}
+	// No URL leaves without its record: an unrecorded upload the client
+	// abandons could never be swept.
+	if h.pending != nil {
+		err := h.pending.Create(reqCtx(c), &models.PendingUpload{
+			ID:        token,
+			PostID:    &post.ID,
+			S3Key:     key,
+			SizeBytes: size,
+			ExpiresAt: time.Now().Add(presignPutTTL),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("post_attachments: record pending upload: %w", err)
+		}
+	}
 	return &presignVideoResponse{
 		UploadURL: url,
 		S3Key:     key,
@@ -164,6 +189,10 @@ type finalizeVideoRequest struct {
 // @Description  attachment is still created, unprobed (no duration/poster,
 // @Description  weaker validation). The object's real size is checked against
 // @Description  the media storage quota; over it, the object is deleted (402).
+// @Description  An upload not finalized within two hours of its URL expiring
+// @Description  is swept from storage; finalizing it then is 410
+// @Description  `upload_expired`. Repeating a finalize that succeeded returns
+// @Description  the same attachment.
 // @Tags         post-attachments
 // @Accept       json
 // @Produce      json
@@ -176,6 +205,7 @@ type finalizeVideoRequest struct {
 // @Failure      402      {object}  map[string]any    "media-storage limit reached"
 // @Failure      404      {object}  map[string]string
 // @Failure      409      {object}  map[string]string
+// @Failure      410      {object}  map[string]string "upload_expired"
 // @Failure      415      {object}  map[string]string "unsupported_media_type"
 // @Failure      503      {object}  map[string]string
 // @Router       /api/posts/{post_id}/attachments/finalize [post]
@@ -220,6 +250,11 @@ func (h *PostAttachmentsHandler) finalizeVideoUpload(c *fiber.Ctx, post *models.
 	if !strings.HasPrefix(key, videoKeyPrefix(c, post)) {
 		return nil, fiber.NewError(fiber.StatusBadRequest, "s3_key does not belong to this post")
 	}
+	// A repeated finalize answers before any reject path can delete the
+	// object its first attempt attached.
+	if existing, err := h.attachmentByKey(reqCtx(c), post.ID, key); err != nil || existing != nil {
+		return existing, err
+	}
 	altText, err := normalizeAltText(altText)
 	if err != nil {
 		return nil, err
@@ -230,7 +265,7 @@ func (h *PostAttachmentsHandler) finalizeVideoUpload(c *fiber.Ctx, post *models.
 	}
 	quota, err := requireQuotaAmount(c, h.limiter, "media_storage_bytes", info.Size)
 	if err != nil {
-		_ = h.storage.Delete(reqCtx(c), key)
+		h.discardUpload(reqCtx(c), key)
 		return nil, err
 	}
 
@@ -256,7 +291,7 @@ func (h *PostAttachmentsHandler) finalizeVideoUpload(c *fiber.Ctx, post *models.
 	// extension. No video type means the container is unsupported.
 	att.MimeType = resolveVideoMIME(probe, info.ContentType, key)
 	if !strings.HasPrefix(att.MimeType, "video/") {
-		_ = h.storage.Delete(reqCtx(c), key)
+		h.discardUpload(reqCtx(c), key)
 		return nil, rejectUpload(fiber.StatusUnsupportedMediaType, models.UploadCodeUnsupportedMediaType, "unsupported video container or codec")
 	}
 
@@ -266,10 +301,59 @@ func (h *PostAttachmentsHandler) finalizeVideoUpload(c *fiber.Ctx, post *models.
 	if probe != nil {
 		poster = probe.PosterPNG
 	}
-	if err := h.saveAttachment(c, att, poster, quota, session.TenantID, source); err != nil {
+	err = h.saveAttachmentWith(c, att, poster, quota, session.TenantID, source, h.insertVideoAttachment)
+	switch {
+	case errors.Is(err, repository.ErrPendingUploadGone):
+		return nil, rejectUpload(fiber.StatusGone, models.UploadCodeUploadExpired, "the upload expired before it was finalized; upload the video again")
+	case errors.Is(err, repository.ErrUploadAlreadyAttached):
+		// A concurrent finalize of the same key won the insert.
+		existing, err := h.attachmentByKey(reqCtx(c), post.ID, key)
+		if err == nil && existing == nil {
+			err = fiber.NewError(fiber.StatusNotFound, "attachment not found")
+		}
+		return existing, err
+	case err != nil:
 		return nil, err
 	}
 	return att, nil
+}
+
+// insertVideoAttachment writes a finalized upload's row. With pending uploads
+// tracked it consumes the upload's record in the same transaction, so a late
+// finalize and the sweep never both act on the object.
+func (h *PostAttachmentsHandler) insertVideoAttachment(ctx context.Context, att *models.PostAttachment) error {
+	if h.pending == nil {
+		return h.repo.CreateAtNextPosition(ctx, att)
+	}
+	return h.repo.CreateFromPendingUpload(ctx, att)
+}
+
+// attachmentByKey returns the post's attachment holding key, or nil when none
+// does.
+func (h *PostAttachmentsHandler) attachmentByKey(ctx context.Context, postID, key string) (*models.PostAttachment, error) {
+	atts, err := h.repo.ListByPostID(ctx, postID)
+	if err != nil {
+		return nil, err
+	}
+	if i := slices.IndexFunc(atts, func(a models.PostAttachment) bool { return a.S3Key == key }); i >= 0 {
+		return &atts[i], nil
+	}
+	return nil, nil
+}
+
+// discardUpload deletes a rejected upload's object and its pending record.
+// The record goes only once the object is gone; otherwise the sweep retries.
+func (h *PostAttachmentsHandler) discardUpload(ctx context.Context, key string) {
+	if err := h.storage.Delete(ctx, key); err != nil {
+		slog.WarnContext(ctx, "rejected video upload not deleted; left to the sweep", logging.AttrComponent, "post_attachments", "key", key, logging.AttrError, err)
+		return
+	}
+	if h.pending == nil {
+		return
+	}
+	if err := h.pending.DeleteByKey(ctx, key); err != nil {
+		slog.WarnContext(ctx, "pending upload record not deleted", logging.AttrComponent, "post_attachments", "key", key, logging.AttrError, err)
+	}
 }
 
 // statVideoUpload reads the uploaded object's authoritative size (never the
@@ -280,11 +364,11 @@ func (h *PostAttachmentsHandler) statVideoUpload(ctx context.Context, key string
 		return nil, fiber.NewError(fiber.StatusBadRequest, "uploaded object not found; PUT the bytes to the presigned URL first")
 	}
 	if info.Size == 0 {
-		_ = h.storage.Delete(ctx, key)
+		h.discardUpload(ctx, key)
 		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeEmptyFile, "uploaded object is empty")
 	}
 	if info.Size > maxBytes {
-		_ = h.storage.Delete(ctx, key)
+		h.discardUpload(ctx, key)
 		return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeTooLarge, videoTooLargeMessage(maxBytes))
 	}
 	return info, nil
@@ -313,7 +397,7 @@ func (h *PostAttachmentsHandler) probeVideo(ctx context.Context, att *models.Pos
 	cancel()
 	if err != nil {
 		if video.IsInvalidVideo(err) {
-			_ = h.storage.Delete(ctx, att.S3Key)
+			h.discardUpload(ctx, att.S3Key)
 			return nil, rejectUpload(fiber.StatusBadRequest, models.UploadCodeInvalidFile, "uploaded file is not a readable video")
 		}
 		slog.WarnContext(ctx, "video probe failed", logging.AttrComponent, "post_attachments", "key", att.S3Key, logging.AttrError, err)

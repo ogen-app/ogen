@@ -64,6 +64,10 @@ const (
 	// UploadCodeInternalError: an unexpected server-side failure (id generation,
 	// storage write, DB insert). Generic — the client should offer a retry.
 	UploadCodeInternalError = "internal_error"
+
+	// UploadCodeUploadExpired: a presigned upload was finalized after the
+	// abandoned-upload sweep removed it. The client presigns and uploads again.
+	UploadCodeUploadExpired = "upload_expired"
 )
 
 // The image.v1.RejectedCode enum name → upload code mapping lives in the image
