@@ -28,6 +28,9 @@ func (s stubAttRepo) GetByID(context.Context, string) (*models.PostAttachment, e
 	return nil, nil
 }
 func (s stubAttRepo) CreateAtNextPosition(context.Context, *models.PostAttachment) error { return nil }
+func (s stubAttRepo) CreateFromPendingUpload(context.Context, *models.PostAttachment) error {
+	return nil
+}
 func (s stubAttRepo) Patch(context.Context, string, repository.AttachmentPatch) error    { return nil }
 func (s stubAttRepo) SetGeneratedAltText(context.Context, string, string) error          { return nil }
 func (s stubAttRepo) SetPublisherMedia(context.Context, string, string, time.Time) error { return nil }

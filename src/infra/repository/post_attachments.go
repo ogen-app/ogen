@@ -34,6 +34,12 @@ type PostAttachmentRepository interface {
 	// unique constraint. att.Position is overwritten with the assigned
 	// value on success.
 	CreateAtNextPosition(ctx context.Context, att *models.PostAttachment) error
+	// CreateFromPendingUpload is CreateAtNextPosition for a presigned upload:
+	// it consumes the key's pending_uploads row in the same transaction, so
+	// the attachment exists only if the sweep has not taken the object. It
+	// fails with ErrPendingUploadGone when the sweep won, and with
+	// ErrUploadAlreadyAttached when an earlier finalize of the key did.
+	CreateFromPendingUpload(ctx context.Context, att *models.PostAttachment) error
 	// Patch applies every set field of p in a single UPDATE, so a PATCH request
 	// either lands completely or not at all.
 	Patch(ctx context.Context, id string, p AttachmentPatch) error
@@ -193,6 +199,16 @@ func (r *postAttachmentRepository) ListS3KeysByPostID(ctx context.Context, postI
 }
 
 func (r *postAttachmentRepository) CreateAtNextPosition(ctx context.Context, att *models.PostAttachment) error {
+	return r.create(ctx, att, false)
+}
+
+func (r *postAttachmentRepository) CreateFromPendingUpload(ctx context.Context, att *models.PostAttachment) error {
+	return r.create(ctx, att, true)
+}
+
+// create inserts att at the next position, first consuming its pending upload
+// row when fromPending is set.
+func (r *postAttachmentRepository) create(ctx context.Context, att *models.PostAttachment, fromPending bool) error {
 	// This INSERT is raw SQL, so the TenantScoped hooks don't fire — stamp and
 	// scope tenant_id by hand.
 	tid, err := writeTenantID(ctx, att.TenantID)
@@ -217,6 +233,11 @@ func (r *postAttachmentRepository) CreateAtNextPosition(ctx context.Context, att
 		var locked int
 		if err := tx.NewRaw(`SELECT 1 FROM posts WHERE id = ? AND tenant_id = ? FOR UPDATE`, att.PostID, tid).Scan(ctx, &locked); err != nil {
 			return err
+		}
+		if fromPending {
+			if err := consumePendingUpload(ctx, tx, att.S3Key, tid); err != nil {
+				return err
+			}
 		}
 		// segment_index is NULL for non-thread attachments; a nil
 		// *int binds as NULL, a non-nil pointer as the 0-based segment.
