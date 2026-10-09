@@ -376,11 +376,18 @@ func (h *PostAttachmentsHandler) saveAttachment(c *fiber.Ctx, att *models.PostAt
 	if strings.HasPrefix(att.MimeType, "image/") && att.AltText == "" && h.image != nil {
 		altCtx := detachedContext(c, tenantID)
 		backgroundTasks.Go("post_attachments.alt_text", func() {
+			altTextSlots <- struct{}{}
+			defer func() { <-altTextSlots }()
 			h.generateAttachmentAltText(altCtx, tenantID, att.PostID, att.ID, att.S3Key)
 		})
 	}
 	return nil
 }
+
+// altTextSlots caps how many background alt-text generations call
+// image-service at once; a batch of image uploads queues behind it instead of
+// starting one vision call per image.
+var altTextSlots = make(chan struct{}, 4)
 
 // respondAttachment answers 201 with a saved attachment and its per-platform
 // soft warnings.
