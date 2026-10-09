@@ -46,17 +46,24 @@ var EmbedAssetFlow *core.Flow[EmbedAssetInput, struct{}, struct{}]
 // latest content. This prevents concurrent embeds of the same asset from
 // flooding the embedder and contending for the same database rows.
 type embedScheduler struct {
-	mu        sync.Mutex
-	pending   map[string]EmbedAssetInput
-	running   map[string]bool
+	mu      sync.Mutex
+	pending map[string]EmbedAssetInput
+	running map[string]bool
+	// slots caps how many embeds run at once across assets, so a bulk import
+	// does not start one concurrent Gemini embed (holding its content) per file.
+	slots     chan struct{}
 	assetRepo repository.AssetRepository // optional; when set, used to flip asset.status
 	embedder  ai.Embedder                // set by Init; used to skip when no key
 }
+
+// maxConcurrentEmbeds caps how many asset embeds run at once.
+const maxConcurrentEmbeds = 4
 
 func newEmbedScheduler() *embedScheduler {
 	return &embedScheduler{
 		pending: make(map[string]EmbedAssetInput),
 		running: make(map[string]bool),
+		slots:   make(chan struct{}, maxConcurrentEmbeds),
 	}
 }
 
@@ -80,7 +87,7 @@ func (s *embedScheduler) run(assetID string) {
 		s.mu.Lock()
 		in, ok := s.pending[assetID]
 		if !ok {
-			s.running[assetID] = false
+			delete(s.running, assetID)
 			s.mu.Unlock()
 			return
 		}
@@ -97,6 +104,7 @@ func (s *embedScheduler) run(assetID string) {
 			continue
 		}
 
+		s.slots <- struct{}{}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		// Rebuild the tenant context the request goroutine carried, so the
 		// status writes and chunk upserts run against the right tenant.
@@ -110,6 +118,7 @@ func (s *embedScheduler) run(assetID string) {
 			s.setStatus(ctx, in.AssetID, models.AssetStatusReady)
 		}
 		cancel()
+		<-s.slots
 	}
 }
 

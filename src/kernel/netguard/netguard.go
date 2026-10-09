@@ -84,8 +84,19 @@ func ResolveAllowed(ctx context.Context, host string) error {
 func SafeClient(timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: dialGuard}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: &http.Transport{Proxy: nil, DialContext: dialer.DialContext},
+		Timeout: timeout,
+		// The hosts are arbitrary pages and image CDNs, rarely called twice, so
+		// idle connections are capped and reaped instead of kept (with their
+		// read/write goroutines) until each remote end closes them.
+		Transport: &http.Transport{
+			Proxy:               nil,
+			DialContext:         dialer.DialContext,
+			ForceAttemptHTTP2:   true,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     30 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("netguard: too many redirects")

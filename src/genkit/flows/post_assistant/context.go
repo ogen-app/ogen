@@ -56,15 +56,40 @@ type contextCacheEntry struct {
 
 var (
 	contextCache = map[string]*contextCacheEntry{}
-	// contextCacheGen tracks a per-post generation number, bumped by every
-	// invalidateContextCache call. assembleContextCached captures it before the
-	// (unlocked) assemble and only writes the result back if it is still
-	// unchanged — otherwise an invalidation that raced an in-flight assembly
-	// would be silently undone by the stale result repopulating the cache.
-	// Kept in its own map so the generation survives deletion of the entry.
-	contextCacheGen = map[string]uint64{}
-	contextCacheMu  sync.Mutex
+	// contextCacheGen tracks a per-post generation number, bumped by an
+	// invalidateContextCache call that lands while an assembly is in flight.
+	// assembleContextCached captures it before the (unlocked) assemble and only
+	// writes the result back if it is still unchanged — otherwise an
+	// invalidation that raced an in-flight assembly would be silently undone by
+	// the stale result repopulating the cache. Kept in its own map so the
+	// generation survives deletion of the entry; dropped with the last
+	// in-flight assembly (contextCacheInflight), when no one can compare to it.
+	contextCacheGen      = map[string]uint64{}
+	contextCacheInflight = map[string]int{}
+	contextCacheMu       sync.Mutex
 )
+
+// contextCacheMax caps the cache. Entries for posts nobody reopens would
+// otherwise stay for the life of the process: the TTL is only checked when the
+// same post is looked up again.
+const contextCacheMax = 512
+
+// pruneContextCacheLocked makes room for one more entry, dropping expired
+// entries first and, if every entry is still live, all of them. The caller
+// holds contextCacheMu.
+func pruneContextCacheLocked(now time.Time) {
+	if len(contextCache) < contextCacheMax {
+		return
+	}
+	for id, e := range contextCache {
+		if !now.Before(e.expiresAt) {
+			delete(contextCache, id)
+		}
+	}
+	if len(contextCache) >= contextCacheMax {
+		clear(contextCache)
+	}
+}
 
 // postFingerprint returns a stable string that changes whenever any
 // prompt-affecting field of the post changes (content, attached assets,
@@ -164,27 +189,34 @@ func assembleContextCached(
 		delete(contextCache, post.ID)
 	}
 	gen := contextCacheGen[post.ID]
+	contextCacheInflight[post.ID]++
 	contextCacheMu.Unlock()
 
 	actx, err := assembleContext(ctx, post, campaign, resolved, repos, systemTmpl, contextTmpl)
-	if err != nil {
-		return nil, err
-	}
 
 	// Only cache the result if no invalidation raced this assembly. If the
 	// generation moved, the underlying data changed (e.g. a note was added)
 	// after we read it, so actx is already stale — drop it rather than
 	// repopulate the cache with data an invalidation just cleared.
 	contextCacheMu.Lock()
-	if contextCacheGen[post.ID] == gen {
+	if err == nil && contextCacheGen[post.ID] == gen {
+		now := time.Now()
+		pruneContextCacheLocked(now)
 		contextCache[post.ID] = &contextCacheEntry{
 			ctx:         actx,
 			fingerprint: fp,
-			expiresAt:   time.Now().Add(contextCacheTTL),
+			expiresAt:   now.Add(contextCacheTTL),
 		}
+	}
+	if contextCacheInflight[post.ID]--; contextCacheInflight[post.ID] <= 0 {
+		delete(contextCacheInflight, post.ID)
+		delete(contextCacheGen, post.ID)
 	}
 	contextCacheMu.Unlock()
 
+	if err != nil {
+		return nil, err
+	}
 	return actx, nil
 }
 
@@ -196,8 +228,10 @@ func invalidateContextCache(postID string) {
 	contextCacheMu.Lock()
 	// Bump the generation so any assembly already in flight (which captured the
 	// old generation before this invalidation) refuses to write its now-stale
-	// result back into the cache.
-	contextCacheGen[postID]++
+	// result back into the cache. With none in flight there is nothing to warn.
+	if contextCacheInflight[postID] > 0 {
+		contextCacheGen[postID]++
+	}
 	delete(contextCache, postID)
 	contextCacheMu.Unlock()
 }
