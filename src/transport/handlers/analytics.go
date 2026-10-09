@@ -81,6 +81,8 @@ type AnalyticsHandler struct {
 	auth         fiber.Handler
 	// insights caches the live Zernio insight reads (see serveInsight).
 	insights *ttlCache[any]
+	// baselines caches the workspace-wide sample reads (see analytics_baselines.go).
+	baselines analyticsBaselines
 }
 
 // NewAnalyticsHandler wires the handler. followerRepo/client/profileID are
@@ -93,7 +95,8 @@ func NewAnalyticsHandler(repo repository.PostAnalyticsRepository, followerRepo r
 	return &AnalyticsHandler{
 		repo: repo, followerRepo: followerRepo, posts: posts, platforms: platforms, accounts: accounts, campaigns: campaigns,
 		client: client, profileID: profileID, auth: auth,
-		insights: newTTLCache[any](insightCacheTTL, insightCacheEntries),
+		insights:  newTTLCache[any](insightCacheTTL, insightCacheEntries),
+		baselines: newAnalyticsBaselines(),
 	}
 }
 

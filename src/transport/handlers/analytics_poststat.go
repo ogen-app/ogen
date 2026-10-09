@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ogen-app/ogen/src/analytics/learnings"
 	"github.com/ogen-app/ogen/src/analytics/poststat"
@@ -116,24 +117,24 @@ func (h *AnalyticsHandler) PostDetail(c *fiber.Ctx) error {
 		EngagementRate: cur.EngagementRate,
 	}
 
-	samples, err := h.repo.ReachByAgeSamples(ctx)
-	if err != nil {
+	// The workspace baselines (cached) and the post's own history are
+	// independent reads, so they run concurrently. The workspace-wide lifespan
+	// (all-time) drives the half-life narrative + the still-counting cutoff;
+	// it is shared with the CON-239 learnings board.
+	var (
+		samples     []repository.ReachAgeSample
+		snaps       []models.PostAnalyticsSnapshot
+		lifeSamples []repository.LifespanSample
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) { samples, err = h.reachByAgeSamples(gctx); return err })
+	g.Go(func() (err error) { snaps, err = h.repo.SnapshotsByPostID(gctx, post.ID); return err })
+	g.Go(func() (err error) { lifeSamples, err = h.lifespanSamples(gctx, time.Time{}); return err })
+	if err := g.Wait(); err != nil {
 		return err
 	}
 	in.Samples = toBandSamples(samples)
-
-	snaps, err := h.repo.SnapshotsByPostID(ctx, post.ID)
-	if err != nil {
-		return err
-	}
 	in.Snapshots = toPoststatSnapshots(snaps, publishedAt)
-
-	// Workspace-wide lifespan (all-time) drives the half-life narrative + the
-	// still-counting cutoff; shared with the CON-239 learnings board.
-	lifeSamples, err := h.repo.LifespanSamples(ctx, time.Time{})
-	if err != nil {
-		return err
-	}
 	in.Lifespan = lifespanInfo(lifeSamples)
 
 	return c.JSON(insightEnvelope{Available: true, Data: poststat.Build(in)})

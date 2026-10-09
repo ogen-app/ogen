@@ -82,7 +82,7 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 	// The typical-at-age baseline stays workspace-wide under any scope, so a
 	// campaign's posts are scored against the workspace's usual post rather than
 	// against each other.
-	samples, err := h.repo.ReachByAgeSamples(ctx)
+	samples, err := h.reachByAgeSamples(ctx)
 	if err != nil {
 		return err
 	}

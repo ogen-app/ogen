@@ -11,6 +11,20 @@ import (
 type curve struct {
 	// platform -> postID -> sorted []agePoint (ascending age)
 	byPlatform map[string]map[string][]agePoint
+	// expected memoises expectedAtAge: every candidate of the same platform
+	// and age asks for the same median over all of that platform's posts.
+	expected map[expectedKey]expectedVal
+}
+
+type expectedKey struct {
+	platform string
+	age      int
+	metric   string
+}
+
+type expectedVal struct {
+	value float64
+	ok    bool
 }
 
 type agePoint struct {
@@ -20,7 +34,7 @@ type agePoint struct {
 }
 
 func buildCurve(samples []Sample) curve {
-	c := curve{byPlatform: map[string]map[string][]agePoint{}}
+	c := curve{byPlatform: map[string]map[string][]agePoint{}, expected: map[expectedKey]expectedVal{}}
 	for _, s := range samples {
 		posts := c.byPlatform[s.Platform]
 		if posts == nil {
@@ -50,16 +64,10 @@ func metricAt(pts []agePoint, ageTarget int, metric string) (float64, bool) {
 	if pts[len(pts)-1].age < ageTarget {
 		return 0, false // post hasn't lived to this age yet (no extrapolation)
 	}
-	// last sample with age <= target
-	var chosen agePoint
-	for _, p := range pts {
-		if p.age <= ageTarget {
-			chosen = p
-		} else {
-			break
-		}
-	}
-	return metricOf(chosen, metric), true
+	// The last sample with age <= target: pts is sorted by age, so it sits just
+	// before the first sample past the target.
+	i, _ := slices.BinarySearchFunc(pts, ageTarget+1, func(p agePoint, age int) int { return cmp.Compare(p.age, age) })
+	return metricOf(pts[i-1], metric), true
 }
 
 func metricOf(p agePoint, metric string) float64 {
@@ -84,7 +92,13 @@ func (c curve) multiplier(platform string, ageTarget int, metric string, candida
 	if len(posts) < baselineMinPosts {
 		return 0, false
 	}
-	expected, ok := c.expectedAtAge(posts, ageTarget, metric)
+	key := expectedKey{platform: platform, age: ageTarget, metric: metric}
+	memo, seen := c.expected[key]
+	if !seen {
+		memo.value, memo.ok = c.expectedAtAge(posts, ageTarget, metric)
+		c.expected[key] = memo
+	}
+	expected, ok := memo.value, memo.ok
 	if !ok || expected <= 0 {
 		return 0, false
 	}
