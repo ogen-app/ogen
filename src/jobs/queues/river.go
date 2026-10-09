@@ -76,6 +76,10 @@ type Deps struct {
 	// `audio` queue.
 	Audio AudioDeps
 
+	// The analyze_asset / reanalyze_campaign workers' dependencies. A nil
+	// Runner makes both jobs no-ops. Runs on the dedicated `analysis` queue.
+	Analysis AnalysisDeps
+
 	// The process_image worker's dependencies (image-service client,
 	// embedder, storage, extraction/block/asset/file repos, cost gate). A nil
 	// Client (no IMAGE_SERVICE_ADDR) makes the job a no-op. Runs on the dedicated
@@ -144,16 +148,17 @@ func register(fn func(*river.Workers, Deps)) {
 }
 
 // QueueConfigs is the River client's queue set: the default queue plus the
-// dedicated audio, image and ingest queues, each with its own worker
+// dedicated audio, image, ingest and analysis queues, each with its own worker
 // pool so heavy runs can't starve short jobs. A job inserted into a queue
 // missing here is never worked, so every InsertOpts Queue must appear —
 // TestEveryInsertQueueIsConfigured guards it.
-func QueueConfigs(defaultWorkers, audioWorkers, imageWorkers, ingestWorkers int) map[string]river.QueueConfig {
+func QueueConfigs(defaultWorkers, audioWorkers, imageWorkers, ingestWorkers, analysisWorkers int) map[string]river.QueueConfig {
 	return map[string]river.QueueConfig{
 		river.QueueDefault: {MaxWorkers: defaultWorkers},
 		AudioQueue:         {MaxWorkers: audioWorkers},
 		ImageQueue:         {MaxWorkers: imageWorkers},
 		IngestQueue:        {MaxWorkers: ingestWorkers},
+		AnalysisQueue:      {MaxWorkers: analysisWorkers},
 	}
 }
 

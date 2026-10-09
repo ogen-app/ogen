@@ -32,7 +32,7 @@ func newRiverClient(ctx context.Context, d *deps) (*river.Client[*sql.Tx], error
 		// Dedicated audio, image and ingest queues keep long transcription, vision
 		// and document runs from starving short jobs (publishing, email) on the
 		// default queue.
-		Queues:       queues.QueueConfigs(d.cfg.JobWorkers, d.cfg.AudioJobWorkers, d.cfg.ImageJobWorkers, d.cfg.IngestJobWorkers),
+		Queues:       queues.QueueConfigs(d.cfg.JobWorkers, d.cfg.AudioJobWorkers, d.cfg.ImageJobWorkers, d.cfg.IngestJobWorkers, d.cfg.AnalysisJobWorkers),
 		Workers:      workers,
 		PeriodicJobs: periodicConfig(d.cfg).PeriodicJobs(),
 	})

@@ -449,6 +449,18 @@ type Config struct {
 	// and URL ingestion run, so minutes-long parses and embeds never hold the
 	// default queue's workers.
 	IngestJobWorkers int `envconfig:"INGEST_JOB_WORKERS" default:"2"`
+	// AnalysisJobWorkers sizes the dedicated `analysis` queue, where asset
+	// analyses run, so a long transcript never holds ingestion or publishing.
+	AnalysisJobWorkers int `envconfig:"ANALYSIS_JOB_WORKERS" default:"4"`
+	// AnalysisFullContextMaxTokens is the largest source analysed in one model
+	// call; a larger one is read in parts and the notes reduced.
+	AnalysisFullContextMaxTokens int `envconfig:"ANALYSIS_FULL_CONTEXT_MAX_TOKENS" default:"150000"`
+	// AnalysisMaxSourceTokens caps how much of a source is analysed at all;
+	// past it the tail is dropped and the analysis marked truncated.
+	AnalysisMaxSourceTokens int `envconfig:"ANALYSIS_MAX_SOURCE_TOKENS" default:"1000000"`
+	// AnalysisRebriefDebounce is how long a campaign brief edit waits before
+	// its campaign's analyses re-run, so a burst of saves costs one run.
+	AnalysisRebriefDebounce time.Duration `envconfig:"ANALYSIS_REBRIEF_DEBOUNCE" default:"10m"`
 	// Graceful-shutdown wait for in-flight jobs to finish.
 	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"30s"`
 

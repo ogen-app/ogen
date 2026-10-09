@@ -103,6 +103,8 @@ type utteranceStore interface {
 // server.go). A nil Client (no AUDIO_SERVICE_ADDR configured) disables the job —
 // it no-ops.
 type AudioDeps struct {
+	// Analysis queues the asset's analyses once it settles; nil skips them.
+	Analysis AnalysisScheduler
 	Client   audioTranscriber
 	Embedder chunkEmbedder
 	Storage  audioBlobStore
@@ -709,7 +711,7 @@ func (p *ProcessAudioProcessor) failSegment(ctx context.Context, seg *models.Aud
 }
 
 func (p *ProcessAudioProcessor) statusWriter() assetStatusWriter {
-	return assetStatusWriter{op: "process_audio", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "audio", kind: models.AssetTypeAudio}
+	return assetStatusWriter{op: "process_audio", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "audio", kind: models.AssetTypeAudio, analysis: p.Deps.Analysis}
 }
 
 func (p *ProcessAudioProcessor) segmentMaxMs() int64 {

@@ -67,6 +67,8 @@ type fileUpserter interface {
 // PDFDeps bundles the process_pdf worker's dependencies (built in server.go). A
 // nil Client (no PDF_SERVICE_ADDR configured) disables the job — it no-ops.
 type PDFDeps struct {
+	// Analysis queues the asset's analyses once it settles; nil skips them.
+	Analysis     AnalysisScheduler
 	Client       pdfParser
 	Embedder     chunkEmbedder
 	Storage      blobStore
@@ -225,7 +227,7 @@ func (p *ProcessPDFProcessor) thumbnailDPI() int {
 }
 
 func (p *ProcessPDFProcessor) statusWriter() assetStatusWriter {
-	return assetStatusWriter{op: "process_pdf", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "document", kind: models.AssetTypePDF}
+	return assetStatusWriter{op: "process_pdf", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "document", kind: models.AssetTypePDF, analysis: p.Deps.Analysis}
 }
 
 func (p *ProcessPDFProcessor) uploadThumbnail(ctx context.Context, assetID string, png []byte) *string {
