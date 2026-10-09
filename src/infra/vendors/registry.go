@@ -136,7 +136,7 @@ func CostOf(vendorName, model string, u Usage) (micros int64, version string, ok
 	if !found {
 		return 0, "", false
 	}
-	rates, found := d.Prices.Models[model]
+	rates, found := d.Prices.RatesFor(model, u)
 	if !found {
 		return 0, d.Prices.Version, false
 	}
@@ -179,8 +179,9 @@ func CapabilitiesOf(vendorName, model string) (modelconfig.ModelCapabilities, bo
 // MergePrices merges per-model rate overrides into a registered vendor's price
 // table and re-tags the table with version (boot-time, from USAGE_MODEL_PRICES).
 // Models present in the override replace the in-code defaults; other models are
-// kept. It returns false when the vendor isn't registered. Copy-on-write: a
-// fresh Models map is built so already-handed-out descriptors aren't mutated.
+// kept, and so are the in-code long-prompt tiers. It returns false when the
+// vendor isn't registered. Copy-on-write: a fresh Models map is built so
+// already-handed-out descriptors aren't mutated.
 func MergePrices(vendorName, version string, models map[string]Rates) bool {
 	mu.Lock()
 	defer mu.Unlock()
@@ -191,7 +192,7 @@ func MergePrices(vendorName, version string, models map[string]Rates) bool {
 	merged := make(map[string]Rates, len(d.Prices.Models)+len(models))
 	maps.Copy(merged, d.Prices.Models)
 	maps.Copy(merged, models)
-	d.Prices = PriceTable{Version: version, Models: merged}
+	d.Prices = PriceTable{Version: version, Models: merged, LongPrompt: d.Prices.LongPrompt}
 	registry[vendorName] = d
 	return true
 }
