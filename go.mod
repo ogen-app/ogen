@@ -10,7 +10,6 @@ require (
 	github.com/aws/smithy-go v1.25.1
 	github.com/firebase/genkit/go v1.6.1
 	github.com/getsentry/sentry-go v0.49.0
-	github.com/getsentry/sentry-go/fiber v0.49.0
 	github.com/getsentry/sentry-go/otel v0.49.0
 	github.com/getsentry/sentry-go/otel/otlp v0.49.0
 	github.com/go-playground/validator/v10 v10.26.0

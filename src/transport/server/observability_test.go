@@ -3,8 +3,10 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/gofiber/fiber/v2"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -37,7 +39,7 @@ func newObservabilityTestApp(t *testing.T) (*fiber.App, *tracetest.InMemoryExpor
 }
 
 // TestObservabilityPanicBecomes500 is the regression guard for the subtle
-// recover/sentryfiber ordering: a handler panic must be turned into a clean 500
+// recover/sentryScope ordering: a handler panic must be turned into a clean 500
 // (never a 200 or a process crash), even with Sentry disabled.
 func TestObservabilityPanicBecomes500(t *testing.T) {
 	app, _ := newObservabilityTestApp(t)
@@ -128,5 +130,52 @@ func TestObservabilityContinuesSentryBrowserTrace(t *testing.T) {
 	}
 	if !spans[0].Parent.IsRemote() {
 		t.Error("server span parent should be the remote browser span")
+	}
+}
+
+// TestSentryScopeCapturesPanicWithoutBody checks that, with Sentry enabled, a
+// panic is reported once with the request's method, URL and safe headers, and
+// that the request body never reaches the event.
+func TestSentryScopeCapturesPanicWithoutBody(t *testing.T) {
+	transport := &sentry.MockTransport{}
+	client, err := sentry.NewClient(sentry.ClientOptions{Dsn: "https://key@sentry.invalid/1", Transport: transport})
+	if err != nil {
+		t.Fatalf("sentry client: %v", err)
+	}
+	hub := sentry.CurrentHub()
+	prev := hub.Client()
+	hub.BindClient(client)
+	t.Cleanup(func() { hub.BindClient(prev) })
+
+	app, _ := newObservabilityTestApp(t)
+	app.Post("/panic", func(*fiber.Ctx) error { panic("boom") })
+
+	req := httptest.NewRequest(http.MethodPost, "/panic", strings.NewReader(`{"secret":"body"}`))
+	req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+	req.Header.Set(fiber.HeaderUserAgent, "probe/1.0")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test: %v", err)
+	}
+	if resp.StatusCode != fiber.StatusInternalServerError {
+		t.Fatalf("panic route: got status %d, want 500", resp.StatusCode)
+	}
+
+	events := transport.Events()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want 1", len(events))
+	}
+	r := events[0].Request
+	if r == nil {
+		t.Fatal("event has no request")
+	}
+	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL, "/panic") {
+		t.Errorf("request = %s %s, want POST …/panic", r.Method, r.URL)
+	}
+	if r.Headers[fiber.HeaderUserAgent] != "probe/1.0" {
+		t.Errorf("user agent = %q, want probe/1.0", r.Headers[fiber.HeaderUserAgent])
+	}
+	if r.Data != "" {
+		t.Errorf("request body leaked into the event: %q", r.Data)
 	}
 }
