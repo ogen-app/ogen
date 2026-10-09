@@ -481,7 +481,7 @@ All runtime knobs are env vars, loaded by
 | `ADDR` | `:9001` | HTTP listen address (the Docker image sets `:3000`). |
 | `DATABASE_DSN` | `postgres://ogen:ogen@localhost:5432/ogen?sslmode=disable` | Control-plane Postgres (pgvector). |
 | `ANALYTICS_DSN` | empty | Isolated analytics TimescaleDB. Empty disables usage metering + analytics (fail-open). |
-| `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 5 | Shared pool sizing for HTTP + River workers. |
+| `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 25 | Shared pool sizing for HTTP + River workers; idle connections close after 5 minutes unused. |
 | `GEMINI_API_KEY` | empty | Gemini Embedding 2 key — first-boot seed; rotate via the operator surface. Empty disables embedding/RAG. |
 | `EMBED_MODEL` / `EMBED_DIMENSIONS` | `gemini-embedding-2` / `3072` | Embedding model + vector width (must match `assets_chunks.embedding`). |
 | `ANTHROPIC_API_KEY` / `MODEL_ID` | empty / `claude-sonnet-4-5-20250929` | Claude key (first-boot seed) + generation model (**seed-only**; see [AI flows](#ai-flows-genkit)). |

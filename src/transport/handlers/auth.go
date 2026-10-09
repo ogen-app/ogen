@@ -31,9 +31,9 @@ import (
 // change. The stored session row is untouched (its tenant is the default, moved
 // only by POST /api/workspaces/:id/switch).
 //
-// Every authenticated request costs one indexed membership lookup (account_id,
-// tenant_id): it is also the gate that keeps a soft-deleted workspace (CON-147
-// PR4) unreachable, so it can't be skipped for the no-header case.
+// Every authenticated request costs one query: the session joined to its
+// membership of the active workspace. The membership is also the gate that
+// keeps a soft-deleted workspace unreachable, so it is resolved every time.
 func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.UserRepository, cookieName string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		token := c.Cookies(cookieName)
@@ -41,7 +41,8 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 			return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 		}
 
-		session, err := sessionRepo.GetByID(reqCtx(c), token)
+		header := c.Get(workspaceHeader)
+		session, membership, err := sessionRepo.GetForAuth(reqCtx(c), token, header)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired session")
@@ -60,19 +61,14 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 		c.Locals(DefaultWorkspaceLocal, storedDefault)
 
 		// Resolve — and authorise — the active workspace. An X-Workspace-Id header
-		// selects it; absent, the session default applies. The membership lookup
-		// filters soft-deleted workspaces, so a deleted or non-member
-		// workspace resolves to ErrNoRows and is refused, and the resolved
-		// membership rewrites the in-request session view (UserID/TenantID) — which
-		// is what every downstream reader, from tenantctx scoping to CreatedBy
-		// stamps, sees.
-		active := storedDefault
-		if ws := c.Get(workspaceHeader); ws != "" {
-			active = ws
-		}
-		membership, merr := userRepo.GetMembership(reqCtx(c), session.AccountID, active)
-		if errors.Is(merr, sql.ErrNoRows) {
-			if c.Get(workspaceHeader) != "" {
+		// selects it; absent, the session default applies. GetForAuth loaded the
+		// membership with the session and filters non-active workspaces, so a
+		// deleted or non-member workspace has none and is refused, and the
+		// resolved membership rewrites the in-request session view
+		// (UserID/TenantID) — which is what every downstream reader, from
+		// tenantctx scoping to CreatedBy stamps, sees.
+		if membership == nil {
+			if header != "" {
 				// An explicit header naming a workspace the account can't reach (not a
 				// member, or soft-deleted) is refused, never silently redirected.
 				return fiber.NewError(fiber.StatusForbidden, "not a member of this workspace")
@@ -80,15 +76,16 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 			// No header and the default is gone (its workspace was deleted, or the
 			// membership removed): fall back to any live workspace so the account
 			// isn't stranded on a dead default. 401 only when nothing remains.
-			membership, merr = userRepo.GetByAccountID(reqCtx(c), session.AccountID)
-			if errors.Is(merr, sql.ErrNoRows) {
+			user, err := userRepo.GetByAccountID(reqCtx(c), session.AccountID)
+			if errors.Is(err, sql.ErrNoRows) {
 				return fiber.NewError(fiber.StatusUnauthorized, "no accessible workspace")
 			}
+			if err != nil {
+				return err
+			}
+			membership = &repository.Membership{UserID: user.ID, TenantID: user.TenantID}
 		}
-		if merr != nil {
-			return merr
-		}
-		session.UserID = membership.ID
+		session.UserID = membership.UserID
 		session.TenantID = membership.TenantID
 
 		c.Locals("session", session)

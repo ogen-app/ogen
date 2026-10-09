@@ -39,6 +39,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
+	"github.com/ogen-app/ogen/src/kernel/httptransport"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/memlimit"
 	"github.com/ogen-app/ogen/src/kernel/telemetry"
@@ -58,6 +59,8 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 	logging.New(cfg)
+	// Before telemetry.Init and the Genkit runtime wrap the default transport.
+	httptransport.TuneDefault()
 	if limit := memlimit.Apply(); limit > 0 {
 		slog.Info("go memory limit set from cgroup", logging.AttrComponent, "boot", "limit_bytes", limit)
 	}
