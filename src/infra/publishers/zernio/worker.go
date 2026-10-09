@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -272,7 +273,19 @@ func (w *Worker) sweep(ctx context.Context, full bool) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(syncParallelism)
 	for _, tid := range tenants {
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			// The tick runs off the worker's goroutine: a panic on one
+			// tenant's data is logged and skipped rather than crashing the process.
+			defer func() {
+				if r := recover(); r != nil {
+					slog.ErrorContext(ctx, "sync tenant panicked",
+						logging.AttrComponent, "zernio.worker",
+						"tenant_id", tid,
+						logging.AttrError, fmt.Errorf("%v", r),
+						"stack", string(debug.Stack()))
+					err = nil
+				}
+			}()
 			if gctx.Err() != nil || w.rateLimited(time.Now()) {
 				return nil // cancelled, or rate-limited earlier this sweep — next sweep retries
 			}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -174,49 +175,19 @@ func resolveAssets(ctx context.Context, campaign *models.Campaign, cfg ContentPl
 // returned (pending/processing assets still contribute any chunks they
 // already have — only definitive failure states are skipped).
 func collectReadyCandidateIDs(ctx context.Context, campaign *models.Campaign, repos ContentPlanRepos) ([]string, []string, error) {
-	var warnings []string
-
-	isBad := func(status string) bool {
-		return status == models.AssetStatusFailed || status == models.AssetStatusPartial
-	}
-
-	if len(campaign.AssetIDs) > 0 {
-		metas, err := repos.Assets.ListMeta(ctx, campaign.AssetIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		status := make(map[string]string, len(metas))
-		for _, a := range metas {
-			status[a.ID] = a.Status
-		}
-		out := make([]string, 0, len(campaign.AssetIDs))
-		for _, id := range campaign.AssetIDs {
-			s, ok := status[id]
-			if !ok {
-				warnings = append(warnings, fmt.Sprintf("asset %q could not be loaded — skipped", id))
-				continue
-			}
-			if isBad(s) {
-				warnings = append(warnings, fmt.Sprintf("asset %q skipped: processing status=%s", id, s))
-				continue
-			}
-			out = append(out, id)
-		}
-		return out, warnings, nil
-	}
-
-	all, err := repos.Assets.ListMeta(ctx, nil)
+	ready, skipped, err := flowkit.ReadyCampaignAssetIDs(ctx, repos.Assets, campaign)
 	if err != nil {
 		return nil, nil, err
 	}
-	out := make([]string, 0, len(all))
-	for _, a := range all {
-		if isBad(a.Status) {
-			continue
+	var warnings []string
+	for _, s := range skipped {
+		if s.Status == "" {
+			warnings = append(warnings, fmt.Sprintf("asset %q could not be loaded — skipped", s.ID))
+		} else {
+			warnings = append(warnings, fmt.Sprintf("asset %q skipped: processing status=%s", s.ID, s.Status))
 		}
-		out = append(out, a.ID)
 	}
-	return out, warnings, nil
+	return ready, warnings, nil
 }
 
 // rankAndPackChunks fetches all embedded chunks, scores them against the

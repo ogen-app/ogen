@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -26,6 +27,11 @@ func TestArgFreeQueriesSkipPreparedStatements(t *testing.T) {
 		}
 		if got != i {
 			t.Fatalf("select = %d, want %d", got, i)
+		}
+		// bun writes interpolate too; pgx already runs an Exec with no
+		// arguments on the simple protocol, which this keeps covered.
+		if _, err := conn.ExecContext(ctx, "SELECT set_config('application_name', ?, false)", fmt.Sprint("t", i)); err != nil {
+			t.Fatalf("exec %d: %v", i, err)
 		}
 	}
 
