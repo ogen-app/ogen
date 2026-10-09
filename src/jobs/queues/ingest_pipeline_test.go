@@ -45,7 +45,7 @@ func TestEmbedStatsSettle(t *testing.T) {
 }
 
 func TestEmbedChunks(t *testing.T) {
-	emb := &fakeEmbedder{failCalls: map[int]bool{2: true}}
+	emb := &fakeEmbedder{failTexts: map[string]bool{"fails to embed": true}}
 	anchor := &models.SourceAnchor{Kind: "page", Page: 1}
 	sources := []chunkSource{
 		{Index: 0, Text: "first chunk text", Label: "Page 1", Anchor: anchor, PageStart: new(1)},

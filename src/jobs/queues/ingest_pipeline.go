@@ -10,11 +10,11 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/firebase/genkit/go/ai"
 	"github.com/pgvector/pgvector-go"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/embedbatch"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/notify"
@@ -71,24 +71,26 @@ func (s embedStats) settle(lastAttempt bool) (string, error) {
 	}
 }
 
-// embedChunks embeds every source that has words, one request per source, and
+// embedChunks embeds every source that has words, in batched requests, and
 // builds the chunk rows. A failed embed is counted, never fatal: the caller
 // decides the outcome through embedStats.settle.
 func embedChunks(ctx context.Context, embedder chunkEmbedder, assetID string, sources iter.Seq[chunkSource]) ([]models.AssetChunk, embedStats) {
-	var (
-		chunks []models.AssetChunk
-		stats  embedStats
-	)
+	var srcs []chunkSource
 	for src := range sources {
-		if !hasWords(src.Text) {
-			continue
+		if hasWords(src.Text) {
+			srcs = append(srcs, src)
 		}
-		stats.Attempts++
-		emb, err := embedder.Embed(ctx, &ai.EmbedRequest{
-			Input:   []*ai.Document{ai.DocumentFromText(src.Text, nil)},
-			Options: embedopts.Document(),
-		})
-		if err != nil || len(emb.Embeddings) != 1 {
+	}
+	texts := make([]string, len(srcs))
+	for i := range srcs {
+		texts[i] = srcs[i].Text
+	}
+	vecs, _ := embedbatch.Embed(ctx, embedder, texts, embedopts.Document())
+
+	chunks := make([]models.AssetChunk, 0, len(srcs))
+	stats := embedStats{Attempts: len(srcs)}
+	for i, src := range srcs {
+		if vecs[i] == nil {
 			stats.Failures++
 			continue
 		}
@@ -104,7 +106,7 @@ func embedChunks(ctx context.Context, embedder chunkEmbedder, assetID string, so
 			ChunkIndex:   src.Index,
 			Content:      src.Text,
 			TokenCount:   tokens,
-			Embedding:    pgvector.NewHalfVector(emb.Embeddings[0].Embedding),
+			Embedding:    pgvector.NewHalfVector(vecs[i]),
 			Model:        embedder.Name(),
 			SourceAnchor: src.Anchor,
 			PageStart:    src.PageStart,

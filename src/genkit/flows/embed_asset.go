@@ -14,6 +14,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/embedbatch"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -170,40 +171,25 @@ func embedAsset(ctx context.Context, embedder ai.Embedder, repo repository.Asset
 	}
 	slog.InfoContext(ctx, "chunked asset", logging.AttrComponent, "genkit.embed_asset", "asset_id", in.AssetID, "chunks", len(chunkTexts), "chars", len(fullText))
 
-	// Embed each chunk individually. Gemini's EmbedContent can batch multiple
-	// documents per request, but per-chunk calls keep the scheduler simple and
-	// the chunk count per asset is small.
 	chunks := make([]models.AssetChunk, 0, len(chunkTexts))
-	var totalTokens int64
 	for i, text := range chunkTexts {
 		if !hasWords(text) {
 			slog.WarnContext(ctx, "chunk skipped, no words", logging.AttrComponent, "genkit.embed_asset", "asset_id", in.AssetID, "chunk", i, "total", len(chunkTexts)-1, "len", len(text), "repr", truncate(text, 80))
 			continue
 		}
-		slog.DebugContext(ctx, "embedding chunk", logging.AttrComponent, "genkit.embed_asset", "asset_id", in.AssetID, "chunk", i, "total", len(chunkTexts)-1, "len", len(text), "preview", truncate(text, 80))
-
-		resp, err := embedder.Embed(ctx, &ai.EmbedRequest{
-			Input:   []*ai.Document{ai.DocumentFromText(text, nil)},
-			Options: embedopts.Document(),
-		})
-		if err != nil {
-			return fmt.Errorf("embed asset %s chunk %d: %w", in.AssetID, i, err)
-		}
-		if len(resp.Embeddings) != 1 {
-			return fmt.Errorf("embed asset %s chunk %d: expected 1 embedding, got %d", in.AssetID, i, len(resp.Embeddings))
-		}
-
-		tokens := EstimateTokens(text)
-		totalTokens += int64(tokens)
 		chunks = append(chunks, models.AssetChunk{
 			ID:         fmt.Sprintf("%s:%d", in.AssetID, i),
 			AssetID:    in.AssetID,
 			ChunkIndex: i,
 			Content:    text,
-			TokenCount: tokens,
-			Embedding:  pgvector.NewHalfVector(resp.Embeddings[0].Embedding),
+			TokenCount: EstimateTokens(text),
 			Model:      embedder.Name(),
 		})
+	}
+
+	totalTokens, err := fillEmbeddings(ctx, embedder, repo, in.AssetID, chunks)
+	if err != nil {
+		return err
 	}
 
 	if err := repo.UpsertChunks(ctx, in.AssetID, chunks); err != nil {
@@ -216,6 +202,47 @@ func embedAsset(ctx context.Context, embedder ai.Embedder, repo repository.Asset
 
 	slog.InfoContext(ctx, "stored chunks", logging.AttrComponent, "genkit.embed_asset", "asset_id", in.AssetID, "chunks", len(chunks))
 	return nil
+}
+
+// fillEmbeddings sets each chunk's embedding, reusing the vector already
+// stored for a chunk whose text an edit left unchanged and embedding the rest
+// in batched requests. It returns the estimated tokens of the newly embedded
+// chunks. A failed reuse lookup only costs re-embedding; a failed embed fails
+// the whole asset, so it is never left half-embedded.
+func fillEmbeddings(ctx context.Context, embedder ai.Embedder, repo repository.AssetChunksRepository, assetID string, chunks []models.AssetChunk) (int64, error) {
+	contents := make([]string, len(chunks))
+	for i := range chunks {
+		contents[i] = chunks[i].Content
+	}
+	stored, err := repo.EmbeddingsByContent(ctx, assetID, embedder.Name(), contents)
+	if err != nil {
+		slog.WarnContext(ctx, "stored embeddings unavailable, re-embedding every chunk", logging.AttrComponent, "genkit.embed_asset", "asset_id", assetID, logging.AttrError, err)
+	}
+
+	var (
+		pending []int
+		texts   []string
+	)
+	for i := range chunks {
+		if vec, ok := stored[chunks[i].Content]; ok {
+			chunks[i].Embedding = vec
+			continue
+		}
+		pending = append(pending, i)
+		texts = append(texts, chunks[i].Content)
+	}
+	slog.DebugContext(ctx, "embedding chunks", logging.AttrComponent, "genkit.embed_asset", "asset_id", assetID, "embed", len(pending), "reused", len(chunks)-len(pending))
+
+	vecs, err := embedbatch.Embed(ctx, embedder, texts, embedopts.Document())
+	if err != nil {
+		return 0, fmt.Errorf("embed asset %s: %w", assetID, err)
+	}
+	var tokens int64
+	for j, i := range pending {
+		chunks[i].Embedding = pgvector.NewHalfVector(vecs[j])
+		tokens += int64(chunks[i].TokenCount)
+	}
+	return tokens, nil
 }
 
 // hasWords returns true when text contains at least one non-whitespace Unicode
