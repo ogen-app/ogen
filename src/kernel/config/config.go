@@ -62,9 +62,11 @@ type Config struct {
 
 	// Connection-pool sizing. Postgres lifts SQLite's single-writer
 	// ceiling, so the API runs a real pool shared by bun and the River
-	// job queue. Size MaxOpen for combined HTTP + worker load.
+	// job queue. Size MaxOpen for combined HTTP + worker load. MaxIdle matches
+	// it so a burst does not close and reopen connections (TCP + TLS + auth);
+	// the pool's idle timeout still releases connections nobody uses.
 	DBMaxOpenConns    int    `envconfig:"DB_MAX_OPEN_CONNS" default:"25"`
-	DBMaxIdleConns    int    `envconfig:"DB_MAX_IDLE_CONNS" default:"5"`
+	DBMaxIdleConns    int    `envconfig:"DB_MAX_IDLE_CONNS" default:"25"`
 	SessionCookieName string `envconfig:"SESSION_COOKIE_NAME" default:"c3_session"`
 
 	// Client IP behind a reverse proxy. TrustedProxies is a comma-separated

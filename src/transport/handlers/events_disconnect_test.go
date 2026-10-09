@@ -16,6 +16,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
@@ -39,6 +40,9 @@ func (stubSessionRepo) CreateTx(context.Context, bun.IDB, *models.Session) error
 	return nil
 }
 func (stubSessionRepo) GetByID(context.Context, string) (*models.Session, error) { return nil, nil }
+func (stubSessionRepo) GetForAuth(context.Context, string, string) (*models.Session, *repository.Membership, error) {
+	return nil, nil, nil
+}
 func (stubSessionRepo) SetDefaultWorkspace(context.Context, string, string, string) error {
 	return nil
 }

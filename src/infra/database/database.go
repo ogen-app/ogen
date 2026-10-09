@@ -14,7 +14,7 @@ import (
 // ceiling, so we open a real pool. cmd/server overrides these from config.
 const (
 	defaultMaxOpenConns = 25
-	defaultMaxIdleConns = 5
+	defaultMaxIdleConns = defaultMaxOpenConns
 
 	// Recycle backends periodically so each server-side process's private
 	// caches (relcache/catcache/CacheMemoryContext, prepared plans) can't grow

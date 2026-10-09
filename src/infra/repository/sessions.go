@@ -25,6 +25,11 @@ type SessionRepository interface {
 	// it). Reports whether the session was created.
 	CreateForCredential(ctx context.Context, session *models.Session, verifiedHash string) (bool, error)
 	GetByID(ctx context.Context, id string) (*models.Session, error)
+	// GetForAuth loads a session together with the account's membership of the
+	// workspace a request acts in (workspaceID, or the session's stored default
+	// when empty), in one query. The membership is nil when the account has no
+	// membership there or the workspace is not active.
+	GetForAuth(ctx context.Context, id, workspaceID string) (*models.Session, *Membership, error)
 	// SetDefaultWorkspace repoints a session's stored default workspace (CON-147
 	// switch): it moves user_id + tenant_id to the given membership/workspace so a
 	// fresh tab or the next login seeds there. It does NOT scope live requests —
@@ -94,6 +99,49 @@ func (r *sessionRepository) GetByID(ctx context.Context, id string) (*models.Ses
 		return nil, err
 	}
 	return session, nil
+}
+
+// Membership is the account's user row in one workspace, as far as request
+// authentication needs it.
+type Membership struct {
+	UserID   string
+	TenantID string
+}
+
+type sessionWithMembership struct {
+	models.Session `bun:",extend"`
+
+	MemberID       string `bun:"member_id,scanonly"`
+	MemberTenantID string `bun:"member_tenant_id,scanonly"`
+}
+
+func (r *sessionRepository) GetForAuth(ctx context.Context, id, workspaceID string) (*models.Session, *Membership, error) {
+	// Unscoped for the same reason as userRepository.GetMembership: this lookup
+	// is what authorises scoping the request to a tenant. The tenants predicate
+	// matches GetMembership's, so a suspended or soft-deleted workspace yields no
+	// membership.
+	row := new(sessionWithMembership)
+	err := r.db.NewSelect().Model(row).
+		ColumnExpr("s.*").
+		ColumnExpr("COALESCE(u.id, '') AS member_id").
+		ColumnExpr("COALESCE(u.tenant_id, '') AS member_tenant_id").
+		Join(`LEFT JOIN users AS u ON u.account_id = s.account_id
+			AND u.tenant_id = COALESCE(NULLIF(?, ''), s.tenant_id)
+			AND EXISTS (SELECT 1 FROM tenants AS t WHERE t.id = u.tenant_id AND t.status = ?)`,
+			workspaceID, models.TenantStatusActive).
+		Where("s.id = ?", id).
+		Scan(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, sql.ErrNoRows
+		}
+		return nil, nil, err
+	}
+	session := row.Session
+	if row.MemberID == "" {
+		return &session, nil, nil
+	}
+	return &session, &Membership{UserID: row.MemberID, TenantID: row.MemberTenantID}, nil
 }
 
 func (r *sessionRepository) SetDefaultWorkspace(ctx context.Context, sessionID, userID, tenantID string) error {

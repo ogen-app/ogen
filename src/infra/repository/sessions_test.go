@@ -1,12 +1,75 @@
 package repository_test
 
 import (
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
+
+// TestSessionRepositoryGetForAuth checks the one-query auth lookup resolves the
+// same membership GetMembership would: the session default when no workspace
+// is named, the named workspace when the account belongs to it, and none for a
+// workspace the account isn't in or that isn't active.
+func TestSessionRepositoryGetForAuth(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewSessionRepository(db)
+	ctx := t.Context()
+
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for id, status := range map[string]string{
+		"t-home": models.TenantStatusActive, "t-other": models.TenantStatusActive,
+		"t-suspended": models.TenantStatusSuspended, "t-foreign": models.TenantStatusActive,
+	} {
+		tn := &models.Tenant{ID: id, Name: id, Slug: id, TierID: models.DefaultTierID, Status: status, CreatedAt: ts, UpdatedAt: ts}
+		if _, err := db.NewInsert().Model(tn).Exec(ctx); err != nil {
+			t.Fatalf("seed tenant %s: %v", id, err)
+		}
+	}
+	for _, m := range []*models.User{
+		{ID: "u-home", AccountID: "acc", TenantID: "t-home", Name: "H", Email: "e@x", CreatedAt: ts, UpdatedAt: ts},
+		{ID: "u-other", AccountID: "acc", TenantID: "t-other", Name: "O", Email: "e@x", CreatedAt: ts, UpdatedAt: ts},
+		{ID: "u-sus", AccountID: "acc", TenantID: "t-suspended", Name: "S", Email: "e@x", CreatedAt: ts, UpdatedAt: ts},
+		{ID: "u-foreign", AccountID: "acc-2", TenantID: "t-foreign", Name: "F", Email: "f@x", CreatedAt: ts, UpdatedAt: ts},
+	} {
+		if _, err := db.NewInsert().Model(m).Exec(ctx); err != nil {
+			t.Fatalf("seed membership %s: %v", m.ID, err)
+		}
+	}
+	s := &models.Session{ID: "s1", AccountID: "acc", UserID: "u-home", TenantID: "t-home", ExpiresAt: ts.Add(time.Hour)}
+	if err := repo.Create(ctx, s); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	cases := []struct{ workspace, wantUser string }{
+		{"", "u-home"},
+		{"t-other", "u-other"},
+		{"t-suspended", ""},
+		{"t-foreign", ""},
+	}
+	for _, c := range cases {
+		session, m, err := repo.GetForAuth(ctx, "s1", c.workspace)
+		if err != nil {
+			t.Fatalf("workspace %q: %v", c.workspace, err)
+		}
+		if session.ID != "s1" || session.AccountID != "acc" || session.TenantID != "t-home" {
+			t.Fatalf("workspace %q: session = %+v", c.workspace, session)
+		}
+		switch {
+		case c.wantUser == "" && m != nil:
+			t.Errorf("workspace %q: membership = %+v, want none", c.workspace, m)
+		case c.wantUser != "" && (m == nil || m.UserID != c.wantUser):
+			t.Errorf("workspace %q: membership = %+v, want %s", c.workspace, m, c.wantUser)
+		}
+	}
+
+	if _, _, err := repo.GetForAuth(ctx, "missing", ""); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("unknown session: err = %v, want sql.ErrNoRows", err)
+	}
+}
 
 func TestSessionRepositoryDeleteAllForAccount(t *testing.T) {
 	db := openMigratedDB(t)

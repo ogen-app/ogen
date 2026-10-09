@@ -155,6 +155,7 @@ func (s hubStream) run(logCtx context.Context, sessionID string, w *bufio.Writer
 	lifetime := time.NewTimer(s.lifetime)
 	defer lifetime.Stop()
 
+	beats := 0
 	for {
 		select {
 		case ev, ok := <-s.events:
@@ -172,6 +173,11 @@ func (s hubStream) run(logCtx context.Context, sessionID string, w *bufio.Writer
 			}
 			// Drop the stream once the session is invalidated (logout, expiry,
 			// deletion) rather than keep delivering to an unauthenticated client.
+			// Checked every few heartbeats, not every one: each open tab holds two
+			// streams, and a per-heartbeat lookup is steady DB load for no reader.
+			if beats++; beats%sessionRecheckBeats != 0 {
+				continue
+			}
 			if !sessionStillValid(s.sessionRepo, sessionID) {
 				slog.InfoContext(logCtx, s.sessionGoneMsg, logging.AttrComponent, s.component)
 				return
@@ -208,10 +214,21 @@ func writeRecycleFrame(w *bufio.Writer) error {
 	return w.Flush()
 }
 
+const (
+	// sessionRecheckBeats is how many heartbeats pass between session
+	// rechecks: two minutes at the default 20 s heartbeat.
+	sessionRecheckBeats = 6
+	// sessionRecheckTimeout bounds one recheck so a stalled database cannot
+	// stall the stream goroutine.
+	sessionRecheckTimeout = 5 * time.Second
+)
+
 // sessionStillValid runs a fresh repo lookup. Background context — the
 // fiber request ctx is gone by the time the stream writer runs.
 func sessionStillValid(repo repository.SessionRepository, id string) bool {
-	s, err := repo.GetByID(context.Background(), id)
+	ctx, cancel := context.WithTimeout(context.Background(), sessionRecheckTimeout)
+	defer cancel()
+	s, err := repo.GetByID(ctx, id)
 	if err != nil || s == nil {
 		return false
 	}
