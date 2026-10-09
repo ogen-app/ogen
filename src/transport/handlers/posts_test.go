@@ -541,6 +541,8 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				Expect(got.UsedAssets).To(HaveLen(1))
 				Expect(got.UsedAssets[0].ID).To(Equal(asset.ID))
 				Expect(got.UsedAssets[0].Title).To(Equal("Ref Asset"))
+				// The asset's text is not part of the post and is not loaded.
+				Expect(got.UsedAssets[0].Content).To(BeEmpty())
 			})
 
 			It("returns 404 for an unknown id", func() {

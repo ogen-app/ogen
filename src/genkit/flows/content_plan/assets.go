@@ -181,23 +181,31 @@ func collectReadyCandidateIDs(ctx context.Context, campaign *models.Campaign, re
 	}
 
 	if len(campaign.AssetIDs) > 0 {
+		metas, err := repos.Assets.ListMeta(ctx, campaign.AssetIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		status := make(map[string]string, len(metas))
+		for _, a := range metas {
+			status[a.ID] = a.Status
+		}
 		out := make([]string, 0, len(campaign.AssetIDs))
 		for _, id := range campaign.AssetIDs {
-			a, err := repos.Assets.GetByID(ctx, id)
-			if err != nil {
+			s, ok := status[id]
+			if !ok {
 				warnings = append(warnings, fmt.Sprintf("asset %q could not be loaded — skipped", id))
 				continue
 			}
-			if isBad(a.Status) {
-				warnings = append(warnings, fmt.Sprintf("asset %q skipped: processing status=%s", id, a.Status))
+			if isBad(s) {
+				warnings = append(warnings, fmt.Sprintf("asset %q skipped: processing status=%s", id, s))
 				continue
 			}
-			out = append(out, a.ID)
+			out = append(out, id)
 		}
 		return out, warnings, nil
 	}
 
-	all, err := repos.Assets.List(ctx)
+	all, err := repos.Assets.ListMeta(ctx, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -278,14 +286,15 @@ func rankAndPackChunks(
 		return nil, warnings, nil
 	}
 
-	// Populate asset titles.
+	// Populate asset titles in one query; an asset that can't be loaded keeps
+	// its ID as the title.
 	for assetID, entry := range selected {
-		a, err := repos.Assets.GetByID(ctx, assetID)
-		if err != nil {
-			entry.title = assetID // fallback to ID if asset can't be loaded
-			continue
+		entry.title = assetID
+	}
+	if metas, err := repos.Assets.ListMeta(ctx, order); err == nil {
+		for _, a := range metas {
+			selected[a.ID].title = a.Title
 		}
-		entry.title = a.Title
 	}
 
 	// Build resolved pieces: one entry per asset, chunks concatenated in order.

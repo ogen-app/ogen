@@ -49,6 +49,12 @@ func (r *fakePostRepo) GetByID(_ context.Context, id string) (*models.Post, erro
 	}
 	return nil, errors.New("not found")
 }
+func (r *fakePostRepo) ListRowsByCampaign(ctx context.Context, campaignID string, _ ...string) ([]models.Post, error) {
+	return r.ListByCampaign(ctx, campaignID)
+}
+func (r *fakePostRepo) GetRowByID(ctx context.Context, id string) (*models.Post, error) {
+	return r.GetByID(ctx, id)
+}
 func (r *fakePostRepo) Update(_ context.Context, p *models.Post, _ ...string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -66,7 +66,7 @@ func (h *AnalyticsHandler) Learnings(c *fiber.Ctx) error {
 	}
 
 	ctx := reqCtx(c)
-	current, err := h.repo.CurrentByPostID(ctx)
+	current, err := h.repo.CurrentMetricsByPostID(ctx)
 	if err != nil {
 		return err
 	}

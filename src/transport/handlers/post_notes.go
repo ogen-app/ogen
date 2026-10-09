@@ -71,7 +71,7 @@ type updateNoteRequest struct {
 }
 
 func (h *PostNotesHandler) List(c *fiber.Ctx) error {
-	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
+	post, err := loadParam(c, "post_id", h.postRepo.GetRowByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (h *PostNotesHandler) List(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Get(c *fiber.Ctx) error {
-	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
+	post, err := loadParam(c, "post_id", h.postRepo.GetRowByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func (h *PostNotesHandler) Get(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Create(c *fiber.Ctx) error {
-	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
+	post, err := loadParam(c, "post_id", h.postRepo.GetRowByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func (h *PostNotesHandler) Create(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Update(c *fiber.Ctx) error {
-	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
+	post, err := loadParam(c, "post_id", h.postRepo.GetRowByID, "post not found")
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func (h *PostNotesHandler) Update(c *fiber.Ctx) error {
 }
 
 func (h *PostNotesHandler) Delete(c *fiber.Ctx) error {
-	post, err := loadParam(c, "post_id", h.postRepo.GetByID, "post not found")
+	post, err := loadParam(c, "post_id", h.postRepo.GetRowByID, "post not found")
 	if err != nil {
 		return err
 	}

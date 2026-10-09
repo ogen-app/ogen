@@ -81,19 +81,25 @@ func collectIDsFlat[T any](items []T, getIDs func(T) []string) []string {
 }
 
 // fetchByIDs fetches records of type T whose id column matches any value in ids
-// and returns an ID→*T index map. Returns an empty map (no error) when ids is empty.
+// and returns an ID→*T index map, leaving the exclude columns unread. Returns an
+// empty map (no error) when ids is empty.
 func fetchByIDs[T any](
 	ctx context.Context,
 	db *bun.DB,
 	ids []string,
 	getID func(*T) string,
+	exclude ...string,
 ) (map[string]*T, error) {
 	result := make(map[string]*T)
 	if len(ids) == 0 {
 		return result, nil
 	}
 	var items []T
-	if err := db.NewSelect().Model(&items).Where("id IN (?)", bun.List(ids)).Scan(ctx); err != nil {
+	q := db.NewSelect().Model(&items).Where("id IN (?)", bun.List(ids))
+	if len(exclude) > 0 {
+		q = q.ExcludeColumn(exclude...)
+	}
+	if err := q.Scan(ctx); err != nil {
 		return nil, err
 	}
 	for i := range items {

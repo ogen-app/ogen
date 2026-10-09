@@ -78,6 +78,8 @@ func runCampaignAssistant(
 		notifyAssistantFinalised(cfg.Notifier, c.TenantID, c.CreatedBy, req.CampaignID, out, retErr)
 	}()
 
+	// One Brand library load serves this turn and every sub-flow its tools run.
+	ctx = brandresolve.WithMemo(ctx)
 	ctx, err := t.prepare(ctx, systemTmpl, contextTmpl)
 	if err != nil {
 		return nil, err

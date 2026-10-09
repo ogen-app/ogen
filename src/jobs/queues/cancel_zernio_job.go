@@ -108,7 +108,7 @@ func init() {
 //     Scheduled; user sees a stuck post and can try again. Per
 //     CON-69 §9 we surface the failure rather than guessing.
 func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZernioJobTask) error {
-	post, err := p.Deps.PostRepo.GetByID(ctx, task.PostID)
+	post, err := p.Deps.PostRepo.GetRowByID(ctx, task.PostID)
 	if err != nil {
 		return fmt.Errorf("cancel: load post %s: %w", task.PostID, err)
 	}

@@ -170,7 +170,7 @@ func logWithdraw(ctx context.Context, deps ZernioDeps, task WithdrawZernioPostTa
 		return
 	}
 	status := models.PostStatus("")
-	if post, err := deps.PostRepo.GetByID(ctx, task.PostID); err == nil {
+	if post, err := deps.PostRepo.GetRowByID(ctx, task.PostID); err == nil {
 		status = post.Status
 	}
 	appendLogActor(ctx, deps, task.PostID, task.Actor, models.PostLogEventZernioCancel, status, status, summary, payload)

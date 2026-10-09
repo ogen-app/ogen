@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -53,7 +54,7 @@ func Resolve(ctx context.Context, repo repository.BrandRepository, campaign *mod
 		return r, nil
 	}
 
-	data, err := repo.GetAll(ctx)
+	data, err := getAll(ctx, repo)
 	if err != nil {
 		return r, err // fail open: r still carries the legacy prose fallback
 	}
@@ -74,6 +75,45 @@ func Resolve(ctx context.Context, repo repository.BrandRepository, campaign *mod
 	r.Guardrails = data.Guardrails
 	r.Facts = currentFacts(ctx, data.Facts, models.CalendarDateOf(now()))
 	return r, nil
+}
+
+type memoKey struct{}
+
+// memo holds the workspace's Brand library for one run.
+type memo struct {
+	mu   sync.Mutex
+	data *models.BrandData
+}
+
+// WithMemo returns ctx carrying a per-run memo, so every Resolve made with it
+// or a context derived from it — a campaign-assistant turn and the content
+// plan, drafts and brief checks its tools run — loads the Brand library once.
+// The memo belongs to one tenant's run; a ctx that already carries one is
+// returned unchanged.
+func WithMemo(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(memoKey{}).(*memo); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, memoKey{}, &memo{})
+}
+
+// getAll loads the Brand library, through ctx's memo when it has one. Only a
+// successful load is remembered, so a failed one is retried by the next call.
+func getAll(ctx context.Context, repo repository.BrandRepository) (*models.BrandData, error) {
+	m, ok := ctx.Value(memoKey{}).(*memo)
+	if !ok {
+		return repo.GetAll(ctx)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data == nil {
+		data, err := repo.GetAll(ctx)
+		if err != nil {
+			return nil, err
+		}
+		m.data = data
+	}
+	return m.data, nil
 }
 
 // now is the clock expiry is judged against; tests replace it.

@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
@@ -415,12 +416,30 @@ func toPlatformOptions(platforms []models.Platform) []platformOption {
 	return opts
 }
 
+// assetsByID loads the id, title and type of the named assets in one query.
+func assetsByID(ctx context.Context, repo repository.AssetRepository, ids []string) (map[string]*models.Asset, error) {
+	metas, err := repo.ListMeta(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*models.Asset, len(metas))
+	for i := range metas {
+		out[metas[i].ID] = &metas[i]
+	}
+	return out, nil
+}
+
 func buildAssetSummaries(ctx context.Context, assetIDs []string, repos PostAssistantRepos) ([]assetSummary, error) {
 	if len(assetIDs) == 0 {
 		return nil, nil
 	}
 
-	// Fetch all assets in parallel.
+	assets, err := assetsByID(ctx, repos.Assets, assetIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch every asset's chunk preview in parallel.
 	type result struct {
 		index   int
 		summary assetSummary
@@ -429,12 +448,12 @@ func buildAssetSummaries(ctx context.Context, assetIDs []string, repos PostAssis
 	results := make([]result, len(assetIDs))
 	var wg sync.WaitGroup
 	for i, id := range assetIDs {
+		asset, ok := assets[id]
+		if !ok {
+			continue
+		}
 		wg.Go(func() {
 			idx, assetID := i, id
-			asset, err := repos.Assets.GetByID(ctx, assetID)
-			if err != nil {
-				return
-			}
 			chunkCount, first, err := repos.Chunks.PreviewByAssetID(ctx, assetID)
 			if err != nil {
 				return
