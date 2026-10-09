@@ -17,6 +17,10 @@ type IdeaListFilter struct {
 	CampaignID string
 	// Unfiled keeps only workspace-wide ideas (no live campaign).
 	Unfiled bool
+	// Origin keeps only ideas of this origin when set.
+	Origin *models.IdeaOrigin
+	// AssetID keeps only ideas an analysis of this asset produced.
+	AssetID string
 }
 
 // IdeaRepository persists the workspace Ideas backlog. Every query
@@ -54,6 +58,7 @@ func (r *ideaRepository) selectIdeas(model any) *bun.SelectQuery {
 	return r.db.NewSelect().
 		Model(model).
 		ColumnExpr("i.id, i.title, i.note, i.verdict, i.remind_at, i.decided_at, i.decided_by").
+		ColumnExpr("i.origin, i.asset_analysis_id").
 		ColumnExpr("i.created_by, i.created_by_name, i.created_at, i.updated_at").
 		ColumnExpr("c.id AS campaign_id").
 		Join("LEFT JOIN campaigns AS c ON c.id = i.campaign_id AND c.deleted_at IS NULL")
@@ -68,10 +73,55 @@ func (r *ideaRepository) List(ctx context.Context, filter IdeaListFilter) ([]mod
 	case filter.Unfiled:
 		q = q.Where("c.id IS NULL")
 	}
+	if filter.Origin != nil {
+		q = q.Where("i.origin = ?", *filter.Origin)
+	}
+	if filter.AssetID != "" {
+		q = q.Where("i.asset_analysis_id IN (SELECT id FROM asset_analyses WHERE asset_id = ?)", filter.AssetID)
+	}
 	if err := q.OrderExpr("i.created_at ASC, i.id ASC").Scan(ctx); err != nil {
 		return nil, err
 	}
+	if err := r.hydrateSourceAssets(ctx, ideas); err != nil {
+		return nil, err
+	}
 	return ideas, nil
+}
+
+// hydrateSourceAssets fills SourceAsset on ideas whose analysis still exists.
+func (r *ideaRepository) hydrateSourceAssets(ctx context.Context, ideas []models.Idea) error {
+	var analysisIDs []string
+	for _, idea := range ideas {
+		if idea.AssetAnalysisID != nil {
+			analysisIDs = append(analysisIDs, *idea.AssetAnalysisID)
+		}
+	}
+	if len(analysisIDs) == 0 {
+		return nil
+	}
+	var rows []struct {
+		AnalysisID string `bun:"analysis_id"`
+		AssetID    string `bun:"asset_id"`
+		Title      string `bun:"title"`
+	}
+	if err := r.db.NewSelect().
+		Model((*models.AssetAnalysis)(nil)).
+		ColumnExpr("aa.id AS analysis_id, a.id AS asset_id, a.title").
+		Join("JOIN assets AS a ON a.id = aa.asset_id").
+		Where("aa.id IN (?)", bun.List(analysisIDs)).
+		Scan(ctx, &rows); err != nil {
+		return err
+	}
+	byAnalysis := make(map[string]*models.IdeaSourceAsset, len(rows))
+	for _, row := range rows {
+		byAnalysis[row.AnalysisID] = &models.IdeaSourceAsset{ID: row.AssetID, Title: row.Title}
+	}
+	for i := range ideas {
+		if id := ideas[i].AssetAnalysisID; id != nil {
+			ideas[i].SourceAsset = byAnalysis[*id]
+		}
+	}
+	return nil
 }
 
 func (r *ideaRepository) GetByID(ctx context.Context, id string) (*models.Idea, error) {
@@ -82,7 +132,11 @@ func (r *ideaRepository) GetByID(ctx context.Context, id string) (*models.Idea, 
 		}
 		return nil, err
 	}
-	return idea, nil
+	one := []models.Idea{*idea}
+	if err := r.hydrateSourceAssets(ctx, one); err != nil {
+		return nil, err
+	}
+	return &one[0], nil
 }
 
 func (r *ideaRepository) Create(ctx context.Context, idea *models.Idea) error {

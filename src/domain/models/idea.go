@@ -27,6 +27,23 @@ func (v IdeaVerdict) Valid() bool {
 	}
 }
 
+// IdeaOrigin records who produced an idea. It is a closed set mirrored by a DB
+// CHECK; the empty value is a person typing it in.
+type IdeaOrigin string
+
+const (
+	IdeaOriginManual IdeaOrigin = ""
+	// IdeaOriginAssetAnalysis marks an idea distilled from an asset by its
+	// analysis; AssetAnalysisID points at that analysis while it exists.
+	IdeaOriginAssetAnalysis IdeaOrigin = "asset_analysis"
+)
+
+// IdeaSourceAsset names the asset an analysis idea came from.
+type IdeaSourceAsset struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
 // Idea is one entry in a workspace's shared Ideas backlog. It is
 // workspace-wide when CampaignID is nil and attached to that campaign otherwise;
 // moving between the two keeps the row, its verdict, and its author.
@@ -48,8 +65,15 @@ type Idea struct {
 	// CreatedBy is stamped from the session on insert and never changes. It goes
 	// null only when the author's user row is hard-deleted; CreatedByName is the
 	// capture-time snapshot that keeps the author after that.
-	CreatedBy     *string   `bun:"created_by"                                   json:"created_by"`
-	CreatedByName string    `bun:"created_by_name,notnull"                      json:"created_by_name"`
-	CreatedAt     time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt     time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	// Origin and AssetAnalysisID trace an analysis idea back to its source.
+	// AssetAnalysisID goes null when that analysis is removed; a triaged idea
+	// outlives it.
+	Origin          IdeaOrigin `bun:"origin,notnull,default:''"                    json:"origin"            swaggertype:"string" enums:",asset_analysis"`
+	AssetAnalysisID *string    `bun:"asset_analysis_id"                            json:"asset_analysis_id"`
+	// SourceAsset is hydrated on reads while the analysis still exists.
+	SourceAsset   *IdeaSourceAsset `bun:"-"                                    json:"source_asset,omitempty"`
+	CreatedBy     *string          `bun:"created_by"                           json:"created_by"`
+	CreatedByName string           `bun:"created_by_name,notnull"                      json:"created_by_name"`
+	CreatedAt     time.Time        `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt     time.Time        `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 }

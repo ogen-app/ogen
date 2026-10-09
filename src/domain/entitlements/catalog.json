@@ -99,6 +99,28 @@
     "description": "AI scoring passes available per post."
   },
   {
+    "key": "asset_analysis",
+    "name": "Asset analysis",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-364",
+    "status": "live",
+    "value_type": "boolean",
+    "is_material": true,
+    "reset": "",
+    "description": "Every text asset is summarised and distilled into post ideas, for the workspace and for each campaign it serves."
+  },
+  {
+    "key": "asset_analyses_per_month",
+    "name": "Asset analyses",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-364",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "monthly",
+    "description": "Analysis runs per month; every campaign lens and every re-run counts one."
+  },
+  {
     "key": "posts_total",
     "name": "Posts",
     "category": "posts_publishing",
