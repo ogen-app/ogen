@@ -17,6 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/embedbatch"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
@@ -162,6 +163,12 @@ type assetFailureMarker interface {
 	MarkFailed(ctx context.Context, id, code, reason string) error
 }
 
+// AnalysisScheduler queues an asset's analyses once its text is settled.
+// *assetanalysis.Service implements it.
+type AnalysisScheduler interface {
+	ScheduleAsset(ctx context.Context, tenantID, assetID string)
+}
+
 // assetStatusWriter persists an ingest's asset status and announces terminal
 // outcomes to the asset's creator. A nil assets store makes every write a
 // no-op. Status errors are returned so the job retries rather than reporting
@@ -176,6 +183,9 @@ type assetStatusWriter struct {
 	// marker persists fail's code and reason. When unset, assets is used if it
 	// implements assetFailureMarker; otherwise fail writes the bare status.
 	marker assetFailureMarker
+	// analysis queues the asset's analyses when it settles ready or partial;
+	// nil skips that.
+	analysis AnalysisScheduler
 }
 
 // unavailableReason is the tenant-visible reason when a dependency (embedder,
@@ -198,6 +208,11 @@ func (w assetStatusWriter) set(ctx context.Context, assetID, status string) erro
 		return fmt.Errorf("%s %s: set status %s: %w", w.op, assetID, status, err)
 	}
 	notifyAssetStatus(ctx, w.notifier, w.assets, assetID, status, w.label, w.kind)
+	if w.analysis != nil && models.IsAnalyzableAssetStatus(status) {
+		if tenantID, ok := tenantctx.From(ctx); ok {
+			w.analysis.ScheduleAsset(ctx, tenantID, assetID)
+		}
+	}
 	return nil
 }
 

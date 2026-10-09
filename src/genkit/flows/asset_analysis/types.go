@@ -59,12 +59,11 @@ type SiblingSummary struct {
 // workspace lens.
 type Lens struct {
 	WorkspaceName string
-	// BrandBlock is the rendered brand voice, audience and guardrails.
+	// BrandBlock is the rendered brand voice, audience, guardrails and current
+	// facts.
 	BrandBlock string
-	// Facts are the workspace's current brand facts.
-	Facts    []string
-	Campaign *CampaignBrief
-	Siblings []SiblingSummary
+	Campaign   *CampaignBrief
+	Siblings   []SiblingSummary
 	// ExistingIdeas are idea titles already in scope, so the model avoids
 	// repeating them.
 	ExistingIdeas []string

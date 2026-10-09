@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -43,6 +44,8 @@ type AssetAnalysisRepository interface {
 	// DeleteUntriagedIdeasForAsset removes the untriaged ideas of every lens
 	// of the asset, ahead of the asset delete that cascades the lenses.
 	DeleteUntriagedIdeasForAsset(ctx context.Context, db bun.IDB, assetID string) error
+	// CampaignIDsWithAsset lists the live campaigns the asset is attached to.
+	CampaignIDsWithAsset(ctx context.Context, assetID string) ([]string, error)
 	// RecordRun logs one run of the analysis against the monthly cap.
 	RecordRun(ctx context.Context, analysisID string) error
 	// CountRunsSince counts the tenant's runs at or after since.
@@ -214,6 +217,22 @@ func (r *assetAnalysisRepository) DeleteUntriagedIdeasForAsset(ctx context.Conte
 		Column("aa.id").
 		Where("aa.asset_id = ?", assetID)
 	return deleteUntriagedIdeas(ctx, db, "asset_analysis_id IN (?)", lensIDs)
+}
+
+func (r *assetAnalysisRepository) CampaignIDsWithAsset(ctx context.Context, assetID string) ([]string, error) {
+	needle, err := json.Marshal([]string{assetID})
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	err = r.db.NewSelect().
+		Model((*models.Campaign)(nil)).
+		Column("c.id").
+		Where("c.deleted_at IS NULL").
+		Where("c.asset_ids @> ?::jsonb", string(needle)).
+		OrderExpr("c.id").
+		Scan(ctx, &ids)
+	return ids, err
 }
 
 func (r *assetAnalysisRepository) RecordRun(ctx context.Context, analysisID string) error {

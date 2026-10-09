@@ -45,6 +45,8 @@ type documentAssetWriter interface {
 // server.go). A nil Client (no DOCUMENTS_SERVICE_ADDR configured) disables the
 // job — it no-ops.
 type DocumentDeps struct {
+	// Analysis queues the asset's analyses once it settles; nil skips them.
+	Analysis AnalysisScheduler
 	Client   documentsParser
 	Embedder chunkEmbedder
 	Storage  blobStore
@@ -200,6 +202,7 @@ func (p *ProcessDocumentProcessor) statusWriter() assetStatusWriter {
 	return assetStatusWriter{
 		op: "process_document", assets: p.Deps.Assets, marker: p.Deps.Assets,
 		notifier: p.Deps.Notifier, label: "document", kind: models.AssetTypeDocument,
+		analysis: p.Deps.Analysis,
 	}
 }
 

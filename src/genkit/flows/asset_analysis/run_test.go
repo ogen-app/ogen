@@ -78,7 +78,7 @@ func meetingRequest() AnalyzeRequest {
 		},
 		Lens: Lens{
 			WorkspaceName: "Acme",
-			Facts:         []string{"Founded 2019"},
+			BrandBlock:    "## Guardrails\n- Founded 2019",
 			Campaign:      &CampaignBrief{Name: "Spring launch", KeyMessages: "Fast and simple", Language: "de", Phases: []string{"Tease", "Launch"}},
 			ExistingIdeas: []string{"Already have this one"},
 		},

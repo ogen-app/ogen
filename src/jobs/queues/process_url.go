@@ -85,6 +85,8 @@ type imageFetcher interface {
 // URLDeps bundles the process_url worker's dependencies (built in server.go). A
 // nil Scraper (no Firecrawl key path) makes the job a no-op.
 type URLDeps struct {
+	// Analysis queues the asset's analyses once it settles; nil skips them.
+	Analysis AnalysisScheduler
 	Scraper  urlScraper
 	Embedder chunkEmbedder
 	Storage  imageUploader
@@ -284,7 +286,7 @@ const (
 )
 
 func (p *ProcessURLProcessor) statusWriter() assetStatusWriter {
-	return assetStatusWriter{op: "process_url", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "link", kind: models.AssetTypeURL}
+	return assetStatusWriter{op: "process_url", assets: p.Deps.Assets, notifier: p.Deps.Notifier, label: "link", kind: models.AssetTypeURL, analysis: p.Deps.Analysis}
 }
 
 // assetEventPayload is the SSE `data:` body for an asset.updated frame.
