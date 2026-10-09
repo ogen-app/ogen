@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ogen-app/ogen/src/analytics/overview"
 	"github.com/ogen-app/ogen/src/analytics/timeframe"
@@ -60,30 +61,35 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 	}
 	ctx := reqCtx(c)
 
-	curPosts, err := h.repo.PublishedBetween(ctx, rng.From, rng.To)
-	if err != nil {
-		return err
+	// The five reads (analytics for both windows, published times for both,
+	// followers) are independent, so they run concurrently.
+	var (
+		curPosts, prevPosts []models.PostAnalytics
+		curPub, prevPub     []time.Time
+		folTotals           []overview.FollowerDayTotal
+		folNow              int
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) { curPosts, err = h.repo.PublishedBetween(gctx, rng.From, rng.To); return err })
+	g.Go(func() (err error) { prevPosts, err = h.repo.PublishedBetween(gctx, prev.From, prev.To); return err })
+	if h.posts != nil {
+		g.Go(func() (err error) {
+			curPub, err = h.posts.PublishedAtsBetween(gctx, rng.From, rng.To, scope.platformIDs(), scope.campaign())
+			return err
+		})
+		g.Go(func() (err error) {
+			prevPub, err = h.posts.PublishedAtsBetween(gctx, prev.From, prev.To, scope.platformIDs(), scope.campaign())
+			return err
+		})
 	}
-	prevPosts, err := h.repo.PublishedBetween(ctx, prev.From, prev.To)
-	if err != nil {
+	g.Go(func() (err error) {
+		folTotals, folNow, err = h.overviewFollowers(gctx, scope, prev.From, rng.To)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return err
 	}
 	if err := h.filterRows(ctx, scope, &curPosts, &prevPosts); err != nil {
-		return err
-	}
-
-	var curPub, prevPub []time.Time
-	if h.posts != nil {
-		if curPub, err = h.posts.PublishedAtsBetween(ctx, rng.From, rng.To, scope.platformIDs(), scope.campaign()); err != nil {
-			return err
-		}
-		if prevPub, err = h.posts.PublishedAtsBetween(ctx, prev.From, prev.To, scope.platformIDs(), scope.campaign()); err != nil {
-			return err
-		}
-	}
-
-	folTotals, folNow, err := h.overviewFollowers(ctx, scope, prev.From, rng.To)
-	if err != nil {
 		return err
 	}
 

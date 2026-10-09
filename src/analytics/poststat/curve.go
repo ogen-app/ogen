@@ -90,9 +90,10 @@ func (c bandCurve) evaluate(platform string, ageTarget int, metric string, candi
 	if !ok || len(vals) < baselineMinPosts {
 		return 0, "", false
 	}
-	p25 := percentile(vals, 0.25)
-	p50 := percentile(vals, 0.50)
-	p75 := percentile(vals, 0.75)
+	slices.Sort(vals) // vals is this call's own slice; sort once for all three
+	p25 := percentileSorted(vals, 0.25)
+	p50 := percentileSorted(vals, 0.50)
+	p75 := percentileSorted(vals, 0.75)
 	if p50 <= 0 {
 		return 0, "", false
 	}
@@ -181,10 +182,9 @@ func bandMetricOf(p bandPoint, metric string) float64 {
 	}
 }
 
-// percentile is the linear-interpolation quantile of xs (q ∈ [0,1]).
-func percentile(xs []float64, q float64) float64 {
-	s := slices.Clone(xs)
-	slices.Sort(s)
+// percentileSorted is the linear-interpolation quantile (q ∈ [0,1]) of the
+// already-sorted s.
+func percentileSorted(s []float64, q float64) float64 {
 	n := len(s)
 	switch n {
 	case 0:
