@@ -100,6 +100,25 @@ type store struct {
 
 	mu          sync.Mutex
 	subscribers map[string][]*subscription
+
+	// cache holds decrypted values (and "not set") per name for cacheTTL.
+	// Every Zernio, Resend and Firecrawl call resolves its key through Get,
+	// so without it each outbound call paid a SELECT and a decrypt. Set and
+	// Delete drop the entry at once; the TTL bounds how long another
+	// replica's rotation takes to show.
+	cacheMu sync.Mutex
+	cache   map[string]cachedSecret
+	now     func() time.Time
+}
+
+// cacheTTL bounds how stale a cached secret may be after another replica
+// rotates it.
+const cacheTTL = time.Minute
+
+type cachedSecret struct {
+	value    string
+	notFound bool
+	expires  time.Time
 }
 
 type subscription struct {
@@ -113,6 +132,8 @@ func NewStore(repo repository.SecretRepository, cipher *envelope.Cipher) Store {
 		repo:        repo,
 		cipher:      cipher,
 		subscribers: map[string][]*subscription{},
+		cache:       map[string]cachedSecret{},
+		now:         time.Now,
 	}
 }
 
@@ -120,9 +141,16 @@ func (s *store) Get(ctx context.Context, name string) (string, error) {
 	if !IsAllowed(name) {
 		return "", fmt.Errorf("%w: %s", ErrUnknownName, name)
 	}
+	if c, ok := s.cached(name); ok {
+		if c.notFound {
+			return "", fmt.Errorf("%w: %s", ErrNotFound, name)
+		}
+		return c.value, nil
+	}
 	row, err := s.repo.Get(ctx, name)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			s.remember(name, cachedSecret{notFound: true})
 			return "", fmt.Errorf("%w: %s", ErrNotFound, name)
 		}
 		return "", err
@@ -131,7 +159,31 @@ func (s *store) Get(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("secrets: decrypt %s: %w", name, err)
 	}
+	s.remember(name, cachedSecret{value: string(pt)})
 	return string(pt), nil
+}
+
+func (s *store) cached(name string) (cachedSecret, bool) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	c, ok := s.cache[name]
+	if !ok || !s.now().Before(c.expires) {
+		return cachedSecret{}, false
+	}
+	return c, true
+}
+
+func (s *store) remember(name string, c cachedSecret) {
+	c.expires = s.now().Add(cacheTTL)
+	s.cacheMu.Lock()
+	s.cache[name] = c
+	s.cacheMu.Unlock()
+}
+
+func (s *store) forget(name string) {
+	s.cacheMu.Lock()
+	delete(s.cache, name)
+	s.cacheMu.Unlock()
 }
 
 // Set upserts an encrypted row. Returns the new metadata and a bool
@@ -174,6 +226,7 @@ func (s *store) Set(ctx context.Context, name, plaintext string) (Metadata, bool
 		return Metadata{}, false, err
 	}
 
+	s.forget(name)
 	s.notify(name)
 
 	return Metadata{
@@ -197,6 +250,7 @@ func (s *store) Delete(ctx context.Context, name string) error {
 	if !deleted {
 		return fmt.Errorf("%w: %s", ErrNotFound, name)
 	}
+	s.forget(name)
 	s.notify(name)
 	return nil
 }

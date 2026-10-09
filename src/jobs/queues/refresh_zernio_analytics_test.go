@@ -42,6 +42,16 @@ func (r *fakeAnalyticsRepo) Upsert(_ context.Context, a *models.PostAnalytics) e
 	r.upserted[a.PostID] = &cp
 	return nil
 }
+func (r *fakeAnalyticsRepo) TouchChecked(_ context.Context, postID string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.upserted[postID]; ok {
+		cp := *cur
+		cp.LastCheckedAt = at
+		r.upserted[postID] = &cp
+	}
+	return nil
+}
 func (r *fakeAnalyticsRepo) AppendSnapshot(context.Context, *models.PostAnalyticsSnapshot) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

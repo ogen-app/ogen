@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -111,9 +112,10 @@ func (p *RefreshZernioAnalyticsProcessor) Work(ctx context.Context, job *river.J
 	return p.Process(ctx, job.Args)
 }
 
-// Timeout is the per-attempt context deadline.
+// Timeout is the per-attempt context deadline. Each tenant has its own
+// tenantSweepTimeout inside it.
 func (p *RefreshZernioAnalyticsProcessor) Timeout(*river.Job[RefreshZernioAnalyticsTask]) time.Duration {
-	return 60 * time.Second
+	return tenantSweepJobTimeout
 }
 
 func init() {
@@ -180,25 +182,32 @@ func (p *RefreshZernioAnalyticsProcessor) refresh(ctx context.Context, now time.
 		byTenant[post.TenantID] = append(byTenant[post.TenantID], post)
 	}
 
-	total := 0
-	var firstErr error
-	for _, tenantID := range sortedTenantIDs(byTenant) {
+	// Tenants are independent, so they refresh in parallel, each under its own
+	// deadline.
+	var (
+		mu       sync.Mutex
+		total    int
+		firstErr error
+	)
+	forEachTenant(ctx, sortedTenantIDs(byTenant), func(ctx context.Context, tenantID string) {
 		tctx := tenantctx.With(ctx, tenantID)
 		n, swept, terr := p.refreshTenant(tctx, byTenant[tenantID], platformName, now)
-		total += n
 		// Only record health for tenants we actually swept (or that errored);
 		// a profile-less tenant is skipped entirely, so writing "ok" would
 		// misreport an unconfigured tenant as healthy.
 		if swept || terr != nil {
-			p.recordStatus(tctx, terr)
+			p.recordStatus(context.WithoutCancel(tctx), terr)
 		}
+		mu.Lock()
+		defer mu.Unlock()
+		total += n
 		if terr != nil {
 			if firstErr == nil {
 				firstErr = terr
 			}
 			slog.ErrorContext(tctx, "analytics refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_analytics", "tenant_id", tenantID, logging.AttrError, terr)
 		}
-	}
+	})
 	return total, firstErr
 }
 
@@ -228,7 +237,10 @@ func (p *RefreshZernioAnalyticsProcessor) refreshTenant(ctx context.Context, pos
 	}
 	sweep := newAnalyticsSweep(posts, current, platformName, now)
 
-	from := now.AddDate(0, 0, -p.windowDays()).Format("2006-01-02")
+	from, anyDue := p.fetchFrom(posts, current, now)
+	if !anyDue {
+		return 0, true, nil // every post was checked recently enough; nothing to fetch
+	}
 	limit := p.pageLimit()
 	for page := 1; page <= maxAnalyticsPages; page++ {
 		apiStart := time.Now()
@@ -253,6 +265,34 @@ func (p *RefreshZernioAnalyticsProcessor) refreshTenant(ctx context.Context, pos
 		}
 	}
 	return upserts, true, nil
+}
+
+// fetchFrom returns the FromDate a tenant's fetch needs and whether any of its
+// posts is due under the decay schedule. Settled posts are re-checked rarely,
+// so the fetch starts at the oldest due post's publish day (a day early, for
+// time zones) rather than at the start of the window; without that, every
+// page of the window was fetched and the decay only skipped the writes.
+func (p *RefreshZernioAnalyticsProcessor) fetchFrom(posts []models.Post, current map[string]*models.PostAnalytics, now time.Time) (string, bool) {
+	windowStart := now.AddDate(0, 0, -p.windowDays())
+	var oldest *time.Time
+	anyDue, unknownAge := false, false
+	for i := range posts {
+		if !p.due(posts[i], current[posts[i].ID], now) {
+			continue
+		}
+		anyDue = true
+		switch at := posts[i].PublishedAt; {
+		case at == nil:
+			unknownAge = true
+		case oldest == nil || at.Before(*oldest):
+			oldest = at
+		}
+	}
+	from := windowStart
+	if !unknownAge && oldest != nil && oldest.AddDate(0, 0, -1).After(windowStart) {
+		from = oldest.AddDate(0, 0, -1)
+	}
+	return from.Format("2006-01-02"), anyDue
 }
 
 // analyticsSweep is one tenant's refresh state. Zernio returns analytics for

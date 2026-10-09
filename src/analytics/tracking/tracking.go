@@ -32,6 +32,30 @@ func Stamp(prev, built *models.PostAnalytics, now time.Time) bool {
 	return changed
 }
 
+// sameStored reports whether built would store exactly what prev holds, apart
+// from the dedup timestamps. Stamp has already compared the metrics.
+func sameStored(prev, built *models.PostAnalytics) bool {
+	if prev == nil {
+		return false
+	}
+	if prev.Publisher != built.Publisher || prev.PublisherPostID != built.PublisherPostID ||
+		prev.Platform != built.Platform || prev.Title != built.Title ||
+		!equalTime(prev.PublishedAt, built.PublishedAt) || !equalTime(prev.MetricsLastUpdated, built.MetricsLastUpdated) {
+		return false
+	}
+	// Compare the payloads as they are stored, so a nil and an empty list match.
+	pv, perr := prev.PlatformAnalytics.Value()
+	bv, berr := built.PlatformAnalytics.Value()
+	return perr == nil && berr == nil && pv == bv
+}
+
+func equalTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
 // RecordCurrent stamps built against prev and writes it. On a change the
 // current row and its trend snapshot are written atomically, so a snapshot
 // failure can't leave the row advanced without its history point (dedup
@@ -39,6 +63,11 @@ func Stamp(prev, built *models.PostAnalytics, now time.Time) bool {
 // bumped. It reports whether the metrics changed.
 func RecordCurrent(ctx context.Context, repo repository.PostAnalyticsRepository, prev, built *models.PostAnalytics, now time.Time) (bool, error) {
 	if !Stamp(prev, built, now) {
+		// Most refreshes of a settled post change nothing but the check time;
+		// moving that alone avoids rewriting the row and its jsonb payload.
+		if sameStored(prev, built) {
+			return false, repo.TouchChecked(ctx, built.PostID, now)
+		}
 		return false, repo.Upsert(ctx, built)
 	}
 	id, err := models.NewID()

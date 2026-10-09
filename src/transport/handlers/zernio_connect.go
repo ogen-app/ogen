@@ -311,11 +311,12 @@ func (h *ZernioHandler) loadPendingForTenant(c *fiber.Ctx) (*models.ZernioConnec
 // account-connected event + usage) stays the sync/reconcile path's job — this
 // adds no duplicate write.
 func (h *ZernioHandler) finalizeConnect(ctx context.Context) {
-	h.integ.BumpFastUntil(time.Now().Add(fastPollWindow))
+	if tid, ok := tenantctx.From(ctx); ok {
+		h.integ.BumpFastUntil(tid, time.Now().Add(fastPollWindow))
+	}
 	if h.worker != nil {
 		h.worker.TriggerNow()
 	}
-	_ = ctx
 }
 
 // --- URL builders -----------------------------------------------------------

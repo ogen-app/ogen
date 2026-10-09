@@ -11,7 +11,12 @@ import (
 
 type fakeRepo struct {
 	repository.PostAnalyticsRepository
-	upserts, snapshots int
+	upserts, snapshots, touches int
+}
+
+func (f *fakeRepo) TouchChecked(context.Context, string, time.Time) error {
+	f.touches++
+	return nil
 }
 
 func (f *fakeRepo) Upsert(context.Context, *models.PostAnalytics) error {
@@ -51,8 +56,12 @@ func TestRecordCurrent(t *testing.T) {
 	prev := &models.PostAnalytics{Likes: 1}
 
 	changed, err := RecordCurrent(t.Context(), repo, prev, &models.PostAnalytics{Likes: 1}, now)
+	if err != nil || changed || repo.touches != 1 || repo.upserts != 0 || repo.snapshots != 0 {
+		t.Fatalf("unchanged, same stored row: changed=%v err=%v repo=%+v", changed, err, repo)
+	}
+	changed, err = RecordCurrent(t.Context(), repo, prev, &models.PostAnalytics{Likes: 1, Title: "renamed"}, now)
 	if err != nil || changed || repo.upserts != 1 || repo.snapshots != 0 {
-		t.Fatalf("unchanged: changed=%v err=%v repo=%+v", changed, err, repo)
+		t.Fatalf("unchanged metrics, new title: changed=%v err=%v repo=%+v", changed, err, repo)
 	}
 	changed, err = RecordCurrent(t.Context(), repo, prev, &models.PostAnalytics{Likes: 5}, now)
 	if err != nil || !changed || repo.upserts != 1 || repo.snapshots != 1 {

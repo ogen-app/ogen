@@ -148,7 +148,7 @@ func (d *deps) initMetering(context.Context) error {
 // startZernio starts the Zernio runtime. Ping, profile bootstrap and the sync
 // worker run in the background, so boot never blocks on Zernio.
 func (d *deps) startZernio(ctx context.Context) error {
-	d.zernio = initZernio(ctx, d.cfg, d.secretStore, d.r.settingRepo, d.r.socialAccountRepo, d.hub, d.usage.recorder)
+	d.zernio = initZernio(ctx, d.cfg, d.secretStore, d.r.settingRepo, d.r.socialAccountRepo, d.hub, d.usage.recorder, advisoryLock(d.db, zernioSyncLockKey))
 	d.shutdown.add(stageIntegrations, func() error {
 		d.zernio.shutdown()
 		return nil
