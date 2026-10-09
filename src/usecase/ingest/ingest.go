@@ -12,7 +12,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/uptrace/bun"
@@ -62,7 +61,7 @@ func Checksum(data []byte) string {
 }
 
 // Service creates assets. Files and Images are optional: nil Files disables
-// checksum dedupe, nil Images leaves mirrored image blobs out of ObjectKeys.
+// checksum dedupe, nil Images leaves mirrored image rows out of ObjectKeys.
 type Service struct {
 	DB     *bun.DB
 	Assets repository.AssetRepository
@@ -129,11 +128,10 @@ func (s *Service) FindByChecksum(ctx context.Context, checksum string) *models.A
 	return a
 }
 
-// ObjectKeys lists every stored object of an asset, captured before the row
-// is deleted (the cascade drops the file and image rows): the original and
-// thumbnail, mirrored images, and the deterministic normalized derivatives
-// (audio .opus, image .png) that have no row of their own — deleting a
-// missing one is a no-op for other asset types.
+// ObjectKeys lists the stored objects an asset's rows record, captured before
+// the row is deleted (the cascade drops the file and image rows): the
+// original, thumbnail and normalized derivative, and mirrored images. Objects
+// no row names live under ObjectPrefix.
 func (s *Service) ObjectKeys(ctx context.Context, assetID string) ([]string, error) {
 	var keys []string
 	if s.Files != nil {
@@ -143,6 +141,9 @@ func (s *Service) ObjectKeys(ctx context.Context, assetID string) ([]string, err
 			keys = appendNonEmpty(keys, f.S3Key)
 			if f.ThumbnailS3Key != nil {
 				keys = appendNonEmpty(keys, *f.ThumbnailS3Key)
+			}
+			if f.NormalizedS3Key != nil {
+				keys = appendNonEmpty(keys, *f.NormalizedS3Key)
 			}
 		case err != nil && !errors.Is(err, sql.ErrNoRows):
 			return nil, err
@@ -155,10 +156,31 @@ func (s *Service) ObjectKeys(ctx context.Context, assetID string) ([]string, err
 			}
 		}
 	}
-	return append(keys,
-		storage.TenantKey(ctx, fmt.Sprintf("assets/%s/normalized.opus", assetID)),
-		storage.TenantKey(ctx, fmt.Sprintf("assets/%s/normalized.png", assetID)),
-	), nil
+	return keys, nil
+}
+
+// ObjectPrefix is the storage folder an asset's objects are written under:
+// its original, thumbnail, normalized derivatives and mirrored images.
+func ObjectPrefix(ctx context.Context, assetID string) string {
+	return storage.TenantKey(ctx, "assets/"+assetID+"/")
+}
+
+// DeleteObjects removes every stored object of an asset: the keys its rows
+// record, then everything under its ObjectPrefix. The prefix catches objects
+// no row names, like the original of a PDF or document whose ingestion never
+// finished. Call it before the rows go; a storage error is returned so the
+// caller can keep the rows and retry.
+func (s *Service) DeleteObjects(ctx context.Context, store storage.Storage, assetID string) error {
+	keys, err := s.ObjectKeys(ctx, assetID)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if err := store.Delete(ctx, k); err != nil {
+			return err
+		}
+	}
+	return store.DeletePrefix(ctx, ObjectPrefix(ctx, assetID))
 }
 
 func appendNonEmpty(keys []string, k string) []string {

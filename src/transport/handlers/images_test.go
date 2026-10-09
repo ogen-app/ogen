@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,8 @@ type stubStorage struct {
 	// headSizeOverride, when > 0, makes Head report this size for any key —
 	// lets a test simulate an oversized object without materialising the bytes.
 	headSizeOverride int64
+	// deleteErr, when set, fails Delete and DeletePrefix.
+	deleteErr error
 }
 
 func (s *stubStorage) Upload(_ context.Context, key string, r io.Reader, _ int64, _ string) (string, error) {
@@ -56,9 +59,20 @@ func (s *stubStorage) Copy(_ context.Context, srcKey, dstKey string) error {
 }
 
 func (s *stubStorage) Delete(_ context.Context, key string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	if s.objects != nil {
 		delete(s.objects, key)
 	}
+	return nil
+}
+
+func (s *stubStorage) DeletePrefix(_ context.Context, prefix string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	maps.DeleteFunc(s.objects, func(k string, _ []byte) bool { return strings.HasPrefix(k, prefix) })
 	return nil
 }
 

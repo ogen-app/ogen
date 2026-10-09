@@ -48,7 +48,7 @@ const (
 	// audioPresignTTL bounds the presigned GET/PUT URLs handed to audio-service.
 	// Generous so a long per-segment transcription can't outlive its URL.
 	audioPresignTTL = time.Hour
-	// normalizedContentType is the MIME bound on the normalized.opus PUT.
+	// normalizedContentType is the MIME bound on the normalized .opus PUT.
 	normalizedContentType = "audio/ogg"
 	// defaultSegmentMaxMs / defaultSegmentOverlapMs back the segmentation when
 	// the deps leave them zero (mirrors the config defaults).
@@ -67,10 +67,12 @@ type audioTranscriber interface {
 
 // audioBlobStore is the storage surface audio ingestion needs: presigned GET
 // (source + normalized reads) and PUT (normalized write) so bytes never traverse
-// gRPC. s3Storage satisfies it.
+// gRPC, and Delete to drop the normalized derivative once a run completes.
+// s3Storage satisfies it.
 type audioBlobStore interface {
 	PresignedGetURL(ctx context.Context, key string, ttl time.Duration) (string, error)
 	PresignedPutURL(ctx context.Context, key, contentType string, ttl time.Duration) (string, error)
+	Delete(ctx context.Context, key string) error
 }
 
 type audioExtractionStore interface {
@@ -343,8 +345,9 @@ func (p *ProcessAudioProcessor) probeGateNormalize(ctx context.Context, in Proce
 	}
 
 	// Normalize to the canonical derivative (mono 16k opus), reused by every
-	// segment and evicted with the asset (D5).
-	normKey := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/normalized.opus", in.AssetID))
+	// segment and deleted once the run completes. The key is per run, so a
+	// reextract started mid-run never shares (and loses) its derivative.
+	normKey := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/normalized-%s.opus", in.AssetID, in.RunKey))
 	// Re-presign the source for the (separate) normalize call so a slow probe
 	// can't have expired it.
 	srcURL, err = p.Deps.Storage.PresignedGetURL(ctx, originalKey, audioPresignTTL)
@@ -663,10 +666,26 @@ func (p *ProcessAudioProcessor) complete(ctx context.Context, in ProcessAudioTas
 	if embedTokens > 0 {
 		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "audio_embed", llm.EmbedUsage{Tokens: embedTokens})
 	}
+	// A complete run is never resumed or retried (reextract normalizes afresh
+	// from the original), so its normalized derivative goes. The original is
+	// kept for playback and reextract.
+	normKey := ext.NormalizedS3Key
+	ext.NormalizedS3Key = nil
 	ext.Status = models.AudioExtractionStatusComplete
 	ext.FailureReason = ""
 	ext.FailureCode = ""
-	return p.Deps.Extractions.Update(ctx, ext)
+	if err := p.Deps.Extractions.Update(ctx, ext); err != nil {
+		ext.NormalizedS3Key = normKey
+		return err
+	}
+	if normKey != nil {
+		// Best-effort: a leftover derivative is removed with the asset.
+		if err := p.Deps.Storage.Delete(ctx, *normKey); err != nil {
+			slog.WarnContext(ctx, "delete normalized audio", logging.AttrComponent, "jobs.process_audio",
+				"asset_id", in.AssetID, "key", *normKey, logging.AttrError, err)
+		}
+	}
+	return nil
 }
 
 // terminalReject marks the extraction + asset failed with a tenant-visible

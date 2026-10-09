@@ -259,7 +259,9 @@ func (d *deps) publishers() []publishers.Publisher {
 }
 
 // deleteAttachmentBlobs removes a post's attachment objects from storage
-// before the post row is deleted; FK cascade removes the attachment rows.
+// before the post row is deleted; FK cascade removes the attachment rows. The
+// post's post-attachments/<id>/ folder goes too, which catches presigned
+// video uploads that were never finalized into a row.
 func deleteAttachmentBlobs(store storage.Storage, attachments repository.PostAttachmentRepository) func(ctx context.Context, postID string) error {
 	return func(ctx context.Context, postID string) error {
 		if store == nil {
@@ -277,6 +279,6 @@ func deleteAttachmentBlobs(store storage.Storage, attachments repository.PostAtt
 				return err
 			}
 		}
-		return nil
+		return store.DeletePrefix(ctx, storage.TenantKey(ctx, "post-attachments/"+postID+"/"))
 	}
 }

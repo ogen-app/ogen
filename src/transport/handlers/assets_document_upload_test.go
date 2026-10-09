@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -167,6 +168,41 @@ var _ = Describe("AssetsHandler document upload (CON-280)", Ordered, Serial, fun
 		Expect(res["status"]).To(Equal("failed"))
 		Expect(res["code"]).To(Equal(models.UploadCodeEmptyFile))
 		Expect(assetCount()).To(BeZero())
+	})
+
+	deleteAsset := func(id string) int {
+		GinkgoHelper()
+		req := httptest.NewRequest("DELETE", "/api/content-bank/assets/"+id, nil)
+		req.AddCookie(authCookie)
+		resp, err := app.Test(req)
+		Expect(err).NotTo(HaveOccurred())
+		return resp.StatusCode
+	}
+
+	It("deletes the original of a document whose ingestion never finished", func() {
+		// No asset_files row exists until process_document succeeds, so only
+		// the asset's folder names the original.
+		id := upload("Q3 plan.docx", "PK\x03\x04 fake docx bytes")["asset_id"].(string)
+		foreign := "t/other-tenant/assets/" + id + "/original.docx"
+		store.objects[foreign] = []byte("not ours")
+		Expect(store.objects).To(HaveLen(2))
+
+		Expect(deleteAsset(id)).To(Equal(fiber.StatusNoContent))
+		Expect(store.objects).To(HaveLen(1))
+		Expect(store.objects).To(HaveKey(foreign))
+		Expect(assetCount()).To(BeZero())
+	})
+
+	It("keeps the asset and returns 502 when storage cleanup fails", func() {
+		id := upload("Q3 plan.docx", "PK\x03\x04 fake docx bytes")["asset_id"].(string)
+		store.deleteErr = errors.New("r2 down")
+
+		Expect(deleteAsset(id)).To(Equal(fiber.StatusBadGateway))
+		Expect(assetCount()).To(Equal(1))
+
+		store.deleteErr = nil
+		Expect(deleteAsset(id)).To(Equal(fiber.StatusNoContent))
+		Expect(store.objects).To(BeEmpty())
 	})
 
 	It("fails fast with service_unavailable when document-service is unwired", func() {

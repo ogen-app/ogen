@@ -146,7 +146,7 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 					return err
 				}
 			}
-			return nil
+			return store.DeletePrefix(ctx, storage.TenantKey(ctx, "post-attachments/"+postID+"/"))
 		}
 		postsHandler := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{OnBeforeDelete: onBeforeDelete})
 		postsHandler.Register(app)
@@ -281,6 +281,28 @@ var _ = Describe("Post attachments — real S3 (MinIO)", Ordered, func() {
 		for _, k := range keys {
 			Expect(objectExists(tenantCtx(), raw, bucket, k)).To(BeFalse(), "object %s should be gone", k)
 		}
+	})
+
+	It("#3b DELETE post removes objects no attachment row names, and only its own", func() {
+		postID := createPost()
+		otherID := createPost()
+		ctx := tenantCtx()
+		// A presigned video upload that was never finalized has no row.
+		orphan := storage.TenantKey(ctx, "post-attachments/"+postID+"/unfinalized.mp4")
+		kept := storage.TenantKey(ctx, "post-attachments/"+otherID+"/kept.mp4")
+		for _, k := range []string{orphan, kept} {
+			_, err := store.Upload(ctx, k, bytes.NewReader([]byte("video")), 5, "video/mp4")
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		req := httptest.NewRequest("DELETE", "/api/posts/"+postID, nil)
+		req.AddCookie(authCookie)
+		resp, err := app.Test(req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(204))
+
+		Expect(objectExists(ctx, raw, bucket, orphan)).To(BeFalse())
+		Expect(objectExists(ctx, raw, bucket, kept)).To(BeTrue())
 	})
 
 	// ── Test #4: concurrent uploads to the same post race-free ─────────────
