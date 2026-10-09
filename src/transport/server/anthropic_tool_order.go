@@ -64,27 +64,38 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 		return t.base.RoundTrip(req)
 	}
 
-	out, changed := body, false
-	if sorted, n, ok := sortAnthropicToolsByName(out); ok {
-		out, changed = sorted, true
+	// The body is parsed once into its top-level fields; every transform edits
+	// that map, and it is marshalled once, only if something changed. Bodies
+	// carry the whole conversation, so each extra parse was a full pass.
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return t.base.RoundTrip(req)
+	}
+	changed := false
+	if n, ok := sortTopTools(top); ok {
+		changed = true
 		slog.Debug("anthropic tools reordered for cache stability",
 			logging.AttrComponent, "anthropic.http", "tools", n)
 	}
 	// Prompt caching is scoped to the one model configured for it, so other
 	// flows never pay the cache-write premium on a prefix they won't reuse.
-	if t.cachePrefixModel != "" && anthropicRequestModel(out) == t.cachePrefixModel {
-		if cached, ok := addAnthropicSystemCacheControl(out); ok {
-			out, changed = cached, true
+	if t.cachePrefixModel != "" && topModel(top) == t.cachePrefixModel {
+		if markTopSystem(top) {
+			changed = true
 			slog.Debug("anthropic system cache breakpoint added",
 				logging.AttrComponent, "anthropic.http")
 		}
-		if cached, ok := addAnthropicHistoryCacheControl(out); ok {
-			out, changed = cached, true
+		if markTopHistory(top) {
+			changed = true
 			slog.Debug("anthropic history cache breakpoint added",
 				logging.AttrComponent, "anthropic.http")
 		}
 	}
 	if !changed {
+		return t.base.RoundTrip(req)
+	}
+	out, err := json.Marshal(top)
+	if err != nil {
 		return t.base.RoundTrip(req)
 	}
 
@@ -95,14 +106,26 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 	return t.base.RoundTrip(clone)
 }
 
-// anthropicRequestModel returns the top-level `model` of a /v1/messages body,
-// or "" when it can't be read.
-func anthropicRequestModel(body []byte) string {
-	var t struct {
-		Model string `json:"model"`
+// topModel returns a /v1/messages body's `model`, or "" when it can't be read.
+func topModel(top map[string]json.RawMessage) string {
+	var model string
+	_ = json.Unmarshal(top["model"], &model)
+	return model
+}
+
+// rewriteTop parses body, applies edit to its top-level fields and returns the
+// re-encoded body when edit reports a change; otherwise body itself. The
+// transport parses once and runs several edits; this is the one-edit form.
+func rewriteTop(body []byte, edit func(map[string]json.RawMessage) bool) ([]byte, bool) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil || !edit(top) {
+		return body, false
 	}
-	_ = json.Unmarshal(body, &t)
-	return t.Model
+	out, err := json.Marshal(top)
+	if err != nil {
+		return body, false
+	}
+	return out, true
 }
 
 // addAnthropicSystemCacheControl puts one ephemeral cache_control breakpoint on
@@ -113,20 +136,21 @@ func anthropicRequestModel(body []byte) string {
 // field is preserved as raw bytes, so the transform is lossless. changed is
 // false when there is no system, it is empty, or a breakpoint already exists.
 func addAnthropicSystemCacheControl(body []byte) (out []byte, changed bool) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(body, &top); err != nil {
-		return body, false
-	}
+	return rewriteTop(body, markTopSystem)
+}
+
+// markTopSystem is addAnthropicSystemCacheControl's edit on parsed fields.
+func markTopSystem(top map[string]json.RawMessage) bool {
 	raw, ok := top["system"]
 	if !ok {
-		return body, false
+		return false
 	}
 
 	var asString string
 	if err := json.Unmarshal(raw, &asString); err == nil {
 		// String form: promote to a single cached text block.
 		if asString == "" {
-			return body, false
+			return false
 		}
 		block := map[string]any{
 			"type":          "text",
@@ -135,40 +159,36 @@ func addAnthropicSystemCacheControl(body []byte) (out []byte, changed bool) {
 		}
 		newSys, err := json.Marshal([]any{block})
 		if err != nil {
-			return body, false
+			return false
 		}
 		top["system"] = newSys
-	} else {
-		// Array form: attach cache_control to the last block.
-		var blocks []json.RawMessage
-		if err := json.Unmarshal(raw, &blocks); err != nil || len(blocks) == 0 {
-			return body, false
-		}
-		var last map[string]json.RawMessage
-		if err := json.Unmarshal(blocks[len(blocks)-1], &last); err != nil {
-			return body, false
-		}
-		if _, exists := last["cache_control"]; exists {
-			return body, false // already marked; nothing to do
-		}
-		last["cache_control"] = json.RawMessage(`{"type":"ephemeral"}`)
-		nb, err := json.Marshal(last)
-		if err != nil {
-			return body, false
-		}
-		blocks[len(blocks)-1] = nb
-		newSys, err := json.Marshal(blocks)
-		if err != nil {
-			return body, false
-		}
-		top["system"] = newSys
+		return true
 	}
 
-	rewritten, err := json.Marshal(top)
-	if err != nil {
-		return body, false
+	// Array form: attach cache_control to the last block.
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil || len(blocks) == 0 {
+		return false
 	}
-	return rewritten, true
+	var last map[string]json.RawMessage
+	if err := json.Unmarshal(blocks[len(blocks)-1], &last); err != nil {
+		return false
+	}
+	if _, exists := last["cache_control"]; exists {
+		return false // already marked; nothing to do
+	}
+	last["cache_control"] = json.RawMessage(`{"type":"ephemeral"}`)
+	nb, err := json.Marshal(last)
+	if err != nil {
+		return false
+	}
+	blocks[len(blocks)-1] = nb
+	newSys, err := json.Marshal(blocks)
+	if err != nil {
+		return false
+	}
+	top["system"] = newSys
+	return true
 }
 
 // addAnthropicHistoryCacheControl puts an ephemeral cache_control breakpoint on
@@ -180,38 +200,35 @@ func addAnthropicSystemCacheControl(body []byte) (out []byte, changed bool) {
 // false when there are no messages, the last one is empty, or its last block
 // already has a breakpoint or cannot carry one (thinking blocks).
 func addAnthropicHistoryCacheControl(body []byte) (out []byte, changed bool) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(body, &top); err != nil {
-		return body, false
-	}
+	return rewriteTop(body, markTopHistory)
+}
+
+// markTopHistory is addAnthropicHistoryCacheControl's edit on parsed fields.
+func markTopHistory(top map[string]json.RawMessage) bool {
 	var msgs []json.RawMessage
 	if err := json.Unmarshal(top["messages"], &msgs); err != nil || len(msgs) == 0 {
-		return body, false
+		return false
 	}
 	var last map[string]json.RawMessage
 	if err := json.Unmarshal(msgs[len(msgs)-1], &last); err != nil {
-		return body, false
+		return false
 	}
 	content, ok := cacheMarkedContent(last["content"])
 	if !ok {
-		return body, false
+		return false
 	}
 	last["content"] = content
 	nm, err := json.Marshal(last)
 	if err != nil {
-		return body, false
+		return false
 	}
 	msgs[len(msgs)-1] = nm
 	newMsgs, err := json.Marshal(msgs)
 	if err != nil {
-		return body, false
+		return false
 	}
 	top["messages"] = newMsgs
-	rewritten, err := json.Marshal(top)
-	if err != nil {
-		return body, false
-	}
-	return rewritten, true
+	return true
 }
 
 // cacheMarkedContent returns a message's content with cache_control on its last
@@ -251,33 +268,50 @@ func cacheMarkedContent(raw json.RawMessage) (json.RawMessage, bool) {
 // sorted by tool name. Only the tools array is reordered; every other top-level
 // field is preserved as raw bytes, so the transform is lossless and
 // deterministic across runs. changed is false when there is nothing to reorder
-// (no tools, <2 tools, or a parse failure) so the original body is sent as-is.
+// (no tools, <2 tools, already in order, or a parse failure) so the original
+// body is sent as-is.
 func sortAnthropicToolsByName(body []byte) (out []byte, n int, changed bool) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(body, &top); err != nil {
-		return body, 0, false
-	}
+	out, changed = rewriteTop(body, func(top map[string]json.RawMessage) bool {
+		var ok bool
+		n, ok = sortTopTools(top)
+		return ok
+	})
+	return out, n, changed
+}
+
+// sortTopTools sorts the parsed `tools` array by name and reports whether it
+// changed the order. Each tool's name is read once, not on every comparison.
+func sortTopTools(top map[string]json.RawMessage) (n int, changed bool) {
 	raw, ok := top["tools"]
 	if !ok {
-		return body, 0, false
+		return 0, false
 	}
 	var tools []json.RawMessage
 	if err := json.Unmarshal(raw, &tools); err != nil || len(tools) < 2 {
-		return body, len(tools), false
+		return len(tools), false
 	}
-	slices.SortStableFunc(tools, func(a, b json.RawMessage) int {
-		return cmp.Compare(anthropicToolName(a), anthropicToolName(b))
-	})
+	type named struct {
+		name string
+		raw  json.RawMessage
+	}
+	byName := make([]named, len(tools))
+	for i, t := range tools {
+		byName[i] = named{anthropicToolName(t), t}
+	}
+	order := func(a, b named) int { return cmp.Compare(a.name, b.name) }
+	if slices.IsSortedFunc(byName, order) {
+		return len(tools), false
+	}
+	slices.SortStableFunc(byName, order)
+	for i := range byName {
+		tools[i] = byName[i].raw
+	}
 	newTools, err := json.Marshal(tools)
 	if err != nil {
-		return body, len(tools), false
+		return len(tools), false
 	}
 	top["tools"] = newTools
-	rewritten, err := json.Marshal(top)
-	if err != nil {
-		return body, len(tools), false
-	}
-	return rewritten, len(tools), true
+	return len(tools), true
 }
 
 func anthropicToolName(raw json.RawMessage) string {

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -334,6 +335,47 @@ var (
 // best-effort: a failed image keeps its original external link and increments
 // the returned failure count (which flips the asset to "partial"). With no
 // storage configured it is a no-op that leaves the Markdown unchanged.
+// imageMirrorParallelism caps how many images one URL asset fetches and
+// re-hosts at once.
+const imageMirrorParallelism = 4
+
+// mirrorImage fetches one image and re-hosts it under storage key slot pos.
+// ok is false on a failure; a nil img with ok true is a deliberate skip.
+func (p *ProcessURLProcessor) mirrorImage(ctx context.Context, assetID string, pos int, url, alt string) (img *models.AssetImage, publicURL string, ok bool) {
+	data, ct, err := p.fetcher().Fetch(ctx, url)
+	if err != nil || !strings.HasPrefix(ct, "image/") {
+		return nil, "", false
+	}
+	// SVGs can carry embedded scripts, so re-hosting an attacker-supplied one
+	// under our storage origin is a stored-XSS vector. Never mirror them — the
+	// original external link is kept (inert when the Markdown renders it as
+	// an <img>). Not a failure: nothing broke, we deliberately skip it.
+	if isSVGContentType(ct) {
+		return nil, "", true
+	}
+	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/images/%d%s", assetID, pos, extForImage(ct, url)))
+	publicURL, err = p.Deps.Storage.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
+	if err != nil {
+		return nil, "", false
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return nil, "", false
+	}
+	img = &models.AssetImage{
+		ID:        id,
+		AssetID:   assetID,
+		SourceURL: url,
+		S3Key:     key,
+		MimeType:  ct,
+		SizeBytes: int64(len(data)),
+	}
+	if alt != "" {
+		img.Alt = &alt
+	}
+	return img, publicURL, true
+}
+
 func (p *ProcessURLProcessor) mirrorImages(ctx context.Context, assetID, markdown string) (string, []models.AssetImage, int) {
 	if p.Deps.Storage == nil {
 		return markdown, nil, 0
@@ -361,52 +403,43 @@ func (p *ProcessURLProcessor) mirrorImages(ctx context.Context, assetID, markdow
 		refs = refs[:maxImagesPerAsset]
 	}
 
+	// Images are fetched and re-hosted a few at a time; each result lands in
+	// its ref's slot, so the order (and the idx numbering below) follows the
+	// page regardless of which download finishes first.
+	type mirrored struct {
+		img       *models.AssetImage
+		publicURL string
+		failed    bool
+	}
+	results := make([]mirrored, len(refs))
+	sem := make(chan struct{}, imageMirrorParallelism)
+	var wg sync.WaitGroup
+	for i, r := range refs {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			img, publicURL, ok := p.mirrorImage(ctx, assetID, i, r.url, r.alt)
+			results[i] = mirrored{img: img, publicURL: publicURL, failed: !ok}
+		})
+	}
+	wg.Wait()
+
 	var (
 		images       []models.AssetImage
 		replacements = make(map[string]string)
 		failed       int
-		idx          int
 	)
-	for _, r := range refs {
-		data, ct, err := p.fetcher().Fetch(ctx, r.url)
-		if err != nil || !strings.HasPrefix(ct, "image/") {
+	for i, res := range results {
+		if res.failed {
 			failed++
 			continue
 		}
-		// SVGs can carry embedded scripts, so re-hosting an attacker-supplied one
-		// under our storage origin is a stored-XSS vector. Never mirror them — the
-		// original external link is kept (inert when the Markdown renders it as
-		// an <img>). Not a failure: nothing broke, we deliberately skip it.
-		if isSVGContentType(ct) {
-			continue
+		if res.img == nil {
+			continue // deliberately skipped (SVG)
 		}
-		key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/images/%d%s", assetID, idx, extForImage(ct, r.url)))
-		publicURL, err := p.Deps.Storage.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
-		if err != nil {
-			failed++
-			continue
-		}
-		id, err := models.NewID()
-		if err != nil {
-			failed++
-			continue
-		}
-		img := models.AssetImage{
-			ID:        id,
-			AssetID:   assetID,
-			Idx:       idx,
-			SourceURL: r.url,
-			S3Key:     key,
-			MimeType:  ct,
-			SizeBytes: int64(len(data)),
-		}
-		if r.alt != "" {
-			alt := r.alt
-			img.Alt = &alt
-		}
-		images = append(images, img)
-		replacements[r.url] = publicURL
-		idx++
+		res.img.Idx = len(images)
+		images = append(images, *res.img)
+		replacements[refs[i].url] = res.publicURL
 	}
 
 	// Apply replacements longest-key-first (deterministic) so a source URL that

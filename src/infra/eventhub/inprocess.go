@@ -15,8 +15,10 @@ import (
 // by any number of publishers and subscribers.
 func New(cfg Config) Hub {
 	return &inProcHub{
-		cfg:  cfg.defaulted(),
-		subs: make(map[uint64]*subscriber),
+		cfg:      cfg.defaulted(),
+		subs:     make(map[uint64]*subscriber),
+		byTenant: make(map[string]map[uint64]*subscriber),
+		byUser:   make(map[string]map[uint64]*subscriber),
 	}
 }
 
@@ -47,9 +49,13 @@ func (s *subscriber) matches(ev Event) bool {
 type inProcHub struct {
 	cfg Config
 
-	mu     sync.RWMutex
-	subs   map[uint64]*subscriber
-	nextID uint64 // monotonic; protected by mu
+	mu   sync.RWMutex
+	subs map[uint64]*subscriber
+	// byTenant and byUser index subs, so a publish scans only the subscribers
+	// that can match it and the per-user cap counts only that user's.
+	byTenant map[string]map[uint64]*subscriber
+	byUser   map[string]map[uint64]*subscriber
+	nextID   uint64 // monotonic; protected by mu
 	// active stays in sync with len(subs) but is exposed atomically for
 	// observability/log lines without taking the mutex.
 	active atomic.Int64
@@ -69,10 +75,11 @@ func (h *inProcHub) Publish(ctx context.Context, ev Event) error {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now().UTC()
 	}
+	ev.encoded = &encodedEvent{}
 
 	h.mu.RLock()
 	var toRemove []uint64
-	for id, sub := range h.subs {
+	for id, sub := range h.candidatesLocked(ev) {
 		if !sub.matches(ev) {
 			continue
 		}
@@ -90,6 +97,20 @@ func (h *inProcHub) Publish(ctx context.Context, ev Event) error {
 		h.disconnect(toRemove, "backpressure")
 	}
 	return nil
+}
+
+// candidatesLocked returns the subscribers that could match ev: a
+// tenant-tagged event only reaches its tenant's subscribers, and a user-scoped
+// one only that user's. The caller holds h.mu.
+func (h *inProcHub) candidatesLocked(ev Event) map[uint64]*subscriber {
+	switch {
+	case ev.TenantID != "":
+		return h.byTenant[ev.TenantID]
+	case ev.UserID != "":
+		return h.byUser[ev.UserID]
+	default:
+		return h.subs
+	}
 }
 
 // disconnect removes the given subscriber IDs from the map and closes
@@ -115,31 +136,41 @@ func (h *inProcHub) removeLocked(id uint64, reason string) {
 		return
 	}
 	delete(h.subs, id)
+	removeIndexed(h.byTenant, sub.tenantID, id)
+	removeIndexed(h.byUser, sub.userID, id)
 	close(sub.ch)
 	h.active.Add(-1)
 	slog.Info("subscriber disconnected", logging.AttrComponent, "eventhub", "id", sub.id, "user", sub.userID, "reason", reason, "topics", sub.topics)
 }
 
+func addIndexed(index map[string]map[uint64]*subscriber, key string, sub *subscriber) {
+	m := index[key]
+	if m == nil {
+		m = make(map[uint64]*subscriber)
+		index[key] = m
+	}
+	m[sub.id] = sub
+}
+
+func removeIndexed(index map[string]map[uint64]*subscriber, key string, id uint64) {
+	m := index[key]
+	delete(m, id)
+	if len(m) == 0 {
+		delete(index, key)
+	}
+}
+
 // userCountLocked returns how many subscribers the user currently holds.
 // The caller must hold h.mu.
 func (h *inProcHub) userCountLocked(userID string) int {
-	count := 0
-	for _, s := range h.subs {
-		if s.userID == userID {
-			count++
-		}
-	}
-	return count
+	return len(h.byUser[userID])
 }
 
 // oldestForUserLocked returns the id of the user's longest-lived subscriber
 // (the smallest id — nextID is monotonic, so lower means earlier). ok is false
 // when the user has none. The caller must hold h.mu.
 func (h *inProcHub) oldestForUserLocked(userID string) (id uint64, ok bool) {
-	for sid, s := range h.subs {
-		if s.userID != userID {
-			continue
-		}
+	for sid := range h.byUser[userID] {
 		if !ok || sid < id {
 			id, ok = sid, true
 		}
@@ -188,6 +219,8 @@ func (h *inProcHub) Subscribe(_ context.Context, opts SubscribeOpts) (<-chan Eve
 		ch:       make(chan Event, bufferSize),
 	}
 	h.subs[id] = sub
+	addIndexed(h.byTenant, sub.tenantID, sub)
+	addIndexed(h.byUser, sub.userID, sub)
 	h.active.Add(1)
 	h.mu.Unlock()
 

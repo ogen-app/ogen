@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -163,7 +162,7 @@ func parseTopicsParam(raw string) ([]string, error) {
 // single `data:` line — the events the Hub carries are flat enough that
 // multi-line data isn't needed today.
 func writeSSEEvent(w *bufio.Writer, ev eventhub.Event) error {
-	body, err := json.Marshal(ev)
+	body, err := ev.JSON()
 	if err != nil {
 		return err
 	}

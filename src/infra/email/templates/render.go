@@ -5,8 +5,10 @@
 package templates
 
 import (
+	"crypto/sha256"
 	htmltemplate "html/template"
 	"strings"
+	"sync"
 	texttemplate "text/template"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -50,7 +52,9 @@ func Render(t *models.EmailTemplate, data any) (Rendered, error) {
 }
 
 func renderHTML(name, src string, data any) (string, error) {
-	tmpl, err := htmltemplate.New(name).Delims(LeftDelim, RightDelim).Parse(src)
+	tmpl, err := parsed(htmlTemplates, name, src, func() (*htmltemplate.Template, error) {
+		return htmltemplate.New(name).Delims(LeftDelim, RightDelim).Parse(src)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -62,7 +66,9 @@ func renderHTML(name, src string, data any) (string, error) {
 }
 
 func renderText(name, src string, data any) (string, error) {
-	tmpl, err := texttemplate.New(name).Delims(LeftDelim, RightDelim).Parse(src)
+	tmpl, err := parsed(textTemplates, name, src, func() (*texttemplate.Template, error) {
+		return texttemplate.New(name).Delims(LeftDelim, RightDelim).Parse(src)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -71,4 +77,47 @@ func renderText(name, src string, data any) (string, error) {
 		return "", err
 	}
 	return b.String(), nil
+}
+
+// Parsed templates are cached by name and source, so a send reuses the parse
+// of the same stored body instead of re-parsing the full compiled HTML. An
+// edited body has new source and parses fresh. Parsed templates are safe to
+// execute concurrently.
+var (
+	htmlTemplates = newTemplateCache[*htmltemplate.Template]()
+	textTemplates = newTemplateCache[*texttemplate.Template]()
+)
+
+// templateCacheMax bounds each cache; past it the cache starts over, which
+// only costs a re-parse.
+const templateCacheMax = 256
+
+type templateCache[T any] struct {
+	mu sync.Mutex
+	m  map[[sha256.Size]byte]T
+}
+
+func newTemplateCache[T any]() *templateCache[T] {
+	return &templateCache[T]{m: map[[sha256.Size]byte]T{}}
+}
+
+func parsed[T any](c *templateCache[T], name, src string, parse func() (T, error)) (T, error) {
+	key := sha256.Sum256([]byte(name + "\x00" + src))
+	c.mu.Lock()
+	t, ok := c.m[key]
+	c.mu.Unlock()
+	if ok {
+		return t, nil
+	}
+	t, err := parse()
+	if err != nil {
+		return t, err
+	}
+	c.mu.Lock()
+	if len(c.m) >= templateCacheMax {
+		clear(c.m)
+	}
+	c.m[key] = t
+	c.mu.Unlock()
+	return t, nil
 }

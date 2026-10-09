@@ -139,18 +139,13 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 	}
 	jobs.ZernioPollSucceeded.Add(1)
 
-	// Persist Zernio's view of status so subsequent polls / debugging
-	// can see what we last saw. Always write — cheap and useful.
+	// Persist Zernio's view of status so subsequent polls / debugging can see
+	// what we last saw.
+	statusChanged := post.PublisherStatus != string(job.Status)
 	post.PublisherStatus = string(job.Status)
 	post.UpdatedAt = time.Now().UTC()
 	if !job.Status.IsTerminal() {
-		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held, "publisher_status", "updated_at")
-		if err == nil && !ok {
-			return p.movedOn(ctx, post)
-		}
-		// Not terminal yet — snooze this same job per the cadence rule.
-		// JobSnooze reschedules without consuming a retry attempt.
-		return river.JobSnooze(p.intervalFor(post))
+		return p.snoozeNonTerminal(ctx, post, held, statusChanged)
 	}
 
 	// Terminal state: published / failed / partial. Map to Ogen status
@@ -272,6 +267,22 @@ func (p *PollZernioStatusProcessor) scheduleFirstComment(ctx context.Context, po
 // movedOn ends a poll whose write found the post no longer scheduled under
 // this submission: it was cancelled, deleted, or another poll already landed
 // the outcome. Writing anyway would restore a stale copy of the post.
+// snoozeNonTerminal handles a poll that found the Zernio post not yet
+// terminal: it records the new publisher status only when it moved (a
+// scheduled post is polled every 30-60s until it publishes, and rewriting an
+// unchanged status touched the row and its updated_at every poll), then
+// snoozes this same job per the cadence rule. JobSnooze reschedules without
+// consuming a retry attempt.
+func (p *PollZernioStatusProcessor) snoozeNonTerminal(ctx context.Context, post *models.Post, held string, statusChanged bool) error {
+	if statusChanged {
+		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held, "publisher_status", "updated_at")
+		if err == nil && !ok {
+			return p.movedOn(ctx, post)
+		}
+	}
+	return river.JobSnooze(p.intervalFor(post))
+}
+
 func (p *PollZernioStatusProcessor) movedOn(ctx context.Context, post *models.Post) error {
 	appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, models.PostStatusScheduled, models.PostStatusScheduled,
 		"poll exited: post moved on while polling", `{"reason":"status_changed"}`)

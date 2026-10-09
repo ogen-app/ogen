@@ -265,20 +265,35 @@ func ensureExtractionRun[T any](ctx context.Context, store extractionRunStore[T]
 	return ext, nil
 }
 
-// downloadOriginal re-reads the original the upload handler stored before
-// enqueue; what names it in the read error. Every failure is transient.
-func downloadOriginal(ctx context.Context, store blobStore, op, assetID, key, what string) ([]byte, error) {
+// openOriginal opens the original the upload handler stored before enqueue,
+// to stream it to the parsing service rather than hold the whole file in
+// memory. The caller closes it; N reports the bytes read so far, which is the
+// file's size once the parser has consumed it. Every failure — opening, or a
+// read error surfacing through the parser — is transient.
+func openOriginal(ctx context.Context, store blobStore, op, assetID, key string) (*originalReader, error) {
 	rc, err := store.Download(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: download %s: %w", op, assetID, key, err)
 	}
-	data, err := io.ReadAll(rc)
-	_ = rc.Close()
-	if err != nil {
-		return nil, fmt.Errorf("%s %s: read %s: %w", op, assetID, what, err)
-	}
-	return data, nil
+	return &originalReader{rc: rc}, nil
 }
+
+// originalReader is an io.ReadCloser that counts what it reads.
+type originalReader struct {
+	rc io.ReadCloser
+	n  int
+}
+
+func (r *originalReader) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	r.n += n
+	return n, err
+}
+
+func (r *originalReader) Close() error { return r.rc.Close() }
+
+// N is the number of bytes read so far.
+func (r *originalReader) N() int { return r.n }
 
 // positiveIntPtr returns &n for n > 0 and nil otherwise, for optional 1-based
 // positions where zero means unknown.

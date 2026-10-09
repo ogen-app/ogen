@@ -73,16 +73,15 @@ var postLogActivityMap = map[models.PostLogEventType]struct{ category, typ strin
 // It maps the meaningful event types onto the live activity taxonomy
 // (see postLogActivityMap) and skips operational noise.
 //
-// It is idempotent and restart-safe without rescanning history: it only reads
-// post_logs at/after a watermark — the newest already-migrated event_timestamp,
-// derived from the migrated rows' occurred_at (so the watermark is persisted
-// with the data itself and advances automatically as rows insert) — and dedups
-// ties at the exact watermark via a seen-map. Each migrated row's id is the
-// source post_log id under postLogBackfillPrefix. So a re-run (or a resumed
-// partial run) neither rescans old rows, duplicates rows, nor double-counts
-// against the live instrumentation. The read is cross-tenant (each row carries
-// its tenant_id, preserved on insert under a system context). Returns the number
-// of rows inserted.
+// It runs once. A completed run records postLogBackfillDoneKey and later boots
+// return at once: from the boot that runs it onwards, every transition is
+// recorded live, so re-running at each boot would only re-migrate the post_logs
+// written since the previous boot, which the live path already recorded under
+// its own ids. The whole migration is one transaction, so a failed run leaves
+// nothing and the next boot retries it. Each migrated row's id is the source
+// post_log id under postLogBackfillPrefix. The read is cross-tenant (each row
+// carries its tenant_id, preserved on insert under a system context). Returns
+// the number of rows inserted.
 //
 // The upper bound `before` excludes rows at/after it. The backfill runs in a
 // background goroutine at boot, concurrent with live serving, and the
@@ -96,6 +95,47 @@ func BackfillPostLogsToActivity(ctx context.Context, mainDB, analyticsDB *bun.DB
 	if mainDB == nil || analyticsDB == nil {
 		return 0, nil
 	}
+	markerCtx := tenantctx.With(ctx, models.DefaultTenantID)
+	var done []string
+	if err := mainDB.NewSelect().Model((*models.Setting)(nil)).
+		Column("st.key").
+		Where("st.key = ?", postLogBackfillDoneKey).
+		Limit(1).
+		Scan(markerCtx, &done); err != nil {
+		return 0, err
+	}
+	if len(done) > 0 {
+		return 0, nil
+	}
+	// A deployment that ran the migration on earlier boots, before the marker
+	// existed, already holds migrated rows: re-running it now would only add
+	// the duplicates described above, so it is just marked done.
+	var migrated []string
+	if err := analyticsDB.NewRaw(
+		`SELECT id FROM tenant_activity_events WHERE id LIKE ? LIMIT 1`, postLogBackfillPrefix+`%`,
+	).Scan(ctx, &migrated); err != nil {
+		return 0, err
+	}
+	n := 0
+	if len(migrated) == 0 {
+		var err error
+		if n, err = backfillPostLogs(ctx, mainDB, analyticsDB, before); err != nil {
+			return n, err
+		}
+	}
+	_, err := mainDB.NewInsert().
+		Model(&models.Setting{Key: postLogBackfillDoneKey, Value: before.UTC().Format(time.RFC3339)}).
+		On("CONFLICT (tenant_id, key) DO UPDATE").
+		Set("value = EXCLUDED.value").
+		Exec(markerCtx)
+	return n, err
+}
+
+// postLogBackfillDoneKey is the default tenant's setting that marks the
+// post_logs → activity migration complete; its value is the bound it ran to.
+const postLogBackfillDoneKey = "activity.post_logs_backfilled_until"
+
+func backfillPostLogs(ctx context.Context, mainDB, analyticsDB *bun.DB, before time.Time) (int, error) {
 
 	type logRow struct {
 		ID             string                  `bun:"id"`
@@ -110,58 +150,37 @@ func BackfillPostLogsToActivity(ctx context.Context, mainDB, analyticsDB *bun.DB
 		Summary        string                  `bun:"summary"`
 	}
 
-	// Watermark: the newest already-migrated post_log timestamp (occurred_at on a
-	// migrated row IS its source event_timestamp). Only rows at/after it need
-	// reconsidering; everything older was migrated on an earlier boot. COALESCE
-	// handles the first run (nothing migrated yet ⇒ epoch ⇒ scan everything).
-	var watermark time.Time
-	if err := analyticsDB.NewRaw(
-		`SELECT COALESCE(MAX(occurred_at), 'epoch'::timestamptz) FROM tenant_activity_events WHERE id LIKE ?`,
-		postLogBackfillPrefix+`%`,
-	).Scan(ctx, &watermark); err != nil {
-		return 0, err
-	}
-
-	// Load only rows in [watermark, before). `>=` (not `>`) re-surfaces ties at
-	// the exact watermark timestamp, which the seen-map below dedups; `< before`
-	// excludes anything created at/after this process started serving, so a live
-	// write can never race into the backfill's window.
+	// Only called on a database with nothing migrated yet, so every row before
+	// the bound is read. `< before` excludes anything created at/after this
+	// process started serving, so a live write can never race into the window.
 	var logs []logRow
 	if err := mainDB.NewRaw(`
 		SELECT id, tenant_id, post_id, event_timestamp, event_type, actor,
 		       from_status, to_status, payload, summary
 		FROM post_logs
-		WHERE event_timestamp >= ? AND event_timestamp < ?
+		WHERE event_timestamp < ?
 		ORDER BY event_timestamp
-	`, watermark, before).Scan(ctx, &logs); err != nil {
+	`, before).Scan(ctx, &logs); err != nil {
 		return 0, err
 	}
 	if len(logs) == 0 {
 		return 0, nil
 	}
 
-	// Idempotency at the boundary: preload the ids already migrated AT/AFTER the
-	// watermark — the only ones the windowed query can re-surface — so a row
-	// sharing the watermark timestamp is skipped, not re-inserted.
-	var migratedIDs []string
-	if err := analyticsDB.NewRaw(
-		`SELECT id FROM tenant_activity_events WHERE id LIKE ? AND occurred_at >= ?`,
-		postLogBackfillPrefix+`%`, watermark,
-	).Scan(ctx, &migratedIDs); err != nil {
+	// One transaction for the whole migration: the marker treats any migrated
+	// row as a finished migration, so a run that fails partway must leave none.
+	sysCtx := tenantctx.WithSystem(ctx)
+	tx, err := analyticsDB.BeginTx(sysCtx, nil)
+	if err != nil {
 		return 0, err
 	}
-	seen := make(map[string]bool, len(migratedIDs))
-	for _, id := range migratedIDs {
-		seen[id] = true
-	}
-
-	sysCtx := tenantctx.WithSystem(ctx)
+	defer func() { _ = tx.Rollback() }()
 	batch := make([]*models.ActivityEvent, 0, 500)
 	flush := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		if _, err := analyticsDB.NewInsert().Model(&batch).Exec(sysCtx); err != nil {
+		if _, err := tx.NewInsert().Model(&batch).Exec(sysCtx); err != nil {
 			return err
 		}
 		batch = batch[:0]
@@ -176,10 +195,6 @@ func BackfillPostLogsToActivity(ctx context.Context, mainDB, analyticsDB *bun.DB
 			continue // operational noise — not migrated
 		}
 		id := postLogBackfillPrefix + lr.ID
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
 
 		ev := &models.ActivityEvent{
 			ID:         id,
@@ -203,12 +218,15 @@ func BackfillPostLogsToActivity(ctx context.Context, mainDB, analyticsDB *bun.DB
 		inserted++
 		if len(batch) >= 500 {
 			if err := flush(); err != nil {
-				return inserted - len(batch), err
+				return 0, err
 			}
 		}
 	}
 	if err := flush(); err != nil {
-		return inserted - len(batch), err
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return inserted, nil
 }

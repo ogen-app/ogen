@@ -53,6 +53,7 @@ func (stubSessionRepo) CreateForCredential(context.Context, *models.Session, str
 func (stubSessionRepo) DeleteAllForAccount(context.Context, bun.IDB, string, string) (int, error) {
 	return 0, nil
 }
+func (stubSessionRepo) DeleteExpiredBefore(context.Context, time.Time) (int, error) { return 0, nil }
 
 // captureHandler records the slog.Records it receives so a test can assert on
 // the correlation attributes the ContextHandler attached from the log call's

@@ -97,6 +97,7 @@ func queueDeps(d *deps) queues.Deps {
 		ConnectSessionRepo:    r.zernioConnectSessionRepo,
 		PluginPairingRepo:     r.pluginPairingRepo,
 		KnownDeviceRepo:       r.knownDeviceRepo,
+		SessionRepo:           r.sessionRepo,
 		LoginAlertTokenRepo:   r.loginAlertTokenRepo,
 		Tenants:               r.tenantRepo,
 		Users:                 r.userRepo,

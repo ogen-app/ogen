@@ -30,7 +30,9 @@ package eventhub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -67,6 +69,28 @@ type Event struct {
 	// derives it from the context's tenant when left empty, so most publishers
 	// need not set it explicitly.
 	TenantID string `json:"-"`
+
+	// encoded is shared by every subscriber's copy of one published event, so
+	// a tenant-wide event is JSON-encoded once, not once per open stream.
+	encoded *encodedEvent
+}
+
+type encodedEvent struct {
+	once sync.Once
+	body []byte
+	err  error
+}
+
+// JSON returns the event's JSON encoding. For a published event it is
+// computed once and shared by every subscriber.
+func (e Event) JSON() ([]byte, error) {
+	if e.encoded == nil {
+		return json.Marshal(e)
+	}
+	e.encoded.once.Do(func() {
+		e.encoded.body, e.encoded.err = json.Marshal(e)
+	})
+	return e.encoded.body, e.encoded.err
 }
 
 // SubscribeOpts controls what a subscriber sees and how much they can
