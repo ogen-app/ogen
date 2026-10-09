@@ -32,10 +32,7 @@ func prewarmToolCache(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, t *tool
 		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)),
 		ai.WithSystem("warmup"),
 		ai.WithPrompt("warmup"),
-		ai.WithTools(
-			t.runContentPlan, t.enrichBrief, t.listCampaignPosts, t.getCampaignOverview,
-			t.generatePosts, t.draftPost, t.setCampaignDates, t.redistributePosts, t.checkBrief, t.checkPostsConsistency,
-		),
+		ai.WithTools(t.all()...),
 		ai.WithMaxTurns(1),
 		cfg.Provider.CallConfig(1), // max_tokens: 1 — grammar compiles during prep
 	)

@@ -128,6 +128,17 @@ func (t *turn) prepare(ctx context.Context, systemTmpl, contextTmpl *template.Te
 	t.campaign = campaign
 	t.timer.lap("load")
 
+	// The history doesn't depend on the brand, so it loads alongside it.
+	type historyResult struct {
+		msgs []models.CampaignAssistantMessage
+		err  error
+	}
+	historyCh := make(chan historyResult, 1)
+	go func() {
+		msgs, err := t.repos.Messages.ListRecentByCampaignID(ctx, t.req.CampaignID, 10)
+		historyCh <- historyResult{msgs, err}
+	}()
+
 	// Brand resolution fails open: the result still carries the legacy tone.
 	brand, err := brandresolve.Resolve(ctx, t.repos.Brands, campaign, nil)
 	if err != nil {
@@ -140,7 +151,8 @@ func (t *turn) prepare(ctx context.Context, systemTmpl, contextTmpl *template.Te
 	}
 	t.timer.lap("context")
 
-	msgs, err := t.repos.Messages.ListRecentByCampaignID(ctx, t.req.CampaignID, 10)
+	hr := <-historyCh
+	msgs, err := hr.msgs, hr.err
 	if err != nil {
 		return ctx, fmt.Errorf("load history: %w", err)
 	}
@@ -179,8 +191,8 @@ func (t *turn) prepare(ctx context.Context, systemTmpl, contextTmpl *template.Te
 //
 // A MaxTurns abort is recoverable: tools that ran have committed and the
 // explanation is already in the scanner, so the turn is finalised from them.
-// genkit returns a nil response then, so the final partial turn's usage goes
-// unrecorded (the sub-flows record their own).
+// genkit returns a nil response then; the rounds that ran are still metered
+// by the Meter middleware (the sub-flows record their own).
 func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
 	maxTokens := cmp.Or(t.cfg.MaxOutputTokens, 8192)
 	maxTurns := cmp.Or(t.cfg.MaxTurns, 4)
@@ -191,15 +203,26 @@ func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
 		}
 	})
 
+	// The sub-flows record their own usage, so the planner's is not double
+	// counted. Meter records every round of the tool loop.
+	usage := flowkit.Usage{
+		Recorder:  t.cfg.Recorder,
+		Model:     mc,
+		Feature:   "campaign_assistant",
+		Component: logComponent,
+		Attrs:     []any{"campaign_id", t.req.CampaignID},
+	}
+
 	t.timer.genStart = time.Now()
 	resp, err := genkit.Generate(ctx, t.g,
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(t.actx.SystemPrompt+"\n\n"+t.actx.ContextBlock),
 		ai.WithMessages(t.history...),
 		ai.WithPrompt(t.req.Instruction),
-		ai.WithTools(tools.runContentPlan, tools.enrichBrief, tools.listCampaignPosts, tools.getCampaignOverview, tools.generatePosts, tools.draftPost, tools.setCampaignDates, tools.redistributePosts, tools.checkBrief, tools.checkPostsConsistency, tools.askCampaignAssets),
+		ai.WithTools(tools.all()...),
 		ai.WithMaxTurns(maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
+		ai.WithMiddleware(usage.Meter()),
 		t.cfg.Provider.CallConfig(maxTokens),
 	)
 	t.timer.genMs = time.Since(t.timer.genStart).Milliseconds()
@@ -211,15 +234,7 @@ func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
 		t.cutShort = true
 		slog.WarnContext(ctx, "tool-call budget exhausted; finalising from committed results", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "max_turns", maxTurns, "duration_ms", t.timer.totalMs())
 	}
-	// The sub-flows record their own usage, so the planner's is not double
-	// counted.
-	flowkit.Usage{
-		Recorder:  t.cfg.Recorder,
-		Model:     mc,
-		Feature:   "campaign_assistant",
-		Component: logComponent,
-		Attrs:     []any{"campaign_id", t.req.CampaignID},
-	}.Finish(ctx, resp, maxTokens)
+	usage.FinishMetered(ctx, resp, maxTokens)
 	return nil
 }
 

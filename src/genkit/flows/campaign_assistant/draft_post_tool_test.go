@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -73,9 +74,13 @@ func TestResolveDraftSource(t *testing.T) {
 }
 
 // stubDraftPost records each request and returns req.Count synthetic posts.
+// Platforms are drafted concurrently, so recording is locked.
 func stubDraftPost(calls *[]draft_post.DraftPostRequest) func(context.Context, draft_post.DraftPostRequest, draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
+	var mu sync.Mutex
 	return func(_ context.Context, req draft_post.DraftPostRequest, _ draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
+		mu.Lock()
 		*calls = append(*calls, req)
+		mu.Unlock()
 		posts := make([]draft_post.DraftedPost, req.Count)
 		for i := range posts {
 			posts[i] = draft_post.DraftedPost{PostID: fmt.Sprintf("%s-%d", req.PlatformID, i), PlatformID: req.PlatformID, PublishDate: req.WindowStart}
@@ -138,8 +143,13 @@ func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	if out.PostCount != 5 || !out.Clamped {
 		t.Fatalf("out = {PostCount:%d Clamped:%v}, want {5 true}", out.PostCount, out.Clamped)
 	}
-	if len(calls) != 2 || calls[0].Count != 3 || calls[1].Count != 2 {
-		t.Fatalf("flow calls counts = [%d %d], want [3 2]", calls[0].Count, calls[1].Count)
+	if len(calls) != 2 {
+		t.Fatalf("flow calls = %d, want 2", len(calls))
+	}
+	// The platforms are drafted concurrently; the budget follows platform order.
+	countByPlatform := map[string]int{calls[0].PlatformID: calls[0].Count, calls[1].PlatformID: calls[1].Count}
+	if got := []int{countByPlatform[out.PlatformIDs[0]], countByPlatform[out.PlatformIDs[1]]}; got[0] != 3 || got[1] != 2 {
+		t.Fatalf("flow call counts in platform order = %v, want [3 2]", got)
 	}
 	// Source + steering are threaded to the flow.
 	if calls[0].SourceMaterial != "the research" || calls[0].Instruction != "make it punchy" {

@@ -298,6 +298,14 @@ func (t *turn) callModel(ctx context.Context, p loopParams) error {
 	t.scanner = jsonstream.New(p.watch, t.emitDelta)
 	prompt := t.schedulingPrompt(ctx)
 
+	// Meter records every round of the tool loop, not just the last.
+	usage := flowkit.Usage{
+		Recorder:  t.cfg.Recorder,
+		Model:     mc,
+		Feature:   "post_assistant",
+		Component: logComponent,
+		Attrs:     []any{"post_id", t.req.PostID},
+	}
 	resp, err := genkit.Generate(ctx, t.g,
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(t.actx.SystemPrompt+"\n\n"+t.actx.ContextBlock),
@@ -306,19 +314,14 @@ func (t *turn) callModel(ctx context.Context, p loopParams) error {
 		ai.WithTools(p.tools...),
 		ai.WithMaxTurns(p.maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
+		ai.WithMiddleware(usage.Meter()),
 		t.cfg.Provider.CallConfig(p.maxTokens),
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "post_id", t.req.PostID, "duration_ms", time.Since(t.start).Milliseconds(), logging.AttrError, err)
 		return &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
 	}
-	flowkit.Usage{
-		Recorder:  t.cfg.Recorder,
-		Model:     mc,
-		Feature:   "post_assistant",
-		Component: logComponent,
-		Attrs:     []any{"post_id", t.req.PostID},
-	}.Finish(ctx, resp, p.maxTokens)
+	usage.FinishMetered(ctx, resp, p.maxTokens)
 	return nil
 }
 

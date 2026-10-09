@@ -13,6 +13,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/pgvector/pgvector-go"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -285,6 +286,16 @@ type toolSet struct {
 	checkBrief            ai.ToolRef
 	checkPostsConsistency ai.ToolRef
 	askCampaignAssets     ai.ToolRef
+}
+
+// all lists every tool in one fixed order. The planner call and the boot
+// prewarm both use it: Anthropic caches the compiled strict-tool grammar per
+// exact tool set, so a prewarm over any other set warms nothing.
+func (t *toolSet) all() []ai.ToolRef {
+	return []ai.ToolRef{
+		t.runContentPlan, t.enrichBrief, t.listCampaignPosts, t.getCampaignOverview, t.generatePosts, t.draftPost,
+		t.setCampaignDates, t.redistributePosts, t.checkBrief, t.checkPostsConsistency, t.askCampaignAssets,
+	}
 }
 
 func defineTools(g *genkit.Genkit) *toolSet {
@@ -728,7 +739,12 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 	})
 
 	// Forward the flow's nested events, namespaced, so drafts stream in live.
+	// The platform drafts run concurrently and the SSE writer behind onEvent
+	// is single-writer, so emits are serialised.
+	var emitMu sync.Mutex
 	nested := draft_post.OnEventFunc(func(name draft_post.SSEEventKind, data any) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
 		switch name {
 		case draft_post.SSEEventStep:
 			emit(st.onEvent, SSEEventDraftPostStep, data)
@@ -739,41 +755,49 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 		}
 	})
 
-	// One flow call per platform, with a shared budget so the total across all
-	// platforms never exceeds the per-call cap.
+	// One flow call per platform, run concurrently. The shared budget is split
+	// up front so the total across all platforms never exceeds the per-call cap.
+	counts, splitClamped := splitDraftBudget(len(platformIDs), perPlatform, maxN)
+	clamped = clamped || splitClamped
+	resps := make([]*draft_post.DraftPostResponse, len(platformIDs))
+	var g errgroup.Group
+	g.SetLimit(maxParallelDrafts)
+	for i, pid := range platformIDs {
+		if counts[i] == 0 {
+			continue
+		}
+		g.Go(func() error {
+			resp, err := st.draftPost(ctx, draft_post.DraftPostRequest{
+				CampaignID:     st.campaignID,
+				PlatformID:     pid,
+				PostType:       in.PostType,
+				Count:          counts[i],
+				SourceMaterial: source,
+				Instruction:    st.instruction,
+				WindowStart:    windowStart,
+				WindowEnd:      windowEnd,
+				PhaseID:        phaseID,
+				// UsedAssetIDs is intentionally left empty in v1: which assets the prior
+				// research cited isn't tracked, and over-stamping would pollute
+				// asset-usage provenance. The "Source research" note on
+				// each post carries the exact source instead.
+			}, nested)
+			resps[i] = resp
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
 	var (
 		total    int
 		allDates []string
 		allWarn  []string
 	)
-	budget := maxN
-	for _, pid := range platformIDs {
-		if budget <= 0 {
-			clamped = true
-			break
-		}
-		n := perPlatform
-		if n > budget {
-			n = budget
-			clamped = true
-		}
-		resp, err := st.draftPost(ctx, draft_post.DraftPostRequest{
-			CampaignID:     st.campaignID,
-			PlatformID:     pid,
-			PostType:       in.PostType,
-			Count:          n,
-			SourceMaterial: source,
-			Instruction:    st.instruction,
-			WindowStart:    windowStart,
-			WindowEnd:      windowEnd,
-			PhaseID:        phaseID,
-			// UsedAssetIDs is intentionally left empty in v1: which assets the prior
-			// research cited isn't tracked, and over-stamping would pollute
-			// asset-usage provenance. The "Source research" note on
-			// each post carries the exact source instead.
-		}, nested)
-		if err != nil {
-			return nil, err
+	for _, resp := range resps {
+		if resp == nil {
+			continue
 		}
 		total += len(resp.Posts)
 		for _, p := range resp.Posts {
@@ -782,7 +806,6 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 			}
 		}
 		allWarn = append(allWarn, resp.Warnings...)
-		budget -= len(resp.Posts)
 	}
 
 	st.draftPostResult = &DraftPostResult{
@@ -804,6 +827,25 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 		Dates:          allDates,
 		Warnings:       allWarn,
 	}, nil
+}
+
+// maxParallelDrafts caps how many platform drafts one draftPost call runs at
+// once.
+const maxParallelDrafts = 3
+
+// splitDraftBudget gives each of n platforms perPlatform drafts, in order,
+// until the shared budget runs out; clamped reports whether any platform got
+// fewer than perPlatform.
+func splitDraftBudget(n, perPlatform, budget int) (counts []int, clamped bool) {
+	counts = make([]int, n)
+	for i := range counts {
+		counts[i] = min(perPlatform, budget)
+		if counts[i] < perPlatform {
+			clamped = true
+		}
+		budget -= counts[i]
+	}
+	return counts, clamped
 }
 
 // resolveDraftSource returns the source text to draft from: an explicit override
