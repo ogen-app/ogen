@@ -56,6 +56,9 @@ func (r *fakeAttachmentRepo) GetByID(context.Context, string) (*models.PostAttac
 func (r *fakeAttachmentRepo) CreateAtNextPosition(context.Context, *models.PostAttachment) error {
 	return nil
 }
+func (r *fakeAttachmentRepo) CreateFromPendingUpload(context.Context, *models.PostAttachment) error {
+	return nil
+}
 func (r *fakeAttachmentRepo) Patch(context.Context, string, repository.AttachmentPatch) error {
 	return nil
 }
