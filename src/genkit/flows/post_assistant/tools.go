@@ -399,10 +399,14 @@ func defineTools(g *genkit.Genkit) *toolSet {
 
 func toolListAssets(ctx context.Context) ([]AssetInfo, error) {
 	st := getRequestState(ctx)
+	assets, err := assetsByID(ctx, st.repos.Assets, st.assetIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list assets: %w", err)
+	}
 	result := make([]AssetInfo, 0, len(st.assetIDs))
 	for _, id := range st.assetIDs {
-		asset, err := st.repos.Assets.GetByID(ctx, id)
-		if err != nil {
+		asset, ok := assets[id]
+		if !ok {
 			continue
 		}
 		chunkCount, _, err := st.repos.Chunks.PreviewByAssetID(ctx, id)

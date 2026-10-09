@@ -61,6 +61,9 @@ func (r *fakeAnalyticsRepo) GetByPostID(_ context.Context, postID string) (*mode
 	defer r.mu.Unlock()
 	return r.upserted[postID], nil
 }
+func (r *fakeAnalyticsRepo) CurrentMetricsByPostID(ctx context.Context) (map[string]*models.PostAnalytics, error) {
+	return r.CurrentByPostID(ctx)
+}
 func (r *fakeAnalyticsRepo) CurrentByPostID(context.Context) (map[string]*models.PostAnalytics, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

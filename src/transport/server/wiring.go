@@ -88,7 +88,7 @@ type repos struct {
 func wireRepositories(db, analyticsDB *bun.DB) *repos {
 	tagRepo := repository.NewTagRepository(db)
 	assetFileRepo := repository.NewAssetFileRepository(db)
-	platformRepo := repository.NewPlatformRepository(db)
+	platformRepo := repository.NewCachedPlatformRepository(repository.NewPlatformRepository(db), time.Minute)
 	campaignTypeRepo := repository.NewCampaignTypeRepository(db)
 
 	r := &repos{

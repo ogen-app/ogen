@@ -18,6 +18,9 @@ import (
 type PostRepository interface {
 	List(ctx context.Context) ([]models.Post, error)
 	ListByCampaign(ctx context.Context, campaignID string) ([]models.Post, error)
+	// ListRowsByCampaign returns the campaign's posts with only the named
+	// columns set and no relations hydrated — for aggregations over a campaign.
+	ListRowsByCampaign(ctx context.Context, campaignID string, columns ...string) ([]models.Post, error)
 	// ListAttachTargets lists the posts that still accept attachments, for a
 	// picker; see posts_attach_targets.go.
 	ListAttachTargets(ctx context.Context, query string, limit int) ([]models.PostAttachTarget, error)
@@ -30,6 +33,10 @@ type PostRepository interface {
 	Create(ctx context.Context, post *models.Post) error
 	CreateBatch(ctx context.Context, posts []*models.Post) error
 	GetByID(ctx context.Context, id string) (*models.Post, error)
+	// GetRowByID loads the post row alone, without GetByID's campaign, platform,
+	// account, asset and phase hydration — for callers that only need the
+	// post's own columns.
+	GetRowByID(ctx context.Context, id string) (*models.Post, error)
 	// Update writes the whole record; excludeColumns drops the named columns
 	// from the write so a PUT that omits the presence-aware source set
 	// (used_asset_ids) doesn't clobber a concurrent membership write.
@@ -110,8 +117,9 @@ type PostRepository interface {
 	ScopeKeysByID(ctx context.Context, ids []string) (map[string]PostScopeKey, error)
 	// ListPublishedSince returns the tenant's Zernio-published posts with
 	// published_at >= since (zero since = all-time), ascending, WITHOUT relation
-	// hydration — the CON-239 "what works / fading" miner reads only the scalar
-	// content/media/cta columns and joins metrics app-side by post id.
+	// hydration and with only id, platform_id, platform_post_type, content,
+	// media_urls and published_at set — what the lessons miner reads before
+	// joining metrics app-side by post id.
 	ListPublishedSince(ctx context.Context, since time.Time) ([]models.Post, error)
 	// PublishedProjectionBetween returns id + platform_id + published_at for the
 	// tenant's posts published in [from, to) — a zero from means unbounded-low —
@@ -137,14 +145,16 @@ func NewPostRepository(db *bun.DB) PostRepository {
 func (r *postRepository) ListPublishedSince(ctx context.Context, since time.Time) ([]models.Post, error) {
 	var posts []models.Post
 	q := r.db.NewSelect().Model(&posts).
+		Column("po.id", "po.platform_id", "po.platform_post_type", "po.content", "po.media_urls", "po.published_at").
 		Where("po.publisher = ?", "zernio").
 		Where("po.published_at IS NOT NULL").
 		OrderExpr("po.published_at ASC")
 	if !since.IsZero() {
 		q = q.Where("po.published_at >= ?", since)
 	}
-	// No hydrateRelations: the miner reads only scalar columns (content,
-	// media_urls, platform_post_type, cta_*, published_at).
+	// Only the columns the lessons miner reads, and no hydrateRelations: an
+	// all-time read must not drag every published post's results, thread
+	// segments and notes along.
 	if err := q.Scan(ctx); err != nil {
 		return nil, err
 	}
@@ -279,6 +289,16 @@ func (r *postRepository) ListByCampaign(ctx context.Context, campaignID string) 
 	return posts, nil
 }
 
+func (r *postRepository) ListRowsByCampaign(ctx context.Context, campaignID string, columns ...string) ([]models.Post, error) {
+	var posts []models.Post
+	err := r.db.NewSelect().Model(&posts).
+		Column(columns...).
+		Where("po.campaign_id = ?", campaignID).
+		OrderExpr("po.created_at ASC").
+		Scan(ctx)
+	return posts, err
+}
+
 func (r *postRepository) Create(ctx context.Context, post *models.Post) error {
 	_, err := r.db.NewInsert().Model(post).Exec(ctx)
 	return err
@@ -295,12 +315,8 @@ func (r *postRepository) CreateBatch(ctx context.Context, posts []*models.Post) 
 }
 
 func (r *postRepository) GetByID(ctx context.Context, id string) (*models.Post, error) {
-	post := new(models.Post)
-	err := r.db.NewSelect().Model(post).Where("po.id = ?", id).Scan(ctx)
+	post, err := r.GetRowByID(ctx, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, sql.ErrNoRows
-		}
 		return nil, err
 	}
 	posts := []models.Post{*post}
@@ -308,6 +324,17 @@ func (r *postRepository) GetByID(ctx context.Context, id string) (*models.Post, 
 		return nil, err
 	}
 	return &posts[0], nil
+}
+
+func (r *postRepository) GetRowByID(ctx context.Context, id string) (*models.Post, error) {
+	post := new(models.Post)
+	if err := r.db.NewSelect().Model(post).Where("po.id = ?", id).Scan(ctx); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	return post, nil
 }
 
 // Update writes the whole post record. excludeColumns drops the named columns
@@ -624,7 +651,9 @@ func (r *postRepository) hydrateRelations(ctx context.Context, posts []models.Po
 		return err
 	}
 
-	assetByID, err := fetchByIDs[models.Asset](ctx, r.db, assetIDs, func(p *models.Asset) string { return p.ID })
+	// A post names its source assets; their full text (transcripts, scraped
+	// pages) is not part of the post and is left unread.
+	assetByID, err := fetchByIDs[models.Asset](ctx, r.db, assetIDs, func(p *models.Asset) string { return p.ID }, "content")
 	if err != nil {
 		return err
 	}

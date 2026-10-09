@@ -964,18 +964,16 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 	}
 
 	titles := make(map[string]string)
+	if metas, err := st.repos.Assets.ListMeta(ctx, ids); err == nil {
+		for _, a := range metas {
+			titles[a.ID] = a.Title
+		}
+	}
 	excerpts := make([]AssetExcerpt, 0, len(chunks))
 	for _, c := range chunks {
-		title, ok := titles[c.AssetID]
-		if !ok {
-			if a, err := st.repos.Assets.GetByID(ctx, c.AssetID); err == nil {
-				title = a.Title
-			}
-			titles[c.AssetID] = title
-		}
 		excerpts = append(excerpts, AssetExcerpt{
 			AssetID: c.AssetID,
-			Title:   title,
+			Title:   titles[c.AssetID],
 			Pages:   pageRef(c.PageStart, c.PageEnd),
 			Text:    c.Content,
 		})
@@ -993,17 +991,23 @@ func readyCampaignAssetIDs(ctx context.Context, campaign *models.Campaign, asset
 		return status == models.AssetStatusFailed || status == models.AssetStatusPartial
 	}
 	if len(campaign.AssetIDs) > 0 {
+		metas, err := assets.ListMeta(ctx, campaign.AssetIDs)
+		if err != nil {
+			return nil, err
+		}
+		status := make(map[string]string, len(metas))
+		for _, a := range metas {
+			status[a.ID] = a.Status
+		}
 		out := make([]string, 0, len(campaign.AssetIDs))
 		for _, id := range campaign.AssetIDs {
-			a, err := assets.GetByID(ctx, id)
-			if err != nil || bad(a.Status) {
-				continue
+			if s, ok := status[id]; ok && !bad(s) {
+				out = append(out, id)
 			}
-			out = append(out, a.ID)
 		}
 		return out, nil
 	}
-	all, err := assets.List(ctx)
+	all, err := assets.ListMeta(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

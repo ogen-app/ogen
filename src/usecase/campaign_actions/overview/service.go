@@ -55,7 +55,9 @@ func (s *Service) Overview(ctx context.Context, campaignID string) (*Overview, e
 		return nil, fmt.Errorf("load campaign: %w", err)
 	}
 
-	posts, err := s.posts.ListByCampaign(ctx, campaignID)
+	// Only the fields buildOverview counts by, without per-post hydration.
+	posts, err := s.posts.ListRowsByCampaign(ctx, campaignID,
+		"id", "status", "platform_id", "platform_post_type", "campaign_type_phase_id")
 	if err != nil {
 		return nil, fmt.Errorf("list posts: %w", err)
 	}

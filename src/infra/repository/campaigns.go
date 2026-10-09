@@ -44,6 +44,9 @@ type CampaignRepository interface {
 	// CountActive counts the tenant's live campaigns — neither soft-deleted nor
 	// archived (mirrors List) — the active_campaigns quota.
 	CountActive(ctx context.Context) (int64, error)
+	// Exists reports whether the tenant has a non-deleted campaign id, in one
+	// query and without GetByID's hydration.
+	Exists(ctx context.Context, id string) (bool, error)
 	// CreatedBetween returns id + created_at for the tenant's non-deleted
 	// campaigns created in [from, to) — a zero from means unbounded-low — newest
 	// first, optionally one campaign. limit 0 = no cap. Feeds the Activity daily
@@ -161,6 +164,19 @@ func (r *campaignRepository) Create(ctx context.Context, campaign *models.Campai
 // GetByID returns a single campaign by id. Soft-deleted campaigns are treated
 // as gone (sql.ErrNoRows); archived campaigns are still returned so they can be
 // viewed and unarchived.
+func (r *campaignRepository) Exists(ctx context.Context, id string) (bool, error) {
+	// Scan, not bun's Exists() or Count(): only a scanning select runs the
+	// BeforeSelect hook that adds the tenant predicate.
+	var ids []string
+	err := r.db.NewSelect().Model((*models.Campaign)(nil)).
+		Column("c.id").
+		Where("c.id = ?", id).
+		Where("c.deleted_at IS NULL").
+		Limit(1).
+		Scan(ctx, &ids)
+	return len(ids) > 0, err
+}
+
 func (r *campaignRepository) GetByID(ctx context.Context, id string) (*models.Campaign, error) {
 	campaign := new(models.Campaign)
 	err := r.db.NewSelect().Model(campaign).Where("c.id = ?", id).Where("c.deleted_at IS NULL").Scan(ctx)

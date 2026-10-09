@@ -2,10 +2,11 @@ package report
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -99,11 +100,12 @@ func (s *Service) requireCampaign(ctx context.Context, campaignID string) error 
 	if campaignID == "" {
 		return nil
 	}
-	if _, err := s.campaigns.GetByID(ctx, campaignID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrCampaignNotFound
-		}
+	ok, err := s.campaigns.Exists(ctx, campaignID)
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return ErrCampaignNotFound
 	}
 	return nil
 }
@@ -136,10 +138,34 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 		}
 	}
 
-	pub, err := s.posts.PublishedProjectionBetween(ctx, from, to, campaignID, limit)
-	if err != nil {
+	// The four streams are independent reads; fetch them concurrently.
+	var (
+		pub     []models.Post
+		failed  []repository.TerminalTransition
+		created []models.Post
+		camps   []models.Campaign
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		pub, err = s.posts.PublishedProjectionBetween(gctx, from, to, campaignID, limit)
+		return err
+	})
+	g.Go(func() (err error) {
+		failed, err = s.postLogs.TerminalTransitionsBetween(gctx, from, to, campaignID, limit)
+		return err
+	})
+	g.Go(func() (err error) {
+		created, err = s.posts.CreatedProjectionBetween(gctx, from, to, campaignID, limit)
+		return err
+	})
+	g.Go(func() (err error) {
+		camps, err = s.campaigns.CreatedBetween(gctx, from, to, campaignID, limit)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return Inputs{}, time.Time{}, err
 	}
+
 	in.Published = make([]PublishedRow, 0, len(pub))
 	for _, p := range pub {
 		if p.PublishedAt == nil {
@@ -151,10 +177,6 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 		raise(len(pub), *pub[len(pub)-1].PublishedAt)
 	}
 
-	failed, err := s.postLogs.TerminalTransitionsBetween(ctx, from, to, campaignID, limit)
-	if err != nil {
-		return Inputs{}, time.Time{}, err
-	}
 	in.Failed = make([]FailedRow, 0, len(failed))
 	for _, f := range failed {
 		in.Failed = append(in.Failed, FailedRow{
@@ -169,10 +191,6 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 		raise(len(failed), failed[len(failed)-1].At)
 	}
 
-	created, err := s.posts.CreatedProjectionBetween(ctx, from, to, campaignID, limit)
-	if err != nil {
-		return Inputs{}, time.Time{}, err
-	}
 	in.Created = make([]CreatedRow, 0, len(created))
 	for _, c := range created {
 		in.Created = append(in.Created, CreatedRow{
@@ -185,10 +203,6 @@ func (s *Service) load(ctx context.Context, from, to time.Time, campaignID strin
 		raise(len(created), created[len(created)-1].CreatedAt)
 	}
 
-	camps, err := s.campaigns.CreatedBetween(ctx, from, to, campaignID, limit)
-	if err != nil {
-		return Inputs{}, time.Time{}, err
-	}
 	in.Campaigns = make([]CampaignRow, 0, len(camps))
 	for _, cm := range camps {
 		in.Campaigns = append(in.Campaigns, CampaignRow{At: cm.CreatedAt, CampaignID: cm.ID})

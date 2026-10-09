@@ -44,7 +44,7 @@ func (h *PostLogsHandler) Register(app *fiber.App) {
 // @Router       /api/posts/{post_id}/log [get]
 func (h *PostLogsHandler) ListByPost(c *fiber.Ctx) error {
 	postID := c.Params("post_id")
-	if _, err := h.postRepo.GetByID(reqCtx(c), postID); err != nil {
+	if _, err := h.postRepo.GetRowByID(reqCtx(c), postID); err != nil {
 		return notFound(err, "post not found")
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))

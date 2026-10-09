@@ -11,9 +11,35 @@ import (
 
 // fakeBrandRepo implements repository.BrandRepository; only GetAll is functional
 // (the only method Resolve calls). The rest are inert stubs.
-type fakeBrandRepo struct{ data *models.BrandData }
+type fakeBrandRepo struct {
+	data  *models.BrandData
+	loads int
+}
 
-func (f *fakeBrandRepo) GetAll(context.Context) (*models.BrandData, error) { return f.data, nil }
+func (f *fakeBrandRepo) GetAll(context.Context) (*models.BrandData, error) {
+	f.loads++
+	return f.data, nil
+}
+
+func TestResolveMemoLoadsLibraryOnce(t *testing.T) {
+	repo := &fakeBrandRepo{data: &models.BrandData{}}
+	ctx := WithMemo(t.Context())
+	for range 3 {
+		if _, err := Resolve(WithMemo(ctx), repo, nil, nil); err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+	}
+	if repo.loads != 1 {
+		t.Fatalf("library loads with a memo = %d, want 1", repo.loads)
+	}
+
+	if _, err := Resolve(t.Context(), repo, nil, nil); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if repo.loads != 2 {
+		t.Fatalf("library loads without a memo = %d, want a fresh load", repo.loads)
+	}
+}
 func (f *fakeBrandRepo) GetVoice(context.Context, string) (*models.BrandVoice, error) {
 	return nil, nil
 }

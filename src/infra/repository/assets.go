@@ -16,6 +16,10 @@ import (
 // AssetRepository defines all persistence operations for the Asset domain.
 type AssetRepository interface {
 	List(ctx context.Context) ([]models.Asset, error)
+	// ListMeta returns the id, title, status and type of the tenant's assets in
+	// ids, or of all its assets when ids is nil, oldest first, in one query
+	// with no content, tags or files.
+	ListMeta(ctx context.Context, ids []string) ([]models.Asset, error)
 	// Count counts the tenant's content-bank assets — the content_bank_assets
 	// quota.
 	Count(ctx context.Context) (int64, error)
@@ -100,6 +104,23 @@ func (r *assetRepository) List(ctx context.Context) ([]models.Asset, error) {
 		return nil, err
 	}
 	if err := r.hydrateFiles(ctx, assets); err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+func (r *assetRepository) ListMeta(ctx context.Context, ids []string) ([]models.Asset, error) {
+	if ids != nil && len(ids) == 0 {
+		return nil, nil
+	}
+	var assets []models.Asset
+	q := r.db.NewSelect().Model(&assets).
+		Column("a.id", "a.title", "a.status", "a.type").
+		OrderExpr("a.created_at ASC")
+	if ids != nil {
+		q = q.Where("a.id IN (?)", bun.List(ids))
+	}
+	if err := q.Scan(ctx); err != nil {
 		return nil, err
 	}
 	return assets, nil

@@ -83,6 +83,9 @@ type PostAnalyticsRepository interface {
 	// post_id, so the refresh job can dedup (compare metric keys) and apply the
 	// decay schedule (last_checked_at) without a per-post query.
 	CurrentByPostID(ctx context.Context) (map[string]*models.PostAnalytics, error)
+	// CurrentMetricsByPostID is CurrentByPostID without the platform_analytics
+	// payload, for readers that only use the metric columns.
+	CurrentMetricsByPostID(ctx context.Context) (map[string]*models.PostAnalytics, error)
 	// List returns one page of current-state rows plus the overview computed over
 	// the full filtered set and the total count.
 	List(ctx context.Context, opts PostAnalyticsListOptions) ([]PostAnalyticsListItem, PostAnalyticsOverview, error)
@@ -291,9 +294,21 @@ func (r *postAnalyticsRepository) GetByPostID(ctx context.Context, postID string
 }
 
 func (r *postAnalyticsRepository) CurrentByPostID(ctx context.Context) (map[string]*models.PostAnalytics, error) {
+	return r.currentByPostID(ctx)
+}
+
+func (r *postAnalyticsRepository) CurrentMetricsByPostID(ctx context.Context) (map[string]*models.PostAnalytics, error) {
+	return r.currentByPostID(ctx, "platform_analytics")
+}
+
+func (r *postAnalyticsRepository) currentByPostID(ctx context.Context, exclude ...string) (map[string]*models.PostAnalytics, error) {
 	var rows []models.PostAnalytics
 	// TenantScoped hook restricts to the ctx tenant.
-	if err := r.db.NewSelect().Model(&rows).Scan(ctx); err != nil {
+	q := r.db.NewSelect().Model(&rows)
+	if len(exclude) > 0 {
+		q = q.ExcludeColumn(exclude...)
+	}
+	if err := q.Scan(ctx); err != nil {
 		return nil, err
 	}
 	out := make(map[string]*models.PostAnalytics, len(rows))

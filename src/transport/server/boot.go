@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"sync"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/platforms"
@@ -40,9 +42,23 @@ func loadOperatorCatalogs(ctx context.Context, cfg *config.Config, r *repos) {
 	logModelCatalog(ctx)
 }
 
+// tierCacheTTL bounds how stale a tenant's tier may be when picking a model;
+// it matches the model-config snapshot's own refresh interval.
+const tierCacheTTL = time.Minute
+
 // tenantTierOf resolves the tier a model lookup runs under: the tier stamped
-// on ctx, else the caller's tenant tier (a rare, LLM-call-time read).
+// on ctx, else the caller's tenant tier. Every model call resolves it (a run
+// of parallel quality checks or batched drafts makes several), so tenant tiers
+// are cached for tierCacheTTL rather than read each time.
 func tenantTierOf(r *repos) func(context.Context) (string, bool) {
+	type entry struct {
+		tier    string
+		expires time.Time
+	}
+	var (
+		mu    sync.Mutex
+		tiers = map[string]entry{}
+	)
 	return func(ctx context.Context) (string, bool) {
 		if t, ok := tenantctx.TierFrom(ctx); ok {
 			return t, true
@@ -51,11 +67,21 @@ func tenantTierOf(r *repos) func(context.Context) (string, bool) {
 		if !ok {
 			return "", false
 		}
+		now := time.Now()
+		mu.Lock()
+		e, hit := tiers[tid]
+		mu.Unlock()
+		if hit && now.Before(e.expires) {
+			return e.tier, e.tier != ""
+		}
 		t, err := r.tenantRepo.GetByID(ctx, tid)
-		if err != nil || t == nil || t.TierID == "" {
+		if err != nil || t == nil {
 			return "", false
 		}
-		return t.TierID, true
+		mu.Lock()
+		tiers[tid] = entry{tier: t.TierID, expires: now.Add(tierCacheTTL)}
+		mu.Unlock()
+		return t.TierID, t.TierID != ""
 	}
 }
 
