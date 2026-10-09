@@ -320,12 +320,17 @@ func (h *PostAttachmentsHandler) finalizeVideoUpload(c *fiber.Ctx, post *models.
 
 // insertVideoAttachment writes a finalized upload's row. With pending uploads
 // tracked it consumes the upload's record in the same transaction, so a late
-// finalize and the sweep never both act on the object.
+// finalize and the sweep never both act on the object. A failed insert
+// discards the object unless an earlier finalize attached it.
 func (h *PostAttachmentsHandler) insertVideoAttachment(ctx context.Context, att *models.PostAttachment) error {
 	if h.pending == nil {
-		return h.repo.CreateAtNextPosition(ctx, att)
+		return h.insertAttachment(ctx, att)
 	}
-	return h.repo.CreateFromPendingUpload(ctx, att)
+	err := h.repo.CreateFromPendingUpload(ctx, att)
+	if err != nil && !errors.Is(err, repository.ErrUploadAlreadyAttached) {
+		h.discardUpload(ctx, att.S3Key)
+	}
+	return err
 }
 
 // attachmentByKey returns the post's attachment holding key, or nil when none
@@ -341,18 +346,20 @@ func (h *PostAttachmentsHandler) attachmentByKey(ctx context.Context, postID, ke
 	return nil, nil
 }
 
-// discardUpload deletes a rejected upload's object and its pending record.
-// The record goes only once the object is gone; otherwise the sweep retries.
+// discardUpload deletes a refused upload's object and its pending record.
+// With uploads tracked this runs under the record's lock, so a concurrent
+// finalize of the same key that attached the object keeps it; a failure
+// leaves the record for the sweep.
 func (h *PostAttachmentsHandler) discardUpload(ctx context.Context, key string) {
-	if err := h.storage.Delete(ctx, key); err != nil {
-		slog.WarnContext(ctx, "rejected video upload not deleted; left to the sweep", logging.AttrComponent, "post_attachments", "key", key, logging.AttrError, err)
-		return
-	}
+	remove := func(ctx context.Context) error { return h.storage.Delete(ctx, key) }
+	var err error
 	if h.pending == nil {
-		return
+		err = remove(ctx)
+	} else {
+		err = h.pending.Discard(ctx, key, remove)
 	}
-	if err := h.pending.DeleteByKey(ctx, key); err != nil {
-		slog.WarnContext(ctx, "pending upload record not deleted", logging.AttrComponent, "post_attachments", "key", key, logging.AttrError, err)
+	if err != nil {
+		slog.WarnContext(ctx, "refused video upload not deleted", logging.AttrComponent, "post_attachments", "key", key, logging.AttrError, err)
 	}
 }
 

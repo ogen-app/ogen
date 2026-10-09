@@ -98,26 +98,100 @@ func TestPendingUploadCreateStampsTenantAndKeyIsUnique(t *testing.T) {
 	}
 }
 
-func TestPendingUploadDeleteByKeyIsTenantScoped(t *testing.T) {
-	db := openPendingDB(t)
-	repo := repository.NewPendingUploadRepository(db)
-	seedPendingPost(t, db, "post-1")
-	if err := repo.Create(tenantCtx(), pendingUpload("pu-1", "post-1", "k1", time.Now())); err != nil {
-		t.Fatalf("create: %v", err)
+func TestPendingUploadDiscard(t *testing.T) {
+	setup := func(t *testing.T) (*bun.DB, repository.PendingUploadRepository) {
+		db := openPendingDB(t)
+		seedPendingPost(t, db, "post-1")
+		repo := repository.NewPendingUploadRepository(db)
+		if err := repo.Create(tenantCtx(), pendingUpload("pu-1", "post-1", "k1", time.Now())); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		return db, repo
+	}
+	attach := func(t *testing.T, idb bun.IDB, key string) {
+		t.Helper()
+		att := &models.PostAttachment{ID: "att-" + key, PostID: "post-1", MimeType: "video/mp4", SizeBytes: 10, S3Key: key, CreatedBy: "user-1"}
+		if _, err := idb.NewInsert().Model(att).Exec(tenantCtx()); err != nil {
+			t.Fatalf("attach: %v", err)
+		}
 	}
 
-	if err := repo.DeleteByKey(tenantctx.With(t.Context(), "tenant-2"), "k1"); err != nil {
-		t.Fatalf("delete from other tenant: %v", err)
-	}
-	if countPending(t, db, "k1") != 1 {
-		t.Fatal("another tenant must not delete the record")
-	}
-	if err := repo.DeleteByKey(tenantCtx(), "k1"); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if countPending(t, db, "k1") != 0 {
-		t.Fatal("record should be gone")
-	}
+	t.Run("refused upload: object removed, record dropped", func(t *testing.T) {
+		db, repo := setup(t)
+		removed := 0
+		if err := repo.Discard(tenantCtx(), "k1", func(context.Context) error { removed++; return nil }); err != nil {
+			t.Fatalf("discard: %v", err)
+		}
+		if removed != 1 || countPending(t, db, "k1") != 0 {
+			t.Fatalf("removed %d times, %d records left", removed, countPending(t, db, "k1"))
+		}
+	})
+
+	t.Run("attached key keeps its object", func(t *testing.T) {
+		db, repo := setup(t)
+		attach(t, db, "k1")
+		if err := repo.Discard(tenantCtx(), "k1", func(context.Context) error {
+			t.Fatal("an attached object must never be removed")
+			return nil
+		}); err != nil {
+			t.Fatalf("discard: %v", err)
+		}
+	})
+
+	t.Run("remove error keeps the record for the sweep", func(t *testing.T) {
+		db, repo := setup(t)
+		boom := errors.New("storage down")
+		if err := repo.Discard(tenantCtx(), "k1", func(context.Context) error { return boom }); !errors.Is(err, boom) {
+			t.Fatalf("discard err = %v, want %v", err, boom)
+		}
+		if countPending(t, db, "k1") != 1 {
+			t.Fatal("record must survive a failed remove")
+		}
+	})
+
+	t.Run("key without a record is still removed", func(t *testing.T) {
+		_, repo := setup(t)
+		removed := 0
+		if err := repo.Discard(tenantCtx(), "k-untracked", func(context.Context) error { removed++; return nil }); err != nil {
+			t.Fatalf("discard: %v", err)
+		}
+		if removed != 1 {
+			t.Fatalf("removed %d times, want 1", removed)
+		}
+	})
+
+	t.Run("waits for a concurrent finalize and keeps what it attached", func(t *testing.T) {
+		db, repo := setup(t)
+		tx, err := db.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		// The finalize's transaction: record consumed, attachment inserted,
+		// not yet committed.
+		if _, err := tx.ExecContext(t.Context(), `DELETE FROM pending_uploads WHERE s3_key = 'k1'`); err != nil {
+			t.Fatalf("consume: %v", err)
+		}
+		attach(t, tx, "k1")
+
+		discarded := make(chan error, 1)
+		go func() {
+			discarded <- repo.Discard(tenantCtx(), "k1", func(context.Context) error {
+				return errors.New("removed an object a concurrent finalize attached")
+			})
+		}()
+		select {
+		case err := <-discarded:
+			t.Fatalf("discard must wait for the finalize's lock, returned %v", err)
+		case <-time.After(300 * time.Millisecond):
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		if err := <-discarded; err != nil {
+			t.Fatalf("discard: %v", err)
+		}
+	})
 }
 
 func TestPendingUploadListExpired(t *testing.T) {
