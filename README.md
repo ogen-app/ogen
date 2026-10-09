@@ -288,23 +288,26 @@ streaming, minimum output/context size, embedding dimensions). Assignments live
 in the `flow_model_config` table. They are resolved at call time, and a
 tier-specific row wins over the global default. Operators edit them from Harbor
 via `ModelConfigAdminService`. A write is rejected when the model doesn't meet
-the slot's requirements, and it can be checked first with a live probe. On boot,
-missing global-default rows are seeded from the legacy `MODEL_ID` /
-`PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` / `EMBED_MODEL` / `VISION_*_MODEL` /
-`TRANSCRIBE_MODEL` env vars (now **seed-only**; after that, the DB is
-authoritative). In-process chat slots accept only Anthropic models. The vision
-and transcribe slots accept only Gemini models, because `image-service` and
-`audio-service` run the model ogen passes on each request.
+the slot's requirements, and it can be checked first with a live probe. Models
+are never chosen through env vars. On boot, a slot with no global-default row
+yet is seeded from the code defaults in `modelconfig.SeedDefaults`; after that,
+the DB is authoritative. The one exception is embeddings: the embedder runs
+`EMBED_MODEL` (changing it means re-embedding), and the `embed` slot is seeded
+with it for display. In-process chat slots accept only Anthropic models. The
+vision and transcribe slots accept only Gemini models, because `image-service`
+and `audio-service` run the model ogen passes on each request. The assistants'
+tool loops (`post_assistant` planner, `campaign_assistant` orchestrator) cache
+their prompt, whichever model their slot runs.
 
 | Flow | Slot(s) | Seed default |
 |------|---------|--------------|
-| `content_plan`, `draft_post`, `enrich_brief`, `consistency` | `main` | Claude Sonnet 5.5 (`MODEL_ID`) |
-| `post_quality` | `main` | Claude Sonnet 5.5 (`QUALITY_MODEL_ID`) |
-| `post_assistant` | `planner` / `writer` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) / Sonnet 5.5 (`MODEL_ID`) |
-| `campaign_assistant` | `orchestrator` | Claude Haiku 4.5 (`PLANNING_MODEL_ID`) |
+| `content_plan`, `draft_post`, `enrich_brief`, `consistency` | `main` | Claude Sonnet 5.5 |
+| `post_quality` | `main` | Claude Sonnet 5.5 |
+| `post_assistant` | `planner` / `writer` | Claude Haiku 4.5 / Sonnet 5.5 |
+| `campaign_assistant` | `orchestrator` | Claude Haiku 4.5 |
 | `embed` | `main` (global only, no tier override) | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) |
-| `vision` (`image-service`) | `classify` / `extract` / `escalate` / `alt_text` | Gemini 2.5 Flash (`VISION_CLASSIFY_MODEL`) / 2.5 Pro (`VISION_EXTRACT_MODEL`) / 2.5 Pro (`VISION_ESCALATE_MODEL`) / 2.5 Flash (`VISION_CLASSIFY_MODEL`) |
-| `transcribe` (`audio-service`) | `main` | Gemini 2.5 Flash (`TRANSCRIBE_MODEL`) |
+| `vision` (`image-service`) | `classify` / `extract` / `escalate` / `alt_text` | Gemini 3.8 Flash |
+| `transcribe` (`audio-service`) | `main` | Gemini 3.8 Flash |
 
 An image or audio extraction run resolves its models once, when the run is
 created, and keeps them on the extraction row, so retries and every audio
@@ -484,8 +487,7 @@ All runtime knobs are env vars, loaded by
 | `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 25 | Shared pool sizing for HTTP + River workers; idle connections close after 5 minutes unused. |
 | `GEMINI_API_KEY` | empty | Gemini Embedding 2 key — first-boot seed; rotate via the operator surface. Empty disables embedding/RAG. |
 | `EMBED_MODEL` / `EMBED_DIMENSIONS` | `gemini-embedding-2` / `3072` | Embedding model + vector width (must match `assets_chunks.embedding`). |
-| `ANTHROPIC_API_KEY` / `MODEL_ID` | empty / `claude-sonnet-5-5` | Claude key (first-boot seed) + generation model (**seed-only**; see [AI flows](#ai-flows-genkit)). |
-| `PLANNING_MODEL_ID` / `QUALITY_MODEL_ID` | Haiku 4.5 / Sonnet 5.5 | Routing + quality-scoring models (**seed-only**; Harbor-managed after first boot). |
+| `ANTHROPIC_API_KEY` | empty | Claude key (first-boot seed). Models are assigned per flow slot in Harbor, not via env; see [AI flows](#ai-flows-genkit). |
 | `STORAGE_*` | empty | S3-compatible storage (R2/MinIO/AWS); empty disables uploads. |
 | `PDF_SERVICE_ADDR` / `VIDEO_SERVICE_ADDR` / `DOCUMENTS_SERVICE_ADDR` / `AUDIO_SERVICE_ADDR` / `IMAGE_SERVICE_ADDR` | empty | gRPC sidecar addresses (`*.railway.internal:50051` in prod). Empty disables that pipeline. |
 | `ZERNIO_API_KEY` / `ZERNIO_BASE_URL` | empty / `https://zernio.com/api/v1` | Zernio integration; key resolved per call, so rotations land without restart. |

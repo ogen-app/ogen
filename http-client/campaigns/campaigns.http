@@ -244,8 +244,8 @@ Accept: text/event-stream
 # instructions to the content_plan and enrich_brief flows (run as tools) or
 # answers grounded questions about the campaign.
 #
-# A cheap planning model (PLANNING_MODEL_ID, Haiku) drives routing; the wrapped
-# flows do the heavy prose on the generation model. enrichBrief auto-applies the
+# A cheap model on the campaign_assistant/orchestrator slot drives routing; the
+# wrapped flows do the heavy prose on their own slots' models. enrichBrief auto-applies the
 # new brief to the campaign; runContentPlan persists the draft posts.
 #
 # Requires ANTHROPIC_API_KEY on the server; returns 503 when the flow is unwired.

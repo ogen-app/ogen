@@ -85,12 +85,13 @@ type <FlowName>Repos struct {
     // e.g. Assets   repository.AssetRepository
 }
 
-// <FlowName>FlowConfig holds static settings (model id, token caps, optional
-// embedder). Not per-request state — that goes in context.WithValue.
+// <FlowName>FlowConfig holds static settings (token caps, optional embedder).
+// The model is not here: it is resolved per call from the flow's slot.
+// Not per-request state — that goes in context.WithValue.
 type <FlowName>FlowConfig struct {
-    ModelID string
     // MaxOutputTokens caps the model's output for one call. 0 falls back
-    // to 64000 — Claude 4.x Haiku/Sonnet's max output. Anthropic charges
+    // to 64000; CallConfig clamps it to the resolved model's max output
+    // (64K on Claude 4.x, 128K on 5.x). Anthropic charges
     // only for tokens actually emitted, so a generous cap costs nothing
     // on short responses but prevents truncation when explanation + full
     // content + tool inputs combined exceed a smaller cap. Detect
@@ -590,7 +591,7 @@ func run<FlowName>(
     if maxTokens == 0 { maxTokens = 64000 } // see Step 2 FlowConfig comment
     maxTurns := cfg.MaxTurns
     if maxTurns == 0 { maxTurns = 8 }       // see Step 2 FlowConfig comment
-    modelName := "anthropic/" + cfg.ModelID
+    mc := modelconfig.Resolve(ctx, modelconfig.Flow<Name>, modelconfig.SlotMain)
     systemBlock := actx.SystemPrompt + "\n\n" + actx.ContextBlock
 
     // Scanner + tool dedup state live outside the callback so they survive
@@ -641,16 +642,17 @@ func run<FlowName>(
     }
 
     resp, err := genkit.Generate(ctx, g,
-        ai.WithModelName(modelName),
+        ai.WithModelName(mc.Ref),
         ai.WithSystem(systemBlock),
         ai.WithMessages(history...),              // omit if not conversational
         ai.WithPrompt(req.<Prompt>),
         ai.WithTools(tools.listAssets /* , ... */), // omit if no tools
         ai.WithMaxTurns(maxTurns),                // see Step 2 FlowConfig + gotcha #12
         ai.WithStreaming(streamCb),
-        ai.WithConfig(anthropic.MessageNewParams{
-            MaxTokens: maxTokens,
-        }),
+        // See Step 8b: CallMiddleware handles refusals and cache-write metering;
+        // CallConfig carries MaxTokens, clamped to mc.Model's max output.
+        ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.Flow<Name>, usage.Record)),
+        cfg.Provider.CallConfig(mc.Model, maxTokens),
         // NB: do NOT add ai.WithOutputType — see Step 6 "Why not ai.WithOutputType"
     )
     if err != nil {
@@ -811,12 +813,12 @@ records nothing / never enforces (no error, no signal).
 
 ### FlowConfig fields (`flow.go`)
 
-Add alongside `ModelID`/`MaxOutputTokens`, and import
+Add alongside `MaxOutputTokens`, and import
 `"github.com/ogen-app/ogen/src/infra/vendors/llm"` + `"github.com/ogen-app/ogen/src/kernel/usage"`:
 
 ```go
-// Provider resolves the model ref + call config by role, so the flow never
-// hardcodes a model id or imports the Anthropic SDK (CON-86 FR12).
+// Provider builds the call config and middleware, so the flow never imports
+// the Anthropic SDK (CON-86 FR12).
 Provider *llm.Provider
 // Recorder captures usage events async; nil disables recording (FR5/FR10).
 Recorder *usage.Recorder
@@ -824,14 +826,16 @@ Recorder *usage.Recorder
 Checker *usage.Checker
 ```
 
-Keep `ModelID`/`QualityModelID` in config too — `llm.NewProvider` is built from
-them — but resolve the model through `Provider`, never the raw string.
+There is no model id in config or env. Models are assigned per flow slot (and
+per tier) in Harbor.
 
-### Pick a role once
+### Register the flow's slot, resolve it once per call
 
-`llm.RoleGeneration` (default → `cfg.ModelID`) or `llm.RoleQuality`
-(→ `cfg.QualityModelID`, for scoring/eval flows like post_quality). Use the
-**same** role for `Ref`, `Model`, and `CallConfig` in a given call.
+Add the flow and its slot(s) to the catalog in
+`src/domain/modelconfig/catalog.go`, and a default in
+`modelconfig.SeedDefaults` (it seeds the slot's row on first boot). Then
+resolve once per call with `modelconfig.Resolve(ctx, flow, slot)`, and use that
+one `Resolved` for `mc.Ref`, `CallConfig(mc.Model, …)` and usage recording.
 
 ### Enforcement gate — before the first paid call
 
@@ -852,22 +856,31 @@ mode never blocks.
 
 ### Model call goes through the Provider
 
-Replace the hardcoded model id + Anthropic config with the Provider:
+The model is never hardcoded or read from env: resolve the flow's slot (Harbor
+assigns it per tier) and pass the resolved model to the Provider:
 
 ```go
-modelName := cfg.Provider.Ref(role) // e.g. "anthropic/claude-sonnet-4-5-20250929"
+mc := modelconfig.Resolve(ctx, modelconfig.Flow<Name>, modelconfig.SlotMain)
+u := flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "<feature>", Component: logComponent}
 ...
 out, resp, err := genkit.GenerateData[T](ctx, g,
-    ai.WithModelName(modelName),
+    ai.WithModelName(mc.Ref),
     ai.WithSystem("%s", prompts.system),
     ai.WithPrompt("%s", userPrompt),
-    cfg.Provider.CallConfig(maxTokens), // carries MaxTokens
+    ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.Flow<Name>, u.Record)),
+    cfg.Provider.CallConfig(mc.Model, maxTokens), // MaxTokens, clamped to the model's max output
 )
 ```
 
 `CallConfig` returns an `ai.WithConfig(...)` option — genkit **rejects two
 `WithConfig`s**, so pass exactly one `CallConfig` per call and no other config
-option.
+option. Its cap covers thinking too (Claude 5.x thinks by default).
+
+`CallMiddleware` turns a refusal into `llm.ErrRefused` (recording the refused
+call through `u.Record`) and meters prompt-cache writes. genkit also allows only
+one `WithMiddleware` per call, so list any other middleware in the same call,
+before it: `ai.WithMiddleware(u.Meter(), cfg.Provider.CallMiddleware(...))`. A
+tool loop that resends the same prefix every round adds `llm.CachePrompt()`.
 
 ### Record usage — after each completed call
 
@@ -877,7 +890,7 @@ tokens), record it. `RecordResp` runs the vendor's meter over the genkit
 
 ```go
 // One event per completed call (CON-86 FR1). Nil recorder = no-op.
-cfg.Recorder.RecordResp(ctx, cfg.Provider.Vendor(), cfg.Provider.Model(role), "<feature>", resp)
+u.Record(ctx, resp)
 ```
 
 - `"<feature>"` is a stable slug for this flow (e.g. `"content_plan"`,
@@ -955,7 +968,6 @@ func init<FlowName>(
         Provider:        provider,
         Recorder:        recorder,
         Checker:         checker,
-        ModelID:         cfg.ModelID,
         MaxOutputTokens: cfg.MaxOutputTokens,
         Embedder:        embedder,
     }
@@ -972,7 +984,7 @@ In `src/transport/server/server.go`, add the callback var declaration near the o
 var <flowName>Callback func(context.Context, <flow_name>.<FlowName>Request, <flow_name>.OnEventFunc) (*<flow_name>.<FlowName>Response, error)
 
 // ... later, inside the Anthropic-key block. provider is already built there
-// (provider := llm.NewProvider(cfg.ModelID, cfg.QualityModelID)); recorder and
+// (provider := llm.NewProvider()); recorder and
 // checker come from initUsage's usageWiring (usageWiring.recorder/.checker) —
 // both nil-safe when analytics is disabled:
 <flowName>Repos := <flow_name>.<FlowName>Repos{ /* ... */ }
@@ -1774,7 +1786,7 @@ Fix any compile or test errors before reporting success. Do not claim success wi
 - `flow.go` created — `InitX`, `NewXCallback`, `emit` helper
 - `src/transport/server/<flow_name>.go` adapter created
 - `src/transport/server/server.go` edited — callback var + `initX` call + handler registration gated on API key
-- **Usage metering wired (CON-86, Step 8b)** — `Provider`/`Recorder`/`Checker` in `FlowConfig`; `cfg.Checker.Enforce(ctx)` gate placed after any cache short-circuit; `cfg.Recorder.RecordResp(ctx, Provider.Vendor(), Provider.Model(role), "<feature>", resp)` after each completed call; model resolved via `Provider.Ref(role)` + `Provider.CallConfig(maxTokens)`; `initX` threads `provider, recorder, checker`; handler maps `*usage.LimitExceededError` → 402
+- **Usage metering wired (CON-86, Step 8b)** — `Provider`/`Recorder`/`Checker` in `FlowConfig`; `cfg.Checker.Enforce(ctx)` gate placed after any cache short-circuit; `u.Record(ctx, resp)` after each completed call; model resolved via `modelconfig.Resolve(ctx, flow, slot)` (slot registered in the catalog + `SeedDefaults`), called with `Provider.CallMiddleware(flow, u.Record)` + `Provider.CallConfig(mc.Model, maxTokens)`; `initX` threads `provider, recorder, checker`; handler maps `*usage.LimitExceededError` → 402
 - HTTP handler added to `src/transport/handlers/<resource>.go` — SSE or JSON shape, swagger comments, service-unavailable branch
 - Callback threaded through `New<Resource>Handler` constructor signature
 - Handler test added (`src/transport/handlers/<resource>_test.go`) — stub callback, SSE frame parser, happy path + error path

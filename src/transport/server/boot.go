@@ -23,22 +23,12 @@ import (
 func loadOperatorCatalogs(ctx context.Context, cfg *config.Config, r *repos) {
 	pubzernio.InitCatalog(ctx, r.platformRepo)
 	platforms.InitGlobalLimits(ctx, r.platformGlobalLimitsRepo)
-	// The config-field defaults seed any missing global-default row, so a
-	// fresh database resolves exactly the models the environment names.
-	modelconfig.Init(ctx, r.flowModelConfigRepo,
-		modelconfig.Defaults{
-			Generation:     cfg.ModelID, //nolint:staticcheck // Seed-only read; the DB is authoritative after boot.
-			Quality:        cfg.QualityModelID,
-			Planning:       cfg.PlanningModelID,
-			Embed:          cfg.EmbedModel,
-			VisionClassify: cfg.VisionClassifyModel,
-			VisionExtract:  cfg.VisionExtractModel,
-			VisionEscalate: cfg.VisionEscalateModel,
-			Transcribe:     cfg.TranscribeModel,
-		},
-		vendors.VendorOf,
-		tenantTierOf(r),
-	)
+	// Code defaults seed any missing global-default row; Harbor owns every
+	// assignment after that. The embed slot is seeded with EMBED_MODEL, the
+	// model the embedder actually runs.
+	seeds := modelconfig.SeedDefaults
+	seeds.Embed = cfg.EmbedModel
+	modelconfig.Init(ctx, r.flowModelConfigRepo, seeds, vendors.VendorOf, tenantTierOf(r))
 	logModelCatalog(ctx)
 }
 
