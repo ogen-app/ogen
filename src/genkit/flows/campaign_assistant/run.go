@@ -223,7 +223,7 @@ func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
 		ai.WithMaxTurns(maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
 		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.RefusalGuard(modelconfig.FlowCampaignAssistant)),
-		t.cfg.Provider.CallConfig(maxTokens),
+		t.cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
 	t.timer.genMs = time.Since(t.timer.genStart).Milliseconds()
 	if err != nil {

@@ -180,7 +180,7 @@ func generatePosts(
 		systemPrompt: systemPrompt,
 		modelOpts: []ai.GenerateOption{
 			ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowContentPlan)),
-			cfg.Provider.CallConfig(cmp.Or(cfg.MaxOutputTokens, 8192)),
+			cfg.Provider.CallConfig(mc.Model, cmp.Or(cfg.MaxOutputTokens, 8192)),
 		},
 		usage:    flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "content_plan", Component: logComponent},
 		validate: newPostValidator(platforms, phaseIDSet(scope.phases), data.StartDate, data.EndDate),

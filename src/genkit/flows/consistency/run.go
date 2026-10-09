@@ -60,7 +60,7 @@ func runCheckBrief(
 		ai.WithSystem("%s", systemPrompt),
 		ai.WithPrompt("%s", userPrompt),
 		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowConsistency)),
-		cfg.Provider.CallConfig(maxTokens),
+		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, "genkit.consistency", "campaign_id", campaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
@@ -159,7 +159,7 @@ func runCheckPosts(
 		ai.WithSystem("%s", systemPrompt),
 		ai.WithPrompt("%s", userPrompt),
 		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowConsistency)),
-		cfg.Provider.CallConfig(maxOutputTokens(cfg)),
+		cfg.Provider.CallConfig(mc.Model, maxOutputTokens(cfg)),
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, "genkit.consistency", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)

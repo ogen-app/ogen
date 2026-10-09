@@ -43,13 +43,14 @@ func prewarmToolCache(g *genkit.Genkit, cfg PostAssistantFlowConfig, t *toolSet)
 	}
 
 	start := time.Now()
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, slot)
 	_, err := genkit.Generate(ctx, g,
-		ai.WithModelName(modelconfig.Ref(ctx, modelconfig.FlowPostAssistant, slot)),
+		ai.WithModelName(mc.Ref),
 		ai.WithSystem("warmup"),
 		ai.WithPrompt("warmup"),
 		ai.WithTools(tools...),
 		ai.WithMaxTurns(1),
-		cfg.Provider.CallConfig(1), // max_tokens: 1 — grammar compiles during prep
+		cfg.Provider.CallConfig(mc.Model, 1), // max_tokens: 1 — grammar compiles during prep
 	)
 	if err != nil {
 		slog.Warn("post_assistant tool-cache prewarm failed (non-fatal)",

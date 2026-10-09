@@ -40,7 +40,7 @@ func TestCallConfig_Claude5Compatible(t *testing.T) {
 		ai.WithSystem("system"),
 		ai.WithMessages(ai.NewUserTextMessage("earlier"), ai.NewModelTextMessage("reply")),
 		ai.WithPrompt("now"),
-		llm.NewProvider().CallConfig(1000),
+		llm.NewProvider().CallConfig("claude-haiku-5-5", 1000),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +54,49 @@ func TestCallConfig_Claude5Compatible(t *testing.T) {
 	}
 	if last := got.Messages[len(got.Messages)-1]; last.Role != ai.RoleUser {
 		t.Errorf("last message role = %q, want user (no prefill)", last.Role)
+	}
+}
+
+// sentMaxTokens returns the max_tokens CallConfig(model, asked) sends.
+func sentMaxTokens(t *testing.T, model string, asked int64) int64 {
+	t.Helper()
+	var got int64
+	g := genkit.Init(t.Context())
+	genkit.DefineModel(g, "test/capture", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+		func(_ context.Context, req *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			got = req.Config.(anthropic.MessageNewParams).MaxTokens
+			return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok"), FinishReason: ai.FinishReasonStop}, nil
+		})
+	if _, err := genkit.Generate(t.Context(), g,
+		ai.WithModelName("test/capture"), ai.WithPrompt("go"),
+		llm.NewProvider().CallConfig(model, asked),
+	); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestCallConfig_ClampsToModelMaxOutput: a cap sized for 5.x (128K output)
+// must still work for a tier on 4.x (64K), so CallConfig clamps per model.
+func TestCallConfig_ClampsToModelMaxOutput(t *testing.T) {
+	tests := []struct {
+		model string
+		asked int64
+		want  int64
+	}{
+		{model: "claude-haiku-4-5-20251001", asked: 128_000, want: 64_000},
+		{model: "claude-sonnet-4-5-20250929", asked: 128_000, want: 64_000},
+		{model: "claude-haiku-5-5", asked: 128_000, want: 128_000},
+		{model: "claude-sonnet-5-5", asked: 200_000, want: 128_000},
+		{model: "claude-haiku-4-5-20251001", asked: 8192, want: 8192},
+		{model: "not-registered", asked: 200_000, want: 200_000},
+	}
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			if got := sentMaxTokens(t, tc.model, tc.asked); got != tc.want {
+				t.Fatalf("max_tokens = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
