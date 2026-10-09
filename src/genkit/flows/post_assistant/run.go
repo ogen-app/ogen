@@ -21,6 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -252,7 +253,10 @@ type loopParams struct {
 	slot      string
 	maxTokens int64
 	maxTurns  int
-	tools     []ai.ToolRef
+	// callOpts configures the loop's model calls; the planner loop caches its
+	// prompt, which its rounds and turns resend.
+	callOpts []llm.CallOption
+	tools    []ai.ToolRef
 	// watch lists the envelope fields streamed as deltas. The planner never
 	// emits updatedContent; the editPost writer streams content itself.
 	watch []string
@@ -269,6 +273,7 @@ func (t *turn) loopParams(tools *toolSet) loopParams {
 	if t.cfg.PlannerEnabled {
 		p.slot = modelconfig.SlotPlanner
 		p.maxTokens = cmp.Or(t.cfg.PlannerMaxOutputTokens, 8192)
+		p.callOpts = []llm.CallOption{llm.CachePrompt()}
 		p.tools = append(p.tools, tools.editPost)
 		p.watch = []string{keyExplanation}
 	}
@@ -314,7 +319,7 @@ func (t *turn) callModel(ctx context.Context, p loopParams) error {
 		ai.WithTools(p.tools...),
 		ai.WithMaxTurns(p.maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
-		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.CallMiddleware(modelconfig.FlowPostAssistant, usage.Record)),
+		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.CallMiddleware(modelconfig.FlowPostAssistant, usage.Record, p.callOpts...)),
 		t.cfg.Provider.CallConfig(mc.Model, p.maxTokens),
 	)
 	if err != nil {

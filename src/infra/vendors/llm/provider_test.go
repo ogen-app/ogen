@@ -175,6 +175,31 @@ func TestCallMiddleware_CacheWritesReachThePrice(t *testing.T) {
 	}
 }
 
+func TestCallMiddleware_CachePromptIsPerCall(t *testing.T) {
+	for _, cache := range []bool{true, false} {
+		var requested bool
+		g := genkit.Init(t.Context())
+		genkit.DefineModel(g, "test/fake", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+			func(ctx context.Context, _ *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				requested = llm.PromptCacheRequested(ctx)
+				return &ai.ModelResponse{Message: ai.NewModelTextMessage("ok"), FinishReason: ai.FinishReasonStop}, nil
+			})
+		var opts []llm.CallOption
+		if cache {
+			opts = append(opts, llm.CachePrompt())
+		}
+		if _, err := genkit.Generate(t.Context(), g,
+			ai.WithModelName("test/fake"), ai.WithPrompt("go"),
+			ai.WithMiddleware(llm.NewProvider().CallMiddleware("test_flow", nil, opts...)),
+		); err != nil {
+			t.Fatal(err)
+		}
+		if requested != cache {
+			t.Errorf("CachePrompt=%v: model request asked for caching = %v", cache, requested)
+		}
+	}
+}
+
 func TestCacheWriteProbe_KeepsLargest(t *testing.T) {
 	_, p := llm.WithCacheWriteProbe(t.Context())
 	for _, n := range []int64{300, 1200, 1200, 50} {

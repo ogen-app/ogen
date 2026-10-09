@@ -44,3 +44,18 @@ func (p *CacheWriteProbe) Observe(tokens int64) {
 
 // Tokens returns the largest count observed.
 func (p *CacheWriteProbe) Tokens() int64 { return p.tokens.Load() }
+
+type promptCacheKey struct{}
+
+// WithPromptCache marks ctx's model request for prompt caching.
+func WithPromptCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, promptCacheKey{}, true)
+}
+
+// PromptCacheRequested reports whether the model request carrying ctx asked
+// for its prompt prefix to be cached (see CachePrompt). The HTTP transport
+// reads it to place the cache breakpoints.
+func PromptCacheRequested(ctx context.Context) bool {
+	v, _ := ctx.Value(promptCacheKey{}).(bool)
+	return v
+}

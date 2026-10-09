@@ -26,32 +26,28 @@ var installAnthropicToolOrderOnce sync.Once
 // exact, order-sensitive tool set, so a random order pays the full compile
 // (~50s) on every call. A stable order keeps that cache warm.
 //
-// When cachePrefixModel is non-empty, requests for that model also get an
-// ephemeral cache_control breakpoint on the last system block, caching the
-// tool schemas and system prompt together, and one on the last message, so a
-// tool loop's rounds reuse the conversation so far. Pass "" to disable.
+// A request whose call asked for prompt caching (llm.CachePrompt, read from the
+// request context) also gets an ephemeral cache_control breakpoint on the last
+// system block, caching the tool schemas and system prompt together, and one
+// on the last message, so a tool loop's rounds reuse the conversation so far.
+// The opt-in is per call, so it follows whatever model the slot resolves to.
 // Prefixes under the model's caching minimum are silently not cached.
 //
 // Must be installed before the plugin builds its client. Idempotent;
 // non-Anthropic traffic passes through untouched.
-func InstallAnthropicToolOrderStabilizer(cachePrefixModel string) {
+func InstallAnthropicToolOrderStabilizer() {
 	installAnthropicToolOrderOnce.Do(func() {
 		base := http.DefaultTransport
 		if base == nil {
 			base = &http.Transport{}
 		}
-		http.DefaultTransport = &anthropicToolOrderTransport{base: base, cachePrefixModel: cachePrefixModel}
-		slog.Info("anthropic tool-order stabilizer installed",
-			logging.AttrComponent, "anthropic.http", "cache_prefix_model", cachePrefixModel)
+		http.DefaultTransport = &anthropicToolOrderTransport{base: base}
+		slog.Info("anthropic tool-order stabilizer installed", logging.AttrComponent, "anthropic.http")
 	})
 }
 
 type anthropicToolOrderTransport struct {
 	base http.RoundTripper
-	// cachePrefixModel is the model whose requests get a system cache_control
-	// breakpoint. Empty disables prompt caching (tool-order sorting is
-	// unconditional). See InstallAnthropicToolOrderStabilizer.
-	cachePrefixModel string
 }
 
 func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -79,9 +75,9 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 		slog.Debug("anthropic tools reordered for cache stability",
 			logging.AttrComponent, "anthropic.http", "tools", n)
 	}
-	// Prompt caching is scoped to the one model configured for it, so other
-	// flows never pay the cache-write premium on a prefix they won't reuse.
-	if t.cachePrefixModel != "" && topModel(top) == t.cachePrefixModel {
+	// Prompt caching is opt-in per call, so one-shot flows never pay the
+	// cache-write premium on a prefix they won't reuse.
+	if llm.PromptCacheRequested(req.Context()) {
 		if markTopSystem(top) {
 			changed = true
 			slog.Debug("anthropic system cache breakpoint added",
@@ -182,13 +178,6 @@ func (r *cacheWriteReader) flush() {
 		}
 		line = line[end:]
 	}
-}
-
-// topModel returns a /v1/messages body's `model`, or "" when it can't be read.
-func topModel(top map[string]json.RawMessage) string {
-	var model string
-	_ = json.Unmarshal(top["model"], &model)
-	return model
 }
 
 // rewriteTop parses body, applies edit to its top-level fields and returns the

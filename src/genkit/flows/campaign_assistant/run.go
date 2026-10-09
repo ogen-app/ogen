@@ -19,6 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 )
@@ -222,7 +223,9 @@ func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
 		ai.WithTools(tools.all()...),
 		ai.WithMaxTurns(maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
-		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.CallMiddleware(modelconfig.FlowCampaignAssistant, usage.Record)),
+		// The routing loop resends the same tools, system prompt and history
+		// every round and turn, so its prompt is cached.
+		ai.WithMiddleware(usage.Meter(), t.cfg.Provider.CallMiddleware(modelconfig.FlowCampaignAssistant, usage.Record, llm.CachePrompt())),
 		t.cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
 	t.timer.genMs = time.Since(t.timer.genStart).Milliseconds()
