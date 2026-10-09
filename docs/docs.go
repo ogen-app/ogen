@@ -7115,7 +7115,7 @@ const docTemplate = `{
                         "PluginToken": []
                     }
                 ],
-                "description": "One PNG or JPEG per request (type detected from the bytes). Stored as a pending IMG asset with origin figma and processed like any upload (alt text, description, embedding); identical bytes return the existing asset with deduplicated=true. With post_id the image is also attached to that post; if that fails the asset is still stored and attach_error says why (post_not_found, post_locked, quota_exceeded, or an image code).",
+                "description": "One PNG or JPEG per request (type detected from the bytes). Without post_id it is stored as a pending IMG asset with origin figma and processed like any upload (alt text, description, embedding); identical bytes return the existing asset with deduplicated=true. With post_id it is attached to that post only, like an upload in the post editor (metadata stripped, alt text generated unless sent), and never enters the content bank: asset is null, attachment is set and open_url is the post. A post that doesn't exist or was already sent for publishing is post_not_found / post_locked.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -7125,7 +7125,7 @@ const docTemplate = `{
                 "tags": [
                     "plugins"
                 ],
-                "summary": "Send a rendered frame to the content bank",
+                "summary": "Send a rendered frame to the content bank or a post",
                 "parameters": [
                     {
                         "type": "file",
@@ -7143,7 +7143,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "frame name; becomes the asset title",
+                        "description": "frame name; becomes the asset title or attachment filename",
                         "name": "node_name",
                         "in": "formData",
                         "required": true
@@ -7162,7 +7162,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "attach to this post",
+                        "description": "attach to this post instead of the content bank",
                         "name": "post_id",
                         "in": "formData"
                     },
@@ -7203,6 +7203,24 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "post_not_found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "post_locked",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "415": {
@@ -13154,17 +13172,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.pluginAttachError": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "string"
-                },
-                "message": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.pluginAttachment": {
             "type": "object",
             "properties": {
@@ -13394,9 +13401,6 @@ const docTemplate = `{
             "properties": {
                 "asset": {
                     "$ref": "#/definitions/handlers.pluginAsset"
-                },
-                "attach_error": {
-                    "$ref": "#/definitions/handlers.pluginAttachError"
                 },
                 "attachment": {
                     "$ref": "#/definitions/handlers.pluginAttachment"

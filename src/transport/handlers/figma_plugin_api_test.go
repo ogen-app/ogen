@@ -27,7 +27,7 @@ import (
 
 // pluginImageWire decodes POST /api/plugins/figma/images.
 type pluginImageWire struct {
-	Asset struct {
+	Asset *struct {
 		ID        string                 `json:"id"`
 		Title     string                 `json:"title"`
 		Status    string                 `json:"status"`
@@ -40,9 +40,6 @@ type pluginImageWire struct {
 		ID     string `json:"id"`
 		PostID string `json:"post_id"`
 	} `json:"attachment"`
-	AttachError *struct {
-		Code string `json:"code"`
-	} `json:"attach_error"`
 	OpenURL string `json:"open_url"`
 	Code    string `json:"code"`
 }
@@ -232,7 +229,6 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(out.Asset.URL).To(HaveSuffix(".png"))
 		Expect(out.OpenURL).To(Equal(testAppBaseURL + "/content-bank/assets/" + out.Asset.ID))
 		Expect(out.Attachment).To(BeNil())
-		Expect(out.AttachError).To(BeNil())
 		Expect(imgEnq.calls).To(HaveLen(1))
 		Expect(imgEnq.calls[0]).To(ContainSubstring("image/png"))
 
@@ -279,13 +275,24 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(resp.StatusCode).To(Equal(fiber.StatusBadRequest))
 	})
 
-	It("attaches the frame to a post when asked", func() {
+	It("attaches the frame to a post without adding it to the content bank", func() {
+		countAssets := func() int {
+			GinkgoHelper()
+			n, err := db.NewSelect().Model((*models.Asset)(nil)).Count(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+			return n
+		}
+		assetsBefore, jobsBefore := countAssets(), len(imgEnq.calls)
 		editor := subscribePostEvents(hub, models.DefaultTenantID, jane.ID)
-		resp, out := sendImage("f.png", otherPNG, frame(map[string]string{"post_id": postID}))
+		resp, out := sendImage("f.png", pngBytes(7, 7), frame(map[string]string{"post_id": postID, "alt_text": "Launch hero"}))
 		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
-		Expect(out.AttachError).To(BeNil())
+		Expect(out.Asset).To(BeNil())
+		Expect(out.Deduplicated).To(BeFalse())
 		Expect(out.Attachment).NotTo(BeNil())
 		Expect(out.Attachment.PostID).To(Equal(postID))
+		Expect(out.OpenURL).To(Equal(testAppBaseURL + "/posts/" + postID))
+		Expect(countAssets()).To(Equal(assetsBefore))
+		Expect(imgEnq.calls).To(HaveLen(jobsBefore))
 
 		// The sender's own open editor hears about it: actor events are not dropped.
 		ev := nextAttachmentEvent(editor)
@@ -298,22 +305,36 @@ var _ = Describe("Figma plugin API", Ordered, func() {
 		Expect(db.NewSelect().Model(&att).Where("id = ?", out.Attachment.ID).Scan(tenantCtx())).To(Succeed())
 		Expect(att.PostID).To(Equal(postID))
 		Expect(att.MimeType).To(Equal("image/png"))
+		Expect(att.CreatedBy).To(Equal(jane.ID))
+		Expect(att.AltText).To(Equal("Launch hero"))
+		Expect(att.AltTextEditedByUser).To(BeTrue())
+		Expect(att.S3Key).To(ContainSubstring("post-attachments/" + postID + "/" + att.ID))
 	})
 
-	It("keeps the asset and reports why when the post can't take it", func() {
+	It("refuses a post that can't take the frame and stores nothing", func() {
+		countAll := func() (assets, atts int) {
+			GinkgoHelper()
+			assets, err := db.NewSelect().Model((*models.Asset)(nil)).Count(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+			atts, err = db.NewSelect().Model((*models.PostAttachment)(nil)).Count(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+			return assets, atts
+		}
+		assetsBefore, attsBefore := countAll()
 		editor := subscribePostEvents(hub, models.DefaultTenantID, jane.ID)
-		resp, out := sendImage("f.png", otherPNG, frame(map[string]string{"post_id": "no-such-post"}))
-		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
-		Expect(out.Attachment).To(BeNil())
-		Expect(out.AttachError.Code).To(Equal(handlers.CodePostNotFound))
-		loadAsset(out.Asset.ID)
+		resp, out := sendImage("f.png", pngBytes(8, 8), frame(map[string]string{"post_id": "no-such-post"}))
+		Expect(resp.StatusCode).To(Equal(fiber.StatusNotFound))
+		Expect(out.Code).To(Equal(handlers.CodePostNotFound))
 
 		_, err := db.NewUpdate().TableExpr("posts").Set("status = ?", models.PostStatusScheduled).Where("id = ?", postID).Exec(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		resp, out = sendImage("g.png", pngBytes(6, 6), frame(map[string]string{"post_id": postID}))
-		Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
-		Expect(out.AttachError.Code).To(Equal(handlers.CodePostLocked))
-		loadAsset(out.Asset.ID)
+		Expect(resp.StatusCode).To(Equal(fiber.StatusConflict))
+		Expect(out.Code).To(Equal(handlers.CodePostLocked))
+
+		assetsAfter, attsAfter := countAll()
+		Expect(assetsAfter).To(Equal(assetsBefore))
+		Expect(attsAfter).To(Equal(attsBefore))
 		expectNoPostEvent(editor)
 	})
 

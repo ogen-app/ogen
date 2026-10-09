@@ -78,7 +78,7 @@ type pluginVideoResponse struct {
 // @Failure     503 {object} map[string]string
 // @Router      /api/plugins/figma/posts/{post_id}/videos/presign [post]
 func (h *FigmaPluginHandler) PresignVideo(c *fiber.Ctx) error {
-	post, err := h.pluginTargetPost(c)
+	post, err := h.pluginTargetPost(c, c.Params("post_id"))
 	if err != nil {
 		return attachmentError(c, err)
 	}
@@ -126,7 +126,7 @@ func (h *FigmaPluginHandler) FinalizeVideo(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	post, err := h.pluginPost(c)
+	post, err := h.pluginPost(c, c.Params("post_id"))
 	if err != nil {
 		return attachmentError(c, err)
 	}
@@ -163,10 +163,10 @@ func (h *FigmaPluginHandler) FinalizeVideo(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(h.videoResponse(c, post, att, append(existing, *att)))
 }
 
-// pluginPost loads the :post_id post, answering post_not_found when this
-// workspace has no such post.
-func (h *FigmaPluginHandler) pluginPost(c *fiber.Ctx) (*models.Post, error) {
-	post, err := h.posts.GetByID(reqCtx(c), c.Params("post_id"))
+// pluginPost loads the post, answering post_not_found when this workspace has
+// no such post.
+func (h *FigmaPluginHandler) pluginPost(c *fiber.Ctx, postID string) (*models.Post, error) {
+	post, err := h.posts.GetByID(reqCtx(c), postID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, rejectUpload(fiber.StatusNotFound, CodePostNotFound, "post not found in this workspace")
 	}
@@ -174,8 +174,8 @@ func (h *FigmaPluginHandler) pluginPost(c *fiber.Ctx) (*models.Post, error) {
 }
 
 // pluginTargetPost is pluginPost refusing a post already sent for publishing.
-func (h *FigmaPluginHandler) pluginTargetPost(c *fiber.Ctx) (*models.Post, error) {
-	post, err := h.pluginPost(c)
+func (h *FigmaPluginHandler) pluginTargetPost(c *fiber.Ctx, postID string) (*models.Post, error) {
+	post, err := h.pluginPost(c, postID)
 	if err != nil {
 		return nil, err
 	}

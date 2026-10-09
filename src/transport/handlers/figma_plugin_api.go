@@ -14,7 +14,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -34,12 +33,10 @@ const (
 	defaultPostPageSize = 20
 )
 
-// Attach error codes, reported beside a stored asset when attaching it to the
-// requested post failed.
+// Codes for a send whose target post can't take it.
 const (
 	CodePostNotFound = "post_not_found"
 	CodePostLocked   = "post_locked"
-	CodeAttachFailed = "attach_failed"
 )
 
 // CodeCampaignNotFound is the 404 for a campaign that was deleted or isn't in
@@ -179,17 +176,13 @@ type pluginAttachment struct {
 	PostID string `json:"post_id"`
 }
 
-type pluginAttachError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
+// pluginImageResponse answers a send: asset for one stored in the content
+// bank, attachment for one sent to a post. Exactly one of the two is set.
 type pluginImageResponse struct {
-	Asset        pluginAsset        `json:"asset"`
-	Deduplicated bool               `json:"deduplicated"`
-	Attachment   *pluginAttachment  `json:"attachment"`
-	AttachError  *pluginAttachError `json:"attach_error"`
-	OpenURL      string             `json:"open_url"`
+	Asset        *pluginAsset      `json:"asset"`
+	Deduplicated bool              `json:"deduplicated"`
+	Attachment   *pluginAttachment `json:"attachment"`
+	OpenURL      string            `json:"open_url"`
 }
 
 // limitPerToken throttles a plugin token's requests.
@@ -421,23 +414,25 @@ type pluginImageMeta struct {
 }
 
 // SendImage godoc
-// @Summary     Send a rendered frame to the content bank
-// @Description One PNG or JPEG per request (type detected from the bytes). Stored as a pending IMG asset with origin figma and processed like any upload (alt text, description, embedding); identical bytes return the existing asset with deduplicated=true. With post_id the image is also attached to that post; if that fails the asset is still stored and attach_error says why (post_not_found, post_locked, quota_exceeded, or an image code).
+// @Summary     Send a rendered frame to the content bank or a post
+// @Description One PNG or JPEG per request (type detected from the bytes). Without post_id it is stored as a pending IMG asset with origin figma and processed like any upload (alt text, description, embedding); identical bytes return the existing asset with deduplicated=true. With post_id it is attached to that post only, like an upload in the post editor (metadata stripped, alt text generated unless sent), and never enters the content bank: asset is null, attachment is set and open_url is the post. A post that doesn't exist or was already sent for publishing is post_not_found / post_locked.
 // @Tags        plugins
 // @Accept      multipart/form-data
 // @Produce     json
 // @Security    PluginToken
 // @Param       file      formData file   true  "PNG or JPEG bytes"
 // @Param       node_id   formData string true  "Figma node id, e.g. 12:345"
-// @Param       node_name formData string true  "frame name; becomes the asset title"
+// @Param       node_name formData string true  "frame name; becomes the asset title or attachment filename"
 // @Param       file_name formData string false "Figma document name"
 // @Param       file_key  formData string false "Figma file key (private builds only)"
-// @Param       post_id   formData string false "attach to this post"
+// @Param       post_id   formData string false "attach to this post instead of the content bank"
 // @Param       alt_text  formData string false "alt text written by the designer"
 // @Success     201 {object} pluginImageResponse
 // @Failure     400 {object} map[string]string "too_large, empty_file, invalid request"
 // @Failure     401 {object} map[string]string "plugin_token_invalid"
 // @Failure     402 {object} map[string]any    "content-bank or media-storage limit reached"
+// @Failure     404 {object} map[string]string "post_not_found"
+// @Failure     409 {object} map[string]string "post_locked"
 // @Failure     415 {object} map[string]string "vector_rejected, unsupported_media_type"
 // @Failure     429 {object} map[string]string
 // @Failure     503 {object} map[string]string "service_unavailable"
@@ -459,6 +454,10 @@ func (h *FigmaPluginHandler) SendImage(c *fiber.Ctx) error {
 	if err != nil {
 		return attachmentError(c, err)
 	}
+	if meta.postID != "" {
+		return h.sendImageToPost(c, session, tok, meta.postID, in)
+	}
+
 	quota, err := h.assets.requireUploadQuota(c, int64(len(in.Raw)))
 	if err != nil {
 		return err
@@ -473,19 +472,56 @@ func (h *FigmaPluginHandler) SendImage(c *fiber.Ctx) error {
 		plugins.ImagesDeduplicated.Add(1)
 	}
 
-	out := pluginImageResponse{
-		Asset:        pluginAssetFrom(res.Asset),
+	asset := pluginAssetFrom(res.Asset)
+	h.recordActivity(c, "plugin_image_sent", tok.ID, map[string]any{"asset_id": res.Asset.ID, "deduplicated": res.deduplicated})
+	return c.Status(fiber.StatusCreated).JSON(pluginImageResponse{
+		Asset:        &asset,
 		Deduplicated: res.deduplicated,
 		OpenURL:      h.appBaseURL + "/content-bank/assets/" + res.Asset.ID,
+	})
+}
+
+// sendImageToPost stores the frame as an attachment of the post the way the
+// post editor's upload does. It never enters the content bank: a post's media
+// is the post's own.
+func (h *FigmaPluginHandler) sendImageToPost(c *fiber.Ctx, session *models.Session, tok *models.PluginToken, postID string, in imageIngest) error {
+	post, err := h.pluginTargetPost(c, postID)
+	if err != nil {
+		return attachmentError(c, err)
 	}
-	payload := map[string]any{"asset_id": res.Asset.ID, "deduplicated": res.deduplicated}
-	if meta.postID != "" {
-		out.Attachment, out.AttachError = h.attachToPost(c, session, res.Asset.ID, meta)
-		payload["post_id"] = meta.postID
-		payload["attached"] = out.Attachment != nil
+	if h.attachments.image == nil {
+		return rejectAttachment(c, fiber.StatusServiceUnavailable, models.UploadCodeServiceUnavailable, "image processing is not configured")
 	}
-	h.recordActivity(c, "plugin_image_sent", tok.ID, payload)
-	return c.Status(fiber.StatusCreated).JSON(out)
+	quota, err := requireQuotaAmount(c, h.attachments.limiter, "media_storage_bytes", int64(len(in.Raw)))
+	if err != nil {
+		return err
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	att := &models.PostAttachment{
+		ID:        id,
+		PostID:    post.ID,
+		AltText:   in.AltText,
+		CreatedBy: session.UserID,
+		// Alt text the designer wrote is a manual edit: the async generator
+		// never overwrites it.
+		AltTextEditedByUser: in.AltText != "",
+	}
+	ext := strings.ToLower(filepath.Ext(in.Filename))
+	if err := h.attachments.storeImage(reqCtx(c), att, in.Raw, in.MimeType, ext, in.Filename); err != nil {
+		return attachmentError(c, err)
+	}
+	if err := h.attachments.saveAttachment(c, att, nil, quota, session.TenantID, attachmentSourceFigmaPlugin); err != nil {
+		return err
+	}
+	plugins.ImagesSent.Add(1)
+	h.recordActivity(c, "plugin_image_sent", tok.ID, map[string]any{"post_id": post.ID, "attachment_id": att.ID})
+	return c.Status(fiber.StatusCreated).JSON(pluginImageResponse{
+		Attachment: &pluginAttachment{ID: att.ID, PostID: post.ID},
+		OpenURL:    h.appBaseURL + "/posts/" + post.ID,
+	})
 }
 
 // readPluginImageMeta validates the form fields beside the file. Values are
@@ -573,47 +609,6 @@ func pluginUploadStatus(code string) int {
 		return fiber.StatusInternalServerError
 	}
 	return imageRejectStatus(code)
-}
-
-// attachToPost attaches the stored asset to the requested post through the
-// bank-attach core. A failure is reported, never fatal: the asset is kept.
-func (h *FigmaPluginHandler) attachToPost(c *fiber.Ctx, session *models.Session, assetID string, meta pluginImageMeta) (*pluginAttachment, *pluginAttachError) {
-	post, err := h.posts.GetByID(reqCtx(c), meta.postID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, &pluginAttachError{Code: CodePostNotFound, Message: "post not found in this workspace"}
-	}
-	if err != nil {
-		return nil, &pluginAttachError{Code: CodeAttachFailed, Message: "could not load the post"}
-	}
-	if ensureMutable(post) != nil {
-		return nil, &pluginAttachError{Code: CodePostLocked, Message: "the post was already sent for publishing and can't take new media"}
-	}
-	req := &attachFromAssetRequest{AssetID: assetID}
-	if meta.altText != "" {
-		req.AltText = &meta.altText
-	}
-	att, err := h.attachments.attachBankAsset(c, post, req, session, attachmentSourceFigmaPlugin)
-	if err != nil {
-		return nil, pluginAttachErrorFrom(err)
-	}
-	return &pluginAttachment{ID: att.ID, PostID: post.ID}, nil
-}
-
-// pluginAttachErrorFrom reports why the bank-attach core refused.
-func pluginAttachErrorFrom(err error) *pluginAttachError {
-	if r, ok := errors.AsType[*attachmentReject](err); ok {
-		return &pluginAttachError{Code: r.code, Message: r.msg}
-	}
-	if _, ok := errors.AsType[*entitlements.QuotaExceededError](err); ok {
-		return &pluginAttachError{Code: models.UploadCodeQuotaExceeded, Message: "media storage limit reached"}
-	}
-	if _, ok := errors.AsType[*entitlements.FeatureNotAvailableError](err); ok {
-		return &pluginAttachError{Code: models.UploadCodeQuotaExceeded, Message: "media storage is not available on this plan"}
-	}
-	if fe, ok := errors.AsType[*fiber.Error](err); ok && fe.Code < fiber.StatusInternalServerError {
-		return &pluginAttachError{Code: CodeAttachFailed, Message: fe.Message}
-	}
-	return &pluginAttachError{Code: CodeAttachFailed, Message: "could not attach the image"}
 }
 
 func pluginAssetFrom(a *models.Asset) pluginAsset {
