@@ -108,6 +108,10 @@ type PostAttachmentsHandler struct {
 	// hub receives post.attachments.changed after each committed write. Nil
 	// disables eventing; set via WithEventHub.
 	hub eventhub.Hub
+	// pending records presigned video uploads until finalize consumes them,
+	// so the sweep can delete the abandoned ones. Nil disables the tracking;
+	// set via WithPendingUploads.
+	pending repository.PendingUploadRepository
 }
 
 func NewPostAttachmentsHandler(
@@ -367,7 +371,12 @@ func (h *PostAttachmentsHandler) createAttachment(c *fiber.Ctx, post *models.Pos
 // generation in the background: the request stays fast, and the generator
 // writes only where alt text is still un-edited.
 func (h *PostAttachmentsHandler) saveAttachment(c *fiber.Ctx, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID, source string) error {
-	if err := h.persistAttachment(reqCtx(c), att, thumbnail); err != nil {
+	return h.saveAttachmentWith(c, att, thumbnail, quota, tenantID, source, h.repo.CreateAtNextPosition)
+}
+
+// saveAttachmentWith is saveAttachment with the row written by insert.
+func (h *PostAttachmentsHandler) saveAttachmentWith(c *fiber.Ctx, att *models.PostAttachment, thumbnail []byte, quota quotaHold, tenantID, source string, insert attachmentInsert) error {
+	if err := h.persistAttachment(reqCtx(c), att, thumbnail, insert); err != nil {
 		return err
 	}
 	quota.dispatch(reqCtx(c))
@@ -663,19 +672,25 @@ func imagePrepareReject(err error) error {
 	}
 }
 
-// persistAttachment stores the PDF thumbnail (best-effort — the attachment is
-// valid without one) and inserts the row at the next position atomically. If
-// the insert fails the stored objects are deleted: without the row they are
-// undiscoverable dead weight.
-func (h *PostAttachmentsHandler) persistAttachment(ctx context.Context, att *models.PostAttachment, thumbnail []byte) error {
+// attachmentInsert writes an attachment row at the post's next position.
+type attachmentInsert func(context.Context, *models.PostAttachment) error
+
+// persistAttachment stores the thumbnail (best-effort — the attachment is
+// valid without one) and inserts the row with insert. If the insert fails the
+// stored objects are deleted: without the row they are undiscoverable dead
+// weight. The one exception is an upload an earlier finalize already
+// attached, whose object that attachment holds.
+func (h *PostAttachmentsHandler) persistAttachment(ctx context.Context, att *models.PostAttachment, thumbnail []byte, insert attachmentInsert) error {
 	if len(thumbnail) > 0 {
 		thumbKey := attachmentKey(ctx, att, ".thumb.png")
 		if _, err := h.storage.Upload(ctx, thumbKey, bytes.NewReader(thumbnail), int64(len(thumbnail)), "image/png"); err == nil {
 			att.ThumbnailS3Key = thumbKey
 		}
 	}
-	if err := h.repo.CreateAtNextPosition(ctx, att); err != nil {
-		_ = h.storage.Delete(ctx, att.S3Key)
+	if err := insert(ctx, att); err != nil {
+		if !errors.Is(err, repository.ErrUploadAlreadyAttached) {
+			_ = h.storage.Delete(ctx, att.S3Key)
+		}
 		if att.ThumbnailS3Key != "" {
 			_ = h.storage.Delete(ctx, att.ThumbnailS3Key)
 		}

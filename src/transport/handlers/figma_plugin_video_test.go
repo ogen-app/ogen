@@ -140,7 +140,7 @@ var _ = Describe("Figma plugin video API", Ordered, func() {
 
 		assets := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), store, db, nil, nil, nil, nil, &fakeImageEnqueuer{}, auth, nil, handlers.AssetsOptions{})
 		attachments := handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, prober, &fakeImagePreparer{store: store}, nil, 280, auth, lim).
-			WithEventHub(hub)
+			WithEventHub(hub).WithPendingUploads(repository.NewPendingUploadRepository(db))
 
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
@@ -166,7 +166,7 @@ var _ = Describe("Figma plugin video API", Ordered, func() {
 	})
 
 	AfterEach(func() {
-		for _, tbl := range []string{"post_attachments", "post_versions", "posts", "campaigns", "plugin_tokens", "sessions", "users", "accounts"} {
+		for _, tbl := range []string{"pending_uploads", "post_attachments", "post_versions", "posts", "campaigns", "plugin_tokens", "sessions", "users", "accounts"} {
 			_, err := db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(ctx)
 			Expect(err).NotTo(HaveOccurred())
 		}
@@ -348,6 +348,17 @@ var _ = Describe("Figma plugin video API", Ordered, func() {
 		Expect(again.StatusCode).To(Equal(fiber.StatusOK))
 		Expect(b.Attachment.ID).To(Equal(a.Attachment.ID))
 		Expect(attachmentCount(postID)).To(Equal(1))
+	})
+
+	It("refuses an upload the sweep already took with 410 upload_expired", func() {
+		key := upload(postID, 1024)
+		_, err := db.NewDelete().TableExpr("pending_uploads").Where("s3_key = ?", key).Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		resp, out := finalize(postID, frame(key))
+		Expect(resp.StatusCode).To(Equal(fiber.StatusGone))
+		Expect(out.Code).To(Equal(models.UploadCodeUploadExpired))
+		Expect(attachmentCount(postID)).To(BeZero())
 	})
 
 	It("answers a repeated finalize after the post was sent for publishing", func() {

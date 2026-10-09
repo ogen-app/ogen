@@ -7459,7 +7459,7 @@
                         "PluginToken": []
                     }
                 ],
-                "description": "Probes the object PUT through the presigned URL (duration, size, poster frame) and attaches it to the post. platform_validation lists the platform and post-type rules this video breaks, as warnings; the attachment is still created. Repeating a finalize for an s3_key already attached returns that attachment with 200, even once the post has been sent for publishing. A refused object is deleted.",
+                "description": "Probes the object PUT through the presigned URL (duration, size, poster frame) and attaches it to the post. platform_validation lists the platform and post-type rules this video breaks, as warnings; the attachment is still created. Repeating a finalize for an s3_key already attached returns that attachment with 200, even once the post has been sent for publishing. A refused object is deleted. An upload not finalized within two hours of its URL expiring is swept from storage, and finalizing it then answers 410 upload_expired.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7537,6 +7537,15 @@
                     },
                     "409": {
                         "description": "post_locked",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "upload_expired",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -9343,7 +9352,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Probes the uploaded object via video-service (duration, codec,\nresolution, poster frame), validates it against the post's\nplatform, and persists the attachment row (CON-148). Corrupt\nor unreadable video is a terminal 400; an unrecognised\ncontainer/codec is 415. If video-service is unreachable the\nattachment is still created, unprobed (no duration/poster,\nweaker validation). The object's real size is checked against\nthe media storage quota; over it, the object is deleted (402).",
+                "description": "Probes the uploaded object via video-service (duration, codec,\nresolution, poster frame), validates it against the post's\nplatform, and persists the attachment row (CON-148). Corrupt\nor unreadable video is a terminal 400; an unrecognised\ncontainer/codec is 415. If video-service is unreachable the\nattachment is still created, unprobed (no duration/poster,\nweaker validation). The object's real size is checked against\nthe media storage quota; over it, the object is deleted (402).\nAn upload not finalized within two hours of its URL expiring\nis swept from storage; finalizing it then is 410\n`upload_expired`. Repeating a finalize that succeeded returns\nthe same attachment.",
                 "consumes": [
                     "application/json"
                 ],
@@ -9415,6 +9424,15 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "upload_expired",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {

@@ -106,6 +106,12 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 		store.objects[key] = bytes.Repeat([]byte{0}, n)
 		return key
 	}
+	pendingCount := func(key string) int {
+		GinkgoHelper()
+		n, err := db.NewSelect().Model((*models.PendingUpload)(nil)).Where("s3_key = ?", key).Count(tenantCtx())
+		Expect(err).NotTo(HaveOccurred())
+		return n
+	}
 	attachmentCount := func() int {
 		GinkgoHelper()
 		n, err := db.NewSelect().Model((*models.PostAttachment)(nil)).Where("post_id = ?", postID).Count(tenantCtx())
@@ -165,7 +171,7 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), platformRepo, postAttRepo, auth, handlers.PostsOptions{}).Register(app)
 		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, prober, &fakeImagePreparer{store: store}, nil, 280, auth, lim).
-			WithEventHub(hub).Register(app)
+			WithEventHub(hub).WithPendingUploads(repository.NewPendingUploadRepository(db)).Register(app)
 
 		seedTenantUser(db, "Admin", "video@example.com", "pw-password")
 		loginBody, _ := json.Marshal(fiber.Map{"email": "video@example.com", "password": "pw-password"})
@@ -183,7 +189,7 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 	})
 
 	AfterEach(func() {
-		for _, tbl := range []string{"post_attachments", "post_versions", "posts", "campaigns", "sessions", "users", "accounts"} {
+		for _, tbl := range []string{"pending_uploads", "post_attachments", "post_versions", "posts", "campaigns", "sessions", "users", "accounts"} {
 			_, err := db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(tenantCtx())
 			Expect(err).NotTo(HaveOccurred())
 		}
@@ -199,6 +205,7 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 			Expect(key).To(HaveSuffix(".mp4"))
 			Expect(body["upload_url"]).To(ContainSubstring("/put/"))
 			Expect(body["expires_in"]).To(BeNumerically("==", 1800))
+			Expect(pendingCount(key)).To(Equal(1))
 		})
 
 		It("refuses a non-video content type with 415 unsupported_media_type", func() {
@@ -247,6 +254,7 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 			Expect(body["thumbnail_url"]).NotTo(BeEmpty())
 			Expect(body["platform_validation"]).To(BeNil())
 			Expect(attachmentEventPayload(nextAttachmentEvent(events))).To(HaveKeyWithValue("source", "editor"))
+			Expect(pendingCount(key)).To(BeZero())
 		})
 
 		It("reports platform rules as soft warnings", func() {
@@ -264,6 +272,7 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 			Expect(resp.StatusCode).To(Equal(fiber.StatusPaymentRequired))
 			Expect(store.objects).NotTo(HaveKey(key))
 			Expect(attachmentCount()).To(BeZero())
+			Expect(pendingCount(key)).To(BeZero())
 		})
 
 		It("refuses a key minted for another post", func() {
@@ -280,6 +289,7 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 			resp = finalize(postID, fiber.Map{"s3_key": key})
 			Expect(resp.StatusCode).To(Equal(fiber.StatusBadRequest))
 			Expect(decode(resp)["error"]).To(ContainSubstring("not found"))
+			Expect(pendingCount(key)).To(Equal(1), "the sweep still owns an upload that may yet arrive")
 		})
 
 		It("refuses an empty object with empty_file and deletes it", func() {
@@ -289,6 +299,7 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 			Expect(resp.StatusCode).To(Equal(fiber.StatusBadRequest))
 			Expect(decode(resp)).To(HaveKeyWithValue("code", models.UploadCodeEmptyFile))
 			Expect(store.objects).NotTo(HaveKey(key))
+			Expect(pendingCount(key)).To(BeZero())
 		})
 
 		It("refuses an unreadable video with invalid_file and deletes it", func() {
@@ -299,6 +310,33 @@ var _ = Describe("PostAttachmentsHandler video presign/finalize", Ordered, func(
 			Expect(decode(resp)).To(HaveKeyWithValue("code", models.UploadCodeInvalidFile))
 			Expect(store.objects).NotTo(HaveKey(key))
 			Expect(attachmentCount()).To(BeZero())
+			Expect(pendingCount(key)).To(BeZero())
+		})
+
+		It("refuses an upload the sweep already took with 410 upload_expired", func() {
+			key := uploadVideo(postID, 2048)
+			_, err := db.NewDelete().Model((*models.PendingUpload)(nil)).Where("s3_key = ?", key).Exec(tenantCtx())
+			Expect(err).NotTo(HaveOccurred())
+
+			resp := finalize(postID, fiber.Map{"s3_key": key})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusGone))
+			Expect(decode(resp)).To(HaveKeyWithValue("code", models.UploadCodeUploadExpired))
+			Expect(store.objects).NotTo(HaveKey(key))
+			Expect(attachmentCount()).To(BeZero())
+		})
+
+		It("answers a repeated finalize with the same attachment, keeping its object", func() {
+			key := uploadVideo(postID, 2048)
+			first := finalize(postID, fiber.Map{"s3_key": key})
+			Expect(first.StatusCode).To(Equal(fiber.StatusCreated))
+			id := decode(first)["id"]
+
+			mediaBytes = trialMediaCap - 1024 // a re-check of the quota would now refuse it
+			again := finalize(postID, fiber.Map{"s3_key": key})
+			Expect(again.StatusCode).To(Equal(fiber.StatusCreated))
+			Expect(decode(again)["id"]).To(Equal(id))
+			Expect(store.objects).To(HaveKey(key))
+			Expect(attachmentCount()).To(Equal(1))
 		})
 
 		It("still creates the attachment, unprobed, when video-service is down", func() {
