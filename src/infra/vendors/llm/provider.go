@@ -72,10 +72,17 @@ func clampMaxTokens(model string, maxTokens int64) int64 {
 //
 // Pass it in the call's single ai.WithMiddleware, after any metering middleware
 // so that middleware sees the cache writes.
-func (p *Provider) CallMiddleware(flow string, record func(context.Context, *ai.ModelResponse)) ai.ModelMiddleware {
+func (p *Provider) CallMiddleware(flow string, record func(context.Context, *ai.ModelResponse), opts ...CallOption) ai.ModelMiddleware {
+	var o callOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return func(next core.StreamingFunc[*ai.ModelRequest, *ai.ModelResponse, *ai.ModelResponseChunk]) core.StreamingFunc[*ai.ModelRequest, *ai.ModelResponse, *ai.ModelResponseChunk] {
 		return func(ctx context.Context, req *ai.ModelRequest, cb core.StreamCallback[*ai.ModelResponseChunk]) (*ai.ModelResponse, error) {
 			ctx, probe := WithCacheWriteProbe(ctx)
+			if o.cachePrompt {
+				ctx = WithPromptCache(ctx)
+			}
 			resp, err := next(ctx, req, cb)
 			if err != nil {
 				return resp, err
@@ -92,6 +99,23 @@ func (p *Provider) CallMiddleware(flow string, record func(context.Context, *ai.
 			return nil, ErrRefused
 		}
 	}
+}
+
+// CallOption configures CallMiddleware.
+type CallOption func(*callOptions)
+
+type callOptions struct {
+	cachePrompt bool
+}
+
+// CachePrompt asks for the call's prompt to be cached: the system prompt with
+// the tools, and the conversation so far. It pays off for a tool loop, whose
+// rounds and turns resend the same prefix, and costs a cache-write premium on
+// a one-shot call, so only loops ask for it. It applies to whatever model the
+// slot resolves to; it is scoped to the model request, so sub-flows a loop
+// runs as tools are not cached by it.
+func CachePrompt() CallOption {
+	return func(o *callOptions) { o.cachePrompt = true }
 }
 
 // addCacheWrites stores a call's cache-write tokens on resp's usage.

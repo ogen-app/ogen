@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 )
 
 func TestSortAnthropicToolsByName(t *testing.T) {
@@ -177,16 +179,20 @@ func TestAddAnthropicSystemCacheControl(t *testing.T) {
 	})
 }
 
-// The system cache breakpoint is added only for the configured model; the tool
-// sort still applies to every Anthropic request regardless.
-func TestAnthropicToolOrderTransport_SystemCacheScopedToModel(t *testing.T) {
-	const body = `{"model":"planning-model","system":"sys","tools":[{"name":"charlie"},{"name":"alpha"}]}`
+// The system cache breakpoint is added only for a call that asked for prompt
+// caching, whatever its model; the tool sort applies to every Anthropic request.
+func TestAnthropicToolOrderTransport_SystemCacheScopedToCall(t *testing.T) {
+	const body = `{"model":"any-model","system":"sys","tools":[{"name":"charlie"},{"name":"alpha"}]}`
 
-	roundTrip := func(t *testing.T, cachePrefixModel string) []byte {
+	roundTrip := func(t *testing.T, cache bool) []byte {
 		t.Helper()
 		base := &stubRoundTripper{resp: newResp(200)}
-		tr := &anthropicToolOrderTransport{base: base, cachePrefixModel: cachePrefixModel}
-		req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader([]byte(body)))
+		tr := &anthropicToolOrderTransport{base: base}
+		ctx := t.Context()
+		if cache {
+			ctx = llm.WithPromptCache(ctx)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader([]byte(body)))
 		if err != nil {
 			t.Fatalf("new request: %v", err)
 		}
@@ -199,8 +205,8 @@ func TestAnthropicToolOrderTransport_SystemCacheScopedToModel(t *testing.T) {
 		return sent
 	}
 
-	t.Run("matching model gets a system cache breakpoint", func(t *testing.T) {
-		sent := roundTrip(t, "planning-model")
+	t.Run("caching call gets a system cache breakpoint", func(t *testing.T) {
+		sent := roundTrip(t, true)
 		if got := toolNameOrder(t, sent); got != "alpha,charlie" {
 			t.Errorf("tools not sorted: %q", got)
 		}
@@ -210,25 +216,12 @@ func TestAnthropicToolOrderTransport_SystemCacheScopedToModel(t *testing.T) {
 		}
 	})
 
-	t.Run("other model gets tool sort but no cache breakpoint", func(t *testing.T) {
-		sent := roundTrip(t, "some-other-model")
+	t.Run("other call gets tool sort but no cache breakpoint", func(t *testing.T) {
+		sent := roundTrip(t, false)
 		if got := toolNameOrder(t, sent); got != "alpha,charlie" {
 			t.Errorf("tools not sorted: %q", got)
 		}
 		// system stays a bare string — no breakpoint added.
-		var top struct {
-			System json.RawMessage `json:"system"`
-		}
-		if err := json.Unmarshal(sent, &top); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if len(top.System) == 0 || top.System[0] != '"' {
-			t.Errorf("system should stay an unmodified string, got %s", top.System)
-		}
-	})
-
-	t.Run("empty cachePrefixModel disables caching", func(t *testing.T) {
-		sent := roundTrip(t, "")
 		var top struct {
 			System json.RawMessage `json:"system"`
 		}
