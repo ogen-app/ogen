@@ -143,7 +143,7 @@ func evaluateDimension(
 			ai.WithModelName(modelName),
 			ai.WithSystem("%s", prompts.system),
 			ai.WithPrompt("%s", userPrompt),
-			ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowPostQuality)),
+			ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowPostQuality, u.Record)),
 			cfg.Provider.CallConfig(mc.Model, maxTokens),
 		)
 		u.WarnIfTruncated(ctx, resp, maxTokens)

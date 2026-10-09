@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
@@ -61,7 +63,7 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 
 	body := readAnthropicReqBody(req)
 	if len(body) == 0 {
-		return t.base.RoundTrip(req)
+		return t.send(req)
 	}
 
 	// The body is parsed once into its top-level fields; every transform edits
@@ -69,7 +71,7 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 	// carry the whole conversation, so each extra parse was a full pass.
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
-		return t.base.RoundTrip(req)
+		return t.send(req)
 	}
 	changed := false
 	if n, ok := sortTopTools(top); ok {
@@ -92,18 +94,94 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 		}
 	}
 	if !changed {
-		return t.base.RoundTrip(req)
+		return t.send(req)
 	}
 	out, err := json.Marshal(top)
 	if err != nil {
-		return t.base.RoundTrip(req)
+		return t.send(req)
 	}
 
 	// RoundTrip must not modify the caller's request (net/http contract), so
 	// rewrite the transformed body on a clone and leave the original untouched.
 	clone := req.Clone(req.Context())
 	setAnthropicReqBody(clone, out)
-	return t.base.RoundTrip(clone)
+	return t.send(clone)
+}
+
+// send forwards a /v1/messages request. When the call carries an
+// llm.CacheWriteProbe, the response body is read through cacheWriteReader so
+// the probe learns the cache_creation_input_tokens the genkit plugin drops.
+func (t *anthropicToolOrderTransport) send(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp.Body == nil {
+		return resp, err
+	}
+	if probe := llm.CacheWriteProbeFrom(req.Context()); probe != nil {
+		resp.Body = &cacheWriteReader{body: resp.Body, probe: probe}
+	}
+	return resp, nil
+}
+
+// cacheWriteKey prefixes the usage field cacheWriteReader looks for.
+var cacheWriteKey = []byte(`"cache_creation_input_tokens":`)
+
+// cacheWriteReader passes a /v1/messages response body through unchanged and
+// reports every cache_creation_input_tokens value in it to probe. It scans
+// line by line: a streamed response puts each event on its own line, and a
+// plain one is a single JSON line.
+type cacheWriteReader struct {
+	body    io.ReadCloser
+	probe   *llm.CacheWriteProbe
+	pending []byte // the current line's bytes, up to the next newline
+}
+
+func (r *cacheWriteReader) Read(p []byte) (int, error) {
+	n, err := r.body.Read(p)
+	r.scan(p[:n])
+	if err != nil {
+		r.flush()
+	}
+	return n, err
+}
+
+func (r *cacheWriteReader) Close() error {
+	r.flush()
+	return r.body.Close()
+}
+
+// scan feeds chunk to the line buffer and checks each completed line.
+func (r *cacheWriteReader) scan(chunk []byte) {
+	for len(chunk) > 0 {
+		i := bytes.IndexByte(chunk, '\n')
+		if i < 0 {
+			r.pending = append(r.pending, chunk...)
+			return
+		}
+		r.pending = append(r.pending, chunk[:i]...)
+		r.flush()
+		chunk = chunk[i+1:]
+	}
+}
+
+// flush checks the buffered line and clears it.
+func (r *cacheWriteReader) flush() {
+	line := r.pending
+	r.pending = r.pending[:0]
+	for {
+		i := bytes.Index(line, cacheWriteKey)
+		if i < 0 {
+			return
+		}
+		line = bytes.TrimLeft(line[i+len(cacheWriteKey):], " ")
+		end := 0
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		if n, err := strconv.ParseInt(string(line[:end]), 10, 64); err == nil {
+			r.probe.Observe(n)
+		}
+		line = line[end:]
+	}
 }
 
 // topModel returns a /v1/messages body's `model`, or "" when it can't be read.

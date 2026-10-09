@@ -116,26 +116,27 @@ func generateBrief(
 			}
 		},
 	)
+	usage := flowkit.Usage{
+		Recorder:  cfg.Recorder,
+		Model:     mc,
+		Feature:   "enrich_brief",
+		Component: logComponent,
+		Attrs:     []any{"campaign_id", campaignID},
+	}
 
 	resp, err := genkit.Generate(ctx, g,
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(bctx.SystemPrompt),
 		ai.WithPrompt(bctx.ContextBlock),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: scanner.Push})),
-		ai.WithMiddleware(cfg.Provider.RefusalGuard(modelconfig.FlowEnrichBrief)),
+		ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowEnrichBrief, usage.Record)),
 		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "campaign_id", campaignID, "duration_ms", time.Since(start).Milliseconds(), logging.AttrError, err)
 		return nil, &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
 	}
-	flowkit.Usage{
-		Recorder:  cfg.Recorder,
-		Model:     mc,
-		Feature:   "enrich_brief",
-		Component: logComponent,
-		Attrs:     []any{"campaign_id", campaignID},
-	}.Finish(ctx, resp, maxTokens)
+	usage.Finish(ctx, resp, maxTokens)
 	return scanner, nil
 }
 

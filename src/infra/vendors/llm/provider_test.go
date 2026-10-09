@@ -10,16 +10,26 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 )
 
-// fakeModel answers every call with text and the given finish reason.
-func fakeModel(t *testing.T, reason ai.FinishReason) *genkit.Genkit {
+// fakeModel answers every call with text, the given finish reason and 1000
+// input / 10 output tokens. A positive cacheWrites is reported to the call's
+// CacheWriteProbe, standing in for the HTTP transport reading the raw response.
+func fakeModel(t *testing.T, reason ai.FinishReason, cacheWrites int64) *genkit.Genkit {
 	t.Helper()
 	g := genkit.Init(t.Context())
 	genkit.DefineModel(g, "test/fake", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
-		func(context.Context, *ai.ModelRequest, ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			return &ai.ModelResponse{Message: ai.NewModelTextMessage("partial"), FinishReason: reason}, nil
+		func(ctx context.Context, _ *ai.ModelRequest, _ ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			if probe := llm.CacheWriteProbeFrom(ctx); probe != nil && cacheWrites > 0 {
+				probe.Observe(cacheWrites)
+			}
+			return &ai.ModelResponse{
+				Message:      ai.NewModelTextMessage("partial"),
+				FinishReason: reason,
+				Usage:        &ai.GenerationUsage{InputTokens: 1000, OutputTokens: 10},
+			}, nil
 		})
 	return g
 }
@@ -100,24 +110,27 @@ func TestCallConfig_ClampsToModelMaxOutput(t *testing.T) {
 	}
 }
 
-func TestRefusalGuard(t *testing.T) {
+func TestCallMiddleware_Refusal(t *testing.T) {
 	p := llm.NewProvider()
 	tests := []struct {
-		name    string
-		reason  ai.FinishReason
-		wantErr error
+		name       string
+		reason     ai.FinishReason
+		wantErr    error
+		wantRecord bool
 	}{
-		{name: "refusal fails the call", reason: ai.FinishReasonUnknown, wantErr: llm.ErrRefused},
-		{name: "normal stop passes", reason: ai.FinishReasonStop},
+		{name: "refusal fails the call and records its usage", reason: ai.FinishReasonUnknown, wantErr: llm.ErrRefused, wantRecord: true},
+		{name: "normal stop passes, flow records it", reason: ai.FinishReasonStop},
 		{name: "truncation passes to the flow's own handling", reason: ai.FinishReasonLength},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			g := fakeModel(t, tc.reason)
+			var recorded []*ai.ModelResponse
+			record := func(_ context.Context, r *ai.ModelResponse) { recorded = append(recorded, r) }
+			g := fakeModel(t, tc.reason, 0)
 			resp, err := genkit.Generate(t.Context(), g,
 				ai.WithModelName("test/fake"),
 				ai.WithPrompt("go"),
-				ai.WithMiddleware(p.RefusalGuard("test_flow")),
+				ai.WithMiddleware(p.CallMiddleware("test_flow", record)),
 			)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
@@ -125,6 +138,49 @@ func TestRefusalGuard(t *testing.T) {
 			if tc.wantErr == nil && resp.Text() != "partial" {
 				t.Fatalf("text = %q, want the model's answer", resp.Text())
 			}
+			if got := len(recorded) == 1; got != tc.wantRecord {
+				t.Fatalf("recorded %d responses, want record=%v", len(recorded), tc.wantRecord)
+			}
+			if tc.wantRecord && recorded[0].Usage.InputTokens != 1000 {
+				t.Fatalf("recorded usage = %+v, want the refused call's tokens", recorded[0].Usage)
+			}
 		})
+	}
+}
+
+// TestCallMiddleware_CacheWritesReachThePrice runs the metered path end to end:
+// cache writes the transport reports are carried on the response, extracted by
+// the Anthropic meter, and count toward Haiku 5.5's long-prompt threshold.
+func TestCallMiddleware_CacheWritesReachThePrice(t *testing.T) {
+	g := fakeModel(t, ai.FinishReasonStop, 120_000)
+	resp, err := genkit.Generate(t.Context(), g,
+		ai.WithModelName("test/fake"),
+		ai.WithPrompt("go"),
+		ai.WithMiddleware(llm.NewProvider().CallMiddleware("test_flow", nil)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, _ := vendors.Get(llm.VendorAnthropic)
+	_, u, ok := d.Meter.Extract(resp)
+	if !ok || u[vendors.KindCacheCreation] != 120_000 {
+		t.Fatalf("metered usage = %v, want cache_creation 120000", u)
+	}
+	// 1000 input + 120K cache-write is a 121K prompt: every kind at the
+	// long-prompt rates ($0.50 input, $2.50 output, $0.625 cache write).
+	cost, _, _ := vendors.CostOf(llm.VendorAnthropic, "claude-haiku-5-5", u)
+	if want := int64(500 + 25 + 75_000); cost != want {
+		t.Fatalf("cost = %d, want %d", cost, want)
+	}
+}
+
+func TestCacheWriteProbe_KeepsLargest(t *testing.T) {
+	_, p := llm.WithCacheWriteProbe(t.Context())
+	for _, n := range []int64{300, 1200, 1200, 50} {
+		p.Observe(n)
+	}
+	if p.Tokens() != 1200 {
+		t.Fatalf("tokens = %d, want 1200", p.Tokens())
 	}
 }

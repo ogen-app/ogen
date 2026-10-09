@@ -14,7 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
-// ErrRefused is returned by a call guarded by RefusalGuard when the model's
+// ErrRefused is returned by a call made through CallMiddleware when the model's
 // safety classifiers declined the request. Its text reaches API clients inside
 // the flows' error events, so it is worded for them.
 var ErrRefused = errors.New("the model declined this request; rephrase it or switch the model")
@@ -60,22 +60,52 @@ func clampMaxTokens(model string, maxTokens int64) int64 {
 	return min(maxTokens, int64(caps.MaxOutputTokens))
 }
 
-// RefusalGuard returns model middleware that fails a call with ErrRefused when
-// the model refused it, instead of handing the flow an empty or partial answer
-// as if it had finished. It wraps every round of a tool loop. Pass it in the
-// call's single ai.WithMiddleware, alongside any other middleware.
-func (p *Provider) RefusalGuard(flow string) ai.ModelMiddleware {
+// CallMiddleware returns the model middleware every flow call carries. It wraps
+// each round of a tool loop and:
+//
+//   - adds the round's prompt-cache write tokens, which the genkit plugin drops,
+//     to resp.Usage.Custom[UsageCacheCreation] so they are metered;
+//   - fails a refused round with ErrRefused, instead of handing the flow an
+//     empty or partial answer as if it had finished. A refusal still consumed
+//     tokens, so its response goes to record first; the flow's own metering
+//     never sees it. record may be nil.
+//
+// Pass it in the call's single ai.WithMiddleware, after any metering middleware
+// so that middleware sees the cache writes.
+func (p *Provider) CallMiddleware(flow string, record func(context.Context, *ai.ModelResponse)) ai.ModelMiddleware {
 	return func(next core.StreamingFunc[*ai.ModelRequest, *ai.ModelResponse, *ai.ModelResponseChunk]) core.StreamingFunc[*ai.ModelRequest, *ai.ModelResponse, *ai.ModelResponseChunk] {
 		return func(ctx context.Context, req *ai.ModelRequest, cb core.StreamCallback[*ai.ModelResponseChunk]) (*ai.ModelResponse, error) {
+			ctx, probe := WithCacheWriteProbe(ctx)
 			resp, err := next(ctx, req, cb)
-			if err != nil || !refused(resp) {
+			if err != nil {
 				return resp, err
+			}
+			addCacheWrites(resp, probe.Tokens())
+			if !refused(resp) {
+				return resp, nil
+			}
+			if record != nil {
+				record(ctx, resp)
 			}
 			modelRefusals.Add(flow, 1)
 			slog.WarnContext(ctx, "model refused the request", logging.AttrComponent, "llm", "flow", flow)
 			return nil, ErrRefused
 		}
 	}
+}
+
+// addCacheWrites stores a call's cache-write tokens on resp's usage.
+func addCacheWrites(resp *ai.ModelResponse, tokens int64) {
+	if resp == nil || tokens <= 0 {
+		return
+	}
+	if resp.Usage == nil {
+		resp.Usage = &ai.GenerationUsage{}
+	}
+	if resp.Usage.Custom == nil {
+		resp.Usage.Custom = map[string]float64{}
+	}
+	resp.Usage.Custom[UsageCacheCreation] = float64(tokens)
 }
 
 // refused reports whether resp is a refusal. The genkit Anthropic plugin maps
