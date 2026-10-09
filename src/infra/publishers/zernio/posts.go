@@ -50,10 +50,12 @@ type PlatformVariant struct {
 // PlatformSpecificData is the per-variant extras bag, serialised as
 // platformSpecificData. Title is the explicit title for platforms that have
 // one (YouTube, Pinterest, Reddit); Zernio has no top-level title, and without
-// this it falls back to the first line of content.
+// this it falls back to the first line of content. FirstComment is posted
+// under the post right after it publishes (pinned on YouTube).
 type PlatformSpecificData struct {
-	Title       string       `json:"title,omitempty"`
-	ThreadItems []ThreadItem `json:"threadItems,omitempty"`
+	Title        string       `json:"title,omitempty"`
+	ThreadItems  []ThreadItem `json:"threadItems,omitempty"`
+	FirstComment string       `json:"firstComment,omitempty"`
 }
 
 // ThreadItem is one message of a native thread. Item 0 is the root;

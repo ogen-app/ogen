@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -811,6 +812,10 @@ type postRequest struct {
 	// accounts) or correct a wrong one. Like every field on this whole-resource
 	// PUT, the FE round-trips the current value; an empty string clears it.
 	PublishedURL string `json:"published_url"`
+	// FirstComment and FirstCommentDelayMinutes are presence-aware like
+	// ContentFormat: omitted leaves them alone; a null or "" comment clears it.
+	FirstComment             Optional[string] `json:"first_comment" swaggertype:"string"`
+	FirstCommentDelayMinutes Optional[int]    `json:"first_comment_delay_minutes" swaggertype:"integer" enums:"0,1,3,5,10"`
 }
 
 func (r *postRequest) toStatus() models.PostStatus {
@@ -854,6 +859,10 @@ func (r *postRequest) apply(post *models.Post, status models.PostStatus) {
 	r.BrandAudienceID.applyTo(&post.BrandAudienceID)
 	r.ContentFormat.applyTo(&post.ContentFormat)
 	r.SeriesID.applyTo(&post.SeriesID)
+	if r.FirstComment.Present {
+		post.FirstComment = r.firstComment()
+	}
+	r.FirstCommentDelayMinutes.applyToValue(&post.FirstCommentDelayMinutes)
 	// Presence-aware: omit to leave the sources alone (the membership
 	// endpoints own them), a present array to replace, an explicit null to clear.
 	applyOptionalSlice(r.UsedAssetIDs, &post.UsedAssetIDs)
@@ -882,7 +891,36 @@ func (r *postRequest) mutatesLockedContent(post *models.Post) bool {
 		(r.UsedAssetIDs.Present && !slices.Equal(nullSlice(r.UsedAssetIDs.orZero()), post.UsedAssetIDs)) ||
 		// The shape a submitted post took is a fact about what went out.
 		(r.ContentFormat.Present && !equalPtr(r.ContentFormat.Value, post.ContentFormat)) ||
-		(r.SeriesID.Present && !equalPtr(r.SeriesID.Value, post.SeriesID))
+		(r.SeriesID.Present && !equalPtr(r.SeriesID.Value, post.SeriesID)) ||
+		// The first comment goes out with (or right after) the post.
+		(r.FirstComment.Present && r.firstComment() != post.FirstComment) ||
+		(r.FirstCommentDelayMinutes.Present && r.FirstCommentDelayMinutes.orZero() != post.FirstCommentDelayMinutes)
+}
+
+// firstComment is the comment the request sets, trimmed; null clears it.
+func (r *postRequest) firstComment() string {
+	return strings.TrimSpace(r.FirstComment.orZero())
+}
+
+// incomingFirstComment is the comment a present first_comment sets, nil when
+// the request omits it.
+func (r *postRequest) incomingFirstComment() *string {
+	if !r.FirstComment.Present {
+		return nil
+	}
+	return new(r.firstComment())
+}
+
+// validateFirstCommentDelay rejects a present delay off the menu. Null is
+// refused too: "no delay" is 0.
+func (r *postRequest) validateFirstCommentDelay() error {
+	if !r.FirstCommentDelayMinutes.Present {
+		return nil
+	}
+	if v := r.FirstCommentDelayMinutes.Value; v == nil || !models.ValidFirstCommentDelay(*v) {
+		return fiber.NewError(fiber.StatusBadRequest, "first_comment_delay_minutes must be 0, 1, 3, 5 or 10")
+	}
+	return nil
 }
 
 // validateContentFormat rejects a present content_format that is not a known
@@ -926,7 +964,19 @@ func equalPtr[T comparable](a, b *T) bool {
 // but writing it back would clobber a concurrent membership write
 // (AddUsedAssetIDs/RemoveUsedAssetID) that landed after the read.
 func (r *postRequest) omitColumns() []string {
-	return omitAbsent(columnPresence{"used_asset_ids", r.UsedAssetIDs.Present})
+	omit := omitAbsent(
+		columnPresence{"used_asset_ids", r.UsedAssetIDs.Present},
+		columnPresence{"first_comment", r.FirstComment.Present},
+		columnPresence{"first_comment_delay_minutes", r.FirstCommentDelayMinutes.Present},
+	)
+	// The publish workers own the first comment's outcome; a PUT racing the
+	// delayed comment must not write a stale copy back.
+	return append(omit, firstCommentOutcomeColumns...)
+}
+
+// firstCommentOutcomeColumns are the worker-written first-comment columns.
+var firstCommentOutcomeColumns = []string{
+	"first_comment_status", "first_comment_id", "first_comment_posted_at", "first_comment_error",
 }
 
 // validateForCreate runs the publish gate (CON-69 §4 attachment rules
@@ -1118,6 +1168,9 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	if err := req.validateContentFormat(); err != nil {
 		return err
 	}
+	if err := req.validateFirstCommentDelay(); err != nil {
+		return err
+	}
 	if err := checkPostSeries(c, h.series, req.SeriesID.Value, req.CampaignID); err != nil {
 		return err
 	}
@@ -1153,9 +1206,11 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 		CampaignTypePhaseID: req.CampaignTypePhaseID,
 		ContentFormat:       req.ContentFormat.Value,
 		SeriesID:            req.SeriesID.Value,
+		FirstComment:        req.firstComment(),
 		CreatedBy:           session.UserID,
 		UsedAssets:          []models.Asset{},
 	}
+	req.FirstCommentDelayMinutes.applyToValue(&post.FirstCommentDelayMinutes)
 	// Derive the thread's segment list from the canonical body (a
 	// non-thread post gets an empty list). Runs before validateForCreate so the
 	// create-time publish gate sees the same segments submit will publish.
@@ -1237,6 +1292,9 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	if err := req.validateContentFormat(); err != nil {
 		return err
 	}
+	if err := req.validateFirstCommentDelay(); err != nil {
+		return err
+	}
 
 	if err := validateBrandRefs(reqCtx(c), h.brandRepo, req.BrandVoiceID.Value, req.BrandAudienceID.Value); err != nil {
 		return err
@@ -1253,20 +1311,22 @@ func (h *PostsHandler) Update(c *fiber.Ctx) error {
 	}
 
 	res, err := h.updater().Update(reqCtx(c), update.Input{
-		Post:                 post,
-		Status:               status,
-		Apply:                func(p *models.Post) { req.apply(p, status) },
-		CampaignID:           req.CampaignID,
-		PhaseID:              req.CampaignTypePhaseID,
-		PlatformID:           req.PlatformID,
-		PlatformPostType:     req.PlatformPostType,
-		Content:              req.Content,
-		CTAUrl:               req.CTAUrl,
-		ScheduledAt:          req.ScheduledAt,
-		SocialAccountID:      req.SocialAccountID,
-		MutatesLockedContent: req.mutatesLockedContent(post),
-		Omit:                 req.omitColumns(),
-		Actor:                cmp.Or(actorID(c), models.ActorSystem),
+		Post:                     post,
+		Status:                   status,
+		Apply:                    func(p *models.Post) { req.apply(p, status) },
+		CampaignID:               req.CampaignID,
+		PhaseID:                  req.CampaignTypePhaseID,
+		PlatformID:               req.PlatformID,
+		PlatformPostType:         req.PlatformPostType,
+		Content:                  req.Content,
+		CTAUrl:                   req.CTAUrl,
+		ScheduledAt:              req.ScheduledAt,
+		SocialAccountID:          req.SocialAccountID,
+		FirstComment:             req.incomingFirstComment(),
+		FirstCommentDelayMinutes: req.FirstCommentDelayMinutes.Value,
+		MutatesLockedContent:     req.mutatesLockedContent(post),
+		Omit:                     req.omitColumns(),
+		Actor:                    cmp.Or(actorID(c), models.ActorSystem),
 	})
 	if res.AutoPublishDecision != "" {
 		c.Set("X-Auto-Publish-Decision", res.AutoPublishDecision)

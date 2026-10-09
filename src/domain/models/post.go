@@ -227,10 +227,20 @@ type Post struct {
 	ContentFormat *ContentFormat `bun:"content_format"                               json:"content_format"`
 	// SeriesID is the series that produced the post. It survives the series
 	// being deleted (series are soft-deleted).
-	SeriesID  *string   `bun:"series_id"                                    json:"series_id"`
-	CreatedBy string    `bun:"created_by,notnull"                           json:"created_by"`
-	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	SeriesID *string `bun:"series_id"                                    json:"series_id"`
+	// FirstComment is posted under the live post, FirstCommentDelayMinutes
+	// after it publishes (0 = with the post). Empty means no comment.
+	FirstComment             string `bun:"first_comment,nullzero"                       json:"first_comment"`
+	FirstCommentDelayMinutes int    `bun:"first_comment_delay_minutes,notnull,default:0" json:"first_comment_delay_minutes"`
+	// The first comment's outcome, written by the publish workers only. Nil
+	// status means no comment went out with this post (yet).
+	FirstCommentStatus   *FirstCommentStatus `bun:"first_comment_status"                     json:"first_comment_status"`
+	FirstCommentID       string              `bun:"first_comment_id,nullzero"                json:"first_comment_id,omitempty"`
+	FirstCommentPostedAt *time.Time          `bun:"first_comment_posted_at"                  json:"first_comment_posted_at,omitempty"`
+	FirstCommentError    string              `bun:"first_comment_error,nullzero"             json:"first_comment_error,omitempty"`
+	CreatedBy            string              `bun:"created_by,notnull"                       json:"created_by"`
+	CreatedAt            time.Time           `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt            time.Time           `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 	// ClonedFromPostID links a clone back to the Post it was duplicated
 	// from. Nil for posts created directly. `nullzero` sends
 	// NULL (not "") so the lineage is a clean "has a source / does not".

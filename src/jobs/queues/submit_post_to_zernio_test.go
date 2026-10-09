@@ -57,6 +57,21 @@ func (r *fakePostRepo) Update(_ context.Context, p *models.Post, _ ...string) er
 	return nil
 }
 
+// SettleFirstComment mirrors the real guard: only a published post whose
+// comment is still pending, under the same Zernio post, is written.
+func (r *fakePostRepo) SettleFirstComment(_ context.Context, p *models.Post, _ ...string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cur, ok := r.posts[p.ID]
+	if !ok || cur.Status != models.PostStatusPublished || cur.PublisherPostID != p.PublisherPostID ||
+		cur.FirstCommentStatus == nil || *cur.FirstCommentStatus != models.FirstCommentPending {
+		return false, nil
+	}
+	cp := *p
+	r.posts[p.ID] = &cp
+	return true, nil
+}
+
 // Stubs for the rest of the PostRepository surface — never called by
 // the queues but required to satisfy the interface. We type-assert in
 // the test setup so any forgotten method becomes a compile error.

@@ -184,6 +184,12 @@ type TextConstraints struct {
 	// PerPostType overrides MaxContentChars for specific post-type slugs —
 	// e.g. LinkedIn {"article": 100000} while its feed posts stay at 3000.
 	PerPostType map[string]int `json:"per_post_type,omitempty"`
+	// MaxFirstCommentChars caps a post's first comment. 0 = the platform
+	// takes no first comment.
+	MaxFirstCommentChars int `json:"max_first_comment_chars,omitzero"`
+	// FirstCommentPerPostType overrides MaxFirstCommentChars per slug; 0
+	// turns the first comment off for that type (e.g. stories).
+	FirstCommentPerPostType map[string]int `json:"first_comment_per_post_type,omitempty"`
 }
 
 func (c TextConstraints) Value() (driver.Value, error) {
@@ -221,7 +227,26 @@ func (c *TextConstraints) Scan(src any) error {
 func (c TextConstraints) IsZero() bool {
 	return c.MaxContentChars == 0 &&
 		c.MaxTitleChars == 0 &&
-		len(c.PerPostType) == 0
+		len(c.PerPostType) == 0 &&
+		c.MaxFirstCommentChars == 0 &&
+		len(c.FirstCommentPerPostType) == 0
+}
+
+// FirstCommentLimitFor returns the first-comment ceiling for a post-type
+// slug: the FirstCommentPerPostType override when present, otherwise
+// MaxFirstCommentChars. Zero means the type takes no first comment.
+func (c TextConstraints) FirstCommentLimitFor(slug string) int {
+	if v, ok := c.FirstCommentPerPostType[slug]; ok {
+		return v
+	}
+	return c.MaxFirstCommentChars
+}
+
+// WithFirstCommentOf returns c carrying the first-comment limits of from.
+func (c TextConstraints) WithFirstCommentOf(from TextConstraints) TextConstraints {
+	c.MaxFirstCommentChars = from.MaxFirstCommentChars
+	c.FirstCommentPerPostType = from.FirstCommentPerPostType
+	return c
 }
 
 // ContentLimitFor returns the resolved body-text ceiling for a post-type

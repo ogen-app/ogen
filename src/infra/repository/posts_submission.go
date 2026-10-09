@@ -32,6 +32,28 @@ func (r *postRepository) UpdateSubmission(ctx context.Context, post *models.Post
 	return n == 1, nil
 }
 
+// SettleFirstComment writes the named columns of post only while it is still
+// published under the same Zernio post and its first comment is still pending.
+// It reports false when the comment was already settled or the post moved on,
+// so a duplicate or late worker never overwrites an outcome.
+func (r *postRepository) SettleFirstComment(ctx context.Context, post *models.Post, columns ...string) (bool, error) {
+	res, err := r.db.NewUpdate().Model(post).
+		Column(columns...).
+		Where("status = ?", models.PostStatusPublished).
+		Where("first_comment_status = ?", models.FirstCommentPending).
+		Where("publisher_post_id = ?", post.PublisherPostID).
+		WherePK().
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 // UpdateWhileScheduled writes the whole record (less excludeColumns) under the
 // same condition as UpdateSubmission: the row is still scheduled and still
 // holds heldID. It backs an edit of a scheduled post, which must not restore

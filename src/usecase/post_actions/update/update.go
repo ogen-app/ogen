@@ -100,6 +100,10 @@ type Input struct {
 	// which Zernio has already taken for a scheduled post.
 	ScheduledAt     *time.Time
 	SocialAccountID string
+	// FirstComment and FirstCommentDelayMinutes are the incoming first
+	// comment; nil leaves the stored one.
+	FirstComment             *string
+	FirstCommentDelayMinutes *int
 
 	// MutatesLockedContent reports whether the request changes content that
 	// is frozen once the post is submitted.
@@ -290,6 +294,12 @@ func (s *Service) checkReadyForPublish(ctx context.Context, in Input) error {
 	incoming.PlatformPostType = in.PlatformPostType
 	incoming.Content = in.Content
 	incoming.CTAUrl = in.CTAUrl
+	if in.FirstComment != nil {
+		incoming.FirstComment = *in.FirstComment
+	}
+	if in.FirstCommentDelayMinutes != nil {
+		incoming.FirstCommentDelayMinutes = *in.FirstCommentDelayMinutes
+	}
 	ApplyThreadSegments(&incoming, ThreadLimitOf(platform))
 	errsByPlatform := platforms.ValidatePublishReadiness(&incoming, platform, atts)
 
