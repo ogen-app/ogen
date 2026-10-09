@@ -30,6 +30,7 @@ func (s stubAttRepo) GetByID(context.Context, string) (*models.PostAttachment, e
 func (s stubAttRepo) CreateAtNextPosition(context.Context, *models.PostAttachment) error { return nil }
 func (s stubAttRepo) Patch(context.Context, string, repository.AttachmentPatch) error    { return nil }
 func (s stubAttRepo) SetGeneratedAltText(context.Context, string, string) error          { return nil }
+func (s stubAttRepo) SetPublisherMedia(context.Context, string, string, time.Time) error { return nil }
 func (s stubAttRepo) ReorderPositions(context.Context, string, []string) error           { return nil }
 func (s stubAttRepo) Delete(context.Context, string) (bool, error)                       { return false, nil }
 func (s stubAttRepo) SumSizeBytesInTenant(context.Context) (int64, error)                { return 0, nil }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
@@ -76,9 +77,23 @@ func (p *SubmitPostProcessor) Work(ctx context.Context, job *river.Job[SubmitPos
 	return p.Process(ctx, job.Args)
 }
 
-// Timeout is the per-attempt context deadline.
+const (
+	// submitBaseTimeout bounds an attempt's API calls and DB work.
+	submitBaseTimeout = 30 * time.Second
+	// minUploadBytesPerSec is the slowest upload throughput an attempt allows
+	// for; the attempt's deadline grows with the attachments' total size.
+	minUploadBytesPerSec = 1 << 20
+	// mediaUploadParallelism caps concurrent presign+PUT uploads per post.
+	mediaUploadParallelism = 3
+	// zernioMediaRetention is how long Zernio holds an upload in temporary
+	// storage; a post must publish within it. A day is kept back as margin.
+	zernioMediaRetention = 6 * 24 * time.Hour
+)
+
+// Timeout disables River's per-attempt deadline: Process sets its own, sized
+// to the post's media.
 func (p *SubmitPostProcessor) Timeout(*river.Job[SubmitPostTask]) time.Duration {
-	return 30 * time.Second
+	return -1
 }
 
 func init() {
@@ -91,7 +106,36 @@ func init() {
 // River to retry; returns nil for both success and terminal
 // failure (Post moved to Failed inside this method when the failure
 // is terminal).
+//
+// The attempt's deadline is submitBaseTimeout plus the time the post's media
+// takes to upload at minUploadBytesPerSec.
 func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) error {
+	ctx, cancel := context.WithTimeout(ctx, submitBaseTimeout+p.uploadBudget(ctx, task.PostID))
+	defer cancel()
+	return p.process(ctx, task)
+}
+
+// uploadBudget is the extra time the post's attachments may take to upload.
+// A listing failure leaves it at zero; the attempt then fails at the base
+// deadline and River retries.
+func (p *SubmitPostProcessor) uploadBudget(ctx context.Context, postID string) time.Duration {
+	if p.Deps.Storage == nil || p.Deps.PostAttachmentRepo == nil {
+		return 0
+	}
+	listCtx, cancel := context.WithTimeout(ctx, submitBaseTimeout)
+	defer cancel()
+	atts, err := p.Deps.PostAttachmentRepo.ListByPostID(listCtx, postID)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for i := range atts {
+		total += atts[i].SizeBytes
+	}
+	return time.Duration(total/minUploadBytesPerSec) * time.Second
+}
+
+func (p *SubmitPostProcessor) process(ctx context.Context, task SubmitPostTask) error {
 	post, err := p.Deps.PostRepo.GetByID(ctx, task.PostID)
 	if err != nil {
 		return fmt.Errorf("submit: load post %s: %w", task.PostID, err)
@@ -407,20 +451,15 @@ func (p *SubmitPostProcessor) buildMediaItems(ctx context.Context, post *models.
 	if len(atts) == 0 {
 		return nil, nil
 	}
-	items := make([]map[string]any, 0, len(atts))
-	for i := range atts {
-		att := atts[i]
-		mediaType := zernio.MediaType(att.MimeType)
-		if mediaType == "" {
-			slog.WarnContext(ctx, "skipping attachment: unsupported media type for Zernio",
-				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID, "mime", att.MimeType)
-			continue
+	uploaded, err := p.uploadAll(ctx, post, atts)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]map[string]any, 0, len(uploaded))
+	for _, item := range uploaded {
+		if item != nil {
+			items = append(items, item)
 		}
-		item, err := p.uploadMedia(ctx, &att, mediaType)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
 	}
 	return items, nil
 }
@@ -450,54 +489,114 @@ func (p *SubmitPostProcessor) buildThreadItems(ctx context.Context, post *models
 	if err != nil {
 		return nil, fmt.Errorf("submit: list attachments: %w", err)
 	}
+	placed := make([]models.PostAttachment, 0, len(atts))
+	segs := make([]int, 0, len(atts))
 	for i := range atts {
-		att := atts[i]
 		seg := 0 // NULL segment_index → root message (segment 0)
-		if att.SegmentIndex != nil {
-			seg = *att.SegmentIndex
+		if atts[i].SegmentIndex != nil {
+			seg = *atts[i].SegmentIndex
 		}
 		if seg < 0 || seg >= len(items) {
 			slog.WarnContext(ctx, "skipping thread attachment with out-of-range segment_index",
-				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID)
+				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", atts[i].ID)
 			continue
 		}
+		placed = append(placed, atts[i])
+		segs = append(segs, seg)
+	}
+	uploaded, err := p.uploadAll(ctx, post, placed)
+	if err != nil {
+		return nil, err
+	}
+	for i, item := range uploaded {
+		if item != nil {
+			items[segs[i]].MediaItems = append(items[segs[i]].MediaItems, item)
+		}
+	}
+	return items, nil
+}
+
+// uploadAll uploads atts to Zernio, up to mediaUploadParallelism at a time,
+// and returns their mediaItems descriptors index-aligned with atts. An
+// attachment whose MIME type Zernio doesn't accept is skipped (nil entry), not
+// fatal; the first upload failure cancels the rest.
+func (p *SubmitPostProcessor) uploadAll(ctx context.Context, post *models.Post, atts []models.PostAttachment) ([]map[string]any, error) {
+	items := make([]map[string]any, len(atts))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(mediaUploadParallelism)
+	for i := range atts {
+		att := &atts[i]
 		mediaType := zernio.MediaType(att.MimeType)
 		if mediaType == "" {
 			slog.WarnContext(ctx, "skipping attachment: unsupported media type for Zernio",
 				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID, "mime", att.MimeType)
 			continue
 		}
-		item, err := p.uploadMedia(ctx, &att, mediaType)
-		if err != nil {
-			return nil, err
-		}
-		items[seg].MediaItems = append(items[seg].MediaItems, item)
+		g.Go(func() error {
+			item, err := p.uploadMedia(gctx, post, att, mediaType)
+			items[i] = item
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return items, nil
 }
 
-// uploadMedia streams one attachment from our storage to Zernio (presign + PUT)
-// and returns its mediaItems descriptor {url, type, altText?}.
-func (p *SubmitPostProcessor) uploadMedia(ctx context.Context, att *models.PostAttachment, mediaType string) (map[string]any, error) {
+// uploadMedia returns one attachment's mediaItems descriptor {url, type,
+// altText?}. It reuses the attachment's previous upload while Zernio still
+// holds it at publish time; otherwise it streams the file from our storage to
+// Zernio (presign + PUT) and records the new public URL for the next attempt.
+func (p *SubmitPostProcessor) uploadMedia(ctx context.Context, post *models.Post, att *models.PostAttachment, mediaType string) (map[string]any, error) {
+	url := att.PublisherMediaURL
+	if !reusableUpload(att, post, time.Now()) {
+		var err error
+		if url, err = p.putMedia(ctx, att); err != nil {
+			return nil, err
+		}
+		if err := p.Deps.PostAttachmentRepo.SetPublisherMedia(ctx, att.ID, url, time.Now().UTC()); err != nil {
+			slog.WarnContext(ctx, "failed to record Zernio media upload; a retry will upload it again",
+				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID, logging.AttrError, err)
+		}
+	}
+
+	item := map[string]any{"url": url, "type": mediaType}
+	if att.AltText != "" {
+		item["altText"] = att.AltText
+	}
+	return item, nil
+}
+
+func (p *SubmitPostProcessor) putMedia(ctx context.Context, att *models.PostAttachment) (string, error) {
 	rc, err := p.Deps.Storage.Download(ctx, att.S3Key)
 	if err != nil {
-		return nil, fmt.Errorf("submit: download attachment %s: %w", att.ID, err)
+		return "", fmt.Errorf("submit: download attachment %s: %w", att.ID, err)
 	}
 	defer rc.Close()
 
 	presign, err := p.Deps.Client.PresignMedia(ctx, path.Base(att.S3Key), att.MimeType)
 	if err != nil {
-		return nil, fmt.Errorf("submit: presign media %s: %w", att.ID, err)
+		return "", fmt.Errorf("submit: presign media %s: %w", att.ID, err)
 	}
 	if err := p.Deps.Client.UploadMedia(ctx, presign.UploadURL, att.MimeType, rc, att.SizeBytes); err != nil {
-		return nil, fmt.Errorf("submit: upload media %s: %w", att.ID, err)
+		return "", fmt.Errorf("submit: upload media %s: %w", att.ID, err)
 	}
+	return presign.PublicURL, nil
+}
 
-	item := map[string]any{"url": presign.PublicURL, "type": mediaType}
-	if att.AltText != "" {
-		item["altText"] = att.AltText
+// reusableUpload reports whether att's recorded Zernio upload will still be in
+// Zernio's temporary storage when the post publishes (now, or at its scheduled
+// time if later).
+func reusableUpload(att *models.PostAttachment, post *models.Post, now time.Time) bool {
+	if att.PublisherMediaURL == "" || att.PublisherMediaUploadedAt == nil {
+		return false
 	}
-	return item, nil
+	publishAt := now
+	if post.ScheduledAt != nil && post.ScheduledAt.After(now) {
+		publishAt = *post.ScheduledAt
+	}
+	return att.PublisherMediaUploadedAt.Add(zernioMediaRetention).After(publishAt)
 }
 
 // recordPublish emits a CON-86 publish/schedule usage event (one post unit)

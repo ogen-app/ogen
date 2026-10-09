@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +18,28 @@ import (
 	"github.com/ogen-app/ogen/src/jobs/queues"
 )
 
-// fakeAttachmentRepo returns a fixed attachment list (CON-122 media tests).
-type fakeAttachmentRepo struct{ atts []models.PostAttachment }
+// fakeAttachmentRepo returns a fixed attachment list (CON-122 media tests) and
+// records SetPublisherMedia onto it.
+type fakeAttachmentRepo struct {
+	mu   sync.Mutex
+	atts []models.PostAttachment
+}
 
 func (r *fakeAttachmentRepo) ListByPostID(context.Context, string) ([]models.PostAttachment, error) {
-	return r.atts, nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.atts), nil
+}
+func (r *fakeAttachmentRepo) SetPublisherMedia(_ context.Context, id, url string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.atts {
+		if r.atts[i].ID == id {
+			r.atts[i].PublisherMediaURL = url
+			r.atts[i].PublisherMediaUploadedAt = &at
+		}
+	}
+	return nil
 }
 func (r *fakeAttachmentRepo) ListByPostIDs(context.Context, []string) ([]models.PostAttachment, error) {
 	return nil, nil
@@ -448,5 +467,77 @@ func TestSubmitDropsTitleForUntitledPlatform(t *testing.T) {
 	}
 	if body.Platforms[0].Data != nil {
 		t.Errorf("platformSpecificData sent for untitled platform: %v", body.Platforms[0].Data)
+	}
+}
+
+// TestSubmitReusesRecordedUploads proves a retried submit reuses an
+// attachment's recorded Zernio upload while Zernio still holds it, re-uploads
+// one whose record is too old, keeps position order across the parallel
+// uploads, and records each fresh upload for the next attempt.
+func TestSubmitReusesRecordedUploads(t *testing.T) {
+	stub := newStubZernio()
+	defer stub.Close()
+
+	var mu sync.Mutex
+	var presigned []string
+	stub.handle("POST", "/media/presign", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		presigned = append(presigned, body["filename"])
+		mu.Unlock()
+		writeJSON(w, http.StatusOK, zernio.MediaPresign{
+			UploadURL: stub.URL + "/up",
+			PublicURL: "https://cdn.zernio.test/new-" + body["filename"],
+		})
+	})
+	stub.handle("PUT", "/up", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	})
+	var submitBody zernio.SubmitRequest
+	stub.handle("POST", "/posts", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&submitBody)
+		writeJSON(w, http.StatusCreated, zernio.PostEnvelope{Post: zernio.Job{ID: "z-reuse", Status: zernio.JobStatusScheduled}})
+	})
+
+	deps, postRepo, _ := makeDeps(stub, map[string][]models.SocialAccount{
+		"p_test": {{ID: "acc-1", Platform: "linkedin"}},
+	})
+	deps.Storage = &fakeStorage{objects: map[string][]byte{
+		"k/a.png": []byte("A"), "k/b.png": []byte("B"), "k/c.png": []byte("C"),
+	}}
+	fresh := time.Now().Add(-time.Hour)
+	stale := time.Now().Add(-8 * 24 * time.Hour)
+	repo := &fakeAttachmentRepo{atts: []models.PostAttachment{
+		{ID: "a", Position: 0, MimeType: "image/png", S3Key: "k/a.png",
+			PublisherMediaURL: "https://cdn.zernio.test/old-a.png", PublisherMediaUploadedAt: &fresh},
+		{ID: "b", Position: 1, MimeType: "image/png", S3Key: "k/b.png",
+			PublisherMediaURL: "https://cdn.zernio.test/old-b.png", PublisherMediaUploadedAt: &stale},
+		{ID: "c", Position: 2, MimeType: "image/png", S3Key: "k/c.png"},
+	}}
+	deps.PostAttachmentRepo = repo
+	post := seedScheduledPost(postRepo)
+
+	proc := &queues.SubmitPostProcessor{Deps: deps}
+	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	slices.Sort(presigned)
+	if !slices.Equal(presigned, []string{"b.png", "c.png"}) {
+		t.Errorf("uploaded %v, want only the stale and unrecorded files [b.png c.png]", presigned)
+	}
+	var urls []any
+	for _, m := range submitBody.MediaItems {
+		urls = append(urls, m["url"])
+	}
+	want := []any{"https://cdn.zernio.test/old-a.png", "https://cdn.zernio.test/new-b.png", "https://cdn.zernio.test/new-c.png"}
+	if !slices.Equal(urls, want) {
+		t.Errorf("mediaItems urls = %v, want %v", urls, want)
+	}
+	atts, _ := repo.ListByPostID(t.Context(), post.ID)
+	if atts[2].PublisherMediaURL != "https://cdn.zernio.test/new-c.png" || atts[2].PublisherMediaUploadedAt == nil {
+		t.Errorf("fresh upload not recorded: %+v", atts[2])
 	}
 }

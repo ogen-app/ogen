@@ -46,6 +46,12 @@ type PostAttachment struct {
 	CreatedBy      string    `bun:"created_by,notnull"                           json:"created_by"`
 	CreatedAt      time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 
+	// PublisherMediaURL is the Zernio public URL this file was last uploaded
+	// to, at PublisherMediaUploadedAt. A submit retry reuses it while Zernio
+	// still holds the upload, instead of uploading the file again.
+	PublisherMediaURL        string     `bun:"publisher_media_url,notnull,default:''" json:"-"`
+	PublisherMediaUploadedAt *time.Time `bun:"publisher_media_uploaded_at"           json:"-"`
+
 	// PresignedURL and ThumbnailURL are hydrated by the handler at
 	// response time; they are not stored in the database.
 	PresignedURL string `bun:"-" json:"presigned_url,omitempty"`
