@@ -2,6 +2,7 @@ package flowkit
 
 import (
 	"context"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -59,11 +60,11 @@ func chunkText(c *ai.ModelResponseChunk) string {
 	if c == nil {
 		return ""
 	}
-	var text string
+	var sb strings.Builder
 	for _, p := range c.Content {
 		if p.IsText() {
-			text += p.Text
+			sb.WriteString(p.Text)
 		}
 	}
-	return text
+	return sb.String()
 }
