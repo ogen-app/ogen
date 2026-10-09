@@ -1,0 +1,40 @@
+@baseUrl = http://localhost:9001
+
+# Asset analysis: the LLM summary, meeting notes and distilled ideas of a text
+# asset, as a workspace lens and one lens per campaign the asset serves. All
+# endpoints require authentication; run "Login" from sessions/sessions.http
+# first. Set assetId (a ready MD/PDF/URL/DOC/AUDIO asset) and campaignId.
+
+### Every lens of an asset, with the ideas each distilled  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{assetId}}/analyses
+Accept: application/json
+
+### The workspace lens  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{assetId}}/analysis
+Accept: application/json
+
+### One campaign's lens  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{assetId}}/analysis?campaign_id={{campaignId}}
+Accept: application/json
+
+### Retry a failed or skipped workspace lens (expects 202, or 409 analysis_not_retryable)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{assetId}}/analysis/retry
+
+### Retry a failed or skipped campaign lens  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{assetId}}/analysis/retry?campaign_id={{campaignId}}
+
+### A campaign's asset analyses, most relevant first  [protected]
+GET {{baseUrl}}/api/campaigns/{{campaignId}}/asset-analyses
+Accept: application/json
+
+### Ideas distilled by analyses  [protected]
+GET {{baseUrl}}/api/ideas?origin=asset_analysis
+Accept: application/json
+
+### Ideas distilled from one asset  [protected]
+GET {{baseUrl}}/api/ideas?asset_id={{assetId}}
+Accept: application/json
+
+### Live status changes (asset.analysis.updated) for an asset and a campaign  [protected]
+GET {{baseUrl}}/api/events?topics=entity:asset:{{assetId}},entity:campaign:{{campaignId}}
+Accept: text/event-stream

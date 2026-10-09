@@ -110,8 +110,11 @@ type Asset struct {
 	File      *AssetFile      `bun:"-"                                            json:"file,omitempty"`
 	// Images are the mirrored page images for URL assets, hydrated and
 	// URL-decorated by the handler layer. Not persisted on assets.
-	Images    []AssetImage `bun:"-" json:"images,omitempty"`
-	CreatedBy string       `bun:"created_by,notnull"                           json:"created_by"`
-	CreatedAt time.Time    `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt time.Time    `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	Images []AssetImage `bun:"-" json:"images,omitempty"`
+	// AnalysisStatus is the workspace analysis lens's status, hydrated by the
+	// handler; nil for assets that are never analysed or not yet queued.
+	AnalysisStatus *AssetAnalysisStatus `bun:"-" json:"analysis_status" swaggertype:"string" enums:"pending,running,ready,failed,skipped" extensions:"x-nullable"`
+	CreatedBy      string               `bun:"created_by,notnull"                           json:"created_by"`
+	CreatedAt      time.Time            `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt      time.Time            `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 }

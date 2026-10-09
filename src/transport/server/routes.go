@@ -149,6 +149,7 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).Register(app)
+	handlers.NewAssetAnalysesHandler(r.assetAnalysisRepo, r.ideaRepo, r.pieceRepo, r.campaignRepo, d.analysis, d.auth).Register(app)
 	handlers.NewSeriesHandler(d.svc.series, d.auth, d.activity.recorder).Register(app)
 }
 
@@ -165,6 +166,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 		Activity: rec,
 		Brands:   r.brandRepo,
 		Withdraw: d.svc.withdraw,
+		Analysis: d.analysis,
 	}).Register(app)
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, rec, d.auth).Register(app)
 }
@@ -237,6 +239,7 @@ func (d *deps) newAssetsHandler() *handlers.AssetsHandler {
 		Limiter:      d.entitlements.limiter,
 		Chunks:       r.chunksRepo,
 		ImageReembed: reembed,
+		Analyses:     r.assetAnalysisRepo,
 	})
 }
 

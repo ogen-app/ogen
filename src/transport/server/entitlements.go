@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/kernel/config"
+	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 )
 
 // entitlementDeps is the versioned tier-entitlement layer: the embedded
@@ -43,7 +45,10 @@ func newEntitlementLimiter(cfg *config.Config, r *repos, resolver *entitlements.
 		Register("web_page_imports", tenantScoped(func(ctx context.Context) (int64, error) {
 			return r.pieceRepo.CountByType(ctx, models.AssetTypeURL)
 		})).
-		Register("media_storage_bytes", tenantScoped(r.mediaStorageBytes))
+		Register("media_storage_bytes", tenantScoped(r.mediaStorageBytes)).
+		Register(assetanalysis.FeatureMonthlyRuns, tenantScoped(func(ctx context.Context) (int64, error) {
+			return r.assetAnalysisRepo.CountRunsSince(ctx, monthStart(time.Now()))
+		}))
 }
 
 // tenantScoped adapts a tenant-scoped repository count to a CounterFunc. The
