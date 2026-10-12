@@ -12385,16 +12385,19 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "analyzed_at": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "asset_id": {
                     "type": "string"
                 },
                 "campaign_id": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "campaign_name": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "commitments": {
                     "type": "array",
@@ -12455,7 +12458,12 @@ const docTemplate = `{
                     }
                 },
                 "relevance": {
-                    "$ref": "#/definitions/models.AnalysisRelevance"
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.AnalysisRelevance"
+                        }
+                    ],
+                    "x-nullable": true
                 },
                 "status": {
                     "type": "string",
@@ -15823,7 +15831,8 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "asset_analysis_id": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "campaign_id": {
                     "type": "string"
