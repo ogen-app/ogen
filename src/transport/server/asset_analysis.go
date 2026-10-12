@@ -30,13 +30,15 @@ func newAssetAnalysis(d *deps) *assetanalysis.Service {
 		Brands:    r.brandRepo,
 		Tenants:   r.tenantRepo,
 	}, d.entitlements.limiter, d.hub)
-	svc.SetJobs(d.enqueuer, d.cfg.AnalysisRebriefDebounce)
+	svc.SetJobs(d.enqueuer, d.cfg.AnalysisRebriefDebounce, d.cfg.AnalysisEditDebounce)
 
 	d.ingest.pdf.Analysis = svc
 	d.ingest.document.Analysis = svc
 	d.ingest.audio.Analysis = svc
 	d.ingest.url.Analysis = svc
-	flows.SetOnAssetEmbedded(svc.ScheduleAsset)
+	// The embedder only runs for authored assets (notes, Markdown), which
+	// are re-saved as they are typed, so their analysis is debounced.
+	flows.SetOnAssetEmbedded(svc.ScheduleEdited)
 	return svc
 }
 

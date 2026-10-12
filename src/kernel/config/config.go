@@ -461,6 +461,15 @@ type Config struct {
 	// AnalysisRebriefDebounce is how long a campaign brief edit waits before
 	// its campaign's analyses re-run, so a burst of saves costs one run.
 	AnalysisRebriefDebounce time.Duration `envconfig:"ANALYSIS_REBRIEF_DEBOUNCE" default:"10m"`
+	// AnalysisEditDebounce is how long a note or Markdown asset must sit
+	// unedited before its analyses re-run, so typing costs one run.
+	AnalysisEditDebounce time.Duration `envconfig:"ANALYSIS_EDIT_DEBOUNCE" default:"5m"`
+	// AnalysisBackfillInterval is how often the sweep queues the analyses
+	// that assets and campaign memberships are missing; 0 disables it.
+	AnalysisBackfillInterval time.Duration `envconfig:"ANALYSIS_BACKFILL_INTERVAL" default:"15m"`
+	// AnalysisBackfillBatch caps the analyses one backfill tick queues per
+	// tenant.
+	AnalysisBackfillBatch int `envconfig:"ANALYSIS_BACKFILL_BATCH" default:"20"`
 	// Graceful-shutdown wait for in-flight jobs to finish.
 	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"30s"`
 

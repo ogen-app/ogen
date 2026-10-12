@@ -53,6 +53,19 @@ type AssetAnalysisRepository interface {
 	DeleteRun(ctx context.Context, id string) error
 	// CountRunsSince counts the tenant's runs at or after since.
 	CountRunsSince(ctx context.Context, since time.Time) (int64, error)
+	// ListMissingLenses lists, across every active tenant, the lenses that
+	// should exist but don't: analysable assets without a workspace lens and
+	// campaign memberships without a campaign lens. At most perTenant per
+	// tenant, oldest asset first.
+	ListMissingLenses(ctx context.Context, perTenant int) ([]MissingLens, error)
+}
+
+// MissingLens names a lens with no row yet; a nil CampaignID is the
+// workspace lens.
+type MissingLens struct {
+	TenantID   string  `bun:"tenant_id"`
+	AssetID    string  `bun:"asset_id"`
+	CampaignID *string `bun:"campaign_id"`
 }
 
 type assetAnalysisRepository struct {
@@ -261,6 +274,47 @@ func (r *assetAnalysisRepository) CountRunsSince(ctx context.Context, since time
 		Where("aar.created_at >= ?", since).
 		Count(ctx)
 	return int64(n), err
+}
+
+// missingLensesSQL finds the absent lenses of active tenants. A NULL type is
+// legacy markdown, analysable like models.IsAnalyzableAssetType says.
+const missingLensesSQL = `
+WITH live AS (
+	SELECT a.tenant_id, a.id, a.created_at
+	FROM assets AS a
+	JOIN tenants AS t ON t.id = a.tenant_id AND t.status = ? AND t.deleted_at IS NULL
+	WHERE (a.type IS NULL OR a.type IN (?)) AND a.status IN (?)
+), missing AS (
+	SELECT l.tenant_id, l.id AS asset_id, NULL::text AS campaign_id, l.created_at
+	FROM live AS l
+	WHERE NOT EXISTS (
+		SELECT 1 FROM asset_analyses AS aa WHERE aa.asset_id = l.id AND aa.campaign_id IS NULL)
+	UNION ALL
+	SELECT l.tenant_id, l.id, c.id, l.created_at
+	FROM campaigns AS c
+	CROSS JOIN LATERAL jsonb_array_elements_text(c.asset_ids) AS m(asset_id)
+	JOIN live AS l ON l.id = m.asset_id AND l.tenant_id = c.tenant_id
+	WHERE c.deleted_at IS NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM asset_analyses AS aa WHERE aa.asset_id = l.id AND aa.campaign_id = c.id)
+)
+SELECT tenant_id, asset_id, campaign_id FROM (
+	SELECT missing.*, row_number() OVER (
+		PARTITION BY tenant_id ORDER BY created_at, asset_id, campaign_id NULLS FIRST) AS n
+	FROM missing
+) AS ranked
+WHERE n <= ?
+ORDER BY tenant_id, n`
+
+func (r *assetAnalysisRepository) ListMissingLenses(ctx context.Context, perTenant int) ([]MissingLens, error) {
+	out := []MissingLens{}
+	err := r.db.NewRaw(missingLensesSQL,
+		models.TenantStatusActive,
+		bun.List(models.AnalyzableAssetTypes),
+		bun.List(models.AnalyzableAssetStatuses),
+		perTenant,
+	).Scan(ctx, &out)
+	return out, err
 }
 
 // deleteUntriagedIdeas deletes the inbox (verdict NULL) ideas matching where.

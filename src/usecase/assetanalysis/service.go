@@ -84,11 +84,15 @@ type Service struct {
 
 	jobs            Jobs
 	rebriefDebounce time.Duration
+	editDebounce    time.Duration
 }
 
 // New builds the service. limiter and hub may be nil.
 func New(db *bun.DB, repos Repos, limiter *entitlements.Limiter, hub eventhub.Hub) *Service {
-	return &Service{db: db, repos: repos, limiter: limiter, hub: hub, now: time.Now, rebriefDebounce: DefaultRebriefDebounce}
+	return &Service{
+		db: db, repos: repos, limiter: limiter, hub: hub, now: time.Now,
+		rebriefDebounce: DefaultRebriefDebounce, editDebounce: DefaultEditDebounce,
+	}
 }
 
 // SetAnalyzer binds the flow once the model runtime is up; nil unbinds it.
@@ -126,7 +130,10 @@ type target struct {
 // Run analyses one lens. It returns nil when there is nothing to do (the
 // asset or campaign is gone, the inputs are unchanged, the tier is gated) or
 // once the result is stored; an error means the run should be retried.
-func (s *Service) Run(ctx context.Context, l Lens) error {
+// A backfill run is not counted against the monthly cap: it catches up
+// assets that predate analysis, which the tenant never asked for.
+func (s *Service) Run(ctx context.Context, l Lens, reason string) error {
+	metered := reason != ReasonBackfill
 	ctx = tenantctx.With(ctx, l.TenantID)
 	t, err := s.load(ctx, l)
 	if err != nil || t == nil {
@@ -150,7 +157,7 @@ func (s *Service) Run(ctx context.Context, l Lens) error {
 		noopsTotal.Add(1)
 		return nil
 	}
-	dec, ok := s.admit(ctx, t)
+	dec, ok := s.admit(ctx, t, metered)
 	if !ok {
 		return nil
 	}
@@ -160,7 +167,10 @@ func (s *Service) Run(ctx context.Context, l Lens) error {
 	}
 	// The run counts against the monthly cap from before the model call, so
 	// concurrent runs of one tenant see each other at the cap check.
-	runID := s.reserveRun(ctx, t)
+	var runID string
+	if metered {
+		runID = s.reserveRun(ctx, t)
+	}
 	s.setStatus(ctx, t, models.AssetAnalysisStatusRunning, "", "")
 	resp, err := (*analyze)(ctx, asset_analysis.AnalyzeRequest{
 		CampaignID: ptrValue(l.CampaignID),
@@ -250,12 +260,16 @@ func (s *Service) load(ctx context.Context, l Lens) (*target, error) {
 	return t, nil
 }
 
-// admit applies the tier gates. A gated lens is marked skipped.
-func (s *Service) admit(ctx context.Context, t *target) (entitlements.Decision, bool) {
+// admit applies the tier gates; an unmetered run skips the monthly cap. A
+// gated lens is marked skipped.
+func (s *Service) admit(ctx context.Context, t *target, metered bool) (entitlements.Decision, bool) {
 	tenantID := t.lens.TenantID
 	if on, _ := s.limiter.Gate(ctx, tenantID, FeatureAnalysis); !on {
 		s.setStatus(ctx, t, models.AssetAnalysisStatusSkipped, models.AnalysisCodeEntitlementDisabled, disabledReason)
 		return entitlements.Decision{}, false
+	}
+	if !metered {
+		return entitlements.Decision{}, true
 	}
 	dec, _ := s.limiter.Allow(ctx, tenantID, FeatureMonthlyRuns)
 	if !dec.Allowed {

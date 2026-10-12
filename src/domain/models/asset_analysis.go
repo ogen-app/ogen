@@ -1,6 +1,7 @@
 package models
 
 import (
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -47,25 +48,29 @@ const (
 	AnalysisCodeModelRefused        = "model_refused"
 )
 
+// AnalyzableAssetTypes are the asset types that carry text worth analysing.
+// Images are excluded: their content is a vision description, not source
+// material. Untyped (legacy markdown) assets are analysed too.
+var AnalyzableAssetTypes = []string{AssetTypeMarkdown, AssetTypePDF, AssetTypeURL, AssetTypeDocument, AssetTypeAudio}
+
+// AnalyzableAssetStatuses are the asset statuses whose extracted text is
+// settled enough to analyse.
+var AnalyzableAssetStatuses = []string{AssetStatusReady, AssetStatusPartial}
+
 // IsAnalyzableAssetType reports whether an asset type carries text worth
-// analysing. Images are excluded: their content is a vision description, not
-// source material.
+// analysing.
 func IsAnalyzableAssetType(t *string) bool {
 	if t == nil {
 		// Untyped assets are legacy markdown created before the type column.
 		return true
 	}
-	switch *t {
-	case AssetTypeMarkdown, AssetTypePDF, AssetTypeURL, AssetTypeDocument, AssetTypeAudio:
-		return true
-	}
-	return false
+	return slices.Contains(AnalyzableAssetTypes, *t)
 }
 
 // IsAnalyzableAssetStatus reports whether an asset's extracted text is
 // settled enough to analyse.
 func IsAnalyzableAssetStatus(status string) bool {
-	return status == AssetStatusReady || status == AssetStatusPartial
+	return slices.Contains(AnalyzableAssetStatuses, status)
 }
 
 // AnalysisEntity is a named thing the source mentions.

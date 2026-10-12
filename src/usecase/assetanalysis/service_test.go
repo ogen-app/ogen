@@ -2,6 +2,7 @@ package assetanalysis_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"slices"
 	"sync"
@@ -51,17 +52,22 @@ type queued struct {
 	reason     string
 }
 
+// editDebounce is the fixture's asset-edit debounce.
+const editDebounce = 5 * time.Minute
+
 type jobRecorder struct {
 	analyses []queued
+	at       []time.Time
 	rebriefs []string
 }
 
-func (j *jobRecorder) EnqueueAnalyzeAsset(_ context.Context, _, assetID string, campaignID *string, reason string) error {
+func (j *jobRecorder) EnqueueAnalyzeAsset(_ context.Context, _, assetID string, campaignID *string, reason string, at time.Time) error {
 	q := queued{assetID: assetID, reason: reason}
 	if campaignID != nil {
 		q.campaignID = *campaignID
 	}
 	j.analyses = append(j.analyses, q)
+	j.at = append(j.at, at)
 	return nil
 }
 
@@ -113,7 +119,7 @@ func newFixture(t *testing.T, limiter *entitlements.Limiter) *fixture {
 		jobs:  &jobRecorder{},
 	}
 	f.svc.SetAnalyzer(f.stub.analyze)
-	f.svc.SetJobs(f.jobs, time.Minute)
+	f.svc.SetJobs(f.jobs, time.Minute, editDebounce)
 	return f
 }
 
@@ -168,7 +174,7 @@ func (f *fixture) ideaTitles(t *testing.T, assetID string) []string {
 
 func run(t *testing.T, f *fixture, assetID string, campaignID *string) {
 	t.Helper()
-	if err := f.svc.Run(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: assetID, CampaignID: campaignID}); err != nil {
+	if err := f.svc.Run(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: assetID, CampaignID: campaignID}, assetanalysis.ReasonIngested); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -313,7 +319,7 @@ func TestRunSettlesFlowFailures(t *testing.T) {
 			f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
 			f.stub.reply = func(asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error) { return nil, tc.err }
 
-			err := f.svc.Run(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: "md-1"})
+			err := f.svc.Run(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: "md-1"}, assetanalysis.ReasonIngested)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
 			}
@@ -381,6 +387,36 @@ func TestRunHonoursTheTierGates(t *testing.T) {
 			t.Fatalf("retry a ready lens: %v", err)
 		}
 	})
+	t.Run("backfill is not metered", func(t *testing.T) {
+		limiter := entitlements.NewLimiter(gateResolver{[]entitlements.EntitlementValue{entitlement(assetanalysis.FeatureMonthlyRuns, float64(1))}}, cat, entitlements.ModeEnforce)
+		f := newFixture(t, limiter)
+		limiter.Register(assetanalysis.FeatureMonthlyRuns, entitlements.CounterFunc(func(ctx context.Context, _ string) (int64, error) {
+			return f.repos.Analyses.CountRunsSince(ctx, time.Now().Add(-time.Hour))
+		}))
+		f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
+		f.seedAsset(t, "md-2", models.AssetTypeMarkdown, models.AssetStatusReady, "more text")
+		run(t, f, "md-1", nil)
+		if err := f.svc.Run(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: "md-2"}, assetanalysis.ReasonBackfill); err != nil {
+			t.Fatal(err)
+		}
+		if a := f.lens(t, "md-2", nil); a.Status != models.AssetAnalysisStatusReady || len(f.stub.reqs) != 2 {
+			t.Fatalf("backfilled lens = %s/%s calls=%d", a.Status, a.FailureCode, len(f.stub.reqs))
+		}
+		if n, _ := f.repos.Analyses.CountRunsSince(f.ctx, time.Now().Add(-time.Hour)); n != 1 {
+			t.Fatalf("recorded runs = %d, want only the metered one", n)
+		}
+	})
+	t.Run("backfill still honours the feature gate", func(t *testing.T) {
+		limiter := entitlements.NewLimiter(gateResolver{[]entitlements.EntitlementValue{entitlement(assetanalysis.FeatureAnalysis, false)}}, cat, entitlements.ModeEnforce)
+		f := newFixture(t, limiter)
+		f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
+		if err := f.svc.Run(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: "md-1"}, assetanalysis.ReasonBackfill); err != nil {
+			t.Fatal(err)
+		}
+		if a := f.lens(t, "md-1", nil); a.Status != models.AssetAnalysisStatusSkipped || a.FailureCode != models.AnalysisCodeEntitlementDisabled {
+			t.Fatalf("lens = %s/%s", a.Status, a.FailureCode)
+		}
+	})
 }
 
 func TestSchedulingQueuesEveryLens(t *testing.T) {
@@ -417,5 +453,165 @@ func TestSchedulingQueuesEveryLens(t *testing.T) {
 	}
 	if len(f.jobs.rebriefs) != 1 || len(f.jobs.analyses) != 1 || f.jobs.analyses[0].reason != assetanalysis.ReasonBrief {
 		t.Fatalf("rebrief = %v, queued = %+v", f.jobs.rebriefs, f.jobs.analyses)
+	}
+}
+
+func TestScheduleEditedDebouncesWithoutTouchingTheLens(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "First draft.")
+	f.seedAsset(t, "md-new", models.AssetTypeMarkdown, models.AssetStatusReady, "Half a thought")
+	f.seedCampaign(t, "camp-a", "md-1")
+	run(t, f, "md-1", nil)
+
+	before := time.Now()
+	f.svc.ScheduleEdited(f.ctx, tenant, "md-1")
+	f.svc.ScheduleEdited(f.ctx, tenant, "md-new")
+	want := []queued{
+		{"md-1", "", assetanalysis.ReasonEdited},
+		{"md-1", "camp-a", assetanalysis.ReasonEdited},
+		{"md-new", "", assetanalysis.ReasonEdited},
+	}
+	if !slices.Equal(f.jobs.analyses, want) {
+		t.Fatalf("queued = %+v, want %+v", f.jobs.analyses, want)
+	}
+	for _, at := range f.jobs.at {
+		if at.Before(before.Add(editDebounce)) {
+			t.Fatalf("queued to run at %v, want a debounce after %v", at, before)
+		}
+	}
+	if a := f.lens(t, "md-1", nil); a.Status != models.AssetAnalysisStatusReady {
+		t.Fatalf("an edit flipped the ready lens to %s before its run", a.Status)
+	}
+	if _, err := f.repos.Analyses.GetLens(f.ctx, "md-new", nil); err == nil {
+		t.Fatal("an edit created the new note's lens before its run")
+	}
+}
+
+func TestEditWaitIsTheRestOfTheDebounce(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
+	l := assetanalysis.Lens{TenantID: tenant, AssetID: "md-1"}
+
+	if wait, changed := f.svc.EditWait(f.ctx, l, time.Time{}); !changed || wait <= editDebounce-time.Minute || wait > editDebounce {
+		t.Fatalf("wait right after an edit = %v/%t, want about %v", wait, changed, editDebounce)
+	}
+	if _, changed := f.svc.EditWait(f.ctx, l, time.Now().Add(time.Minute)); changed {
+		t.Fatal("an asset last edited before since reported a change")
+	}
+	if _, err := f.db.NewUpdate().Model((*models.Asset)(nil)).
+		Set("updated_at = ?", time.Now().Add(-editDebounce-time.Second)).
+		Where("id = ?", "md-1").Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if wait, _ := f.svc.EditWait(f.ctx, l, time.Time{}); wait != 0 {
+		t.Fatalf("wait after a quiet debounce = %v, want 0", wait)
+	}
+	if wait, changed := f.svc.EditWait(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: "gone"}, time.Time{}); wait != 0 || changed {
+		t.Fatalf("wait for a deleted asset = %v/%t, want none", wait, changed)
+	}
+}
+
+func TestRetryStartsAMissingLens(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
+	f.seedAsset(t, "md-busy", models.AssetTypeMarkdown, models.AssetStatusProcessing, "text")
+	f.seedCampaign(t, "camp-a", "md-1")
+	f.seedCampaign(t, "camp-b")
+
+	if err := f.svc.Retry(f.ctx, tenant, "md-1", nil); err != nil {
+		t.Fatalf("start the workspace lens: %v", err)
+	}
+	if err := f.svc.Retry(f.ctx, tenant, "md-1", new("camp-a")); err != nil {
+		t.Fatalf("start the campaign lens: %v", err)
+	}
+	want := []queued{{"md-1", "", assetanalysis.ReasonRetry}, {"md-1", "camp-a", assetanalysis.ReasonRetry}}
+	if !slices.Equal(f.jobs.analyses, want) {
+		t.Fatalf("queued = %+v, want %+v", f.jobs.analyses, want)
+	}
+	for _, campaignID := range []*string{nil, new("camp-a")} {
+		if a := f.lens(t, "md-1", campaignID); a.Status != models.AssetAnalysisStatusPending {
+			t.Fatalf("started lens %v = %s, want pending", campaignID, a.Status)
+		}
+	}
+	if err := f.svc.Retry(f.ctx, tenant, "md-1", new("camp-b")); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("retry for a campaign without the asset: %v, want sql.ErrNoRows", err)
+	}
+	if err := f.svc.Retry(f.ctx, tenant, "md-1", new("camp-gone")); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("retry for a missing campaign: %v, want sql.ErrNoRows", err)
+	}
+	if err := f.svc.Retry(f.ctx, tenant, "md-busy", nil); !errors.Is(err, assetanalysis.ErrNotRetryable) {
+		t.Fatalf("retry for an asset still processing: %v, want ErrNotRetryable", err)
+	}
+	if len(f.jobs.analyses) != 2 {
+		t.Fatalf("rejected retries queued jobs: %+v", f.jobs.analyses)
+	}
+}
+
+func TestBackfillQueuesMissingLensesInBatches(t *testing.T) {
+	f := newFixture(t, nil)
+	base := time.Now().Add(-time.Hour)
+	for i, id := range []string{"md-1", "pdf-1", "md-done"} {
+		typ := models.AssetTypeMarkdown
+		if id == "pdf-1" {
+			typ = models.AssetTypePDF
+		}
+		f.seedAsset(t, id, typ, models.AssetStatusReady, "text")
+		f.ageAsset(t, id, base.Add(time.Duration(i)*time.Minute))
+	}
+	f.seedAsset(t, "img-1", models.AssetTypeImage, models.AssetStatusReady, "a picture")
+	f.seedAsset(t, "md-busy", models.AssetTypeMarkdown, models.AssetStatusProcessing, "text")
+	f.seedCampaign(t, "camp-a", "md-done", "img-1")
+	run(t, f, "md-done", nil)
+	f.seedSuspendedTenantAsset(t, "t-suspended", "md-frozen")
+
+	n, err := f.svc.Backfill(f.ctx, 2)
+	if err != nil || n != 2 {
+		t.Fatalf("first tick queued %d, %v; want the batch of 2", n, err)
+	}
+	n, err = f.svc.Backfill(f.ctx, 2)
+	if err != nil || n != 1 {
+		t.Fatalf("second tick queued %d, %v; want the remaining 1", n, err)
+	}
+	n, err = f.svc.Backfill(f.ctx, 2)
+	if err != nil || n != 0 {
+		t.Fatalf("third tick queued %d, %v; want nothing left", n, err)
+	}
+
+	want := []queued{
+		{"md-1", "", assetanalysis.ReasonBackfill},
+		{"pdf-1", "", assetanalysis.ReasonBackfill},
+		{"md-done", "camp-a", assetanalysis.ReasonBackfill},
+	}
+	if !slices.Equal(f.jobs.analyses, want) {
+		t.Fatalf("queued = %+v, want %+v (no image, no processing asset, no suspended tenant)", f.jobs.analyses, want)
+	}
+	if a := f.lens(t, "pdf-1", nil); a.Status != models.AssetAnalysisStatusPending {
+		t.Fatalf("backfilled lens = %s, want pending", a.Status)
+	}
+}
+
+// ageAsset moves an asset's creation time, which orders the backfill.
+func (f *fixture) ageAsset(t *testing.T, id string, at time.Time) {
+	t.Helper()
+	if _, err := f.db.NewUpdate().Model((*models.Asset)(nil)).Set("created_at = ?", at).Where("id = ?", id).Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedSuspendedTenantAsset adds a suspended tenant holding one ready note.
+func (f *fixture) seedSuspendedTenantAsset(t *testing.T, tenantID, assetID string) {
+	t.Helper()
+	if _, err := f.db.NewInsert().Model(&models.Tenant{
+		ID: tenantID, Name: tenantID, Slug: tenantID, TierID: "tier", Status: models.TenantStatusSuspended,
+	}).Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	a := &models.Asset{
+		ID: assetID, Title: assetID, Content: "text", Status: models.AssetStatusReady, Type: new(models.AssetTypeMarkdown),
+		TagIDs: models.StringSlice{}, CreatedBy: "user-1", CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := f.db.NewInsert().Model(a).Exec(tenantctx.With(context.Background(), tenantID)); err != nil {
+		t.Fatal(err)
 	}
 }

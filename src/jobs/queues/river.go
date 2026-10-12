@@ -217,6 +217,9 @@ type PeriodicConfig struct {
 	OrphanSweepEvery time.Duration
 	// Abandoned-upload sweep. Positive-interval gated like the others.
 	PendingUploadSweepEvery time.Duration
+	// Missing asset-analysis lens backfill. Positive-interval gated like the
+	// others.
+	AnalysisBackfillEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -301,6 +304,11 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.PendingUploadSweepEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.PendingUploadSweepEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return SweepPendingUploadsTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.AnalysisBackfillEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.AnalysisBackfillEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return BackfillAssetAnalysesTask{}, nil
 		}, runOnStart))
 	}
 	return jobs
