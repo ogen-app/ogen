@@ -36,7 +36,7 @@ type AssetFile struct {
 	CreatedAt      time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt      time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 
-	// URL, ThumbnailURL and NormalizedURL are transient public URLs rendered from
+	// URL, ThumbnailURL and NormalizedURL are transient browser-loadable URLs (presigned by default) minted from
 	// S3Key / ThumbnailS3Key / NormalizedS3Key by the handler layer before
 	// serialization. URL is the original bytes; NormalizedURL is the copy
 	// a browser can draw — the full-size asset screen renders it for

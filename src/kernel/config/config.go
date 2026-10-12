@@ -193,6 +193,11 @@ type Config struct {
 	StorageSecretKey string `envconfig:"STORAGE_SECRET_KEY" default:""`
 	StorageBucket    string `envconfig:"STORAGE_BUCKET"     default:""`
 	StoragePublicURL string `envconfig:"STORAGE_PUBLIC_URL" default:""` // CDN/public base URL for returned object URLs
+	// StoragePublicRead makes API reads hand out STORAGE_PUBLIC_URL links for
+	// asset files and post covers instead of presigned GETs. Set it only when
+	// the bucket (or a CDN in front of it) serves anonymous reads; a configured
+	// STORAGE_PUBLIC_URL alone does not imply that.
+	StoragePublicRead bool `envconfig:"STORAGE_PUBLIC_READ" default:"false"`
 
 	// PDF parsing microservice. The API streams PDF bytes to
 	// pdf-service over gRPC — exclusively over the Railway private network — and

@@ -25,7 +25,7 @@ type AssetImage struct {
 	Alt       *string   `bun:"alt"                                          json:"alt,omitempty"`
 	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 
-	// URL is a transient public URL rendered from S3Key by the handler layer
+	// URL is a transient browser-loadable URL (presigned by default) minted from S3Key by the handler layer
 	// before serialization. Not persisted.
 	URL *string `bun:"-" json:"url,omitempty"`
 }

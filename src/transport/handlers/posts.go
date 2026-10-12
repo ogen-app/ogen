@@ -90,9 +90,10 @@ type PostsHandler struct {
 	// 400. nil leaves it to the DB trigger, whose
 	// rejection is mapped to the same 400.
 	campaignRepo repository.CampaignRepository
-	// storage mints the public cover_url on read responses. nil leaves
-	// cover_url unset.
-	storage storage.Storage
+	// storage mints cover_url on read responses — presigned unless publicRead.
+	// nil leaves cover_url unset.
+	storage    storage.Storage
+	publicRead bool
 	// series validates a post's series_id. nil skips validation.
 	series *series.Service
 }
@@ -504,6 +505,7 @@ func NewPostsHandler(
 		activity:       opts.Activity,
 		onBeforeDelete: opts.OnBeforeDelete,
 		storage:        opts.Storage,
+		publicRead:     opts.PublicRead,
 		series:         opts.Series,
 		withdraw:       opts.Withdraw,
 	}
@@ -526,17 +528,21 @@ type PostsOptions struct {
 	Activity       *activity.Recorder
 	OnBeforeDelete func(ctx context.Context, postID string) error
 	Storage        storage.Storage
-	Series         *series.Service
+	// PublicRead serves cover_url as a public object URL instead of a
+	// presigned one; only for a bucket that allows anonymous reads.
+	PublicRead bool
+	Series     *series.Service
 	// Withdraw deletes a post together with its queued Zernio copy; nil
 	// falls back to the bare row delete.
 	Withdraw *withdraw.Service
 }
 
 // decorateCovers fills each post's CoverURL from its first drawable
-// attachment, served from the public key the way assets are (decorateFile) —
-// a stored copy keeps working, unlike a presigned GET. Best-effort: a failed
-// lookup is logged and leaves the posts without covers rather than failing the
-// read, since the card simply falls back to no picture.
+// attachment, minted the way asset files are (objectURL): presigned unless the
+// deployment opted in to public reads. A signed cover expires with
+// PresignedURLTTL; the next read of the list mints a fresh one. Best-effort: a
+// failed lookup is logged and leaves the posts without covers rather than
+// failing the read, since the card simply falls back to no picture.
 func (h *PostsHandler) decorateCovers(c *fiber.Ctx, posts []models.Post) {
 	if h.storage == nil || h.attachmentRepo == nil || len(posts) == 0 {
 		return
@@ -553,8 +559,7 @@ func (h *PostsHandler) decorateCovers(c *fiber.Ctx, posts []models.Post) {
 	}
 	for i := range posts {
 		if key, ok := keys[posts[i].ID]; ok {
-			u := h.storage.PublicURL(key)
-			posts[i].CoverURL = &u
+			posts[i].CoverURL = objectURL(reqCtx(c), h.storage, h.publicRead, key)
 		}
 	}
 }

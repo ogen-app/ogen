@@ -15139,7 +15139,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "url": {
-                    "description": "URL, ThumbnailURL and NormalizedURL are transient public URLs rendered from\nS3Key / ThumbnailS3Key / NormalizedS3Key by the handler layer before\nserialization. URL is the original bytes; NormalizedURL is the copy\na browser can draw — the full-size asset screen renders it for\nHEIC/TIFF; ThumbnailURL is the small preview. Not persisted; minted per\nresponse so a signed/public URL is never stored or cached client-side.",
+                    "description": "URL, ThumbnailURL and NormalizedURL are transient browser-loadable URLs (presigned by default) minted from\nS3Key / ThumbnailS3Key / NormalizedS3Key by the handler layer before\nserialization. URL is the original bytes; NormalizedURL is the copy\na browser can draw — the full-size asset screen renders it for\nHEIC/TIFF; ThumbnailURL is the small preview. Not persisted; minted per\nresponse so a signed/public URL is never stored or cached client-side.",
                     "type": "string"
                 },
                 "width": {
@@ -15179,7 +15179,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "url": {
-                    "description": "URL is a transient public URL rendered from S3Key by the handler layer\nbefore serialization. Not persisted.",
+                    "description": "URL is a transient browser-loadable URL (presigned by default) minted from S3Key by the handler layer\nbefore serialization. Not persisted.",
                     "type": "string"
                 }
             }
