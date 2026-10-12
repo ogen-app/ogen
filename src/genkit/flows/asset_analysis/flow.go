@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"strings"
 	"text/template"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 )
 
 //go:embed prompts/*.tmpl
@@ -96,21 +98,26 @@ func parsePrompt(name string) (*template.Template, error) {
 func genkitGenerator(g *genkit.Genkit, cfg FlowConfig) generator {
 	maxTokens := cmp.Or(cfg.MaxOutputTokens, defaultMaxOutputTokens)
 	return func(ctx context.Context, call modelCall) (string, error) {
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName(call.Model.Ref),
-			ai.WithSystem("%s", call.System),
-			ai.WithPrompt("%s", call.Prompt),
-			cfg.Provider.CallConfig(maxTokens),
-		)
-		if err != nil {
-			return "", &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
-		}
-		flowkit.Usage{
+		usage := flowkit.Usage{
 			Recorder:  cfg.Recorder,
 			Model:     call.Model,
 			Feature:   usageFeature,
 			Component: logComponent,
-		}.Finish(ctx, resp, maxTokens)
+		}
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModelName(call.Model.Ref),
+			ai.WithSystem("%s", call.System),
+			ai.WithPrompt("%s", call.Prompt),
+			ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowAssetAnalysis, usage.Record)),
+			cfg.Provider.CallConfig(call.Model.Model, maxTokens),
+		)
+		if errors.Is(err, llm.ErrRefused) {
+			return "", &AIError{Msg: err.Error(), Refused: true}
+		}
+		if err != nil {
+			return "", &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
+		}
+		usage.Finish(ctx, resp, maxTokens)
 		return resp.Text(), nil
 	}
 }
