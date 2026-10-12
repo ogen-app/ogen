@@ -378,16 +378,17 @@ func (h *AssetsHandler) attachImages(ctx context.Context, asset *models.Asset, i
 
 // unsignImageLinks is attachImages' inverse for a write: a client saving the
 // scraped Markdown echoes the presigned links it was served, which would expire
-// in storage, so they go back to the stable public form the worker writes.
-func (h *AssetsHandler) unsignImageLinks(ctx context.Context, asset *models.Asset, content string) string {
+// in storage, so they go back to the stable public form the worker writes. A
+// failed image lookup is returned rather than saving the links unconverted.
+func (h *AssetsHandler) unsignImageLinks(ctx context.Context, asset *models.Asset, content string) (string, error) {
 	if asset.Type == nil || *asset.Type != models.AssetTypeURL || h.imageRepo == nil || h.storage == nil || content == "" {
-		return content
+		return content, nil
 	}
 	images, err := h.imageRepo.GetByAssetID(ctx, asset.ID)
-	if err != nil || len(images) == 0 {
-		return content
+	if err != nil {
+		return "", fmt.Errorf("assets: load images to unsign links: %w", err)
 	}
-	return relinkKeys(content, imageKeys(images), h.storage.PublicURL)
+	return relinkKeys(content, imageKeys(images), h.storage.PublicURL), nil
 }
 
 func imageKeys(images []models.AssetImage) []string {
@@ -1178,7 +1179,11 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return notFound(err, "asset not found")
 	}
 
-	content, err := ingest.EditContent(asset, h.unsignImageLinks(reqCtx(c), asset, req.Content))
+	content, err := h.unsignImageLinks(reqCtx(c), asset, req.Content)
+	if err != nil {
+		return err
+	}
+	content, err = ingest.EditContent(asset, content)
 	switch {
 	case errors.Is(err, ingest.ErrContentLocked):
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{

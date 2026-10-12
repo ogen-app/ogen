@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
 )
 
@@ -179,5 +180,37 @@ func TestRelinkKeys_KeyBoundaries(t *testing.T) {
 	want := "![a](S:" + k1 + ") ![b](S:" + k10 + ")"
 	if got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
+	}
+
+	// A link that merely starts with a key's path is a different object.
+	longer := "![c](" + pubBase + k1 + ".backup) ![d](" + pubBase + k1 + ".backup?X-Amz-Signature=x)"
+	if got := relinkKeys(longer, []string{k1}, func(k string) string { return "S:" + k }); got != longer {
+		t.Fatalf("a longer path was relinked:\n got %q\nwant %q", got, longer)
+	}
+
+	// A signed link's query is replaced along with its path.
+	signed := "![e](" + signBase + k1 + "?X-Amz-Signature=x&X-Amz-Expires=900)"
+	if got := relinkKeys(signed, []string{k1}, func(k string) string { return "P:" + k }); got != "![e](P:"+k1+")" {
+		t.Fatalf("signed link not unsigned: %q", got)
+	}
+}
+
+// failingImageRepo fails every image lookup; any other method panics on the
+// nil embed.
+type failingImageRepo struct {
+	repository.AssetImageRepository
+}
+
+func (failingImageRepo) GetByAssetID(context.Context, string) ([]models.AssetImage, error) {
+	return nil, errors.New("db down")
+}
+
+// TestUnsignImageLinks_LookupFailure: when the images can't be loaded, the save
+// fails instead of persisting the echoed presigned links unconverted.
+func TestUnsignImageLinks_LookupFailure(t *testing.T) {
+	h := &AssetsHandler{storage: decorateStubStorage{}, imageRepo: failingImageRepo{}}
+	a := &models.Asset{ID: "a1", Type: new(models.AssetTypeURL)}
+	if _, err := h.unsignImageLinks(t.Context(), a, "![x]("+signBase+"k?sig=1)"); err == nil {
+		t.Fatal("want the lookup error, got nil")
 	}
 }
