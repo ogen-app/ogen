@@ -57,8 +57,8 @@ func (h *AssetAnalysesHandler) Register(app *fiber.App) {
 type assetAnalysisResponse struct {
 	ID            string                        `json:"id"`
 	AssetID       string                        `json:"asset_id"`
-	CampaignID    *string                       `json:"campaign_id"`
-	CampaignName  *string                       `json:"campaign_name"`
+	CampaignID    *string                       `json:"campaign_id"     extensions:"x-nullable"`
+	CampaignName  *string                       `json:"campaign_name"   extensions:"x-nullable"`
 	Status        models.AssetAnalysisStatus    `json:"status"          swaggertype:"string" enums:"pending,running,ready,failed,skipped"`
 	Strategy      *models.AssetAnalysisStrategy `json:"strategy"        swaggertype:"string" enums:"full,map_reduce" extensions:"x-nullable"`
 	Summary       string                        `json:"summary"`
@@ -70,12 +70,12 @@ type assetAnalysisResponse struct {
 	Commitments   []models.AnalysisCommitment   `json:"commitments,omitempty"`
 	Decisions     []models.AnalysisDecision     `json:"decisions,omitempty"`
 	OpenQuestions []string                      `json:"open_questions,omitempty"`
-	Relevance     *models.AnalysisRelevance     `json:"relevance"`
+	Relevance     *models.AnalysisRelevance     `json:"relevance"       extensions:"x-nullable"`
 	PartialSource bool                          `json:"partial_source"`
 	Truncated     bool                          `json:"truncated"`
 	FailureCode   string                        `json:"failure_code"`
 	FailureReason string                        `json:"failure_reason"`
-	AnalyzedAt    *time.Time                    `json:"analyzed_at"`
+	AnalyzedAt    *time.Time                    `json:"analyzed_at"     extensions:"x-nullable"`
 	// Ideas are embedded on asset reads (an empty array when a lens has none)
 	// and left out of the campaign list.
 	Ideas *[]models.Idea `json:"ideas,omitempty"`

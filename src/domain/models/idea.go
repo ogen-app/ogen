@@ -69,7 +69,7 @@ type Idea struct {
 	// AssetAnalysisID goes null when that analysis is removed; a triaged idea
 	// outlives it.
 	Origin          IdeaOrigin `bun:"origin,notnull,default:''"                    json:"origin"            swaggertype:"string" enums:",asset_analysis"`
-	AssetAnalysisID *string    `bun:"asset_analysis_id"                            json:"asset_analysis_id"`
+	AssetAnalysisID *string    `bun:"asset_analysis_id"                            json:"asset_analysis_id" extensions:"x-nullable"`
 	// SourceAsset is hydrated on reads while the analysis still exists.
 	SourceAsset   *IdeaSourceAsset `bun:"-"                                    json:"source_asset,omitempty"`
 	CreatedBy     *string          `bun:"created_by"                           json:"created_by"`

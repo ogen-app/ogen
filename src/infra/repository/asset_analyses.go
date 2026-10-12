@@ -55,9 +55,11 @@ type AssetAnalysisRepository interface {
 	CountRunsSince(ctx context.Context, since time.Time) (int64, error)
 	// ListMissingLenses lists, across every active tenant, the lenses that
 	// should exist but don't: analysable assets without a workspace lens and
-	// campaign memberships without a campaign lens. At most perTenant per
+	// campaign memberships without a campaign lens. It also lists stranded
+	// lenses: pending for over pendingGrace with no live analyze_asset job,
+	// because queueing failed after the row was made. At most perTenant per
 	// tenant, oldest asset first.
-	ListMissingLenses(ctx context.Context, perTenant int) ([]MissingLens, error)
+	ListMissingLenses(ctx context.Context, perTenant int, pendingGrace time.Duration) ([]MissingLens, error)
 }
 
 // MissingLens names a lens with no row yet; a nil CampaignID is the
@@ -276,8 +278,10 @@ func (r *assetAnalysisRepository) CountRunsSince(ctx context.Context, since time
 	return int64(n), err
 }
 
-// missingLensesSQL finds the absent lenses of active tenants. A NULL type is
-// legacy markdown, analysable like models.IsAnalyzableAssetType says.
+// missingLensesSQL finds the absent and stranded lenses of active tenants. A
+// NULL type is legacy markdown, analysable like models.IsAnalyzableAssetType
+// says. A stranded lens is looked up against River's own job table (same
+// database), matching the analyze_asset job args.
 const missingLensesSQL = `
 WITH live AS (
 	SELECT a.tenant_id, a.id, a.created_at
@@ -297,6 +301,18 @@ WITH live AS (
 	WHERE c.deleted_at IS NULL
 		AND NOT EXISTS (
 			SELECT 1 FROM asset_analyses AS aa WHERE aa.asset_id = l.id AND aa.campaign_id = c.id)
+	UNION ALL
+	SELECT l.tenant_id, l.id, aa.campaign_id, l.created_at
+	FROM asset_analyses AS aa
+	JOIN live AS l ON l.id = aa.asset_id
+	LEFT JOIN campaigns AS c ON c.id = aa.campaign_id
+	WHERE aa.status = ? AND aa.updated_at < ?
+		AND (aa.campaign_id IS NULL OR c.deleted_at IS NULL)
+		AND NOT EXISTS (
+			SELECT 1 FROM river_job AS j
+			WHERE j.kind = ? AND j.state IN (?)
+				AND j.args->>'asset_id' = aa.asset_id
+				AND j.args->>'campaign_id' IS NOT DISTINCT FROM aa.campaign_id)
 )
 SELECT tenant_id, asset_id, campaign_id FROM (
 	SELECT missing.*, row_number() OVER (
@@ -306,16 +322,28 @@ SELECT tenant_id, asset_id, campaign_id FROM (
 WHERE n <= ?
 ORDER BY tenant_id, n`
 
-func (r *assetAnalysisRepository) ListMissingLenses(ctx context.Context, perTenant int) ([]MissingLens, error) {
+// liveJobStates are the River job states in which a queued analysis will
+// still run.
+var liveJobStates = []string{"available", "pending", "retryable", "running", "scheduled"}
+
+func (r *assetAnalysisRepository) ListMissingLenses(ctx context.Context, perTenant int, pendingGrace time.Duration) ([]MissingLens, error) {
 	out := []MissingLens{}
 	err := r.db.NewRaw(missingLensesSQL,
 		models.TenantStatusActive,
 		bun.List(models.AnalyzableAssetTypes),
 		bun.List(models.AnalyzableAssetStatuses),
+		models.AssetAnalysisStatusPending,
+		time.Now().Add(-pendingGrace),
+		analyzeAssetJobKind,
+		bun.List(liveJobStates),
 		perTenant,
 	).Scan(ctx, &out)
 	return out, err
 }
+
+// analyzeAssetJobKind mirrors queues.AnalyzeAssetKind, which this package
+// cannot import.
+const analyzeAssetJobKind = "analyze_asset"
 
 // deleteUntriagedIdeas deletes the inbox (verdict NULL) ideas matching where.
 func deleteUntriagedIdeas(ctx context.Context, db bun.IDB, where string, args ...any) error {

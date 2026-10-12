@@ -244,15 +244,21 @@ func (s *Service) start(ctx context.Context, l Lens) error {
 	return nil
 }
 
+// strandedGrace is how long a pending lens may go without a queued job before
+// backfill re-queues it; it covers the gap between creating a lens row and
+// queueing its job.
+const strandedGrace = 10 * time.Minute
+
 // Backfill queues up to perTenant missing lenses of each active tenant:
-// analysable assets without a workspace lens and campaign memberships without
-// a campaign lens. Each queued lens gets its row, so the next call moves on
-// to the next batch. It returns how many lenses it queued.
+// analysable assets without a workspace lens, campaign memberships without a
+// campaign lens, and pending lenses whose job was never queued. Each queued
+// lens has its row and job, so the next call moves on to the next batch. It
+// returns how many lenses it queued.
 func (s *Service) Backfill(ctx context.Context, perTenant int) (int, error) {
 	if s.jobs == nil {
 		return 0, nil
 	}
-	missing, err := s.repos.Analyses.ListMissingLenses(tenantctx.WithSystem(ctx), perTenant)
+	missing, err := s.repos.Analyses.ListMissingLenses(tenantctx.WithSystem(ctx), perTenant, strandedGrace)
 	if err != nil {
 		return 0, fmt.Errorf("list missing lenses: %w", err)
 	}
