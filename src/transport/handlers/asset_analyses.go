@@ -158,8 +158,8 @@ func (h *AssetAnalysesHandler) Get(c *fiber.Ctx) error {
 }
 
 // Retry godoc
-// @Summary      Retry a failed or skipped analysis
-// @Description  Re-queues the lens (the workspace lens, or campaign_id's). Only a failed or skipped lens can be retried.
+// @Summary      Retry or start an analysis
+// @Description  Re-queues the lens (the workspace lens, or campaign_id's) when it failed or was skipped, or starts it pending when it was never created. Starting a campaign lens needs the asset to be in that campaign.
 // @Tags         assets
 // @Produce      json
 // @Security     CookieAuth
@@ -168,7 +168,7 @@ func (h *AssetAnalysesHandler) Get(c *fiber.Ctx) error {
 // @Success      202
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
-// @Failure      409  {object}  map[string]string  "analysis_not_retryable"
+// @Failure      409  {object}  map[string]string  "analysis_not_retryable: the lens is pending, running or ready, or the asset is not ready to analyse"
 // @Failure      422  {object}  map[string]string  "the asset type is never analysed"
 // @Failure      503  {object}  map[string]string
 // @Router       /api/content-bank/assets/{id}/analysis/retry [post]
@@ -187,9 +187,9 @@ func (h *AssetAnalysesHandler) Retry(c *fiber.Ctx) error {
 	case err == nil:
 		return c.SendStatus(fiber.StatusAccepted)
 	case errors.Is(err, sql.ErrNoRows):
-		return fiber.NewError(fiber.StatusNotFound, "analysis not found")
+		return fiber.NewError(fiber.StatusNotFound, "campaign not found or the asset is not in it")
 	case errors.Is(err, assetanalysis.ErrNotRetryable):
-		return rejectCoded(c, fiber.StatusConflict, codeAnalysisNotRetryable, "only a failed or skipped analysis can be retried", nil)
+		return rejectCoded(c, fiber.StatusConflict, codeAnalysisNotRetryable, "only a failed, skipped or missing analysis of a ready asset can be retried", nil)
 	case errors.Is(err, assetanalysis.ErrUnavailable):
 		return fiber.NewError(fiber.StatusServiceUnavailable, "asset analysis is not available")
 	}
