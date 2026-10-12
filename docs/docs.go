@@ -2355,6 +2355,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/campaigns/{id}/asset-analyses": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "One lens per asset attached to the campaign, most relevant first. Ideas are not embedded; read them from /api/ideas?campaign_id=.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "List a campaign's asset analyses",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assetAnalysesResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/campaigns/{id}/assets": {
             "post": {
                 "security": [
@@ -4095,6 +4147,198 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/content-bank/assets/{id}/analyses": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The workspace lens first, then one lens per live campaign the asset serves, each with the ideas it distilled.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assets"
+                ],
+                "summary": "List an asset's analyses",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assetAnalysesResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/analysis": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Without campaign_id, the workspace lens; with it, that campaign's lens. Ideas are embedded.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assets"
+                ],
+                "summary": "Get one analysis lens of an asset",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assetAnalysisResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/analysis/retry": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Re-queues the lens (the workspace lens, or campaign_id's) when it failed or was skipped, or starts it pending when it was never created. Starting a campaign lens needs the asset to be in that campaign.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assets"
+                ],
+                "summary": "Retry or start an analysis",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "analysis_not_retryable: the lens is pending, running or ready, or the asset is not ready to analyse",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "the asset type is never analysed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/content-bank/assets/{id}/audio": {
             "get": {
                 "security": [
@@ -5061,6 +5305,22 @@ const docTemplate = `{
                         "description": "only ideas attached to this campaign, or ` + "`" + `none` + "`" + ` for workspace-wide ideas",
                         "name": "campaign_id",
                         "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "manual",
+                            "asset_analysis"
+                        ],
+                        "type": "string",
+                        "description": "only ideas of this origin",
+                        "name": "origin",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "only ideas an analysis of this asset distilled",
+                        "name": "asset_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -5068,6 +5328,15 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/handlers.ideaListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -12101,6 +12370,125 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.assetAnalysesResponse": {
+            "type": "object",
+            "properties": {
+                "analyses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.assetAnalysisResponse"
+                    }
+                }
+            }
+        },
+        "handlers.assetAnalysisResponse": {
+            "type": "object",
+            "properties": {
+                "analyzed_at": {
+                    "type": "string"
+                },
+                "asset_id": {
+                    "type": "string"
+                },
+                "campaign_id": {
+                    "type": "string"
+                },
+                "campaign_name": {
+                    "type": "string"
+                },
+                "commitments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AnalysisCommitment"
+                    }
+                },
+                "decisions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AnalysisDecision"
+                    }
+                },
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AnalysisEntity"
+                    }
+                },
+                "failure_code": {
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "ideas": {
+                    "description": "Ideas are embedded on asset reads (an empty array when a lens has none)\nand left out of the campaign list.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.Idea"
+                    }
+                },
+                "key_points": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "language": {
+                    "type": "string"
+                },
+                "open_questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "partial_source": {
+                    "type": "boolean"
+                },
+                "participants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AnalysisParticipant"
+                    }
+                },
+                "relevance": {
+                    "$ref": "#/definitions/models.AnalysisRelevance"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "running",
+                        "ready",
+                        "failed",
+                        "skipped"
+                    ]
+                },
+                "strategy": {
+                    "type": "string",
+                    "enum": [
+                        "full",
+                        "map_reduce"
+                    ],
+                    "x-nullable": true
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "topics": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
         "handlers.assetChunksResponse": {
             "type": "object",
             "properties": {
@@ -14490,6 +14878,76 @@ const docTemplate = `{
                 }
             }
         },
+        "models.AnalysisCommitment": {
+            "type": "object",
+            "properties": {
+                "commitment": {
+                    "type": "string"
+                },
+                "confidence": {
+                    "type": "string"
+                },
+                "due": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "source_label": {
+                    "description": "SourceLabel cites where it was said, e.g. a \"12:03–12:47\" time range.",
+                    "type": "string"
+                }
+            }
+        },
+        "models.AnalysisDecision": {
+            "type": "object",
+            "properties": {
+                "source_label": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.AnalysisEntity": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "description": "Kind is person, org, product, place or other.",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.AnalysisParticipant": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "description": "Confidence is \"stated\" when the person introduced themselves or was named\ndirectly, \"inferred\" when the model deduced it.",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.AnalysisRelevance": {
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "integer"
+                },
+                "why": {
+                    "type": "string"
+                }
+            }
+        },
         "models.Asset": {
             "type": "object",
             "properties": {
@@ -14500,6 +14958,18 @@ const docTemplate = `{
                 "alt_text_edited_by_user": {
                     "description": "AltTextEditedByUser guards a user's manual alt text from being overwritten\nby (re-)processing: image-service fills AltText only while this\nis false; a PUT that sets alt_text flips it true, so re-extraction never\nclobbers a human edit.",
                     "type": "boolean"
+                },
+                "analysis_status": {
+                    "description": "AnalysisStatus is the workspace analysis lens's status, hydrated by the\nhandler; nil for assets that are never analysed or not yet queued.",
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "running",
+                        "ready",
+                        "failed",
+                        "skipped"
+                    ],
+                    "x-nullable": true
                 },
                 "content": {
                     "type": "string"
@@ -15352,6 +15822,9 @@ const docTemplate = `{
         "models.Idea": {
             "type": "object",
             "properties": {
+                "asset_analysis_id": {
+                    "type": "string"
+                },
                 "campaign_id": {
                     "type": "string"
                 },
@@ -15359,7 +15832,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "created_by": {
-                    "description": "CreatedBy is stamped from the session on insert and never changes. It goes\nnull only when the author's user row is hard-deleted; CreatedByName is the\ncapture-time snapshot that keeps the author after that.",
                     "type": "string"
                 },
                 "created_by_name": {
@@ -15377,8 +15849,24 @@ const docTemplate = `{
                 "note": {
                     "type": "string"
                 },
+                "origin": {
+                    "description": "CreatedBy is stamped from the session on insert and never changes. It goes\nnull only when the author's user row is hard-deleted; CreatedByName is the\ncapture-time snapshot that keeps the author after that.\nOrigin and AssetAnalysisID trace an analysis idea back to its source.\nAssetAnalysisID goes null when that analysis is removed; a triaged idea\noutlives it.",
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "asset_analysis"
+                    ]
+                },
                 "remind_at": {
                     "type": "string"
+                },
+                "source_asset": {
+                    "description": "SourceAsset is hydrated on reads while the analysis still exists.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IdeaSourceAsset"
+                        }
+                    ]
                 },
                 "title": {
                     "type": "string"
@@ -15394,6 +15882,17 @@ const docTemplate = `{
                         "no"
                     ],
                     "x-nullable": true
+                }
+            }
+        },
+        "models.IdeaSourceAsset": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
                 }
             }
         },
