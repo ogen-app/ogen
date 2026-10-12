@@ -57,7 +57,9 @@ func relinkKeys(content string, keys []string, mint func(key string) string) str
 	if len(alts) == 0 {
 		return content
 	}
-	re := regexp.MustCompile(linkChars + `*?/(` + strings.Join(alts, "|") + `)(?:\?` + linkChars + `*)?`)
+	// The greedy tail takes the rest of the link, so the suffix check below
+	// sees its whole path: ".../1.png.backup" is not the key ".../1.png".
+	re := regexp.MustCompile(linkChars + `*?/(?:` + strings.Join(alts, "|") + `)` + linkChars + `*`)
 	return re.ReplaceAllStringFunc(content, func(m string) string {
 		path, _, _ := strings.Cut(m, "?")
 		for _, k := range keys {
