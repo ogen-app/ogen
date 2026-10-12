@@ -46,8 +46,11 @@ type AssetAnalysisRepository interface {
 	DeleteUntriagedIdeasForAsset(ctx context.Context, db bun.IDB, assetID string) error
 	// CampaignIDsWithAsset lists the live campaigns the asset is attached to.
 	CampaignIDsWithAsset(ctx context.Context, assetID string) ([]string, error)
-	// RecordRun logs one run of the analysis against the monthly cap.
-	RecordRun(ctx context.Context, analysisID string) error
+	// RecordRun logs one run of the analysis against the monthly cap and
+	// returns the run's id.
+	RecordRun(ctx context.Context, analysisID string) (string, error)
+	// DeleteRun releases a recorded run that never reached a result.
+	DeleteRun(ctx context.Context, id string) error
 	// CountRunsSince counts the tenant's runs at or after since.
 	CountRunsSince(ctx context.Context, since time.Time) (int64, error)
 }
@@ -235,12 +238,19 @@ func (r *assetAnalysisRepository) CampaignIDsWithAsset(ctx context.Context, asse
 	return ids, err
 }
 
-func (r *assetAnalysisRepository) RecordRun(ctx context.Context, analysisID string) error {
+func (r *assetAnalysisRepository) RecordRun(ctx context.Context, analysisID string) (string, error) {
 	id, err := models.NewID()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = r.db.NewInsert().Model(&models.AssetAnalysisRun{ID: id, AnalysisID: analysisID}).Exec(ctx)
+	if _, err := r.db.NewInsert().Model(&models.AssetAnalysisRun{ID: id, AnalysisID: analysisID}).Exec(ctx); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (r *assetAnalysisRepository) DeleteRun(ctx context.Context, id string) error {
+	_, err := r.db.NewDelete().Model((*models.AssetAnalysisRun)(nil)).Where("id = ?", id).Exec(ctx)
 	return err
 }
 

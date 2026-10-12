@@ -158,6 +158,9 @@ func (s *Service) Run(ctx context.Context, l Lens) error {
 	if analyze == nil {
 		return ErrUnavailable
 	}
+	// The run counts against the monthly cap from before the model call, so
+	// concurrent runs of one tenant see each other at the cap check.
+	runID := s.reserveRun(ctx, t)
 	s.setStatus(ctx, t, models.AssetAnalysisStatusRunning, "", "")
 	resp, err := (*analyze)(ctx, asset_analysis.AnalyzeRequest{
 		CampaignID: ptrValue(l.CampaignID),
@@ -165,13 +168,36 @@ func (s *Service) Run(ctx context.Context, l Lens) error {
 		Lens:       lensCtx,
 	})
 	if err != nil {
-		return s.handleFailure(ctx, t, err)
-	}
-	if err := s.repos.Analyses.RecordRun(ctx, t.row.ID); err != nil {
-		slog.WarnContext(ctx, "could not record the run", logging.AttrComponent, logComponent, logging.AttrError, err)
+		_, rejected := errors.AsType[*asset_analysis.ValidationError](err)
+		retryErr := s.handleFailure(ctx, t, err)
+		if retryErr != nil || rejected {
+			// Retried by River, or rejected before any model call: this
+			// attempt must not use up a run.
+			s.releaseRun(ctx, runID)
+		}
+		return retryErr
 	}
 	s.limiter.DispatchCrossing(ctx, l.TenantID, dec)
 	return s.save(ctx, t, resp, fp)
+}
+
+// reserveRun records the run against the monthly cap and returns its id;
+// empty when it could not be recorded.
+func (s *Service) reserveRun(ctx context.Context, t *target) string {
+	id, err := s.repos.Analyses.RecordRun(ctx, t.row.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "could not record the run", logging.AttrComponent, logComponent, logging.AttrError, err)
+	}
+	return id
+}
+
+func (s *Service) releaseRun(ctx context.Context, id string) {
+	if id == "" {
+		return
+	}
+	if err := s.repos.Analyses.DeleteRun(ctx, id); err != nil {
+		slog.WarnContext(ctx, "could not release the run", logging.AttrComponent, logComponent, logging.AttrError, err)
+	}
 }
 
 // Fail marks a lens failed after its last attempt, so it never stays

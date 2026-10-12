@@ -278,7 +278,7 @@ func TestAssetAnalysisRunLedger(t *testing.T) {
 	f := newAnalysisFixture(t)
 	since := time.Now().UTC().AddDate(0, 0, -1)
 	for range 3 {
-		if err := f.analyses.RecordRun(f.ctx, "analysis-1"); err != nil {
+		if _, err := f.analyses.RecordRun(f.ctx, "analysis-1"); err != nil {
 			t.Fatal(err)
 		}
 	}
