@@ -860,7 +860,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 			return out
 		}
 
-		It("carries the first image's public URL on the list rows, and nothing for a post without media", func() {
+		It("carries the first image's presigned URL on the list rows, and nothing for a post without media", func() {
 			withMedia := createPostWithPlatform(linkedinPlatformID)
 			_, err := uploadPNG(withMedia, minimalPNG())
 			Expect(err).NotTo(HaveOccurred())
@@ -871,7 +871,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 			var atts map[string]any
 			getJSON("/api/posts/"+withMedia+"/attachments", &atts)
 			first := atts["attachments"].([]any)[0].(map[string]any)
-			want := "https://pub.example.com/" + first["s3_key"].(string)
+			want := "https://pub.example.com/signed/" + first["s3_key"].(string)
 
 			for _, path := range []string{"/api/posts", "/api/campaigns/" + campaignID + "/posts"} {
 				var posts []map[string]any
@@ -901,7 +901,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 
 			var one map[string]any
 			getJSON("/api/posts/"+postID, &one)
-			Expect(one["cover_url"]).To(Equal("https://pub.example.com/" + att["thumbnail_s3_key"].(string)))
+			Expect(one["cover_url"]).To(Equal("https://pub.example.com/signed/" + att["thumbnail_s3_key"].(string)))
 		})
 
 		It("is never written back: a PUT of the returned post does not persist it", func() {

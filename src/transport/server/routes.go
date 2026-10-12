@@ -194,6 +194,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 		Activity:       rec,
 		OnBeforeDelete: deleteAttachmentBlobs(d.store, r.postAttachmentRepo),
 		Storage:        d.store,
+		PublicRead:     d.cfg.StoragePublicRead,
 		Series:         d.svc.series,
 		Withdraw:       d.svc.withdraw,
 	}).Register(app)
@@ -240,6 +241,7 @@ func (d *deps) newAssetsHandler() *handlers.AssetsHandler {
 		Chunks:       r.chunksRepo,
 		ImageReembed: reembed,
 		Analyses:     r.assetAnalysisRepo,
+		PublicRead:   d.cfg.StoragePublicRead,
 	})
 }
 

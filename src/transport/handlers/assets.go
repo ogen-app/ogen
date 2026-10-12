@@ -136,9 +136,12 @@ type AssetsHandler struct {
 	fileRepo  repository.AssetFileRepository
 	imageRepo repository.AssetImageRepository
 	storage   storage.Storage
-	db        *bun.DB
-	auth      fiber.Handler
-	limiter   *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
+	// publicRead hands out plain public object URLs instead of presigned ones
+	// (STORAGE_PUBLIC_READ) — only for a bucket that really serves anonymous reads.
+	publicRead bool
+	db         *bun.DB
+	auth       fiber.Handler
+	limiter    *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 
 	// onSave triggers async embedding for text-based Asset saves (JSON create/update + MD upload).
 	onSave func(assetID, title, content, tenantID string)
@@ -172,6 +175,9 @@ type AssetsOptions struct {
 	ImageReembed ImageReembedEnqueuer
 	// Analyses fills analysis_status on reads; nil leaves it null.
 	Analyses repository.AssetAnalysisRepository
+	// PublicRead serves public object URLs instead of presigned ones; set it
+	// only when the bucket allows anonymous reads (STORAGE_PUBLIC_READ).
+	PublicRead bool
 }
 
 func NewAssetsHandler(
@@ -194,6 +200,7 @@ func NewAssetsHandler(
 		chunks:     opts.Chunks,
 		imgReembed: opts.ImageReembed,
 		analyses:   opts.Analyses,
+		publicRead: opts.PublicRead,
 		repo:       repo,
 		fileRepo:   fileRepo,
 		imageRepo:  imageRepo,
@@ -261,7 +268,7 @@ func (h *AssetsHandler) List(c *fiber.Ctx) error {
 		return err
 	}
 	for i := range assets {
-		h.decorateFile(&assets[i])
+		h.decorateFile(reqCtx(c), &assets[i])
 	}
 	h.decorateImagesBatch(reqCtx(c), assets)
 	h.decorateAnalysisStatus(reqCtx(c), assets)
@@ -290,7 +297,8 @@ func (h *AssetsHandler) decorateAnalysisStatus(ctx context.Context, assets []mod
 }
 
 // decorateImagesBatch hydrates mirrored images for a list of assets in one query,
-// URL-decorating each. No-op when the image repo is unwired.
+// URL-decorating each and relinking them in the scraped Markdown. No-op when the
+// image repo is unwired.
 func (h *AssetsHandler) decorateImagesBatch(ctx context.Context, assets []models.Asset) {
 	if h.imageRepo == nil || len(assets) == 0 {
 		return
@@ -304,47 +312,42 @@ func (h *AssetsHandler) decorateImagesBatch(ctx context.Context, assets []models
 		return
 	}
 	for i := range assets {
-		imgs, ok := byAsset[assets[i].ID]
-		if !ok {
-			continue
+		if imgs, ok := byAsset[assets[i].ID]; ok {
+			h.attachImages(ctx, &assets[i], imgs)
 		}
-		for j := range imgs {
-			if h.storage != nil && imgs[j].S3Key != "" {
-				u := h.storage.PublicURL(imgs[j].S3Key)
-				imgs[j].URL = &u
-			}
-		}
-		assets[i].Images = imgs
 	}
+}
+
+// fileURL mints the loadable URL for one of an asset's stored objects; see
+// objectURL.
+func (h *AssetsHandler) fileURL(ctx context.Context, key string) *string {
+	return objectURL(ctx, h.storage, h.publicRead, key)
 }
 
 // decorateFile fills File.URL (the original), File.ThumbnailURL and
-// File.NormalizedURL from their s3 keys using the public storage URL, when
-// present. URL is the original bytes an image viewer downloads;
-// NormalizedURL is the browser-drawable derivative — what the asset screen shows
-// for HEIC/TIFF, which no browser decodes; ThumbnailURL is the
-// PDF/first-page preview and the image grid thumbnail.
-func (h *AssetsHandler) decorateFile(asset *models.Asset) {
+// File.NormalizedURL from their s3 keys — presigned unless the deployment opted
+// in to public reads; a key that fails to sign leaves its URL unset. URL is the
+// original bytes an image viewer downloads; NormalizedURL is the
+// browser-drawable derivative — what the asset screen shows for HEIC/TIFF,
+// which no browser decodes; ThumbnailURL is the PDF/first-page preview and the
+// image grid thumbnail. Signed URLs expire after PresignedURLTTL; the client
+// refetches the asset on focus and through its polls, which mints fresh ones.
+func (h *AssetsHandler) decorateFile(ctx context.Context, asset *models.Asset) {
 	if asset == nil || asset.File == nil || h.storage == nil {
 		return
 	}
-	if asset.File.S3Key != "" {
-		u := h.storage.PublicURL(asset.File.S3Key)
-		asset.File.URL = &u
+	asset.File.URL = h.fileURL(ctx, asset.File.S3Key)
+	if asset.File.ThumbnailS3Key != nil {
+		asset.File.ThumbnailURL = h.fileURL(ctx, *asset.File.ThumbnailS3Key)
 	}
-	if asset.File.ThumbnailS3Key != nil && *asset.File.ThumbnailS3Key != "" {
-		u := h.storage.PublicURL(*asset.File.ThumbnailS3Key)
-		asset.File.ThumbnailURL = &u
-	}
-	if asset.File.NormalizedS3Key != nil && *asset.File.NormalizedS3Key != "" {
-		u := h.storage.PublicURL(*asset.File.NormalizedS3Key)
-		asset.File.NormalizedURL = &u
+	if asset.File.NormalizedS3Key != nil {
+		asset.File.NormalizedURL = h.fileURL(ctx, *asset.File.NormalizedS3Key)
 	}
 }
 
-// decorateImages hydrates a URL asset's mirrored images and fills each
-// image's public URL from its s3_key. No-op when the image repo/storage are
-// unwired or the asset has no images.
+// decorateImages hydrates a URL asset's mirrored images, mints each image's URL
+// from its s3_key and relinks them in the scraped Markdown. No-op when the image
+// repo is unwired or the asset has no images.
 func (h *AssetsHandler) decorateImages(ctx context.Context, asset *models.Asset) {
 	if asset == nil || h.imageRepo == nil {
 		return
@@ -353,13 +356,46 @@ func (h *AssetsHandler) decorateImages(ctx context.Context, asset *models.Asset)
 	if err != nil || len(images) == 0 {
 		return
 	}
+	h.attachImages(ctx, asset, images)
+}
+
+// attachImages sets asset.Images with each image's URL minted, and points the
+// scraped Markdown's links at those URLs: the worker stored them as public
+// URLs, which a private bucket refuses.
+func (h *AssetsHandler) attachImages(ctx context.Context, asset *models.Asset, images []models.AssetImage) {
+	urls := make(map[string]string, len(images))
 	for i := range images {
-		if h.storage != nil && images[i].S3Key != "" {
-			u := h.storage.PublicURL(images[i].S3Key)
-			images[i].URL = &u
+		images[i].URL = h.fileURL(ctx, images[i].S3Key)
+		if images[i].URL != nil {
+			urls[images[i].S3Key] = *images[i].URL
 		}
 	}
 	asset.Images = images
+	if !h.publicRead {
+		asset.Content = relinkKeys(asset.Content, imageKeys(images), func(key string) string { return urls[key] })
+	}
+}
+
+// unsignImageLinks is attachImages' inverse for a write: a client saving the
+// scraped Markdown echoes the presigned links it was served, which would expire
+// in storage, so they go back to the stable public form the worker writes.
+func (h *AssetsHandler) unsignImageLinks(ctx context.Context, asset *models.Asset, content string) string {
+	if asset.Type == nil || *asset.Type != models.AssetTypeURL || h.imageRepo == nil || h.storage == nil || content == "" {
+		return content
+	}
+	images, err := h.imageRepo.GetByAssetID(ctx, asset.ID)
+	if err != nil || len(images) == 0 {
+		return content
+	}
+	return relinkKeys(content, imageKeys(images), h.storage.PublicURL)
+}
+
+func imageKeys(images []models.AssetImage) []string {
+	keys := make([]string, len(images))
+	for i := range images {
+		keys[i] = images[i].S3Key
+	}
+	return keys
 }
 
 // Create godoc
@@ -821,7 +857,7 @@ func (h *AssetsHandler) ingestImage(c *fiber.Ctx, session *models.Session, in im
 	// first asset instead of a near-duplicate.
 	checksum := ingest.Checksum(in.Raw)
 	if a := svc.FindByChecksum(ctx, checksum); a != nil {
-		h.decorateFile(a)
+		h.decorateFile(ctx, a)
 		res.deduplicated = true
 		return res.created(a)
 	}
@@ -870,7 +906,7 @@ func (h *AssetsHandler) ingestImage(c *fiber.Ctx, session *models.Session, in im
 	} else {
 		res.deduplicated = true // a concurrent upload of the same bytes won
 	}
-	h.decorateFile(stored)
+	h.decorateFile(ctx, stored)
 	return res.created(stored)
 }
 
@@ -1061,7 +1097,7 @@ func (h *AssetsHandler) refreshURLAsset(c *fiber.Ctx, asset *models.Asset, sourc
 		return err
 	}
 	asset.Status = models.AssetStatusPending
-	h.decorateFile(asset)
+	h.decorateFile(reqCtx(c), asset)
 	h.decorateImages(reqCtx(c), asset)
 	return c.Status(fiber.StatusOK).JSON(asset)
 }
@@ -1107,7 +1143,7 @@ func (h *AssetsHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return notFound(err, "asset not found")
 	}
-	h.decorateFile(asset)
+	h.decorateFile(reqCtx(c), asset)
 	h.decorateImages(reqCtx(c), asset)
 	one := []models.Asset{*asset}
 	h.decorateAnalysisStatus(reqCtx(c), one)
@@ -1142,7 +1178,7 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 		return notFound(err, "asset not found")
 	}
 
-	content, err := ingest.EditContent(asset, req.Content)
+	content, err := ingest.EditContent(asset, h.unsignImageLinks(reqCtx(c), asset, req.Content))
 	switch {
 	case errors.Is(err, ingest.ErrContentLocked):
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
@@ -1188,7 +1224,8 @@ func (h *AssetsHandler) Update(c *fiber.Ctx) error {
 
 	h.reembed(c, asset, reembed)
 
-	h.decorateFile(asset)
+	h.decorateFile(reqCtx(c), asset)
+	h.decorateImages(reqCtx(c), asset)
 	return c.JSON(asset)
 }
 
@@ -1258,7 +1295,7 @@ func (h *AssetsHandler) BulkTag(c *fiber.Ctx) error {
 		return err
 	}
 	for i := range updated {
-		h.decorateFile(&updated[i])
+		h.decorateFile(reqCtx(c), &updated[i])
 	}
 	return c.JSON(updated)
 }
