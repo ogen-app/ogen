@@ -194,6 +194,9 @@ type AIError struct {
 	// Invalid is set when the model answered but the answer was not valid
 	// JSON even after a repair attempt, so retrying the job will not help.
 	Invalid bool
+	// Refused is set when the model declined the request. A refusal is never
+	// retried: the same source would most likely be refused again.
+	Refused bool
 }
 
 func (e *AIError) Error() string { return e.Msg }

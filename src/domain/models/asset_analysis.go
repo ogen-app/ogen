@@ -44,6 +44,7 @@ const (
 	AnalysisCodeInvalidOutput       = "invalid_output"
 	AnalysisCodeSourceUnavailable   = "source_unavailable"
 	AnalysisCodeModelUnavailable    = "model_unavailable"
+	AnalysisCodeModelRefused        = "model_refused"
 )
 
 // IsAnalyzableAssetType reports whether an asset type carries text worth

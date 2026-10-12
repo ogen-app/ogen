@@ -298,6 +298,7 @@ func TestRunSettlesFlowFailures(t *testing.T) {
 	}{
 		{"empty source", &asset_analysis.ValidationError{Msg: "empty"}, models.AssetAnalysisStatusFailed, models.AnalysisCodeEmptySource, false},
 		{"invalid output", &asset_analysis.AIError{Msg: "bad", Invalid: true}, models.AssetAnalysisStatusFailed, models.AnalysisCodeInvalidOutput, false},
+		{"refused", &asset_analysis.AIError{Msg: "declined", Refused: true}, models.AssetAnalysisStatusFailed, models.AnalysisCodeModelRefused, false},
 		{"transient", &asset_analysis.AIError{Msg: "503"}, models.AssetAnalysisStatusPending, "", true},
 	}
 	for _, tc := range cases {

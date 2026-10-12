@@ -45,6 +45,7 @@ const (
 	limitReachedReason   = "This month's asset analyses are used up"
 	sourceMissingReason  = "The asset's text could not be read"
 	modelExhaustedReason = "The analysis model could not be reached"
+	refusedReason        = "The analysis model declined this asset"
 )
 
 var (
@@ -247,6 +248,10 @@ func (s *Service) handleFailure(ctx context.Context, t *target, err error) error
 	}
 	if aiErr, ok := errors.AsType[*asset_analysis.AIError](err); ok && aiErr.Invalid {
 		s.setStatus(ctx, t, models.AssetAnalysisStatusFailed, models.AnalysisCodeInvalidOutput, failedOutputReason)
+		return nil
+	}
+	if aiErr, ok := errors.AsType[*asset_analysis.AIError](err); ok && aiErr.Refused {
+		s.setStatus(ctx, t, models.AssetAnalysisStatusFailed, models.AnalysisCodeModelRefused, refusedReason)
 		return nil
 	}
 	if _, ok := errors.AsType[*usage.LimitExceededError](err); ok {
