@@ -314,6 +314,12 @@ var _ = Describe("AssetAnalysesHandler", Ordered, func() {
 		var asset map[string]any
 		Expect(json.NewDecoder(resp.Body).Decode(&asset)).To(Succeed())
 		Expect(asset["analysis_status"]).To(Equal("failed"))
+
+		resp = request(admin, "GET", "/api/content-bank/assets/doc-1/analysis", nil)
+		Expect(resp.StatusCode).To(Equal(200))
+		var lens map[string]any
+		Expect(json.NewDecoder(resp.Body).Decode(&lens)).To(Succeed())
+		Expect(lens).To(HaveKeyWithValue("ideas", BeEmpty()), "a lens without ideas reads back an empty array, not a missing field")
 	})
 
 	It("keeps campaign lenses in step with attach, detach and brief edits", func() {

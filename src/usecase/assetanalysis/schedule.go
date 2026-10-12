@@ -130,14 +130,14 @@ func (s *Service) Retry(ctx context.Context, tenantID, assetID string, campaignI
 	if !row.Status.Retryable() {
 		return ErrNotRetryable
 	}
+	if s.jobs == nil {
+		return ErrUnavailable
+	}
 	if err := s.repos.Analyses.SetStatus(ctx, s.db, row.ID, models.AssetAnalysisStatusPending, "", ""); err != nil {
 		return err
 	}
 	l := Lens{TenantID: tenantID, AssetID: assetID, CampaignID: campaignID}
 	s.publish(ctx, l, row.ID, models.AssetAnalysisStatusPending, 0)
-	if s.jobs == nil {
-		return ErrUnavailable
-	}
 	return s.jobs.EnqueueAnalyzeAsset(ctx, tenantID, assetID, campaignID, ReasonRetry)
 }
 

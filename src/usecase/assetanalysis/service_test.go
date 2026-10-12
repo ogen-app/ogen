@@ -300,11 +300,12 @@ func TestRunSettlesFlowFailures(t *testing.T) {
 		status  models.AssetAnalysisStatus
 		code    string
 		wantErr bool
+		runs    int64
 	}{
-		{"empty source", &asset_analysis.ValidationError{Msg: "empty"}, models.AssetAnalysisStatusFailed, models.AnalysisCodeEmptySource, false},
-		{"invalid output", &asset_analysis.AIError{Msg: "bad", Invalid: true}, models.AssetAnalysisStatusFailed, models.AnalysisCodeInvalidOutput, false},
-		{"refused", &asset_analysis.AIError{Msg: "declined", Refused: true}, models.AssetAnalysisStatusFailed, models.AnalysisCodeModelRefused, false},
-		{"transient", &asset_analysis.AIError{Msg: "503"}, models.AssetAnalysisStatusPending, "", true},
+		{"empty source", &asset_analysis.ValidationError{Msg: "empty"}, models.AssetAnalysisStatusFailed, models.AnalysisCodeEmptySource, false, 0},
+		{"invalid output", &asset_analysis.AIError{Msg: "bad", Invalid: true}, models.AssetAnalysisStatusFailed, models.AnalysisCodeInvalidOutput, false, 1},
+		{"refused", &asset_analysis.AIError{Msg: "declined", Refused: true}, models.AssetAnalysisStatusFailed, models.AnalysisCodeModelRefused, false, 1},
+		{"transient", &asset_analysis.AIError{Msg: "503"}, models.AssetAnalysisStatusPending, "", true, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -319,6 +320,9 @@ func TestRunSettlesFlowFailures(t *testing.T) {
 			a := f.lens(t, "md-1", nil)
 			if a.Status != tc.status || a.FailureCode != tc.code {
 				t.Fatalf("status = %s/%s, want %s/%s", a.Status, a.FailureCode, tc.status, tc.code)
+			}
+			if runs, _ := f.repos.Analyses.CountRunsSince(f.ctx, time.Now().Add(-time.Hour)); runs != tc.runs {
+				t.Fatalf("runs counted = %d, want %d", runs, tc.runs)
 			}
 			if tc.wantErr {
 				f.svc.Fail(f.ctx, assetanalysis.Lens{TenantID: tenant, AssetID: "md-1"}, err)

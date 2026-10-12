@@ -76,8 +76,9 @@ type assetAnalysisResponse struct {
 	FailureCode   string                        `json:"failure_code"`
 	FailureReason string                        `json:"failure_reason"`
 	AnalyzedAt    *time.Time                    `json:"analyzed_at"`
-	// Ideas are embedded on asset reads and left out of the campaign list.
-	Ideas []models.Idea `json:"ideas,omitempty"`
+	// Ideas are embedded on asset reads (an empty array when a lens has none)
+	// and left out of the campaign list.
+	Ideas *[]models.Idea `json:"ideas,omitempty"`
 }
 
 type assetAnalysesResponse struct {
@@ -237,7 +238,7 @@ func (h *AssetAnalysesHandler) withIdeas(ctx context.Context, assetID string, le
 	out := make([]assetAnalysisResponse, 0, len(lenses))
 	for _, l := range lenses {
 		r := toAnalysisResponse(l)
-		r.Ideas = nonNil(byLens[l.ID])
+		r.Ideas = new(nonNil(byLens[l.ID]))
 		out = append(out, r)
 	}
 	return out, nil
