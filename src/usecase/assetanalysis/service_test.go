@@ -234,9 +234,14 @@ func TestRunCampaignLensRerunsOnBriefChange(t *testing.T) {
 	if len(ideas) != 2 {
 		t.Fatalf("campaign ideas = %d", len(ideas))
 	}
+	// Ideas inserted together share created_at, so pick by title, not position.
+	i := slices.IndexFunc(ideas, func(idea models.Idea) bool { return idea.Title == "Idea one" })
+	if i < 0 {
+		t.Fatalf("no %q among %+v", "Idea one", ideas)
+	}
 	now := time.Now().UTC()
-	ideas[0].Verdict, ideas[0].DecidedAt = new(models.IdeaVerdictYes), &now
-	if _, err := f.repos.Ideas.Update(f.ctx, &ideas[0], "verdict", "decided_at"); err != nil {
+	ideas[i].Verdict, ideas[i].DecidedAt = new(models.IdeaVerdictYes), &now
+	if _, err := f.repos.Ideas.Update(f.ctx, &ideas[i], "verdict", "decided_at"); err != nil {
 		t.Fatal(err)
 	}
 
