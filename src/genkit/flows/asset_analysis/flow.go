@@ -92,9 +92,11 @@ func parsePrompt(name string) (*template.Template, error) {
 	return tpl, nil
 }
 
-// genkitGenerator runs one blocking generation and meters it. The output is
-// read whole rather than streamed: nobody watches an analysis as it is
-// written, and the nested arrays need a full JSON decode anyway.
+// genkitGenerator runs one generation and meters it. The call streams, but
+// the chunks are dropped and the output is read whole: nobody watches an
+// analysis as it is written, and the nested arrays need a full JSON decode
+// anyway. Streaming is still required, because the Anthropic SDK refuses a
+// blocking call whose max_tokens could take over 10 minutes (above ~21K).
 func genkitGenerator(g *genkit.Genkit, cfg FlowConfig) generator {
 	maxTokens := cmp.Or(cfg.MaxOutputTokens, defaultMaxOutputTokens)
 	return func(ctx context.Context, call modelCall) (string, error) {
@@ -108,6 +110,7 @@ func genkitGenerator(g *genkit.Genkit, cfg FlowConfig) generator {
 			ai.WithModelName(call.Model.Ref),
 			ai.WithSystem("%s", call.System),
 			ai.WithPrompt("%s", call.Prompt),
+			ai.WithStreaming(discardChunks),
 			ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowAssetAnalysis, usage.Record)),
 			cfg.Provider.CallConfig(call.Model.Model, maxTokens),
 		)
@@ -121,3 +124,6 @@ func genkitGenerator(g *genkit.Genkit, cfg FlowConfig) generator {
 		return resp.Text(), nil
 	}
 }
+
+// discardChunks makes a call stream without using the chunks.
+func discardChunks(context.Context, *ai.ModelResponseChunk) error { return nil }
