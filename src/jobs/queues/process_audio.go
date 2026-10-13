@@ -91,6 +91,10 @@ type assetContentSetter interface {
 	SetContent(ctx context.Context, id, content string) error
 }
 
+type assetDurationSetter interface {
+	SetDuration(ctx context.Context, assetID string, durationMs int64) error
+}
+
 type utteranceStore interface {
 	ReplaceForSegment(ctx context.Context, segmentID string, utterances []models.Utterance) error
 	// ListByExtraction scopes to the current run's segments so a re-extraction
@@ -112,7 +116,10 @@ type AudioDeps struct {
 	// Content writes the assembled transcript onto asset.Content on completion,
 	// so previews and the assistant's asset-content tools see it. Nil
 	// skips the write.
-	Content     assetContentSetter
+	Content assetContentSetter
+	// Files records the measured duration on the asset's file row, so the
+	// Assets list can show it. Nil skips the write.
+	Files       assetDurationSetter
 	Chunks      chunkUpserter
 	Extractions audioExtractionStore
 	Segments    audioSegmentStore
@@ -328,6 +335,8 @@ func (p *ProcessAudioProcessor) probeGateNormalize(ctx context.Context, in Proce
 	if probe.Silent || probe.DurationMs <= 0 {
 		return p.terminalReject(ctx, in, ext, models.UploadCodeEmptyFile, "the audio is empty or silent throughout")
 	}
+	// Recorded before the gates: an over-limit file is still that long.
+	p.setFileDuration(ctx, in.AssetID, probe.DurationMs)
 	// Max-duration tier gate (before any transcode/transcribe spend).
 	if p.Deps.MaxDurationMs > 0 && probe.DurationMs > p.Deps.MaxDurationMs {
 		return p.terminalReject(ctx, in, ext, models.UploadCodeDurationExceeded, fmt.Sprintf("audio is %d min, over the %d min limit for your plan", probe.DurationMs/60000, p.Deps.MaxDurationMs/60000))
@@ -370,6 +379,7 @@ func (p *ProcessAudioProcessor) probeGateNormalize(ctx context.Context, in Proce
 	if norm.DurationMs > 0 {
 		ext.SourceDurationMs = norm.DurationMs
 		ext.AudioSeconds = norm.DurationMs / 1000
+		p.setFileDuration(ctx, in.AssetID, norm.DurationMs)
 	}
 	ext.NormalizedS3Key = &normKey
 	ext.Status = models.AudioExtractionStatusTranscribing
@@ -688,6 +698,19 @@ func (p *ProcessAudioProcessor) complete(ctx context.Context, in ProcessAudioTas
 		}
 	}
 	return nil
+}
+
+// setFileDuration records the measured duration on the asset's file row.
+// Best-effort: it only feeds the Assets list, and the normalize step writes it
+// again.
+func (p *ProcessAudioProcessor) setFileDuration(ctx context.Context, assetID string, durationMs int64) {
+	if p.Deps.Files == nil {
+		return
+	}
+	if err := p.Deps.Files.SetDuration(ctx, assetID, durationMs); err != nil {
+		slog.WarnContext(ctx, "set asset file duration", logging.AttrComponent, "jobs.process_audio",
+			"asset_id", assetID, logging.AttrError, err)
+	}
 }
 
 // terminalReject marks the extraction + asset failed with a tenant-visible

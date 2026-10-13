@@ -320,6 +320,34 @@ func TestProcessAudio_WritesTranscriptToContent(t *testing.T) {
 	}
 }
 
+type fakeDurations struct{ got []int64 }
+
+func (f *fakeDurations) SetDuration(_ context.Context, _ string, durationMs int64) error {
+	f.got = append(f.got, durationMs)
+	return nil
+}
+
+// TestProcessAudio_WritesFileDuration: the probed duration lands on the file
+// row first, then the normalized one replaces it.
+func TestProcessAudio_WritesFileDuration(t *testing.T) {
+	client := &fakeAudioClient{
+		probe:      &audio.ProbeResult{DurationMs: 61_000},
+		norm:       &audio.NormalizeResult{DurationMs: 60_500},
+		transcribe: &audio.TranscribeSegmentResult{Utterances: []audio.Utterance{{Text: "hi", StartMs: 0, EndMs: 1_000, IsSpeech: true}}},
+	}
+	d := baseAudioDeps(client, &fakeExtractions{}, &fakeSegments{}, &fakeUtterances{}, &fakeStatus{}, &fakeChunks{})
+	files := &fakeDurations{}
+	d.Files = files
+
+	task := ProcessAudioTask{AssetID: "a1", RunKey: "run-1", StorageKey: "assets/a1/original.mp3", MimeType: "audio/mpeg"}
+	if err := newAudioProc(d).process(t.Context(), task, false); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if !slices.Equal(files.got, []int64{61_000, 60_500}) {
+		t.Fatalf("durations written = %v, want [61000 60500]", files.got)
+	}
+}
+
 // TestProcessAudio_ResumeFromIncomplete: a pre-normalized run with segment 0
 // already done transcribes ONLY segment 1 (no re-probe / re-normalize).
 func TestProcessAudio_ResumeFromIncomplete(t *testing.T) {
@@ -363,9 +391,15 @@ func TestProcessAudio_ResumeFromIncomplete(t *testing.T) {
 func TestProcessAudio_SilentIsTerminal(t *testing.T) {
 	client := &fakeAudioClient{probe: &audio.ProbeResult{DurationMs: 30_000, Silent: true}}
 	ext, status := &fakeExtractions{}, &fakeStatus{}
-	p := newAudioProc(baseAudioDeps(client, ext, &fakeSegments{}, &fakeUtterances{}, status, &fakeChunks{}))
+	deps := baseAudioDeps(client, ext, &fakeSegments{}, &fakeUtterances{}, status, &fakeChunks{})
+	files := &fakeDurations{}
+	deps.Files = files
+	p := newAudioProc(deps)
 	if err := p.process(t.Context(), ProcessAudioTask{AssetID: "a3", RunKey: "run-1", StorageKey: "assets/a3/original.wav"}, false); err != nil {
 		t.Fatalf("silent audio must not retry: %v", err)
+	}
+	if len(files.got) != 0 {
+		t.Fatalf("silent audio must not record a duration, got %v", files.got)
 	}
 	if client.normalizeCalls != 0 || client.transcribeCalls != 0 {
 		t.Fatalf("silent reject must not normalize/transcribe")
@@ -383,6 +417,8 @@ func TestProcessAudio_OverMaxDurationIsTerminal(t *testing.T) {
 	status := &fakeStatus{}
 	deps := baseAudioDeps(client, &fakeExtractions{}, &fakeSegments{}, &fakeUtterances{}, status, &fakeChunks{})
 	deps.MaxDurationMs = 60_000 // 1 min cap, source is 10 min
+	files := &fakeDurations{}
+	deps.Files = files
 	p := newAudioProc(deps)
 	if err := p.process(t.Context(), ProcessAudioTask{AssetID: "a4", RunKey: "run-1", StorageKey: "assets/a4/original.mp3"}, false); err != nil {
 		t.Fatalf("over-limit must not retry: %v", err)
@@ -392,6 +428,10 @@ func TestProcessAudio_OverMaxDurationIsTerminal(t *testing.T) {
 	}
 	if status.last() != models.AssetStatusFailed {
 		t.Fatalf("status = %q, want failed", status.last())
+	}
+	// The rejected file is still 10 minutes long.
+	if !slices.Equal(files.got, []int64{600_000}) {
+		t.Fatalf("durations written = %v, want [600000]", files.got)
 	}
 }
 

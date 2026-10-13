@@ -29,12 +29,16 @@ type AssetFile struct {
 	// Width, Height, IsAnimated and ChecksumSHA256 describe image files.
 	// Same names/types as post_attachments so the attach-to-post bridge is a
 	// field copy. Zero/empty for PDFs. ChecksumSHA256 also backs upload dedupe.
-	Width          int       `bun:"width,notnull,default:0"                      json:"width"`
-	Height         int       `bun:"height,notnull,default:0"                     json:"height"`
-	IsAnimated     bool      `bun:"is_animated,notnull,default:false"            json:"is_animated"`
-	ChecksumSHA256 string    `bun:"checksum_sha256"                              json:"checksum_sha256,omitempty"`
-	CreatedAt      time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt      time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	Width          int    `bun:"width,notnull,default:0"                      json:"width"`
+	Height         int    `bun:"height,notnull,default:0"                     json:"height"`
+	IsAnimated     bool   `bun:"is_animated,notnull,default:false"            json:"is_animated"`
+	ChecksumSHA256 string `bun:"checksum_sha256"                              json:"checksum_sha256,omitempty"`
+	// DurationMs is a recording's length, written by the audio pipeline at
+	// probe and again after normalize. 0 when unknown or not a recording.
+	// Upsert leaves it alone: only SetDuration writes it.
+	DurationMs int64     `bun:"duration_ms,notnull,default:0"                json:"duration_ms"`
+	CreatedAt  time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt  time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 
 	// URL, ThumbnailURL and NormalizedURL are transient browser-loadable URLs (presigned by default) minted from
 	// S3Key / ThumbnailS3Key / NormalizedS3Key by the handler layer before
