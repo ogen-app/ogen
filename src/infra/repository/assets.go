@@ -15,7 +15,14 @@ import (
 
 // AssetRepository defines all persistence operations for the Asset domain.
 type AssetRepository interface {
-	List(ctx context.Context) ([]models.Asset, error)
+	// Query reads one page of the tenant's asset list: the assets matching
+	// every filter of q, in its sort order, with totals and the requested facet
+	// counts. sql.ErrNoRows when q.ScopeCampaign names no live campaign;
+	// ErrInvalidAssetCursor for a cursor of another sort or not issued here.
+	Query(ctx context.Context, q models.AssetQuery) (*models.AssetQueryResult, error)
+	// QueryIDs returns the ids of every asset Query would list for q, in its
+	// sort order, unpaginated. q's Cursor, Limit and Facets are ignored.
+	QueryIDs(ctx context.Context, q models.AssetQuery) ([]string, error)
 	// ListMeta returns the id, title, status and type of the tenant's assets in
 	// ids, or of all its assets when ids is nil, oldest first, in one query
 	// with no content, tags or files.
@@ -93,20 +100,6 @@ func (r *assetRepository) Count(ctx context.Context) (int64, error) {
 func (r *assetRepository) CountByType(ctx context.Context, assetType string) (int64, error) {
 	n, err := r.db.NewSelect().Model((*models.Asset)(nil)).Where("a.type = ?", assetType).Count(ctx)
 	return int64(n), err
-}
-
-func (r *assetRepository) List(ctx context.Context) ([]models.Asset, error) {
-	var assets []models.Asset
-	if err := r.db.NewSelect().Model(&assets).OrderExpr("created_at ASC").Scan(ctx); err != nil {
-		return nil, err
-	}
-	if err := r.hydrateTags(ctx, assets); err != nil {
-		return nil, err
-	}
-	if err := r.hydrateFiles(ctx, assets); err != nil {
-		return nil, err
-	}
-	return assets, nil
 }
 
 func (r *assetRepository) ListMeta(ctx context.Context, ids []string) ([]models.Asset, error) {

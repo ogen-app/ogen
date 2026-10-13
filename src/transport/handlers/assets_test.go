@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -96,6 +98,21 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 		return p
 	}
 
+	// listAssets reads one page of the asset list with query appended.
+	listAssets := func(query string) assetListPage {
+		req := httptest.NewRequest("GET", "/api/content-bank/assets"+query, nil)
+		req.AddCookie(authCookie)
+		resp, err := app.Test(req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
+		raw, err := io.ReadAll(resp.Body)
+		Expect(err).NotTo(HaveOccurred())
+		var page assetListPage
+		Expect(json.Unmarshal(raw, &page)).To(Succeed())
+		page.Raw = string(raw)
+		return page
+	}
+
 	// ── List ─────────────────────────────────────────────────────────────────
 
 	Describe("GET /api/content-bank/assets", func() {
@@ -116,37 +133,99 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.StatusCode).To(Equal(200))
 
-				var assets []models.Asset
-				Expect(json.NewDecoder(resp.Body).Decode(&assets)).To(Succeed())
-				Expect(assets).To(BeEmpty())
+				var page assetListPage
+				Expect(json.NewDecoder(resp.Body).Decode(&page)).To(Succeed())
+				Expect(page.Assets).To(BeEmpty())
+				Expect(page.Total).To(Equal(0))
+				Expect(page.NextCursor).To(BeNil())
 			})
 
-			It("returns all assets", func() {
+			It("returns all assets, newest first, without content", func() {
 				createPiece("First", `[{"type":"paragraph"}]`)
 				createPiece("Second", `[{"type":"paragraph"}]`)
 
-				req := httptest.NewRequest("GET", "/api/content-bank/assets", nil)
+				page := listAssets("")
+				Expect(page.Assets).To(HaveLen(2))
+				Expect(page.Assets[0].Title).To(Equal("Second"))
+				Expect(page.Assets[0].Kind).To(Equal(models.AssetKindNote))
+				Expect(page.Total).To(Equal(2))
+				Expect(page.TotalUnfiltered).To(Equal(2))
+				Expect(page.Raw).NotTo(ContainSubstring(`"content"`))
+			})
+
+			It("filters, pages and counts", func() {
+				for _, title := range []string{"Alpha", "Beta", "Gamma"} {
+					createPiece(title, `[{"type":"paragraph"}]`)
+				}
+				page := listAssets("?title=a&title_not=gamma&limit=1&facets=kind,status")
+				Expect(page.Assets).To(HaveLen(1))
+				Expect(page.Total).To(Equal(2))
+				Expect(page.TotalUnfiltered).To(Equal(3))
+				Expect(page.NextCursor).NotTo(BeNil())
+				Expect(page.Facets["kind"]).To(ContainElement(models.AssetFacetCount{Value: "note", Count: 2}))
+				Expect(page.Facets["status"]).To(ContainElement(models.AssetFacetCount{Value: "failed", Count: 0}))
+
+				next := listAssets("?title=a&title_not=gamma&limit=1&cursor=" + *page.NextCursor)
+				Expect(next.Assets).To(HaveLen(1))
+				Expect(next.Assets[0].ID).NotTo(Equal(page.Assets[0].ID))
+				Expect(next.NextCursor).To(BeNil())
+
+				req := httptest.NewRequest("GET", "/api/content-bank/assets?ids_only=true&sort=title", nil)
 				req.AddCookie(authCookie)
 				resp, err := app.Test(req)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
+				var idsOnly struct {
+					IDs []string `json:"ids"`
+				}
+				Expect(json.NewDecoder(resp.Body).Decode(&idsOnly)).To(Succeed())
+				Expect(idsOnly.IDs).To(HaveLen(3))
+			})
 
-				var assets []models.Asset
-				Expect(json.NewDecoder(resp.Body).Decode(&assets)).To(Succeed())
-				Expect(assets).To(HaveLen(2))
+			DescribeTable("rejects invalid parameters with a stable code",
+				func(query, code string) {
+					req := httptest.NewRequest("GET", "/api/content-bank/assets"+query, nil)
+					req.AddCookie(authCookie)
+					resp, err := app.Test(req)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(resp.StatusCode).To(Equal(fiber.StatusBadRequest))
+					var body map[string]string
+					Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+					Expect(body["code"]).To(Equal(code))
+				},
+				Entry("unknown kind", "?kind=pdf,movie", models.AssetCodeInvalidFilter),
+				Entry("unknown status", "?status_not=processing", models.AssetCodeInvalidFilter),
+				Entry("unknown ideas value", "?ideas=maybe", models.AssetCodeInvalidFilter),
+				Entry("bad timestamp", "?updated_after=yesterday", models.AssetCodeInvalidFilter),
+				Entry("bad checksum", "?checksum=abc", models.AssetCodeInvalidFilter),
+				Entry("unknown sort", "?sort=size", models.AssetCodeInvalidFilter),
+				Entry("relevance without text", "?sort=relevance", models.AssetCodeInvalidFilter),
+				Entry("limit too high", "?limit=201", models.AssetCodeInvalidFilter),
+				Entry("limit zero", "?limit=0", models.AssetCodeInvalidFilter),
+				Entry("unknown facet", "?facets=kind,size", models.AssetCodeInvalidFilter),
+				Entry("unknown time zone", "?tz=Mars/Base", models.AssetCodeInvalidFilter),
+				Entry("bad ids_only", "?ids_only=maybe", models.AssetCodeInvalidFilter),
+				Entry("garbage cursor", "?cursor=***", models.AssetCodeInvalidCursor),
+				Entry("text too short", "?text=a", models.AssetCodeQueryTooShort),
+				Entry("text too long", "?text="+strings.Repeat("a", 201), models.AssetCodeQueryTooLong),
+			)
+
+			It("404s an unknown scope campaign", func() {
+				req := httptest.NewRequest("GET", "/api/content-bank/assets?scope_campaign=missing", nil)
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(fiber.StatusNotFound))
 			})
 
 			It("returns the gist and the recording duration on the list and the single asset", func() {
 				p := createPiece("Launch sync", `[{"type":"paragraph"}]`)
 				seedGistAndDuration(db, p.ID, "Pricing moves to seats in Q3.", 1_080_000)
 
-				listReq := httptest.NewRequest("GET", "/api/content-bank/assets", nil)
-				listReq.AddCookie(authCookie)
-				listResp, err := app.Test(listReq)
-				Expect(err).NotTo(HaveOccurred())
-				var list []models.Asset
-				Expect(json.NewDecoder(listResp.Body).Decode(&list)).To(Succeed())
+				list := listAssets("").Assets
 				Expect(list).To(HaveLen(1))
+				Expect(list[0].Gist).To(HaveValue(Equal("Pricing moves to seats in Q3.")))
+				Expect(list[0].File).NotTo(BeNil())
+				Expect(list[0].File.DurationMS).To(Equal(int64(1_080_000)))
 
 				getReq := httptest.NewRequest("GET", "/api/content-bank/assets/"+p.ID, nil)
 				getReq.AddCookie(authCookie)
@@ -154,12 +233,9 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 				Expect(err).NotTo(HaveOccurred())
 				var one models.Asset
 				Expect(json.NewDecoder(getResp.Body).Decode(&one)).To(Succeed())
-
-				for _, got := range []models.Asset{list[0], one} {
-					Expect(got.Gist).To(HaveValue(Equal("Pricing moves to seats in Q3.")))
-					Expect(got.File).NotTo(BeNil())
-					Expect(got.File.DurationMs).To(Equal(int64(1_080_000)))
-				}
+				Expect(one.Gist).To(HaveValue(Equal("Pricing moves to seats in Q3.")))
+				Expect(one.File).NotTo(BeNil())
+				Expect(one.File.DurationMs).To(Equal(int64(1_080_000)))
 			})
 
 			It("returns a null gist while the workspace analysis is not ready", func() {
@@ -168,15 +244,13 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 				_, err := repository.NewAssetAnalysisRepository(db).Ensure(tctx, db, p.ID, nil)
 				Expect(err).NotTo(HaveOccurred())
 
-				req := httptest.NewRequest("GET", "/api/content-bank/assets", nil)
-				req.AddCookie(authCookie)
-				resp, err := app.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				var raw []map[string]any
-				Expect(json.NewDecoder(resp.Body).Decode(&raw)).To(Succeed())
-				Expect(raw).To(HaveLen(1))
-				Expect(raw[0]).To(HaveKeyWithValue("analysis_status", "pending"))
-				Expect(raw[0]).To(HaveKeyWithValue("gist", BeNil()))
+				var body struct {
+					Assets []map[string]any `json:"assets"`
+				}
+				Expect(json.Unmarshal([]byte(listAssets("").Raw), &body)).To(Succeed())
+				Expect(body.Assets).To(HaveLen(1))
+				Expect(body.Assets[0]).To(HaveKeyWithValue("analysis_status", "pending"))
+				Expect(body.Assets[0]).To(HaveKeyWithValue("gist", BeNil()))
 			})
 		})
 	})
@@ -360,19 +434,12 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
 
-			listReq := httptest.NewRequest("GET", "/api/content-bank/assets", nil)
-			listReq.AddCookie(authCookie)
-			listResp, err := app.Test(listReq)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(listResp.StatusCode).To(Equal(200))
-
-			var assets []models.Asset
-			Expect(json.NewDecoder(listResp.Body).Decode(&assets)).To(Succeed())
+			assets := listAssets("?tag=" + tagID).Assets
 			Expect(assets).To(HaveLen(1))
-			Expect(assets[0].TagIDs).To(ConsistOf(tagID))
 			Expect(assets[0].Tags).To(HaveLen(1))
 			Expect(assets[0].Tags[0].ID).To(Equal(tagID))
 			Expect(assets[0].Tags[0].Name).To(Equal("Featured"))
+			Expect(listAssets("?tag=none").Assets).To(BeEmpty())
 		})
 
 		It("returns tags populated on GetByID", func() {
@@ -1059,4 +1126,14 @@ func seedGistAndDuration(db *bun.DB, assetID, gist string, durationMs int64) {
 		Where("id = ?", lens.ID).
 		Exec(ctx)
 	Expect(err).NotTo(HaveOccurred())
+}
+
+// assetListPage is the body of GET /api/content-bank/assets, plus the raw JSON.
+type assetListPage struct {
+	Assets          []models.AssetListItem              `json:"assets"`
+	NextCursor      *string                             `json:"next_cursor"`
+	Total           int                                 `json:"total"`
+	TotalUnfiltered int                                 `json:"total_unfiltered"`
+	Facets          map[string][]models.AssetFacetCount `json:"facets"`
+	Raw             string                              `json:"-"`
 }
