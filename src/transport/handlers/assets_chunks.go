@@ -67,32 +67,36 @@ func (h *AssetsHandler) Chunks(c *fiber.Ctx) error {
 }
 
 const (
-	defaultSearchLimit = 50
-	maxSearchLimit     = 200
-	minSearchQueryLen  = 2
-	maxSearchQueryLen  = 200
+	// maxSearchLimit is also the default: the Assets filter intersects the list
+	// with every matching asset, so by default it gets them all.
+	maxSearchLimit    = 1000
+	minSearchQueryLen = 2
+	maxSearchQueryLen = 200
 )
 
 // AssetChunkSearcher finds the assets whose chunks mention a text.
 // Implemented by repository.AssetChunksRepository.
 type AssetChunkSearcher interface {
-	SearchText(ctx context.Context, query string, limit int) ([]repository.AssetTextMatch, error)
+	SearchText(ctx context.Context, query string, limit int) ([]repository.AssetTextMatch, int, error)
 }
 
-// assetSearchResponse lists the assets that mention a query, best first.
+// assetSearchResponse lists the assets that mention a query, most matches
+// first. Total counts every matching asset; it exceeds len(Results) when the
+// limit cut the list.
 type assetSearchResponse struct {
 	Query   string                      `json:"query"`
+	Total   int                         `json:"total"`
 	Results []repository.AssetTextMatch `json:"results"`
 }
 
 // Search godoc
 // @Summary      Search inside assets
-// @Description  Returns the workspace's assets whose content mentions `q`, one row per asset, best-scoring first. Full-text, not semantic: words are matched with English stemming ("cycles" finds "cycle"), "quoted phrases" match as phrases, `-word` excludes and `or` alternates. Covers every asset kind that has chunks (PDF, documents and spreadsheets, URL, markdown, audio transcripts, image regions). `matches` is the number of matching chunks; `snippet`, `source_label` and `chunk_index` describe the best one. `snippet` is HTML-escaped text whose only markup is `<mark>` around matched words, with "…" where it was cut. `source_label` is absent for chunks without a location (markdown, URL). A query of only stopwords or punctuation returns no results.
+// @Description  Returns the workspace's assets whose content mentions `q`, one row per asset: the assets with the most matching chunks first, ties broken by the best chunk's `score`. Full-text, not semantic: words are matched with English stemming ("cycles" finds "cycle"), "quoted phrases" match as phrases, `-word` excludes and `or` alternates. Covers every asset kind that has chunks (PDF, documents and spreadsheets, URL, markdown, audio transcripts, image regions). `matches` is the number of matching chunks. The first 50 results also carry evidence from their best chunk: `score`, `snippet`, `chunk_index` and `source_label`; later results carry only `asset_id` and `matches`. `snippet` is HTML-escaped text whose only markup is `<mark>` around matched words, with "…" where it was cut. `source_label` is absent for chunks without a location (markdown, URL). `total` is the number of matching assets; it exceeds the number of `results` only when `limit` cut the list. A query of only stopwords or punctuation returns no results.
 // @Tags         content-bank
 // @Produce      json
 // @Security     CookieAuth
 // @Param        q      query     string  true   "Text to find (2–200 characters)"
-// @Param        limit  query     int     false  "Max assets (default 50, max 200)"
+// @Param        limit  query     int     false  "Max assets (default and max 1000)"
 // @Success      200    {object}  assetSearchResponse
 // @Failure      400    {object}  map[string]string  "code: query_too_short | query_too_long"
 // @Failure      401    {object}  map[string]string
@@ -114,18 +118,18 @@ func (h *AssetsHandler) Search(c *fiber.Ctx) error {
 			"error": fmt.Sprintf("q must be at most %d characters", maxSearchQueryLen),
 		})
 	}
-	limit := c.QueryInt("limit", defaultSearchLimit)
+	limit := c.QueryInt("limit", maxSearchLimit)
 	if limit <= 0 {
-		limit = defaultSearchLimit
+		limit = maxSearchLimit
 	}
 	limit = min(limit, maxSearchLimit)
 
-	results, err := h.chunkSearch.SearchText(reqCtx(c), query, limit)
+	results, total, err := h.chunkSearch.SearchText(reqCtx(c), query, limit)
 	if err != nil {
 		return err
 	}
 	if results == nil {
 		results = []repository.AssetTextMatch{}
 	}
-	return c.JSON(assetSearchResponse{Query: query, Results: results})
+	return c.JSON(assetSearchResponse{Query: query, Total: total, Results: results})
 }

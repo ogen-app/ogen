@@ -1013,9 +1013,10 @@ var _ = Describe("AssetsHandler GET /:id/chunks (CON-312) and GET /search", Orde
 
 	It("finds the assets that mention a text, with the best chunk's evidence", func() {
 		id := seedAudio(3) // "part 0", "part 1", "part 2", labelled by time range
-		status, query, results, _ := search("q=+part+&limit=5")
+		status, query, results, raw := search("q=+part+&limit=5")
 		Expect(status).To(Equal(fiber.StatusOK))
 		Expect(query).To(Equal("part"))
+		Expect(raw).To(HaveKeyWithValue("total", BeNumerically("==", 1)))
 		Expect(results).To(HaveLen(1))
 		Expect(results[0].AssetID).To(Equal(id))
 		Expect(results[0].Matches).To(Equal(3))

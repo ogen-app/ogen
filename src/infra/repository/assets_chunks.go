@@ -39,9 +39,11 @@ type AssetChunksRepository interface {
 	SearchSimilar(ctx context.Context, query pgvector.HalfVector, assetIDs []string, minScore float64, limit int) ([]models.AssetChunk, error)
 	// SearchText answers "which of the tenant's assets mention this text":
 	// a full-text match of query (websearch syntax, so "quoted phrases" match as
-	// phrases) against chunk content, one row per asset, best-scoring first, at
-	// most limit rows. Backed by the GIN index on assets_chunks.content_tsv.
-	SearchText(ctx context.Context, query string, limit int) ([]AssetTextMatch, error)
+	// phrases) against chunk content, one row per asset, the assets with the
+	// most matching chunks first (ties by best-chunk score), at most limit rows,
+	// plus the number of matching assets before the limit. Backed by the GIN
+	// index on assets_chunks.content_tsv.
+	SearchText(ctx context.Context, query string, limit int) ([]AssetTextMatch, int, error)
 	// EmbeddingsByContent returns the stored embedding of each of the asset's
 	// chunks whose content is in contents and which model embedded, keyed by
 	// content, so a re-embed can skip text that hasn't changed.
@@ -149,24 +151,32 @@ func (r *assetChunksRepository) SearchSimilar(ctx context.Context, query pgvecto
 	return chunks, nil
 }
 
-// AssetTextMatch is one asset's full-text hit: how many of its chunks match and
-// where the best one is.
+// SearchTextEvidenceLimit is how many of SearchText's leading results carry
+// evidence (score, snippet, source label, chunk index); the rest carry only the
+// asset and its match count. Evidence means ranking every matching chunk of the
+// asset and building a headline, which costs far more than finding the assets,
+// so a filter can afford the full asset list but only a page of excerpts.
+const SearchTextEvidenceLimit = 50
+
+// AssetTextMatch is one asset's full-text hit: how many of its chunks match
+// and, for the leading SearchTextEvidenceLimit results, where the best one is.
 type AssetTextMatch struct {
 	AssetID string `json:"asset_id"`
 	// Matches is the number of the asset's chunks that match.
 	Matches int `json:"matches"`
-	// Score is the best chunk's cover-density rank scaled into [0, 1).
-	Score float64 `json:"score"`
+	// Score is the best chunk's cover-density rank scaled into (0, 1).
+	Score float64 `json:"score,omitzero"`
 	// Snippet is an excerpt of the best chunk around the match, with HTML tags
 	// in the source dropped. It is HTML-escaped, with each matched word wrapped
 	// in <mark>…</mark> (the only markup it contains), and starts or ends with
 	// "…" when it was cut from a longer chunk.
-	Snippet string `json:"snippet"`
+	Snippet string `json:"snippet,omitempty"`
 	// SourceLabel cites where the best chunk sits in its source ("Slide 4",
 	// "1:05–1:40", "Page 14"). Absent when the chunk has no location, as for
 	// markdown and scraped-URL chunks.
 	SourceLabel *string `json:"source_label,omitempty"`
-	ChunkIndex  int     `json:"chunk_index"`
+	// ChunkIndex is the best chunk's position in the asset.
+	ChunkIndex *int `json:"chunk_index,omitempty"`
 }
 
 // Highlight delimiters ts_headline puts around matched words. Control
@@ -177,69 +187,82 @@ const (
 	highlightStop  = "\x03"
 )
 
-// searchTextSQL ranks every matching chunk, keeps the best chunk per asset and
-// counts the rest, then builds a headline only for the assets returned:
-// ts_headline re-parses the whole chunk, so it must not run per match.
+// searchTextSQL counts matching chunks per asset and keeps the limit assets
+// with the most. Only the leading evidence-limit of those get their matching
+// chunks ranked to pick a best chunk, whose content is read and headlined:
+// ranking reads every hit's tsvector and ts_headline re-parses the whole
+// chunk, so on a common word doing either for every matching asset costs
+// several times the rest of the query. total is the number of matching assets
+// before the limit.
 const searchTextSQL = `
 WITH q AS (
 	SELECT websearch_to_tsquery('english', ?) AS tsq
-), hits AS (
-	SELECT ac.asset_id, ac.chunk_index, ac.content, ac.source_label, ac.page_start, ac.page_end,
-		ts_rank_cd(ac.content_tsv, q.tsq, 32) AS score
+), hits AS MATERIALIZED (
+	SELECT ac.id, ac.asset_id, ac.chunk_index
 	FROM assets_chunks ac, q
 	WHERE ac.tenant_id = ? AND ac.content_tsv @@ q.tsq
-), ranked AS (
-	SELECT hits.*,
-		count(*) OVER (PARTITION BY asset_id) AS matches,
-		row_number() OVER (PARTITION BY asset_id ORDER BY score DESC, chunk_index) AS rn
-	FROM hits
+), per_asset AS MATERIALIZED (
+	SELECT asset_id, count(*) AS matches FROM hits GROUP BY asset_id
+), top AS MATERIALIZED (
+	SELECT asset_id, matches FROM per_asset ORDER BY matches DESC, asset_id LIMIT ?
 ), best AS (
-	SELECT asset_id, chunk_index, translate(content, chr(2) || chr(3), '') AS content,
-		source_label, page_start, page_end, score, matches
-	FROM ranked
-	WHERE rn = 1
-	ORDER BY score DESC, matches DESC, asset_id
-	LIMIT ?
+	SELECT DISTINCT ON (hits.asset_id) hits.id, ts_rank_cd(ac.content_tsv, q.tsq, 32) AS score
+	FROM (SELECT asset_id FROM top ORDER BY matches DESC, asset_id LIMIT ?) evidenced
+	JOIN hits ON hits.asset_id = evidenced.asset_id
+	JOIN assets_chunks ac ON ac.id = hits.id
+	CROSS JOIN q
+	ORDER BY hits.asset_id, score DESC, hits.chunk_index
+), chunk AS (
+	SELECT best.score, ac.asset_id, ac.chunk_index, ac.source_label, ac.page_start, ac.page_end,
+		translate(ac.content, chr(2) || chr(3), '') AS content
+	FROM best JOIN assets_chunks ac ON ac.id = best.id
 )
-SELECT best.asset_id, best.chunk_index, best.content, best.source_label, best.page_start,
-	best.page_end, best.score, best.matches,
-	ts_headline('english', best.content, q.tsq,
+SELECT top.asset_id, top.matches, (SELECT count(*) FROM per_asset) AS total,
+	chunk.chunk_index, chunk.content, chunk.source_label, chunk.page_start, chunk.page_end, chunk.score,
+	ts_headline('english', chunk.content, q.tsq,
 		'StartSel=' || chr(2) || ', StopSel=' || chr(3) || ', MaxWords=30, MinWords=12, MaxFragments=1') AS headline
-FROM best, q
-ORDER BY best.score DESC, best.matches DESC, best.asset_id`
+FROM top
+LEFT JOIN chunk ON chunk.asset_id = top.asset_id
+CROSS JOIN q
+ORDER BY top.matches DESC, chunk.score DESC NULLS LAST, top.asset_id`
 
-func (r *assetChunksRepository) SearchText(ctx context.Context, query string, limit int) ([]AssetTextMatch, error) {
+func (r *assetChunksRepository) SearchText(ctx context.Context, query string, limit int) ([]AssetTextMatch, int, error) {
 	// A raw query bypasses the TenantScoped hooks, so scope it here.
 	tid, ok := tenantctx.From(ctx)
 	if !ok {
-		return nil, tenantctx.ErrNoTenant
+		return nil, 0, tenantctx.ErrNoTenant
 	}
 	var rows []struct {
-		AssetID     string  `bun:"asset_id"`
-		ChunkIndex  int     `bun:"chunk_index"`
-		Content     string  `bun:"content"`
-		SourceLabel *string `bun:"source_label"`
-		PageStart   *int    `bun:"page_start"`
-		PageEnd     *int    `bun:"page_end"`
-		Score       float64 `bun:"score"`
-		Matches     int     `bun:"matches"`
-		Headline    string  `bun:"headline"`
+		AssetID     string   `bun:"asset_id"`
+		Matches     int      `bun:"matches"`
+		Total       int      `bun:"total"`
+		ChunkIndex  *int     `bun:"chunk_index"`
+		Content     *string  `bun:"content"`
+		SourceLabel *string  `bun:"source_label"`
+		PageStart   *int     `bun:"page_start"`
+		PageEnd     *int     `bun:"page_end"`
+		Score       *float64 `bun:"score"`
+		Headline    *string  `bun:"headline"`
 	}
-	if err := r.db.NewRaw(searchTextSQL, query, tid, limit).Scan(ctx, &rows); err != nil {
-		return nil, err
+	if err := r.db.NewRaw(searchTextSQL, query, tid, limit, SearchTextEvidenceLimit).Scan(ctx, &rows); err != nil {
+		return nil, 0, err
+	}
+	total := 0
+	if len(rows) > 0 {
+		total = rows[0].Total
 	}
 	out := make([]AssetTextMatch, len(rows))
 	for i, row := range rows {
-		out[i] = AssetTextMatch{
-			AssetID:     row.AssetID,
-			Matches:     row.Matches,
-			Score:       row.Score,
-			Snippet:     snippetHTML(row.Headline, row.Content),
-			SourceLabel: chunkCitation(row.SourceLabel, row.PageStart, row.PageEnd),
-			ChunkIndex:  row.ChunkIndex,
+		out[i] = AssetTextMatch{AssetID: row.AssetID, Matches: row.Matches}
+		if row.Score == nil {
+			continue // past the evidence limit
 		}
+		out[i].Score = *row.Score
+		out[i].Snippet = snippetHTML(*row.Headline, *row.Content)
+		out[i].SourceLabel = chunkCitation(row.SourceLabel, row.PageStart, row.PageEnd)
+		out[i].ChunkIndex = row.ChunkIndex
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // snippetHTML turns a ts_headline excerpt of content into safe HTML: the text

@@ -3776,7 +3776,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns the workspace's assets whose content mentions `q`, one row per asset, best-scoring first. Full-text, not semantic: words are matched with English stemming (\"cycles\" finds \"cycle\"), \"quoted phrases\" match as phrases, `-word` excludes and `or` alternates. Covers every asset kind that has chunks (PDF, documents and spreadsheets, URL, markdown, audio transcripts, image regions). `matches` is the number of matching chunks; `snippet`, `source_label` and `chunk_index` describe the best one. `snippet` is HTML-escaped text whose only markup is `\u003cmark\u003e` around matched words, with \"…\" where it was cut. `source_label` is absent for chunks without a location (markdown, URL). A query of only stopwords or punctuation returns no results.",
+                "description": "Returns the workspace's assets whose content mentions `q`, one row per asset: the assets with the most matching chunks first, ties broken by the best chunk's `score`. Full-text, not semantic: words are matched with English stemming (\"cycles\" finds \"cycle\"), \"quoted phrases\" match as phrases, `-word` excludes and `or` alternates. Covers every asset kind that has chunks (PDF, documents and spreadsheets, URL, markdown, audio transcripts, image regions). `matches` is the number of matching chunks. The first 50 results also carry evidence from their best chunk: `score`, `snippet`, `chunk_index` and `source_label`; later results carry only `asset_id` and `matches`. `snippet` is HTML-escaped text whose only markup is `\u003cmark\u003e` around matched words, with \"…\" where it was cut. `source_label` is absent for chunks without a location (markdown, URL). `total` is the number of matching assets; it exceeds the number of `results` only when `limit` cut the list. A query of only stopwords or punctuation returns no results.",
                 "produces": [
                     "application/json"
                 ],
@@ -3794,7 +3794,7 @@
                     },
                     {
                         "type": "integer",
-                        "description": "Max assets (default 50, max 200)",
+                        "description": "Max assets (default and max 1000)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -12591,6 +12591,9 @@
                     "items": {
                         "$ref": "#/definitions/repository.AssetTextMatch"
                     }
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
@@ -17685,6 +17688,7 @@
                     "type": "string"
                 },
                 "chunk_index": {
+                    "description": "ChunkIndex is the best chunk's position in the asset.",
                     "type": "integer"
                 },
                 "matches": {
@@ -17692,7 +17696,7 @@
                     "type": "integer"
                 },
                 "score": {
-                    "description": "Score is the best chunk's cover-density rank scaled into [0, 1).",
+                    "description": "Score is the best chunk's cover-density rank scaled into (0, 1).",
                     "type": "number"
                 },
                 "snippet": {

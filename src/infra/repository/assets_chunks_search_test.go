@@ -44,9 +44,12 @@ func cleanupSearchChunks(t *testing.T, db *bun.DB, tenants ...string) {
 
 func searchByAsset(t *testing.T, repo repository.AssetChunksRepository, tenant, query string, limit int) map[string]repository.AssetTextMatch {
 	t.Helper()
-	got, err := repo.SearchText(tenantctx.With(t.Context(), tenant), query, limit)
+	got, total, err := repo.SearchText(tenantctx.With(t.Context(), tenant), query, limit)
 	if err != nil {
 		t.Fatalf("search %q: %v", query, err)
+	}
+	if total < len(got) {
+		t.Fatalf("search %q: total %d below the %d results", query, total, len(got))
 	}
 	out := make(map[string]repository.AssetTextMatch, len(got))
 	for _, m := range got {
@@ -123,29 +126,59 @@ func TestAssetChunks_SearchTextRanksCountsAndLimits(t *testing.T) {
 		"Nothing here.",
 	}, nil)
 	seedSearchChunks(t, repo, tenant, "once", []string{"One varroa mention buried in a much longer chunk about queen rearing, drones and honey flow timing."}, nil)
+	seedSearchChunks(t, repo, tenant, "dense", []string{"Varroa, varroa, varroa."}, nil)
 
-	got, err := repo.SearchText(tenantctx.With(t.Context(), tenant), "varroa", 50)
+	got, total, err := repo.SearchText(tenantctx.With(t.Context(), tenant), "varroa", 50)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(got) != 2 || got[0].AssetID != "many" || got[1].AssetID != "once" {
-		t.Fatalf("results = %+v, want many then once", got)
+	// Most matching chunks first; between equal counts, the denser best chunk.
+	if total != 3 || len(got) != 3 || got[0].AssetID != "many" || got[1].AssetID != "dense" || got[2].AssetID != "once" {
+		t.Fatalf("results = %+v (total %d), want many, dense, once", got, total)
 	}
-	if got[0].Matches != 3 || got[0].ChunkIndex != 1 {
-		t.Errorf("many: matches/chunk = %d/%d, want 3 matches with chunk 1 the best", got[0].Matches, got[0].ChunkIndex)
+	if got[1].Score <= got[2].Score {
+		t.Errorf("dense score %v not above once score %v", got[1].Score, got[2].Score)
 	}
-	if got[0].Score < got[1].Score {
-		t.Errorf("scores out of order: %v < %v", got[0].Score, got[1].Score)
-	}
-
-	limited, err := repo.SearchText(tenantctx.With(t.Context(), tenant), "varroa", 1)
-	if err != nil || len(limited) != 1 || limited[0].AssetID != "many" {
-		t.Fatalf("limit 1 = (%+v, %v), want only the best asset", limited, err)
+	if got[0].Matches != 3 || got[0].ChunkIndex == nil || *got[0].ChunkIndex != 1 {
+		t.Errorf("many = %+v, want 3 matches with chunk 1 the best", got[0])
 	}
 
-	stop, err := repo.SearchText(tenantctx.With(t.Context(), tenant), "the and of", 50)
-	if err != nil || len(stop) != 0 {
-		t.Fatalf("stopword-only search = (%+v, %v), want no results and no error", stop, err)
+	limited, total, err := repo.SearchText(tenantctx.With(t.Context(), tenant), "varroa", 1)
+	if err != nil || len(limited) != 1 || limited[0].AssetID != "many" || total != 3 {
+		t.Fatalf("limit 1 = (%+v, total %d, %v), want only the asset with most matches and total 3", limited, total, err)
+	}
+
+	stop, total, err := repo.SearchText(tenantctx.With(t.Context(), tenant), "the and of", 50)
+	if err != nil || len(stop) != 0 || total != 0 {
+		t.Fatalf("stopword-only search = (%+v, total %d, %v), want no results and no error", stop, total, err)
+	}
+}
+
+func TestAssetChunks_SearchTextEvidenceOnlyOnLeadingResults(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewAssetChunksRepository(db)
+	const tenant = "tenant-search-evidence"
+	cleanupSearchChunks(t, db, tenant)
+
+	// One asset with two matching chunks leads; the rest match once each.
+	seedSearchChunks(t, repo, tenant, "lead", []string{"Nectar flow.", "Nectar again."}, nil)
+	n := repository.SearchTextEvidenceLimit + 5
+	for i := range n - 1 {
+		seedSearchChunks(t, repo, tenant, fmt.Sprintf("asset-%03d", i), []string{"Nectar sources."}, nil)
+	}
+
+	got, total, err := repo.SearchText(tenantctx.With(t.Context(), tenant), "nectar", 1000)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if total != n || len(got) != n || got[0].AssetID != "lead" || got[0].Matches != 2 {
+		t.Fatalf("got %d results (total %d), first %+v; want all %d with lead first", len(got), total, got[0], n)
+	}
+	for i, m := range got {
+		withEvidence := m.Snippet != "" && m.Score > 0 && m.ChunkIndex != nil
+		if want := i < repository.SearchTextEvidenceLimit; withEvidence != want {
+			t.Errorf("result %d (%s): evidence = %v, want %v", i, m.AssetID, withEvidence, want)
+		}
 	}
 }
 
@@ -225,7 +258,7 @@ func TestAssetChunks_SearchTextIsTenantScoped(t *testing.T) {
 	if got := searchByAsset(t, repo, tenantB, "beeswax", 50); len(got) != 1 || got["b-asset"].AssetID == "" {
 		t.Errorf("tenant B saw %v, want only its own asset", got)
 	}
-	if _, err := repo.SearchText(context.Background(), "beeswax", 50); !errors.Is(err, tenantctx.ErrNoTenant) {
+	if _, _, err := repo.SearchText(context.Background(), "beeswax", 50); !errors.Is(err, tenantctx.ErrNoTenant) {
 		t.Errorf("search without a tenant = %v, want ErrNoTenant", err)
 	}
 }
