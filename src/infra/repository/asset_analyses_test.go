@@ -2,8 +2,10 @@ package repository_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/uptrace/bun"
 
@@ -226,6 +228,38 @@ func TestAssetAnalysisDeleteLensAndAsset(t *testing.T) {
 	}
 }
 
+// TestAssetAnalysisWorkspaceDigests: the gist comes back as stored, and the
+// summary head is read (capped) only for lenses without one.
+func TestAssetAnalysisWorkspaceDigests(t *testing.T) {
+	f := newAnalysisFixture(t)
+	longSummary := strings.Repeat("Older analysis prose. ", 60) // > 800 runes
+	for assetID, gist := range map[string]string{"with-gist": "Reference architectures for RAG.", "no-gist": ""} {
+		f.seedAsset(t, assetID)
+		a, err := f.analyses.Ensure(f.ctx, f.db, assetID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.save(t, a, 0)
+		if _, err := f.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
+			Set("gist = ?", gist).Set("summary = ?", longSummary).
+			Where("id = ?", a.ID).Exec(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := f.analyses.WorkspaceDigests(f.ctx, []string{"with-gist", "no-gist"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := got["with-gist"]; d.Status != models.AssetAnalysisStatusReady || d.Gist != "Reference architectures for RAG." || d.SummaryHead != "" {
+		t.Fatalf("with-gist digest = %+v", d)
+	}
+	d := got["no-gist"]
+	if d.Gist != "" || utf8.RuneCountInString(d.SummaryHead) != 800 || !strings.HasPrefix(d.SummaryHead, "Older analysis prose.") {
+		t.Fatalf("no-gist digest = gist %q, head %d runes", d.Gist, utf8.RuneCountInString(d.SummaryHead))
+	}
+}
+
 func TestAssetAnalysisCampaignReads(t *testing.T) {
 	f := newAnalysisFixture(t)
 	f.seedAsset(t, "low")
@@ -255,12 +289,12 @@ func TestAssetAnalysisCampaignReads(t *testing.T) {
 		t.Fatalf("ListByCampaign order = %+v", got)
 	}
 
-	statuses, err := f.analyses.WorkspaceStatuses(f.ctx, []string{"low", "high", "none"})
+	digests, err := f.analyses.WorkspaceDigests(f.ctx, []string{"low", "high", "none"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(statuses) != 2 || statuses["low"] != models.AssetAnalysisStatusPending {
-		t.Fatalf("WorkspaceStatuses = %v", statuses)
+	if len(digests) != 2 || digests["low"].Status != models.AssetAnalysisStatusPending {
+		t.Fatalf("WorkspaceDigests = %v", digests)
 	}
 
 	if _, err := f.campaigns.Delete(f.ctx, campaignID); err != nil {

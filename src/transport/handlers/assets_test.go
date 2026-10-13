@@ -51,7 +51,8 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
+		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil,
+			handlers.AssetsOptions{Analyses: repository.NewAssetAnalysisRepository(db)}).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
 
 		// Seed an auth user and log in
@@ -133,6 +134,49 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 				var assets []models.Asset
 				Expect(json.NewDecoder(resp.Body).Decode(&assets)).To(Succeed())
 				Expect(assets).To(HaveLen(2))
+			})
+
+			It("returns the gist and the recording duration on the list and the single asset", func() {
+				p := createPiece("Launch sync", `[{"type":"paragraph"}]`)
+				seedGistAndDuration(db, p.ID, "Pricing moves to seats in Q3.", 1_080_000)
+
+				listReq := httptest.NewRequest("GET", "/api/content-bank/assets", nil)
+				listReq.AddCookie(authCookie)
+				listResp, err := app.Test(listReq)
+				Expect(err).NotTo(HaveOccurred())
+				var list []models.Asset
+				Expect(json.NewDecoder(listResp.Body).Decode(&list)).To(Succeed())
+				Expect(list).To(HaveLen(1))
+
+				getReq := httptest.NewRequest("GET", "/api/content-bank/assets/"+p.ID, nil)
+				getReq.AddCookie(authCookie)
+				getResp, err := app.Test(getReq)
+				Expect(err).NotTo(HaveOccurred())
+				var one models.Asset
+				Expect(json.NewDecoder(getResp.Body).Decode(&one)).To(Succeed())
+
+				for _, got := range []models.Asset{list[0], one} {
+					Expect(got.Gist).To(HaveValue(Equal("Pricing moves to seats in Q3.")))
+					Expect(got.File).NotTo(BeNil())
+					Expect(got.File.DurationMs).To(Equal(int64(1_080_000)))
+				}
+			})
+
+			It("returns a null gist while the workspace analysis is not ready", func() {
+				p := createPiece("Pending", `[{"type":"paragraph"}]`)
+				tctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+				_, err := repository.NewAssetAnalysisRepository(db).Ensure(tctx, db, p.ID, nil)
+				Expect(err).NotTo(HaveOccurred())
+
+				req := httptest.NewRequest("GET", "/api/content-bank/assets", nil)
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				var raw []map[string]any
+				Expect(json.NewDecoder(resp.Body).Decode(&raw)).To(Succeed())
+				Expect(raw).To(HaveLen(1))
+				Expect(raw[0]).To(HaveKeyWithValue("analysis_status", "pending"))
+				Expect(raw[0]).To(HaveKeyWithValue("gist", BeNil()))
 			})
 		})
 	})
@@ -993,4 +1037,26 @@ type fakeImageReembedder struct{ ch chan string }
 func (f *fakeImageReembedder) EnqueueReembedImage(_ context.Context, assetID, _ string) error {
 	f.ch <- assetID
 	return nil
+}
+
+// seedGistAndDuration gives an asset a recording file with durationMs and a
+// ready workspace analysis with gist.
+func seedGistAndDuration(db *bun.DB, assetID, gist string, durationMs int64) {
+	GinkgoHelper()
+	ctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+	files := repository.NewAssetFileRepository(db)
+	Expect(files.Upsert(ctx, &models.AssetFile{
+		ID: "file-" + assetID, AssetID: assetID, OriginalName: "call.mp3", MimeType: "audio/mpeg",
+		SizeBytes: 1024, S3Key: "assets/" + assetID + "/original.mp3",
+	})).To(Succeed())
+	Expect(files.SetDuration(ctx, assetID, durationMs)).To(Succeed())
+
+	lens, err := repository.NewAssetAnalysisRepository(db).Ensure(ctx, db, assetID, nil)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
+		Set("status = ?", models.AssetAnalysisStatusReady).
+		Set("gist = ?", gist).
+		Where("id = ?", lens.ID).
+		Exec(ctx)
+	Expect(err).NotTo(HaveOccurred())
 }
