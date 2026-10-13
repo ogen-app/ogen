@@ -61,7 +61,15 @@ GET {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}/chunks
 Accept: application/json
 
 ### Asset — content holds the transcript once ready (CON-312)  [protected]
+# file.duration_ms is set once the probe step has run (0 before). gist is
+# null until the workspace analysis is ready, e.g.
+#   "gist": "Q3 pricing moves to seats; usage stays free.",
+#   "file": { …, "duration_ms": 1080000 }
 GET {{baseUrl}}/api/content-bank/assets/{{audioAssetId}}
+Accept: application/json
+
+### Assets list — each row carries analysis_status, gist and file.duration_ms  [protected]
+GET {{baseUrl}}/api/content-bank/assets
 Accept: application/json
 
 ### Rename — title/tags-only save, no content needed (CON-312)  [protected]
