@@ -19,6 +19,9 @@ type AssetFileRepository interface {
 	// Tenant scoping comes from the TenantScoped hooks.
 	GetByChecksum(ctx context.Context, checksum string) (*models.AssetFile, error)
 	Upsert(ctx context.Context, file *models.AssetFile) error
+	// SetDuration records a recording's length on the asset's file row. It is
+	// the only writer of duration_ms; Upsert leaves the column alone.
+	SetDuration(ctx context.Context, assetID string, durationMs int64) error
 	DeleteByAssetID(ctx context.Context, assetID string) error
 	ListByAssetIDs(ctx context.Context, assetIDs []string) (map[string]*models.AssetFile, error)
 	// SumSizeBytesInTenant totals the stored originals across the ctx tenant's
@@ -94,6 +97,16 @@ func (r *assetFileRepository) SumSizeBytesInTenant(ctx context.Context) (int64, 
 		ColumnExpr("COALESCE(SUM(af.size_bytes), 0)").
 		Scan(ctx, &total)
 	return total, err
+}
+
+func (r *assetFileRepository) SetDuration(ctx context.Context, assetID string, durationMs int64) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.AssetFile)(nil)).
+		Set("duration_ms = ?", durationMs).
+		Set("updated_at = ?", time.Now().UTC()).
+		Where("asset_id = ?", assetID).
+		Exec(ctx)
+	return err
 }
 
 func (r *assetFileRepository) DeleteByAssetID(ctx context.Context, assetID string) error {

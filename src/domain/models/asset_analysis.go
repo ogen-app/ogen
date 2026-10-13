@@ -137,16 +137,19 @@ type AssetAnalysis struct {
 	AssetID    string  `bun:"asset_id,notnull"                             json:"asset_id"`
 	CampaignID *string `bun:"campaign_id"                                  json:"campaign_id"`
 	// CampaignName is read alongside the lens, never written.
-	CampaignName       *string                `bun:"campaign_name,scanonly" json:"campaign_name"`
-	Status             AssetAnalysisStatus    `bun:"status,notnull"                               json:"status"         swaggertype:"string" enums:"pending,running,ready,failed,skipped"`
-	Strategy           *AssetAnalysisStrategy `bun:"strategy"                                     json:"strategy"       swaggertype:"string" enums:"full,map_reduce" extensions:"x-nullable"`
-	Summary            string                 `bun:"summary,notnull,default:''"                   json:"summary"`
-	Result             AssetAnalysisResult    `bun:"result,notnull,type:jsonb"                    json:"-"`
-	Language           string                 `bun:"language,notnull,default:''"                  json:"language"`
-	PartialSource      bool                   `bun:"partial_source,notnull,default:false"         json:"partial_source"`
-	Truncated          bool                   `bun:"truncated,notnull,default:false"              json:"truncated"`
-	SourceTokens       int                    `bun:"source_tokens,notnull,default:0"              json:"-"`
-	ContextFingerprint string                 `bun:"context_fingerprint,notnull,default:''"       json:"-"`
+	CampaignName *string                `bun:"campaign_name,scanonly" json:"campaign_name"`
+	Status       AssetAnalysisStatus    `bun:"status,notnull"                               json:"status"         swaggertype:"string" enums:"pending,running,ready,failed,skipped"`
+	Strategy     *AssetAnalysisStrategy `bun:"strategy"                                     json:"strategy"       swaggertype:"string" enums:"full,map_reduce" extensions:"x-nullable"`
+	// Gist is one sentence of what the source offers; '' on rows analysed
+	// before the model wrote one.
+	Gist               string              `bun:"gist,notnull,default:''"                      json:"gist"`
+	Summary            string              `bun:"summary,notnull,default:''"                   json:"summary"`
+	Result             AssetAnalysisResult `bun:"result,notnull,type:jsonb"                    json:"-"`
+	Language           string              `bun:"language,notnull,default:''"                  json:"language"`
+	PartialSource      bool                `bun:"partial_source,notnull,default:false"         json:"partial_source"`
+	Truncated          bool                `bun:"truncated,notnull,default:false"              json:"truncated"`
+	SourceTokens       int                 `bun:"source_tokens,notnull,default:0"              json:"-"`
+	ContextFingerprint string              `bun:"context_fingerprint,notnull,default:''"       json:"-"`
 	// ModelID is the model that produced this analysis. Spend lives in the
 	// analytics usage events, not here.
 	ModelID       string     `bun:"model_id,notnull,default:''"                  json:"-"`

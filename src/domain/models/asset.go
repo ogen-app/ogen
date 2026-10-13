@@ -114,7 +114,11 @@ type Asset struct {
 	// AnalysisStatus is the workspace analysis lens's status, hydrated by the
 	// handler; nil for assets that are never analysed or not yet queued.
 	AnalysisStatus *AssetAnalysisStatus `bun:"-" json:"analysis_status" swaggertype:"string" enums:"pending,running,ready,failed,skipped" extensions:"x-nullable"`
-	CreatedBy      string               `bun:"created_by,notnull"                           json:"created_by"`
-	CreatedAt      time.Time            `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt      time.Time            `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	// Gist is one sentence of the workspace analysis, hydrated by the handler;
+	// nil unless the workspace lens is ready and has a gist or a usable summary
+	// sentence.
+	Gist      *string   `bun:"-" json:"gist" extensions:"x-nullable"`
+	CreatedBy string    `bun:"created_by,notnull"                           json:"created_by"`
+	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
 }

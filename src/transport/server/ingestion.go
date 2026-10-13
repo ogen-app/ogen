@@ -175,6 +175,7 @@ func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) 
 			Storage:          store,
 			Assets:           r.pieceRepo,
 			Content:          r.pieceRepo,
+			Files:            r.assetFileRepo,
 			Chunks:           r.chunksRepo,
 			Extractions:      r.audioExtractionRepo,
 			Segments:         r.audioSegmentRepo,
