@@ -21,6 +21,10 @@ const (
 	highlightStop  = "\x03"
 )
 
+// chunkTSV is a chunk's searchable text. It must match the expression of the
+// idx_assets_chunks_content_tsv GIN index exactly, or the planner skips it.
+const chunkTSV = `to_tsvector('english', ac.content)`
+
 // textEvidenceSQL picks, for each asset in a page, its best matching chunk
 // and headlines it. Ranking and ts_headline cost far more than finding the
 // matches, so they run only for the page's assets, never for every hit.
@@ -28,9 +32,9 @@ const textEvidenceSQL = `
 WITH q AS (
 	SELECT websearch_to_tsquery('english', ?) AS tsq
 ), best AS (
-	SELECT DISTINCT ON (ac.asset_id) ac.id, ts_rank_cd(ac.content_tsv, q.tsq, 32) AS score
+	SELECT DISTINCT ON (ac.asset_id) ac.id, ts_rank_cd(` + chunkTSV + `, q.tsq, 32) AS score
 	FROM assets_chunks ac CROSS JOIN q
-	WHERE ac.tenant_id = ? AND ac.asset_id IN (?) AND ac.content_tsv @@ q.tsq
+	WHERE ac.tenant_id = ? AND ac.asset_id IN (?) AND ` + chunkTSV + ` @@ q.tsq
 	ORDER BY ac.asset_id, score DESC, ac.chunk_index
 ), chunk AS (
 	SELECT ac.asset_id, ac.chunk_index, ac.source_label, ac.page_start, ac.page_end,

@@ -288,6 +288,34 @@ func TestAssetQuery_WholeBankCampaign(t *testing.T) {
 	}
 }
 
+// An archived campaign drops out of membership and the campaign facet, like
+// the campaign list, but its own scope still reads.
+func TestAssetQuery_ArchivedCampaign(t *testing.T) {
+	fx := seedAssetQueryFixture(t)
+	if _, err := fx.db.NewInsert().Model(&models.Campaign{
+		ID: "c-arch", Name: "archived", UseAssets: true, AssetIDs: models.StringSlice{fxCSV}, ArchivedAt: &fx.now,
+		TargetPlatforms: models.CampaignPlatforms{}, PublishingDays: models.StringSlice{},
+	}).Exec(fx.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(fx.run(t, models.AssetQuery{Campaign: anyOf("c-arch")})); len(got) != 0 {
+		t.Errorf("campaign=c-arch = %v, want none: archived campaigns have no members", got)
+	}
+	res := fx.run(t, models.AssetQuery{Kind: anyOf("csv"), Campaign: anyOf("none"), Facets: []string{models.AssetFacetCampaign}})
+	if got := listedIDs(res); !slices.Equal(got, []string{fxCSV}) {
+		t.Errorf("campaign=none = %v, want the csv only listed by an archived campaign", got)
+	}
+	for _, c := range res.Facets[models.AssetFacetCampaign] {
+		if c.Value == "c-arch" {
+			t.Error("the campaign facet lists an archived campaign")
+		}
+	}
+	scoped := fx.run(t, models.AssetQuery{ScopeCampaign: "c-arch"})
+	if got := listedIDs(scoped); !slices.Equal(got, []string{fxCSV}) || !slices.Equal(scoped.Assets[0].CampaignIDs, []string{"c-arch"}) {
+		t.Errorf("scope c-arch = %v / %v, want the csv in its archived campaign", got, scoped.Assets)
+	}
+}
+
 func TestAssetQuery_RowShape(t *testing.T) {
 	fx := seedAssetQueryFixture(t)
 	res := fx.run(t, models.AssetQuery{})

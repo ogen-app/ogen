@@ -34,9 +34,14 @@ type assetListResponse struct {
 	// Facets holds, per requested field, every value with the number of
 	// assets that have it.
 	Facets map[string][]models.AssetFacetCount `json:"facets"`
+	// IDs is present only with ids_only=true, and then it is the whole body
+	// (an assetIDsResponse): every matching id in sort order, unpaginated.
+	// Swagger allows one schema per status, so the list schema carries it.
+	IDs []string `json:"ids,omitempty"`
 }
 
-// assetIDsResponse is every asset id matching the filters, unpaginated.
+// assetIDsResponse is the body with ids_only=true: every asset id matching
+// the filters, unpaginated.
 type assetIDsResponse struct {
 	IDs []string `json:"ids"`
 }
@@ -223,7 +228,7 @@ func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
 // @Param        facets          query     string  false  "kind, status, campaign, tag, ideas, updated"
 // @Param        tz              query     string  false  "IANA time zone of the updated presets (default UTC)"
 // @Param        ids_only        query     bool    false  "Return every matching id instead of a page"
-// @Success      200  {object}  assetListResponse  "With ids_only=true the body is an assetIDsResponse instead"
+// @Success      200  {object}  assetListResponse  "With ids_only=true only ids is present"
 // @Failure      400  {object}  map[string]string  "code: invalid_filter | invalid_cursor | query_too_short | query_too_long"
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string  "scope_campaign names no live campaign"

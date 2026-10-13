@@ -262,16 +262,20 @@ func where(b *sqlBuf, preds []assetPred, except string) {
 // writeAssetFacts writes the CTEs ending in facts: one row per asset in scope
 // with every value the filters, facets and sorts read.
 //
+// The campaigns that count are the active ones, the set the campaign list
+// shows: neither deleted nor archived. A campaign scope may still name an
+// archived campaign, whose overview stays readable; it counts then.
+//
 // Campaign membership agrees with how generation reads it: an asset belongs to
-// every live campaign listing it, and to every campaign that draws on the
-// whole bank (use_assets with no asset_ids). Ideas count only those of the
-// analysis lenses in scope: the workspace lens plus every live campaign's,
-// or under a campaign scope that campaign's alone.
+// every such campaign listing it, and to every one that draws on the whole
+// bank (use_assets with no asset_ids). Ideas count only those of the analysis
+// lenses in scope: the workspace lens plus every counted campaign's, or under
+// a campaign scope that campaign's alone.
 func writeAssetFacts(b *sqlBuf, q models.AssetQuery, tenantID string) {
 	b.add(`WITH camps_raw AS (
 	SELECT c.id, c.use_assets,
 		CASE WHEN jsonb_typeof(c.asset_ids) = 'array' THEN c.asset_ids ELSE '[]'::jsonb END AS asset_ids
-	FROM campaigns c WHERE c.tenant_id = ? AND c.deleted_at IS NULL
+	FROM campaigns c WHERE c.tenant_id = ? AND c.deleted_at IS NULL AND (c.archived_at IS NULL OR c.id = ?)
 ), camps AS MATERIALIZED (
 	SELECT c.id, c.asset_ids, (c.use_assets AND c.asset_ids = '[]'::jsonb) AS whole_bank FROM camps_raw c
 ), members AS MATERIALIZED (
@@ -297,7 +301,7 @@ func writeAssetFacts(b *sqlBuf, q models.AssetQuery, tenantID string) {
 		coalesce(sum(li.i_later), 0) AS i_later, coalesce(sum(li.i_no), 0) AS i_no
 	FROM asset_analyses aa
 	LEFT JOIN lens_ideas li ON li.lens_id = aa.id
-	WHERE aa.tenant_id = ? AND `, tenantID, tenantID, q.Now, q.Now, tenantID, tenantID)
+	WHERE aa.tenant_id = ? AND `, tenantID, q.ScopeCampaign, tenantID, q.Now, q.Now, tenantID, tenantID)
 	if q.ScopeCampaign != "" {
 		b.add(`(aa.campaign_id IS NULL OR aa.campaign_id = ?)`, q.ScopeCampaign)
 	} else {
@@ -309,7 +313,7 @@ func writeAssetFacts(b *sqlBuf, q models.AssetQuery, tenantID string) {
 	if q.Text != "" {
 		b.add(`, hits AS MATERIALIZED (
 	SELECT ac.asset_id, count(*) AS matches FROM assets_chunks ac
-	WHERE ac.tenant_id = ? AND ac.content_tsv @@ websearch_to_tsquery('english', ?)
+	WHERE ac.tenant_id = ? AND `+chunkTSV+` @@ websearch_to_tsquery('english', ?)
 	GROUP BY ac.asset_id
 )`, tenantID, q.Text)
 	}
