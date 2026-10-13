@@ -255,28 +255,6 @@ type updateAssetRequest struct {
 	TagIDs  *models.StringSlice `json:"tag_ids"`
 }
 
-// List godoc
-// @Summary      List assets
-// @Description  Returns all content bank assets ordered by creation date.
-// @Tags         content-bank
-// @Produce      json
-// @Security     CookieAuth
-// @Success      200  {array}   models.Asset
-// @Failure      401  {object}  map[string]string
-// @Router       /api/content-bank/assets [get]
-func (h *AssetsHandler) List(c *fiber.Ctx) error {
-	assets, err := h.repo.List(reqCtx(c))
-	if err != nil {
-		return err
-	}
-	for i := range assets {
-		h.decorateFile(reqCtx(c), &assets[i])
-	}
-	h.decorateImagesBatch(reqCtx(c), assets)
-	h.decorateAnalysis(reqCtx(c), assets)
-	return c.JSON(assets)
-}
-
 // decorateAnalysis sets each asset's workspace analysis status and gist in one
 // query. The gist is set only on a ready lens; a lens analysed before gists
 // existed gets the first prose sentence of its summary. Best effort: a failed
@@ -304,28 +282,6 @@ func (h *AssetsHandler) decorateAnalysis(ctx context.Context, assets []models.As
 		}
 		if gist := cmp.Or(d.Gist, textgist.FromSummary(d.SummaryHead)); gist != "" {
 			assets[i].Gist = new(gist)
-		}
-	}
-}
-
-// decorateImagesBatch hydrates mirrored images for a list of assets in one query,
-// URL-decorating each and relinking them in the scraped Markdown. No-op when the
-// image repo is unwired.
-func (h *AssetsHandler) decorateImagesBatch(ctx context.Context, assets []models.Asset) {
-	if h.imageRepo == nil || len(assets) == 0 {
-		return
-	}
-	ids := make([]string, len(assets))
-	for i := range assets {
-		ids[i] = assets[i].ID
-	}
-	byAsset, err := h.imageRepo.ListByAssetIDs(ctx, ids)
-	if err != nil {
-		return
-	}
-	for i := range assets {
-		if imgs, ok := byAsset[assets[i].ID]; ok {
-			h.attachImages(ctx, &assets[i], imgs)
 		}
 	}
 }

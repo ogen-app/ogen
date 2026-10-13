@@ -1,0 +1,255 @@
+package models
+
+import (
+	"time"
+)
+
+// AssetKind is what an asset is to a person browsing the bank, derived from its
+// coarse type and, for documents, the MIME type of its file. The server owns
+// this classification so the client never maps MIME types.
+type AssetKind string
+
+const (
+	AssetKindPDF          AssetKind = "pdf"
+	AssetKindWeb          AssetKind = "web"
+	AssetKindAudio        AssetKind = "audio"
+	AssetKindNote         AssetKind = "note"
+	AssetKindImage        AssetKind = "image"
+	AssetKindDocument     AssetKind = "document"
+	AssetKindSpreadsheet  AssetKind = "spreadsheet"
+	AssetKindCSV          AssetKind = "csv"
+	AssetKindPresentation AssetKind = "presentation"
+)
+
+// AssetKinds lists every kind, in the order the kind facet reports them.
+var AssetKinds = []string{
+	string(AssetKindPDF), string(AssetKindWeb), string(AssetKindAudio), string(AssetKindNote),
+	string(AssetKindImage), string(AssetKindDocument), string(AssetKindSpreadsheet),
+	string(AssetKindCSV), string(AssetKindPresentation),
+}
+
+// AssetListStatuses are the statuses the list filters and counts by. An asset
+// still processing counts as pending.
+var AssetListStatuses = []string{AssetStatusReady, AssetStatusPartial, AssetStatusPending, AssetStatusFailed}
+
+// AssetFilterNone is the filter value matching assets with no value for a
+// field: in no campaign, untagged.
+const AssetFilterNone = "none"
+
+// Values of the ideas filter. The first four match an asset with at least one
+// analysis idea of that verdict, a later idea whose reminder has passed counting
+// as undecided; none matches an analysed asset with no ideas and unread one
+// with no finished analysis.
+const (
+	AssetIdeasUndecided = "undecided"
+	AssetIdeasYes       = "yes"
+	AssetIdeasLater     = "later"
+	AssetIdeasNo        = "no"
+	AssetIdeasNone      = "none"
+	AssetIdeasUnread    = "unread"
+)
+
+// AssetIdeasValues lists every ideas filter value, in facet order.
+var AssetIdeasValues = []string{
+	AssetIdeasUndecided, AssetIdeasYes, AssetIdeasLater, AssetIdeasNo, AssetIdeasNone, AssetIdeasUnread,
+}
+
+// Sort orders of the asset list. The leading "-" means descending.
+const (
+	AssetSortUpdatedDesc    = "-updated_at"
+	AssetSortUpdatedAsc     = "updated_at"
+	AssetSortTitleAsc       = "title"
+	AssetSortTitleDesc      = "-title"
+	AssetSortIdeasUndecided = "-ideas_undecided"
+	// AssetSortRelevance puts the assets with the most matching chunks first;
+	// it needs a text query.
+	AssetSortRelevance = "relevance"
+)
+
+// AssetSorts lists every sort order.
+var AssetSorts = []string{
+	AssetSortUpdatedDesc, AssetSortUpdatedAsc, AssetSortTitleAsc, AssetSortTitleDesc,
+	AssetSortIdeasUndecided, AssetSortRelevance,
+}
+
+// Fields the asset list can count values of.
+const (
+	AssetFacetKind     = "kind"
+	AssetFacetStatus   = "status"
+	AssetFacetCampaign = "campaign"
+	AssetFacetTag      = "tag"
+	AssetFacetIdeas    = "ideas"
+	AssetFacetUpdated  = "updated"
+)
+
+// AssetFacets lists every facet field.
+var AssetFacets = []string{
+	AssetFacetKind, AssetFacetStatus, AssetFacetCampaign, AssetFacetTag, AssetFacetIdeas, AssetFacetUpdated,
+}
+
+// Presets of the updated facet: since the start of today, of the day six or
+// twenty-nine days ago, and of the month, in the viewer's time zone.
+const (
+	AssetUpdatedToday = "1d"
+	AssetUpdatedWeek  = "7d"
+	AssetUpdated30d   = "30d"
+	AssetUpdatedMonth = "month"
+)
+
+// AssetUpdatedPresets lists the updated facet's values.
+var AssetUpdatedPresets = []string{AssetUpdatedToday, AssetUpdatedWeek, AssetUpdated30d, AssetUpdatedMonth}
+
+// AssetUpdatedSince is the start of an updated preset for a viewer whose clock
+// reads now in loc. ok is false for an unknown preset.
+func AssetUpdatedSince(preset string, now time.Time, loc *time.Location) (since time.Time, ok bool) {
+	local := now.In(loc)
+	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	switch preset {
+	case AssetUpdatedToday:
+		return today, true
+	case AssetUpdatedWeek:
+		return today.AddDate(0, 0, -6), true
+	case AssetUpdated30d:
+		return today.AddDate(0, 0, -29), true
+	case AssetUpdatedMonth:
+		return time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc), true
+	}
+	return time.Time{}, false
+}
+
+// Machine-readable codes on the 400s of the asset list.
+const (
+	AssetCodeInvalidFilter = "invalid_filter"
+	AssetCodeInvalidCursor = "invalid_cursor"
+	AssetCodeQueryTooShort = "query_too_short"
+	AssetCodeQueryTooLong  = "query_too_long"
+)
+
+// AssetValueFilter is one field's filter: an asset matches when its value is
+// any of Any (or Any is empty) and none of Not.
+type AssetValueFilter struct {
+	Any []string
+	Not []string
+}
+
+// Active reports whether the filter narrows anything.
+func (f AssetValueFilter) Active() bool { return len(f.Any) > 0 || len(f.Not) > 0 }
+
+// AssetQuery is one read of the asset list. Different fields combine with AND.
+type AssetQuery struct {
+	// Title holds case-insensitive substrings of the title.
+	Title    AssetValueFilter
+	Kind     AssetValueFilter
+	Status   AssetValueFilter
+	Campaign AssetValueFilter
+	Tag      AssetValueFilter
+	Ideas    AssetValueFilter
+	// Checksums keeps the assets whose file has one of these SHA-256 sums.
+	Checksums []string
+	// UpdatedAfter is inclusive, UpdatedBefore exclusive.
+	UpdatedAfter  *time.Time
+	UpdatedBefore *time.Time
+	// Text keeps the assets whose chunks mention it (websearch syntax).
+	Text string
+	// ScopeCampaign confines the whole read, totals and counts included, to
+	// one campaign's assets.
+	ScopeCampaign string
+	Sort          string
+	Limit         int
+	// Cursor continues a previous page of the same sort.
+	Cursor string
+	// Facets names the fields to count values of.
+	Facets []string
+	// Now is the clock the reminder rule and the updated presets read.
+	Now time.Time
+	// Location is the viewer's time zone for the updated presets.
+	Location *time.Location
+}
+
+// AssetIdeaCounts counts an asset's analysis ideas per verdict. A later idea
+// whose reminder has passed counts as undecided, not later.
+type AssetIdeaCounts struct {
+	Undecided int `json:"undecided"`
+	Yes       int `json:"yes"`
+	Later     int `json:"later"`
+	No        int `json:"no"`
+}
+
+// AssetTextMatch is where an asset mentions the text of a query.
+type AssetTextMatch struct {
+	// Matches is the number of the asset's chunks that match.
+	Matches int `json:"matches"`
+	// Snippet is an excerpt of the best chunk around the match, with HTML tags
+	// in the source dropped. It is HTML-escaped, with each matched word wrapped
+	// in <mark>…</mark> (the only markup it contains), and starts or ends with
+	// "…" when it was cut from a longer chunk.
+	Snippet string `json:"snippet"`
+	// SourceLabel cites where the best chunk sits in its source ("Slide 4",
+	// "1:05–1:40", "Page 14"). Null when the chunk has no location, as for
+	// notes and web pages.
+	SourceLabel *string `json:"source_label" extensions:"x-nullable"`
+	// ChunkIndex is the best chunk's position in the asset.
+	ChunkIndex int `json:"chunk_index"`
+}
+
+// AssetListFile is the part of an asset's file the list shows.
+type AssetListFile struct {
+	MimeType  string `json:"mime_type"`
+	PageCount *int   `json:"page_count"  extensions:"x-nullable"`
+	// DurationMS is a recording's length; 0 when unknown or not a recording.
+	DurationMS     int64   `json:"duration_ms"`
+	ChecksumSHA256 string  `json:"checksum_sha256,omitempty"`
+	ThumbnailURL   *string `json:"thumbnail_url" extensions:"x-nullable"`
+	URL            *string `json:"url"           extensions:"x-nullable"`
+
+	S3Key          string  `json:"-"`
+	ThumbnailS3Key *string `json:"-"`
+}
+
+// AssetListItem is one row of the asset list: the asset without its content.
+type AssetListItem struct {
+	ID    string    `json:"id"`
+	Title string    `json:"title"`
+	Type  *string   `json:"type"  extensions:"x-nullable"`
+	Kind  AssetKind `json:"kind"  swaggertype:"string" enums:"pdf,web,audio,note,image,document,spreadsheet,csv,presentation"`
+	// Status is the stored status; the status filter counts processing as
+	// pending.
+	Status      string    `json:"status" enums:"pending,processing,ready,partial,failed"`
+	FailureCode string    `json:"failure_code"`
+	SourceURL   *string   `json:"source_url" extensions:"x-nullable"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	// AnalysisStatus is the workspace analysis lens's status.
+	AnalysisStatus *AssetAnalysisStatus `json:"analysis_status" swaggertype:"string" enums:"pending,running,ready,failed,skipped" extensions:"x-nullable"`
+	File           *AssetListFile       `json:"file"            extensions:"x-nullable"`
+	Tags           []Tag                `json:"tags"`
+	// CampaignIDs are the live campaigns the asset serves, including those
+	// that draw on the whole bank.
+	CampaignIDs []string        `json:"campaign_ids"`
+	IdeaCounts  AssetIdeaCounts `json:"idea_counts"`
+	// Gist is one sentence of the workspace analysis; null unless that lens is
+	// ready and has a gist or a usable summary sentence.
+	Gist *string `json:"gist" extensions:"x-nullable"`
+	// Match is present only when the query has text.
+	Match *AssetTextMatch `json:"match,omitempty"`
+}
+
+// AssetFacetCount is how many assets have one value of a field.
+type AssetFacetCount struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// AssetQueryResult is one page of the asset list.
+type AssetQueryResult struct {
+	Assets []AssetListItem
+	// NextCursor continues the list; "" on the last page.
+	NextCursor string
+	// Total counts the assets matching every filter; TotalUnfiltered every
+	// asset in scope.
+	Total           int
+	TotalUnfiltered int
+	// Facets holds the counts of the requested fields. Each field's counts
+	// apply every other field's filter but not its own.
+	Facets map[string][]AssetFacetCount
+}

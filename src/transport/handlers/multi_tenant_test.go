@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +10,12 @@ import (
 	"github.com/gofiber/fiber/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/pgvector/pgvector-go"
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
@@ -24,8 +27,9 @@ import (
 // tenant-owned entity.
 var _ = Describe("Multi-tenant isolation (CON-97)", Ordered, func() {
 	var (
-		app *fiber.App
-		db  *bun.DB
+		app        *fiber.App
+		db         *bun.DB
+		chunksRepo repository.AssetChunksRepository
 	)
 
 	BeforeAll(func() { db = mustOpenTestDBWithMigrations() })
@@ -48,11 +52,14 @@ var _ = Describe("Multi-tenant isolation (CON-97)", Ordered, func() {
 		handlers.NewTenantsHandler(signup.New(db, repository.NewAccountRepository(db), tenantRepo, nil), tenantRepo, testCookieName, false, auth, nil).Register(app)
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
+		chunksRepo = repository.NewAssetChunksRepository(db)
+		assetFileRepo := repository.NewAssetFileRepository(db)
+		handlers.NewAssetsHandler(repository.NewAssetRepository(db, tagRepo, assetFileRepo), assetFileRepo, repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 	})
 
 	AfterEach(func() {
 		ctx := tenantCtx() // TableExpr deletes bypass hooks; tenant value is ignored
-		for _, t := range []string{"campaigns", "tags", "sessions", "users", "accounts"} {
+		for _, t := range []string{"assets_chunks", "assets", "campaigns", "tags", "sessions", "users", "accounts"} {
 			_, _ = db.NewDelete().TableExpr(t).Where("1 = 1").Exec(ctx)
 		}
 		_, _ = db.NewDelete().Model((*models.Tenant)(nil)).Where("id <> ?", models.DefaultTenantID).Exec(ctx)
@@ -167,6 +174,60 @@ var _ = Describe("Multi-tenant isolation (CON-97)", Ordered, func() {
 		var c models.Campaign
 		Expect(json.NewDecoder(resp.Body).Decode(&c)).To(Succeed())
 		Expect(c.Name).To(Equal("Acme Campaign"))
+	})
+
+	It("lists, counts and searches only the caller's assets", func() {
+		a := signup("Acme", "a@acme.test")
+		b := signup("Beta", "b@beta.test")
+		createTag(a, "Acme tag")
+		createTag(b, "Beta tag")
+		// seed stores an asset whose one chunk mentions "overwintering" under the
+		// named tenant.
+		seed := func(tenantName, assetID string) {
+			GinkgoHelper()
+			sys := tenantctx.WithSystem(context.Background())
+			var tenant models.Tenant
+			Expect(db.NewSelect().Model(&tenant).Where("name = ?", tenantName).Scan(sys)).To(Succeed())
+			var owner models.User
+			Expect(db.NewSelect().Model(&owner).Where("tenant_id = ?", tenant.ID).Limit(1).Scan(sys)).To(Succeed())
+			ctx := tenantctx.With(context.Background(), tenant.ID)
+			_, err := db.NewInsert().Model(&models.Asset{
+				ID: assetID, Title: assetID, Content: "c", Status: models.AssetStatusReady, TagIDs: models.StringSlice{}, CreatedBy: owner.ID,
+			}).Exec(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(chunksRepo.UpsertChunks(ctx, assetID, []models.AssetChunk{{
+				ID: assetID + ":0", AssetID: assetID, Content: tenantName + " notes on overwintering", TokenCount: 4,
+				Embedding: pgvector.NewHalfVector(make([]float32, 3072)), Model: "m",
+			}})).To(Succeed())
+		}
+		seed("Acme", "acme-asset")
+		seed("Beta", "beta-asset")
+
+		for cookie, want := range map[*http.Cookie]string{a: "acme-asset", b: "beta-asset"} {
+			for _, query := range []string{"", "?text=overwintering&facets=tag,campaign,kind", "?ids_only=true"} {
+				resp := withCookie("GET", "/api/content-bank/assets"+query, cookie, nil)
+				Expect(resp.StatusCode).To(Equal(200))
+				var body struct {
+					Assets []struct {
+						ID string `json:"id"`
+					} `json:"assets"`
+					IDs             []string                            `json:"ids"`
+					TotalUnfiltered int                                 `json:"total_unfiltered"`
+					Facets          map[string][]models.AssetFacetCount `json:"facets"`
+				}
+				Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+				if query == "?ids_only=true" {
+					Expect(body.IDs).To(Equal([]string{want}))
+					continue
+				}
+				Expect(body.Assets).To(HaveLen(1))
+				Expect(body.Assets[0].ID).To(Equal(want))
+				Expect(body.TotalUnfiltered).To(Equal(1))
+				if tags := body.Facets["tag"]; tags != nil {
+					Expect(tags).To(HaveLen(2)) // the caller's one tag, then none
+				}
+			}
+		}
 	})
 
 	It("isolates tags across tenants", func() {

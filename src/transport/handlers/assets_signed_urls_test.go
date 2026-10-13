@@ -66,7 +66,7 @@ var _ = Describe("AssetsHandler signed image links in scraped Markdown", Ordered
 	})
 
 	AfterEach(func() {
-		for _, tbl := range []string{"asset_images", "assets_chunks", "assets", "sessions", "users", "accounts"} {
+		for _, tbl := range []string{"asset_images", "assets_chunks", "asset_files", "assets", "sessions", "users", "accounts"} {
 			_, err := db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(context.Background())
 			Expect(err).NotTo(HaveOccurred())
 		}
@@ -126,7 +126,7 @@ var _ = Describe("AssetsHandler signed image links in scraped Markdown", Ordered
 		}
 	}
 
-	It("signs the image links on GET and on the list", func() {
+	It("signs the image links on GET", func() {
 		id, _, keys := seedScrapedAsset()
 
 		resp := do("GET", "/api/content-bank/assets/"+id, nil)
@@ -134,13 +134,27 @@ var _ = Describe("AssetsHandler signed image links in scraped Markdown", Ordered
 		var one models.Asset
 		Expect(json.NewDecoder(resp.Body).Decode(&one)).To(Succeed())
 		expectSigned(one, keys)
+	})
 
-		resp = do("GET", "/api/content-bank/assets", nil)
+	It("signs the file and thumbnail links on the list", func() {
+		id, _, _ := seedScrapedAsset()
+		key, thumb := "t/"+models.DefaultTenantID+"/assets/"+id+"/original.pdf", "t/"+models.DefaultTenantID+"/assets/"+id+"/thumb.png"
+		_, err := db.NewInsert().Model(&models.AssetFile{
+			ID: "file-" + id, AssetID: id, OriginalName: "a.pdf", MimeType: "application/pdf",
+			S3Key: key, ThumbnailS3Key: &thumb,
+		}).Exec(tctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		resp := do("GET", "/api/content-bank/assets", nil)
 		Expect(resp.StatusCode).To(Equal(fiber.StatusOK))
-		var list []models.Asset
-		Expect(json.NewDecoder(resp.Body).Decode(&list)).To(Succeed())
-		Expect(list).To(HaveLen(1))
-		expectSigned(list[0], keys)
+		var page struct {
+			Assets []models.AssetListItem `json:"assets"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&page)).To(Succeed())
+		Expect(page.Assets).To(HaveLen(1))
+		Expect(page.Assets[0].File).NotTo(BeNil())
+		Expect(page.Assets[0].File.URL).To(HaveValue(Equal(signed + key)))
+		Expect(page.Assets[0].File.ThumbnailURL).To(HaveValue(Equal(signed + thumb)))
 	})
 
 	It("stores the public links when a save echoes the signed Markdown back", func() {
