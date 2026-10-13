@@ -80,7 +80,7 @@ func (j *jobRecorder) EnqueueReanalyzeCampaign(_ context.Context, _, campaignID 
 
 func answer(ideas ...string) func(asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error) {
 	return func(req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error) {
-		a := asset_analysis.Analysis{Language: "en", Summary: "Summary of " + req.Source.Title, KeyPoints: []string{"k"}}
+		a := asset_analysis.Analysis{Language: "en", Gist: "Gist of " + req.Source.Title, Summary: "Summary of " + req.Source.Title, KeyPoints: []string{"k"}}
 		for _, title := range ideas {
 			a.Ideas = append(a.Ideas, asset_analysis.Idea{Title: title, Angle: "angle", Rationale: "why", SourceLabels: []string{"Part 1"}})
 		}
@@ -188,7 +188,7 @@ func TestRunWorkspaceLensStoresAnalysisAndIdeas(t *testing.T) {
 	run(t, f, "md-1", nil)
 
 	a := f.lens(t, "md-1", nil)
-	if a.Status != models.AssetAnalysisStatusReady || a.Summary != "Summary of Asset md-1" || a.ModelID != "test-model" ||
+	if a.Status != models.AssetAnalysisStatusReady || a.Gist != "Gist of Asset md-1" || a.Summary != "Summary of Asset md-1" || a.ModelID != "test-model" ||
 		a.Strategy == nil || *a.Strategy != models.AssetAnalysisStrategyFull || a.AnalyzedAt == nil {
 		t.Fatalf("lens = %+v", a)
 	}

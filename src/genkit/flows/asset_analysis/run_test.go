@@ -47,6 +47,7 @@ const meetingReply = `Here you go:
 ` + "```json" + `
 {
   "language": "EN",
+  "gist": "  The **launch plan**, its   new date\nand who owns it.  ",
   "summary": "The team agreed the launch plan.",
   "ideas": [
     {"title": "Why we moved the launch", "angle": "Behind the scenes", "rationale": "Fits the brief", "sourceLabels": ["00:10–00:40", "99:99"]},
@@ -107,6 +108,12 @@ func TestAnalyzeFullContextCleansTheReply(t *testing.T) {
 	a := resp.Analysis
 	if a.Language != "en" || len(a.KeyPoints) != 1 {
 		t.Errorf("language=%q keyPoints=%v", a.Language, a.KeyPoints)
+	}
+	if a.Gist != "The launch plan, its new date and who owns it." {
+		t.Errorf("gist = %q, want it trimmed, collapsed and plain", a.Gist)
+	}
+	if !strings.Contains(s.calls[0].System, `"gist"`) {
+		t.Error("system prompt does not ask for the gist")
 	}
 	if len(a.Ideas) != 1 || a.Ideas[0].Title != "Why we moved the launch" || len(a.Ideas[0].SourceLabels) != 1 {
 		t.Errorf("ideas = %+v, want the one new idea with its one real label", a.Ideas)
