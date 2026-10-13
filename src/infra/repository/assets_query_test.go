@@ -245,6 +245,9 @@ func TestAssetQuery_Filters(t *testing.T) {
 		{"ideas_not", models.AssetQuery{Ideas: noneOf("unread")}, []string{fxPDF, fxWeb}},
 		{"updated window", models.AssetQuery{UpdatedAfter: &since}, []string{fxPDF, fxWeb}},
 		{"updated before", models.AssetQuery{UpdatedBefore: new(fx.now.Add(-75 * 24 * time.Hour))}, []string{fxAudio, fxImage}},
+		{"created window", models.AssetQuery{CreatedAfter: &since}, []string{fxPDF, fxWeb}},
+		{"created before", models.AssetQuery{CreatedBefore: new(fx.now.Add(-75 * 24 * time.Hour))}, []string{fxAudio, fxImage}},
+		{"created, oldest first", models.AssetQuery{Sort: models.AssetSortCreatedAsc, Kind: anyOf("pdf", "web", "note")}, []string{fxNote, fxWeb, fxPDF}},
 		{"checksum", models.AssetQuery{Checksums: []string{fxChecksum}}, []string{fxPDF}},
 		{"text", models.AssetQuery{Text: "overwinter"}, []string{fxPDF, fxWeb}},
 		{"text of stopwords only", models.AssetQuery{Text: "the and"}, nil},
@@ -433,8 +436,11 @@ func TestAssetQuery_FacetsAgreeWithFilters(t *testing.T) {
 				case models.AssetFacetIdeas:
 					q.Ideas = anyOf(c.Value)
 				case models.AssetFacetUpdated:
-					since, _ := models.AssetUpdatedSince(c.Value, fx.now, loc)
+					since, _ := models.AssetDateSince(c.Value, fx.now, loc)
 					q.UpdatedAfter, q.UpdatedBefore = &since, nil
+				case models.AssetFacetCreated:
+					since, _ := models.AssetDateSince(c.Value, fx.now, loc)
+					q.CreatedAfter, q.CreatedBefore = &since, nil
 				}
 				if total := fx.run(t, q).Total; total != c.Count {
 					t.Errorf("base %d: facet %s=%s counts %d, filtering by it gives %d", bi, field, c.Value, c.Count, total)

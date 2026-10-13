@@ -3520,7 +3520,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Filters, counts and pages the workspace's assets, without their content (GET /:id has it).\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its `_not` twin excludes values. Different fields combine with AND. `campaign` and `tag` take ids plus `none` (in no campaign, untagged). An asset belongs to every live campaign listing it and to every campaign that draws on the whole bank. `ideas` matches an asset with at least one analysis idea of that verdict (`undecided`, `yes`, `later`, `no`; a `later` idea whose reminder has passed counts as `undecided`), `none` an analysed asset without ideas, `unread` one with no finished analysis. `status=pending` includes assets still processing. `updated_after` is inclusive, `updated_before` exclusive.\n\n`text` searches inside the assets (full-text with English stemming; \"quoted phrases\", `-word` and `or` work) and adds `match` to each row: the number of matching chunks and the best one's `snippet` (HTML-escaped, matched words in `\u003cmark\u003e`), `source_label` and `chunk_index`.\n\n`scope_campaign` confines the whole read, totals and counts included, to one campaign's assets; the campaign facet is not returned there. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value, with 0 for those nothing matches. The `updated` presets are since the start of today (`1d`), of the day 6 or 29 days ago (`7d`, `30d`) and of the month (`month`), in `tz`.\n\n`ids_only=true` returns `{ids}`: every matching id in sort order, unpaginated.",
+                "description": "Filters, counts and pages the workspace's assets, without their content (GET /:id has it).\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its `_not` twin excludes values. Different fields combine with AND. `campaign` and `tag` take ids plus `none` (in no campaign, untagged). An asset belongs to every live campaign listing it and to every campaign that draws on the whole bank. `ideas` matches an asset with at least one analysis idea of that verdict (`undecided`, `yes`, `later`, `no`; a `later` idea whose reminder has passed counts as `undecided`), `none` an analysed asset without ideas, `unread` one with no finished analysis. `status=pending` includes assets still processing. `updated_after` is inclusive, `updated_before` exclusive.\n\n`text` searches inside the assets (full-text with English stemming; \"quoted phrases\", `-word` and `or` work) and adds `match` to each row: the number of matching chunks and the best one's `snippet` (HTML-escaped, matched words in `\u003cmark\u003e`), `source_label` and `chunk_index`.\n\n`scope_campaign` confines the whole read, totals and counts included, to one campaign's assets; the campaign facet is not returned there. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value, with 0 for those nothing matches. The date presets of `updated` and `created`, as filters and facets, are since the start of today (`1d`), of the day 6 or 29 days ago (`7d`, `30d`) and of the month (`month`), in `tz`.\n\nEvery row carries `next_idea`: the oldest of the ideas `idea_counts.undecided` counts (`{id, title}`), null exactly when that count is 0. `ideas_undecided_total` sums `idea_counts.undecided` over every matching asset, not just the page.\n\n`group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). Paging runs across groups, so a group may span pages. `ideas` groups are `undecided`, `answered` (ideas, none undecided) and `none`; `created` groups are the disjoint bands `1d` (today), `7d` (the 6 days before), `30d` (the 23 days before those) and `earlier`; `kind` groups follow the kind order; `campaign` and `tag` groups go by name with `none` last, and list an asset under each of its campaigns or tags that the field's filter allows, so `groups` counts appearances while `total` counts assets.\n\n`ids_only=true` returns `{ids}`: every matching id in sort order, unpaginated.",
                 "produces": [
                     "application/json"
                 ],
@@ -3615,6 +3615,30 @@
                     },
                     {
                         "type": "string",
+                        "description": "Preset start of the updated window: 1d, 7d, 30d, month (not with updated_after)",
+                        "name": "updated",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339, inclusive",
+                        "name": "created_after",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339, exclusive",
+                        "name": "created_before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Preset start of the created window: 1d, 7d, 30d, month (not with created_after)",
+                        "name": "created",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
                         "description": "SHA-256 sums of asset files",
                         "name": "checksum",
                         "in": "query"
@@ -3633,7 +3657,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "-updated_at (default), updated_at, title, -title, -ideas_undecided, relevance (needs text)",
+                        "description": "-updated_at (default), updated_at, -created_at, created_at, title, -title, -ideas_undecided, relevance (needs text)",
                         "name": "sort",
                         "in": "query"
                     },
@@ -3651,13 +3675,19 @@
                     },
                     {
                         "type": "string",
-                        "description": "kind, status, campaign, tag, ideas, updated",
+                        "description": "kind, status, campaign, tag, ideas, updated, created",
                         "name": "facets",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "IANA time zone of the updated presets (default UTC)",
+                        "description": "ideas, campaign, tag, kind, created",
+                        "name": "group",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone of the date presets and created groups (default UTC)",
                         "name": "tz",
                         "in": "query"
                     },
@@ -12685,6 +12715,17 @@
                         }
                     }
                 },
+                "groups": {
+                    "description": "Groups lists, with group, every non-empty group of the whole match with\nits row count, in display order; empty without group.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AssetGroupCount"
+                    }
+                },
+                "ideas_undecided_total": {
+                    "description": "IdeasUndecidedTotal sums idea_counts.undecided over every asset total\ncounts, not just this page.",
+                    "type": "integer"
+                },
                 "ids": {
                     "description": "IDs is present only with ids_only=true, and then it is the whole body\n(an assetIDsResponse): every matching id in sort order, unpaginated.\nSwagger allows one schema per status, so the list schema carries it.",
                     "type": "array",
@@ -15208,6 +15249,11 @@
                 "origin_ref": {
                     "$ref": "#/definitions/models.AssetOriginRef"
                 },
+                "published_at": {
+                    "description": "PublishedAt is when the source was published, read from its metadata at\ningest (a web page's published time, a PDF's creation date); nil when\nunknown.",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "source_url": {
                     "description": "SourceURL is the origin URL for URL-scraped assets; nil for\nMD/PDF/text assets. Unique per tenant, so re-submitting a URL refreshes\nthe same asset instead of duplicating it.",
                     "type": "string"
@@ -15356,6 +15402,17 @@
                 }
             }
         },
+        "models.AssetGroupCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "key": {
+                    "type": "string"
+                }
+            }
+        },
         "models.AssetIdeaCounts": {
             "type": "object",
             "properties": {
@@ -15477,6 +15534,10 @@
                     "type": "string",
                     "x-nullable": true
                 },
+                "group_key": {
+                    "description": "GroupKey is the group the row is listed under, present only when the\nquery groups: a tag or campaign id, a kind, an ideas or created key, or\nnone.",
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -15504,6 +15565,20 @@
                             "$ref": "#/definitions/models.AssetTextMatch"
                         }
                     ]
+                },
+                "next_idea": {
+                    "description": "NextIdea is the oldest of the ideas IdeaCounts.Undecided counts; null\nexactly when that count is 0.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.AssetNextIdea"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "published_at": {
+                    "description": "PublishedAt is when the source was published, read from its metadata at\ningest; null when unknown.",
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "source_url": {
                     "type": "string",
@@ -15534,6 +15609,17 @@
                     "x-nullable": true
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.AssetNextIdea": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "title": {
                     "type": "string"
                 }
             }
