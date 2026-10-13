@@ -168,9 +168,10 @@ type WorkspaceDigest struct {
 	SummaryHead string
 }
 
-// summaryHeadRunes bounds the summary read for the gist fallback; the first
-// prose sentence sits well inside it.
-const summaryHeadRunes = 800
+// summaryHeadRunes bounds the summary read for the gist fallback. It matches
+// the flow's summary cap, so a summary that opens with long headings and
+// lists still reaches its first prose paragraph.
+const summaryHeadRunes = 4000
 
 func (r *assetAnalysisRepository) WorkspaceDigests(ctx context.Context, assetIDs []string) (map[string]WorkspaceDigest, error) {
 	out := make(map[string]WorkspaceDigest, len(assetIDs))
