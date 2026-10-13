@@ -3526,7 +3526,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns all content bank assets ordered by creation date.",
+                "description": "Filters, counts and pages the workspace's assets, without their content (GET /:id has it).\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its ` + "`" + `_not` + "`" + ` twin excludes values. Different fields combine with AND. ` + "`" + `campaign` + "`" + ` and ` + "`" + `tag` + "`" + ` take ids plus ` + "`" + `none` + "`" + ` (in no campaign, untagged). An asset belongs to every live campaign listing it and to every campaign that draws on the whole bank. ` + "`" + `ideas` + "`" + ` matches an asset with at least one analysis idea of that verdict (` + "`" + `undecided` + "`" + `, ` + "`" + `yes` + "`" + `, ` + "`" + `later` + "`" + `, ` + "`" + `no` + "`" + `; a ` + "`" + `later` + "`" + ` idea whose reminder has passed counts as ` + "`" + `undecided` + "`" + `), ` + "`" + `none` + "`" + ` an analysed asset without ideas, ` + "`" + `unread` + "`" + ` one with no finished analysis. ` + "`" + `status=pending` + "`" + ` includes assets still processing. ` + "`" + `updated_after` + "`" + ` is inclusive, ` + "`" + `updated_before` + "`" + ` exclusive.\n\n` + "`" + `text` + "`" + ` searches inside the assets (full-text with English stemming; \"quoted phrases\", ` + "`" + `-word` + "`" + ` and ` + "`" + `or` + "`" + ` work) and adds ` + "`" + `match` + "`" + ` to each row: the number of matching chunks and the best one's ` + "`" + `snippet` + "`" + ` (HTML-escaped, matched words in ` + "`" + `\u003cmark\u003e` + "`" + `), ` + "`" + `source_label` + "`" + ` and ` + "`" + `chunk_index` + "`" + `.\n\n` + "`" + `scope_campaign` + "`" + ` confines the whole read, totals and counts included, to one campaign's assets; the campaign facet is not returned there. ` + "`" + `facets` + "`" + ` names the fields to count: each field's counts apply every other filter but not its own, and list every value, with 0 for those nothing matches. The ` + "`" + `updated` + "`" + ` presets are since the start of today (` + "`" + `1d` + "`" + `), of the day 6 or 29 days ago (` + "`" + `7d` + "`" + `, ` + "`" + `30d` + "`" + `) and of the month (` + "`" + `month` + "`" + `), in ` + "`" + `tz` + "`" + `.\n\n` + "`" + `ids_only=true` + "`" + ` returns ` + "`" + `{ids}` + "`" + `: every matching id in sort order, unpaginated.",
                 "produces": [
                     "application/json"
                 ],
@@ -3534,18 +3534,173 @@ const docTemplate = `{
                     "content-bank"
                 ],
                 "summary": "List assets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive title substrings",
+                        "name": "title",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Title substrings to exclude",
+                        "name": "title_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "pdf, web, audio, note, image, document, spreadsheet, csv, presentation",
+                        "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Kinds to exclude",
+                        "name": "kind_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "ready, partial, pending, failed",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Statuses to exclude",
+                        "name": "status_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids, or none",
+                        "name": "campaign",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids (or none) to exclude",
+                        "name": "campaign_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Tag ids, or none",
+                        "name": "tag",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Tag ids (or none) to exclude",
+                        "name": "tag_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "undecided, yes, later, no, none, unread",
+                        "name": "ideas",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Ideas values to exclude",
+                        "name": "ideas_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339, inclusive",
+                        "name": "updated_after",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339, exclusive",
+                        "name": "updated_before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "SHA-256 sums of asset files",
+                        "name": "checksum",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Text to find inside the assets (2–200 characters)",
+                        "name": "text",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign id to confine the read to",
+                        "name": "scope_campaign",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "-updated_at (default), updated_at, title, -title, -ideas_undecided, relevance (needs text)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "next_cursor of the previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "kind, status, campaign, tag, ideas, updated",
+                        "name": "facets",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone of the updated presets (default UTC)",
+                        "name": "tz",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Return every matching id instead of a page",
+                        "name": "ids_only",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "With ids_only=true the body is an assetIDsResponse instead",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/models.Asset"
+                            "$ref": "#/definitions/handlers.assetListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "code: invalid_filter | invalid_cursor | query_too_short | query_too_long",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "scope_campaign names no live campaign",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -12517,6 +12672,38 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.assetListResponse": {
+            "type": "object",
+            "properties": {
+                "assets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AssetListItem"
+                    }
+                },
+                "facets": {
+                    "description": "Facets holds, per requested field, every value with the number of\nassets that have it.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/models.AssetFacetCount"
+                        }
+                    }
+                },
+                "next_cursor": {
+                    "description": "NextCursor continues the list in the same sort; null on the last page.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "total_unfiltered": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.assetMembershipRequest": {
             "type": "object",
             "properties": {
@@ -15091,6 +15278,17 @@ const docTemplate = `{
                 }
             }
         },
+        "models.AssetFacetCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
         "models.AssetFile": {
             "type": "object",
             "properties": {
@@ -15157,6 +15355,23 @@ const docTemplate = `{
                 }
             }
         },
+        "models.AssetIdeaCounts": {
+            "type": "object",
+            "properties": {
+                "later": {
+                    "type": "integer"
+                },
+                "no": {
+                    "type": "integer"
+                },
+                "undecided": {
+                    "type": "integer"
+                },
+                "yes": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.AssetImage": {
             "type": "object",
             "properties": {
@@ -15193,6 +15408,135 @@ const docTemplate = `{
                 }
             }
         },
+        "models.AssetListFile": {
+            "type": "object",
+            "properties": {
+                "checksum_sha256": {
+                    "type": "string"
+                },
+                "duration_ms": {
+                    "description": "DurationMS is a recording's length; 0 when unknown or not a recording.",
+                    "type": "integer"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "page_count": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "thumbnail_url": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "url": {
+                    "type": "string",
+                    "x-nullable": true
+                }
+            }
+        },
+        "models.AssetListItem": {
+            "type": "object",
+            "properties": {
+                "analysis_status": {
+                    "description": "AnalysisStatus is the workspace analysis lens's status.",
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "running",
+                        "ready",
+                        "failed",
+                        "skipped"
+                    ],
+                    "x-nullable": true
+                },
+                "campaign_ids": {
+                    "description": "CampaignIDs are the live campaigns the asset serves, including those\nthat draw on the whole bank.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "failure_code": {
+                    "type": "string"
+                },
+                "file": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.AssetListFile"
+                        }
+                    ],
+                    "x-nullable": true
+                },
+                "gist": {
+                    "description": "Gist is one sentence of the workspace analysis; null unless that lens is\nready and has a gist or a usable summary sentence.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "id": {
+                    "type": "string"
+                },
+                "idea_counts": {
+                    "$ref": "#/definitions/models.AssetIdeaCounts"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "pdf",
+                        "web",
+                        "audio",
+                        "note",
+                        "image",
+                        "document",
+                        "spreadsheet",
+                        "csv",
+                        "presentation"
+                    ]
+                },
+                "match": {
+                    "description": "Match is present only when the query has text.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.AssetTextMatch"
+                        }
+                    ]
+                },
+                "source_url": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "status": {
+                    "description": "Status is the stored status; the status filter counts processing as\npending.",
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "processing",
+                        "ready",
+                        "partial",
+                        "failed"
+                    ]
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.Tag"
+                    }
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "models.AssetOriginRef": {
             "type": "object",
             "properties": {
@@ -15207,6 +15551,28 @@ const docTemplate = `{
                 },
                 "node_name": {
                     "type": "string"
+                }
+            }
+        },
+        "models.AssetTextMatch": {
+            "type": "object",
+            "properties": {
+                "chunk_index": {
+                    "description": "ChunkIndex is the best chunk's position in the asset.",
+                    "type": "integer"
+                },
+                "matches": {
+                    "description": "Matches is the number of the asset's chunks that match.",
+                    "type": "integer"
+                },
+                "snippet": {
+                    "description": "Snippet is an excerpt of the best chunk around the match, with HTML tags\nin the source dropped. It is HTML-escaped, with each matched word wrapped\nin \u003cmark\u003e…\u003c/mark\u003e (the only markup it contains), and starts or ends with\n\"…\" when it was cut from a longer chunk.",
+                    "type": "string"
+                },
+                "source_label": {
+                    "description": "SourceLabel cites where the best chunk sits in its source (\"Slide 4\",\n\"1:05–1:40\", \"Page 14\"). Null when the chunk has no location, as for\nnotes and web pages.",
+                    "type": "string",
+                    "x-nullable": true
                 }
             }
         },
