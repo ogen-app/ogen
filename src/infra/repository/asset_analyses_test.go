@@ -232,7 +232,7 @@ func TestAssetAnalysisDeleteLensAndAsset(t *testing.T) {
 // summary head is read (capped) only for lenses without one.
 func TestAssetAnalysisWorkspaceDigests(t *testing.T) {
 	f := newAnalysisFixture(t)
-	longSummary := strings.Repeat("Older analysis prose. ", 60) // > 800 runes
+	longSummary := strings.Repeat("Older analysis prose. ", 200) // > 4000 runes
 	for assetID, gist := range map[string]string{"with-gist": "Reference architectures for RAG.", "no-gist": ""} {
 		f.seedAsset(t, assetID)
 		a, err := f.analyses.Ensure(f.ctx, f.db, assetID, nil)
@@ -255,7 +255,7 @@ func TestAssetAnalysisWorkspaceDigests(t *testing.T) {
 		t.Fatalf("with-gist digest = %+v", d)
 	}
 	d := got["no-gist"]
-	if d.Gist != "" || utf8.RuneCountInString(d.SummaryHead) != 800 || !strings.HasPrefix(d.SummaryHead, "Older analysis prose.") {
+	if d.Gist != "" || utf8.RuneCountInString(d.SummaryHead) != 4000 || !strings.HasPrefix(d.SummaryHead, "Older analysis prose.") {
 		t.Fatalf("no-gist digest = gist %q, head %d runes", d.Gist, utf8.RuneCountInString(d.SummaryHead))
 	}
 }

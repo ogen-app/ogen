@@ -9,7 +9,9 @@ import (
 	"unicode/utf8"
 )
 
-// MaxRunes caps a gist, ellipsis included.
+// MaxRunes caps a gist, ellipsis included. The analysis prompt asks for at
+// most 140 characters; the cap leaves slack so a slight overrun is kept whole
+// instead of cut mid-sentence.
 const MaxRunes = 160
 
 var (
