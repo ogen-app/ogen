@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -96,8 +97,8 @@ type ScrapeResult struct {
 	SourceURL   string // the final URL after redirects (metadata.sourceURL)
 	StatusCode  int
 	ContentType string
-	// PublishedTime holds the page's published-time meta tags, most specific
-	// first; empty strings where a tag is absent.
+	// PublishedTime holds the values of the page's published-time meta tags,
+	// most specific tag first.
 	PublishedTime []string
 }
 
@@ -127,9 +128,9 @@ type scrapeResponse struct {
 			StatusCode  int        `json:"statusCode"`
 			ContentType string     `json:"contentType"`
 			// Firecrawl passes meta tags through under their own names.
-			PublishedTime        flexString `json:"publishedTime"`
-			ArticlePublishedTime flexString `json:"article:published_time"`
-			OGPublishedTime      flexString `json:"og:published_time"`
+			PublishedTime        flexStrings `json:"publishedTime"`
+			ArticlePublishedTime flexStrings `json:"article:published_time"`
+			OGPublishedTime      flexStrings `json:"og:published_time"`
 		} `json:"metadata"`
 	} `json:"data"`
 }
@@ -207,11 +208,11 @@ func (c *Client) Scrape(ctx context.Context, in ScrapeRequest) (*ScrapeResult, e
 		SourceURL:   out.Data.Metadata.SourceURL,
 		StatusCode:  out.Data.Metadata.StatusCode,
 		ContentType: out.Data.Metadata.ContentType,
-		PublishedTime: []string{
-			out.Data.Metadata.ArticlePublishedTime.String(),
-			out.Data.Metadata.OGPublishedTime.String(),
-			out.Data.Metadata.PublishedTime.String(),
-		},
+		PublishedTime: slices.Concat(
+			out.Data.Metadata.ArticlePublishedTime,
+			out.Data.Metadata.OGPublishedTime,
+			out.Data.Metadata.PublishedTime,
+		),
 	}, nil
 }
 
@@ -271,6 +272,26 @@ func (f *flexString) UnmarshalJSON(b []byte) error {
 }
 
 func (f flexString) String() string { return string(f) }
+
+// flexStrings decodes a field that may be a string or an array of strings,
+// keeping each value apart.
+type flexStrings []string
+
+func (f *flexStrings) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '[' {
+		return json.Unmarshal(b, (*[]string)(f))
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	*f = flexStrings{s}
+	return nil
+}
 
 // shortErrorMessage extracts a brief message from a Firecrawl error body,
 // falling back to a truncated raw body when the shape is unknown.

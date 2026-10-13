@@ -31,8 +31,8 @@ type assetListResponse struct {
 	NextCursor      *string `json:"next_cursor" extensions:"x-nullable"`
 	Total           int     `json:"total"`
 	TotalUnfiltered int     `json:"total_unfiltered"`
-	// IdeasUndecidedTotal sums idea_counts.undecided over every asset total
-	// counts, not just this page.
+	// IdeasUndecidedTotal sums idea_counts.undecided over every asset that
+	// total counts, not just this page.
 	IdeasUndecidedTotal int `json:"ideas_undecided_total"`
 	// Facets holds, per requested field, every value with the number of
 	// assets that have it.

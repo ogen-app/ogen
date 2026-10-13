@@ -4,6 +4,7 @@ package pubdate
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -54,7 +55,10 @@ var (
 // /CreationDate, else the XMP packet's xmp:CreateDate. Either can sit in a
 // compressed object stream, where it is not found.
 func PDF(raw []byte, now time.Time) (time.Time, bool) {
-	if m := infoCreation.FindSubmatch(raw); m != nil {
+	// An incremental update appends a newer Info dictionary, so the last
+	// plausible date wins.
+	matches := infoCreation.FindAllSubmatch(raw, -1)
+	for _, m := range slices.Backward(matches) {
 		if t, ok := pdfDate(m); ok && plausible(t, now) {
 			return t, true
 		}
@@ -90,7 +94,14 @@ func pdfDate(m [][]byte) (time.Time, bool) {
 		}
 		loc = time.FixedZone("", offset)
 	}
-	t := time.Date(num(1, 0), time.Month(month), day, num(4, 0), num(5, 0), num(6, 0), 0, loc)
+	year, hour, minute, sec := num(1, 0), num(4, 0), num(5, 0), num(6, 0)
+	t := time.Date(year, time.Month(month), day, hour, minute, sec, 0, loc)
+	// time.Date normalises out-of-range parts (Feb 31 becomes March); such a
+	// date is not the one the file holds.
+	if t.Year() != year || int(t.Month()) != month || t.Day() != day ||
+		t.Hour() != hour || t.Minute() != minute || t.Second() != sec {
+		return time.Time{}, false
+	}
 	return t.UTC(), true
 }
 
