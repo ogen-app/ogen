@@ -6,18 +6,15 @@
 -- typed, not text that merely means something similar (that is what the
 -- embedding column is for).
 --
--- content_tsv is a STORED generated column, so the ALTER fills it for every
--- existing chunk and UpsertChunks' inserts get it on write with no code change.
--- The 'english' config stems ("cycles" finds "cycle") and drops stopwords;
+-- An expression index rather than a stored generated column: adding a stored
+-- column rewrites assets_chunks and rebuilds its HNSW embedding index under an
+-- exclusive lock. Queries must spell the expression exactly as below,
+-- to_tsvector('english', content), for the planner to use the index. The
+-- 'english' config stems ("cycles" finds "cycle") and drops stopwords;
 -- non-English words pass through unstemmed, so they still match exactly.
--- Adding a stored generated column rewrites the table under an exclusive lock,
--- which is fine at today's chunk counts.
-ALTER TABLE assets_chunks
-    ADD COLUMN content_tsv tsvector
-    GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
-
 -- Plain (not CONCURRENTLY) builds: the migration runs in one transaction.
-CREATE INDEX idx_assets_chunks_content_tsv ON assets_chunks USING gin (content_tsv);
+CREATE INDEX idx_assets_chunks_content_tsv
+    ON assets_chunks USING gin (to_tsvector('english', content));
 
 -- The default order of the list, and its keyset cursor.
 CREATE INDEX idx_assets_tenant_updated ON assets (tenant_id, updated_at DESC, id DESC);

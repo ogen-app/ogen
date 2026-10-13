@@ -223,8 +223,9 @@ var _ = Describe("Multi-tenant isolation (CON-97)", Ordered, func() {
 				Expect(body.Assets).To(HaveLen(1))
 				Expect(body.Assets[0].ID).To(Equal(want))
 				Expect(body.TotalUnfiltered).To(Equal(1))
-				if tags := body.Facets["tag"]; tags != nil {
-					Expect(tags).To(HaveLen(2)) // the caller's one tag, then none
+				if query != "" {
+					Expect(body.Facets).To(HaveKey("tag"))
+					Expect(body.Facets["tag"]).To(HaveLen(2)) // the caller's one tag, then none
 				}
 			}
 		}

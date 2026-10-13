@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,8 @@ var assetQueryPerfSeed = []string{
 // seeds about a minute's worth of data, so it runs only with ASSET_QUERY_PERF
 // set. The budget is checked against the main statement's server-side time;
 // wall-clock p50/p95 (which add the hydration round trips and whatever else
-// the machine is doing) are logged. ASSET_QUERY_EXPLAIN also logs the plan.
+// the machine is doing) are logged. ASSET_QUERY_EXPLAIN=<n> also logs the
+// plan of the n-th scenario (0-based).
 func TestAssetQuery_Performance(t *testing.T) {
 	if os.Getenv("ASSET_QUERY_PERF") == "" {
 		t.Skip("set ASSET_QUERY_PERF=1 to measure the asset list at 5k assets / 100k chunks / 20k ideas")
@@ -92,7 +94,8 @@ func TestAssetQuery_Performance(t *testing.T) {
 		{"campaign scope, all facets", models.AssetQuery{Facets: models.AssetFacets, ScopeCampaign: "pc-5"}, 250 * time.Millisecond},
 		{"undecided sort, page 1", models.AssetQuery{Sort: models.AssetSortIdeasUndecided}, 250 * time.Millisecond},
 		{"rare text, all facets", models.AssetQuery{Facets: models.AssetFacets, Text: "overwintering", Sort: models.AssetSortRelevance}, 0},
-		{"common text, all facets", models.AssetQuery{Facets: models.AssetFacets, Text: "lorem"}, 0},
+		{"frequent text, all facets", models.AssetQuery{Facets: models.AssetFacets, Text: "honey"}, 0},
+		{"text in every chunk, all facets", models.AssetQuery{Facets: models.AssetFacets, Text: "lorem"}, 0},
 	}
 	hook := &lastQueryHook{}
 	db.AddQueryHook(hook)
@@ -129,7 +132,7 @@ func TestAssetQuery_Performance(t *testing.T) {
 			t.Fatal(err)
 		}
 		server := serverTime(hook.main)
-		if i == 0 && os.Getenv("ASSET_QUERY_EXPLAIN") != "" {
+		if os.Getenv("ASSET_QUERY_EXPLAIN") == strconv.Itoa(i) {
 			var plan []string
 			if err := db.NewRaw("EXPLAIN (ANALYZE, BUFFERS) "+hook.main).Scan(ctx, &plan); err != nil {
 				t.Fatal(err)
@@ -150,7 +153,7 @@ func TestAssetQuery_Performance(t *testing.T) {
 		}
 		slices.Sort(times)
 		p50, p95 := times[runs/2], times[runs*95/100-1]
-		t.Logf("%-28s p50 %6s  p95 %6s  server best %6s", sc.name,
+		t.Logf("%-32s p50 %6s  p95 %6s  server best %6s", sc.name,
 			p50.Round(time.Millisecond), p95.Round(time.Millisecond), server.Round(time.Millisecond))
 		if sc.budget > 0 && server > sc.budget {
 			t.Errorf("%s: server time %s over the %s budget", sc.name, server, sc.budget)

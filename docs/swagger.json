@@ -3670,7 +3670,7 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "With ids_only=true the body is an assetIDsResponse instead",
+                        "description": "With ids_only=true only ids is present",
                         "schema": {
                             "$ref": "#/definitions/handlers.assetListResponse"
                         }
@@ -12683,6 +12683,13 @@
                         "items": {
                             "$ref": "#/definitions/models.AssetFacetCount"
                         }
+                    }
+                },
+                "ids": {
+                    "description": "IDs is present only with ids_only=true, and then it is the whole body\n(an assetIDsResponse): every matching id in sort order, unpaginated.\nSwagger allows one schema per status, so the list schema carries it.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
                     }
                 },
                 "next_cursor": {
