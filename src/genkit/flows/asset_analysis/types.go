@@ -121,10 +121,11 @@ type Idea struct {
 }
 
 // Analysis is the model's structured output after server-side clean-up.
-// Field order is the order the prompt asks for: ideas sit right after the
-// summary so a truncated reply still carries them.
+// Field order is the order the prompt asks for: the gist leads and ideas sit
+// right after the summary so a truncated reply still carries them.
 type Analysis struct {
 	Language      string        `json:"language"      jsonschema:"description=ISO 639-1 code of the language the analysis is written in"`
+	Gist          string        `json:"gist"          jsonschema:"description=One sentence, at most 140 characters, saying what this source offers a content marketer — no preamble like 'This document'"`
 	Summary       string        `json:"summary"       jsonschema:"description=150-400 word markdown summary"`
 	Ideas         []Idea        `json:"ideas"         jsonschema:"description=5 to 10 post ideas"`
 	KeyPoints     []string      `json:"keyPoints"     jsonschema:"description=Up to 10 key points"`

@@ -195,7 +195,7 @@ func (r *assetAnalysisRepository) SaveResult(ctx context.Context, tx bun.Tx, a *
 	a.UpdatedAt = time.Now().UTC()
 	if _, err := tx.NewUpdate().
 		Model(a).
-		Column("status", "strategy", "summary", "result", "language", "partial_source", "truncated",
+		Column("status", "strategy", "gist", "summary", "result", "language", "partial_source", "truncated",
 			"source_tokens", "context_fingerprint", "model_id", "failure_code", "failure_reason",
 			"analyzed_at", "updated_at").
 		WherePK().

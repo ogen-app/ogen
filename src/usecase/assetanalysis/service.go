@@ -312,6 +312,7 @@ func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.Anal
 	if resp.Strategy != "" {
 		row.Strategy = new(models.AssetAnalysisStrategy(resp.Strategy))
 	}
+	row.Gist = resp.Analysis.Gist
 	row.Summary = resp.Analysis.Summary
 	row.Result = toResult(resp)
 	row.Language = resp.Analysis.Language

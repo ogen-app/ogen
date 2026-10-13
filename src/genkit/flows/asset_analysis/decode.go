@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
+	"github.com/ogen-app/ogen/src/kernel/textgist"
 )
 
 // Output limits. The prompt asks for these; the server enforces them.
@@ -50,6 +51,7 @@ type cleaner struct {
 func (c cleaner) clean(a Analysis) Analysis {
 	out := Analysis{
 		Language:  strings.ToLower(strings.TrimSpace(a.Language)),
+		Gist:      textgist.Clean(a.Gist),
 		Summary:   clampRunes(strings.TrimSpace(a.Summary), maxSummaryRunes),
 		Ideas:     c.ideas(a.Ideas),
 		KeyPoints: cleanStrings(a.KeyPoints, maxKeyPoints),
