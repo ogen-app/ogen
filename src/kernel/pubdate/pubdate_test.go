@@ -47,6 +47,12 @@ func TestPDF(t *testing.T) {
 		{"xmp attribute", `<rdf:Description xmp:CreateDate="2021-06-30T12:00:00+00:00">`, time.Date(2021, 6, 30, 12, 0, 0, 0, time.UTC), true},
 		{"bad month falls back to xmp", "/CreationDate (D:20241399) <xmp:CreateDate>2020-02-02</xmp:CreateDate>",
 			time.Date(2020, 2, 2, 0, 0, 0, 0, time.UTC), true},
+		{"normalised date rejected", "/CreationDate (D:20240231)", time.Time{}, false},
+		{"bad hour rejected", "/CreationDate (D:2024010125)", time.Time{}, false},
+		{"last info date wins", "/CreationDate (D:20100101) ... /CreationDate (D:20230707)",
+			time.Date(2023, 7, 7, 0, 0, 0, 0, time.UTC), true},
+		{"last plausible info date", "/CreationDate (D:20100101) /CreationDate (D:20990101)",
+			time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), true},
 		{"none", "%PDF-1.7 stream compressed", time.Time{}, false},
 	}
 	for _, tc := range cases {

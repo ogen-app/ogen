@@ -12729,7 +12729,7 @@ const docTemplate = `{
                     }
                 },
                 "ideas_undecided_total": {
-                    "description": "IdeasUndecidedTotal sums idea_counts.undecided over every asset total\ncounts, not just this page.",
+                    "description": "IdeasUndecidedTotal sums idea_counts.undecided over every asset that\ntotal counts, not just this page.",
                     "type": "integer"
                 },
                 "ids": {

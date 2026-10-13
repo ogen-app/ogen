@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -22,7 +23,7 @@ func TestScrape_Success(t *testing.T) {
 		gotPath = r.URL.Path
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &gotBody)
-		_, _ = w.Write([]byte(`{"success":true,"data":{"markdown":"# Hello","metadata":{"title":"Hi","description":"d","sourceURL":"https://ex.com/final","statusCode":200,"contentType":"text/html","article:published_time":"2025-08-14T09:30:00Z","publishedTime":"2025-08-01"}}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"markdown":"# Hello","metadata":{"title":"Hi","description":"d","sourceURL":"https://ex.com/final","statusCode":200,"contentType":"text/html","article:published_time":["not a date","2025-08-14T09:30:00Z"],"publishedTime":"2025-08-01"}}}`))
 	}))
 	defer srv.Close()
 
@@ -41,7 +42,7 @@ func TestScrape_Success(t *testing.T) {
 		t.Fatalf("request body not as expected: %+v", gotBody)
 	}
 	if res.Markdown != "# Hello" || res.Title != "Hi" || res.SourceURL != "https://ex.com/final" ||
-		res.PublishedTime[0] != "2025-08-14T09:30:00Z" || res.PublishedTime[2] != "2025-08-01" {
+		!slices.Equal(res.PublishedTime, []string{"not a date", "2025-08-14T09:30:00Z", "2025-08-01"}) {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 }
