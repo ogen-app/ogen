@@ -14998,6 +14998,11 @@ const docTemplate = `{
                 "file": {
                     "$ref": "#/definitions/models.AssetFile"
                 },
+                "gist": {
+                    "description": "Gist is one sentence of the workspace analysis, hydrated by the handler;\nnil unless the workspace lens is ready and has a gist or a usable summary\nsentence.",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "id": {
                     "type": "string"
                 },
@@ -15097,6 +15102,10 @@ const docTemplate = `{
                 },
                 "created_at": {
                     "type": "string"
+                },
+                "duration_ms": {
+                    "description": "DurationMs is a recording's length in milliseconds, measured by the audio\npipeline. 0 when unknown or not a recording.",
+                    "type": "integer"
                 },
                 "height": {
                     "type": "integer"

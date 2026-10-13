@@ -33,9 +33,8 @@ type AssetFile struct {
 	Height         int    `bun:"height,notnull,default:0"                     json:"height"`
 	IsAnimated     bool   `bun:"is_animated,notnull,default:false"            json:"is_animated"`
 	ChecksumSHA256 string `bun:"checksum_sha256"                              json:"checksum_sha256,omitempty"`
-	// DurationMs is a recording's length, written by the audio pipeline at
-	// probe and again after normalize. 0 when unknown or not a recording.
-	// Upsert leaves it alone: only SetDuration writes it.
+	// DurationMs is a recording's length in milliseconds, measured by the audio
+	// pipeline. 0 when unknown or not a recording.
 	DurationMs int64     `bun:"duration_ms,notnull,default:0"                json:"duration_ms"`
 	CreatedAt  time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt  time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
