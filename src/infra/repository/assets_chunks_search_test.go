@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -179,6 +180,11 @@ func TestAssetChunks_SearchTextEvidenceOnlyOnLeadingResults(t *testing.T) {
 		if want := i < repository.SearchTextEvidenceLimit; withEvidence != want {
 			t.Errorf("result %d (%s): evidence = %v, want %v", i, m.AssetID, withEvidence, want)
 		}
+	}
+	// Past the evidence rows there is no score, so equal counts go by asset ID.
+	tail := got[repository.SearchTextEvidenceLimit:]
+	if !slices.IsSortedFunc(tail, func(a, b repository.AssetTextMatch) int { return strings.Compare(a.AssetID, b.AssetID) }) {
+		t.Errorf("results past the evidence limit are not in asset ID order: %+v", tail)
 	}
 }
 

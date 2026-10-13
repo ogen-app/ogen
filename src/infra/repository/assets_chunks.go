@@ -40,9 +40,11 @@ type AssetChunksRepository interface {
 	// SearchText answers "which of the tenant's assets mention this text":
 	// a full-text match of query (websearch syntax, so "quoted phrases" match as
 	// phrases) against chunk content, one row per asset, the assets with the
-	// most matching chunks first (ties by best-chunk score), at most limit rows,
-	// plus the number of matching assets before the limit. Backed by the GIN
-	// index on assets_chunks.content_tsv.
+	// most matching chunks first, at most limit rows, plus the number of
+	// matching assets before the limit. Equal counts are ordered by asset ID,
+	// except among the leading SearchTextEvidenceLimit rows, which carry a
+	// score and order ties by it. Backed by the GIN index on
+	// assets_chunks.content_tsv.
 	SearchText(ctx context.Context, query string, limit int) ([]AssetTextMatch, int, error)
 	// EmbeddingsByContent returns the stored embedding of each of the asset's
 	// chunks whose content is in contents and which model embedded, keyed by
@@ -192,8 +194,10 @@ const (
 // chunks ranked to pick a best chunk, whose content is read and headlined:
 // ranking reads every hit's tsvector and ts_headline re-parses the whole
 // chunk, so on a common word doing either for every matching asset costs
-// several times the rest of the query. total is the number of matching assets
-// before the limit.
+// several times the rest of the query. That is also why the limit and the
+// evidence cut both pick by (matches, asset_id): breaking those ties by score
+// would mean ranking every hit, which on 100k chunks roughly doubled the p95.
+// total is the number of matching assets before the limit.
 const searchTextSQL = `
 WITH q AS (
 	SELECT websearch_to_tsquery('english', ?) AS tsq
