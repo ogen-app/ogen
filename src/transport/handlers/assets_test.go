@@ -204,10 +204,39 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 				Entry("unknown facet", "?facets=kind,size", models.AssetCodeInvalidFilter),
 				Entry("unknown time zone", "?tz=Mars/Base", models.AssetCodeInvalidFilter),
 				Entry("bad ids_only", "?ids_only=maybe", models.AssetCodeInvalidFilter),
+				Entry("unknown group", "?group=size", models.AssetCodeInvalidFilter),
+				Entry("unknown created preset", "?created=2d", models.AssetCodeInvalidFilter),
+				Entry("created preset with created_after", "?created=1d&created_after=2026-01-01T00:00:00Z", models.AssetCodeInvalidFilter),
+				Entry("bad created timestamp", "?created_before=soon", models.AssetCodeInvalidFilter),
 				Entry("garbage cursor", "?cursor=***", models.AssetCodeInvalidCursor),
 				Entry("text too short", "?text=a", models.AssetCodeQueryTooShort),
 				Entry("text too long", "?text="+strings.Repeat("a", 201), models.AssetCodeQueryTooLong),
 			)
+
+			It("groups, filters by when an asset was added and sums the undecided ideas", func() {
+				createPiece("First", `[{"type":"paragraph"}]`)
+				createPiece("Second", `[{"type":"paragraph"}]`)
+
+				page := listAssets("?group=ideas&created=1d&tz=Europe/Kyiv&sort=created_at&limit=1&facets=created")
+				Expect(page.Total).To(Equal(2))
+				Expect(page.IdeasUndecided).To(Equal(0))
+				Expect(page.Groups).To(Equal([]models.AssetGroupCount{{Key: "none", Count: 2}}))
+				Expect(page.Assets).To(HaveLen(1))
+				Expect(page.Assets[0].Title).To(Equal("First"))
+				Expect(page.Assets[0].GroupKey).To(Equal("none"))
+				Expect(page.Raw).To(ContainSubstring(`"next_idea":null`))
+				Expect(page.Raw).To(ContainSubstring(`"published_at":null`))
+				Expect(page.Facets["created"]).To(ContainElement(models.AssetFacetCount{Value: "1d", Count: 2}))
+
+				next := listAssets("?group=ideas&created=1d&tz=Europe/Kyiv&sort=created_at&limit=1&cursor=" + *page.NextCursor)
+				Expect(next.Assets).To(HaveLen(1))
+				Expect(next.Assets[0].Title).To(Equal("Second"))
+
+				ungrouped := listAssets("?created_before=2000-01-01T00:00:00Z")
+				Expect(ungrouped.Total).To(Equal(0))
+				Expect(ungrouped.Raw).To(ContainSubstring(`"groups":[]`))
+				Expect(ungrouped.Raw).To(ContainSubstring(`"ideas_undecided_total":0`))
+			})
 
 			It("404s an unknown scope campaign", func() {
 				req := httptest.NewRequest("GET", "/api/content-bank/assets?scope_campaign=missing", nil)
@@ -1134,6 +1163,8 @@ type assetListPage struct {
 	NextCursor      *string                             `json:"next_cursor"`
 	Total           int                                 `json:"total"`
 	TotalUnfiltered int                                 `json:"total_unfiltered"`
+	IdeasUndecided  int                                 `json:"ideas_undecided_total"`
 	Facets          map[string][]models.AssetFacetCount `json:"facets"`
+	Groups          []models.AssetGroupCount            `json:"groups"`
 	Raw             string                              `json:"-"`
 }

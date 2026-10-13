@@ -31,9 +31,15 @@ type assetListResponse struct {
 	NextCursor      *string `json:"next_cursor" extensions:"x-nullable"`
 	Total           int     `json:"total"`
 	TotalUnfiltered int     `json:"total_unfiltered"`
+	// IdeasUndecidedTotal sums idea_counts.undecided over every asset total
+	// counts, not just this page.
+	IdeasUndecidedTotal int `json:"ideas_undecided_total"`
 	// Facets holds, per requested field, every value with the number of
 	// assets that have it.
 	Facets map[string][]models.AssetFacetCount `json:"facets"`
+	// Groups lists, with group, every non-empty group of the whole match with
+	// its row count, in display order; empty without group.
+	Groups []models.AssetGroupCount `json:"groups"`
 	// IDs is present only with ids_only=true, and then it is the whole body
 	// (an assetIDsResponse): every matching id in sort order, unpaginated.
 	// Swagger allows one schema per status, so the list schema carries it.
@@ -97,6 +103,46 @@ func timeParam(c *fiber.Ctx, key string) (*time.Time, error) {
 	return &t, nil
 }
 
+// dateWindow reads key_after and key_before, or the preset key, which starts
+// the window at the preset in tz. Location must already be read.
+func dateWindow(c *fiber.Ctx, key string, now time.Time) (after, before *time.Time, err error) {
+	if after, err = timeParam(c, key+"_after"); err != nil {
+		return nil, nil, err
+	}
+	if before, err = timeParam(c, key+"_before"); err != nil {
+		return nil, nil, err
+	}
+	preset := strings.TrimSpace(c.Query(key))
+	if preset == "" {
+		return after, before, nil
+	}
+	if after != nil {
+		return nil, nil, invalidFilter("%s and %s_after cannot be combined", key, key)
+	}
+	loc, err := queryLocation(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	since, ok := models.AssetDateSince(preset, now, loc)
+	if !ok {
+		return nil, nil, invalidFilter("%s: unknown value %q (allowed: %s)", key, preset, strings.Join(models.AssetDatePresets, ", "))
+	}
+	return &since, before, nil
+}
+
+// queryLocation reads tz, UTC when absent.
+func queryLocation(c *fiber.Ctx) (*time.Location, error) {
+	tz := strings.TrimSpace(c.Query("tz"))
+	if tz == "" {
+		return time.UTC, nil
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return nil, invalidFilter("tz: unknown time zone %q", tz)
+	}
+	return loc, nil
+}
+
 // parseAssetQuery reads the list parameters. idsOnly reports ids_only=true.
 func parseAssetQuery(c *fiber.Ctx, now time.Time) (q models.AssetQuery, idsOnly bool, err error) {
 	q = models.AssetQuery{Now: now, Location: time.UTC, Sort: models.AssetSortUpdatedDesc, Limit: defaultAssetPageSize}
@@ -139,10 +185,10 @@ func parseAssetFilters(c *fiber.Ctx, q *models.AssetQuery) (err error) {
 		}
 		q.Checksums = append(q.Checksums, sum)
 	}
-	if q.UpdatedAfter, err = timeParam(c, "updated_after"); err != nil {
+	if q.UpdatedAfter, q.UpdatedBefore, err = dateWindow(c, "updated", q.Now); err != nil {
 		return err
 	}
-	if q.UpdatedBefore, err = timeParam(c, "updated_before"); err != nil {
+	if q.CreatedAfter, q.CreatedBefore, err = dateWindow(c, "created", q.Now); err != nil {
 		return err
 	}
 	q.Text = strings.TrimSpace(c.Query("text"))
@@ -181,13 +227,17 @@ func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
 			return invalidFilter("facets: unknown field %q (allowed: %s)", f, strings.Join(models.AssetFacets, ", "))
 		}
 	}
-	if tz := strings.TrimSpace(c.Query("tz")); tz != "" {
-		loc, err := time.LoadLocation(tz)
-		if err != nil {
-			return invalidFilter("tz: unknown time zone %q", tz)
+	if g := strings.TrimSpace(c.Query("group")); g != "" {
+		if !slices.Contains(models.AssetGroups, g) {
+			return invalidFilter("group: unknown value %q (allowed: %s)", g, strings.Join(models.AssetGroups, ", "))
 		}
-		q.Location = loc
+		q.Group = g
 	}
+	loc, err := queryLocation(c)
+	if err != nil {
+		return err
+	}
+	q.Location = loc
 	return nil
 }
 
@@ -199,7 +249,11 @@ func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
 // @Description
 // @Description  `text` searches inside the assets (full-text with English stemming; "quoted phrases", `-word` and `or` work) and adds `match` to each row: the number of matching chunks and the best one's `snippet` (HTML-escaped, matched words in `<mark>`), `source_label` and `chunk_index`.
 // @Description
-// @Description  `scope_campaign` confines the whole read, totals and counts included, to one campaign's assets; the campaign facet is not returned there. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value, with 0 for those nothing matches. The `updated` presets are since the start of today (`1d`), of the day 6 or 29 days ago (`7d`, `30d`) and of the month (`month`), in `tz`.
+// @Description  `scope_campaign` confines the whole read, totals and counts included, to one campaign's assets; the campaign facet is not returned there. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value, with 0 for those nothing matches. The date presets of `updated` and `created`, as filters and facets, are since the start of today (`1d`), of the day 6 or 29 days ago (`7d`, `30d`) and of the month (`month`), in `tz`.
+// @Description
+// @Description  Every row carries `next_idea`: the oldest of the ideas `idea_counts.undecided` counts (`{id, title}`), null exactly when that count is 0. `ideas_undecided_total` sums `idea_counts.undecided` over every matching asset, not just the page.
+// @Description
+// @Description  `group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). Paging runs across groups, so a group may span pages. `ideas` groups are `undecided`, `answered` (ideas, none undecided) and `none`; `created` groups are the disjoint bands `1d` (today), `7d` (the 6 days before), `30d` (the 23 days before those) and `earlier`; `kind` groups follow the kind order; `campaign` and `tag` groups go by name with `none` last, and list an asset under each of its campaigns or tags that the field's filter allows, so `groups` counts appearances while `total` counts assets.
 // @Description
 // @Description  `ids_only=true` returns `{ids}`: every matching id in sort order, unpaginated.
 // @Tags         content-bank
@@ -219,14 +273,19 @@ func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
 // @Param        ideas_not       query     string  false  "Ideas values to exclude"
 // @Param        updated_after   query     string  false  "RFC 3339, inclusive"
 // @Param        updated_before  query     string  false  "RFC 3339, exclusive"
+// @Param        updated         query     string  false  "Preset start of the updated window: 1d, 7d, 30d, month (not with updated_after)"
+// @Param        created_after   query     string  false  "RFC 3339, inclusive"
+// @Param        created_before  query     string  false  "RFC 3339, exclusive"
+// @Param        created         query     string  false  "Preset start of the created window: 1d, 7d, 30d, month (not with created_after)"
 // @Param        checksum        query     string  false  "SHA-256 sums of asset files"
 // @Param        text            query     string  false  "Text to find inside the assets (2–200 characters)"
 // @Param        scope_campaign  query     string  false  "Campaign id to confine the read to"
-// @Param        sort            query     string  false  "-updated_at (default), updated_at, title, -title, -ideas_undecided, relevance (needs text)"
+// @Param        sort            query     string  false  "-updated_at (default), updated_at, -created_at, created_at, title, -title, -ideas_undecided, relevance (needs text)"
 // @Param        limit           query     int     false  "Page size (default 50, max 200)"
 // @Param        cursor          query     string  false  "next_cursor of the previous page"
-// @Param        facets          query     string  false  "kind, status, campaign, tag, ideas, updated"
-// @Param        tz              query     string  false  "IANA time zone of the updated presets (default UTC)"
+// @Param        facets          query     string  false  "kind, status, campaign, tag, ideas, updated, created"
+// @Param        group           query     string  false  "ideas, campaign, tag, kind, created"
+// @Param        tz              query     string  false  "IANA time zone of the date presets and created groups (default UTC)"
 // @Param        ids_only        query     bool    false  "Return every matching id instead of a page"
 // @Success      200  {object}  assetListResponse  "With ids_only=true only ids is present"
 // @Failure      400  {object}  map[string]string  "code: invalid_filter | invalid_cursor | query_too_short | query_too_long"
@@ -263,10 +322,13 @@ func (h *AssetsHandler) List(c *fiber.Ctx) error {
 	}
 	resp := assetListResponse{
 		Assets: res.Assets, Total: res.Total, TotalUnfiltered: res.TotalUnfiltered,
-		Facets: res.Facets,
+		IdeasUndecidedTotal: res.IdeasUndecided, Facets: res.Facets, Groups: res.Groups,
 	}
 	if resp.Facets == nil {
 		resp.Facets = map[string][]models.AssetFacetCount{}
+	}
+	if resp.Groups == nil {
+		resp.Groups = []models.AssetGroupCount{}
 	}
 	if res.NextCursor != "" {
 		resp.NextCursor = &res.NextCursor

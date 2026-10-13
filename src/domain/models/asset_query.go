@@ -58,6 +58,8 @@ var AssetIdeasValues = []string{
 const (
 	AssetSortUpdatedDesc    = "-updated_at"
 	AssetSortUpdatedAsc     = "updated_at"
+	AssetSortCreatedDesc    = "-created_at"
+	AssetSortCreatedAsc     = "created_at"
 	AssetSortTitleAsc       = "title"
 	AssetSortTitleDesc      = "-title"
 	AssetSortIdeasUndecided = "-ideas_undecided"
@@ -68,8 +70,8 @@ const (
 
 // AssetSorts lists every sort order.
 var AssetSorts = []string{
-	AssetSortUpdatedDesc, AssetSortUpdatedAsc, AssetSortTitleAsc, AssetSortTitleDesc,
-	AssetSortIdeasUndecided, AssetSortRelevance,
+	AssetSortUpdatedDesc, AssetSortUpdatedAsc, AssetSortCreatedDesc, AssetSortCreatedAsc,
+	AssetSortTitleAsc, AssetSortTitleDesc, AssetSortIdeasUndecided, AssetSortRelevance,
 }
 
 // Fields the asset list can count values of.
@@ -80,42 +82,77 @@ const (
 	AssetFacetTag      = "tag"
 	AssetFacetIdeas    = "ideas"
 	AssetFacetUpdated  = "updated"
+	AssetFacetCreated  = "created"
 )
 
 // AssetFacets lists every facet field.
 var AssetFacets = []string{
 	AssetFacetKind, AssetFacetStatus, AssetFacetCampaign, AssetFacetTag, AssetFacetIdeas, AssetFacetUpdated,
+	AssetFacetCreated,
 }
 
-// Presets of the updated facet: since the start of today, of the day six or
-// twenty-nine days ago, and of the month, in the viewer's time zone.
+// Presets of the updated and created filters and facets: since the start of
+// today, of the day six or twenty-nine days ago, and of the month, in the
+// viewer's time zone.
 const (
-	AssetUpdatedToday = "1d"
-	AssetUpdatedWeek  = "7d"
-	AssetUpdated30d   = "30d"
-	AssetUpdatedMonth = "month"
+	AssetDateToday = "1d"
+	AssetDateWeek  = "7d"
+	AssetDate30d   = "30d"
+	AssetDateMonth = "month"
 )
 
-// AssetUpdatedPresets lists the updated facet's values.
-var AssetUpdatedPresets = []string{AssetUpdatedToday, AssetUpdatedWeek, AssetUpdated30d, AssetUpdatedMonth}
+// AssetDatePresets lists the values of the updated and created facets.
+var AssetDatePresets = []string{AssetDateToday, AssetDateWeek, AssetDate30d, AssetDateMonth}
 
-// AssetUpdatedSince is the start of an updated preset for a viewer whose clock
-// reads now in loc. ok is false for an unknown preset.
-func AssetUpdatedSince(preset string, now time.Time, loc *time.Location) (since time.Time, ok bool) {
+// AssetDateSince is the start of a date preset for a viewer whose clock reads
+// now in loc. ok is false for an unknown preset.
+func AssetDateSince(preset string, now time.Time, loc *time.Location) (since time.Time, ok bool) {
 	local := now.In(loc)
 	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 	switch preset {
-	case AssetUpdatedToday:
+	case AssetDateToday:
 		return today, true
-	case AssetUpdatedWeek:
+	case AssetDateWeek:
 		return today.AddDate(0, 0, -6), true
-	case AssetUpdated30d:
+	case AssetDate30d:
 		return today.AddDate(0, 0, -29), true
-	case AssetUpdatedMonth:
+	case AssetDateMonth:
 		return time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc), true
 	}
 	return time.Time{}, false
 }
+
+// Fields the asset list can group its rows by.
+const (
+	AssetGroupIdeas    = "ideas"
+	AssetGroupCampaign = "campaign"
+	AssetGroupTag      = "tag"
+	AssetGroupKind     = "kind"
+	AssetGroupCreated  = "created"
+)
+
+// AssetGroups lists every grouping.
+var AssetGroups = []string{AssetGroupIdeas, AssetGroupCampaign, AssetGroupTag, AssetGroupKind, AssetGroupCreated}
+
+// Keys of the ideas grouping, in display order. They partition the assets: an
+// asset with an undecided idea, one with ideas but none undecided, and every
+// other one, analysed without ideas or not read yet.
+const (
+	AssetIdeasGroupUndecided = "undecided"
+	AssetIdeasGroupAnswered  = "answered"
+	AssetIdeasGroupNone      = "none"
+)
+
+// AssetIdeasGroupKeys lists the ideas grouping's keys in display order.
+var AssetIdeasGroupKeys = []string{AssetIdeasGroupUndecided, AssetIdeasGroupAnswered, AssetIdeasGroupNone}
+
+// AssetCreatedEarlier is the created grouping's band before the 30d preset.
+// The other bands are disjoint slices of the presets: 1d is today, 7d the six
+// days before it, 30d the 23 days before those.
+const AssetCreatedEarlier = "earlier"
+
+// AssetCreatedGroupKeys lists the created grouping's keys in display order.
+var AssetCreatedGroupKeys = []string{AssetDateToday, AssetDateWeek, AssetDate30d, AssetCreatedEarlier}
 
 // Machine-readable codes on the 400s of the asset list.
 const (
@@ -146,9 +183,12 @@ type AssetQuery struct {
 	Ideas    AssetValueFilter
 	// Checksums keeps the assets whose file has one of these SHA-256 sums.
 	Checksums []string
-	// UpdatedAfter is inclusive, UpdatedBefore exclusive.
+	// UpdatedAfter and CreatedAfter are inclusive, UpdatedBefore and
+	// CreatedBefore exclusive.
 	UpdatedAfter  *time.Time
 	UpdatedBefore *time.Time
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
 	// Text keeps the assets whose chunks mention it (websearch syntax).
 	Text string
 	// ScopeCampaign confines the whole read, totals and counts included, to
@@ -156,13 +196,16 @@ type AssetQuery struct {
 	ScopeCampaign string
 	Sort          string
 	Limit         int
-	// Cursor continues a previous page of the same sort.
+	// Group orders the rows by one of AssetGroups first, then by Sort within
+	// each group; "" does not group.
+	Group string
+	// Cursor continues a previous page of the same sort and grouping.
 	Cursor string
 	// Facets names the fields to count values of.
 	Facets []string
-	// Now is the clock the reminder rule and the updated presets read.
+	// Now is the clock the reminder rule and the date presets read.
 	Now time.Time
-	// Location is the viewer's time zone for the updated presets.
+	// Location is the viewer's time zone for the date presets.
 	Location *time.Location
 }
 
@@ -173,6 +216,13 @@ type AssetIdeaCounts struct {
 	Yes       int `json:"yes"`
 	Later     int `json:"later"`
 	No        int `json:"no"`
+}
+
+// AssetNextIdea is the idea an asset's row names: the oldest one counted in
+// its undecided ideas.
+type AssetNextIdea struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // AssetTextMatch is where an asset mentions the text of a query.
@@ -227,16 +277,32 @@ type AssetListItem struct {
 	// that draw on the whole bank.
 	CampaignIDs []string        `json:"campaign_ids"`
 	IdeaCounts  AssetIdeaCounts `json:"idea_counts"`
+	// NextIdea is the oldest of the ideas IdeaCounts.Undecided counts; null
+	// exactly when that count is 0.
+	NextIdea *AssetNextIdea `json:"next_idea" extensions:"x-nullable"`
+	// PublishedAt is when the source was published, read from its metadata at
+	// ingest; null when unknown.
+	PublishedAt *time.Time `json:"published_at" extensions:"x-nullable"`
 	// Gist is one sentence of the workspace analysis; null unless that lens is
 	// ready and has a gist or a usable summary sentence.
 	Gist *string `json:"gist" extensions:"x-nullable"`
 	// Match is present only when the query has text.
 	Match *AssetTextMatch `json:"match,omitempty"`
+	// GroupKey is the group the row is listed under, present only when the
+	// query groups: a tag or campaign id, a kind, an ideas or created key, or
+	// none.
+	GroupKey string `json:"group_key,omitempty"`
 }
 
 // AssetFacetCount is how many assets have one value of a field.
 type AssetFacetCount struct {
 	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// AssetGroupCount is how many rows of the whole match one group lists.
+type AssetGroupCount struct {
+	Key   string `json:"key"`
 	Count int    `json:"count"`
 }
 
@@ -249,7 +315,13 @@ type AssetQueryResult struct {
 	// asset in scope.
 	Total           int
 	TotalUnfiltered int
+	// IdeasUndecided sums the undecided ideas of the assets Total counts.
+	IdeasUndecided int
 	// Facets holds the counts of the requested fields. Each field's counts
 	// apply every other field's filter but not its own.
 	Facets map[string][]AssetFacetCount
+	// Groups lists, when the query groups, every non-empty group of the whole
+	// match in display order. A tag grouping lists an asset once per tag, so
+	// its counts may add up to more than Total.
+	Groups []AssetGroupCount
 }
