@@ -96,6 +96,9 @@ type ScrapeResult struct {
 	SourceURL   string // the final URL after redirects (metadata.sourceURL)
 	StatusCode  int
 	ContentType string
+	// PublishedTime holds the page's published-time meta tags, most specific
+	// first; empty strings where a tag is absent.
+	PublishedTime []string
 }
 
 // scrapeBody is the POST /v2/scrape request body. Field names match Firecrawl's
@@ -123,6 +126,10 @@ type scrapeResponse struct {
 			SourceURL   string     `json:"sourceURL"`
 			StatusCode  int        `json:"statusCode"`
 			ContentType string     `json:"contentType"`
+			// Firecrawl passes meta tags through under their own names.
+			PublishedTime        flexString `json:"publishedTime"`
+			ArticlePublishedTime flexString `json:"article:published_time"`
+			OGPublishedTime      flexString `json:"og:published_time"`
 		} `json:"metadata"`
 	} `json:"data"`
 }
@@ -200,6 +207,11 @@ func (c *Client) Scrape(ctx context.Context, in ScrapeRequest) (*ScrapeResult, e
 		SourceURL:   out.Data.Metadata.SourceURL,
 		StatusCode:  out.Data.Metadata.StatusCode,
 		ContentType: out.Data.Metadata.ContentType,
+		PublishedTime: []string{
+			out.Data.Metadata.ArticlePublishedTime.String(),
+			out.Data.Metadata.OGPublishedTime.String(),
+			out.Data.Metadata.PublishedTime.String(),
+		},
 	}, nil
 }
 

@@ -53,6 +53,9 @@ type AssetRepository interface {
 	// UpdateContent sets title + content (and bumps updated_at) without touching
 	// status/source_url — the process_url worker's write after a scrape.
 	UpdateContent(ctx context.Context, id, title, content string) error
+	// SetPublishedAt records when the asset's source was published, read from
+	// its metadata at ingest. It leaves updated_at alone: it is not an edit.
+	SetPublishedAt(ctx context.Context, id string, at time.Time) error
 	// SetContent sets content only (title/status untouched) — the process_audio
 	// worker's transcript write on completion.
 	SetContent(ctx context.Context, id, content string) error
@@ -214,6 +217,15 @@ func (r *assetRepository) UpdateContent(ctx context.Context, id, title, content 
 		Set("title = ?", title).
 		Set("content = ?", content).
 		Set("updated_at = ?", time.Now().UTC()).
+		Where("id = ?", id).
+		Exec(ctx)
+	return err
+}
+
+func (r *assetRepository) SetPublishedAt(ctx context.Context, id string, at time.Time) error {
+	_, err := r.db.NewUpdate().
+		Model((*models.Asset)(nil)).
+		Set("published_at = ?", at.UTC()).
 		Where("id = ?", id).
 		Exec(ctx)
 	return err

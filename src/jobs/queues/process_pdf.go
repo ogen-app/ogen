@@ -18,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/pubdate"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
@@ -33,6 +34,10 @@ const ProcessPDFQueue = "process_pdf"
 
 // thumbnailDPIDefault is used when PDFDeps.ThumbnailDPI is 0.
 const thumbnailDPIDefault = 96
+
+// pdfMetaWindow is how much of each end of a PDF is searched for its creation
+// date.
+const pdfMetaWindow = 256 << 10
 
 // Narrow dependency interfaces — the real client/embedder/storage/repos satisfy
 // these structurally; tests provide small fakes.
@@ -68,13 +73,15 @@ type fileUpserter interface {
 // nil Client (no PDF_SERVICE_ADDR configured) disables the job — it no-ops.
 type PDFDeps struct {
 	// Analysis queues the asset's analyses once it settles; nil skips them.
-	Analysis     AnalysisScheduler
-	Client       pdfParser
-	Embedder     chunkEmbedder
-	Storage      blobStore
-	Assets       assetStatusUpdater
-	Chunks       chunkUpserter
-	Files        fileUpserter
+	Analysis AnalysisScheduler
+	Client   pdfParser
+	Embedder chunkEmbedder
+	Storage  blobStore
+	Assets   assetStatusUpdater
+	Chunks   chunkUpserter
+	Files    fileUpserter
+	// Published records the PDF's creation date; nil skips it.
+	Published    publishedAtSetter
 	ThumbnailDPI int
 	// Recorder + EmbedModel meter PDF-ingestion embedding usage. nil
 	// Recorder = no-op. EmbedModel is the price-map key (cfg.EmbedModel).
@@ -155,8 +162,10 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	if err != nil {
 		return err
 	}
+	// The sniffer keeps both ends of the file, where the creation date sits.
+	sniff := pubdate.NewSniffer(pdfMetaWindow)
 	// Corrupt/unsupported PDFs are terminal; service-down/deadline retry.
-	res, err := p.Deps.Client.Parse(ctx, original, pdf.Options{
+	res, err := p.Deps.Client.Parse(ctx, io.TeeReader(original, sniff), pdf.Options{
 		Filename:        in.OriginalName,
 		RenderThumbnail: true,
 		ThumbnailDPI:    p.thumbnailDPI(),
@@ -168,6 +177,10 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 			return status.fail(ctx, in.AssetID, models.UploadCodeInvalidFile, "the PDF could not be read (corrupt, encrypted, or unsupported)")
 		}
 		return fmt.Errorf("process_pdf %s: parse: %w", in.AssetID, err)
+	}
+
+	if t, ok := sniff.PDF(time.Now()); ok {
+		recordPublishedAt(ctx, p.Deps.Published, "process_pdf", in.AssetID, t)
 	}
 
 	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, pdfChunkSources(res.Chunks))

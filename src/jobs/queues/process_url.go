@@ -28,6 +28,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
+	"github.com/ogen-app/ogen/src/kernel/pubdate"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notify"
@@ -92,9 +93,11 @@ type URLDeps struct {
 	Storage  imageUploader
 	Fetcher  imageFetcher
 	Assets   assetContentWriter
-	Chunks   chunkUpserter
-	Images   imageReplacer
-	Hub      eventPublisher
+	// Published records the page's published time; nil skips it.
+	Published publishedAtSetter
+	Chunks    chunkUpserter
+	Images    imageReplacer
+	Hub       eventPublisher
 	// Recorder + EmbedModel meter scrape + embedding usage. A
 	// nil Recorder is a no-op. EmbedModel is the embed price-map key.
 	Recorder   *usage.Recorder
@@ -175,6 +178,9 @@ func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, la
 	title := cmp.Or(strings.TrimSpace(res.Title), in.SourceURL)
 	if err := p.persistContent(ctx, in.AssetID, title, markdown, images); err != nil {
 		return err
+	}
+	if t, ok := pubdate.Web(time.Now(), res.PublishedTime...); ok {
+		recordPublishedAt(ctx, p.Deps.Published, "process_url", in.AssetID, t)
 	}
 
 	// The title is prepended for context, like embed_asset.

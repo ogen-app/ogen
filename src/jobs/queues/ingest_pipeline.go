@@ -9,6 +9,7 @@ import (
 	"iter"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/pgvector/pgvector-go"
 
@@ -291,6 +292,23 @@ func openOriginal(ctx context.Context, store blobStore, op, assetID, key string)
 		return nil, fmt.Errorf("%s %s: download %s: %w", op, assetID, key, err)
 	}
 	return &originalReader{rc: rc}, nil
+}
+
+// publishedAtSetter records when an asset's source was published.
+type publishedAtSetter interface {
+	SetPublishedAt(ctx context.Context, id string, at time.Time) error
+}
+
+// recordPublishedAt stores a source's publication date, best-effort: the date
+// is a nicety of the list, never a reason to fail or retry an ingest.
+func recordPublishedAt(ctx context.Context, s publishedAtSetter, op, assetID string, at time.Time) {
+	if s == nil {
+		return
+	}
+	if err := s.SetPublishedAt(ctx, assetID, at); err != nil {
+		slog.WarnContext(ctx, "record published_at failed", logging.AttrComponent, "jobs."+op,
+			"asset_id", assetID, logging.AttrError, err)
+	}
 }
 
 // originalReader is an io.ReadCloser that counts what it reads.
