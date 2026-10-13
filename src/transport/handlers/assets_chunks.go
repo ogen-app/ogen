@@ -2,10 +2,14 @@ package handlers
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
 const (
@@ -60,4 +64,68 @@ func (h *AssetsHandler) Chunks(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(assetChunksResponse{Chunks: chunks, Total: total, Offset: offset, Limit: limit})
+}
+
+const (
+	defaultSearchLimit = 50
+	maxSearchLimit     = 200
+	minSearchQueryLen  = 2
+	maxSearchQueryLen  = 200
+)
+
+// AssetChunkSearcher finds the assets whose chunks mention a text.
+// Implemented by repository.AssetChunksRepository.
+type AssetChunkSearcher interface {
+	SearchText(ctx context.Context, query string, limit int) ([]repository.AssetTextMatch, error)
+}
+
+// assetSearchResponse lists the assets that mention a query, best first.
+type assetSearchResponse struct {
+	Query   string                      `json:"query"`
+	Results []repository.AssetTextMatch `json:"results"`
+}
+
+// Search godoc
+// @Summary      Search inside assets
+// @Description  Returns the workspace's assets whose content mentions `q`, one row per asset, best-scoring first. Full-text, not semantic: words are matched with English stemming ("cycles" finds "cycle"), "quoted phrases" match as phrases, `-word` excludes and `or` alternates. Covers every asset kind that has chunks (PDF, documents and spreadsheets, URL, markdown, audio transcripts, image regions). `matches` is the number of matching chunks; `snippet`, `source_label` and `chunk_index` describe the best one. `snippet` is HTML-escaped text whose only markup is `<mark>` around matched words, with "…" where it was cut. `source_label` is absent for chunks without a location (markdown, URL). A query of only stopwords or punctuation returns no results.
+// @Tags         content-bank
+// @Produce      json
+// @Security     CookieAuth
+// @Param        q      query     string  true   "Text to find (2–200 characters)"
+// @Param        limit  query     int     false  "Max assets (default 50, max 200)"
+// @Success      200    {object}  assetSearchResponse
+// @Failure      400    {object}  map[string]string  "code: query_too_short | query_too_long"
+// @Failure      401    {object}  map[string]string
+// @Router       /api/content-bank/assets/search [get]
+func (h *AssetsHandler) Search(c *fiber.Ctx) error {
+	if h.chunkSearch == nil {
+		return fiber.NewError(fiber.StatusConflict, "asset search is not configured")
+	}
+	query := strings.TrimSpace(c.Query("q"))
+	switch n := utf8.RuneCountInString(query); {
+	case n < minSearchQueryLen:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"code":  models.AssetCodeQueryTooShort,
+			"error": fmt.Sprintf("q must be at least %d characters", minSearchQueryLen),
+		})
+	case n > maxSearchQueryLen:
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"code":  models.AssetCodeQueryTooLong,
+			"error": fmt.Sprintf("q must be at most %d characters", maxSearchQueryLen),
+		})
+	}
+	limit := c.QueryInt("limit", defaultSearchLimit)
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	limit = min(limit, maxSearchLimit)
+
+	results, err := h.chunkSearch.SearchText(reqCtx(c), query, limit)
+	if err != nil {
+		return err
+	}
+	if results == nil {
+		results = []repository.AssetTextMatch{}
+	}
+	return c.JSON(assetSearchResponse{Query: query, Results: results})
 }

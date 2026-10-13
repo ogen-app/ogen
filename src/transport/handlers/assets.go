@@ -163,6 +163,8 @@ type AssetsHandler struct {
 	imgReembed ImageReembedEnqueuer
 	// chunks backs GET /:id/chunks. Nil answers 409.
 	chunks AssetChunkLister
+	// chunkSearch backs GET /search. Nil answers 409.
+	chunkSearch AssetChunkSearcher
 }
 
 // AssetsOptions carries the handler's nil-safe collaborators.
@@ -170,6 +172,8 @@ type AssetsOptions struct {
 	Limiter *entitlements.Limiter
 	// Chunks backs GET /:id/chunks; nil answers 409.
 	Chunks AssetChunkLister
+	// ChunkSearch backs GET /search; nil answers 409.
+	ChunkSearch AssetChunkSearcher
 	// ImageReembed re-embeds an image asset after its description is edited;
 	// nil skips it (image ingestion not configured).
 	ImageReembed ImageReembedEnqueuer
@@ -196,23 +200,24 @@ func NewAssetsHandler(
 	opts AssetsOptions,
 ) *AssetsHandler {
 	return &AssetsHandler{
-		limiter:    opts.Limiter,
-		chunks:     opts.Chunks,
-		imgReembed: opts.ImageReembed,
-		analyses:   opts.Analyses,
-		publicRead: opts.PublicRead,
-		repo:       repo,
-		fileRepo:   fileRepo,
-		imageRepo:  imageRepo,
-		storage:    store,
-		db:         db,
-		auth:       auth,
-		onSave:     onSave,
-		pdfJobs:    pdfJobs,
-		urlJobs:    urlJobs,
-		scrapeGate: scrapeGate,
-		docJobs:    docJobs,
-		imgJobs:    imgJobs,
+		limiter:     opts.Limiter,
+		chunks:      opts.Chunks,
+		chunkSearch: opts.ChunkSearch,
+		imgReembed:  opts.ImageReembed,
+		analyses:    opts.Analyses,
+		publicRead:  opts.PublicRead,
+		repo:        repo,
+		fileRepo:    fileRepo,
+		imageRepo:   imageRepo,
+		storage:     store,
+		db:          db,
+		auth:        auth,
+		onSave:      onSave,
+		pdfJobs:     pdfJobs,
+		urlJobs:     urlJobs,
+		scrapeGate:  scrapeGate,
+		docJobs:     docJobs,
+		imgJobs:     imgJobs,
 	}
 }
 
@@ -223,6 +228,7 @@ func (h *AssetsHandler) Register(app *fiber.App) {
 	g.Post("/upload", h.auth, h.Upload)
 	g.Post("/url", h.auth, h.CreateURL)
 	g.Post("/tags", h.auth, h.BulkTag)
+	g.Get("/search", h.auth, h.Search) // before /:id, which would take "search" as an ID
 	g.Get("/:id", h.auth, h.Get)
 	g.Get("/:id/chunks", h.auth, h.Chunks)
 	g.Put("/:id", h.auth, h.Update)

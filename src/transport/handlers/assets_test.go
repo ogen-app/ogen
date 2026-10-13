@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -867,7 +868,7 @@ var _ = Describe("AssetsHandler onSave embed trigger", Ordered, func() {
 
 // ── chunk view ────────────────────────────────────────────────────
 
-var _ = Describe("AssetsHandler GET /:id/chunks (CON-312)", Ordered, func() {
+var _ = Describe("AssetsHandler GET /:id/chunks (CON-312) and GET /search", Ordered, func() {
 	var (
 		app        *fiber.App
 		db         *bun.DB
@@ -897,7 +898,7 @@ var _ = Describe("AssetsHandler GET /:id/chunks (CON-312)", Ordered, func() {
 		chunksRepo = repository.NewAssetChunksRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		h := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{Chunks: chunksRepo})
+		h := handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{Chunks: chunksRepo, ChunkSearch: chunksRepo})
 		h.Register(app)
 
 		userID = seedTenantUser(db, "Admin", "chunks@example.com", "admin-password").ID
@@ -984,6 +985,63 @@ var _ = Describe("AssetsHandler GET /:id/chunks (CON-312)", Ordered, func() {
 
 	It("returns 404 for an unknown asset", func() {
 		Expect(get("/api/content-bank/assets/nope/chunks").StatusCode).To(Equal(fiber.StatusNotFound))
+	})
+
+	// search decodes GET /search?<query> into its response.
+	type searchResult struct {
+		AssetID     string  `json:"asset_id"`
+		Matches     int     `json:"matches"`
+		Score       float64 `json:"score"`
+		Snippet     string  `json:"snippet"`
+		SourceLabel *string `json:"source_label"`
+		ChunkIndex  int     `json:"chunk_index"`
+	}
+	search := func(query string) (int, string, []searchResult, map[string]any) {
+		GinkgoHelper()
+		resp := get("/api/content-bank/assets/search?" + query)
+		var body struct {
+			Query   string         `json:"query"`
+			Results []searchResult `json:"results"`
+			Code    string         `json:"code"`
+		}
+		raw := map[string]any{}
+		Expect(json.NewDecoder(resp.Body).Decode(&raw)).To(Succeed())
+		b, _ := json.Marshal(raw)
+		Expect(json.Unmarshal(b, &body)).To(Succeed())
+		return resp.StatusCode, body.Query, body.Results, raw
+	}
+
+	It("finds the assets that mention a text, with the best chunk's evidence", func() {
+		id := seedAudio(3) // "part 0", "part 1", "part 2", labelled by time range
+		status, query, results, _ := search("q=+part+&limit=5")
+		Expect(status).To(Equal(fiber.StatusOK))
+		Expect(query).To(Equal("part"))
+		Expect(results).To(HaveLen(1))
+		Expect(results[0].AssetID).To(Equal(id))
+		Expect(results[0].Matches).To(Equal(3))
+		Expect(results[0].Snippet).To(ContainSubstring("<mark>part</mark>"))
+		Expect(results[0].SourceLabel).NotTo(BeNil())
+		Expect(*results[0].SourceLabel).To(MatchRegexp(`^0:\d0–0:\d0$`))
+	})
+
+	It("answers 200 with an empty list when nothing matches", func() {
+		seedAudio(1)
+		status, _, results, raw := search("q=overwintering")
+		Expect(status).To(Equal(fiber.StatusOK))
+		Expect(raw).To(HaveKeyWithValue("results", BeEmpty()))
+		Expect(raw["results"]).NotTo(BeNil(), "results must be [], not null")
+		Expect(results).To(BeEmpty())
+	})
+
+	It("rejects a query that is too short or too long", func() {
+		for _, q := range []string{"", "q=", "q=a", "q=%20%20a%20", "q=%C3%A9"} {
+			status, _, _, raw := search(q)
+			Expect(status).To(Equal(fiber.StatusBadRequest), q)
+			Expect(raw).To(HaveKeyWithValue("code", models.AssetCodeQueryTooShort), q)
+		}
+		status, _, _, raw := search("q=" + strings.Repeat("a", 201))
+		Expect(status).To(Equal(fiber.StatusBadRequest))
+		Expect(raw).To(HaveKeyWithValue("code", models.AssetCodeQueryTooLong))
 	})
 })
 

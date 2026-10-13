@@ -42,6 +42,13 @@ const (
 // refused. The client should re-extract instead.
 const AssetCodeContentLocked = "content_locked"
 
+// Machine-readable codes on the 400 an asset text search gets when its query
+// is outside the accepted length.
+const (
+	AssetCodeQueryTooShort = "query_too_short"
+	AssetCodeQueryTooLong  = "query_too_long"
+)
+
 // IsServiceIngestedAssetType reports whether an asset's chunks come from an
 // ingestion service (PDF/DOC/AUDIO/IMG) rather than the markdown embed of its
 // title + content. Those chunks carry source_label/source_anchor and

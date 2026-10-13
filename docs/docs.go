@@ -3775,6 +3775,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/content-bank/assets/search": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the workspace's assets whose content mentions ` + "`" + `q` + "`" + `, one row per asset, best-scoring first. Full-text, not semantic: words are matched with English stemming (\"cycles\" finds \"cycle\"), \"quoted phrases\" match as phrases, ` + "`" + `-word` + "`" + ` excludes and ` + "`" + `or` + "`" + ` alternates. Covers every asset kind that has chunks (PDF, documents and spreadsheets, URL, markdown, audio transcripts, image regions). ` + "`" + `matches` + "`" + ` is the number of matching chunks; ` + "`" + `snippet` + "`" + `, ` + "`" + `source_label` + "`" + ` and ` + "`" + `chunk_index` + "`" + ` describe the best one. ` + "`" + `snippet` + "`" + ` is HTML-escaped text whose only markup is ` + "`" + `\u003cmark\u003e` + "`" + ` around matched words, with \"…\" where it was cut. ` + "`" + `source_label` + "`" + ` is absent for chunks without a location (markdown, URL). A query of only stopwords or punctuation returns no results.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "content-bank"
+                ],
+                "summary": "Search inside assets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Text to find (2–200 characters)",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max assets (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assetSearchResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "code: query_too_short | query_too_long",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/content-bank/assets/tags": {
             "post": {
                 "security": [
@@ -12528,6 +12586,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.assetSearchResponse": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/repository.AssetTextMatch"
+                    }
+                }
+            }
+        },
         "handlers.assistantRequest": {
             "type": "object",
             "required": [
@@ -17609,6 +17681,33 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/report.ListItem"
                     }
+                }
+            }
+        },
+        "repository.AssetTextMatch": {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string"
+                },
+                "chunk_index": {
+                    "type": "integer"
+                },
+                "matches": {
+                    "description": "Matches is the number of the asset's chunks that match.",
+                    "type": "integer"
+                },
+                "score": {
+                    "description": "Score is the best chunk's cover-density rank scaled into [0, 1).",
+                    "type": "number"
+                },
+                "snippet": {
+                    "description": "Snippet is an excerpt of the best chunk around the match, with HTML tags\nin the source dropped. It is HTML-escaped, with each matched word wrapped\nin \u003cmark\u003e…\u003c/mark\u003e (the only markup it contains), and starts or ends with\n\"…\" when it was cut from a longer chunk.",
+                    "type": "string"
+                },
+                "source_label": {
+                    "description": "SourceLabel cites where the best chunk sits in its source (\"Slide 4\",\n\"1:05–1:40\", \"Page 14\"). Absent when the chunk has no location, as for\nmarkdown and scraped-URL chunks.",
+                    "type": "string"
                 }
             }
         },

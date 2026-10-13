@@ -239,6 +239,7 @@ func (d *deps) newAssetsHandler() *handlers.AssetsHandler {
 	return handlers.NewAssetsHandler(r.pieceRepo, r.assetFileRepo, r.assetImageRepo, d.store, d.db, pdfJobs, d.enqueuer, in.firecrawl, docJobs, imgJobs, d.auth, in.embedCallbacks.OnMarkdownSave, handlers.AssetsOptions{
 		Limiter:      d.entitlements.limiter,
 		Chunks:       r.chunksRepo,
+		ChunkSearch:  r.chunksRepo,
 		ImageReembed: reembed,
 		Analyses:     r.assetAnalysisRepo,
 		PublicRead:   d.cfg.StoragePublicRead,
