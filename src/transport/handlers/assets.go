@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/kernel/textgist"
 	"github.com/ogen-app/ogen/src/usecase/ingest"
 )
 
@@ -271,13 +273,15 @@ func (h *AssetsHandler) List(c *fiber.Ctx) error {
 		h.decorateFile(reqCtx(c), &assets[i])
 	}
 	h.decorateImagesBatch(reqCtx(c), assets)
-	h.decorateAnalysisStatus(reqCtx(c), assets)
+	h.decorateAnalysis(reqCtx(c), assets)
 	return c.JSON(assets)
 }
 
-// decorateAnalysisStatus sets each asset's workspace analysis status in one
-// query. Best effort: a failed read leaves the status null.
-func (h *AssetsHandler) decorateAnalysisStatus(ctx context.Context, assets []models.Asset) {
+// decorateAnalysis sets each asset's workspace analysis status and gist in one
+// query. The gist is set only on a ready lens; a lens analysed before gists
+// existed gets the first prose sentence of its summary. Best effort: a failed
+// read leaves both null.
+func (h *AssetsHandler) decorateAnalysis(ctx context.Context, assets []models.Asset) {
 	if h.analyses == nil || len(assets) == 0 {
 		return
 	}
@@ -285,13 +289,21 @@ func (h *AssetsHandler) decorateAnalysisStatus(ctx context.Context, assets []mod
 	for i := range assets {
 		ids[i] = assets[i].ID
 	}
-	statuses, err := h.analyses.WorkspaceStatuses(ctx, ids)
+	digests, err := h.analyses.WorkspaceDigests(ctx, ids)
 	if err != nil {
 		return
 	}
 	for i := range assets {
-		if st, ok := statuses[assets[i].ID]; ok {
-			assets[i].AnalysisStatus = &st
+		d, ok := digests[assets[i].ID]
+		if !ok {
+			continue
+		}
+		assets[i].AnalysisStatus = new(d.Status)
+		if d.Status != models.AssetAnalysisStatusReady {
+			continue
+		}
+		if gist := cmp.Or(d.Gist, textgist.FromSummary(d.SummaryHead)); gist != "" {
+			assets[i].Gist = new(gist)
 		}
 	}
 }
@@ -1147,7 +1159,7 @@ func (h *AssetsHandler) Get(c *fiber.Ctx) error {
 	h.decorateFile(reqCtx(c), asset)
 	h.decorateImages(reqCtx(c), asset)
 	one := []models.Asset{*asset}
-	h.decorateAnalysisStatus(reqCtx(c), one)
+	h.decorateAnalysis(reqCtx(c), one)
 	return c.JSON(one[0])
 }
 
