@@ -27,15 +27,22 @@ var ErrBlocked = errors.New("netguard: address not allowed")
 // 169.254.169.254 is link-local, also covered below.
 var gcpMetadataV6 = net.ParseIP("fd00:ec2::254")
 
+// sharedSpace is 100.64.0.0/10 (RFC 6598, carrier-grade NAT), which IsPrivate
+// leaves out but platform private networks use: Railway's internal addresses
+// are in it, so a scraped page must not reach them.
+var _, sharedSpace, _ = net.ParseCIDR("100.64.0.0/10")
+
 // Blocked reports whether ip is one we must never connect to: loopback,
-// RFC1918/ULA private, link-local (incl. 169.254.169.254 cloud metadata),
-// multicast, or the unspecified address.
+// RFC1918/ULA private, RFC 6598 shared space, link-local (incl.
+// 169.254.169.254 cloud metadata), multicast, or the unspecified address.
+// river-service's fetch guard blocks the same ranges.
 func Blocked(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
 	return ip.IsLoopback() ||
 		ip.IsPrivate() ||
+		sharedSpace.Contains(ip) ||
 		ip.IsUnspecified() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
