@@ -10,6 +10,7 @@ func TestBlocked(t *testing.T) {
 	blocked := []string{
 		"127.0.0.1", "::1", // loopback
 		"10.0.0.5", "192.168.1.1", "172.16.0.1", // RFC1918
+		"100.64.0.1", "100.127.255.254", "::ffff:100.100.1.1", // RFC 6598 shared space
 		"169.254.169.254", // AWS/GCP IMDS (link-local)
 		"fd00:ec2::254",   // GCP IMDS IPv6 (ULA)
 		"0.0.0.0",         // unspecified
@@ -21,7 +22,7 @@ func TestBlocked(t *testing.T) {
 			t.Errorf("Blocked(%s) = false, want true", s)
 		}
 	}
-	allowed := []string{"8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:2800:220:1::"}
+	allowed := []string{"8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:2800:220:1::", "100.63.255.255", "100.128.0.1"}
 	for _, s := range allowed {
 		if Blocked(net.ParseIP(s)) {
 			t.Errorf("Blocked(%s) = true, want false", s)
