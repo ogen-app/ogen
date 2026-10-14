@@ -157,7 +157,7 @@ type submitState struct {
 	AccountID string         `json:"account_id,omitempty"`
 	Uploads   []submitUpload `json:"uploads,omitempty"`
 	// Next is the upload in progress; UploadURL and PublicURL its presign.
-	Next      int    `json:"next,omitempty"`
+	Next      int    `json:"next,omitzero"`
 	UploadURL string `json:"upload_url,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
 	// Content is what was submitted, for the dedupe search, and Pages the

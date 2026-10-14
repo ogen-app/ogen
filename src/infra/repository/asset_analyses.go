@@ -46,6 +46,17 @@ type AssetAnalysisRepository interface {
 	DeleteUntriagedIdeasForAsset(ctx context.Context, db bun.IDB, assetID string) error
 	// CampaignIDsWithAsset lists the live campaigns the asset is attached to.
 	CampaignIDsWithAsset(ctx context.Context, assetID string) ([]string, error)
+	// ClaimRunSlot gives the lens's detached run slot to token unless a run
+	// holds it with a heartbeat at or after staleBefore. It reports whether
+	// the slot was claimed.
+	ClaimRunSlot(ctx context.Context, id, token string, staleBefore time.Time) (bool, error)
+	// HeartbeatRunSlot refreshes the heartbeat of token's run.
+	HeartbeatRunSlot(ctx context.Context, id, token string) error
+	// FinishRunSlot records the outcome of token's run: errText empty on
+	// success, code naming the failure.
+	FinishRunSlot(ctx context.Context, id, token, errText, code string) error
+	// TouchLens records activity of the lens's analysis job.
+	TouchLens(ctx context.Context, id string) error
 	// RecordRun logs one run of the analysis against the monthly cap and
 	// returns the run's id.
 	RecordRun(ctx context.Context, analysisID string) (string, error)
@@ -56,8 +67,8 @@ type AssetAnalysisRepository interface {
 	// ListMissingLenses lists, across every active tenant, the lenses that
 	// should exist but don't: analysable assets without a workspace lens and
 	// campaign memberships without a campaign lens. It also lists stranded
-	// lenses: pending for over pendingGrace with no live analyze_asset job,
-	// because queueing failed after the row was made. At most perTenant per
+	// lenses: pending for over pendingGrace with no analysis job stepping on
+	// them for as long, because queueing failed after the row was made. At most perTenant per
 	// tenant, oldest asset first.
 	ListMissingLenses(ctx context.Context, perTenant int, pendingGrace time.Duration) ([]MissingLens, error)
 }
@@ -289,6 +300,49 @@ func (r *assetAnalysisRepository) DeleteRun(ctx context.Context, id string) erro
 	return err
 }
 
+func (r *assetAnalysisRepository) ClaimRunSlot(ctx context.Context, id, token string, staleBefore time.Time) (bool, error) {
+	res, err := r.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
+		Set("run_token = ?", token).
+		Set("run_heartbeat_at = now()").
+		Set("run_done_at = NULL").
+		Set("run_error = ''").
+		Set("run_error_code = ''").
+		Where("aa.id = ?", id).
+		Where("aa.run_token IS NULL OR aa.run_done_at IS NOT NULL OR aa.run_heartbeat_at < ?", staleBefore).
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (r *assetAnalysisRepository) HeartbeatRunSlot(ctx context.Context, id, token string) error {
+	_, err := r.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
+		Set("run_heartbeat_at = now()").
+		Where("aa.id = ? AND aa.run_token = ? AND aa.run_done_at IS NULL", id, token).
+		Exec(ctx)
+	return err
+}
+
+func (r *assetAnalysisRepository) FinishRunSlot(ctx context.Context, id, token, errText, code string) error {
+	_, err := r.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
+		Set("run_done_at = now()").
+		Set("run_error = ?", errText).
+		Set("run_error_code = ?", code).
+		Where("aa.id = ? AND aa.run_token = ?", id, token).
+		Exec(ctx)
+	return err
+}
+
+func (r *assetAnalysisRepository) TouchLens(ctx context.Context, id string) error {
+	_, err := r.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
+		Set("last_activity_at = now()").
+		Where("aa.id = ?", id).
+		Exec(ctx)
+	return err
+}
+
 // CountRunsSince uses Count, which unlike Exists runs the TenantScoped hook.
 func (r *assetAnalysisRepository) CountRunsSince(ctx context.Context, since time.Time) (int64, error) {
 	n, err := r.db.NewSelect().
@@ -300,8 +354,9 @@ func (r *assetAnalysisRepository) CountRunsSince(ctx context.Context, since time
 
 // missingLensesSQL finds the absent and stranded lenses of active tenants. A
 // NULL type is legacy markdown, analysable like models.IsAnalyzableAssetType
-// says. A stranded lens is looked up against River's own job table (same
-// database), matching the analyze_asset job args.
+// says. A stranded lens is a pending one whose analysis job hasn't stepped
+// within the grace either: the job's steps stamp last_activity_at, so ogen
+// never reads the job queue, which lives in river-service.
 const missingLensesSQL = `
 WITH live AS (
 	SELECT a.tenant_id, a.id, a.created_at
@@ -328,11 +383,7 @@ WITH live AS (
 	LEFT JOIN campaigns AS c ON c.id = aa.campaign_id
 	WHERE aa.status = ? AND aa.updated_at < ?
 		AND (aa.campaign_id IS NULL OR c.deleted_at IS NULL)
-		AND NOT EXISTS (
-			SELECT 1 FROM river_job AS j
-			WHERE j.kind = ? AND j.state IN (?)
-				AND j.args->>'asset_id' = aa.asset_id
-				AND j.args->>'campaign_id' IS NOT DISTINCT FROM aa.campaign_id)
+		AND (aa.last_activity_at IS NULL OR aa.last_activity_at < ?)
 )
 SELECT tenant_id, asset_id, campaign_id FROM (
 	SELECT missing.*, row_number() OVER (
@@ -342,28 +393,20 @@ SELECT tenant_id, asset_id, campaign_id FROM (
 WHERE n <= ?
 ORDER BY tenant_id, n`
 
-// liveJobStates are the River job states in which a queued analysis will
-// still run.
-var liveJobStates = []string{"available", "pending", "retryable", "running", "scheduled"}
-
 func (r *assetAnalysisRepository) ListMissingLenses(ctx context.Context, perTenant int, pendingGrace time.Duration) ([]MissingLens, error) {
 	out := []MissingLens{}
+	cutoff := time.Now().Add(-pendingGrace)
 	err := r.db.NewRaw(missingLensesSQL,
 		models.TenantStatusActive,
 		bun.List(models.AnalyzableAssetTypes),
 		bun.List(models.AnalyzableAssetStatuses),
 		models.AssetAnalysisStatusPending,
-		time.Now().Add(-pendingGrace),
-		analyzeAssetJobKind,
-		bun.List(liveJobStates),
+		cutoff,
+		cutoff,
 		perTenant,
 	).Scan(ctx, &out)
 	return out, err
 }
-
-// analyzeAssetJobKind mirrors queues.AnalyzeAssetKind, which this package
-// cannot import.
-const analyzeAssetJobKind = "analyze_asset"
 
 // deleteUntriagedIdeas deletes the inbox (verdict NULL) ideas matching where.
 func deleteUntriagedIdeas(ctx context.Context, db bun.IDB, where string, args ...any) error {

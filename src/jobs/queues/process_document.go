@@ -145,7 +145,7 @@ func (p *ProcessDocumentProcessor) embedLoop() embedLoop {
 type documentState struct {
 	Phase string        `json:"phase"`
 	Embed embedProgress `json:"embed"`
-	Size  int64         `json:"size,omitempty"`
+	Size  int64         `json:"size,omitzero"`
 }
 
 const (

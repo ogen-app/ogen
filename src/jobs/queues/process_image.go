@@ -494,8 +494,7 @@ func (p *ProcessImageProcessor) embedNext(ctx context.Context, in ProcessImageTa
 func (p *ProcessImageProcessor) embedAndSettle(ctx context.Context, in ProcessImageTask, ext *models.ImageExtraction, runID string, lastAttempt bool) (StepOutput, error) {
 	embedFailures, err := commitImageChunks(ctx, p.Deps, p.stages(), in.AssetID, runID)
 	if err != nil {
-		var allFailed *allChunksFailedError
-		if errors.As(err, &allFailed) && lastAttempt {
+		if _, ok := errors.AsType[*allChunksFailedError](err); ok && lastAttempt {
 			// Nothing embedded, so the asset is not searchable; the retriable
 			// reason lets the tenant re-extract once the embedder recovers.
 			return settledOr(p.terminalReject(ctx, in, ext, models.UploadCodeServiceUnavailable, imageUnavailableReason))
