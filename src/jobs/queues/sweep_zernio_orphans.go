@@ -147,7 +147,7 @@ func (p *SweepZernioOrphansProcessor) orphan(ctx context.Context, tenantID, prof
 		TenantID:        tenantID,
 		Reason:          WithdrawReasonOrphan,
 		Actor:           models.ActorSystem,
-	})
+	}, p.Deps.Client.Cancel(ctx, j.ID))
 	switch {
 	case err != nil:
 		slog.WarnContext(ctx, "orphan sweep: withdraw failed; next tick retries", append(attrs, logging.AttrError, err)...)

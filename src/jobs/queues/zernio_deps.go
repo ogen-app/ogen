@@ -53,4 +53,7 @@ type ZernioDeps struct {
 	// (publish_submitted/succeeded/failed/cancelled, analytics_refreshed).
 	// nil = no-op.
 	ActivityRecorder *activity.Recorder
+	// Jobs enqueues the follow-up jobs these jobs schedule (a delayed first
+	// comment, a withdrawal). Nil fails those enqueues.
+	Jobs *Enqueuer
 }
