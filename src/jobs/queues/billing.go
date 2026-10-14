@@ -142,11 +142,7 @@ func IsLastAttempt(ctx context.Context) bool {
 // EnqueueScheduledChangeStepTx schedules a step of a plan change at a time,
 // inside the transaction that wrote the change.
 func (e *Enqueuer) EnqueueScheduledChangeStepTx(ctx context.Context, tx *sql.Tx, changeID string, at time.Time) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, BillingScheduledChangeTask{ChangeID: changeID}, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: at}))
-	return err
+	return e.insertTx(ctx, tx, BillingScheduledChangeTask{ChangeID: changeID}, &river.InsertOpts{ScheduledAt: at})
 }
 
 func init() {

@@ -1,0 +1,104 @@
+package queues
+
+import (
+	"fmt"
+
+	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/riverqueue/river"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	jobsv1 "github.com/ogen-app/ogen/gen/jobs/v1"
+)
+
+// enqueueRequest converts a job's args to the jobs.v1 request river-service
+// receives: the matching args message, field for field, and the schedule from
+// opts. Queue, attempts and uniqueness are river-service's own per kind.
+func enqueueRequest(args river.JobArgs, opts *river.InsertOpts) (*jobsv1.EnqueueRequest, error) {
+	req := &jobsv1.EnqueueRequest{}
+	if opts != nil && !opts.ScheduledAt.IsZero() {
+		req.ScheduledAt = timestamppb.New(opts.ScheduledAt)
+	}
+	if !setArgs(req, args) {
+		return nil, fmt.Errorf("jobs: %s has no jobs.v1 args message", args.Kind())
+	}
+	return req, nil
+}
+
+// setArgs fills req's args oneof from args and reports whether the kind has a
+// jobs.v1 message.
+func setArgs(req *jobsv1.EnqueueRequest, args river.JobArgs) bool {
+	switch a := args.(type) {
+	case SubmitPostTask:
+		req.Args = &jobsv1.EnqueueRequest_SubmitPostToZernio{SubmitPostToZernio: &jobsv1.SubmitPostToZernioArgs{PostId: a.PostID}}
+	case PollZernioStatusTask:
+		req.Args = &jobsv1.EnqueueRequest_PollZernioStatus{PollZernioStatus: &jobsv1.PollZernioStatusArgs{PostId: a.PostID, PublisherPostId: a.PublisherPostID}}
+	case CancelZernioJobTask:
+		req.Args = &jobsv1.EnqueueRequest_CancelZernioJob{CancelZernioJob: &jobsv1.CancelZernioJobArgs{PostId: a.PostID, Target: string(a.Target), Actor: a.Actor}}
+	case WithdrawZernioPostTask:
+		req.Args = &jobsv1.EnqueueRequest_WithdrawZernioPost{WithdrawZernioPost: &jobsv1.WithdrawZernioPostArgs{
+			PublisherPostId: a.PublisherPostID, PostId: a.PostID, TenantId: a.TenantID, Reason: a.Reason, Actor: a.Actor,
+		}}
+	case PostFirstCommentTask:
+		req.Args = &jobsv1.EnqueueRequest_PostFirstComment{PostFirstComment: &jobsv1.PostFirstCommentArgs{PostId: a.PostID, PublisherPostId: a.PublisherPostID}}
+	case BootstrapZernioProfileTask:
+		req.Args = &jobsv1.EnqueueRequest_BootstrapZernioProfile{BootstrapZernioProfile: &jobsv1.BootstrapZernioProfileArgs{TenantId: a.TenantID}}
+	case TeardownZernioProfileTask:
+		req.Args = &jobsv1.EnqueueRequest_TeardownZernioProfile{TeardownZernioProfile: &jobsv1.TeardownZernioProfileArgs{TenantId: a.TenantID}}
+	case SendEmailTask:
+		req.Args = &jobsv1.EnqueueRequest_SendEmail{SendEmail: &jobsv1.SendEmailArgs{
+			UserId: a.UserID, TenantId: a.TenantID, TemplateKey: a.TemplateKey, EmailKind: string(a.EmailKind),
+			IdempotencyKey: a.IdempotencyKey, ToEmail: a.ToEmail, ToName: a.ToName, Vars: a.Vars,
+		}}
+	case NotifyHarborTenantRegisteredTask:
+		req.Args = &jobsv1.EnqueueRequest_NotifyHarborTenantRegistered{NotifyHarborTenantRegistered: &jobsv1.NotifyHarborTenantRegisteredArgs{TenantId: a.TenantID}}
+	default:
+		return setIngestArgs(req, args)
+	}
+	return true
+}
+
+func setIngestArgs(req *jobsv1.EnqueueRequest, args river.JobArgs) bool {
+	switch a := args.(type) {
+	case ProcessPDFTask:
+		req.Args = &jobsv1.EnqueueRequest_ProcessPdf{ProcessPdf: &jobsv1.ProcessPdfArgs{
+			AssetId: a.AssetID, TenantId: a.TenantID, OriginalName: a.OriginalName, MimeType: a.MimeType,
+		}}
+	case ProcessDocumentTask:
+		req.Args = &jobsv1.EnqueueRequest_ProcessDocument{ProcessDocument: &jobsv1.ProcessDocumentArgs{
+			AssetId: a.AssetID, TenantId: a.TenantID, OriginalName: a.OriginalName, MimeType: a.MimeType, StorageKey: a.StorageKey,
+		}}
+	case ProcessURLTask:
+		req.Args = &jobsv1.EnqueueRequest_ProcessUrl{ProcessUrl: &jobsv1.ProcessUrlArgs{
+			AssetId: a.AssetID, TenantId: a.TenantID, SourceUrl: a.SourceURL, Refresh: a.Refresh,
+		}}
+	case ProcessImageTask:
+		req.Args = &jobsv1.EnqueueRequest_ProcessImage{ProcessImage: &jobsv1.ProcessImageArgs{
+			AssetId: a.AssetID, TenantId: a.TenantID, OriginalName: a.OriginalName, MimeType: a.MimeType,
+			StorageKey: a.StorageKey, RunKey: a.RunKey, PinnedModel: a.PinnedModel,
+		}}
+	case ProcessAudioTask:
+		req.Args = &jobsv1.EnqueueRequest_ProcessAudio{ProcessAudio: &jobsv1.ProcessAudioArgs{
+			AssetId: a.AssetID, TenantId: a.TenantID, OriginalName: a.OriginalName, MimeType: a.MimeType,
+			StorageKey: a.StorageKey, RunKey: a.RunKey, PinnedModel: a.PinnedModel,
+		}}
+	case ReembedImageTask:
+		req.Args = &jobsv1.EnqueueRequest_ReembedImage{ReembedImage: &jobsv1.ReembedImageArgs{AssetId: a.AssetID, TenantId: a.TenantID}}
+	case AnalyzeAssetTask:
+		req.Args = &jobsv1.EnqueueRequest_AnalyzeAsset{AnalyzeAsset: &jobsv1.AnalyzeAssetArgs{
+			TenantId: a.TenantID, AssetId: a.AssetID, CampaignId: a.CampaignID, Reason: a.Reason,
+		}}
+	case ReanalyzeCampaignTask:
+		req.Args = &jobsv1.EnqueueRequest_ReanalyzeCampaign{ReanalyzeCampaign: &jobsv1.ReanalyzeCampaignArgs{TenantId: a.TenantID, CampaignId: a.CampaignID}}
+	default:
+		return false
+	}
+	return true
+}
+
+// hasArgsMessage reports whether kind names a jobs.v1 EnqueueRequest args
+// field, which is how river-service's contract names its kinds.
+func hasArgsMessage(kind string) bool {
+	oneof := (&jobsv1.EnqueueRequest{}).ProtoReflect().Descriptor().Oneofs().ByName("args")
+	return oneof.Fields().ByName(protoreflect.Name(kind)) != nil
+}

@@ -137,9 +137,5 @@ func (p *ExpireBrandDistillsProcessor) Work(ctx context.Context, _ *river.Job[Ex
 
 // EnqueueDistillBrand queues a run to start now.
 func (e *Enqueuer) EnqueueDistillBrand(ctx context.Context, tenantID, runID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.Insert(ctx, DistillBrandTask{TenantID: tenantID, RunID: runID}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insert(ctx, DistillBrandTask{TenantID: tenantID, RunID: runID}, nil)
 }

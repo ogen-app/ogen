@@ -74,9 +74,5 @@ func (p *DistillAssetIdeasProcessor) Process(ctx context.Context, task DistillAs
 
 // EnqueueDistillIdeas queues a distill run to start now.
 func (e *Enqueuer) EnqueueDistillIdeas(ctx context.Context, tenantID, runID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.Insert(ctx, DistillAssetIdeasTask{TenantID: tenantID, RunID: runID}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insert(ctx, DistillAssetIdeasTask{TenantID: tenantID, RunID: runID}, nil)
 }

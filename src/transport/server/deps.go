@@ -217,6 +217,9 @@ func (d *deps) initRiver(ctx context.Context) error {
 	if d.enqueuer == nil {
 		d.enqueuer = &queues.Enqueuer{}
 	}
+	if err := d.initRelay(ctx); err != nil {
+		return err
+	}
 	d.analysis = newAssetAnalysis(d)
 	d.brandDistill = newBrandDistill(d)
 	client, err := newRiverClient(ctx, d)
