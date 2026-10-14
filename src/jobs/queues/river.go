@@ -378,6 +378,15 @@ func (e *Enqueuer) insertTx(ctx context.Context, tx *sql.Tx, args river.JobArgs,
 	return err
 }
 
+// enqueue is insert for jobs enqueued by other jobs, where losing the job
+// matters: with no enqueuer wired it fails rather than doing nothing.
+func (e *Enqueuer) enqueue(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) error {
+	if e == nil || (e.Client == nil && !e.Relays(args.Kind())) {
+		return fmt.Errorf("jobs: no enqueuer for %s", args.Kind())
+	}
+	return e.insert(ctx, args, opts)
+}
+
 // insert is insertTx for callers with no transaction.
 func (e *Enqueuer) insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) error {
 	if e.Relays(args.Kind()) {

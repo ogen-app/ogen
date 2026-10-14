@@ -32,7 +32,10 @@ func (j *jobSteps) Step(ctx context.Context, req *jobrpcv1.StepRequest) (*jobrpc
 	if j.steps == nil {
 		return nil, status.Error(codes.Unavailable, "job steps are not wired")
 	}
-	in := queues.StepInput{Kind: req.GetKind(), Args: req.GetArgs(), State: req.GetState()}
+	in := queues.StepInput{
+		Kind: req.GetKind(), Args: req.GetArgs(), State: req.GetState(),
+		Attempt: int(req.GetAttempt()), MaxAttempts: int(req.GetMaxAttempts()),
+	}
 	if r := req.GetResult(); r != nil {
 		in.Result = &queues.StepResult{Status: int(r.GetStatus()), Body: r.GetBody(), Err: r.GetError(), CredentialMissing: r.GetCredentialMissing()}
 	}
@@ -83,6 +86,13 @@ func stepResponse(out queues.StepOutput) *jobrpcv1.StepResponse {
 			d.Outcome = out.Done.Outcome
 			for _, c := range out.Done.Enqueue {
 				d.Enqueue = append(d.Enqueue, &jobrpcv1.ChildJob{Kind: c.Kind, Args: c.Args})
+			}
+			for _, m := range out.Done.Cancel {
+				jm := &jobrpcv1.JobMatch{Kind: m.Kind}
+				for _, a := range m.Args {
+					jm.Args = append(jm.Args, &jobrpcv1.ArgMatch{Key: a.Key, Values: a.Values})
+				}
+				d.Cancel = append(d.Cancel, jm)
 			}
 		}
 		resp.Next = &jobrpcv1.StepResponse_Done{Done: d}

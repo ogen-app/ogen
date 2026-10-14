@@ -148,6 +148,7 @@ func zernioQueueDeps(d *deps) queues.ZernioDeps {
 		Recorder:           d.usage.recorder,
 		ActivityRecorder:   d.activity.recorder,
 		ProfileID:          d.zernioProfileID,
+		Jobs:               d.enqueuer,
 	}
 }
 

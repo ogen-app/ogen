@@ -37,6 +37,15 @@ type StepInput struct {
 	State []byte
 	// Result is the raw result of the action the previous Step asked for.
 	Result *StepResult
+	// Attempt is this run's attempt, from 1, of at most MaxAttempts.
+	Attempt     int
+	MaxAttempts int
+}
+
+// lastAttempt reports whether no retry follows this run, so a transient
+// failure must be settled now. Unknown counts are never the last.
+func (in StepInput) lastAttempt() bool {
+	return in.MaxAttempts > 0 && in.Attempt >= in.MaxAttempts
 }
 
 // StepResult is the raw result of an action.
@@ -97,13 +106,33 @@ type MediaTransfer struct {
 	UploadURL   string
 	ContentType string
 	Size        int64
+	// storageKey names the stored file, so a run inside ogen reads it from
+	// storage directly rather than through SourceURL.
+	storageKey string
 }
 
 // StepDone ends the job, optionally with child jobs for river-service to
-// enqueue.
+// enqueue and queued jobs for it to cancel. Follow-up jobs of kinds ogen
+// enqueues anyway go through the Enqueuer instead; Enqueue is for the kinds
+// that exist only between the two services.
 type StepDone struct {
 	Outcome string
 	Enqueue []ChildJob
+	Cancel  []JobMatch
+}
+
+// JobMatch selects the queued jobs of one kind whose args match every
+// condition.
+type JobMatch struct {
+	Kind string
+	Args []ArgMatch
+}
+
+// ArgMatch holds when the string arg Key is one of Values; an empty value
+// also matches a job without the key.
+type ArgMatch struct {
+	Key    string
+	Values []string
 }
 
 // ChildJob is a job river-service enqueues on ogen's behalf.
@@ -134,7 +163,19 @@ type JobSteps struct {
 func NewJobSteps(d Deps) *JobSteps {
 	s := &JobSteps{deps: d, kinds: map[string]stepFunc{}}
 	s.registerZernioLifecycle()
+	s.registerPublishing()
 	return s
+}
+
+// registerPublishing adds the publishing jobs. Each runs the same steps here
+// when ogen still works the kind itself.
+func (s *JobSteps) registerPublishing() {
+	d := s.deps
+	s.kinds[SubmitPostToZernioQueue] = (&SubmitPostProcessor{Deps: d.Zernio, Tenants: d.Tenants, Notifier: d.Notifier, Members: d.Users}).step
+	s.kinds[PollZernioStatusQueue] = (&PollZernioStatusProcessor{Deps: d.Zernio, Notifier: d.Notifier, Members: d.Users}).step
+	s.kinds[CancelZernioJobQueue] = (&CancelZernioJobProcessor{Deps: d.Zernio}).step
+	s.kinds[WithdrawZernioPostQueue] = (&WithdrawZernioPostProcessor{Deps: d.Zernio, Notifier: d.Notifier, Members: d.Users}).step
+	s.kinds[PostFirstCommentQueue] = (&PostFirstCommentProcessor{Deps: d.Zernio, Notifier: d.Notifier}).step
 }
 
 // Step returns what river-service does next for one job. An error is
