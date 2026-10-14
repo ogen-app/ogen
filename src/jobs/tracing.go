@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -15,10 +16,10 @@ import (
 )
 
 // Middleware returns the River worker middleware Ogen installs on its job
-// client. Currently just tracing; kept as a slice so more can be added
-// without touching the call site.
+// client, outermost first: tracing wraps the drain handling, so a job
+// rescheduled by a shutdown shows as a snooze in its span, not a failure.
 func Middleware() []rivertype.Middleware {
-	return []rivertype.Middleware{newTracingMiddleware()}
+	return []rivertype.Middleware{newTracingMiddleware(), &drainMiddleware{}}
 }
 
 // tracingMiddleware wraps every River job in a root OpenTelemetry span named by
@@ -55,6 +56,12 @@ func (m *tracingMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doI
 	}
 
 	err := doInner(ctx)
+	// A snooze reschedules the job without using an attempt; it is not a
+	// failure.
+	if _, snoozed := errors.AsType[*rivertype.JobSnoozeError](err); snoozed {
+		span.SetAttributes(attribute.Bool("job.snoozed", true))
+		return err
+	}
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
