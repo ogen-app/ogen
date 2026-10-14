@@ -17,7 +17,15 @@ var sqlMigrations embed.FS
 
 // Migrate applies all pending SQL migrations on every startup.
 // Applied migrations are recorded in the bun_migrations table and never re-run.
+// It runs under the migration lock, so concurrent boots never race on the
+// schema.
 func Migrate(ctx context.Context, db *bun.DB) error {
+	return WithMigrationLock(ctx, db.DB, func(ctx context.Context) error {
+		return migrateSchema(ctx, db)
+	})
+}
+
+func migrateSchema(ctx context.Context, db *bun.DB) error {
 	migrations := migrate.NewMigrations()
 	if err := migrations.Discover(sqlMigrations); err != nil {
 		return fmt.Errorf("discover migrations: %w", err)

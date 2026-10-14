@@ -15,18 +15,24 @@ import (
 
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/rivermigrate"
+
+	"github.com/ogen-app/ogen/src/infra/database"
 )
 
 // MigrateRiver installs or updates River's own tables (river_job,
 // river_leader, river_queue, …) on the shared Postgres database. Idempotent;
-// safe to run on every boot after the application's bun migrations.
+// safe to run on every boot after the application's bun migrations. It runs
+// under the same migration lock, so concurrent boots never race on River's
+// tables either.
 func MigrateRiver(ctx context.Context, db *sql.DB) error {
-	migrator, err := rivermigrate.New(riverdatabasesql.New(db), nil)
-	if err != nil {
-		return fmt.Errorf("jobs: river migrator: %w", err)
-	}
-	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
-		return fmt.Errorf("jobs: river migrate: %w", err)
-	}
-	return nil
+	return database.WithMigrationLock(ctx, db, func(ctx context.Context) error {
+		migrator, err := rivermigrate.New(riverdatabasesql.New(db), nil)
+		if err != nil {
+			return fmt.Errorf("jobs: river migrator: %w", err)
+		}
+		if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+			return fmt.Errorf("jobs: river migrate: %w", err)
+		}
+		return nil
+	})
 }
