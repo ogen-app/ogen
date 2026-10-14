@@ -18,6 +18,7 @@ func MaintenanceTasks(d Deps) map[string]func(context.Context) error {
 		CleanupLoginSecurityQueue:  sweepRunner(newCleanupLoginSecurity(d), CleanupLoginSecurityTask{}),
 		CleanupPluginPairingsQueue: sweepRunner(newCleanupPluginPairings(d), CleanupPluginPairingsTask{}),
 		SweepPendingUploadsQueue:   sweepRunner(newSweepPendingUploads(d), SweepPendingUploadsTask{}),
+		CleanupEmailLogsQueue:      sweepRunner(newCleanupEmailLogs(d), CleanupEmailLogsTask{}),
 	}
 }
 
