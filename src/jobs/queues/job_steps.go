@@ -230,6 +230,9 @@ func (s *JobSteps) registerIngestion() {
 	s.kinds[ProcessPDFQueue] = (&ProcessPDFProcessor{Deps: d.PDF}).step
 	s.kinds[ProcessDocumentQueue] = (&ProcessDocumentProcessor{Deps: d.Document}).step
 	s.kinds[ProcessURLQueue] = (&ProcessURLProcessor{Deps: d.URL}).step
+	s.kinds[ProcessImageQueue] = (&ProcessImageProcessor{Deps: d.Image}).step
+	s.kinds[ReembedImageQueue] = (&ReembedImageProcessor{Deps: d.Image}).step
+	s.kinds[ProcessAudioKind] = (&ProcessAudioProcessor{Deps: d.Audio}).step
 }
 
 // Step returns what river-service does next for one job. An error is

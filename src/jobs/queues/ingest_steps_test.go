@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 
+	audiov1 "github.com/ogen-app/ogen/gen/audio/v1"
+	imagev1 "github.com/ogen-app/ogen/gen/image/v1"
 	pdfv1 "github.com/ogen-app/ogen/gen/pdf/v1"
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -146,5 +148,77 @@ func TestProcessURLRunsInRiverService(t *testing.T) {
 	}
 	if len(chunks.got) == 0 {
 		t.Fatal("no chunks stored")
+	}
+}
+
+func sidecarAnswer(t *testing.T, m proto.Message) *StepResult {
+	t.Helper()
+	b, err := proto.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &StepResult{Status: int(codes.OK), Body: b}
+}
+
+func TestProcessImageRunsInRiverService(t *testing.T) {
+	d, assets, chunks, _, exts := baseImageDeps(&fakeImageClient{})
+	out := driveSteps(t, newImageProc(d).step, ProcessImageQueue,
+		ProcessImageTask{AssetID: "a1", TenantID: "t1", RunKey: "run-1", StorageKey: "assets/a1/original.png", MimeType: "image/png"}, 1, 5,
+		func(o StepOutput) *StepResult {
+			switch {
+			case o.Sidecar != nil:
+				if o.Sidecar.Service != sidecarImage || o.Sidecar.Method != "/image.v1.ImageService/Extract" || o.Sidecar.Stream != nil {
+					t.Fatalf("sidecar = %+v", o.Sidecar)
+				}
+				return sidecarAnswer(t, &imagev1.ExtractResponse{
+					Description: "a bar chart of revenue", AltText: "chart", DescriptionOk: true, ExtractionOk: true,
+					Blocks: []*imagev1.Block{{Text: "Revenue by month"}},
+				})
+			case o.HTTP != nil:
+				return geminiEmbeds(t, o.HTTP)
+			}
+			t.Fatalf("unexpected action %+v", o)
+			return nil
+		})
+	if out.Done == nil || assets.last() != models.AssetStatusReady || len(chunks.got) != 2 {
+		t.Fatalf("out %+v, status %q, chunks %d", out, assets.last(), len(chunks.got))
+	}
+	if ext, _ := exts.GetLatestByAsset(t.Context(), "a1"); ext == nil || ext.Status != models.ImageExtractionStatusComplete {
+		t.Fatalf("extraction = %+v", ext)
+	}
+}
+
+func TestProcessAudioRunsInRiverService(t *testing.T) {
+	ext, seg, utt, status, chunks := &fakeExtractions{}, &fakeSegments{}, &fakeUtterances{}, &fakeStatus{}, &fakeChunks{}
+	d := baseAudioDeps(&fakeAudioClient{}, ext, seg, utt, status, chunks)
+	calls := map[string]int{}
+	out := driveSteps(t, newAudioProc(d).step, ProcessAudioKind,
+		ProcessAudioTask{AssetID: "a1", TenantID: "t1", RunKey: "run-1", StorageKey: "assets/a1/original.mp3", MimeType: "audio/mpeg"}, 1, 10,
+		func(o StepOutput) *StepResult {
+			if o.HTTP != nil {
+				return geminiEmbeds(t, o.HTTP)
+			}
+			if o.Sidecar == nil || o.Sidecar.Service != sidecarAudio {
+				t.Fatalf("unexpected action %+v", o)
+			}
+			calls[o.Sidecar.Method]++
+			switch o.Sidecar.Method {
+			case "/audio.v1.AudioService/Probe":
+				return sidecarAnswer(t, &audiov1.ProbeResponse{DurationMs: 60_000})
+			case "/audio.v1.AudioService/Normalize":
+				return sidecarAnswer(t, &audiov1.NormalizeResponse{DurationMs: 60_000})
+			case "/audio.v1.AudioService/TranscribeSegment":
+				return sidecarAnswer(t, &audiov1.TranscribeSegmentResponse{Utterances: []*audiov1.Utterance{
+					{Text: "hello world", StartMs: 0, EndMs: 2_000, IsSpeech: true},
+				}})
+			}
+			t.Fatalf("unexpected method %s", o.Sidecar.Method)
+			return nil
+		})
+	if out.Done == nil || status.last() != models.AssetStatusReady || len(chunks.got) != 1 {
+		t.Fatalf("out %+v, statuses %v, chunks %d", out, status.all, len(chunks.got))
+	}
+	if calls["/audio.v1.AudioService/Probe"] != 1 || calls["/audio.v1.AudioService/Normalize"] != 1 || calls["/audio.v1.AudioService/TranscribeSegment"] < 1 {
+		t.Errorf("sidecar calls = %v", calls)
 	}
 }

@@ -6,16 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"iter"
 	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/pgvector/pgvector-go"
-
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/embedbatch"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -76,55 +72,6 @@ func (s embedStats) settle(lastAttempt bool) (string, error) {
 	default:
 		return models.AssetStatusReady, nil
 	}
-}
-
-// embedChunks embeds every source that has words, in batched requests, and
-// builds the chunk rows. A failed embed is counted, never fatal: the caller
-// decides the outcome through embedStats.settle.
-func embedChunks(ctx context.Context, embedder chunkEmbedder, assetID string, sources iter.Seq[chunkSource]) ([]models.AssetChunk, embedStats) {
-	var srcs []chunkSource
-	for src := range sources {
-		if hasWords(src.Text) {
-			srcs = append(srcs, src)
-		}
-	}
-	texts := make([]string, len(srcs))
-	for i := range srcs {
-		texts[i] = srcs[i].Text
-	}
-	vecs, _ := embedbatch.Embed(ctx, embedder, texts, embedopts.Document())
-
-	chunks := make([]models.AssetChunk, 0, len(srcs))
-	stats := embedStats{Attempts: len(srcs)}
-	for i, src := range srcs {
-		if vecs[i] == nil {
-			stats.Failures++
-			continue
-		}
-		tokens := src.Tokens
-		if tokens <= 0 {
-			tokens = estimateTokens(src.Text)
-		}
-		stats.Embedded++
-		stats.Tokens += int64(tokens)
-		chunk := models.AssetChunk{
-			ID:           fmt.Sprintf("%s:%d", assetID, src.Index),
-			AssetID:      assetID,
-			ChunkIndex:   src.Index,
-			Content:      src.Text,
-			TokenCount:   tokens,
-			Embedding:    pgvector.NewHalfVector(vecs[i]),
-			Model:        embedder.Name(),
-			SourceAnchor: src.Anchor,
-			PageStart:    src.PageStart,
-			PageEnd:      src.PageEnd,
-		}
-		if src.Label != "" {
-			chunk.SourceLabel = new(src.Label)
-		}
-		chunks = append(chunks, chunk)
-	}
-	return chunks, stats
 }
 
 // storeChunks replaces the asset's chunks with the embedded ones. An empty set
