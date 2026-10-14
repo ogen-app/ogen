@@ -3,7 +3,6 @@ package queues
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,58 +13,6 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
-
-// Zernio jobs run in river-service, which makes every Zernio call with a key
-// leased from ogen. Each job is a short loop: river-service asks Step what to
-// do next, does it, and passes the result to the next Step. The decisions
-// stay here, next to the data: Step reads and writes ogen's tables and builds
-// each Zernio request with the ordinary client (zernio.Plan / zernio.Decode).
-// The loop keeps no durable state, so a job cut short retries from the start;
-// every flow converges on a repeat.
-
-// ZernioStepInput is one Step request.
-type ZernioStepInput struct {
-	Kind string
-	// Args is the job's arguments as JSON, with the same field names as the
-	// job's task here.
-	Args []byte
-	// State is what the previous Step returned; empty on the first.
-	State []byte
-	// Result is the answer to the call the previous Step asked for.
-	Result *zernio.Result
-}
-
-// ZernioStepOutput is what river-service does next: exactly one of Call, Done
-// and Retry is set.
-type ZernioStepOutput struct {
-	State []byte
-	Call  *zernio.Call
-	Done  *ZernioStepDone
-	Retry *ZernioStepRetry
-}
-
-// ZernioStepDone ends the job, optionally with child jobs for river-service to
-// enqueue.
-type ZernioStepDone struct {
-	Outcome string
-	Enqueue []ChildJob
-}
-
-// ChildJob is a job river-service enqueues on ogen's behalf.
-type ChildJob struct {
-	Kind string
-	Args []byte
-}
-
-// ZernioStepRetry stops the job for a later retry.
-type ZernioStepRetry struct {
-	Reason string
-	After  time.Duration
-}
-
-// ErrUnknownZernioKind means this ogen has no steps for the kind: a newer
-// river-service is ahead of it.
-var ErrUnknownZernioKind = errors.New("zernio steps: unknown job kind")
 
 // Child kinds river-service runs for ogen's sweeps. They exist only between
 // the two services: nothing in ogen enqueues them.
@@ -86,70 +33,21 @@ type TeardownLease interface {
 	EndTeardownLease(ctx context.Context, tenantID string) error
 }
 
-type stepFunc func(ctx context.Context, in ZernioStepInput) (ZernioStepOutput, error)
-
-// ZernioSteps answers Step for every Zernio kind river-service runs.
-type ZernioSteps struct {
-	deps  Deps
-	kinds map[string]stepFunc
-}
-
-// NewZernioSteps builds the steps from the same deps as the River workers.
-func NewZernioSteps(d Deps) *ZernioSteps {
-	z := &ZernioSteps{deps: d}
-	z.kinds = map[string]stepFunc{
-		BootstrapZernioProfileQueue:    z.bootstrap,
-		TeardownZernioProfileQueue:     z.teardown,
-		DetectExpiringConnectionsQueue: z.expiringSweep,
-		ExpiringConnectionsTenantKind:  z.expiringTenant,
-	}
-	return z
-}
-
-// Step returns what river-service does next for one Zernio job. An error is
-// transient (a database failure): river-service retries the job later.
-func (z *ZernioSteps) Step(ctx context.Context, in ZernioStepInput) (ZernioStepOutput, error) {
-	fn, ok := z.kinds[in.Kind]
-	if !ok {
-		return ZernioStepOutput{}, fmt.Errorf("%w: %q", ErrUnknownZernioKind, in.Kind)
-	}
-	return fn(ctx, in)
-}
-
-func done(outcome string, children ...ChildJob) (ZernioStepOutput, error) {
-	return ZernioStepOutput{Done: &ZernioStepDone{Outcome: outcome, Enqueue: children}}, nil
-}
-
-func retry(reason string, err error) (ZernioStepOutput, error) {
-	if err != nil {
-		reason += ": " + err.Error()
-	}
-	return ZernioStepOutput{Retry: &ZernioStepRetry{Reason: reason}}, nil
-}
-
-func next(state any, call zernio.Call) (ZernioStepOutput, error) {
-	raw, err := json.Marshal(state)
-	if err != nil {
-		return ZernioStepOutput{}, err
-	}
-	return ZernioStepOutput{State: raw, Call: &call}, nil
-}
-
-func decodeState(raw []byte, into any) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	return json.Unmarshal(raw, into)
-}
-
 // zernioAuthFailed reports a rejected Zernio key: retrying won't help.
 func zernioAuthFailed(err error) bool {
 	return zernio.IsStatus(err, http.StatusUnauthorized) || zernio.IsStatus(err, http.StatusForbidden)
 }
 
+func (z *JobSteps) registerZernioLifecycle() {
+	z.kinds[BootstrapZernioProfileQueue] = z.bootstrap
+	z.kinds[TeardownZernioProfileQueue] = z.teardown
+	z.kinds[DetectExpiringConnectionsQueue] = z.expiringSweep
+	z.kinds[ExpiringConnectionsTenantKind] = z.expiringTenant
+}
+
 // --- bootstrap_zernio_profile ---------------------------------------------
 
-func (z *ZernioSteps) bootstrap(ctx context.Context, in ZernioStepInput) (ZernioStepOutput, error) {
+func (z *JobSteps) bootstrap(ctx context.Context, in StepInput) (StepOutput, error) {
 	var task BootstrapZernioProfileTask
 	if err := json.Unmarshal(in.Args, &task); err != nil || task.TenantID == "" {
 		return done("skipped_bad_args")
@@ -166,13 +64,21 @@ func (z *ZernioSteps) bootstrap(ctx context.Context, in ZernioStepInput) (Zernio
 		// A tenant frozen between signup and now gets no profile.
 		active, err := tenantIsActive(ctx, z.deps.Tenants, task.TenantID)
 		if err != nil {
-			return ZernioStepOutput{}, err
+			return StepOutput{}, err
 		}
 		if !active {
 			return done("skipped_inactive")
 		}
 	}
-	call, finished, err := z.deps.ProfileBootstrapper.BootstrapStep(ctx, &st, in.Result)
+	var res *zernio.Result
+	if in.Result != nil {
+		r := zernioResult(in.Result)
+		res = &r
+	}
+	if zernioDisabled(in.Result) {
+		return done("skipped_zernio_disabled")
+	}
+	call, finished, err := z.deps.ProfileBootstrapper.BootstrapStep(ctx, &st, res)
 	switch {
 	case zernioAuthFailed(err):
 		slog.WarnContext(ctx, "bootstrap gave up: zernio rejected the key", logging.AttrComponent, "jobs.bootstrap_zernio_profile", logging.AttrError, err)
@@ -183,7 +89,7 @@ func (z *ZernioSteps) bootstrap(ctx context.Context, in ZernioStepInput) (Zernio
 		slog.InfoContext(ctx, "bootstrap ok", logging.AttrComponent, "jobs.bootstrap_zernio_profile")
 		return done("bootstrapped")
 	default:
-		return next(st, *call)
+		return nextZernio(st, *call)
 	}
 }
 
@@ -202,7 +108,7 @@ const (
 	tdPhaseDeleteProfile = "delete_profile"
 )
 
-func (z *ZernioSteps) teardown(ctx context.Context, in ZernioStepInput) (ZernioStepOutput, error) {
+func (z *JobSteps) teardown(ctx context.Context, in StepInput) (StepOutput, error) {
 	var task TeardownZernioProfileTask
 	if err := json.Unmarshal(in.Args, &task); err != nil || task.TenantID == "" {
 		return done("skipped_bad_args")
@@ -224,12 +130,16 @@ func (z *ZernioSteps) teardown(ctx context.Context, in ZernioStepInput) (ZernioS
 	// and the workspace was restored meanwhile, stop.
 	torn, err := z.deps.TeardownLease.RenewTeardownLease(ctx, tid, teardownLeaseTTL)
 	if err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
 	if !torn {
 		return done("aborted_restored")
 	}
-	out, err := z.teardownAdvance(ctx, &st, *in.Result)
+	if zernioDisabled(in.Result) {
+		_ = z.deps.TeardownLease.EndTeardownLease(ctx, tid)
+		return done("skipped_zernio_disabled")
+	}
+	out, err := z.teardownAdvance(ctx, &st, zernioResult(in.Result))
 	if zernioAuthFailed(err) {
 		slog.WarnContext(ctx, "teardown gave up: zernio rejected the key", logging.AttrComponent, "jobs.teardown_zernio_profile", "profile_id", st.ProfileID, logging.AttrError, err)
 		_ = z.deps.TeardownLease.EndTeardownLease(ctx, tid)
@@ -241,17 +151,17 @@ func (z *ZernioSteps) teardown(ctx context.Context, in ZernioStepInput) (ZernioS
 	return out, nil
 }
 
-func (z *ZernioSteps) teardownStart(ctx context.Context, tid string) (ZernioStepOutput, error) {
+func (z *JobSteps) teardownStart(ctx context.Context, tid string) (StepOutput, error) {
 	status, _, err := z.deps.TeardownLease.BeginTeardownLease(ctx, tid, teardownLeaseTTL)
 	if err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
 	if status == models.TenantStatusActive {
 		return done("skipped_active")
 	}
 	profileID, found, err := z.deps.AnalyticsSettings.Get(ctx, zernio.SettingProfileID)
 	if err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
 	if !found || profileID == "" {
 		return z.teardownFinish(ctx, tid, "noop_no_profile")
@@ -261,15 +171,15 @@ func (z *ZernioSteps) teardownStart(ctx context.Context, tid string) (ZernioStep
 		return err
 	})
 	if err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
-	return next(teardownState{Phase: tdPhaseList, ProfileID: profileID}, call)
+	return nextZernio(teardownState{Phase: tdPhaseList, ProfileID: profileID}, call)
 }
 
 // teardownAdvance handles the result of the last call: disconnect every
 // account, then delete the profile, then clear the local pointer. A 404 at
 // any point means that part is already gone.
-func (z *ZernioSteps) teardownAdvance(ctx context.Context, st *teardownState, res zernio.Result) (ZernioStepOutput, error) {
+func (z *JobSteps) teardownAdvance(ctx context.Context, st *teardownState, res zernio.Result) (StepOutput, error) {
 	tid, _ := tenantctx.From(ctx)
 	switch st.Phase {
 	case tdPhaseList:
@@ -283,7 +193,7 @@ func (z *ZernioSteps) teardownAdvance(ctx context.Context, st *teardownState, re
 			return z.teardownFinish(ctx, tid, "torn_down_already_gone")
 		}
 		if err != nil {
-			return ZernioStepOutput{}, err
+			return StepOutput{}, err
 		}
 		for _, a := range accounts {
 			st.Accounts = append(st.Accounts, a.ID)
@@ -292,23 +202,23 @@ func (z *ZernioSteps) teardownAdvance(ctx context.Context, st *teardownState, re
 	case tdPhaseDeleteAccount:
 		id := st.Accounts[st.Next]
 		if err := zernio.Decode(res, func(c *zernio.Client) error { return c.DeleteAccount(ctx, id) }); err != nil && !zernio.IsStatus(err, http.StatusNotFound) {
-			return ZernioStepOutput{}, fmt.Errorf("disconnect account %s: %w", id, err)
+			return StepOutput{}, fmt.Errorf("disconnect account %s: %w", id, err)
 		}
 		st.Next++
 		return z.teardownNextDelete(ctx, st)
 	case tdPhaseDeleteProfile:
 		if err := zernio.Decode(res, func(c *zernio.Client) error { return c.DeleteProfile(ctx, st.ProfileID) }); err != nil && !zernio.IsStatus(err, http.StatusNotFound) {
-			return ZernioStepOutput{}, fmt.Errorf("delete profile: %w", err)
+			return StepOutput{}, fmt.Errorf("delete profile: %w", err)
 		}
 		return z.teardownFinish(ctx, tid, "torn_down")
 	default:
-		return ZernioStepOutput{}, fmt.Errorf("unknown teardown phase %q", st.Phase)
+		return StepOutput{}, fmt.Errorf("unknown teardown phase %q", st.Phase)
 	}
 }
 
 // teardownNextDelete disconnects the next account, or deletes the profile once
 // none are left: Zernio refuses to delete a profile that still has accounts.
-func (z *ZernioSteps) teardownNextDelete(ctx context.Context, st *teardownState) (ZernioStepOutput, error) {
+func (z *JobSteps) teardownNextDelete(ctx context.Context, st *teardownState) (StepOutput, error) {
 	var call zernio.Call
 	var err error
 	if st.Next < len(st.Accounts) {
@@ -320,21 +230,21 @@ func (z *ZernioSteps) teardownNextDelete(ctx context.Context, st *teardownState)
 		call, err = zernio.Plan(func(c *zernio.Client) error { return c.DeleteProfile(ctx, st.ProfileID) })
 	}
 	if err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
-	return next(st, call)
+	return nextZernio(st, call)
 }
 
 // teardownFinish clears the local profile keys and releases the lease. A
 // failure to clear must fail the step, or a dangling profile id survives.
-func (z *ZernioSteps) teardownFinish(ctx context.Context, tid, outcome string) (ZernioStepOutput, error) {
+func (z *JobSteps) teardownFinish(ctx context.Context, tid, outcome string) (StepOutput, error) {
 	for _, k := range []string{zernio.SettingProfileID, zernio.SettingProfileName, zernio.SettingProfileCreatedAt, zernio.SettingProfileMeta} {
 		if err := z.deps.AnalyticsSettings.Delete(ctx, k); err != nil {
-			return ZernioStepOutput{}, fmt.Errorf("clear %s: %w", k, err)
+			return StepOutput{}, fmt.Errorf("clear %s: %w", k, err)
 		}
 	}
 	if err := z.deps.TeardownLease.EndTeardownLease(ctx, tid); err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
 	slog.InfoContext(ctx, "teardown finished", logging.AttrComponent, "jobs.teardown_zernio_profile", "outcome", outcome)
 	return done(outcome)
@@ -350,14 +260,14 @@ type expiringTenantArgs struct {
 // expiringSweep fans the connection-health sweep out into one job per tenant
 // with a Zernio profile, so each runs on its own and a slow tenant holds up
 // nobody.
-func (z *ZernioSteps) expiringSweep(ctx context.Context, _ ZernioStepInput) (ZernioStepOutput, error) {
+func (z *JobSteps) expiringSweep(ctx context.Context, _ StepInput) (StepOutput, error) {
 	repo := z.deps.Zernio.SocialAccountRepo
 	if repo == nil {
 		return done("skipped_unwired")
 	}
 	pairs, err := repo.ListActiveTenantProfiles(tenantctx.WithSystem(ctx))
 	if err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
 	children := make([]ChildJob, 0, len(pairs))
 	for _, tp := range pairs {
@@ -366,7 +276,7 @@ func (z *ZernioSteps) expiringSweep(ctx context.Context, _ ZernioStepInput) (Zer
 		}
 		raw, err := json.Marshal(expiringTenantArgs{TenantID: tp.TenantID, ProfileID: tp.ProfileID})
 		if err != nil {
-			return ZernioStepOutput{}, err
+			return StepOutput{}, err
 		}
 		children = append(children, ChildJob{Kind: ExpiringConnectionsTenantKind, Args: raw})
 	}
@@ -375,7 +285,7 @@ func (z *ZernioSteps) expiringSweep(ctx context.Context, _ ZernioStepInput) (Zer
 
 // expiringTenant checks one tenant's account health: fetch it from Zernio,
 // then record it and notify owners as the in-process sweep does.
-func (z *ZernioSteps) expiringTenant(ctx context.Context, in ZernioStepInput) (ZernioStepOutput, error) {
+func (z *JobSteps) expiringTenant(ctx context.Context, in StepInput) (StepOutput, error) {
 	var args expiringTenantArgs
 	if err := json.Unmarshal(in.Args, &args); err != nil || args.TenantID == "" || args.ProfileID == "" {
 		return done("skipped_bad_args")
@@ -387,12 +297,15 @@ func (z *ZernioSteps) expiringTenant(ctx context.Context, in ZernioStepInput) (Z
 			return err
 		})
 		if err != nil {
-			return ZernioStepOutput{}, err
+			return StepOutput{}, err
 		}
-		return next(struct{}{}, call)
+		return nextZernio(struct{}{}, call)
+	}
+	if zernioDisabled(in.Result) {
+		return done("skipped_zernio_disabled")
 	}
 	var healths []zernio.AccountHealth
-	err := zernio.Decode(*in.Result, func(c *zernio.Client) error {
+	err := zernio.Decode(zernioResult(in.Result), func(c *zernio.Client) error {
 		var err error
 		healths, err = c.GetAccountsHealth(ctx, args.ProfileID)
 		return err
@@ -406,7 +319,7 @@ func (z *ZernioSteps) expiringTenant(ctx context.Context, in ZernioStepInput) (Z
 	p := newDetectExpiringConnections(z.deps)
 	res, err := p.applyHealth(ctx, args.TenantID, args.ProfileID, healths, time.Now().UTC())
 	if err != nil {
-		return ZernioStepOutput{}, err
+		return StepOutput{}, err
 	}
 	return done(fmt.Sprintf("checked_%d_notified_%d", res.checked, res.notified))
 }

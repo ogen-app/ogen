@@ -20,33 +20,36 @@ type scriptedZernio struct {
 	calls   []string
 }
 
-func (s *scriptedZernio) answer(c zernio.Call) zernio.Result {
+func (s *scriptedZernio) answer(c queues.HTTPCall) queues.StepResult {
 	key := c.Method + " " + c.Path
 	s.calls = append(s.calls, key)
 	if r, ok := s.replies[key]; ok {
-		return r
+		return queues.StepResult{Status: r.Status, Body: r.Body, Err: r.Err}
 	}
-	return zernio.Result{Status: 500, Body: []byte(`{"error":"unscripted ` + key + `"}`)}
+	return queues.StepResult{Status: 500, Body: []byte(`{"error":"unscripted ` + key + `"}`)}
 }
 
 // runSteps drives one job to the end the way river-service does.
-func runSteps(t *testing.T, steps *queues.ZernioSteps, kind string, args any, z *scriptedZernio) queues.ZernioStepOutput {
+func runSteps(t *testing.T, steps *queues.JobSteps, kind string, args any, z *scriptedZernio) queues.StepOutput {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	in := queues.ZernioStepInput{Kind: kind, Args: raw}
+	in := queues.StepInput{Kind: kind, Args: raw}
 	for range 20 {
 		out, err := steps.Step(context.Background(), in)
 		if err != nil {
 			t.Fatalf("Step: %v", err)
 		}
-		if out.Call == nil {
+		if out.HTTP == nil {
 			return out
 		}
-		res := z.answer(*out.Call)
+		if out.HTTP.Upstream != queues.UpstreamZernio {
+			t.Fatalf("call to %q, want zernio", out.HTTP.Upstream)
+		}
+		res := z.answer(*out.HTTP)
 		in.State, in.Result = out.State, &res
 	}
 	t.Fatal("job did not finish in 20 steps")
-	return queues.ZernioStepOutput{}
+	return queues.StepOutput{}
 }
 
 type activeTenants struct{ status string }
@@ -60,7 +63,7 @@ func profileJSON(id, name, created string) string {
 func TestBootstrapStepsCreateAndAdoptTheOldest(t *testing.T) {
 	settings := newFakeSettings()
 	boot := zernio.NewBootstrapper(nil, settings, "dev")
-	steps := queues.NewZernioSteps(queues.Deps{ProfileBootstrapper: boot, Tenants: activeTenants{models.TenantStatusActive}})
+	steps := queues.NewJobSteps(queues.Deps{ProfileBootstrapper: boot, Tenants: activeTenants{models.TenantStatusActive}})
 	name := zernio.ManagedProfileNameFor("dev", "t1")
 	z := &scriptedZernio{replies: map[string]zernio.Result{
 		"POST /profiles": {Status: 201, Body: []byte(`{"profile":` + profileJSON("p-new", name, "2026-10-14T10:00:00Z") + `}`)},
@@ -84,7 +87,7 @@ func TestBootstrapStepsAdoptAStoredProfile(t *testing.T) {
 	settings := newFakeSettings()
 	ctx := tenantctx.With(context.Background(), "t1")
 	_ = settings.Set(ctx, zernio.SettingProfileID, "p-1")
-	steps := queues.NewZernioSteps(queues.Deps{ProfileBootstrapper: zernio.NewBootstrapper(nil, settings, "dev"), Tenants: activeTenants{models.TenantStatusActive}})
+	steps := queues.NewJobSteps(queues.Deps{ProfileBootstrapper: zernio.NewBootstrapper(nil, settings, "dev"), Tenants: activeTenants{models.TenantStatusActive}})
 	z := &scriptedZernio{replies: map[string]zernio.Result{
 		"GET /profiles/p-1": {Status: 200, Body: []byte(`{"profile":` + profileJSON("p-1", "x", "2026-10-01T00:00:00Z") + `}`)},
 	}}
@@ -95,12 +98,12 @@ func TestBootstrapStepsAdoptAStoredProfile(t *testing.T) {
 }
 
 func TestBootstrapStepsOutcomes(t *testing.T) {
-	steps := queues.NewZernioSteps(queues.Deps{ProfileBootstrapper: zernio.NewBootstrapper(nil, newFakeSettings(), "dev"), Tenants: activeTenants{models.TenantStatusSuspended}})
+	steps := queues.NewJobSteps(queues.Deps{ProfileBootstrapper: zernio.NewBootstrapper(nil, newFakeSettings(), "dev"), Tenants: activeTenants{models.TenantStatusSuspended}})
 	if out := runSteps(t, steps, queues.BootstrapZernioProfileQueue, map[string]string{"tenant_id": "t1"}, &scriptedZernio{}); out.Done == nil || out.Done.Outcome != "skipped_inactive" {
 		t.Errorf("inactive tenant: %+v", out)
 	}
 
-	steps = queues.NewZernioSteps(queues.Deps{ProfileBootstrapper: zernio.NewBootstrapper(nil, newFakeSettings(), "dev"), Tenants: activeTenants{models.TenantStatusActive}})
+	steps = queues.NewJobSteps(queues.Deps{ProfileBootstrapper: zernio.NewBootstrapper(nil, newFakeSettings(), "dev"), Tenants: activeTenants{models.TenantStatusActive}})
 	z := &scriptedZernio{replies: map[string]zernio.Result{"GET /profiles": {Status: 401, Body: []byte(`{"error":"bad key"}`)}}}
 	if out := runSteps(t, steps, queues.BootstrapZernioProfileQueue, map[string]string{"tenant_id": "t1"}, z); out.Done == nil || out.Done.Outcome != "gave_up_auth" {
 		t.Errorf("rejected key: %+v", out)
@@ -118,33 +121,33 @@ type listSequence struct {
 	lists []string
 }
 
-func (l *listSequence) answer(c zernio.Call) zernio.Result {
+func (l *listSequence) answer(c queues.HTTPCall) queues.StepResult {
 	if c.Method == "GET" && c.Path == "/profiles" && len(l.lists) > 0 {
 		body := l.lists[0]
 		l.lists = l.lists[1:]
 		l.calls = append(l.calls, "GET /profiles")
-		return zernio.Result{Status: 200, Body: []byte(body)}
+		return queues.StepResult{Status: 200, Body: []byte(body)}
 	}
 	return l.scriptedZernio.answer(c)
 }
 
-func runStepsWith(t *testing.T, steps *queues.ZernioSteps, kind string, args any, answer func(zernio.Call) zernio.Result) queues.ZernioStepOutput {
+func runStepsWith(t *testing.T, steps *queues.JobSteps, kind string, args any, answer func(queues.HTTPCall) queues.StepResult) queues.StepOutput {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	in := queues.ZernioStepInput{Kind: kind, Args: raw}
+	in := queues.StepInput{Kind: kind, Args: raw}
 	for range 20 {
 		out, err := steps.Step(context.Background(), in)
 		if err != nil {
 			t.Fatalf("Step: %v", err)
 		}
-		if out.Call == nil {
+		if out.HTTP == nil {
 			return out
 		}
-		res := answer(*out.Call)
+		res := answer(*out.HTTP)
 		in.State, in.Result = out.State, &res
 	}
 	t.Fatal("job did not finish in 20 steps")
-	return queues.ZernioStepOutput{}
+	return queues.StepOutput{}
 }
 
 // fakeLease is an in-memory teardown lease on one tenant.
@@ -177,7 +180,7 @@ func TestTeardownStepsDisconnectThenDelete(t *testing.T) {
 	_ = settings.Set(ctx, zernio.SettingProfileID, "p-1")
 	_ = settings.Set(ctx, zernio.SettingProfileName, "ogen-dev-t1")
 	lease := &fakeLease{status: models.TenantStatusDeleted}
-	steps := queues.NewZernioSteps(queues.Deps{TeardownLease: lease, AnalyticsSettings: settings})
+	steps := queues.NewJobSteps(queues.Deps{TeardownLease: lease, AnalyticsSettings: settings})
 	z := &scriptedZernio{replies: map[string]zernio.Result{
 		"GET /accounts":        {Status: 200, Body: []byte(`{"accounts":[{"_id":"a1","platform":"x"},{"_id":"a2","platform":"linkedin"}]}`)},
 		"DELETE /accounts/a1":  {Status: 200, Body: []byte(`{}`)},
@@ -203,7 +206,7 @@ func TestTeardownStepsDisconnectThenDelete(t *testing.T) {
 func TestTeardownStepsStopForARestoredTenant(t *testing.T) {
 	settings := newFakeSettings()
 	_ = settings.Set(tenantctx.With(context.Background(), "t1"), zernio.SettingProfileID, "p-1")
-	steps := queues.NewZernioSteps(queues.Deps{TeardownLease: &fakeLease{status: models.TenantStatusActive}, AnalyticsSettings: settings})
+	steps := queues.NewJobSteps(queues.Deps{TeardownLease: &fakeLease{status: models.TenantStatusActive}, AnalyticsSettings: settings})
 	z := &scriptedZernio{}
 	if out := runSteps(t, steps, queues.TeardownZernioProfileQueue, map[string]string{"tenant_id": "t1"}, z); out.Done == nil || out.Done.Outcome != "skipped_active" || len(z.calls) != 0 {
 		t.Fatalf("active tenant: %+v, calls %v", out, z.calls)
@@ -212,9 +215,9 @@ func TestTeardownStepsStopForARestoredTenant(t *testing.T) {
 	// Restored after the teardown started (its lease lapsed): stop before the
 	// next destructive call.
 	lease := &fakeLease{status: models.TenantStatusDeleted}
-	steps = queues.NewZernioSteps(queues.Deps{TeardownLease: lease, AnalyticsSettings: settings})
+	steps = queues.NewJobSteps(queues.Deps{TeardownLease: lease, AnalyticsSettings: settings})
 	z = &scriptedZernio{replies: map[string]zernio.Result{"GET /accounts": {Status: 200, Body: []byte(`{"accounts":[{"_id":"a1"}]}`)}}}
-	answer := func(c zernio.Call) zernio.Result {
+	answer := func(c queues.HTTPCall) queues.StepResult {
 		lease.status = models.TenantStatusActive
 		return z.answer(c)
 	}
@@ -225,8 +228,23 @@ func TestTeardownStepsStopForARestoredTenant(t *testing.T) {
 }
 
 func TestUnknownKindIsReportedAsSuch(t *testing.T) {
-	_, err := queues.NewZernioSteps(queues.Deps{}).Step(context.Background(), queues.ZernioStepInput{Kind: "publish_to_mars"})
+	_, err := queues.NewJobSteps(queues.Deps{}).Step(context.Background(), queues.StepInput{Kind: "publish_to_mars"})
 	if err == nil || !strings.Contains(err.Error(), "unknown job kind") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestZernioStepsWithNoKeyInOgen(t *testing.T) {
+	steps := queues.NewJobSteps(queues.Deps{ProfileBootstrapper: zernio.NewBootstrapper(nil, newFakeSettings(), "dev"), Tenants: activeTenants{models.TenantStatusActive}})
+	noKey := func(queues.HTTPCall) queues.StepResult { return queues.StepResult{CredentialMissing: true} }
+	if out := runStepsWith(t, steps, queues.BootstrapZernioProfileQueue, map[string]string{"tenant_id": "t1"}, noKey); out.Done == nil || out.Done.Outcome != "skipped_zernio_disabled" {
+		t.Errorf("bootstrap with no key: %+v", out)
+	}
+	settings := newFakeSettings()
+	_ = settings.Set(tenantctx.With(context.Background(), "t1"), zernio.SettingProfileID, "p-1")
+	lease := &fakeLease{status: models.TenantStatusDeleted}
+	steps = queues.NewJobSteps(queues.Deps{TeardownLease: lease, AnalyticsSettings: settings})
+	if out := runStepsWith(t, steps, queues.TeardownZernioProfileQueue, map[string]string{"tenant_id": "t1"}, noKey); out.Done == nil || out.Done.Outcome != "skipped_zernio_disabled" || lease.held {
+		t.Errorf("teardown with no key: %+v, lease held %v", out, lease.held)
 	}
 }
