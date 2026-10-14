@@ -267,7 +267,7 @@ func (h *AssetsHandler) decorateAnalysis(ctx context.Context, assets []models.As
 	for i := range assets {
 		ids[i] = assets[i].ID
 	}
-	digests, err := h.analyses.WorkspaceDigests(ctx, ids)
+	digests, err := h.analyses.LensDigests(ctx, ids, nil)
 	if err != nil {
 		return
 	}

@@ -34,8 +34,8 @@ const (
 
 // Assets of the fixture, by what makes each one distinct.
 const (
-	fxPDF   = "q-pdf"   // ready, tag gartner, in c-explicit, woken + later + yes ideas, matches text once
-	fxWeb   = "q-web"   // processing, tags gartner+finance, in c-explicit, analysed without ideas, matches text twice
+	fxPDF   = "q-pdf"   // ready, tag gartner, in c-explicit, woken + later + yes ideas (its c-explicit lens: open + no), matches text once
+	fxWeb   = "q-web"   // processing, tags gartner+finance, in c-explicit without a c-explicit lens, analysed without ideas, matches text twice
 	fxNote  = "q-note"  // failed, only a deleted tag, in the deleted campaign only, analysis pending
 	fxSheet = "q-sheet" // partial, untagged, listed by a campaign with use_assets off
 	fxCSV   = "q-csv"
@@ -133,7 +133,7 @@ func seedAssetQueryFixture(t *testing.T) *assetQueryFixture {
 		insert(ctx, &models.AssetAnalysis{ID: id, AssetID: asset, CampaignID: campaignID, Status: status, Summary: summary})
 	}
 	lens("l-pdf", fxPDF, nil, models.AssetAnalysisStatusReady, "## Summary\n\nThe hype cycle maps **AI agents** at the peak. More detail follows.")
-	lens("l-pdf-c", fxPDF, new("c-explicit"), models.AssetAnalysisStatusReady, "")
+	lens("l-pdf-c", fxPDF, new("c-explicit"), models.AssetAnalysisStatusReady, "For the launch, the PDF frames **agents** as early. More follows.")
 	lens("l-web", fxWeb, nil, models.AssetAnalysisStatusReady, "Bees.")
 	lens("l-note", fxNote, nil, models.AssetAnalysisStatusPending, "")
 	lens("l-note-del", fxNote, new("c-deleted"), models.AssetAnalysisStatusReady, "")
@@ -152,6 +152,7 @@ func seedAssetQueryFixture(t *testing.T) *assetQueryFixture {
 	idea("i-later", "l-pdf", &later, new(fx.now.Add(24*time.Hour)))
 	idea("i-yes", "l-pdf", new(models.IdeaVerdictYes), nil)
 	idea("i-no-campaign-lens", "l-pdf-c", new(models.IdeaVerdictNo), nil)
+	idea("i-open-campaign-lens", "l-pdf-c", nil, nil)
 	idea("i-deleted-campaign", "l-note-del", new(models.IdeaVerdictYes), nil)
 	// A manual idea that happens to point at an analysis never counts.
 	insert(ctx, &models.Idea{ID: "i-manual", Title: "manual", AssetAnalysisID: new("l-web"), CreatedByName: "u"})
@@ -239,7 +240,7 @@ func TestAssetQuery_Filters(t *testing.T) {
 		{"tag or none", models.AssetQuery{Tag: anyOf("tg-finance", "none"), Kind: anyOf("pdf", "web", "note")}, []string{fxWeb, fxNote}},
 		{"tag_not", models.AssetQuery{Tag: noneOf("tg-gartner", "none")}, nil},
 		{"ideas undecided includes woken", models.AssetQuery{Ideas: anyOf("undecided")}, []string{fxPDF}},
-		{"ideas no from campaign lens", models.AssetQuery{Ideas: anyOf("no")}, []string{fxPDF}},
+		{"ideas no only in a campaign lens", models.AssetQuery{Ideas: anyOf("no")}, nil},
 		{"ideas none", models.AssetQuery{Ideas: anyOf("none")}, []string{fxWeb}},
 		{"ideas unread", models.AssetQuery{Ideas: anyOf("unread"), Kind: anyOf("pdf", "web", "note")}, []string{fxNote}},
 		{"ideas_not", models.AssetQuery{Ideas: noneOf("unread")}, []string{fxPDF, fxWeb}},
@@ -330,8 +331,8 @@ func TestAssetQuery_RowShape(t *testing.T) {
 	if pdf.Kind != models.AssetKindPDF || pdf.File == nil || *pdf.File.PageCount != 12 || pdf.File.ChecksumSHA256 != fxChecksum {
 		t.Errorf("pdf row = %+v / %+v", pdf, pdf.File)
 	}
-	if want := (models.AssetIdeaCounts{Undecided: 2, Yes: 1, Later: 1, No: 1}); pdf.IdeaCounts != want {
-		t.Errorf("idea_counts = %+v, want %+v (woken idea undecided only, campaign-lens idea counted)", pdf.IdeaCounts, want)
+	if want := (models.AssetIdeaCounts{Undecided: 2, Yes: 1, Later: 1}); pdf.IdeaCounts != want {
+		t.Errorf("idea_counts = %+v, want %+v (woken idea undecided only, campaign-lens ideas not counted)", pdf.IdeaCounts, want)
 	}
 	if pdf.Gist == nil || *pdf.Gist != "The hype cycle maps AI agents at the peak." {
 		t.Errorf("gist = %v, want the summary's lead sentence", pdf.Gist)
@@ -390,11 +391,66 @@ func TestAssetQuery_Scope(t *testing.T) {
 			t.Errorf("scope %s: err = %v, want sql.ErrNoRows", scope, err)
 		}
 	}
-	// Inside c-explicit the deleted campaign's lens never counted anyway; the
-	// PDF keeps both its workspace and its c-explicit ideas.
-	pdf := fx.run(t, models.AssetQuery{ScopeCampaign: "c-explicit", Kind: anyOf("pdf")}).Assets[0]
-	if pdf.IdeaCounts.No != 1 || pdf.IdeaCounts.Undecided != 2 {
-		t.Errorf("scoped idea counts = %+v", pdf.IdeaCounts)
+}
+
+// TestAssetQuery_OneLensPerScope: the bank counts the workspace lens alone and
+// a campaign page that campaign's lens alone, in the counts, next idea,
+// undecided total, gist and analysis status alike.
+func TestAssetQuery_OneLensPerScope(t *testing.T) {
+	fx := seedAssetQueryFixture(t)
+
+	bank := fx.run(t, models.AssetQuery{Kind: anyOf("pdf")})
+	pdf := bank.Assets[0]
+	if want := (models.AssetIdeaCounts{Undecided: 2, Yes: 1, Later: 1}); pdf.IdeaCounts != want {
+		t.Errorf("bank idea_counts = %+v, want %+v", pdf.IdeaCounts, want)
+	}
+	if pdf.NextIdea == nil || pdf.NextIdea.ID == "i-open-campaign-lens" {
+		t.Errorf("bank next_idea = %+v, want a workspace idea", pdf.NextIdea)
+	}
+	if bank.IdeasUndecided != 2 {
+		t.Errorf("bank ideas_undecided = %d, want the workspace lens's 2", bank.IdeasUndecided)
+	}
+	if pdf.Gist == nil || *pdf.Gist != "The hype cycle maps AI agents at the peak." {
+		t.Errorf("bank gist = %v, want the workspace lens's", pdf.Gist)
+	}
+
+	scoped := fx.run(t, models.AssetQuery{ScopeCampaign: "c-explicit"})
+	byID := map[string]models.AssetListItem{}
+	for _, a := range scoped.Assets {
+		byID[a.ID] = a
+	}
+	pdf = byID[fxPDF]
+	if want := (models.AssetIdeaCounts{Undecided: 1, No: 1}); pdf.IdeaCounts != want {
+		t.Errorf("scoped idea_counts = %+v, want %+v (c-explicit lens only)", pdf.IdeaCounts, want)
+	}
+	if pdf.NextIdea == nil || pdf.NextIdea.ID != "i-open-campaign-lens" {
+		t.Errorf("scoped next_idea = %+v, want the campaign lens's open idea", pdf.NextIdea)
+	}
+	if scoped.IdeasUndecided != 1 {
+		t.Errorf("scoped ideas_undecided = %d, want the campaign lens's 1", scoped.IdeasUndecided)
+	}
+	if pdf.Gist == nil || *pdf.Gist != "For the launch, the PDF frames agents as early." {
+		t.Errorf("scoped gist = %v, want the campaign lens's", pdf.Gist)
+	}
+	if pdf.AnalysisStatus == nil || *pdf.AnalysisStatus != models.AssetAnalysisStatusReady {
+		t.Errorf("scoped analysis_status = %v", pdf.AnalysisStatus)
+	}
+
+	// The web page has a ready workspace lens but no c-explicit one: on the
+	// campaign page it is unread, without gist or status.
+	web := byID[fxWeb]
+	if web.Gist != nil || web.AnalysisStatus != nil || web.IdeaCounts != (models.AssetIdeaCounts{}) || web.NextIdea != nil {
+		t.Errorf("scoped web row = %+v, want no reading", web)
+	}
+	if got := listedIDs(fx.run(t, models.AssetQuery{ScopeCampaign: "c-explicit", Ideas: anyOf("unread")})); !slices.Equal(got, []string{fxWeb}) {
+		t.Errorf("scoped ideas=unread = %v, want the web page", got)
+	}
+	if got := listedIDs(fx.run(t, models.AssetQuery{Ideas: anyOf("unread"), Kind: anyOf("web")})); len(got) != 0 {
+		t.Errorf("bank ideas=unread = %v, want none: the web page's workspace lens is ready", got)
+	}
+	grouped := fx.run(t, models.AssetQuery{ScopeCampaign: "c-explicit", Group: models.AssetGroupIdeas})
+	if want := []models.AssetGroupCount{{Key: "undecided", Count: 1}, {Key: "none", Count: 1}}; !slices.Equal(grouped.Groups, want) {
+		t.Errorf("scoped ideas groups = %+v, want %+v", grouped.Groups, want)
 	}
 }
 
@@ -411,6 +467,7 @@ func TestAssetQuery_FacetsAgreeWithFilters(t *testing.T) {
 		{Text: "overwintering", UpdatedAfter: new(fx.now.Add(-24 * time.Hour))},
 		{Title: anyOf("e"), Tag: anyOf("none")},
 		{ScopeCampaign: "c-explicit", Tag: anyOf("tg-finance")},
+		{ScopeCampaign: "c-explicit", Ideas: anyOf("undecided", "unread")},
 	}
 	loc, err := time.LoadLocation("Pacific/Auckland")
 	if err != nil {

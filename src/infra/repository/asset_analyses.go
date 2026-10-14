@@ -29,9 +29,10 @@ type AssetAnalysisRepository interface {
 	ListByAsset(ctx context.Context, assetID string) ([]models.AssetAnalysis, error)
 	// ListByCampaign returns the campaign's lenses, most relevant first.
 	ListByCampaign(ctx context.Context, campaignID string) ([]models.AssetAnalysis, error)
-	// WorkspaceDigests maps each asset id to its workspace lens status and
-	// gist in one query; assets without a lens are absent.
-	WorkspaceDigests(ctx context.Context, assetIDs []string) (map[string]WorkspaceDigest, error)
+	// LensDigests maps each asset id to the status and gist of one lens, the
+	// workspace lens for a nil campaignID, in one query; assets without that
+	// lens are absent.
+	LensDigests(ctx context.Context, assetIDs []string, campaignID *string) (map[string]LensDigest, error)
 	// SetStatus writes status with its failure code and reason (both empty
 	// unless failed or skipped).
 	SetStatus(ctx context.Context, db bun.IDB, id string, status models.AssetAnalysisStatus, code, reason string) error
@@ -159,8 +160,8 @@ func (r *assetAnalysisRepository) ListByCampaign(ctx context.Context, campaignID
 	return out, err
 }
 
-// WorkspaceDigest is what the asset list shows of a workspace lens.
-type WorkspaceDigest struct {
+// LensDigest is what the asset list shows of a lens.
+type LensDigest struct {
 	Status models.AssetAnalysisStatus
 	Gist   string
 	// SummaryHead is the start of the summary, read only when Gist is empty
@@ -173,8 +174,8 @@ type WorkspaceDigest struct {
 // lists still reaches its first prose paragraph.
 const summaryHeadRunes = 4000
 
-func (r *assetAnalysisRepository) WorkspaceDigests(ctx context.Context, assetIDs []string) (map[string]WorkspaceDigest, error) {
-	out := make(map[string]WorkspaceDigest, len(assetIDs))
+func (r *assetAnalysisRepository) LensDigests(ctx context.Context, assetIDs []string, campaignID *string) (map[string]LensDigest, error) {
+	out := make(map[string]LensDigest, len(assetIDs))
 	if len(assetIDs) == 0 {
 		return out, nil
 	}
@@ -184,17 +185,21 @@ func (r *assetAnalysisRepository) WorkspaceDigests(ctx context.Context, assetIDs
 		Gist        string                     `bun:"gist"`
 		SummaryHead string                     `bun:"summary_head"`
 	}
-	if err := r.db.NewSelect().
+	q := r.db.NewSelect().
 		Model((*models.AssetAnalysis)(nil)).
 		Column("aa.asset_id", "aa.status", "aa.gist").
 		ColumnExpr("CASE WHEN aa.gist = '' THEN left(aa.summary, ?) ELSE '' END AS summary_head", summaryHeadRunes).
-		Where("aa.asset_id IN (?)", bun.List(assetIDs)).
-		Where("aa.campaign_id IS NULL").
-		Scan(ctx, &rows); err != nil {
+		Where("aa.asset_id IN (?)", bun.List(assetIDs))
+	if campaignID == nil {
+		q = q.Where("aa.campaign_id IS NULL")
+	} else {
+		q = q.Where("aa.campaign_id = ?", *campaignID)
+	}
+	if err := q.Scan(ctx, &rows); err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
-		out[row.AssetID] = WorkspaceDigest{Status: row.Status, Gist: row.Gist, SummaryHead: row.SummaryHead}
+		out[row.AssetID] = LensDigest{Status: row.Status, Gist: row.Gist, SummaryHead: row.SummaryHead}
 	}
 	return out, nil
 }
