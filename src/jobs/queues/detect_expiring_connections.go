@@ -83,16 +83,20 @@ func (p *DetectExpiringConnectionsProcessor) Timeout(*river.Job[DetectExpiringCo
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &DetectExpiringConnectionsProcessor{
-			Zernio:     d.Zernio,
-			Users:      d.Users,
-			EmailLogs:  d.Email.Logs,
-			AppBaseURL: d.Email.AppBaseURL,
-			LeadDays:   d.ExpiryLeadDays,
-			Notifier:   d.Notifier,
-			Jobs:       d.Jobs,
-		})
+		river.AddWorker(w, newDetectExpiringConnections(d))
 	})
+}
+
+func newDetectExpiringConnections(d Deps) *DetectExpiringConnectionsProcessor {
+	return &DetectExpiringConnectionsProcessor{
+		Zernio:     d.Zernio,
+		Users:      d.Users,
+		EmailLogs:  d.Email.Logs,
+		AppBaseURL: d.Email.AppBaseURL,
+		LeadDays:   d.ExpiryLeadDays,
+		Notifier:   d.Notifier,
+		Jobs:       d.Jobs,
+	}
 }
 
 // Process runs one sweep tick. Per-tenant failures are recorded in the tick
@@ -178,6 +182,13 @@ func (p *DetectExpiringConnectionsProcessor) sweepTenant(ctx context.Context, te
 	if err != nil {
 		return res, err
 	}
+	return p.applyHealth(ctx, tenantID, profileID, healths, now)
+}
+
+// applyHealth records each tracked account's health and notifies the owners
+// of accounts that need reconnecting, once per account, stage and episode.
+func (p *DetectExpiringConnectionsProcessor) applyHealth(ctx context.Context, tenantID, profileID string, healths []zernio.AccountHealth, now time.Time) (sweepResult, error) {
+	var res sweepResult
 	if len(healths) == 0 {
 		return res, nil
 	}

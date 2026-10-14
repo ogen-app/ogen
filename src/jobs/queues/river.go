@@ -64,6 +64,9 @@ type Deps struct {
 	// Fences the Zernio profile teardown against a concurrent CON-190
 	// restore via the tenant row lock. nil disables teardown (fail-closed).
 	TenantFence TenantTeardownFence
+	// TeardownLease guards a teardown river-service runs, step by step,
+	// against a concurrent restore.
+	TeardownLease TeardownLease
 
 	// Billing runs the billing sweeps and scheduled plan changes; BillingLive
 	// gates the unpaid-trial teardown. Nil when billing is off: the jobs are

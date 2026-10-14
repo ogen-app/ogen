@@ -150,6 +150,7 @@ func queueDeps(d *deps) queues.Deps {
 		TenantFence:           r.tenantFence,
 		Billing:               d.billing,
 		BillingLive:           d.billing,
+		TeardownLease:         r.tenantFence,
 		PDF:                   d.ingest.pdf,
 		Document:              d.ingest.document,
 		Audio:                 d.ingest.audio,

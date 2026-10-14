@@ -401,6 +401,9 @@ func (s *tenantAdminService) SetTenantStatus(ctx context.Context, req *tenantsv1
 		reason = strings.TrimSpace(req.GetReason())
 	}
 	ok, err := s.tenantRepo.SetStatus(ctx, tenantID, newStatus, reason, time.Now().UTC())
+	if errors.Is(err, repository.ErrZernioTeardownInProgress) {
+		return nil, status.Error(codes.FailedPrecondition, "the workspace's Zernio profile is being torn down; retry in a couple of minutes")
+	}
 	if err != nil {
 		return nil, s.internal(ctx, "set tenant status", err)
 	}
