@@ -50,8 +50,12 @@ func (p *CleanupEmailLogsProcessor) Timeout(*river.Job[CleanupEmailLogsTask]) ti
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupEmailLogsProcessor{Repo: d.Email.Logs, Retention: d.Email.Retention})
+		river.AddWorker(w, newCleanupEmailLogs(d))
 	})
+}
+
+func newCleanupEmailLogs(d Deps) *CleanupEmailLogsProcessor {
+	return &CleanupEmailLogsProcessor{Repo: d.Email.Logs, Retention: d.Email.Retention}
 }
 
 // Process deletes email_logs entries older than the retention window.

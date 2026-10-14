@@ -30,12 +30,14 @@ func (d *deps) initJobRPC(ctx context.Context) error {
 	if token != "" && token == strings.TrimSpace(d.cfg.GRPCAuthToken) {
 		return errors.New("RIVER_RPC_AUTH_TOKEN must differ from GRPC_AUTH_TOKEN, so Harbor's token never opens job RPCs")
 	}
+	qd := queueDeps(d)
 	srv, err := jobrpc.New(jobrpc.Deps{
 		Token:          token,
 		MaxConcurrency: d.cfg.JobRPCMaxConcurrency,
 		Secrets:        d.secretStore,
 		LeaseTTL:       d.cfg.CredentialLeaseTTL,
-		Maintenance:    queues.MaintenanceTasks(queueDeps(d)),
+		Maintenance:    queues.MaintenanceTasks(qd),
+		Email:          queues.NewSendEmail(qd),
 	})
 	if err != nil {
 		return err

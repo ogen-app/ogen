@@ -506,3 +506,49 @@ func TestSendEmailMarketingBuildsUnsubscribe(t *testing.T) {
 		t.Errorf("rendered html missing unsubscribe link: %q", msg.HTML)
 	}
 }
+
+// TestPrepareForARemoteSend checks the river-service path: Prepare renders and
+// gates without a local sender, and RecordOutcome logs what the remote send
+// did against the same row a local send writes.
+func TestPrepareForARemoteSend(t *testing.T) {
+	logs := &fakeEmailLogRepo{}
+	p := newProcessor(nil, newFakeSuppRepo(), logs, "<p>Hi [[ .Name ]]</p>")
+	tk := task("drip_day2", models.EmailKindMarketing)
+
+	prep, err := p.Prepare(t.Context(), tk)
+	if err != nil || prep == nil {
+		t.Fatalf("Prepare = %v, %v; want a message even with no local sender", prep, err)
+	}
+	if prep.Message.To != "Ann@Example.com" || prep.Message.IdempotencyKey != "drip_day2:u1" || prep.Message.Headers["List-Unsubscribe"] == "" {
+		t.Errorf("prepared message = %+v", prep.Message)
+	}
+	if len(logs.rows) != 0 {
+		t.Fatalf("Prepare logged %d rows, want 0 (the send hasn't happened)", len(logs.rows))
+	}
+
+	remote := NewPreparedEmail(tk, prep.Message)
+	p.RecordOutcome(t.Context(), remote, models.EmailLogSent, "msg_remote", "")
+	if len(logs.rows) != 1 {
+		t.Fatalf("logged %d rows, want 1", len(logs.rows))
+	}
+	row := logs.rows[0]
+	if row.Status != models.EmailLogSent || row.ProviderMessageID != "msg_remote" || row.ToEmail != "Ann@Example.com" || row.IdempotencyKey != "drip_day2:u1" || row.TemplateID != "drip_day2" {
+		t.Errorf("log row = %+v", row)
+	}
+}
+
+// TestPrepareSettlesSuppressed checks that a send ogen can already rule out is
+// logged and reported as settled, with nothing for river-service to send.
+func TestPrepareSettlesSuppressed(t *testing.T) {
+	supp := newFakeSuppRepo()
+	supp.add("ann@example.com", models.EmailSuppressionScopeAll)
+	logs := &fakeEmailLogRepo{}
+	p := newProcessor(nil, supp, logs, "<p>x</p>")
+	prep, err := p.Prepare(t.Context(), task("welcome", models.EmailKindTransactional))
+	if err != nil || prep != nil {
+		t.Fatalf("Prepare = %v, %v; want settled", prep, err)
+	}
+	if len(logs.rows) != 1 || logs.rows[0].Status != models.EmailLogSkippedSuppressed {
+		t.Errorf("log rows = %+v, want one skipped_suppressed", logs.rows)
+	}
+}
