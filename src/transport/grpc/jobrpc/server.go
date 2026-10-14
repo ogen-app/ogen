@@ -1,6 +1,6 @@
 // Package jobrpc serves jobrpc.v1, the RPCs river-service's jobs call on
-// ogen: credential leases, housekeeping sweeps, email sends and Zernio job
-// steps. It runs on its own
+// ogen: credential leases, housekeeping sweeps, email sends and the steps of
+// the jobs that need outside calls. It runs on its own
 // listener with its own bearer token, so neither Harbor's token nor
 // river-service's opens the other's services, and with a concurrency limit, so
 // a backlog of jobs can't starve request handling of database connections.
@@ -65,8 +65,8 @@ type Deps struct {
 	Maintenance map[string]func(context.Context) error
 	// Email prepares and records the sends river-service makes.
 	Email EmailJobs
-	// Zernio answers the steps of the Zernio jobs river-service runs.
-	Zernio ZernioJobs
+	// Steps answers the steps of the jobs river-service runs step by step.
+	Steps JobSteps
 }
 
 // New builds the job-RPC server. An empty token is rejected: the caller must
@@ -94,7 +94,7 @@ func New(d Deps) (*grpc.Server, error) {
 	jobrpcv1.RegisterCredentialServiceServer(srv, &credentials{store: d.Secrets, config: d.ConfigCredentials, ttl: ttl})
 	jobrpcv1.RegisterMaintenanceServiceServer(srv, &maintenance{tasks: d.Maintenance})
 	jobrpcv1.RegisterEmailJobServiceServer(srv, &emailJobs{jobs: d.Email})
-	jobrpcv1.RegisterZernioJobServiceServer(srv, &zernioJobs{steps: d.Zernio})
+	jobrpcv1.RegisterJobStepServiceServer(srv, &jobSteps{steps: d.Steps})
 	hs := health.NewServer()
 	healthpb.RegisterHealthServer(srv, hs)
 	hs.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)

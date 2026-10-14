@@ -21,14 +21,14 @@ func TestExpiringConnectionSteps(t *testing.T) {
 		accounts:  map[string]*models.SocialAccount{"acc1": {ID: "acc1", Platform: "youtube"}},
 	}
 	logs := &seenKeyLog{}
-	steps := NewZernioSteps(Deps{
+	steps := NewJobSteps(Deps{
 		Zernio: ZernioDeps{SocialAccountRepo: accounts},
 		Users:  ownerRepo{owner: models.User{ID: "owner1"}},
 		Email:  EmailDeps{Logs: logs},
 	})
 	ctx := context.Background()
 
-	sweep, err := steps.Step(ctx, ZernioStepInput{Kind: DetectExpiringConnectionsQueue, Args: []byte(`{}`)})
+	sweep, err := steps.Step(ctx, StepInput{Kind: DetectExpiringConnectionsQueue, Args: []byte(`{}`)})
 	if err != nil || sweep.Done == nil || len(sweep.Done.Enqueue) != 1 {
 		t.Fatalf("sweep = %+v, %v; want one child", sweep, err)
 	}
@@ -37,16 +37,16 @@ func TestExpiringConnectionSteps(t *testing.T) {
 		t.Fatalf("child kind = %q", child.Kind)
 	}
 
-	first, err := steps.Step(ctx, ZernioStepInput{Kind: child.Kind, Args: child.Args})
-	if err != nil || first.Call == nil || first.Call.Path != "/accounts/health" || first.Call.Query.Get("profileId") != "p1" {
-		t.Fatalf("first step = %+v, %v; want GET /accounts/health for p1", first.Call, err)
+	first, err := steps.Step(ctx, StepInput{Kind: child.Kind, Args: child.Args})
+	if err != nil || first.HTTP == nil || first.HTTP.Path != "/accounts/health" || first.HTTP.Query.Get("profileId") != "p1" {
+		t.Fatalf("first step = %+v, %v; want GET /accounts/health for p1", first.HTTP, err)
 	}
 
 	expiry := time.Now().Add(30 * time.Hour)
 	body, _ := json.Marshal(map[string]any{"accounts": []zernio.AccountHealth{{
 		AccountID: "acc1", ProfileID: "p1", Platform: "youtube", Status: "warning", TokenValid: true, TokenExpiresAt: &expiry,
 	}}})
-	last, err := steps.Step(ctx, ZernioStepInput{Kind: child.Kind, Args: child.Args, State: first.State, Result: &zernio.Result{Status: 200, Body: body}})
+	last, err := steps.Step(ctx, StepInput{Kind: child.Kind, Args: child.Args, State: first.State, Result: &StepResult{Status: 200, Body: body}})
 	if err != nil || last.Done == nil {
 		t.Fatalf("last step = %+v, %v", last, err)
 	}
