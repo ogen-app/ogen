@@ -46,6 +46,12 @@ func Embed(ctx context.Context, e Embedder, texts []string, options any) (vecs [
 	return vecs, err
 }
 
+// Batch embeds texts in a single request: one vector per text, or the
+// request's failure. Callers keep texts within Size.
+func Batch(ctx context.Context, e Embedder, texts []string, options any) ([][]float32, error) {
+	return embed(ctx, e, texts, options)
+}
+
 func embed(ctx context.Context, e Embedder, texts []string, options any) ([][]float32, error) {
 	docs := make([]*ai.Document, len(texts))
 	for i, t := range texts {
