@@ -222,6 +222,7 @@ func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) 
 		Recorder:   rec,
 		EmbedModel: cfg.EmbedModel,
 		Notifier:   d.notifier,
+		Stages:     r.chunkStageRepo,
 	}
 	in.wireClients(d.clients)
 	return in
