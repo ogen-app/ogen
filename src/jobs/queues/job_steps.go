@@ -56,6 +56,8 @@ type StepResult struct {
 	Err    string
 	// The upstream's key is not set in ogen, so the call was not made.
 	CredentialMissing bool
+	// ContentType is the response's Content-Type, for an HTTP call.
+	ContentType string
 	// local is the typed outcome of an action run inside ogen through its
 	// local closure; river-service's results never carry one.
 	local *localOutcome
@@ -227,6 +229,7 @@ func (s *JobSteps) registerIngestion() {
 	d := s.deps
 	s.kinds[ProcessPDFQueue] = (&ProcessPDFProcessor{Deps: d.PDF}).step
 	s.kinds[ProcessDocumentQueue] = (&ProcessDocumentProcessor{Deps: d.Document}).step
+	s.kinds[ProcessURLQueue] = (&ProcessURLProcessor{Deps: d.URL}).step
 }
 
 // Step returns what river-service does next for one job. An error is
