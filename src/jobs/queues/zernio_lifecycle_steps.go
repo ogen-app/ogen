@@ -99,7 +99,7 @@ type teardownState struct {
 	Phase     string   `json:"phase"`
 	ProfileID string   `json:"profile_id"`
 	Accounts  []string `json:"accounts,omitempty"`
-	Next      int      `json:"next,omitempty"`
+	Next      int      `json:"next,omitzero"`
 }
 
 const (

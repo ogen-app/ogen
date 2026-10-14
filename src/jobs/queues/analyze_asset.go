@@ -3,6 +3,8 @@ package queues
 import (
 	"cmp"
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -39,10 +41,22 @@ type AnalysisRunner interface {
 	Backfill(ctx context.Context, perTenant int) (int, error)
 }
 
+// AnalysisRuns tracks the detached runs of lenses whose analysis a job
+// orchestrates (see assetanalysis.StartDetached). *assetanalysis.Service
+// implements it.
+type AnalysisRuns interface {
+	StartDetached(ctx context.Context, l assetanalysis.Lens, reason string) (string, error)
+	Slot(ctx context.Context, l assetanalysis.Lens) (assetanalysis.RunSlot, error)
+	Touch(ctx context.Context, l assetanalysis.Lens)
+}
+
 // AnalysisDeps are the analysis workers' dependencies. A nil Runner makes
 // every analysis job a no-op.
 type AnalysisDeps struct {
 	Runner AnalysisRunner
+	// Runs runs each analysis detached, so a step never holds a model
+	// call; nil runs it inline, inside the step.
+	Runs AnalysisRuns
 	// Distiller runs distill jobs; nil makes them no-ops.
 	Distiller DistillRunner
 	Tenants   TenantStatusReader
@@ -95,14 +109,18 @@ func init() {
 	register(func(w *river.Workers, d Deps) {
 		river.AddWorker(w, &AnalyzeAssetProcessor{Deps: d.Analysis})
 		river.AddWorker(w, &ReanalyzeCampaignProcessor{Deps: d.Analysis})
-		river.AddWorker(w, &BackfillAssetAnalysesProcessor{Deps: d.Analysis})
+		river.AddWorker(w, newBackfillAssetAnalyses(d))
 		river.AddWorker(w, &DistillAssetIdeasProcessor{Deps: d.Analysis})
 	})
 }
 
+func newBackfillAssetAnalyses(d Deps) *BackfillAssetAnalysesProcessor {
+	return &BackfillAssetAnalysesProcessor{Deps: d.Analysis}
+}
+
 func (p *AnalyzeAssetProcessor) Work(ctx context.Context, job *river.Job[AnalyzeAssetTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args, job.Attempt >= job.MaxAttempts)
+	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
 }
 
 // Timeout covers a map-reduce run over a source near the token cap.
@@ -110,39 +128,128 @@ func (p *AnalyzeAssetProcessor) Timeout(*river.Job[AnalyzeAssetTask]) time.Durat
 	return 15 * time.Minute
 }
 
-// Process runs the lens. An edit-triggered run snoozes until the asset has
-// been quiet for the whole edit debounce; snoozing uses no attempt, and the
+// Process runs the lens in-process. On the last attempt a failure is stored
+// on the lens so it never stays pending.
+func (p *AnalyzeAssetProcessor) Process(ctx context.Context, task AnalyzeAssetTask, lastAttempt bool) error {
+	attempt, maxAttempts := 1, 2
+	if lastAttempt {
+		attempt = 2
+	}
+	return runLocal(ctx, p.step, AnalyzeAssetKind, task, attempt, maxAttempts, localActions{})
+}
+
+// analysisPollEvery is how often a job checks on its detached run.
+const analysisPollEvery = 5 * time.Second
+
+// analyzeState is the detached run a job waits on.
+type analyzeState struct {
+	Token   string    `json:"token"`
+	Started time.Time `json:"started"`
+}
+
+// step runs the lens. An edit-triggered run snoozes until the asset has been
+// quiet for the whole edit debounce; snoozing uses no attempt, and the
 // snoozed job still folds in later saves. A run whose asset changed while it
 // ran snoozes the same way to read the new text, since the saves it raced
-// were folded into it. On the last attempt a failure is stored on the lens so
-// it never stays pending.
-func (p *AnalyzeAssetProcessor) Process(ctx context.Context, task AnalyzeAssetTask, lastAttempt bool) error {
+// were folded into it. With Runs wired the model call runs detached and the
+// job waits on it; a job restarted meanwhile (a deploy) finds the run in
+// flight and waits on that one.
+func (p *AnalyzeAssetProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task AnalyzeAssetTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
 	if p.Deps.Runner == nil {
-		return nil
+		return done("skipped_unwired")
 	}
 	ctx = tenantctx.With(ctx, task.TenantID)
-	if active, err := tenantIsActive(ctx, p.Deps.Tenants, task.TenantID); err != nil || !active {
-		return err
+	if active, err := tenantIsActive(ctx, p.Deps.Tenants, task.TenantID); err != nil {
+		return retry("analyze_asset", err)
+	} else if !active {
+		return done("skipped_inactive")
+	}
+	var st analyzeState
+	if err := decodeState(in.State, &st); err != nil {
+		return done("skipped_bad_state")
+	}
+	lens := task.lens()
+	if st.Token != "" {
+		return p.poll(ctx, task, st, in.lastAttempt())
 	}
 	if task.Reason == assetanalysis.ReasonEdited {
-		if wait, _ := p.Deps.Runner.EditWait(ctx, task.lens(), time.Time{}); wait > 0 {
-			return river.JobSnooze(wait)
+		if wait, _ := p.Deps.Runner.EditWait(ctx, lens, time.Time{}); wait > 0 {
+			return snooze("edit debounce", wait)
 		}
 	}
 	started := time.Now()
-	err := p.Deps.Runner.Run(ctx, task.lens(), task.Reason)
-	if err == nil {
-		if wait, changed := p.Deps.Runner.EditWait(ctx, task.lens(), started); changed {
-			return river.JobSnooze(wait)
+	if p.Deps.Runs == nil {
+		return p.settle(ctx, task, p.Deps.Runner.Run(ctx, lens, task.Reason), started, in.lastAttempt())
+	}
+
+	p.Deps.Runs.Touch(ctx, lens)
+	token, err := p.Deps.Runs.StartDetached(ctx, lens, task.Reason)
+	switch {
+	case errors.Is(err, assetanalysis.ErrLensGone):
+		return done("skipped_lens_gone")
+	case err != nil:
+		return retry("analyze_asset", err)
+	case token == "":
+		// A run is already in flight, started by this job before a restart.
+		slot, err := p.Deps.Runs.Slot(ctx, lens)
+		if err != nil {
+			return retry("analyze_asset", err)
 		}
+		token = slot.Token
 	}
-	if err != nil && lastAttempt {
+	return waitOn(analyzeState{Token: token, Started: started})
+}
+
+// poll checks the detached run the job waits on.
+func (p *AnalyzeAssetProcessor) poll(ctx context.Context, task AnalyzeAssetTask, st analyzeState, lastAttempt bool) (StepOutput, error) {
+	lens := task.lens()
+	p.Deps.Runs.Touch(ctx, lens)
+	slot, err := p.Deps.Runs.Slot(ctx, lens)
+	switch {
+	case errors.Is(err, assetanalysis.ErrLensGone):
+		return done("skipped_lens_gone")
+	case err != nil:
+		return retry("analyze_asset", err)
+	case slot.Token != st.Token:
+		return retry("analyze_asset", errors.New("another run took the lens"))
+	case slot.Done:
+		return p.settle(ctx, task, slot.Err, st.Started, lastAttempt)
+	case slot.Running:
+		return waitOn(st)
+	default:
+		// No heartbeat: ogen restarted under the run.
+		return retry("analyze_asset", errors.New("the analysis run stopped without an outcome"))
+	}
+}
+
+// settle ends the job on the run's outcome.
+func (p *AnalyzeAssetProcessor) settle(ctx context.Context, task AnalyzeAssetTask, runErr error, started time.Time, lastAttempt bool) (StepOutput, error) {
+	lens := task.lens()
+	if runErr == nil {
+		if wait, changed := p.Deps.Runner.EditWait(ctx, lens, started); changed {
+			return snooze("asset changed mid-run", wait)
+		}
+		return done("analyzed")
+	}
+	if lastAttempt {
 		slog.WarnContext(ctx, "analysis failed on its last attempt", logging.AttrComponent, "jobs.analyze_asset",
-			"asset_id", task.AssetID, "reason", task.Reason, logging.AttrError, err)
-		p.Deps.Runner.Fail(ctx, task.lens(), err)
-		return nil
+			"asset_id", task.AssetID, "reason", task.Reason, logging.AttrError, runErr)
+		p.Deps.Runner.Fail(ctx, lens, runErr)
+		return done("failed")
 	}
-	return err
+	return retry("analyze_asset", runErr)
+}
+
+func waitOn(st analyzeState) (StepOutput, error) {
+	raw, err := encodeState(st)
+	if err != nil {
+		return StepOutput{}, err
+	}
+	return StepOutput{State: raw, Wait: analysisPollEvery}, nil
 }
 
 // ReanalyzeCampaignTask re-runs a campaign's lenses after its brief changed.
@@ -176,6 +283,18 @@ type ReanalyzeCampaignProcessor struct {
 func (p *ReanalyzeCampaignProcessor) Work(ctx context.Context, job *river.Job[ReanalyzeCampaignTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
 	return p.Process(ctx, job.Args)
+}
+
+// step queues the campaign's lenses in one go; it makes no outside call.
+func (p *ReanalyzeCampaignProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task ReanalyzeCampaignTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
+	if err := p.Process(ctx, task); err != nil {
+		return retry("reanalyze_campaign", err)
+	}
+	return done("rebriefed")
 }
 
 func (p *ReanalyzeCampaignProcessor) Timeout(*river.Job[ReanalyzeCampaignTask]) time.Duration {

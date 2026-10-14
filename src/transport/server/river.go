@@ -156,7 +156,7 @@ func queueDeps(d *deps) queues.Deps {
 		Audio:                 d.ingest.audio,
 		Image:                 d.ingest.image,
 		URL:                   d.ingest.url,
-		Analysis:              queues.AnalysisDeps{Runner: d.analysis, Distiller: d.analysis, Tenants: r.tenantRepo, BackfillBatch: cfg.AnalysisBackfillBatch},
+		Analysis:              queues.AnalysisDeps{Runner: d.analysis, Runs: d.analysis, Distiller: d.analysis, Tenants: r.tenantRepo, BackfillBatch: cfg.AnalysisBackfillBatch},
 		BrandDistill:          queues.BrandDistillDeps{Runner: d.brandDistill, Tenants: r.tenantRepo},
 		Email:                 d.email.Deps,
 		WeeklyReport:          weeklyReportDeps(d),
