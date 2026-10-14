@@ -213,7 +213,10 @@ func (d *deps) initRiver(ctx context.Context) error {
 		return err
 	}
 	d.shutdown.add(stageJobs, closeWithin(d.cfg.JobShutdownTimeout, func(ctx context.Context) error {
-		_ = client.Stop(ctx)
+		if err := client.Stop(ctx); err != nil {
+			slog.WarnContext(ctx, "job client did not stop within JOB_SHUTDOWN_TIMEOUT; jobs still running are rescued after their timeout",
+				logging.AttrComponent, "jobs", logging.AttrError, err)
+		}
 		return nil
 	}))
 	return nil

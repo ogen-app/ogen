@@ -29,6 +29,9 @@ func newRiverClient(ctx context.Context, d *deps) (*river.Client[*sql.Tx], error
 		// Each job runs in a root tracing span; exhausted-retry failures are
 		// reported to Sentry.
 		Middleware: jobs.Middleware(),
+		// Past the soft stop, River cancels the jobs still running; the drain
+		// middleware reschedules them for the replacement replica.
+		SoftStopTimeout: softStopTimeout(d.cfg),
 		// Dedicated audio, image and ingest queues keep long transcription, vision
 		// and document runs from starving short jobs (publishing, email) on the
 		// default queue.
@@ -137,4 +140,23 @@ func zernioQueueDeps(d *deps) queues.ZernioDeps {
 		ActivityRecorder:   d.activity.recorder,
 		ProfileID:          d.zernioProfileID,
 	}
+}
+
+// minJobCancelMargin is the least time the shutdown leaves between River
+// cancelling running jobs and giving up on the stop, so cancelled jobs can
+// record their reschedule before the process exits.
+const minJobCancelMargin = 15 * time.Second
+
+// softStopTimeout is how long River lets running jobs finish on shutdown
+// before cancelling them. It is clamped below JobShutdownTimeout so the
+// cancellation always happens while the stop is still being awaited.
+func softStopTimeout(cfg *config.Config) time.Duration {
+	ceiling := cfg.JobShutdownTimeout - minJobCancelMargin
+	if ceiling <= 0 {
+		return cfg.JobShutdownTimeout / 2
+	}
+	if cfg.JobSoftStopTimeout <= 0 || cfg.JobSoftStopTimeout > ceiling {
+		return ceiling
+	}
+	return cfg.JobSoftStopTimeout
 }

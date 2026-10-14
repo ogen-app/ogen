@@ -475,8 +475,13 @@ type Config struct {
 	// AnalysisBackfillBatch caps the analyses one backfill tick queues per
 	// tenant.
 	AnalysisBackfillBatch int `envconfig:"ANALYSIS_BACKFILL_BATCH" default:"20"`
-	// Graceful-shutdown wait for in-flight jobs to finish.
-	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"30s"`
+	// River's stop budget on shutdown. Running jobs get JobSoftStopTimeout to
+	// finish; any still running then have their contexts cancelled and are
+	// rescheduled, and the stop gives up at JobShutdownTimeout. Every shutdown
+	// stage together must fit the platform's grace before SIGKILL (Railway:
+	// RAILWAY_DEPLOYMENT_DRAINING_SECONDS, set it to 300 for these defaults).
+	JobSoftStopTimeout time.Duration `envconfig:"JOB_SOFT_STOP_TIMEOUT" default:"210s"`
+	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"240s"`
 
 	// Reconciliation grace window. A Scheduled post whose
 	// scheduled_at + this window has passed without a terminal Zernio
