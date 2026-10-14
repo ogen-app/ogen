@@ -527,6 +527,21 @@ type Config struct {
 	JobSoftStopTimeout time.Duration `envconfig:"JOB_SOFT_STOP_TIMEOUT" default:"210s"`
 	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"240s"`
 
+	// river-service takes over job kinds one family at a time. Kinds listed in
+	// OUTBOX_RELAY_KINDS are written to the job outbox in the enqueuing
+	// transaction and relayed to river-service's JobService at
+	// RIVER_SERVICE_ADDR (e.g. dns:///river-service.railway.internal:9092); a
+	// periodic kind listed there is scheduled by river-service instead. Empty
+	// keeps every kind in-process. The relay delivers due rows on every write
+	// and at least every OUTBOX_RELAY_POLL_INTERVAL, and keeps delivered rows
+	// for OUTBOX_RETENTION_DAYS.
+	RiverServiceAddr        string        `envconfig:"RIVER_SERVICE_ADDR"`
+	RiverServiceAuthToken   string        `envconfig:"RIVER_SERVICE_AUTH_TOKEN"`
+	OutboxRelayKinds        []string      `envconfig:"OUTBOX_RELAY_KINDS"`
+	OutboxRelayPollInterval time.Duration `envconfig:"OUTBOX_RELAY_POLL_INTERVAL" default:"2s"`
+	OutboxRelayBatch        int           `envconfig:"OUTBOX_RELAY_BATCH" default:"100"`
+	OutboxRetentionDays     int           `envconfig:"OUTBOX_RETENTION_DAYS" default:"7"`
+
 	// Reconciliation grace window. A Scheduled post whose
 	// scheduled_at + this window has passed without a terminal Zernio
 	// status is forced to Failed with a reason that distinguishes

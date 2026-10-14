@@ -65,6 +65,9 @@ type DetectExpiringConnectionsProcessor struct {
 	// Notifier drops an in-app notification alongside the email. Nil
 	// (notification center unwired) is a no-op.
 	Notifier *notify.Service
+	// Jobs routes the expiry email, so it goes through the outbox once
+	// river-service owns send_email. Nil inserts on the worker's own client.
+	Jobs *Enqueuer
 }
 
 func (p *DetectExpiringConnectionsProcessor) Work(ctx context.Context, job *river.Job[DetectExpiringConnectionsTask]) error {
@@ -87,6 +90,7 @@ func init() {
 			AppBaseURL: d.Email.AppBaseURL,
 			LeadDays:   d.ExpiryLeadDays,
 			Notifier:   d.Notifier,
+			Jobs:       d.Jobs,
 		})
 	})
 }
@@ -336,10 +340,6 @@ func (p *DetectExpiringConnectionsProcessor) emitNotification(ctx context.Contex
 // registered, so it can't ride the processor struct), mirroring the submit
 // worker's poll enqueue.
 func (p *DetectExpiringConnectionsProcessor) enqueueEmail(ctx context.Context, owner models.User, tenantID string, h zernio.AccountHealth, local models.SocialAccount, stage, idemKey string, now time.Time) error {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil || client == nil {
-		return fmt.Errorf("river client unavailable for send_email enqueue: %w", err)
-	}
 	vars := map[string]string{
 		"platform":      platformLabel(h.Platform),
 		"account_name":  accountLabel(h, local),
@@ -350,14 +350,22 @@ func (p *DetectExpiringConnectionsProcessor) enqueueEmail(ctx context.Context, o
 		vars["expires_at"] = h.TokenExpiresAt.UTC().Format("January 2, 2006")
 		vars["expires_in"] = humanizeUntil(*h.TokenExpiresAt, now)
 	}
-	_, err = client.Insert(ctx, SendEmailTask{
+	task := SendEmailTask{
 		UserID:         owner.ID,
 		TenantID:       tenantID,
 		TemplateKey:    templates.KeyConnectionExpiring,
 		EmailKind:      models.EmailKindTransactional,
 		IdempotencyKey: idemKey,
 		Vars:           vars,
-	}, insertOptsWithRequestID(ctx, nil))
+	}
+	if p.Jobs != nil {
+		return p.Jobs.insert(ctx, task, nil)
+	}
+	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
+	if err != nil || client == nil {
+		return fmt.Errorf("river client unavailable for send_email enqueue: %w", err)
+	}
+	_, err = client.Insert(ctx, task, insertOptsWithRequestID(ctx, nil))
 	return err
 }
 
