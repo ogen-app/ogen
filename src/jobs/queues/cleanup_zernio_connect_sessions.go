@@ -56,8 +56,12 @@ func (p *CleanupZernioConnectSessionsProcessor) Timeout(*river.Job[CleanupZernio
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupZernioConnectSessionsProcessor{Repo: d.ConnectSessionRepo})
+		river.AddWorker(w, newCleanupZernioConnectSessions(d))
 	})
+}
+
+func newCleanupZernioConnectSessions(d Deps) *CleanupZernioConnectSessionsProcessor {
+	return &CleanupZernioConnectSessionsProcessor{Repo: d.ConnectSessionRepo}
 }
 
 // Process deletes connect sessions whose expiry has passed.

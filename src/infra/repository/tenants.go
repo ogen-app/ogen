@@ -212,11 +212,12 @@ func (r *tenantRepository) SetStatus(ctx context.Context, tenantID, status, reas
 	found := false
 	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var current string
+		var leaseUntil sql.NullTime
 		err := tx.NewSelect().Model((*models.Tenant)(nil)).
-			Column("status").
+			Column("status", "zernio_teardown_lease_until").
 			Where("id = ?", tenantID).
 			For("UPDATE").
-			Scan(ctx, &current)
+			Scan(ctx, &current, &leaseUntil)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // found stays false → distinct not-found result
 		}
@@ -226,6 +227,11 @@ func (r *tenantRepository) SetStatus(ctx context.Context, tenantID, status, reas
 		found = true
 		if current == status {
 			return nil // idempotent no-op: no write, timestamps preserved
+		}
+		// A Zernio profile teardown in progress holds off a restore until its
+		// lease ends, so a reactivated workspace never loses its accounts.
+		if status == models.TenantStatusActive && leaseUntil.Valid && leaseUntil.Time.After(at) {
+			return ErrZernioTeardownInProgress
 		}
 		q := tx.NewUpdate().Model((*models.Tenant)(nil)).
 			Set("status = ?", status).
