@@ -176,6 +176,16 @@ func (s *JobSteps) registerPublishing() {
 	s.kinds[CancelZernioJobQueue] = (&CancelZernioJobProcessor{Deps: d.Zernio}).step
 	s.kinds[WithdrawZernioPostQueue] = (&WithdrawZernioPostProcessor{Deps: d.Zernio, Notifier: d.Notifier, Members: d.Users}).step
 	s.kinds[PostFirstCommentQueue] = (&PostFirstCommentProcessor{Deps: d.Zernio, Notifier: d.Notifier}).step
+
+	orphans := &SweepZernioOrphansProcessor{Deps: d.Zernio, Config: d.OrphanSweep}
+	s.kinds[SweepZernioOrphansQueue] = orphans.step
+	s.kinds[OrphanSweepProfileKind] = orphans.profileStep
+	analytics := newRefreshZernioAnalytics(d)
+	s.kinds[RefreshZernioAnalyticsQueue] = analytics.step
+	s.kinds[AnalyticsTenantKind] = analytics.tenantStep
+	followers := newRefreshZernioFollowers(d)
+	s.kinds[RefreshZernioFollowersQueue] = followers.step
+	s.kinds[FollowersTenantKind] = followers.tenantStep
 }
 
 // Step returns what river-service does next for one job. An error is

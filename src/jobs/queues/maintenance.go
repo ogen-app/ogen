@@ -20,6 +20,8 @@ func MaintenanceTasks(d Deps) map[string]func(context.Context) error {
 		SweepPendingUploadsQueue:          sweepRunner(newSweepPendingUploads(d), SweepPendingUploadsTask{}),
 		CleanupEmailLogsQueue:             sweepRunner(newCleanupEmailLogs(d), CleanupEmailLogsTask{}),
 		CleanupZernioConnectSessionsQueue: sweepRunner(newCleanupZernioConnectSessions(d), CleanupZernioConnectSessionsTask{}),
+		ReconcileScheduledPostsQueue:      sweepRunner(newReconcileScheduledPosts(d), ReconcileScheduledPostsTask{}),
+		DetectManualPublishDueQueue:       sweepRunner(newDetectManualPublishDue(d), DetectManualPublishDueTask{}),
 	}
 }
 

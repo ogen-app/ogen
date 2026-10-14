@@ -77,13 +77,20 @@ func (p *ReconcileScheduledPostsProcessor) Timeout(*river.Job[ReconcileScheduled
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ReconcileScheduledPostsProcessor{
-			Repo:     d.Zernio.PostRepo,
-			LogRepo:  d.Zernio.PostLogRepo,
-			Activity: d.Zernio.ActivityRecorder,
-			Grace:    d.ReconcileGrace,
-		})
+		river.AddWorker(w, newReconcileScheduledPosts(d))
 	})
+}
+
+func newReconcileScheduledPosts(d Deps) *ReconcileScheduledPostsProcessor {
+	return &ReconcileScheduledPostsProcessor{
+		Repo:     d.Zernio.PostRepo,
+		LogRepo:  d.Zernio.PostLogRepo,
+		Activity: d.Zernio.ActivityRecorder,
+		Grace:    d.ReconcileGrace,
+		Withdraw: func(ctx context.Context, task WithdrawZernioPostTask) error {
+			return d.Jobs.enqueue(ctx, task, nil)
+		},
+	}
 }
 
 // ReconcilePostRepo is the narrow surface the sweeper needs out of
@@ -101,6 +108,9 @@ type ReconcileLogRepo interface {
 
 // Process runs one sweep tick.
 func (p *ReconcileScheduledPostsProcessor) Process(ctx context.Context, _ ReconcileScheduledPostsTask) error {
+	if p.Repo == nil {
+		return nil
+	}
 	if p.Grace <= 0 {
 		p.Grace = time.Hour
 	}

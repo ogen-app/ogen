@@ -2,6 +2,7 @@ package queues
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -58,10 +59,9 @@ type SweepZernioOrphansProcessor struct {
 	Now func() time.Time
 }
 
-// Work is the River entrypoint; it delegates to Process.
+// Work is the River entrypoint: it runs the job's steps in-process.
 func (p *SweepZernioOrphansProcessor) Work(ctx context.Context, job *river.Job[SweepZernioOrphansTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
 
@@ -76,38 +76,104 @@ func init() {
 	})
 }
 
-// Process sweeps every tenant profile. A failing profile is logged and
-// skipped so one bad profile can't starve the rest.
-func (p *SweepZernioOrphansProcessor) Process(ctx context.Context, _ SweepZernioOrphansTask) error {
-	if p.Deps.Client == nil || p.Deps.SocialAccountRepo == nil {
-		return nil
-	}
-	profiles, err := p.Deps.SocialAccountRepo.ListActiveTenantProfiles(ctx)
-	if err != nil {
-		return err
-	}
-	for _, tp := range profiles {
-		tctx := tenantctx.With(ctx, tp.TenantID)
-		if err := p.sweepProfile(tctx, tp.TenantID, tp.ProfileID); err != nil {
-			slog.WarnContext(tctx, "orphan sweep: profile skipped", logging.AttrComponent, "jobs.orphan_sweep",
-				"profile_id", tp.ProfileID, logging.AttrError, err)
-		}
-	}
-	return nil
+// Process sweeps every tenant profile in-process.
+func (p *SweepZernioOrphansProcessor) Process(ctx context.Context, task SweepZernioOrphansTask) error {
+	return runLocal(ctx, p.step, SweepZernioOrphansQueue, task, 0, 0, localActions{
+		zernio:   p.Deps.Client,
+		children: map[string]stepFunc{OrphanSweepProfileKind: p.profileStep},
+	})
 }
 
-func (p *SweepZernioOrphansProcessor) sweepProfile(ctx context.Context, tenantID, profileID string) error {
+// OrphanSweepProfileKind sweeps one tenant profile; the sweep fans out into
+// one per profile, so a failing profile can't starve the rest.
+const OrphanSweepProfileKind = "sweep_zernio_orphans_profile"
+
+type orphanProfileArgs struct {
+	TenantID  string `json:"tenant_id"`
+	ProfileID string `json:"profile_id"`
+}
+
+func (p *SweepZernioOrphansProcessor) step(ctx context.Context, _ StepInput) (StepOutput, error) {
+	if p.Deps.SocialAccountRepo == nil {
+		return done("skipped_unwired")
+	}
+	profiles, err := p.Deps.SocialAccountRepo.ListActiveTenantProfiles(tenantctx.WithSystem(ctx))
+	if err != nil {
+		return retry("orphan sweep: list profiles", err)
+	}
+	children := make([]ChildJob, 0, len(profiles))
+	for _, tp := range profiles {
+		raw, err := json.Marshal(orphanProfileArgs{TenantID: tp.TenantID, ProfileID: tp.ProfileID})
+		if err != nil {
+			return StepOutput{}, err
+		}
+		children = append(children, ChildJob{Kind: OrphanSweepProfileKind, Args: raw})
+	}
+	return done("fanned_out", children...)
+}
+
+// orphanProfileState pages through the profile's queued posts, then withdraws
+// the orphans one by one.
+type orphanProfileState struct {
+	Pages   []zernio.Result `json:"pages,omitempty"`
+	Listed  bool            `json:"listed,omitempty"`
+	Orphans []orphanRef     `json:"orphans,omitempty"`
+	Next    int             `json:"next,omitempty"`
+}
+
+type orphanRef struct {
+	PublisherPostID string `json:"publisher_post_id"`
+	PostID          string `json:"post_id,omitempty"`
+}
+
+func (p *SweepZernioOrphansProcessor) profileStep(ctx context.Context, in StepInput) (StepOutput, error) {
+	var args orphanProfileArgs
+	if err := json.Unmarshal(in.Args, &args); err != nil || args.ProfileID == "" {
+		return done("skipped_bad_args")
+	}
+	ctx = tenantctx.With(ctx, args.TenantID)
+	var st orphanProfileState
+	if err := decodeState(in.State, &st); err != nil {
+		return done("skipped_bad_state")
+	}
+	if zernioDisabled(in.Result) {
+		return done("skipped_zernio_disabled")
+	}
+	if !st.Listed {
+		if in.Result != nil {
+			st.Pages = append(st.Pages, zernioResult(in.Result))
+		}
+		return p.list(ctx, args, &st)
+	}
+	p.settleOrphan(ctx, args, st.Orphans[st.Next], in.Result)
+	st.Next++
+	return p.nextOrphan(ctx, &st)
+}
+
+// list pages through the profile's queued posts, then picks the orphans: old
+// enough, and held by no scheduled Ogen post.
+func (p *SweepZernioOrphansProcessor) list(ctx context.Context, args orphanProfileArgs, st *orphanProfileState) (StepOutput, error) {
 	pages := p.Config.MaxPages
 	if pages <= 0 {
 		pages = 20
 	}
-	queued, err := p.Deps.Client.ListScheduled(ctx, profileID, pages)
-	if err != nil {
+	var queued []zernio.Job
+	next, err := zernio.Replay(st.Pages, func(c *zernio.Client) error {
+		var err error
+		queued, err = c.ListScheduled(ctx, args.ProfileID, pages)
 		return err
+	})
+	if next != nil {
+		return nextZernio(st, *next)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "orphan sweep: profile skipped", logging.AttrComponent, "jobs.orphan_sweep",
+			"profile_id", args.ProfileID, logging.AttrError, err)
+		return done("skipped_list_failed")
 	}
 	candidates := p.oldEnough(queued)
 	if len(candidates) == 0 {
-		return nil
+		return done("no_orphans")
 	}
 	ids := make([]string, len(candidates))
 	for i, j := range candidates {
@@ -115,39 +181,56 @@ func (p *SweepZernioOrphansProcessor) sweepProfile(ctx context.Context, tenantID
 	}
 	holders, err := p.Deps.PostRepo.ListByPublisherPostIDs(ctx, ids)
 	if err != nil {
-		return err
+		return retry("orphan sweep: load holders", err)
 	}
 	holder := make(map[string]models.Post, len(holders))
 	for _, h := range holders {
 		holder[h.PublisherPostID] = h
 	}
+	*st = orphanProfileState{Listed: true}
 	for _, j := range candidates {
 		post, held := holder[j.ID]
 		if held && post.Status == models.PostStatusScheduled {
 			continue
 		}
-		p.orphan(ctx, tenantID, profileID, j, post)
+		jobs.ZernioOrphansFound.Add(1)
+		attrs := []any{logging.AttrComponent, "jobs.orphan_sweep", "profile_id", args.ProfileID,
+			"publisher_post_id", j.ID, "post_id", post.ID, "post_status", post.Status, "live", p.Config.Live}
+		if !p.Config.Live {
+			slog.InfoContext(ctx, "orphan sweep (dry run): Zernio post queued with no scheduled Ogen post", attrs...)
+			continue
+		}
+		st.Orphans = append(st.Orphans, orphanRef{PublisherPostID: j.ID, PostID: post.ID})
 	}
-	return nil
+	return p.nextOrphan(ctx, st)
 }
 
-// orphan handles one Zernio post no scheduled Ogen post holds. post is the
-// zero value when no Ogen post holds the id at all.
-func (p *SweepZernioOrphansProcessor) orphan(ctx context.Context, tenantID, profileID string, j zernio.Job, post models.Post) {
-	jobs.ZernioOrphansFound.Add(1)
-	attrs := []any{logging.AttrComponent, "jobs.orphan_sweep", "profile_id", profileID,
-		"publisher_post_id", j.ID, "post_id", post.ID, "post_status", post.Status, "live", p.Config.Live}
-	if !p.Config.Live {
-		slog.InfoContext(ctx, "orphan sweep (dry run): Zernio post queued with no scheduled Ogen post", attrs...)
-		return
+// nextOrphan withdraws the next orphan, or ends the sweep of the profile.
+func (p *SweepZernioOrphansProcessor) nextOrphan(ctx context.Context, st *orphanProfileState) (StepOutput, error) {
+	if st.Next >= len(st.Orphans) {
+		return done("swept")
 	}
+	id := st.Orphans[st.Next].PublisherPostID
+	call, err := zernio.Plan(func(c *zernio.Client) error { return c.Cancel(ctx, id) })
+	if err != nil {
+		return StepOutput{}, err
+	}
+	return nextZernio(st, call)
+}
+
+// settleOrphan records one orphan's withdrawal; a failure is left to the next
+// tick.
+func (p *SweepZernioOrphansProcessor) settleOrphan(ctx context.Context, args orphanProfileArgs, o orphanRef, res *StepResult) {
+	cancelErr := zernio.Decode(zernioResult(res), func(c *zernio.Client) error { return c.Cancel(ctx, o.PublisherPostID) })
 	published, err := withdraw(ctx, p.Deps, WithdrawZernioPostTask{
-		PublisherPostID: j.ID,
-		PostID:          post.ID,
-		TenantID:        tenantID,
+		PublisherPostID: o.PublisherPostID,
+		PostID:          o.PostID,
+		TenantID:        args.TenantID,
 		Reason:          WithdrawReasonOrphan,
 		Actor:           models.ActorSystem,
-	}, p.Deps.Client.Cancel(ctx, j.ID))
+	}, cancelErr)
+	attrs := []any{logging.AttrComponent, "jobs.orphan_sweep", "profile_id", args.ProfileID,
+		"publisher_post_id", o.PublisherPostID, "post_id", o.PostID, "live", p.Config.Live}
 	switch {
 	case err != nil:
 		slog.WarnContext(ctx, "orphan sweep: withdraw failed; next tick retries", append(attrs, logging.AttrError, err)...)
