@@ -31,7 +31,6 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/kernel/pubdate"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
@@ -214,7 +213,7 @@ func (p *ProcessURLProcessor) step(ctx context.Context, in StepInput) (StepOutpu
 	if err := json.Unmarshal(in.Args, &task); err != nil {
 		return done("skipped_bad_args")
 	}
-	ctx = tenantctx.With(ctx, task.TenantID)
+	ctx = withTaskTenant(ctx, task.TenantID)
 	var st urlState
 	if err := decodeState(in.State, &st); err != nil {
 		return done("skipped_bad_state")
