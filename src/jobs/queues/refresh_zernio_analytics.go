@@ -1,9 +1,8 @@
 package queues
 
 import (
-	"cmp"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -104,11 +103,9 @@ type RefreshZernioAnalyticsProcessor struct {
 	Decay      AnalyticsDecay // CON-236 age-based re-check cadence
 }
 
-// Work is the River entrypoint; it delegates to Process.
+// Work is the River entrypoint: it runs the job's steps in-process.
 func (p *RefreshZernioAnalyticsProcessor) Work(ctx context.Context, job *river.Job[RefreshZernioAnalyticsTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background jobs span tenants (interim until per-tenant, PR4).
-	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
 
@@ -120,151 +117,198 @@ func (p *RefreshZernioAnalyticsProcessor) Timeout(*river.Job[RefreshZernioAnalyt
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &RefreshZernioAnalyticsProcessor{
-			Deps:       d.Zernio,
-			Settings:   d.AnalyticsSettings,
-			Hub:        d.AnalyticsHub,
-			WindowDays: d.AnalyticsWindowDays,
-			Decay:      d.AnalyticsDecay,
-		})
+		river.AddWorker(w, newRefreshZernioAnalytics(d))
 	})
 }
 
-// Process runs one refresh tick across every tenant that owns Zernio-published
-// posts. Per-tenant health (zernio.analytics.last_refresh_*) is recorded inside
-// refresh under each tenant's context; the aggregate error here only drives the
-// tick-level metric and log line.
-func (p *RefreshZernioAnalyticsProcessor) Process(ctx context.Context, _ RefreshZernioAnalyticsTask) error {
-	tickStart := time.Now()
-	upserts, err := p.refresh(ctx, tickStart.UTC())
-
-	if err != nil {
-		// Any failure (transient 429/5xx/network, 401, legacy 402, terminal
-		// 4xx) is recorded and logged; the tick still reschedules below and
-		// returns nil. Transient failures recover on the next cadence tick
-		// rather than via a River retry — see InsertOpts for why returning an
-		// error here would risk killing or fanning out the recurring chain.
-		jobs.ZernioAnalyticsRefreshFailed.Add(1)
-		slog.ErrorContext(ctx, "analytics refresh failed", logging.AttrComponent, "jobs.refresh_analytics", "upserts", upserts, "tick_ms", time.Since(tickStart).Milliseconds(), logging.AttrError, err)
-	} else {
-		jobs.ZernioAnalyticsRefreshSucceeded.Add(1)
-		jobs.ZernioAnalyticsPostsUpserted.Add(int64(upserts))
-		slog.InfoContext(ctx, "analytics refresh ok", logging.AttrComponent, "jobs.refresh_analytics", "upserts", upserts, "tick_ms", time.Since(tickStart).Milliseconds())
+func newRefreshZernioAnalytics(d Deps) *RefreshZernioAnalyticsProcessor {
+	return &RefreshZernioAnalyticsProcessor{
+		Deps:       d.Zernio,
+		Settings:   d.AnalyticsSettings,
+		Hub:        d.AnalyticsHub,
+		WindowDays: d.AnalyticsWindowDays,
+		Decay:      d.AnalyticsDecay,
 	}
-	return nil
 }
 
-// refresh sweeps analytics once per tenant that owns Zernio-published posts,
-// scoping each fetch to that tenant's Zernio profile (CON-93 follow-up:
-// per-profile collection). A single cross-tenant read of the published-post
-// projection yields both the set of tenants to sweep and each tenant's match
-// map. Per-tenant health is recorded under that tenant's context; the returned
-// error is the first tenant-level failure — Process uses it only for the
-// tick-level metric, never propagating to River.
-func (p *RefreshZernioAnalyticsProcessor) refresh(ctx context.Context, now time.Time) (int, error) {
-	if p.Deps.AnalyticsRepo == nil || p.Deps.PostRepo == nil {
-		return 0, errors.New("refresh: analytics dependencies not configured")
-	}
+// AnalyticsTenantKind refreshes one tenant's analytics; the tick fans out
+// into one per tenant that owns Zernio-published posts.
+const AnalyticsTenantKind = "refresh_zernio_analytics_tenant"
 
-	// Enumerate under a system context so the scoping hook doesn't restrict the
-	// projection to one tenant — this single read spans every tenant.
+type analyticsTenantArgs struct {
+	TenantID string `json:"tenant_id"`
+}
+
+// Process runs one refresh tick in-process, tenant by tenant.
+func (p *RefreshZernioAnalyticsProcessor) Process(ctx context.Context, task RefreshZernioAnalyticsTask) error {
+	return runLocal(ctx, p.step, RefreshZernioAnalyticsQueue, task, 0, 0, localActions{
+		zernio:   p.Deps.Client,
+		children: map[string]stepFunc{AnalyticsTenantKind: p.tenantStep},
+	})
+}
+
+// step fans the tick out across every tenant that owns Zernio-published
+// posts. Per-tenant health (zernio.analytics.last_refresh_*) is recorded by
+// each tenant's job.
+func (p *RefreshZernioAnalyticsProcessor) step(ctx context.Context, _ StepInput) (StepOutput, error) {
+	if p.Deps.AnalyticsRepo == nil || p.Deps.PostRepo == nil {
+		return done("skipped_unwired")
+	}
 	posts, err := p.Deps.PostRepo.ListWithPublisherPostID(tenantctx.WithSystem(ctx))
 	if err != nil {
-		return 0, fmt.Errorf("refresh: list posts: %w", err)
+		jobs.ZernioAnalyticsRefreshFailed.Add(1)
+		slog.ErrorContext(ctx, "analytics refresh failed", logging.AttrComponent, "jobs.refresh_analytics", logging.AttrError, err)
+		return done("failed_list")
 	}
-	if len(posts) == 0 {
-		return 0, nil
-	}
-	platformName := p.platformNames(tenantctx.WithSystem(ctx))
-
 	byTenant := make(map[string][]models.Post)
 	for _, post := range posts {
 		byTenant[post.TenantID] = append(byTenant[post.TenantID], post)
 	}
-
-	// Tenants are independent, so they refresh in parallel, each under its own
-	// deadline.
 	tenants := sortedTenantIDs(byTenant)
-	counts, errs := forEachTenant(ctx, tenants, func(ctx context.Context, tenantID string) (int, error) {
-		tctx := tenantctx.With(ctx, tenantID)
-		n, swept, terr := p.refreshTenant(tctx, byTenant[tenantID], platformName, now)
-		// Only record health for tenants we actually swept (or that errored);
-		// a profile-less tenant is skipped entirely, so writing "ok" would
-		// misreport an unconfigured tenant as healthy.
-		if swept || terr != nil {
-			sctx, cancel := statusWriteContext(tctx)
-			p.recordStatus(sctx, terr)
-			cancel()
+	children := make([]ChildJob, 0, len(tenants))
+	for _, id := range tenants {
+		raw, err := json.Marshal(analyticsTenantArgs{TenantID: id})
+		if err != nil {
+			return StepOutput{}, err
 		}
-		return n, terr
-	})
-	total := 0
-	var firstErr error
-	for i, terr := range errs {
-		total += counts[i]
-		if terr == nil {
-			continue
-		}
-		firstErr = cmp.Or(firstErr, terr)
-		slog.ErrorContext(tenantctx.With(ctx, tenants[i]), "analytics refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_analytics", "tenant_id", tenants[i], logging.AttrError, terr)
+		children = append(children, ChildJob{Kind: AnalyticsTenantKind, Args: raw})
 	}
-	return total, firstErr
+	return done("fanned_out", children...)
 }
 
-// refreshTenant fetches and upserts one tenant's analytics. ctx is already
-// tenant-scoped, so the Zernio fetch is filtered to this tenant's profile and
-// every write/event lands in the right tenant. The returned swept flag is false
-// when the tenant has Zernio-published posts but no profile id recorded — it is
-// skipped rather than falling back to an unscoped cross-profile fetch, and the
-// caller skips its health write so an unconfigured tenant isn't reported "ok".
-func (p *RefreshZernioAnalyticsProcessor) refreshTenant(ctx context.Context, posts []models.Post, platformName map[string]string, now time.Time) (upserts int, swept bool, err error) {
-	profileID := ""
-	if p.Deps.ProfileID != nil {
-		if profileID, err = p.Deps.ProfileID(ctx); err != nil {
-			return 0, false, fmt.Errorf("resolve profile id: %w", err)
-		}
-	}
-	if profileID == "" {
-		return 0, false, nil
-	}
+// analyticsTenantState pages through one tenant's analytics.
+type analyticsTenantState struct {
+	ProfileID string    `json:"profile_id"`
+	From      string    `json:"from"`
+	Page      int       `json:"page"`
+	Now       time.Time `json:"now"`
+	Upserts   int       `json:"upserts,omitempty"`
+}
 
-	// Preload the tenant's current-state rows once: the decay gate reads
-	// last_checked_at from them and dedup compares metric keys, both without a
-	// per-post query. A nil map is fine (every post is a first sight).
+// tenantStep fetches and upserts one tenant's analytics, a page per step,
+// scoped to the tenant's Zernio profile. A tenant with Zernio-published posts
+// but no profile id recorded is skipped rather than falling back to an
+// unscoped cross-profile fetch, and gets no health write, so an unconfigured
+// tenant isn't reported "ok".
+func (p *RefreshZernioAnalyticsProcessor) tenantStep(ctx context.Context, in StepInput) (StepOutput, error) {
+	var args analyticsTenantArgs
+	if err := json.Unmarshal(in.Args, &args); err != nil || args.TenantID == "" {
+		return done("skipped_bad_args")
+	}
+	if p.Deps.AnalyticsRepo == nil || p.Deps.PostRepo == nil {
+		return done("skipped_unwired")
+	}
+	ctx = tenantctx.With(ctx, args.TenantID)
+	var st analyticsTenantState
+	if err := decodeState(in.State, &st); err != nil {
+		return done("skipped_bad_state")
+	}
+	if zernioDisabled(in.Result) {
+		return done("skipped_zernio_disabled")
+	}
+	posts, err := p.tenantPosts(ctx, args.TenantID)
+	if err != nil {
+		return p.tenantDone(ctx, &st, err)
+	}
+	// The tenant's current-state rows: the decay gate reads last_checked_at
+	// from them and dedup compares metric keys, both without a per-post
+	// query. A nil map is fine (every post is a first sight).
 	current, err := p.Deps.AnalyticsRepo.CurrentByPostID(ctx)
 	if err != nil {
-		return 0, true, fmt.Errorf("load current analytics: %w", err)
+		return p.tenantDone(ctx, &st, fmt.Errorf("load current analytics: %w", err))
 	}
-	sweep := newAnalyticsSweep(posts, current, platformName, now)
-
-	from, anyDue := p.fetchFrom(posts, current, now)
-	if !anyDue {
-		return 0, true, nil // every post was checked recently enough; nothing to fetch
-	}
-	limit := p.pageLimit()
-	for page := 1; page <= maxAnalyticsPages; page++ {
-		apiStart := time.Now()
-		items, pagination, err := p.Deps.Client.ListAnalytics(ctx, zernio.AnalyticsQuery{
-			Source:    zernio.AnalyticsSourceLate,
-			ProfileID: profileID,
-			FromDate:  from,
-			Limit:     limit,
-			Page:      page,
-		})
-		jobs.ObserveZernioCall(time.Since(apiStart))
-		if err != nil {
-			return upserts, true, err
-		}
-		for i := range items {
-			if p.applyItem(ctx, sweep, &items[i]) {
-				upserts++
+	if in.Result == nil {
+		st.Now = time.Now().UTC()
+		if p.Deps.ProfileID != nil {
+			if st.ProfileID, err = p.Deps.ProfileID(ctx); err != nil {
+				return p.tenantDone(ctx, &st, fmt.Errorf("resolve profile id: %w", err))
 			}
 		}
-		if shouldStopPaging(page, len(items), limit, pagination) {
-			break
+		if st.ProfileID == "" {
+			return done("skipped_no_profile")
+		}
+		var anyDue bool
+		if st.From, anyDue = p.fetchFrom(posts, current, st.Now); !anyDue {
+			return p.tenantDone(ctx, &st, nil) // every post was checked recently enough
+		}
+		st.Page = 1
+		return p.nextAnalyticsPage(ctx, &st)
+	}
+
+	var items []zernio.AnalyticsItem
+	var pagination zernio.AnalyticsPagination
+	err = zernio.Decode(zernioResult(in.Result), func(c *zernio.Client) error {
+		var err error
+		items, pagination, err = c.ListAnalytics(ctx, p.analyticsQuery(&st))
+		return err
+	})
+	if err != nil {
+		return p.tenantDone(ctx, &st, err)
+	}
+	sweep := newAnalyticsSweep(posts, current, p.platformNames(tenantctx.WithSystem(ctx)), st.Now)
+	for i := range items {
+		if p.applyItem(ctx, sweep, &items[i]) {
+			st.Upserts++
 		}
 	}
-	return upserts, true, nil
+	if st.Page >= maxAnalyticsPages || shouldStopPaging(st.Page, len(items), p.pageLimit(), pagination) {
+		return p.tenantDone(ctx, &st, nil)
+	}
+	st.Page++
+	return p.nextAnalyticsPage(ctx, &st)
+}
+
+// tenantPosts is the tenant's share of the Zernio-published posts.
+func (p *RefreshZernioAnalyticsProcessor) tenantPosts(ctx context.Context, tenantID string) ([]models.Post, error) {
+	all, err := p.Deps.PostRepo.ListWithPublisherPostID(tenantctx.WithSystem(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("refresh: list posts: %w", err)
+	}
+	var posts []models.Post
+	for _, post := range all {
+		if post.TenantID == tenantID {
+			posts = append(posts, post)
+		}
+	}
+	return posts, nil
+}
+
+func (p *RefreshZernioAnalyticsProcessor) analyticsQuery(st *analyticsTenantState) zernio.AnalyticsQuery {
+	return zernio.AnalyticsQuery{
+		Source:    zernio.AnalyticsSourceLate,
+		ProfileID: st.ProfileID,
+		FromDate:  st.From,
+		Limit:     p.pageLimit(),
+		Page:      st.Page,
+	}
+}
+
+func (p *RefreshZernioAnalyticsProcessor) nextAnalyticsPage(ctx context.Context, st *analyticsTenantState) (StepOutput, error) {
+	q := p.analyticsQuery(st)
+	call, err := zernio.Plan(func(c *zernio.Client) error { _, _, err := c.ListAnalytics(ctx, q); return err })
+	if err != nil {
+		return StepOutput{}, err
+	}
+	return nextZernio(st, call)
+}
+
+// tenantDone records the tenant's health and ends its job. Any failure
+// (transient 429/5xx/network, 401, legacy 402, terminal 4xx) is recorded and
+// logged; it recovers on the next tick rather than via a retry.
+func (p *RefreshZernioAnalyticsProcessor) tenantDone(ctx context.Context, st *analyticsTenantState, err error) (StepOutput, error) {
+	sctx, cancel := statusWriteContext(ctx)
+	p.recordStatus(sctx, err)
+	cancel()
+	if err != nil {
+		jobs.ZernioAnalyticsRefreshFailed.Add(1)
+		slog.ErrorContext(ctx, "analytics refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_analytics",
+			"upserts", st.Upserts, logging.AttrError, err)
+		return done("failed")
+	}
+	jobs.ZernioAnalyticsRefreshSucceeded.Add(1)
+	jobs.ZernioAnalyticsPostsUpserted.Add(int64(st.Upserts))
+	slog.InfoContext(ctx, "analytics refresh ok", logging.AttrComponent, "jobs.refresh_analytics", "upserts", st.Upserts)
+	return done("refreshed")
 }
 
 // fetchFrom returns the FromDate a tenant's fetch needs and whether any of its

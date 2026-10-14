@@ -1,9 +1,8 @@
 package queues
 
 import (
-	"cmp"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
-	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -57,8 +55,6 @@ type RefreshZernioFollowersProcessor struct {
 
 func (p *RefreshZernioFollowersProcessor) Work(ctx context.Context, job *river.Job[RefreshZernioFollowersTask]) error {
 	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background jobs span tenants; refreshTenant re-scopes per tenant.
-	ctx = tenantctx.WithSystem(ctx)
 	return p.Process(ctx, job.Args)
 }
 
@@ -68,101 +64,121 @@ func (p *RefreshZernioFollowersProcessor) Timeout(*river.Job[RefreshZernioFollow
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &RefreshZernioFollowersProcessor{
-			Deps:     d.Zernio,
-			Settings: d.AnalyticsSettings,
-		})
+		river.AddWorker(w, newRefreshZernioFollowers(d))
 	})
 }
 
-// Process runs one follower-refresh tick. Like the analytics refresh, per-tenant
-// health is recorded inside refresh under each tenant's context; the aggregate
-// error here only drives the tick-level metric and log line — it is never
-// returned to River (a single attempt records its own outcome and reschedules).
-func (p *RefreshZernioFollowersProcessor) Process(ctx context.Context, _ RefreshZernioFollowersTask) error {
-	tickStart := time.Now()
-	inserted, err := p.refresh(ctx, tickStart.UTC())
-	if err != nil {
-		jobs.ZernioFollowerRefreshFailed.Add(1)
-		slog.ErrorContext(ctx, "follower refresh failed", logging.AttrComponent, "jobs.refresh_followers", "inserted", inserted, "tick_ms", time.Since(tickStart).Milliseconds(), logging.AttrError, err)
-	} else {
-		jobs.ZernioFollowerRefreshSucceeded.Add(1)
-		jobs.ZernioFollowerPointsInserted.Add(int64(inserted))
-		slog.InfoContext(ctx, "follower refresh ok", logging.AttrComponent, "jobs.refresh_followers", "inserted", inserted, "tick_ms", time.Since(tickStart).Milliseconds())
-	}
-	return nil
+func newRefreshZernioFollowers(d Deps) *RefreshZernioFollowersProcessor {
+	return &RefreshZernioFollowersProcessor{Deps: d.Zernio, Settings: d.AnalyticsSettings}
 }
 
-// refresh sweeps follower stats once per tenant that owns active connected
-// accounts, scoping each fetch to that tenant's Zernio profile. A single
-// cross-tenant read of social_accounts yields the (tenant, profile) pairs to
-// sweep. The returned error is the first tenant-level failure — used only for
-// the tick metric, never propagated to River.
-func (p *RefreshZernioFollowersProcessor) refresh(ctx context.Context, now time.Time) (int, error) {
-	if p.Deps.FollowerRepo == nil || p.Deps.SocialAccountRepo == nil || p.Deps.Client == nil {
-		return 0, errors.New("refresh followers: dependencies not configured")
-	}
+// FollowersTenantKind refreshes one tenant's follower stats; the tick fans
+// out into one per tenant with active connected accounts.
+const FollowersTenantKind = "refresh_zernio_followers_tenant"
 
+type followersTenantArgs struct {
+	TenantID  string `json:"tenant_id"`
+	ProfileID string `json:"profile_id"`
+}
+
+// Process runs one follower-refresh tick in-process, tenant by tenant.
+func (p *RefreshZernioFollowersProcessor) Process(ctx context.Context, task RefreshZernioFollowersTask) error {
+	return runLocal(ctx, p.step, RefreshZernioFollowersQueue, task, 0, 0, localActions{
+		zernio:   p.Deps.Client,
+		children: map[string]stepFunc{FollowersTenantKind: p.tenantStep},
+	})
+}
+
+// step fans the tick out across the (tenant, profile) pairs with active
+// connected accounts. Each tenant's job records its own health.
+func (p *RefreshZernioFollowersProcessor) step(ctx context.Context, _ StepInput) (StepOutput, error) {
+	if p.Deps.FollowerRepo == nil || p.Deps.SocialAccountRepo == nil {
+		return done("skipped_unwired")
+	}
 	pairs, err := p.Deps.SocialAccountRepo.ListActiveTenantProfiles(tenantctx.WithSystem(ctx))
 	if err != nil {
-		return 0, fmt.Errorf("refresh followers: list tenant profiles: %w", err)
+		jobs.ZernioFollowerRefreshFailed.Add(1)
+		slog.ErrorContext(ctx, "follower refresh failed", logging.AttrComponent, "jobs.refresh_followers",
+			logging.AttrError, fmt.Errorf("refresh followers: list tenant profiles: %w", err))
+		return done("failed_list")
 	}
-
-	counts, errs := forEachTenant(ctx, pairs, func(ctx context.Context, tp repository.TenantProfile) (int, error) {
-		tctx := tenantctx.With(ctx, tp.TenantID)
-		n, terr := p.refreshTenant(tctx, tp.ProfileID, now)
-		sctx, cancel := statusWriteContext(tctx)
-		p.recordStatus(sctx, terr)
-		cancel()
-		return n, terr
-	})
-	total := 0
-	var firstErr error
-	for i, terr := range errs {
-		total += counts[i]
-		if terr == nil {
-			continue
+	children := make([]ChildJob, 0, len(pairs))
+	for _, tp := range pairs {
+		raw, err := json.Marshal(followersTenantArgs{TenantID: tp.TenantID, ProfileID: tp.ProfileID})
+		if err != nil {
+			return StepOutput{}, err
 		}
-		firstErr = cmp.Or(firstErr, terr)
-		slog.ErrorContext(tenantctx.With(ctx, pairs[i].TenantID), "follower refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_followers", "tenant_id", pairs[i].TenantID, logging.AttrError, terr)
+		children = append(children, ChildJob{Kind: FollowersTenantKind, Args: raw})
 	}
-	return total, firstErr
+	return done("fanned_out", children...)
 }
 
-// refreshTenant fetches and upserts one tenant's follower stats. ctx is already
-// tenant-scoped, so the Zernio fetch is filtered to this tenant's profile and
-// every write lands in the right tenant. It requests only points newer than the
-// latest snapshot on file (falling back to a bounded backfill on first run).
-func (p *RefreshZernioFollowersProcessor) refreshTenant(ctx context.Context, profileID string, now time.Time) (int, error) {
-	if profileID == "" {
-		return 0, nil
+// tenantStep fetches and upserts one tenant's follower stats in one call,
+// scoped to its Zernio profile. It requests only points newer than the latest
+// snapshot on file (falling back to a bounded backfill on first run).
+func (p *RefreshZernioFollowersProcessor) tenantStep(ctx context.Context, in StepInput) (StepOutput, error) {
+	var args followersTenantArgs
+	if err := json.Unmarshal(in.Args, &args); err != nil || args.TenantID == "" {
+		return done("skipped_bad_args")
 	}
-
+	if p.Deps.FollowerRepo == nil {
+		return done("skipped_unwired")
+	}
+	ctx = tenantctx.With(ctx, args.TenantID)
+	if zernioDisabled(in.Result) {
+		return done("skipped_zernio_disabled")
+	}
+	now := time.Now().UTC()
+	if args.ProfileID == "" {
+		return p.tenantDone(ctx, 0, nil)
+	}
 	from := now.AddDate(0, 0, -p.backfillDays()).Format("2006-01-02")
 	if latest, err := p.Deps.FollowerRepo.LatestPointDate(ctx); err == nil && !latest.IsZero() {
 		from = latest.Format("2006-01-02")
 	}
-
-	apiStart := time.Now()
-	stats, err := p.Deps.Client.GetFollowerStats(ctx, zernio.FollowerQuery{
-		ProfileID:   profileID,
-		FromDate:    from,
-		Granularity: "daily",
-	})
-	jobs.ObserveZernioCall(time.Since(apiStart))
-	if err != nil {
-		return 0, err
+	q := zernio.FollowerQuery{ProfileID: args.ProfileID, FromDate: from, Granularity: "daily"}
+	var stats zernio.FollowerStats
+	fetch := func(c *zernio.Client) error {
+		var err error
+		stats, err = c.GetFollowerStats(ctx, q)
+		return err
 	}
-
+	if in.Result == nil {
+		call, err := zernio.Plan(fetch)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		return nextZernio(nil, call)
+	}
+	if err := zernio.Decode(zernioResult(in.Result), fetch); err != nil {
+		return p.tenantDone(ctx, 0, err)
+	}
 	rows := buildFollowerSnapshots(stats, now)
 	if len(rows) == 0 {
-		return 0, nil
+		return p.tenantDone(ctx, 0, nil)
 	}
 	n, err := p.Deps.FollowerRepo.InsertMany(ctx, rows)
 	if err != nil {
-		return 0, fmt.Errorf("upsert follower snapshots: %w", err)
+		return p.tenantDone(ctx, 0, fmt.Errorf("upsert follower snapshots: %w", err))
 	}
-	return n, nil
+	return p.tenantDone(ctx, n, nil)
+}
+
+// tenantDone records the tenant's health and ends its job; a failure
+// recovers on the next tick.
+func (p *RefreshZernioFollowersProcessor) tenantDone(ctx context.Context, inserted int, err error) (StepOutput, error) {
+	sctx, cancel := statusWriteContext(ctx)
+	p.recordStatus(sctx, err)
+	cancel()
+	if err != nil {
+		jobs.ZernioFollowerRefreshFailed.Add(1)
+		slog.ErrorContext(ctx, "follower refresh: tenant sweep failed", logging.AttrComponent, "jobs.refresh_followers", logging.AttrError, err)
+		return done("failed")
+	}
+	jobs.ZernioFollowerRefreshSucceeded.Add(1)
+	jobs.ZernioFollowerPointsInserted.Add(int64(inserted))
+	slog.InfoContext(ctx, "follower refresh ok", logging.AttrComponent, "jobs.refresh_followers", "inserted", inserted)
+	return done("refreshed")
 }
 
 // buildFollowerSnapshots flattens a Zernio follower-stats response into daily
