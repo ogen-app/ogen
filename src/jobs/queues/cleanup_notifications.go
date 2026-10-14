@@ -67,9 +67,10 @@ func (p *CleanupNotificationsProcessor) Timeout(*river.Job[CleanupNotificationsT
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupNotificationsProcessor{
-			Repo:      d.NotificationRepo,
-			Retention: d.NotificationRetention,
-		})
+		river.AddWorker(w, newCleanupNotifications(d))
 	})
+}
+
+func newCleanupNotifications(d Deps) *CleanupNotificationsProcessor {
+	return &CleanupNotificationsProcessor{Repo: d.NotificationRepo, Retention: d.NotificationRetention}
 }

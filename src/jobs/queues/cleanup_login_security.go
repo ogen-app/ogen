@@ -59,8 +59,12 @@ func (p *CleanupLoginSecurityProcessor) Timeout(*river.Job[CleanupLoginSecurityT
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupLoginSecurityProcessor{Devices: d.KnownDeviceRepo, Alerts: d.LoginAlertTokenRepo, Sessions: d.SessionRepo, OAuth: d.OAuthRepo})
+		river.AddWorker(w, newCleanupLoginSecurity(d))
 	})
+}
+
+func newCleanupLoginSecurity(d Deps) *CleanupLoginSecurityProcessor {
+	return &CleanupLoginSecurityProcessor{Devices: d.KnownDeviceRepo, Alerts: d.LoginAlertTokenRepo, Sessions: d.SessionRepo, OAuth: d.OAuthRepo}
 }
 
 // Process deletes alert tokens older than the retention window, devices
