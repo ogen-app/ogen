@@ -74,12 +74,12 @@ func (p *DetectManualPublishDueProcessor) Timeout(*river.Job[DetectManualPublish
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &DetectManualPublishDueProcessor{
-			Posts:    d.Zernio.PostRepo,
-			Users:    d.Users,
-			Notifier: d.Notifier,
-		})
+		river.AddWorker(w, newDetectManualPublishDue(d))
 	})
+}
+
+func newDetectManualPublishDue(d Deps) *DetectManualPublishDueProcessor {
+	return &DetectManualPublishDueProcessor{Posts: d.Zernio.PostRepo, Users: d.Users, Notifier: d.Notifier}
 }
 
 // Process runs one sweep tick. Failures are recorded in the log line but never
