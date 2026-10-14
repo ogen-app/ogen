@@ -391,15 +391,24 @@ func writeAssetFacts(b *sqlBuf, q models.AssetQuery, tenantID string) {
 `)
 }
 
-// lensInScope is the condition on an analysis row aa of a lens whose ideas
-// count: the workspace lens plus every counted campaign's, or under a campaign
-// scope that campaign's alone. It reads the camps CTE.
+// lensInScope is the condition on an analysis row aa of the one lens whose
+// ideas count: the workspace lens, or under a campaign scope that campaign's
+// lens alone.
 func lensInScope(b *sqlBuf, q models.AssetQuery) {
 	if q.ScopeCampaign != "" {
-		b.add(`(aa.campaign_id IS NULL OR aa.campaign_id = ?)`, q.ScopeCampaign)
+		b.add(`aa.campaign_id = ?`, q.ScopeCampaign)
 	} else {
-		b.add(`(aa.campaign_id IS NULL OR aa.campaign_id IN (SELECT c.id FROM camps c))`)
+		b.add(`aa.campaign_id IS NULL`)
 	}
+}
+
+// scopeLens is the campaign id of the lens in scope, nil for the workspace
+// lens; see lensInScope.
+func scopeLens(q models.AssetQuery) *string {
+	if q.ScopeCampaign == "" {
+		return nil
+	}
+	return new(q.ScopeCampaign)
 }
 
 // writeAssetGrouped writes the grouped CTE when q groups: one row per facts
@@ -657,7 +666,7 @@ func (r *assetRepository) Query(ctx context.Context, q models.AssetQuery) (*mode
 	if res.Facets, err = assetFacetCounts(row.Facets, row.TagIDs, row.CampaignIDs, facets); err != nil {
 		return nil, err
 	}
-	if res.Assets, err = r.hydrateListItems(ctx, tid, page, q.Text); err != nil {
+	if res.Assets, err = r.hydrateListItems(ctx, tid, page, q); err != nil {
 		return nil, err
 	}
 	return res, nil
@@ -848,20 +857,20 @@ type listItemSources struct {
 	assets  map[string]*models.Asset
 	files   map[string]*models.AssetFile
 	tags    map[string]models.Tag
-	digests map[string]WorkspaceDigest
+	digests map[string]LensDigest
 	// evidence is nil without a text query.
 	evidence map[string]models.AssetTextMatch
 }
 
 // hydrateListItems builds the list rows of a page, in page order: the asset
-// columns but content, its file, tags, workspace analysis status and gist,
-// audio duration and, for a text query, where it matches.
-func (r *assetRepository) hydrateListItems(ctx context.Context, tid string, page []assetPageRow, text string) ([]models.AssetListItem, error) {
+// columns but content, its file, tags, the scope lens's analysis status and
+// gist, audio duration and, for a text query, where it matches.
+func (r *assetRepository) hydrateListItems(ctx context.Context, tid string, page []assetPageRow, q models.AssetQuery) ([]models.AssetListItem, error) {
 	items := make([]models.AssetListItem, 0, len(page))
 	if len(page) == 0 {
 		return items, nil
 	}
-	src, err := r.loadListItemSources(ctx, tid, page, text)
+	src, err := r.loadListItemSources(ctx, tid, page, q)
 	if err != nil {
 		return nil, err
 	}
@@ -873,7 +882,7 @@ func (r *assetRepository) hydrateListItems(ctx context.Context, tid string, page
 	return items, nil
 }
 
-func (r *assetRepository) loadListItemSources(ctx context.Context, tid string, page []assetPageRow, text string) (*listItemSources, error) {
+func (r *assetRepository) loadListItemSources(ctx context.Context, tid string, page []assetPageRow, q models.AssetQuery) (*listItemSources, error) {
 	ids := make([]string, len(page))
 	var tagIDs []string
 	for i, p := range page {
@@ -895,11 +904,11 @@ func (r *assetRepository) loadListItemSources(ctx context.Context, tid string, p
 	if src.tags, err = r.tagRepo.GetByIDs(ctx, slices.Compact(tagIDs)); err != nil {
 		return nil, err
 	}
-	if src.digests, err = (&assetAnalysisRepository{db: r.db}).WorkspaceDigests(ctx, ids); err != nil {
+	if src.digests, err = (&assetAnalysisRepository{db: r.db}).LensDigests(ctx, ids, scopeLens(q)); err != nil {
 		return nil, err
 	}
-	if text != "" {
-		if src.evidence, err = r.textEvidence(ctx, tid, text, ids); err != nil {
+	if q.Text != "" {
+		if src.evidence, err = r.textEvidence(ctx, tid, q.Text, ids); err != nil {
 			return nil, err
 		}
 	}

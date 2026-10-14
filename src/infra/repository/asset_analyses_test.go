@@ -228,9 +228,9 @@ func TestAssetAnalysisDeleteLensAndAsset(t *testing.T) {
 	}
 }
 
-// TestAssetAnalysisWorkspaceDigests: the gist comes back as stored, and the
+// TestAssetAnalysisLensDigests: the gist comes back as stored, and the
 // summary head is read (capped) only for lenses without one.
-func TestAssetAnalysisWorkspaceDigests(t *testing.T) {
+func TestAssetAnalysisLensDigests(t *testing.T) {
 	f := newAnalysisFixture(t)
 	longSummary := strings.Repeat("Older analysis prose. ", 200) // > 4000 runes
 	for assetID, gist := range map[string]string{"with-gist": "Reference architectures for RAG.", "no-gist": ""} {
@@ -247,7 +247,7 @@ func TestAssetAnalysisWorkspaceDigests(t *testing.T) {
 		}
 	}
 
-	got, err := f.analyses.WorkspaceDigests(f.ctx, []string{"with-gist", "no-gist"})
+	got, err := f.analyses.LensDigests(f.ctx, []string{"with-gist", "no-gist"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,12 +289,23 @@ func TestAssetAnalysisCampaignReads(t *testing.T) {
 		t.Fatalf("ListByCampaign order = %+v", got)
 	}
 
-	digests, err := f.analyses.WorkspaceDigests(f.ctx, []string{"low", "high", "none"})
+	// The workspace lenses are still pending; the campaign's are ready.
+	digests, err := f.analyses.LensDigests(f.ctx, []string{"low", "high", "none"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(digests) != 2 || digests["low"].Status != models.AssetAnalysisStatusPending {
-		t.Fatalf("WorkspaceDigests = %v", digests)
+		t.Fatalf("workspace LensDigests = %v", digests)
+	}
+	digests, err = f.analyses.LensDigests(f.ctx, []string{"low", "high", "none"}, &campaignID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(digests) != 2 || digests["low"].Status != models.AssetAnalysisStatusReady || digests["high"].Status != models.AssetAnalysisStatusReady {
+		t.Fatalf("campaign LensDigests = %v", digests)
+	}
+	if other, err := f.analyses.LensDigests(f.ctx, []string{"low"}, new("c-unknown")); err != nil || len(other) != 0 {
+		t.Fatalf("unknown campaign LensDigests = %v, %v", other, err)
 	}
 
 	if _, err := f.campaigns.Delete(f.ctx, campaignID); err != nil {

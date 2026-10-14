@@ -9,22 +9,22 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// digestRepo serves WorkspaceDigests from a map and counts the calls; any
+// digestRepo serves LensDigests from a map and counts the calls; any
 // other method panics on the nil embed.
 type digestRepo struct {
 	repository.AssetAnalysisRepository
-	digests map[string]repository.WorkspaceDigest
+	digests map[string]repository.LensDigest
 	err     error
 	calls   int
 }
 
-func (r *digestRepo) WorkspaceDigests(_ context.Context, _ []string) (map[string]repository.WorkspaceDigest, error) {
+func (r *digestRepo) LensDigests(_ context.Context, _ []string, _ *string) (map[string]repository.LensDigest, error) {
 	r.calls++
 	return r.digests, r.err
 }
 
 func TestDecorateAnalysis(t *testing.T) {
-	repo := &digestRepo{digests: map[string]repository.WorkspaceDigest{
+	repo := &digestRepo{digests: map[string]repository.LensDigest{
 		"gist":     {Status: models.AssetAnalysisStatusReady, Gist: "Reference architectures for RAG."},
 		"fallback": {Status: models.AssetAnalysisStatusReady, SummaryHead: "## Overview\n\nThe call agreed Q3 pricing. More follows."},
 		"bullets":  {Status: models.AssetAnalysisStatusReady, SummaryHead: "- one\n- two"},
@@ -37,7 +37,7 @@ func TestDecorateAnalysis(t *testing.T) {
 	h.decorateAnalysis(t.Context(), assets)
 
 	if repo.calls != 1 {
-		t.Fatalf("WorkspaceDigests called %d times for %d assets, want 1", repo.calls, len(assets))
+		t.Fatalf("LensDigests called %d times for %d assets, want 1", repo.calls, len(assets))
 	}
 	want := map[string]struct {
 		status models.AssetAnalysisStatus
