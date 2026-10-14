@@ -24,7 +24,6 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/pubdate"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 	"github.com/ogen-app/ogen/src/usecase/notify"
@@ -185,7 +184,7 @@ func (p *ProcessPDFProcessor) step(ctx context.Context, in StepInput) (StepOutpu
 	if err := json.Unmarshal(in.Args, &task); err != nil {
 		return done("skipped_bad_args")
 	}
-	ctx = tenantctx.With(ctx, task.TenantID)
+	ctx = withTaskTenant(ctx, task.TenantID)
 	var st pdfState
 	if err := decodeState(in.State, &st); err != nil {
 		return done("skipped_bad_state")

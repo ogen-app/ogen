@@ -24,6 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/embedding"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/remote"
 )
 
@@ -398,4 +399,13 @@ func gunzipText(b []byte) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// withTaskTenant scopes ctx to the job's tenant. Every enqueued ingest
+// carries one; a run inside ogen without it keeps the caller's scope.
+func withTaskTenant(ctx context.Context, tenantID string) context.Context {
+	if tenantID == "" {
+		return ctx
+	}
+	return tenantctx.With(ctx, tenantID)
 }

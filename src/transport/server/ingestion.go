@@ -191,6 +191,7 @@ func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) 
 			MaxDurationMs:    cfg.AudioMaxDurationMs,
 			JobTimeout:       cfg.AudioJobTimeout,
 			Notifier:         d.notifier,
+			Stages:           r.chunkStageRepo,
 		},
 		image: queues.ImageDeps{
 			Embedder:            embedder,
@@ -207,6 +208,7 @@ func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) 
 			AltTextMaxChars:     cfg.AltTextGenMaxChars,
 			JobTimeout:          cfg.ImageJobTimeout,
 			Notifier:            d.notifier,
+			Stages:              r.chunkStageRepo,
 		},
 	}
 	// Without storage, scraped images stay external links.
