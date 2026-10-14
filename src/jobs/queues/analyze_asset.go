@@ -240,19 +240,11 @@ func (p *BackfillAssetAnalysesProcessor) Process(ctx context.Context) error {
 // zero). A lens already waiting is not queued twice: the waiting job keeps
 // its own run time.
 func (e *Enqueuer) EnqueueAnalyzeAsset(ctx context.Context, tenantID, assetID string, campaignID *string, reason string, at time.Time) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.Insert(ctx, AnalyzeAssetTask{TenantID: tenantID, AssetID: assetID, CampaignID: campaignID, Reason: reason}, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: at}))
-	return err
+	return e.insert(ctx, AnalyzeAssetTask{TenantID: tenantID, AssetID: assetID, CampaignID: campaignID, Reason: reason}, &river.InsertOpts{ScheduledAt: at})
 }
 
 // EnqueueReanalyzeCampaign schedules a campaign's re-analysis at at. While
 // one is waiting, further calls are no-ops.
 func (e *Enqueuer) EnqueueReanalyzeCampaign(ctx context.Context, tenantID, campaignID string, at time.Time) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.Insert(ctx, ReanalyzeCampaignTask{TenantID: tenantID, CampaignID: campaignID}, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: at}))
-	return err
+	return e.insert(ctx, ReanalyzeCampaignTask{TenantID: tenantID, CampaignID: campaignID}, &river.InsertOpts{ScheduledAt: at})
 }

@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -17,6 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/jobs/outbox"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
@@ -132,6 +136,12 @@ type Deps struct {
 	NotificationRepo      repository.NotificationRepository
 	NotificationRetention time.Duration
 
+	// Jobs is the app's enqueuer, for workers that enqueue a kind of another
+	// family: while families move to river-service one at a time, such an
+	// enqueue must follow the target kind's routing. Its River client is set
+	// after the workers are registered.
+	Jobs *Enqueuer
+
 	// The notify_harbor_tenant_registered worker's config — the outbound
 	// webhook URL Harbor exposes + the HMAC signing secret. An empty URL makes the
 	// worker a no-op (feature off); an empty secret sends the body unsigned.
@@ -220,6 +230,11 @@ type PeriodicConfig struct {
 	// Missing asset-analysis lens backfill. Positive-interval gated like the
 	// others.
 	AnalysisBackfillEvery time.Duration
+
+	// Relayed reports whether river-service owns a job kind. Its periodic
+	// sweeps are then scheduled by river-service and left out here. Nil means
+	// ogen owns every kind.
+	Relayed func(kind string) bool
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -232,86 +247,83 @@ type PeriodicConfig struct {
 // the active-state UniqueOpts dedupe overlapping inserts across a fast restart,
 // and every sweep is idempotent (upserts) or a no-op when there's nothing to
 // do, so the extra boot tick is harmless in a stable process too.
+//
+// A sweep with a zero interval is left out: River doesn't validate it and
+// PeriodicInterval(0).Next(t) == t would spin the periodic enqueuer. A sweep
+// river-service owns is left out too, so only its leader schedules it.
 func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	runOnStart := &river.PeriodicJobOpts{RunOnStart: true}
-	jobs := []*river.PeriodicJob{
-		river.NewPeriodicJob(river.PeriodicInterval(cfg.CleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return CleanupPostLogsTask{}, nil
-		}, runOnStart),
-		river.NewPeriodicJob(river.PeriodicInterval(cfg.ReconcileEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return ReconcileScheduledPostsTask{}, nil
-		}, runOnStart),
-	}
-	// email_logs retention sweep, gated on a configured interval so a
-	// zero value (e.g. in tests) can't create an invalid periodic job.
-	if cfg.EmailCleanupEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.EmailCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return CleanupEmailLogsTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.IncludeAnalytics {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.AnalyticsEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return RefreshZernioAnalyticsTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.IncludeFollowers {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.FollowerEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return RefreshZernioFollowersTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.ConnectSessionCleanupEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.ConnectSessionCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return CleanupZernioConnectSessionsTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.PluginPairingCleanupEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.PluginPairingCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return CleanupPluginPairingsTask{}, nil
-		}, runOnStart))
-	}
-	// Connection-health / expiry sweep. Also requires a positive
-	// interval — River doesn't validate it and PeriodicInterval(0).Next(t)==t, so
-	// a zero HealthCheckEvery would spin the periodic enqueuer (mirrors the
-	// EmailCleanup/ConnectSessionCleanup guards above).
-	if cfg.IncludeConnectionExpiry && cfg.HealthCheckEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.HealthCheckEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return DetectExpiringConnectionsTask{}, nil
-		}, runOnStart))
-	}
-	// Notification retention/expiry sweep. Positive-interval guard like
-	// the EmailCleanup/ConnectSessionCleanup sweeps above.
-	if cfg.NotificationCleanupEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.NotificationCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return CleanupNotificationsTask{}, nil
-		}, runOnStart))
-	}
-	// Manual-publish-due sweep. Positive-interval guard like above.
-	if cfg.ManualPublishDueEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.ManualPublishDueEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return DetectManualPublishDueTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.LoginSecurityCleanupEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.LoginSecurityCleanupEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return CleanupLoginSecurityTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.OrphanSweepEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.OrphanSweepEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return SweepZernioOrphansTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.PendingUploadSweepEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.PendingUploadSweepEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return SweepPendingUploadsTask{}, nil
-		}, runOnStart))
-	}
-	if cfg.AnalysisBackfillEvery > 0 {
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.AnalysisBackfillEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return BackfillAssetAnalysesTask{}, nil
+	var jobs []*river.PeriodicJob
+	for _, s := range cfg.sweeps() {
+		if !s.enabled || s.every <= 0 || (cfg.Relayed != nil && cfg.Relayed(s.args.Kind())) {
+			continue
+		}
+		args := s.args
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(s.every), func() (river.JobArgs, *river.InsertOpts) {
+			return args, nil
 		}, runOnStart))
 	}
 	return jobs
+}
+
+type sweep struct {
+	every   time.Duration
+	enabled bool
+	args    river.JobArgs
+}
+
+func (cfg PeriodicConfig) sweeps() []sweep {
+	return []sweep{
+		{cfg.CleanupEvery, true, CleanupPostLogsTask{}},
+		{cfg.ReconcileEvery, true, ReconcileScheduledPostsTask{}},
+		{cfg.EmailCleanupEvery, true, CleanupEmailLogsTask{}},
+		{cfg.AnalyticsEvery, cfg.IncludeAnalytics, RefreshZernioAnalyticsTask{}},
+		{cfg.FollowerEvery, cfg.IncludeFollowers, RefreshZernioFollowersTask{}},
+		{cfg.ConnectSessionCleanupEvery, true, CleanupZernioConnectSessionsTask{}},
+		{cfg.PluginPairingCleanupEvery, true, CleanupPluginPairingsTask{}},
+		{cfg.HealthCheckEvery, cfg.IncludeConnectionExpiry, DetectExpiringConnectionsTask{}},
+		{cfg.NotificationCleanupEvery, true, CleanupNotificationsTask{}},
+		{cfg.ManualPublishDueEvery, true, DetectManualPublishDueTask{}},
+		{cfg.LoginSecurityCleanupEvery, true, CleanupLoginSecurityTask{}},
+		{cfg.OrphanSweepEvery, true, SweepZernioOrphansTask{}},
+		{cfg.PendingUploadSweepEvery, true, SweepPendingUploadsTask{}},
+		{cfg.AnalysisBackfillEvery, true, BackfillAssetAnalysesTask{}},
+	}
+}
+
+// RelayKinds normalizes OUTBOX_RELAY_KINDS and checks it: every entry must be
+// a relayable kind, and relaying anything needs river-service's address, or
+// the jobs would sit in the outbox undelivered.
+func RelayKinds(kinds []string, riverServiceAddr string) ([]string, error) {
+	var out []string
+	for _, k := range kinds {
+		k = strings.ToLower(strings.TrimSpace(k))
+		if k == "" || slices.Contains(out, k) {
+			continue
+		}
+		if !RelayableKind(k) {
+			return nil, fmt.Errorf("OUTBOX_RELAY_KINDS: unknown job kind %q", k)
+		}
+		out = append(out, k)
+	}
+	if len(out) > 0 && riverServiceAddr == "" {
+		return nil, errors.New("OUTBOX_RELAY_KINDS is set but RIVER_SERVICE_ADDR is empty, so relayed jobs would never be delivered")
+	}
+	return out, nil
+}
+
+// RelayableKind reports whether kind can be handed to river-service: a kind
+// with a jobs.v1 args message, or a periodic sweep river-service schedules.
+func RelayableKind(kind string) bool {
+	if hasArgsMessage(kind) {
+		return true
+	}
+	for _, s := range (PeriodicConfig{}).sweeps() {
+		if s.args.Kind() == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // Enqueuer is the app-facing enqueue surface. It wraps the River client so
@@ -319,8 +331,64 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 // set rather than River directly. The client is generic over *sql.Tx
 // because River runs on bun's shared database/sql pool — so InsertTx joins
 // the exact bun transaction the schedule path opens.
+//
+// Kinds river-service owns go to the outbox instead, written in the same
+// transaction; see Relay.
 type Enqueuer struct {
 	Client *river.Client[*sql.Tx]
+
+	outbox  *outbox.Writer
+	relayed map[string]bool
+}
+
+// Relay sends the given job kinds to river-service through w instead of the
+// in-process River client. A periodic kind listed here is also no longer
+// scheduled by ogen (see PeriodicConfig.Relayed).
+func (e *Enqueuer) Relay(w *outbox.Writer, kinds []string) {
+	e.outbox = w
+	e.relayed = make(map[string]bool, len(kinds))
+	for _, k := range kinds {
+		e.relayed[k] = true
+	}
+}
+
+// Relays reports whether river-service owns kind.
+func (e *Enqueuer) Relays(kind string) bool {
+	return e != nil && e.outbox != nil && e.relayed[kind]
+}
+
+// insertTx enqueues args inside tx: into the outbox when river-service owns
+// the kind, otherwise into the in-process River queue. A nil enqueuer, or no
+// River client for a kind ogen still runs, is a no-op.
+func (e *Enqueuer) insertTx(ctx context.Context, tx *sql.Tx, args river.JobArgs, opts *river.InsertOpts) error {
+	if e.Relays(args.Kind()) {
+		req, err := enqueueRequest(args, opts)
+		if err != nil {
+			return err
+		}
+		return e.outbox.WriteTx(ctx, tx, args.Kind(), req)
+	}
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, args, insertOptsWithRequestID(ctx, opts))
+	return err
+}
+
+// insert is insertTx for callers with no transaction.
+func (e *Enqueuer) insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) error {
+	if e.Relays(args.Kind()) {
+		req, err := enqueueRequest(args, opts)
+		if err != nil {
+			return err
+		}
+		return e.outbox.Write(ctx, args.Kind(), req)
+	}
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.Insert(ctx, args, insertOptsWithRequestID(ctx, opts))
+	return err
 }
 
 // NewInsertOnlyEnqueuer builds an Enqueuer over a fresh insert-only River client
@@ -393,22 +461,14 @@ func WithJobRequestID(ctx context.Context, jr *rivertype.JobRow) context.Context
 // EnqueueSubmitTx enqueues a submit task inside the given transaction, so
 // the enqueue commits atomically with the post status change.
 func (e *Enqueuer) EnqueueSubmitTx(ctx context.Context, tx *sql.Tx, postID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, SubmitPostTask{PostID: postID}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insertTx(ctx, tx, SubmitPostTask{PostID: postID}, nil)
 }
 
 // EnqueueWithdrawTx enqueues a Zernio withdrawal inside the given transaction,
 // so it commits atomically with the delete or unschedule that orphaned the
 // Zernio post: a committed change always gets its withdrawal.
 func (e *Enqueuer) EnqueueWithdrawTx(ctx context.Context, tx *sql.Tx, task WithdrawZernioPostTask) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, task, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insertTx(ctx, tx, task, nil)
 }
 
 // EnqueueBootstrapProfileTx enqueues an eager Zernio profile-provisioning task
@@ -417,11 +477,7 @@ func (e *Enqueuer) EnqueueWithdrawTx(ctx context.Context, tx *sql.Tx, task Withd
 // durably queues exactly one. A nil enqueuer (Zernio queue unwired) is a no-op —
 // the lazy on-connect bootstrap remains the fallback.
 func (e *Enqueuer) EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, BootstrapZernioProfileTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insertTx(ctx, tx, BootstrapZernioProfileTask{TenantID: tenantID}, nil)
 }
 
 // EnqueueTeardownProfileTx enqueues a Zernio profile-teardown task inside the
@@ -432,11 +488,7 @@ func (e *Enqueuer) EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, te
 // blocks on Zernio reachability. A nil enqueuer (Zernio queue unwired) is a
 // no-op; the profile is simply left orphaned, as it was before CON-203.
 func (e *Enqueuer) EnqueueTeardownProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, TeardownZernioProfileTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insertTx(ctx, tx, TeardownZernioProfileTask{TenantID: tenantID}, nil)
 }
 
 // dripSchedule is the marketing onboarding drip cadence: one
@@ -457,17 +509,13 @@ var dripSchedule = []struct {
 // worker — so signup never blocks on Resend reachability. A nil enqueuer (email
 // queue unwired) is a no-op.
 func (e *Enqueuer) EnqueueWelcomeEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+	return e.insertTx(ctx, tx, SendEmailTask{
 		UserID:         userID,
 		TenantID:       tenantID,
 		TemplateKey:    templates.KeyWelcome,
 		EmailKind:      models.EmailKindTransactional,
 		IdempotencyKey: "welcome:" + userID,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueAdminTenantRegisteredEmail enqueues one admin_tenant_registered
@@ -479,18 +527,14 @@ func (e *Enqueuer) EnqueueWelcomeEmailTx(ctx context.Context, tx *sql.Tx, userID
 // (tenant, recipient) so a retried webhook can't double-send. A nil enqueuer
 // (email queue unwired) is a no-op.
 func (e *Enqueuer) EnqueueAdminTenantRegisteredEmail(ctx context.Context, tenantID, recipient string, vars map[string]string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.Insert(ctx, SendEmailTask{
+	return e.insert(ctx, SendEmailTask{
 		TenantID:       tenantID,
 		ToEmail:        recipient,
 		TemplateKey:    templates.KeyAdminTenantRegistered,
 		EmailKind:      models.EmailKindTransactional,
 		IdempotencyKey: "admin_tenant_registered:" + tenantID + ":" + recipient,
 		Vars:           vars,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueNotifyHarborTenantRegisteredTx enqueues the CON-229 "notify Harbor a
@@ -498,11 +542,7 @@ func (e *Enqueuer) EnqueueAdminTenantRegisteredEmail(ctx context.Context, tenant
 // operator notification fires iff the tenant commits. A nil enqueuer (feature
 // unwired) is a no-op.
 func (e *Enqueuer) EnqueueNotifyHarborTenantRegisteredTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, NotifyHarborTenantRegisteredTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insertTx(ctx, tx, NotifyHarborTenantRegisteredTask{TenantID: tenantID}, nil)
 }
 
 // EnqueuePasswordResetTx enqueues the transactional password-reset email inside
@@ -514,18 +554,14 @@ func (e *Enqueuer) EnqueueNotifyHarborTenantRegisteredTx(ctx context.Context, tx
 // idempotency so each distinct request queues its own mail. A nil enqueuer
 // (email queue unwired) is a no-op.
 func (e *Enqueuer) EnqueuePasswordResetTx(ctx context.Context, tx *sql.Tx, userID, tenantID, tokenID, resetURL string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+	return e.insertTx(ctx, tx, SendEmailTask{
 		UserID:         userID,
 		TenantID:       tenantID,
 		TemplateKey:    templates.KeyPasswordReset,
 		EmailKind:      models.EmailKindTransactional,
 		IdempotencyKey: "password_reset:" + tokenID,
 		Vars:           map[string]string{"reset_url": resetURL},
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // NewDeviceLoginVars are the sign-in details a new-device alert shows. They
@@ -545,10 +581,7 @@ type NewDeviceLoginVars struct {
 // the token does. The recipient is re-resolved from userID at send time.
 // tokenID keys the idempotency. A nil enqueuer is a no-op.
 func (e *Enqueuer) EnqueueNewDeviceLoginEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID, tokenID string, v NewDeviceLoginVars) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+	return e.insertTx(ctx, tx, SendEmailTask{
 		UserID:         userID,
 		TenantID:       tenantID,
 		TemplateKey:    templates.KeyNewDeviceLogin,
@@ -562,8 +595,7 @@ func (e *Enqueuer) EnqueueNewDeviceLoginEmailTx(ctx context.Context, tx *sql.Tx,
 			"secure_url":   v.SecureURL,
 			"masked_email": v.MaskedEmail,
 		},
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueInvitationEmailTx enqueues the transactional workspace-invitation email
@@ -577,10 +609,7 @@ func (e *Enqueuer) EnqueueNewDeviceLoginEmailTx(ctx context.Context, tx *sql.Tx,
 // idempotency so each distinct invite queues its own mail. A nil enqueuer (email
 // queue unwired) is a no-op.
 func (e *Enqueuer) EnqueueInvitationEmailTx(ctx context.Context, tx *sql.Tx, tenantID, invitationID, toEmail, inviteURL, inviterName, workspaceName, role string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+	return e.insertTx(ctx, tx, SendEmailTask{
 		TenantID:       tenantID,
 		ToEmail:        toEmail,
 		TemplateKey:    templates.KeyInvitation,
@@ -592,8 +621,7 @@ func (e *Enqueuer) EnqueueInvitationEmailTx(ctx context.Context, tx *sql.Tx, ten
 			"workspace_name": workspaceName,
 			"role":           role,
 		},
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueDripTx enqueues the marketing onboarding drip (day 2/5/7) as delayed
@@ -601,19 +629,15 @@ func (e *Enqueuer) EnqueueInvitationEmailTx(ctx context.Context, tx *sql.Tx, ten
 // ScheduledAt; unsubscribes are honoured at send time, so no scheduled job ever
 // needs cancelling. A nil enqueuer is a no-op.
 func (e *Enqueuer) EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
 	now := time.Now().UTC()
 	for _, step := range dripSchedule {
-		opts := insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: now.Add(step.Offset)})
-		if _, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+		if err := e.insertTx(ctx, tx, SendEmailTask{
 			UserID:         userID,
 			TenantID:       tenantID,
 			TemplateKey:    step.Key,
 			EmailKind:      models.EmailKindMarketing,
 			IdempotencyKey: step.Key + ":" + userID,
-		}, opts); err != nil {
+		}, &river.InsertOpts{ScheduledAt: now.Add(step.Offset)}); err != nil {
 			return err
 		}
 	}
@@ -626,16 +650,12 @@ func (e *Enqueuer) EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenant
 // re-reads original.pdf from storage, so the bytes are not in the args. Takes
 // primitives so the handler can depend on a narrow interface, not this package.
 func (e *Enqueuer) EnqueueProcessPDFTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, ProcessPDFTask{
+	return e.insertTx(ctx, tx, ProcessPDFTask{
 		AssetID:      assetID,
 		TenantID:     tenantID,
 		OriginalName: originalName,
 		MimeType:     mimeType,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueProcessDocumentTx enqueues a document-ingestion task inside the given
@@ -645,17 +665,13 @@ func (e *Enqueuer) EnqueueProcessPDFTx(ctx context.Context, tx *sql.Tx, assetID,
 // path), so the bytes are not in the args. Takes primitives so the handler can
 // depend on a narrow interface, not this package.
 func (e *Enqueuer) EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, ProcessDocumentTask{
+	return e.insertTx(ctx, tx, ProcessDocumentTask{
 		AssetID:      assetID,
 		TenantID:     tenantID,
 		OriginalName: originalName,
 		MimeType:     mimeType,
 		StorageKey:   storageKey,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueProcessAudioTx enqueues an audio-ingestion task inside the given
@@ -667,10 +683,7 @@ func (e *Enqueuer) EnqueueProcessDocumentTx(ctx context.Context, tx *sql.Tx, ass
 // routes it onto the dedicated `audio` queue. Takes primitives so the handler
 // depends on a narrow interface, not this package.
 func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, ProcessAudioTask{
+	return e.insertTx(ctx, tx, ProcessAudioTask{
 		AssetID:      assetID,
 		TenantID:     tenantID,
 		OriginalName: originalName,
@@ -678,8 +691,7 @@ func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetI
 		StorageKey:   storageKey,
 		RunKey:       runKey,
 		PinnedModel:  pinnedModel,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueProcessImageTx enqueues an image-ingestion task inside the given
@@ -691,10 +703,7 @@ func (e *Enqueuer) EnqueueProcessAudioTx(ctx context.Context, tx *sql.Tx, assetI
 // InsertOpts routes it onto the dedicated `image` queue. Takes primitives so the
 // handler depends on a narrow interface, not this package.
 func (e *Enqueuer) EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, originalName, mimeType, storageKey, runKey, pinnedModel string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, ProcessImageTask{
+	return e.insertTx(ctx, tx, ProcessImageTask{
 		AssetID:      assetID,
 		TenantID:     tenantID,
 		OriginalName: originalName,
@@ -702,8 +711,7 @@ func (e *Enqueuer) EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetI
 		StorageKey:   storageKey,
 		RunKey:       runKey,
 		PinnedModel:  pinnedModel,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueReembedImage enqueues a re-embed of an image asset's edited description
@@ -711,11 +719,7 @@ func (e *Enqueuer) EnqueueProcessImageTx(ctx context.Context, tx *sql.Tx, assetI
 // already saved, and the worker re-reads it, so a lost enqueue only leaves the
 // previous chunks in place until the next edit or re-extract.
 func (e *Enqueuer) EnqueueReembedImage(ctx context.Context, assetID, tenantID string) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.Insert(ctx, ReembedImageTask{AssetID: assetID, TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insert(ctx, ReembedImageTask{AssetID: assetID, TenantID: tenantID}, nil)
 }
 
 // EnqueueProcessURLTx enqueues a URL-scrape task inside the given transaction,
@@ -724,23 +728,19 @@ func (e *Enqueuer) EnqueueReembedImage(ctx context.Context, assetID, tenantID st
 // Firecrawl's cache off for a re-submit of an existing URL. Takes primitives so
 // the handler depends on a narrow interface, not this package.
 func (e *Enqueuer) EnqueueProcessURLTx(ctx context.Context, tx *sql.Tx, assetID, tenantID, sourceURL string, refresh bool) error {
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.InsertTx(ctx, tx, ProcessURLTask{
+	return e.insertTx(ctx, tx, ProcessURLTask{
 		AssetID:   assetID,
 		TenantID:  tenantID,
 		SourceURL: sourceURL,
 		Refresh:   refresh,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}, nil)
 }
 
 // EnqueueCancel enqueues a cancellation task (non-transactional).
 func (e *Enqueuer) EnqueueCancel(ctx context.Context, postID string, target CancelTarget, actor string) error {
-	if e == nil || e.Client == nil {
+	task := CancelZernioJobTask{PostID: postID, Target: target, Actor: actor}
+	if e == nil || (e.Client == nil && !e.Relays(task.Kind())) {
 		return fmt.Errorf("jobs: enqueuer not configured")
 	}
-	_, err := e.Client.Insert(ctx, CancelZernioJobTask{PostID: postID, Target: target, Actor: actor}, insertOptsWithRequestID(ctx, nil))
-	return err
+	return e.insert(ctx, task, nil)
 }

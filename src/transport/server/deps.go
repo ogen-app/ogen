@@ -203,6 +203,9 @@ func (d *deps) initRiver(ctx context.Context) error {
 	// The analysis service enqueues from inside River workers, so it is built
 	// over the enqueuer before the client exists; the client is attached below.
 	d.enqueuer = &queues.Enqueuer{}
+	if err := d.initRelay(ctx); err != nil {
+		return err
+	}
 	d.analysis = newAssetAnalysis(d)
 	client, err := newRiverClient(ctx, d)
 	if err != nil {

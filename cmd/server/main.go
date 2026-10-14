@@ -37,6 +37,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
+	"github.com/ogen-app/ogen/src/jobs/outbox"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/httptransport"
@@ -227,6 +228,12 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		slog.Error("grpc admin-email enqueuer init failed; registration notifications disabled (non-fatal)",
 			logging.AttrComponent, "boot", logging.AttrError, err)
 	} else {
+		// Route like the app's enqueuer, so a relayed send_email goes through
+		// the outbox; the app's relay delivers it. A bad OUTBOX_RELAY_KINDS
+		// already fails the app's boot.
+		if kinds, err := queues.RelayKinds(cfg.OutboxRelayKinds, cfg.RiverServiceAddr); err == nil && cfg.RiverServiceAddr != "" {
+			enq.Relay(outbox.NewWriter(db.DB), kinds)
+		}
 		adminEmailEnqueuer = enq
 	}
 

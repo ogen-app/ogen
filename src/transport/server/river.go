@@ -37,8 +37,15 @@ func newRiverClient(ctx context.Context, d *deps) (*river.Client[*sql.Tx], error
 		// default queue.
 		Queues:       queues.QueueConfigs(d.cfg.JobWorkers, d.cfg.AudioJobWorkers, d.cfg.ImageJobWorkers, d.cfg.IngestJobWorkers, d.cfg.AnalysisJobWorkers),
 		Workers:      workers,
-		PeriodicJobs: periodicConfig(d.cfg).PeriodicJobs(),
+		PeriodicJobs: periodicJobs(d),
 	})
+}
+
+// periodicJobs is ogen's periodic set: every sweep river-service does not own.
+func periodicJobs(d *deps) []*river.PeriodicJob {
+	pc := periodicConfig(d.cfg)
+	pc.Relayed = d.enqueuer.Relays
+	return pc.PeriodicJobs()
 }
 
 // periodicConfig schedules the sweeps. The analytics, follower and
@@ -118,6 +125,7 @@ func queueDeps(d *deps) queues.Deps {
 		NotificationRepo:      r.notificationRepo,
 		NotificationRetention: time.Duration(cfg.NotificationsRetentionDays) * 24 * time.Hour,
 		// An empty URL disables the signed new-tenant webhook.
+		Jobs:         d.enqueuer,
 		HarborNotify: queues.HarborNotifyDeps{URL: cfg.HarborWebhookURL, Secret: cfg.HarborWebhookSecret},
 	}
 }
