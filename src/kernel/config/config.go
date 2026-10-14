@@ -498,6 +498,16 @@ type Config struct {
 	OutboxRelayBatch        int           `envconfig:"OUTBOX_RELAY_BATCH" default:"100"`
 	OutboxRetentionDays     int           `envconfig:"OUTBOX_RETENTION_DAYS" default:"7"`
 
+	// river-service's jobs call back into ogen on a dedicated listener at
+	// JOB_RPC_ADDR (e.g. :9093), behind RIVER_RPC_AUTH_TOKEN, which must differ
+	// from Harbor's GRPC_AUTH_TOKEN. At most JOB_RPC_MAX_CONCURRENCY calls run
+	// at once; past that callers are told to back off. Leased credentials are
+	// good for CREDENTIAL_LEASE_TTL. Empty JOB_RPC_ADDR disables the listener.
+	JobRPCAddr           string        `envconfig:"JOB_RPC_ADDR"`
+	RiverRPCAuthToken    string        `envconfig:"RIVER_RPC_AUTH_TOKEN"`
+	JobRPCMaxConcurrency int           `envconfig:"JOB_RPC_MAX_CONCURRENCY" default:"8"`
+	CredentialLeaseTTL   time.Duration `envconfig:"CREDENTIAL_LEASE_TTL" default:"5m"`
+
 	// Reconciliation grace window. A Scheduled post whose
 	// scheduled_at + this window has passed without a terminal Zernio
 	// status is forced to Failed with a reason that distinguishes

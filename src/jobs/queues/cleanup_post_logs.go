@@ -59,8 +59,12 @@ func (p *CleanupPostLogsProcessor) Timeout(*river.Job[CleanupPostLogsTask]) time
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupPostLogsProcessor{Repo: d.Zernio.PostLogRepo, Retention: d.PostLogRetention})
+		river.AddWorker(w, newCleanupPostLogs(d))
 	})
+}
+
+func newCleanupPostLogs(d Deps) *CleanupPostLogsProcessor {
+	return &CleanupPostLogsProcessor{Repo: d.Zernio.PostLogRepo, Retention: d.PostLogRetention}
 }
 
 // Process deletes Post Log entries older than the retention window.

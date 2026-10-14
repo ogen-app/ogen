@@ -113,6 +113,7 @@ func (d *deps) phases() []func(context.Context) error {
 		d.initGRPCClients,
 		d.initIngestion,
 		d.initRiver,
+		d.initJobRPC,
 		d.initServices,
 		d.initGenkit,
 	}

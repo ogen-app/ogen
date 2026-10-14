@@ -51,8 +51,12 @@ func (p *CleanupPluginPairingsProcessor) Timeout(*river.Job[CleanupPluginPairing
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupPluginPairingsProcessor{Repo: d.PluginPairingRepo})
+		river.AddWorker(w, newCleanupPluginPairings(d))
 	})
+}
+
+func newCleanupPluginPairings(d Deps) *CleanupPluginPairingsProcessor {
+	return &CleanupPluginPairingsProcessor{Repo: d.PluginPairingRepo}
 }
 
 // Process deletes pairings whose expiry has passed. A nil repo is a no-op.
