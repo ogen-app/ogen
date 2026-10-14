@@ -2,6 +2,7 @@ package zernio
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -106,9 +107,88 @@ func Plan(op func(c *Client) error) (Call, error) {
 	return Call{}, fmt.Errorf("zernio: plan request: %w", err)
 }
 
+// Replay runs a read-only op that makes several requests (paging through a
+// list): prior answers its first requests in order, and the first request
+// past them is captured and returned instead of sent. A nil call means op
+// finished on prior alone, with err its result.
+func Replay(prior []Result, op func(c *Client) error) (next *Call, err error) {
+	rt := &sequenceTransport{prior: prior, capture: &captureTransport{call: &Call{}}}
+	err = op(clientWith(rt))
+	if errors.Is(err, errCaptured) {
+		return rt.capture.call, nil
+	}
+	return nil, err
+}
+
+type sequenceTransport struct {
+	prior   []Result
+	n       int
+	capture *captureTransport
+}
+
+func (t *sequenceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.n < len(t.prior) {
+		res := t.prior[t.n]
+		t.n++
+		return replayTransport{res: res}.RoundTrip(req)
+	}
+	return t.capture.RoundTrip(req)
+}
+
 // Decode runs op as if Zernio had answered its request with res, so op's
 // typed result and error (an *APIError for a non-2xx status) are exactly what
 // a direct call would have returned.
 func Decode(res Result, op func(c *Client) error) error {
 	return op(clientWith(replayTransport{res: res}))
 }
+
+// Send makes a planned Call with this client's own key and returns what
+// river-service would have: the response, or why there was none. It runs the
+// step-run jobs ogen still works itself. keyMissing reports a disabled client
+// or no key set, in which case nothing is sent.
+func (c *Client) Send(ctx context.Context, call Call) (res Result, keyMissing bool) {
+	if c == nil || c.keyResolver == nil {
+		return Result{}, true
+	}
+	key, err := c.keyResolver(ctx)
+	if err != nil {
+		return Result{Err: "zernio: resolve api key: " + err.Error()}, false
+	}
+	if key == "" {
+		return Result{}, true
+	}
+	u := c.baseURL + call.Path
+	if len(call.Query) > 0 {
+		u += "?" + call.Query.Encode()
+	}
+	var body io.Reader
+	if len(call.Body) > 0 {
+		body = bytes.NewReader(call.Body)
+	}
+	req, err := http.NewRequestWithContext(ctx, call.Method, u, body)
+	if err != nil {
+		return Result{Err: err.Error()}, false
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range call.Headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return Result{Err: err.Error()}, false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, sendBodyLimit))
+	if err != nil {
+		return Result{Status: resp.StatusCode, Err: "zernio: read response: " + err.Error()}, false
+	}
+	return Result{Status: resp.StatusCode, Body: b}, false
+}
+
+// sendBodyLimit bounds a response Send reads, as river-service bounds the
+// ones it hands back.
+const sendBodyLimit = 32 << 20

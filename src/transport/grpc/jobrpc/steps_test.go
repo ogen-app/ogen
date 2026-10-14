@@ -50,10 +50,17 @@ func TestJobStep(t *testing.T) {
 		t.Errorf("sidecar = %v", sc)
 	}
 
-	steps.out = queues.StepOutput{Done: &queues.StepDone{Outcome: "fanned_out", Enqueue: []queues.ChildJob{{Kind: "c", Args: []byte(`{"tenant_id":"t1"}`)}}}}
-	res, _ = c.Step(ctx, &jobrpcv1.StepRequest{Kind: "k"})
-	if d := res.GetDone(); d.GetOutcome() != "fanned_out" || len(d.GetEnqueue()) != 1 {
+	steps.out = queues.StepOutput{Done: &queues.StepDone{
+		Outcome: "fanned_out", Enqueue: []queues.ChildJob{{Kind: "c", Args: []byte(`{"tenant_id":"t1"}`)}},
+		Cancel: []queues.JobMatch{{Kind: "poll", Args: []queues.ArgMatch{{Key: "post_id", Values: []string{"p1"}}}}},
+	}}
+	res, _ = c.Step(ctx, &jobrpcv1.StepRequest{Kind: "k", Attempt: 3, MaxAttempts: 5})
+	if d := res.GetDone(); d.GetOutcome() != "fanned_out" || len(d.GetEnqueue()) != 1 ||
+		len(d.GetCancel()) != 1 || d.GetCancel()[0].GetArgs()[0].GetValues()[0] != "p1" {
 		t.Errorf("done = %v", d)
+	}
+	if steps.got.Attempt != 3 || steps.got.MaxAttempts != 5 {
+		t.Errorf("attempt = %d of %d, want 3 of 5", steps.got.Attempt, steps.got.MaxAttempts)
 	}
 
 	steps.out = queues.StepOutput{Retry: &queues.StepRetry{Reason: "down", After: time.Minute}}
