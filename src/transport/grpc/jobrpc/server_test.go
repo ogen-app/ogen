@@ -162,3 +162,15 @@ func TestMaintenanceRun(t *testing.T) {
 		t.Errorf("unknown task = %v, want InvalidArgument", err)
 	}
 }
+
+func TestLeaseConfigCredentials(t *testing.T) {
+	conn := dial(t, Deps{Secrets: fakeSecrets{}, ConfigCredentials: map[string]string{"harbor_webhook_secret": "hook-key", "empty_one": ""}})
+	c := jobrpcv1.NewCredentialServiceClient(conn)
+	ctx := authed(t.Context(), token)
+	if res, err := c.Lease(ctx, &jobrpcv1.LeaseRequest{Name: "harbor_webhook_secret"}); err != nil || res.GetValue() != "hook-key" {
+		t.Errorf("Lease(harbor) = %v, %v", res, err)
+	}
+	if _, err := c.Lease(ctx, &jobrpcv1.LeaseRequest{Name: "empty_one"}); status.Code(err) != codes.NotFound {
+		t.Errorf("Lease(unset config key) = %v, want NotFound", err)
+	}
+}

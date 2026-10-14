@@ -38,8 +38,8 @@ const (
 	maxConnectionAgeGrace = 30 * time.Second
 )
 
-// leasable are the credentials river-service may lease: the vendor keys its
-// jobs call vendors with. Everything else stays in ogen.
+// leasable are the secret-store credentials river-service may lease: the
+// vendor keys its jobs call vendors with. Everything else stays in ogen.
 var leasable = map[string]bool{
 	secrets.NameZernioAPIKey:    true,
 	secrets.NameGeminiAPIKey:    true,
@@ -57,6 +57,9 @@ type Deps struct {
 	Secrets        secrets.Store
 	// LeaseTTL is how long a leased credential is good for. Zero means 5m.
 	LeaseTTL time.Duration
+	// ConfigCredentials are leasable keys ogen holds in its own config rather
+	// than the secret store, by lease name (the Harbor webhook signing key).
+	ConfigCredentials map[string]string
 	// Maintenance runs one pass of each housekeeping sweep, by kind.
 	Maintenance map[string]func(context.Context) error
 	// Email prepares and records the sends river-service makes.
@@ -85,7 +88,7 @@ func New(d Deps) (*grpc.Server, error) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
-	jobrpcv1.RegisterCredentialServiceServer(srv, &credentials{store: d.Secrets, ttl: ttl})
+	jobrpcv1.RegisterCredentialServiceServer(srv, &credentials{store: d.Secrets, config: d.ConfigCredentials, ttl: ttl})
 	jobrpcv1.RegisterMaintenanceServiceServer(srv, &maintenance{tasks: d.Maintenance})
 	jobrpcv1.RegisterEmailJobServiceServer(srv, &emailJobs{jobs: d.Email})
 	hs := health.NewServer()
@@ -157,12 +160,19 @@ func streamGate(token string, sem chan struct{}) grpc.StreamServerInterceptor {
 // credentials serves CredentialService.
 type credentials struct {
 	jobrpcv1.UnimplementedCredentialServiceServer
-	store secrets.Store
-	ttl   time.Duration
+	store  secrets.Store
+	config map[string]string
+	ttl    time.Duration
 }
 
 func (c *credentials) Lease(ctx context.Context, req *jobrpcv1.LeaseRequest) (*jobrpcv1.LeaseResponse, error) {
 	name := req.GetName()
+	if value, ok := c.config[name]; ok {
+		if value == "" {
+			return nil, status.Errorf(codes.NotFound, "credential %q is not set", name)
+		}
+		return &jobrpcv1.LeaseResponse{Value: value, ExpiresAt: timestamppb.New(time.Now().Add(c.ttl))}, nil
+	}
 	if !leasable[name] {
 		return nil, status.Errorf(codes.PermissionDenied, "credential %q is not leasable", name)
 	}

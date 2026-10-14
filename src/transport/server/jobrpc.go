@@ -36,8 +36,11 @@ func (d *deps) initJobRPC(ctx context.Context) error {
 		MaxConcurrency: d.cfg.JobRPCMaxConcurrency,
 		Secrets:        d.secretStore,
 		LeaseTTL:       d.cfg.CredentialLeaseTTL,
-		Maintenance:    queues.MaintenanceTasks(qd),
-		Email:          queues.NewSendEmail(qd),
+		// The Harbor webhook signing key lives in ogen's config; river-service
+		// leases it to sign the new-tenant webhook.
+		ConfigCredentials: map[string]string{"harbor_webhook_secret": d.cfg.HarborWebhookSecret},
+		Maintenance:       queues.MaintenanceTasks(qd),
+		Email:             queues.NewSendEmail(qd),
 	})
 	if err != nil {
 		return err
