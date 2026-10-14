@@ -98,6 +98,9 @@ type StepOutput struct {
 	Transfer *MediaTransfer
 	Done     *StepDone
 	Retry    *StepRetry
+	// Wait has river-service step again after this long with the same
+	// state, for work ogen runs detached.
+	Wait time.Duration
 }
 
 // HTTPCall is one request to an outside API. With an Upstream, Path is
@@ -200,6 +203,7 @@ func NewJobSteps(d Deps) *JobSteps {
 	s.registerZernioLifecycle()
 	s.registerPublishing()
 	s.registerIngestion()
+	s.registerAnalysis()
 	return s
 }
 
@@ -233,6 +237,21 @@ func (s *JobSteps) registerIngestion() {
 	s.kinds[ProcessImageQueue] = (&ProcessImageProcessor{Deps: d.Image}).step
 	s.kinds[ReembedImageQueue] = (&ReembedImageProcessor{Deps: d.Image}).step
 	s.kinds[ProcessAudioKind] = (&ProcessAudioProcessor{Deps: d.Audio}).step
+}
+
+// registerAnalysis adds the asset analysis jobs. Their model calls run here,
+// detached; river-service only orchestrates them.
+func (s *JobSteps) registerAnalysis() {
+	d := s.deps
+	s.kinds[AnalyzeAssetKind] = (&AnalyzeAssetProcessor{Deps: d.Analysis}).step
+	s.kinds[ReanalyzeCampaignKind] = (&ReanalyzeCampaignProcessor{Deps: d.Analysis}).step
+}
+
+// snooze stops the job and runs it again after wait, without using an
+// attempt. A retry without a delay would use one, so the wait is at least a
+// second.
+func snooze(reason string, wait time.Duration) (StepOutput, error) {
+	return StepOutput{Retry: &StepRetry{Reason: reason, After: max(wait, time.Second)}}, nil
 }
 
 // Step returns what river-service does next for one job. An error is

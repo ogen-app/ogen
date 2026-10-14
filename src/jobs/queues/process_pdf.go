@@ -168,8 +168,8 @@ type pdfState struct {
 	Phase     string        `json:"phase"`
 	Embed     embedProgress `json:"embed"`
 	ThumbKey  *string       `json:"thumb_key,omitempty"`
-	Size      int           `json:"size,omitempty"`
-	PageCount int           `json:"page_count,omitempty"`
+	Size      int           `json:"size,omitzero"`
+	PageCount int           `json:"page_count,omitzero"`
 }
 
 const (

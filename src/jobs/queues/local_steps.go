@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -67,6 +68,14 @@ func runLocal(ctx context.Context, step stepFunc, kind string, args any, attempt
 			in.Result = runLocalAction(ctx, out.Sidecar.local)
 		case out.Sidecar != nil:
 			in.Result = &StepResult{Status: int(codesUnimplemented), Err: "sidecar call without a local client"}
+		case out.Wait > 0:
+			t := time.NewTimer(out.Wait)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return ctx.Err()
+			case <-t.C:
+			}
 		case out.Retry != nil:
 			if out.Retry.After > 0 {
 				return river.JobSnooze(out.Retry.After)

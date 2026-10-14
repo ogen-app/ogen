@@ -63,6 +63,12 @@ func TestJobStep(t *testing.T) {
 		t.Errorf("attempt = %d of %d, want 3 of 5", steps.got.Attempt, steps.got.MaxAttempts)
 	}
 
+	steps.out = queues.StepOutput{State: []byte("s"), Wait: 5 * time.Second}
+	res, _ = c.Step(ctx, &jobrpcv1.StepRequest{Kind: "k"})
+	if res.GetWait().AsDuration() != 5*time.Second || string(res.GetState()) != "s" {
+		t.Errorf("wait = %v", res)
+	}
+
 	steps.out = queues.StepOutput{Retry: &queues.StepRetry{Reason: "down", After: time.Minute}}
 	res, _ = c.Step(ctx, &jobrpcv1.StepRequest{Kind: "k"})
 	if r := res.GetRetry(); r.GetReason() != "down" || r.GetAfter().AsDuration() != time.Minute {
