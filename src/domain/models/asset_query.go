@@ -209,8 +209,9 @@ type AssetQuery struct {
 	Location *time.Location
 }
 
-// AssetIdeaCounts counts an asset's analysis ideas per verdict. A later idea
-// whose reminder has passed counts as undecided, not later.
+// AssetIdeaCounts counts an asset's analysis ideas per verdict, from the lens
+// in scope: the workspace lens, or under ScopeCampaign that campaign's. A later
+// idea whose reminder has passed counts as undecided, not later.
 type AssetIdeaCounts struct {
 	Undecided int `json:"undecided"`
 	Yes       int `json:"yes"`
@@ -269,7 +270,8 @@ type AssetListItem struct {
 	SourceURL   *string   `json:"source_url" extensions:"x-nullable"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	// AnalysisStatus is the workspace analysis lens's status.
+	// AnalysisStatus is the status of the lens in scope: the workspace lens,
+	// or under ScopeCampaign that campaign's; null when it has none.
 	AnalysisStatus *AssetAnalysisStatus `json:"analysis_status" swaggertype:"string" enums:"pending,running,ready,failed,skipped" extensions:"x-nullable"`
 	File           *AssetListFile       `json:"file"            extensions:"x-nullable"`
 	Tags           []Tag                `json:"tags"`
@@ -283,7 +285,8 @@ type AssetListItem struct {
 	// PublishedAt is when the source was published, read from its metadata at
 	// ingest; null when unknown.
 	PublishedAt *time.Time `json:"published_at" extensions:"x-nullable"`
-	// Gist is one sentence of the workspace analysis; null unless that lens is
+	// Gist is one sentence of the analysis of the lens in scope (the workspace
+	// lens, or under ScopeCampaign that campaign's); null unless that lens is
 	// ready and has a gist or a usable summary sentence.
 	Gist *string `json:"gist" extensions:"x-nullable"`
 	// Match is present only when the query has text.

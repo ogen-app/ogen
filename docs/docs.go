@@ -15503,7 +15503,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "analysis_status": {
-                    "description": "AnalysisStatus is the workspace analysis lens's status.",
+                    "description": "AnalysisStatus is the status of the lens in scope: the workspace lens,\nor under ScopeCampaign that campaign's; null when it has none.",
                     "type": "string",
                     "enum": [
                         "pending",
@@ -15536,7 +15536,7 @@ const docTemplate = `{
                     "x-nullable": true
                 },
                 "gist": {
-                    "description": "Gist is one sentence of the workspace analysis; null unless that lens is\nready and has a gist or a usable summary sentence.",
+                    "description": "Gist is one sentence of the analysis of the lens in scope (the workspace\nlens, or under ScopeCampaign that campaign's); null unless that lens is\nready and has a gist or a usable summary sentence.",
                     "type": "string",
                     "x-nullable": true
                 },
