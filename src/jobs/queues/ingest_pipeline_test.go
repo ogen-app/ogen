@@ -54,7 +54,30 @@ func TestEmbedChunks(t *testing.T) {
 		{Index: 5, Text: "reported tokens", Tokens: 42},
 	}
 
-	chunks, stats := embedChunks(t.Context(), emb, "a1", slices.Values(sources))
+	store := &fakeChunks{}
+	stage := newMemChunkStage(store)
+	if err := stage.Begin(t.Context(), "run", "a1", stageSources(slices.Values(sources))); err != nil {
+		t.Fatal(err)
+	}
+	loop := embedLoop{stage: stage, embedder: emb}
+	p := embedProgress{RunID: "run"}
+	for {
+		call, err := loop.next(t.Context(), &p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if call == nil {
+			break
+		}
+		if err := loop.settle(t.Context(), &p, runLocalAction(t.Context(), call.local)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	committed, err := stage.Commit(t.Context(), "run", "a1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, chunks := stageStats(committed), store.got
 
 	if want := (embedStats{Attempts: 3, Embedded: 2, Failures: 1, Tokens: int64(estimateTokens("first chunk text")) + 42}); stats != want {
 		t.Fatalf("stats = %+v, want %+v", stats, want)
@@ -66,7 +89,7 @@ func TestEmbedChunks(t *testing.T) {
 	if first.ID != "a1:0" || first.AssetID != "a1" || first.Model != "fake-embedder" {
 		t.Fatalf("first chunk identity = %q/%q/%q", first.ID, first.AssetID, first.Model)
 	}
-	if first.SourceLabel == nil || *first.SourceLabel != "Page 1" || first.SourceAnchor != anchor || *first.PageStart != 1 {
+	if first.SourceLabel == nil || *first.SourceLabel != "Page 1" || first.SourceAnchor != anchor || *first.PageStart != 1 || len(first.Embedding.Slice()) != 4 {
 		t.Fatalf("first chunk metadata not carried: %+v", first)
 	}
 	if last.ID != "a1:5" || last.ChunkIndex != 5 || last.TokenCount != 42 {
