@@ -57,12 +57,16 @@ func runLocal(ctx context.Context, step stepFunc, kind string, args any, attempt
 		}
 		in.State, in.Result = out.State, nil
 		switch {
+		case out.HTTP != nil && out.HTTP.local != nil:
+			in.Result = runLocalAction(ctx, out.HTTP.local)
 		case out.HTTP != nil:
 			in.Result = acts.http(ctx, out.HTTP)
 		case out.Transfer != nil:
 			in.Result = acts.transferMedia(ctx, out.Transfer)
+		case out.Sidecar != nil && out.Sidecar.local != nil:
+			in.Result = runLocalAction(ctx, out.Sidecar.local)
 		case out.Sidecar != nil:
-			in.Result = &StepResult{Status: int(codesUnimplemented), Err: "sidecar calls are not run inside ogen"}
+			in.Result = &StepResult{Status: int(codesUnimplemented), Err: "sidecar call without a local client"}
 		case out.Retry != nil:
 			if out.Retry.After > 0 {
 				return river.JobSnooze(out.Retry.After)
@@ -73,6 +77,12 @@ func runLocal(ctx context.Context, step stepFunc, kind string, args any, attempt
 		}
 	}
 	return fmt.Errorf("%s: no result after %d steps", kind, maxLocalSteps)
+}
+
+// runLocalAction makes an action through its local closure.
+func runLocalAction(ctx context.Context, act localAction) *StepResult {
+	v, err := act(ctx)
+	return &StepResult{local: &localOutcome{value: v, err: err}}
 }
 
 // codesUnimplemented is gRPC's UNIMPLEMENTED, the code river-service returns

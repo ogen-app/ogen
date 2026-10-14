@@ -56,6 +56,35 @@ type StepResult struct {
 	Err    string
 	// The upstream's key is not set in ogen, so the call was not made.
 	CredentialMissing bool
+	// local is the typed outcome of an action run inside ogen through its
+	// local closure; river-service's results never carry one.
+	local *localOutcome
+}
+
+// localOutcome is what an action's local closure returned.
+type localOutcome struct {
+	value any
+	err   error
+}
+
+// localAction makes an action in-process, with ogen's own clients, and
+// returns its typed outcome. A step attaches one to an outside call whose
+// client is ogen's (an embedder, a sidecar client), so a run inside ogen calls
+// that client directly and river-service gets the raw request.
+type localAction func(ctx context.Context) (any, error)
+
+// localOr returns an action's typed outcome: the in-process one when the
+// step ran inside ogen, otherwise decode's reading of river-service's result.
+func localOr[T any](r *StepResult, decode func(*StepResult) (T, error)) (T, error) {
+	if r != nil && r.local != nil {
+		v, _ := r.local.value.(T)
+		return v, r.local.err
+	}
+	if r == nil {
+		var zero T
+		return zero, errors.New("no result")
+	}
+	return decode(r)
 }
 
 // StepOutput is what river-service does next: exactly one of the action
@@ -80,6 +109,8 @@ type HTTPCall struct {
 	Headers  map[string]string
 	Body     []byte
 	URL      string
+	// local makes the call in-process instead.
+	local localAction
 }
 
 // SidecarCall is one RPC to a sidecar: a unary Request, or for a
@@ -90,6 +121,8 @@ type SidecarCall struct {
 	Request []byte
 	Stream  *StreamSource
 	Timeout time.Duration
+	// local makes the call in-process instead.
+	local localAction
 }
 
 // StreamSource streams a stored file to a sidecar: Header first, then frames
@@ -164,6 +197,7 @@ func NewJobSteps(d Deps) *JobSteps {
 	s := &JobSteps{deps: d, kinds: map[string]stepFunc{}}
 	s.registerZernioLifecycle()
 	s.registerPublishing()
+	s.registerIngestion()
 	return s
 }
 
@@ -186,6 +220,13 @@ func (s *JobSteps) registerPublishing() {
 	followers := newRefreshZernioFollowers(d)
 	s.kinds[RefreshZernioFollowersQueue] = followers.step
 	s.kinds[FollowersTenantKind] = followers.tenantStep
+}
+
+// registerIngestion adds the ingest jobs.
+func (s *JobSteps) registerIngestion() {
+	d := s.deps
+	s.kinds[ProcessPDFQueue] = (&ProcessPDFProcessor{Deps: d.PDF}).step
+	s.kinds[ProcessDocumentQueue] = (&ProcessDocumentProcessor{Deps: d.Document}).step
 }
 
 // Step returns what river-service does next for one job. An error is
