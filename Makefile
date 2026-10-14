@@ -89,12 +89,12 @@ lint:
 # on EmailAdminService in v1.9.0 (CON-229); modelconfig.v1 in v1.10.0 (CON-308);
 # modelconfig.v1 vision_input/audio_input + FlowSlot.vendors in v1.11.0 (CON-310);
 # jobs.v1 (JobService, served by river-service) in v1.13.0 and jobrpc.v1
-# (CredentialService, MaintenanceService, served for river-service) in v1.14.0
-# (CON-332)
+# (CredentialService, MaintenanceService, served for river-service) in v1.14.0,
+# EmailJobService and ZernioJobService in v1.15.0 (CON-332)
 # — publish the proto repo tag before `make proto` can resolve it. Until then,
 # generate from a local checkout: make proto PROTO_SOURCE=../proto/proto
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.14.0
+PROTO_VERSION := v1.15.0
 PROTO_SOURCE  ?= $(PROTO_MODULE):$(PROTO_VERSION)
 
 proto:
