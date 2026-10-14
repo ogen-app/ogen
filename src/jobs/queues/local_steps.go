@@ -35,6 +35,9 @@ type localActions struct {
 	// transfer streams media between stored files and upload URLs. Nil uses
 	// a client bounded only by the job's context.
 	transfer *http.Client
+	// children are the steps of the child kinds a job fans out into; a
+	// local run works each child inline, as its own job.
+	children map[string]stepFunc
 }
 
 // runLocal runs a step-run job to completion in-process, from its first
@@ -66,7 +69,7 @@ func runLocal(ctx context.Context, step stepFunc, kind string, args any, attempt
 			}
 			return fmt.Errorf("%s: %s", kind, out.Retry.Reason)
 		default:
-			return finishLocal(ctx, kind, out.Done)
+			return acts.finish(ctx, kind, out.Done)
 		}
 	}
 	return fmt.Errorf("%s: no result after %d steps", kind, maxLocalSteps)
@@ -143,10 +146,12 @@ func (a localActions) openSource(ctx context.Context, client *http.Client, t *Me
 	return src.Body, nil
 }
 
-// finishLocal carries out a done step's cancels and child jobs on the
-// worker's own River client. Cancels are best effort, as they are in
-// river-service: a job left behind exits on its own when it runs.
-func finishLocal(ctx context.Context, kind string, d *StepDone) error {
+// finish carries out a done step's cancels on the worker's own River client,
+// then works its child jobs inline, one after another. Cancels are best
+// effort, as they are in river-service: a job left behind exits on its own
+// when it runs. A failing child is logged and skipped, so one can't starve
+// the rest; the next sweep tries it again.
+func (a localActions) finish(ctx context.Context, kind string, d *StepDone) error {
 	if d == nil {
 		return nil
 	}
@@ -156,10 +161,17 @@ func finishLocal(ctx context.Context, kind string, d *StepDone) error {
 				"job_kind", kind, "cancel_kind", m.Kind, logging.AttrError, err)
 		}
 	}
-	if len(d.Enqueue) == 0 {
-		return nil
+	for _, c := range d.Enqueue {
+		step, ok := a.children[c.Kind]
+		if !ok {
+			return fmt.Errorf("%s: no local steps for child job kind %q", kind, c.Kind)
+		}
+		if err := runLocal(ctx, step, c.Kind, json.RawMessage(c.Args), 1, 1, a); err != nil {
+			slog.WarnContext(ctx, "child job failed", logging.AttrComponent, "jobs.steps",
+				"job_kind", kind, "child_kind", c.Kind, logging.AttrError, err)
+		}
 	}
-	return errors.New(kind + ": child jobs are only enqueued by river-service")
+	return nil
 }
 
 // cancelLimit bounds the jobs one match cancels.
