@@ -13,12 +13,13 @@ import (
 // timeout.
 func MaintenanceTasks(d Deps) map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		CleanupPostLogsQueue:       sweepRunner(newCleanupPostLogs(d), CleanupPostLogsTask{}),
-		CleanupNotificationsQueue:  sweepRunner(newCleanupNotifications(d), CleanupNotificationsTask{}),
-		CleanupLoginSecurityQueue:  sweepRunner(newCleanupLoginSecurity(d), CleanupLoginSecurityTask{}),
-		CleanupPluginPairingsQueue: sweepRunner(newCleanupPluginPairings(d), CleanupPluginPairingsTask{}),
-		SweepPendingUploadsQueue:   sweepRunner(newSweepPendingUploads(d), SweepPendingUploadsTask{}),
-		CleanupEmailLogsQueue:      sweepRunner(newCleanupEmailLogs(d), CleanupEmailLogsTask{}),
+		CleanupPostLogsQueue:              sweepRunner(newCleanupPostLogs(d), CleanupPostLogsTask{}),
+		CleanupNotificationsQueue:         sweepRunner(newCleanupNotifications(d), CleanupNotificationsTask{}),
+		CleanupLoginSecurityQueue:         sweepRunner(newCleanupLoginSecurity(d), CleanupLoginSecurityTask{}),
+		CleanupPluginPairingsQueue:        sweepRunner(newCleanupPluginPairings(d), CleanupPluginPairingsTask{}),
+		SweepPendingUploadsQueue:          sweepRunner(newSweepPendingUploads(d), SweepPendingUploadsTask{}),
+		CleanupEmailLogsQueue:             sweepRunner(newCleanupEmailLogs(d), CleanupEmailLogsTask{}),
+		CleanupZernioConnectSessionsQueue: sweepRunner(newCleanupZernioConnectSessions(d), CleanupZernioConnectSessionsTask{}),
 	}
 }
 

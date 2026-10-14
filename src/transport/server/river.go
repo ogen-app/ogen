@@ -105,6 +105,7 @@ func queueDeps(d *deps) queues.Deps {
 		Integration:         d.zernio.Integration,
 		// Fences the profile teardown against a concurrent tenant restore.
 		TenantFence:           r.tenantFence,
+		TeardownLease:         r.tenantFence,
 		PDF:                   d.ingest.pdf,
 		Document:              d.ingest.document,
 		Audio:                 d.ingest.audio,
