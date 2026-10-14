@@ -36,6 +36,7 @@ type repos struct {
 	settingRepo              repository.SettingRepository
 	tagRepo                  repository.TagRepository
 	chunksRepo               repository.AssetChunksRepository
+	chunkStageRepo           repository.AssetChunkStagesRepository
 	assetFileRepo            repository.AssetFileRepository
 	assetImageRepo           repository.AssetImageRepository
 	pieceRepo                repository.AssetRepository
@@ -112,6 +113,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		settingRepo:              repository.NewSettingRepository(db),
 		tagRepo:                  tagRepo,
 		chunksRepo:               repository.NewAssetChunksRepository(db),
+		chunkStageRepo:           repository.NewAssetChunkStagesRepository(db),
 		assetFileRepo:            assetFileRepo,
 		assetImageRepo:           repository.NewAssetImageRepository(db),
 		pieceRepo:                repository.NewAssetRepository(db, tagRepo, assetFileRepo),

@@ -114,6 +114,13 @@ func New(cfg Config) (*Client, error) {
 	return &Client{conn: conn, rpc: pdfv1.NewPdfServiceClient(conn), timeout: timeout}, nil
 }
 
+// Over returns a Client whose calls go over cc instead of a dialled
+// connection: remote.Plan and remote.Decode run it to plan and decode the
+// pdf-service calls river-service makes. Close is a no-op on it.
+func Over(cc grpc.ClientConnInterface) *Client {
+	return &Client{rpc: pdfv1.NewPdfServiceClient(cc), timeout: defaultTimeout}
+}
+
 // Close releases the underlying connection. Safe on a nil client.
 func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
