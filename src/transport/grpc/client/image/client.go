@@ -298,6 +298,13 @@ func New(cfg Config) (*Client, error) {
 	return &Client{conn: conn, rpc: imagev1.NewImageServiceClient(conn), timeout: timeout}, nil
 }
 
+// Over returns a Client whose calls go over cc instead of a dialled
+// connection: remote.Plan and remote.Decode run it to plan and decode the
+// image-service calls river-service makes. Close is a no-op on it.
+func Over(cc grpc.ClientConnInterface) *Client {
+	return &Client{rpc: imagev1.NewImageServiceClient(cc), timeout: defaultTimeout}
+}
+
 // Close releases the underlying connection. Safe on a nil client.
 func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
