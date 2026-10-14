@@ -110,3 +110,41 @@ func TestProcessPDFRemoteParseRejection(t *testing.T) {
 		t.Errorf("service down: out %+v, want a retry", out)
 	}
 }
+
+func TestProcessURLRunsInRiverService(t *testing.T) {
+	assets, images, chunks, blob := &fakeURLAssets{}, &fakeImages{}, &fakeChunks{}, &fakeBlob{}
+	p := newURLProc(URLDeps{
+		Scraper: &fakeScraper{}, Embedder: &fakeEmbedder{}, Storage: blob, Fetcher: &fakeFetcher{},
+		Assets: assets, Chunks: chunks, Images: images,
+	})
+	md := "# Page\n\nSome wordy paragraph.\n\n![a](https://example.com/a.png)\n\n![b](https://example.com/b.svg)\n\n![c](https://example.com/gone.png)"
+	scraped, _ := json.Marshal(map[string]any{"success": true, "data": map[string]any{"markdown": md, "metadata": map[string]any{"title": "Page"}}})
+	out := driveSteps(t, p.step, ProcessURLQueue, ProcessURLTask{AssetID: "u1", TenantID: "t1", SourceURL: "https://example.com/x"}, 1, 5, func(o StepOutput) *StepResult {
+		c := o.HTTP
+		switch {
+		case c == nil:
+			t.Fatalf("unexpected action %+v", o)
+		case c.Upstream == UpstreamFirecrawl:
+			if c.Path != "/v2/scrape" {
+				t.Fatalf("scrape call = %+v", c)
+			}
+			return &StepResult{Status: 200, Body: scraped}
+		case c.URL == "https://example.com/a.png":
+			return &StepResult{Status: 200, Body: []byte("PNG"), ContentType: "image/png"}
+		case c.URL == "https://example.com/b.svg":
+			return &StepResult{Status: 200, Body: []byte("<svg/>"), ContentType: "image/svg+xml"}
+		case c.URL != "":
+			return &StepResult{Err: "address not allowed"}
+		}
+		return geminiEmbeds(t, c)
+	})
+	if out.Done == nil || assets.last() != models.AssetStatusPartial {
+		t.Fatalf("out %+v, statuses %v", out, assets.statuses)
+	}
+	if len(images.got) != 1 || !strings.Contains(assets.content, "https://stub/") || !strings.Contains(assets.content, "https://example.com/b.svg") {
+		t.Fatalf("images %+v, content %q", images.got, assets.content)
+	}
+	if len(chunks.got) == 0 {
+		t.Fatal("no chunks stored")
+	}
+}

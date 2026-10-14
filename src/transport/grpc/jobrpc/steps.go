@@ -37,7 +37,10 @@ func (j *jobSteps) Step(ctx context.Context, req *jobrpcv1.StepRequest) (*jobrpc
 		Attempt: int(req.GetAttempt()), MaxAttempts: int(req.GetMaxAttempts()),
 	}
 	if r := req.GetResult(); r != nil {
-		in.Result = &queues.StepResult{Status: int(r.GetStatus()), Body: r.GetBody(), Err: r.GetError(), CredentialMissing: r.GetCredentialMissing()}
+		in.Result = &queues.StepResult{
+			Status: int(r.GetStatus()), Body: r.GetBody(), Err: r.GetError(),
+			CredentialMissing: r.GetCredentialMissing(), ContentType: r.GetContentType(),
+		}
 	}
 	out, err := j.steps.Step(ctx, in)
 	if errors.Is(err, queues.ErrUnknownStepKind) {

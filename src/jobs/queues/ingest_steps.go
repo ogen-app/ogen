@@ -1,6 +1,8 @@
 package queues
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -367,4 +369,33 @@ func (m *memChunkStage) Commit(ctx context.Context, runID, assetID string, clear
 	}
 	stats := embedStats{Attempts: st.Attempts, Embedded: st.Embedded, Failures: st.Failures, Tokens: st.Tokens}
 	return st, storeChunks(ctx, m.chunks, "stage", assetID, chunks, stats, clearStale)
+}
+
+// gzipText packs a large text for a job's state.
+func gzipText(s string) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(s)); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// gunzipText unpacks gzipText's output.
+func gunzipText(b []byte) (string, error) {
+	if len(b) == 0 {
+		return "", nil
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	out, err := io.ReadAll(zr)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
