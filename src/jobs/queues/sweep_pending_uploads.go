@@ -71,12 +71,12 @@ func (p *SweepPendingUploadsProcessor) Timeout(*river.Job[SweepPendingUploadsTas
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &SweepPendingUploadsProcessor{
-			Repo:    d.PendingUploadRepo,
-			Storage: d.Zernio.Storage,
-			Config:  d.PendingUploadSweep,
-		})
+		river.AddWorker(w, newSweepPendingUploads(d))
 	})
+}
+
+func newSweepPendingUploads(d Deps) *SweepPendingUploadsProcessor {
+	return &SweepPendingUploadsProcessor{Repo: d.PendingUploadRepo, Storage: d.Zernio.Storage, Config: d.PendingUploadSweep}
 }
 
 // Process settles one batch of expired uploads; a backlog drains over the
