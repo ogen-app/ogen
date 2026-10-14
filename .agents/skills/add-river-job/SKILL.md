@@ -1,392 +1,238 @@
 ---
 name: add-river-job
-description: Add a background job (River queue) to the Go app — args type, worker/processor, self-registration, transactional enqueue, periodic scheduling, and tests. Use when the user asks to add an async/background task, a queue worker, a recurring sweep, polling, or to offload work out of a request handler.
+description: Add a background job to Ogen now that jobs run in river-service — the proto args message, the ogen side (enqueue through the outbox, the job's steps or its maintenance pass), the river-service worker, periodic scheduling, and tests. Use when the user asks to add an async/background task, a queue worker, a recurring sweep, polling, or to offload work out of a request handler.
 tools: Read, Edit, Write, Glob, Grep, Bash
 ---
 
 # Add River Job Skill
 
-Scaffold a background job on **River** (`riverqueue/river`), the Postgres-native
-queue this app adopted in CON-87 (replacing the SQLite-only backlite). Follow
-the conventions below exactly — the project already has six jobs to diff
-against. Canonical references in `src/jobs/queues/`:
+Background jobs run in **river-service** (a separate repo and Railway service,
+CON-332), on open-source River. ogen keeps every decision and every write
+next to its data; river-service owns the queue, the schedule and the outside
+calls. A new job touches three repos:
 
-- `submit_post_to_zernio.go` — one-shot, retries, enqueues a *different* job
-  kind (the first poll) from inside the worker.
-- `poll_zernio_status.go` — one-shot that **self-reschedules** with a dynamic
-  cadence via `river.JobSnooze`.
-- `cancel_zernio_job.go` — minimal one-shot.
-- `cleanup_post_logs.go`, `reconcile_scheduled_posts.go`,
-  `refresh_zernio_analytics.go` — **periodic** sweeps (marker args, unique).
-- `river.go` — the central plumbing: `Deps`, the self-registration registry,
-  `periodicUniqueOpts()`, `PeriodicConfig`/`PeriodicJobs()`, and `Enqueuer`.
+| Where | What |
+|---|---|
+| `ogen-app/proto` | the args message in `ogen.jobs.v1` (one per kind, field for field with the Go task) |
+| `ogen` (this repo) | the Go task, its enqueue method, and either its **steps** (`JobStepService`) or its **maintenance pass** (`MaintenanceService`) |
+| `ogen-app/river-service` | the args type, its registration and schedule — see that repo's `add-step-job` skill |
 
-## Architecture (read first)
+Until a kind is listed in ogen's `OUTBOX_RELAY_KINDS`, ogen's in-process River
+still runs it: its worker there runs **the same steps** in-process
+(`runLocal`), so each job has one implementation whichever service runs it.
 
-- River runs on **bun's shared `database/sql` pool** via the
-  **`riverdatabasesql`** driver — deliberately *not* `riverpgxv5`. This is what
-  lets `client.InsertTx(ctx, tx.Tx, args, nil)` join the **exact bun
-  transaction** the app already opened, so an enqueue commits atomically with a
-  DB write (e.g. a post status change + its submit enqueue). riverpgxv5 needs a
-  `pgx.Tx` and could not share bun's `*sql.Tx`. The client type is
-  `*river.Client[*sql.Tx]`.
-- River's own tables (`river_job`, `river_leader`, `river_queue`, …) are
-  installed by `jobs.MigrateRiver(ctx, db.DB)` at boot (in `server.New`, before
-  the client is built).
-- The job **payload** (`args`) is JSON-stored in `river_job`. Keep args tiny —
-  carry ids, re-load the row inside the worker (never persist stale field
-  copies in the queue).
+Canonical references in `src/jobs/queues/`:
+
+- `job_steps.go` — the step protocol: `StepInput`, `StepOutput`, actions,
+  `done`/`retry`/`snooze`, `JobSteps` registration.
+- `local_steps.go` — `runLocal`, how ogen runs the same steps in-process.
+- `withdraw_zernio_post.go`, `post_first_comment.go` — one Zernio call.
+- `poll_zernio_status.go` — a call, then snooze until terminal.
+- `submit_post_to_zernio.go` — a multi-phase machine (retry, presign +
+  transfer per attachment, submit, dedupe paging, withdraw).
+- `refresh_zernio_analytics.go`, `sweep_zernio_orphans.go` — a periodic sweep
+  that fans out into one child job per tenant.
+- `process_pdf.go`, `process_audio.go` — sidecar calls and the staged embed
+  loop (`ingest_steps.go`).
+- `analyze_asset.go` — work run **detached** in ogen with a `Wait` step.
+- `maintenance.go` — sweeps that only touch ogen's tables.
+- `river.go` — `Enqueuer` (outbox or in-process River per kind),
+  `PeriodicConfig.sweeps()`, `RelayKinds`.
 
 ## Step 0: Clarify scope
 
-1. **Job kind** — a stable snake_case name (e.g. `submit_post_to_zernio`,
-   `cleanup_post_logs`). This is the queue name AND `Kind()`.
-2. **One-shot or periodic?**
-   - *One-shot* — enqueued in response to something (a user action, another
-     job). Has retry semantics.
-   - *Periodic* — a recurring sweep on a fixed cadence (cleanup, reconcile,
-     refresh). Uses a marker args struct + `PeriodicJob`, not self-rescheduling.
-3. **Payload** — what ids does the worker need? (Keep it to ids.)
-4. **Dependencies** — which repos / clients does the work need?
-5. **Enqueue site** — who enqueues it, and must it be **transactional** (commit
-   atomically with a DB change)?
-6. **Self-rescheduling?** — does it poll / repeat with a dynamic delay? (Use
-   `river.JobSnooze`, see Step 4.)
+1. **Kind** — stable snake_case (`submit_post_to_zernio`). It is the River
+   kind in both services and the proto oneof field.
+2. **One-shot or periodic?** Periodic sweeps are River `PeriodicJob`s
+   scheduled by river-service's leader, never self-rescheduling copies.
+3. **Does it call anything outside ogen** (Zernio, Gemini, Firecrawl, a
+   sidecar, an outside URL, a media upload)?
+   - **No** → a *maintenance pass*: river-service schedules it, ogen runs it
+     whole through `MaintenanceService.Run` (Step 3b).
+   - **Yes** → a *step-run job*: ogen plans each outside call and decodes its
+     result; river-service makes it (Step 3a).
+4. **Payload** — ids only; every step re-loads the rows.
+5. **Enqueue site** — transactional with a DB write? (Almost always yes.)
+6. **Long work?** Every step must finish well inside the drain window (about
+   4 minutes); long work is split into steps with checkpoints stored in ogen.
 
 ---
 
-## Step 1: The job file (`src/jobs/queues/<kind>.go`)
+## Step 1: The args message (`ogen-app/proto`)
 
-A job is **one file** containing the args, the worker, an `init()` registrar,
-and the `Process` logic. Adding a job = adding one file; there is **no central
-worker list** to edit (registration is decentralized — see Step 3).
+Add `message <Kind>Args` to `proto/jobs/v1/jobs.proto` and a field to
+`EnqueueRequest.args`. Additive only: never renumber or remove a field (the
+deploy order below relies on old readers ignoring new fields). Tag a release
+(`vX.Y.0`) and bump `PROTO_VERSION` in both Makefiles; I can't push tags, so
+ask the user.
+
+In ogen, map the Go task to the message in `outbox_args.go` (`setArgs`).
+Add the task to the table in `outbox_args_test.go`, which checks every kind
+round-trips to its message and is relayable.
+
+---
+
+## Step 2: The Go task and its enqueue (`src/jobs/queues/<kind>.go`)
 
 ```go
-package queues
-
-import (
-	"context"
-	"time"
-
-	"github.com/riverqueue/river"
-	// + repos / clients your Process needs
-)
-
-// <Kind>Queue is the River job-kind name.
 const <Kind>Queue = "<kind>"
 
-// <Kind>Task is the typed payload (args). Keep it to ids; the worker re-loads
-// the row. River JSON-stores this in river_job.
+// <Kind>Task carries ids; the steps re-load the rows.
 type <Kind>Task struct {
 	PostID string `json:"post_id"`
 }
 
-// Kind implements river.JobArgs.
 func (<Kind>Task) Kind() string { return <Kind>Queue }
 
-// InsertOpts sets per-kind defaults. MaxAttempts is the total attempt budget
-// (1 = no retries). Backoff is River's default exponential-with-jitter — don't
-// override NextRetry unless you need a fixed cadence.
-func (<Kind>Task) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 5}
-}
-
-// <Kind>Processor is the River worker. It embeds river.WorkerDefaults[T] and
-// implements river.Worker directly; Process is the test seam Work delegates to.
-type <Kind>Processor struct {
-	river.WorkerDefaults[<Kind>Task]
-	Deps ZernioDeps // or whatever this job needs
-}
-
-// Work is the River entrypoint; it delegates to Process.
-func (p *<Kind>Processor) Work(ctx context.Context, job *river.Job[<Kind>Task]) error {
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *<Kind>Processor) Timeout(*river.Job[<Kind>Task]) time.Duration {
-	return 30 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &<Kind>Processor{Deps: d.Zernio})
-	})
-}
-
-// Process does the work. Return value semantics (see Step 4):
-//   nil                -> job completed.
-//   non-nil error      -> River retries per MaxAttempts + backoff.
-//   river.JobSnooze(d) -> reschedule THIS job after d (no attempt consumed).
-func (p *<Kind>Processor) Process(ctx context.Context, task <Kind>Task) error {
-	// 1. Re-load the row by task.PostID.
-	// 2. Bail quietly (return nil) if state changed underneath us.
-	// 3. Do the work; persist; emit a PostLog if relevant.
-	return nil
-}
+// InsertOpts must match the river-service args type: queue, attempts,
+// uniqueness.
+func (<Kind>Task) InsertOpts() river.InsertOpts { return river.InsertOpts{MaxAttempts: 5} }
 ```
 
-**Rules:**
-- The processor **is** the worker (embed `river.WorkerDefaults[T]`). Don't add a
-  separate wrapper type.
-- Keep a `Process(ctx, args) error` method — it's the unit-test seam (tests call
-  it directly with fakes, no DB / River client needed).
-- Re-load the row in `Process`; never trust field copies from the args payload.
-- Per-attempt timeout lives on the worker's `Timeout()`; `MaxAttempts` on the
-  args' `InsertOpts()`.
-
----
-
-## Step 2: Add the job's dependencies to `Deps`
-
-Workers receive their deps from the single `queues.Deps` bundle in `river.go`.
-If your job needs something not already there, add a field:
+Enqueue through the `Enqueuer`, inside the caller's transaction:
 
 ```go
-// src/jobs/queues/river.go
-type Deps struct {
-	Zernio              ZernioDeps
-	PostLogRetention    time.Duration
-	ReconcileGrace      time.Duration
-	// ... add yours; reuse Zernio's repos where possible (they're shared
-	// instances — e.g. d.Zernio.PostRepo, d.Zernio.PostLogRepo).
-}
-```
-
-`server.go` builds one `Deps` and passes it to `RegisterAll` (Step 6).
-
----
-
-## Step 3: Self-registration (already wired)
-
-Each job's `init()` appends a registrar to the package-level `registrars` slice
-via `register(...)`. `RegisterAll(workers, deps)` iterates them. You do **not**
-edit any central list — writing the `init()` in Step 1 is the whole
-registration. (`river.AddWorker[T]` panics on a duplicate `Kind()`, which the
-`register_test.go` smoke test catches.)
-
----
-
-## Step 4: Return-value semantics & self-rescheduling
-
-| Situation | Return |
-|---|---|
-| Done successfully | `nil` |
-| Transient failure, want a retry | a non-nil `error` (counts as an attempt) |
-| Terminal failure you already resolved (e.g. marked the post Failed) | `nil` — returning an error here would pointlessly retry. Optionally `river.JobCancel(reason)` to record a *cancelled* row with a reason. |
-| Poll again later / dynamic cadence | `river.JobSnooze(delay)` |
-
-**`river.JobSnooze(delay)`** reschedules the **same** job after `delay`. It does
-**not** consume a retry attempt (it bumps `max_attempts`), so a poll can snooze
-indefinitely while keeping its transient-error retry budget. Use it for
-self-rescheduling cadence — see `poll_zernio_status.go`:
-
-```go
-if !job.Status.IsTerminal() {
-	_ = p.Deps.PostRepo.Update(ctx, post) // persist last-seen status
-	return river.JobSnooze(p.intervalFor(post))
-}
-```
-
-Do **not** self-reschedule by inserting a fresh copy of the same job — that
-creates a new `river_job` row each cycle and is the non-idiomatic anti-pattern
-CON-87 removed.
-
-**Enqueuing a *different* job kind from inside a worker** (e.g. submit → first
-poll) *is* a genuine insert. Get the client from context:
-
-```go
-client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-if err != nil || client == nil { return }
-_, _ = client.Insert(ctx, PollZernioStatusTask{PostID: post.ID},
-	&river.InsertOpts{ScheduledAt: when})
-```
-
----
-
-## Step 5: Enqueue surface (`Enqueuer`)
-
-App code (handlers, services) must **not** import River. It depends on a narrow
-interface implemented by `*queues.Enqueuer` (which wraps the River client).
-
-**Transactional enqueue** (commit atomically with a DB write) — the whole point
-of the riverdatabasesql driver. Add a method that calls `InsertTx` with the
-caller's `*sql.Tx`:
-
-```go
-// src/jobs/queues/river.go
 func (e *Enqueuer) Enqueue<Kind>Tx(ctx context.Context, tx *sql.Tx, postID string) error {
-	if e == nil || e.Client == nil { return nil }
-	_, err := e.Client.InsertTx(ctx, tx, <Kind>Task{PostID: postID}, nil)
-	return err
+	return e.insertTx(ctx, tx, <Kind>Task{PostID: postID}, nil)
 }
 ```
 
-Callers pass bun's underlying `*sql.Tx`, exposed as `tx.Tx` inside
-`db.RunInTx(...)`:
-
-```go
-// in a service that already opened a bun transaction:
-return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-	if _, err := tx.NewUpdate().Model(post).WherePK().Exec(ctx); err != nil {
-		return err
-	}
-	return s.jobs.Enqueue<Kind>Tx(ctx, tx.Tx, post.ID) // commits or rolls back together
-})
-```
-
-**Non-transactional enqueue** — `e.Client.Insert(ctx, <Kind>Task{...}, nil)`.
-
-Define the consumer-side interface in the **consumer's** package (Go
-convention), e.g. `schedule.SubmitEnqueuer` / `handlers.CancelEnqueuer`, with
-just the method(s) that package needs — not the whole client.
+`insertTx` writes a `job_outbox` row in `tx` when river-service owns the kind
+and inserts into ogen's River otherwise; the trace carrier and request id
+ride along automatically. No transaction: `e.insert`. From inside a job,
+where losing the follow-up matters: `e.enqueue` (fails when nothing is
+wired). Consumers depend on a narrow interface in **their** package, never on
+River.
 
 ---
 
-## Step 6: Periodic jobs (recurring sweeps)
+## Step 3a: A step-run job
 
-A recurring job is a **River PeriodicJob**, not a self-rescheduling task. River's
-scheduler owns the cadence, so the chain can't die on one failed tick.
+A job is a function `step(ctx, StepInput) (StepOutput, error)`. river-service
+calls it, does what it returns, and calls it again with the raw result:
 
-1. Marker args carry no per-tick data and use **`MaxAttempts: 1` +
-   `periodicUniqueOpts()`**:
+| `StepOutput` | river-service does |
+|---|---|
+| `HTTP` (`Upstream` `zernio`/`gemini`/`firecrawl` + path, or an absolute `URL`) | the call with that upstream's leased key; absolute URLs go through its SSRF guard |
+| `Sidecar` (unary, or `Stream` from a stored file) | the gRPC call to pdf/documents/image/audio-service |
+| `Transfer` | streams a stored file to an upload URL |
+| `Wait` | sleeps, then steps again with the same state |
+| `Done` (+ `Enqueue` child jobs, `Cancel` job matches) | ends the job |
+| `Retry` (`After` > 0 = snooze) | retries (costs an attempt) or snoozes (doesn't) |
+
+Plan and decode with the ordinary clients, so request building and error
+mapping keep one implementation:
 
 ```go
-func (<Kind>Task) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
+cancel := func(c *zernio.Client) error { return c.Cancel(ctx, id) }
+if in.Result == nil {
+	call, err := zernio.Plan(cancel)   // capture, don't send
+	if err != nil { return StepOutput{}, err }
+	return nextZernio(nil, call)
+}
+if zernioDisabled(in.Result) { return done("skipped_zernio_disabled") }
+cancelErr := zernio.Decode(zernioResult(in.Result), cancel) // the error a direct call would return
+```
+
+- Paging reads: `zernio.Replay(prior, op)` returns the next page's request.
+- Sidecars: `sidecarStep(state, service, timeout, stream, op, local)` with the
+  typed client's `Over(cc)` constructor; decode with `sidecarResult` inside
+  `localOr`.
+- Firecrawl: `firecrawl.Plan` / `firecrawl.Decode`. Gemini embeds: the
+  staged `embedLoop` (`ingest_steps.go`).
+- Give an action whose client is ogen's own (a sidecar, the embedder) a
+  `local` closure, and read the outcome with `localOr`: a run inside ogen
+  then calls that client directly, and the tests' fakes keep working.
+
+**State.** `StepOutput.State` comes back in the next `StepInput`. Keep it small
+(ids, cursors, a few short strings); it is lost on a snooze or retry, which
+restart the job from its first step. Large intermediate data goes into
+ogen tables keyed by a run id (`asset_chunk_stages`, extraction rows). Every
+flow must converge when it runs again from the start.
+
+**Attempts.** `in.lastAttempt()` tells the last attempt, when a transient
+failure must be settled instead of retried.
+
+**Long calls ogen makes itself** (a model call): run them detached and poll
+with `Wait`, tracking them on a row ogen owns (`assetanalysis.StartDetached`
+and the lens run slot). A restarted job adopts the run in flight; a stale
+heartbeat retries.
+
+Register the step in `NewJobSteps` (`job_steps.go`), and keep the River worker
+here as a thin `runLocal` wrapper:
+
+```go
+func (p *<Kind>Processor) Work(ctx context.Context, job *river.Job[<Kind>Task]) error {
+	ctx = WithJobRequestID(ctx, job.JobRow)
+	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{zernio: p.Deps.Client})
 }
 ```
 
-`periodicUniqueOpts()` (in `river.go`) uses **active states only**
-(`Available/Pending/Running/Scheduled/Retryable`) so overlapping ticks can't
-stack. **Never** use River's default `ByState` for a periodic marker — the
-default includes `Completed`, which would block the next tick until River's job
-cleaner removes the retained completed row (it breaks the cadence).
-
-2. Register the schedule in `PeriodicConfig.PeriodicJobs()` (in `river.go`):
-
-```go
-river.NewPeriodicJob(river.PeriodicInterval(cfg.<Kind>Every),
-	func() (river.JobArgs, *river.InsertOpts) { return <Kind>Task{}, nil }, nil),
-```
-
-Gate a conditional periodic job (e.g. only when an integration is configured)
-behind a `PeriodicConfig` bool, like `IncludeAnalytics`.
-
-3. The worker still self-registers (Step 1/3); a periodic job needs **both** the
-   registered worker AND the `PeriodicJob` schedule.
+**Fan-out sweeps** return `done("fanned_out", children...)` with one
+`ChildJob` per tenant; the child kind exists only between the two services
+(river-service registers it as internal). Locally, `localActions.children`
+runs them inline.
 
 ---
 
-## Step 7: Wire into server (`src/transport/server/server.go`)
+## Step 3b: A maintenance pass
 
-Already wired for the existing jobs; for reference the shape is:
-
-```go
-workers := river.NewWorkers()
-queues.RegisterAll(workers, queues.Deps{ /* one bundle */ })
-
-if err := jobs.MigrateRiver(ctx, db.DB); err != nil { return nil, err } // BEFORE NewClient
-
-riverClient, err := river.NewClient[*sql.Tx](riverdatabasesql.New(db.DB), &river.Config{
-	Queues:       map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: cfg.JobWorkers}},
-	Workers:      workers,
-	PeriodicJobs: queues.PeriodicConfig{ /* cadences */ }.PeriodicJobs(),
-})
-enqueuer := &queues.Enqueuer{Client: riverClient}
-// pass enqueuer to services/handlers via their narrow interfaces
-
-riverClient.Start(ctx)
-app.Hooks().OnShutdown(func() error {
-	sctx, cancel := context.WithTimeout(context.Background(), cfg.JobShutdownTimeout)
-	defer cancel()
-	_ = riverClient.Stop(sctx)
-	return nil
-})
-```
-
-If you added a new periodic cadence or `Deps` field, update the
-`queues.Deps{...}` / `PeriodicConfig{...}` literals here. New one-shot jobs
-usually need **no** server.go edit (they self-register).
+A sweep that touches only ogen's tables (cleanups, reconcile,
+manual-publish-due, the analysis backfill) stays an ordinary processor and is
+listed in `MaintenanceTasks` (`maintenance.go`) under its kind. Give it a
+`new<Kind>(d Deps)` constructor shared by `init()` and `MaintenanceTasks`.
+Update `TestMaintenanceTasksMatchTheContract` and the task list in
+`jobrpc.proto`'s `RunRequest` comment.
 
 ---
 
-## Step 8: Tests (`src/jobs/queues/<kind>_test.go`)
+## Step 4: Periodic scheduling
 
-Plain Go `testing` (the queue tests are not Ginkgo). Test `Process` **directly**
-with fake repos — no DB, no River client.
-
-```go
-func Test<Kind>DoesX(t *testing.T) {
-	deps, postRepo, _ := makeDeps(stub, nil) // see existing _test.go helpers
-	post := seedScheduledPost(postRepo)
-	postRepo.put(post)
-
-	proc := &queues.<Kind>Processor{Deps: deps}
-	if err := proc.Process(context.Background(), queues.<Kind>Task{PostID: post.ID}); err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	// assert persisted state via postRepo.GetByID
-}
-```
-
-For a **self-rescheduling / poll** job, assert the snooze:
-
-```go
-err := proc.Process(ctx, queues.<Kind>Task{PostID: post.ID})
-var snooze *river.JobSnoozeError
-if !errors.As(err, &snooze) {
-	t.Fatalf("expected a river JobSnooze, got %v", err)
-}
-```
-
-The package's `register_test.go` already asserts every job self-registers
-(`len(registrars)`) and `RegisterAll` wires them without a duplicate-kind panic
-— **bump its expected count** when you add a job.
-
-Run: `go test ./src/jobs/...`
+Add the sweep to `PeriodicConfig.sweeps()` in `river.go` (ogen schedules it
+until the kind is relayed; `Relayed` then leaves it out), with
+`MaxAttempts: 1` and `periodicUniqueOpts()` (active states only — River's
+default `ByState` includes `Completed` and would block the next tick).
+river-service schedules it with `queue.RegisterPeriodic` and a cadence env var
+of the same name as ogen's.
 
 ---
 
-## Gotchas (CON-87 lessons — read before you start)
+## Step 5: Tests
 
-1. **`riverdatabasesql`, not `riverpgxv5`.** Only the database/sql driver lets
-   River share bun's `*sql.Tx`, which is what makes the transactional enqueue
-   atomic. Don't "upgrade" to riverpgxv5 without a plan for the shared tx.
-2. **Periodic `UniqueOpts` must exclude `Completed`.** Use `periodicUniqueOpts()`
-   (active states only). River's default `ByState` includes `Completed` and
-   would block the next periodic tick until the job cleaner runs — silently
-   killing the cadence.
-3. **`JobSnooze` for polling, not a fresh `Insert`.** Snooze reuses the same job
-   and doesn't consume a retry attempt. A fresh insert spawns a new row each
-   cycle.
-4. **Terminal failure returns `nil`.** Once you've resolved state (e.g. marked
-   the post Failed), returning an error just retries pointlessly. Return `nil`
-   (or `river.JobCancel(reason)` for an explicit cancelled record).
-5. **Args are JSON in `river_job`.** Keep them to ids and re-load; don't smuggle
-   large/stale payloads.
-6. **`MigrateRiver` runs before `NewClient`.** Already true in `server.New`; keep
-   it that way for any new entrypoint (a test harness that exercises jobs must
-   call it too — `pgtest.MustDB` does).
-7. **One default queue.** All kinds share `river.QueueDefault` with
-   `cfg.JobWorkers` workers. Only add a separate queue if a kind needs isolated
-   concurrency.
-8. **Self-registration via `init()`.** Don't reintroduce a central worker list;
-   add the `init()` registrar in the job file and (for periodic) the schedule in
-   `PeriodicJobs()`.
+- **Local run:** the processor's `Process`/`process` with fakes, as before;
+  it now goes through `runLocal`.
+- **river-service mode:** drive `p.step` with raw results, no local closures
+  (`driveSteps` in `ingest_steps_test.go`, `runSteps` + `scriptedZernio` in
+  `zernio_lifecycle_steps_test.go`).
+- **Mapping:** `src/transport/grpc/jobrpc/steps_test.go` for new action
+  fields.
+- DB tests (`pgtest`) for new repository methods.
+
+Run `go test ./src/jobs/... ./src/transport/grpc/jobrpc/...` and `make lint`.
 
 ---
 
-## Checklist
+## Deploy order (every new kind)
 
-- Job file created (`src/jobs/queues/<kind>.go`): const + args (`Kind`,
-  `InsertOpts`) + processor (embeds `WorkerDefaults`, `Work`, `Timeout`,
-  `Process`) + `init()` registrar.
-- New deps (if any) added to `queues.Deps` and populated in `server.go`.
-- Enqueue: transactional `Enqueue<Kind>Tx` and/or non-tx method on `Enqueuer`;
-  consumer interface defined in the consumer package.
-- Periodic only: `periodicUniqueOpts()` on the marker; schedule added to
-  `PeriodicConfig.PeriodicJobs()` (+ cadence field + server.go literal).
-- Tests: `Process`-level unit test (+ snooze assertion if self-rescheduling);
-  bumped `register_test.go` count.
-- `go test ./src/jobs/...` green.
+1. Tag the proto release.
+2. ogen with the task, its steps or maintenance pass (`OUTBOX_RELAY_KINDS`
+   unchanged: ogen still runs the kind in-process).
+3. river-service with the args type and registration.
+4. Add the kind to `OUTBOX_RELAY_KINDS` in ogen. A periodic kind stops being
+   scheduled by ogen in that same deploy.
+
+Rolling back is removing the kind from `OUTBOX_RELAY_KINDS`; rows already
+relayed finish in river-service.
+
+## Gotchas
+
+1. **Never read River's tables from ogen** (`river_job`): they live in
+   river-service's schema. Track job progress on rows ogen owns.
+2. **A retry or snooze restarts the job** at its first step with empty state.
+3. **`Retry{After: 0}` costs an attempt**; use `snooze()` to wait without one.
+4. **`omitzero`** for numeric/bool state fields, `omitempty` for strings,
+   slices and maps.
+5. **No storage credentials in river-service:** hand it presigned links
+   (`sourceURL`, `PresignedPutURL`).
+6. **Attempt timeouts stay below river-service's `RESCUE_STUCK_JOBS_AFTER`
+   (30 min).** Longer work checkpoints and resumes across attempts.
