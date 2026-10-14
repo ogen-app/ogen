@@ -182,7 +182,7 @@ type analyticsTenantState struct {
 	From      string    `json:"from"`
 	Page      int       `json:"page"`
 	Now       time.Time `json:"now"`
-	Upserts   int       `json:"upserts,omitempty"`
+	Upserts   int       `json:"upserts,omitzero"`
 }
 
 // tenantStep fetches and upserts one tenant's analytics, a page per step,

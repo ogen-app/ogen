@@ -116,9 +116,9 @@ func (p *SweepZernioOrphansProcessor) step(ctx context.Context, _ StepInput) (St
 // the orphans one by one.
 type orphanProfileState struct {
 	Pages   []zernio.Result `json:"pages,omitempty"`
-	Listed  bool            `json:"listed,omitempty"`
+	Listed  bool            `json:"listed,omitzero"`
 	Orphans []orphanRef     `json:"orphans,omitempty"`
-	Next    int             `json:"next,omitempty"`
+	Next    int             `json:"next,omitzero"`
 }
 
 type orphanRef struct {

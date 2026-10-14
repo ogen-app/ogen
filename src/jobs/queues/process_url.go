@@ -187,10 +187,10 @@ type urlState struct {
 	// images are mirrored.
 	Markdown     []byte              `json:"markdown,omitempty"`
 	Refs         []imageRef          `json:"refs,omitempty"`
-	Next         int                 `json:"next,omitempty"`
+	Next         int                 `json:"next,omitzero"`
 	Images       []models.AssetImage `json:"images,omitempty"`
 	Replacements map[string]string   `json:"replacements,omitempty"`
-	FailedImages int                 `json:"failed_images,omitempty"`
+	FailedImages int                 `json:"failed_images,omitzero"`
 	Embed        embedProgress       `json:"embed"`
 }
 

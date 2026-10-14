@@ -77,6 +77,8 @@ func stepResponse(out queues.StepOutput) *jobrpcv1.StepResponse {
 		resp.Next = &jobrpcv1.StepResponse_Transfer{Transfer: &jobrpcv1.MediaTransfer{
 			SourceUrl: t.SourceURL, UploadUrl: t.UploadURL, ContentType: t.ContentType, Size: t.Size,
 		}}
+	case out.Wait > 0:
+		resp.Next = &jobrpcv1.StepResponse_Wait{Wait: durationpb.New(out.Wait)}
 	case out.Retry != nil:
 		r := &jobrpcv1.StepRetry{Reason: out.Retry.Reason}
 		if out.Retry.After > 0 {

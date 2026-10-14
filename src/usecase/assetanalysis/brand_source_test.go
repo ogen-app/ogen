@@ -75,7 +75,6 @@ func TestBackfillPassesOverBrandSources(t *testing.T) {
 	f.markBrandSource(t, "deck")
 	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
 	f.seedCampaign(t, "camp-a", "deck")
-	f.migrateRiver(t)
 
 	if _, err := f.svc.Backfill(f.ctx, 10); err != nil {
 		t.Fatal(err)
