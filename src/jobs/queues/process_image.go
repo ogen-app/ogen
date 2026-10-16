@@ -33,11 +33,6 @@ import (
 // imageprobe path (deleted, D6); image-service is the sole image authority.
 const ProcessImageQueue = "process_image"
 
-// ImageQueue is the dedicated River queue image jobs run on, isolated from the
-// default queue so a backlog of heavy vision runs can't starve short ingestion
-// for other tenants. Sized in server.go.
-const ImageQueue = "image"
-
 const (
 	// imagePresignTTL bounds the presigned GET/PUT URLs handed to image-service.
 	imagePresignTTL = time.Hour
