@@ -47,6 +47,9 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 			if field == nil || string(field.Name()) != args.Kind() {
 				t.Fatalf("args field = %v, want %s", field, args.Kind())
 			}
+			if _, ok := riverKinds[args.Kind()]; !ok {
+				t.Errorf("RetireRiver can't move a River %s job", args.Kind())
+			}
 		})
 	}
 }
@@ -104,5 +107,18 @@ func TestEnqueueRequestKeepsFieldsMainAdded(t *testing.T) {
 	}
 	if r := req.GetTeardownZernioProfile().GetReason(); r != TeardownReasonTrialUnpaid {
 		t.Errorf("teardown reason = %q", r)
+	}
+}
+
+// TestRetireRiverKnowsEveryRelayedKind keeps RetireRiver's kind table in step
+// with the contract: a jobs.v1 kind it can't decode would be dropped with
+// River at boot, so a pending billing change or distill would be lost.
+func TestRetireRiverKnowsEveryRelayedKind(t *testing.T) {
+	oneof := (&jobsv1.EnqueueRequest{}).ProtoReflect().Descriptor().Oneofs().ByName("args")
+	for i := range oneof.Fields().Len() {
+		kind := string(oneof.Fields().Get(i).Name())
+		if _, ok := riverKinds[kind]; !ok {
+			t.Errorf("RetireRiver can't move a pending %s job", kind)
+		}
 	}
 }
