@@ -42,6 +42,9 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 			if field == nil || string(field.Name()) != args.Kind() {
 				t.Fatalf("args field = %v, want %s", field, args.Kind())
 			}
+			if _, ok := riverKinds[args.Kind()]; !ok {
+				t.Errorf("RetireRiver can't move a River %s job", args.Kind())
+			}
 		})
 	}
 }
