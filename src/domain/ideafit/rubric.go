@@ -282,7 +282,7 @@ type Rating struct {
 type Breakdown struct {
 	Lens LensKind `json:"lens" swaggertype:"string" enums:"campaign,workspace"`
 	// CampaignID is the campaign of a campaign lens, nil for the workspace lens.
-	CampaignID *string           `json:"campaign_id"`
+	CampaignID *string           `json:"campaign_id" extensions:"x-nullable"`
 	Criteria   map[string]Rating `json:"criteria"`
 	Caps       []Cap             `json:"caps"`
 }

@@ -15075,7 +15075,8 @@ const docTemplate = `{
             "properties": {
                 "campaign_id": {
                     "description": "CampaignID is the campaign of a campaign lens, nil for the workspace lens.",
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "caps": {
                     "type": "array",
