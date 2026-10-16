@@ -24,7 +24,7 @@ const SendEmailQueue = "send_email"
 
 // SendEmailTask carries the addressing indirection (user + tenant) rather than
 // a baked recipient, so the worker re-resolves the current address. EmailKind
-// (note: the field is not Kind — that name is taken by the river.JobArgs method)
+// (note: the field is not Kind — that name is taken by the JobArgs method)
 // drives suppression semantics + whether an unsubscribe footer is required.
 type SendEmailTask struct {
 	UserID         string           `json:"user_id"`

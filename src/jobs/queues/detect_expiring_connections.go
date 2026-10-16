@@ -44,7 +44,7 @@ func (DetectExpiringConnectionsTask) Kind() string { return DetectExpiringConnec
 // supplies the client + social-account repo (enumeration/persistence), Users
 // resolves the owner recipients, EmailLogs backs the durable notify-once dedupe,
 // and AppBaseURL builds the reconnect deep link. The email itself is enqueued as
-// a send_email job via the River client on the worker context.
+// a send_email job through Jobs.
 type DetectExpiringConnectionsProcessor struct {
 	Zernio     ZernioDeps
 	Users      repository.UserRepository
@@ -318,10 +318,7 @@ func (p *DetectExpiringConnectionsProcessor) emitNotification(ctx context.Contex
 	})
 }
 
-// enqueueEmail inserts a send_email job for one owner. The River client is
-// pulled from the worker context (the client is built after the workers are
-// registered, so it can't ride the processor struct), mirroring the submit
-// worker's poll enqueue.
+// enqueueEmail enqueues a send_email job for one owner.
 func (p *DetectExpiringConnectionsProcessor) enqueueEmail(ctx context.Context, owner models.User, tenantID string, h zernio.AccountHealth, local models.SocialAccount, stage, idemKey string, now time.Time) error {
 	vars := map[string]string{
 		"platform":      platformLabel(h.Platform),

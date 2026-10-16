@@ -7,7 +7,8 @@
 #
 # To get a token locally: log in once (sessions/sessions.http), clear the
 # ogen_device cookie, log in again, then take `token=` from the secure_url in
-# the queued send_email job's args (river_job.args->'vars'->>'secure_url').
+# the queued send_email job's args
+# (job_outbox.payload->'sendEmail'->'vars'->>'secure_url').
 @alertToken = paste-token-here
 
 ### Preview the alert — read-only, safe for mail scanners (expects 200; status pending|used|expired)

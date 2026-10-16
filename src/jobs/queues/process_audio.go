@@ -34,12 +34,6 @@ import (
 // checkpoints, so a crash resumes from the first incomplete segment.
 const ProcessAudioKind = "process_audio"
 
-// AudioQueue is the dedicated River queue audio jobs run on, isolated from the
-// default queue so a backlog of hour-long assets can't starve short ingestion
-// for other tenants. Its MaxWorkers + job timeout are sized
-// separately in server.go.
-const AudioQueue = "audio"
-
 const (
 	// audioChunkTargetChars packs assembled transcript into ~token-budget chunks
 	// on utterance boundaries (never splitting an utterance). ~4 chars/token, so

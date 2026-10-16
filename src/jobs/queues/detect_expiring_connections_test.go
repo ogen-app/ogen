@@ -131,7 +131,7 @@ func (o ownerRepo) ListOwnersByTenant(context.Context, string) ([]models.User, e
 }
 
 // seenKeyLog reports every idempotency key as already sent and records the
-// lookups, so a sweep exercises the dedupe without needing a River client.
+// lookups, so a sweep exercises the dedupe without needing an enqueuer.
 type seenKeyLog struct {
 	repository.EmailLogRepository
 	keys []string
