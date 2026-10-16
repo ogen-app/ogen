@@ -37,7 +37,7 @@ type Sender interface {
 }
 
 // SendError wraps a provider failure with a retry classification. Transient
-// faults should be returned to River (retry with backoff); terminal faults
+// faults should be returned as errors (the job retries with backoff); terminal faults
 // should be logged as failed and swallowed (no retry — a malformed request or
 // rejected recipient won't succeed on a re-attempt).
 type SendError struct {

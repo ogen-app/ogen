@@ -186,7 +186,7 @@ databases where the key is still absent.
 ## Task: trigger a new lifecycle email
 
 Rendering is only half — something must **enqueue** a `send_email` job. See
-`src/jobs/queues/river.go`:
+`src/jobs/queues/jobs.go`:
 
 - `EnqueueWelcomeEmailTx` / `EnqueueDripTx` are the models. Add
   `Enqueue<X>Tx(ctx, tx, userID, tenantID)` inserting a `SendEmailTask`
@@ -221,7 +221,7 @@ Rendering is only half — something must **enqueue** a `send_email` job. See
   hand-written.
 - `templates.go`: key const + `defaultSpec` (kind + subject + **variables**);
   `Data` fields added + populated in `send_email.go` if new.
-- Enqueue path in `river.go` (+ consumer interface / call site) if it's a new
+- Enqueue path in `jobs.go` (+ consumer interface / call site) if it's a new
   trigger.
 - Render test case for the new template; `go test ./src/infra/email/... ./src/jobs/...`
   green (a real seed + the `variables` jsonb round-trip are exercised by any

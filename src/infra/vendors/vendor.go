@@ -4,8 +4,7 @@
 // primitives the usage-accounting layer is built on.
 //
 // Adding a vendor means dropping one file that calls Register() from an
-// init(); there is no central list to edit. This mirrors the River job
-// self-registration idiom in src/jobs/queues/river.go.
+// init(); there is no central list to edit.
 //
 // Vendor families share only two things: this registration pattern
 // (Layer 0) and the optional metering cross-cut — the Meter interface plus

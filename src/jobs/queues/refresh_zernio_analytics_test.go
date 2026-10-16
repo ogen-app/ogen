@@ -470,7 +470,7 @@ func TestRefreshRateLimitRecordedChainContinues(t *testing.T) {
 
 	// A 429 is recorded but does NOT propagate — Process always returns nil
 	// and self-reschedules so the recurring chain can't die or fan out (the
-	// reschedule itself is a no-op here: no River client in ctx). The
+	// reschedule itself is not run here). The
 	// failure is still recorded for operators, per tenant.
 	err := proc.Process(t.Context(), queues.RefreshZernioAnalyticsTask{})
 	if err != nil {
