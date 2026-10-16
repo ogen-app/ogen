@@ -52,8 +52,9 @@ us and both are covered below:
   (`bunotel.NewQueryHook`).
 - **gRPC:** `src/transport/grpc/server/server.go:73` (`otelgrpc.NewServerHandler`),
   every `src/transport/grpc/client/*/client.go` (`otelgrpc.NewClientHandler`).
-- **Jobs:** `src/jobs/tracing.go` (`Middleware`, root span per job); installed on the
-  River client in `src/transport/server/server.go`.
+- **Jobs:** the enqueuer's trace context rides each `job_outbox` row
+  (`src/jobs/outbox/outbox.go` `traceCarrier`) to river-service, whose step calls
+  come back over `otelgrpc` on the job RPC listener (`src/transport/grpc/jobrpc`).
 - **Boot order:** `cmd/server/main.go` — `telemetry.Init` (~L55) runs **before**
   `server.New` (~L140).
 - **Config:** `src/kernel/config/config.go` (`Sentry*`, `OTelServiceName`); `.env.example`.
