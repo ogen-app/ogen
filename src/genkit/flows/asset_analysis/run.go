@@ -10,6 +10,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -71,11 +72,14 @@ type mapSourceData struct {
 	Segments    []Segment
 }
 
-// systemData selects the system prompt variant. It holds only booleans so
-// every run of a variant shares one cacheable prefix.
+// systemData selects the system prompt variant. It holds only booleans and
+// what they derive, so every run of a variant shares one cacheable prefix.
 type systemData struct {
 	Recording bool
 	Campaign  bool
+	// Rubric is the fit rubric of the lens kind; it drops phase_fit when the
+	// campaign's type has no phases.
+	Rubric rubricData
 }
 
 func (r *runner) analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResponse, error) {
@@ -123,9 +127,11 @@ func (r *runner) analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeRespo
 // reduce runs the analysis call over body, which is either the source or the
 // map notes, and repairs an unparseable reply once.
 func (r *runner) reduce(ctx context.Context, req AnalyzeRequest, body sourceData, model modelconfig.Resolved) (*Analysis, error) {
+	campaign, phases := req.Lens.Campaign != nil, hasPhases(req.Lens)
 	system, err := flowkit.RenderTemplate(r.tpl.system, systemData{
 		Recording: req.Source.Kind == SourceKindRecording,
-		Campaign:  req.Lens.Campaign != nil,
+		Campaign:  campaign,
+		Rubric:    rubric(campaign, phases),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render system prompt: %w", err)
@@ -260,8 +266,46 @@ func (r *runner) cleaner(req AnalyzeRequest, read []Segment) cleaner {
 		labels:    labelSet(read),
 		recording: req.Source.Kind == SourceKindRecording,
 		campaign:  req.Lens.Campaign != nil,
+		phases:    hasPhases(req.Lens),
 		existing:  existing,
 	}
+}
+
+// hasPhases reports whether a campaign lens's type has phases to rate
+// phase_fit on.
+func hasPhases(l Lens) bool {
+	return l.Campaign != nil && len(l.Campaign.Phases) > 0
+}
+
+// rubricData is the fit rubric section of the system prompt for one lens
+// variant. It is fixed per variant, so the system prompt stays cacheable.
+type rubricData struct {
+	Criteria []rubricCriterion
+	Caps     []ideafit.CapRule
+}
+
+type rubricCriterion struct {
+	ideafit.Criterion
+	// Anchors are the level descriptions from 5 down to 1, as the prompt
+	// lists them.
+	Anchors []string
+}
+
+func rubric(campaign, phases bool) rubricData {
+	kind := ideafit.LensWorkspace
+	if campaign {
+		kind = ideafit.LensCampaign
+	}
+	var out rubricData
+	for _, c := range ideafit.Criteria(kind, phases) {
+		rc := rubricCriterion{Criterion: c}
+		for level := 5; level >= 1; level-- {
+			rc.Anchors = append(rc.Anchors, fmt.Sprintf("%d = %s", level, c.Levels[level-1]))
+		}
+		out.Criteria = append(out.Criteria, rc)
+	}
+	out.Caps = ideafit.Caps(kind)
+	return out
 }
 
 // outputLanguage is the language a lens writes in: the campaign's for a

@@ -1,6 +1,10 @@
 package asset_analysis
 
 import (
+	"encoding/json"
+	"math"
+
+	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 )
@@ -118,6 +122,55 @@ type Idea struct {
 	Angle        string   `json:"angle"        jsonschema:"description=The hook or angle that makes it a post"`
 	Rationale    string   `json:"rationale"    jsonschema:"description=Why it fits the workspace or campaign"`
 	SourceLabels []string `json:"sourceLabels" jsonschema:"description=Labels of the segments it draws on"`
+	// Fit is the idea's rating on the lens's fit rubric; nil when the model
+	// gave none that could be read.
+	Fit *IdeaFit `json:"fit,omitempty"`
+}
+
+// IdeaFit is the model's rating of one idea: a level per rubric criterion and
+// the caps it flagged. The score itself is computed by ideafit.Score.
+type IdeaFit struct {
+	Criteria map[string]ideafit.Rating `json:"criteria"`
+	Caps     []ideafit.Cap             `json:"caps"`
+}
+
+// UnmarshalJSON reads what it can of a rating and never fails: a malformed
+// rating must not fail the whole analysis. Unreadable criteria and caps are
+// dropped and a level is rounded to the nearest whole number.
+func (f *IdeaFit) UnmarshalJSON(b []byte) error {
+	*f = IdeaFit{}
+	var raw struct {
+		Criteria map[string]json.RawMessage `json:"criteria"`
+		Caps     []json.RawMessage          `json:"caps"`
+	}
+	if json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	for key, v := range raw.Criteria {
+		var r struct {
+			Level    float64 `json:"level"`
+			Why      string  `json:"why"`
+			Phase    string  `json:"phase"`
+			Campaign string  `json:"campaign"`
+		}
+		if json.Unmarshal(v, &r) != nil {
+			continue
+		}
+		if f.Criteria == nil {
+			f.Criteria = map[string]ideafit.Rating{}
+		}
+		// Bounded before the conversion so a huge number can't overflow;
+		// ideafit.Clean clamps to 1..5 afterwards.
+		level := int(math.Round(min(max(r.Level, -1), 6)))
+		f.Criteria[key] = ideafit.Rating{Level: level, Why: r.Why, Phase: r.Phase, Campaign: r.Campaign}
+	}
+	for _, v := range raw.Caps {
+		var c string
+		if json.Unmarshal(v, &c) == nil {
+			f.Caps = append(f.Caps, ideafit.Cap(c))
+		}
+	}
+	return nil
 }
 
 // Analysis is the model's structured output after server-side clean-up.
