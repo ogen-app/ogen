@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+
+	"github.com/ogen-app/ogen/src/domain/ideafit"
 )
 
 // IdeaVerdict is the triage answer on an idea. It is a stable, closed
@@ -70,6 +72,15 @@ type Idea struct {
 	// outlives it.
 	Origin          IdeaOrigin `bun:"origin,notnull,default:''"                    json:"origin"            swaggertype:"string" enums:",asset_analysis"`
 	AssetAnalysisID *string    `bun:"asset_analysis_id"                            json:"asset_analysis_id" extensions:"x-nullable"`
+	// FitScore is how well an analysis idea fits the lens it was made in,
+	// 10–100, computed from FitBreakdown with the weights of FitRubricVersion.
+	// It is set once, at generation: moving or editing the idea keeps it, and
+	// FitBreakdown names the lens that scored it. All three are nil for manual
+	// ideas and for ideas analysed before scoring existed; FitScore alone is
+	// nil when too few criteria were rated.
+	FitScore         *int               `bun:"fit_score"                        json:"fit_score"          extensions:"x-nullable"`
+	FitBreakdown     *ideafit.Breakdown `bun:"fit_breakdown,type:jsonb"         json:"fit_breakdown"      extensions:"x-nullable"`
+	FitRubricVersion *int               `bun:"fit_rubric_version"               json:"fit_rubric_version" extensions:"x-nullable"`
 	// SourceAsset is hydrated on reads while the analysis still exists.
 	SourceAsset   *IdeaSourceAsset `bun:"-"                                    json:"source_asset,omitempty"`
 	CreatedBy     *string          `bun:"created_by"                           json:"created_by"`

@@ -13,6 +13,7 @@ import (
 	"expvar"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -52,6 +54,10 @@ var (
 	runsTotal  = expvar.NewMap("ogen_asset_analysis_runs_total")
 	noopsTotal = expvar.NewInt("ogen_asset_analysis_noop_total")
 	ideasTotal = expvar.NewInt("ogen_asset_analysis_ideas_total")
+	// ideasScoredTotal counts saved ideas by lens kind and fit band, e.g.
+	// "campaign/high"; ideaCapsTotal counts the caps they were flagged with.
+	ideasScoredTotal = expvar.NewMap("ogen_asset_analysis_ideas_scored_total")
+	ideaCapsTotal    = expvar.NewMap("ogen_asset_analysis_idea_caps_total")
 )
 
 // ErrUnavailable means no analysis model is configured right now; the job
@@ -314,7 +320,6 @@ func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.Anal
 	}
 	row.Gist = resp.Analysis.Gist
 	row.Summary = resp.Analysis.Summary
-	row.Result = toResult(resp)
 	row.Language = resp.Analysis.Language
 	row.PartialSource = t.asset.Status == models.AssetStatusPartial
 	row.Truncated = resp.Truncated
@@ -327,6 +332,10 @@ func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.Anal
 	ideas, err := ideaRows(row, resp.Analysis.Ideas)
 	if err != nil {
 		return err
+	}
+	row.Result = toResult(resp)
+	if row.CampaignID != nil {
+		row.Result.Relevance = ideaRelevance(row.Result.Relevance, ideas)
 	}
 	saved := false
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -353,6 +362,14 @@ func (s *Service) save(ctx context.Context, t *target, resp *asset_analysis.Anal
 	}
 	runsTotal.Add(t.lens.kind()+"/"+cmp.Or(string(resp.Strategy), "empty"), 1)
 	ideasTotal.Add(int64(len(ideas)))
+	for _, idea := range ideas {
+		ideasScoredTotal.Add(t.lens.kind()+"/"+string(ideafit.BandOf(idea.FitScore)), 1)
+		if idea.FitBreakdown != nil {
+			for _, c := range idea.FitBreakdown.Caps {
+				ideaCapsTotal.Add(string(c), 1)
+			}
+		}
+	}
 	s.publish(ctx, t.lens, row.ID, models.AssetAnalysisStatusReady, len(ideas))
 	return nil
 }
@@ -432,7 +449,8 @@ func toResult(resp *asset_analysis.AnalyzeResponse) models.AssetAnalysisResult {
 	return r
 }
 
-// ideaRows turns the distilled ideas into inbox rows of the lens's scope.
+// ideaRows turns the distilled ideas into inbox rows of the lens's scope,
+// each with its fit score when the model rated it.
 func ideaRows(row *models.AssetAnalysis, ideas []asset_analysis.Idea) ([]models.Idea, error) {
 	out := make([]models.Idea, 0, len(ideas))
 	for _, idea := range ideas {
@@ -440,7 +458,7 @@ func ideaRows(row *models.AssetAnalysis, ideas []asset_analysis.Idea) ([]models.
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, models.Idea{
+		i := models.Idea{
 			ID:              id,
 			Title:           idea.Title,
 			Note:            ideaNote(idea),
@@ -448,9 +466,47 @@ func ideaRows(row *models.AssetAnalysis, ideas []asset_analysis.Idea) ([]models.
 			Origin:          models.IdeaOriginAssetAnalysis,
 			AssetAnalysisID: new(row.ID),
 			CreatedByName:   ideaAuthor,
-		})
+		}
+		if idea.Fit != nil {
+			b := &ideafit.Breakdown{Lens: ideafit.LensWorkspace, Criteria: idea.Fit.Criteria, Caps: idea.Fit.Caps}
+			if row.CampaignID != nil {
+				b.Lens, b.CampaignID = ideafit.LensCampaign, new(*row.CampaignID)
+			}
+			i.FitBreakdown, i.FitScore, i.FitRubricVersion = b, ideafit.Score(*b), new(ideafit.RubricVersion)
+		}
+		out = append(out, i)
 	}
 	return out, nil
+}
+
+// relevanceTopIdeas is how many of the best-scored ideas a campaign lens's
+// relevance is the mean of.
+const relevanceTopIdeas = 3
+
+// ideaRelevance replaces the model's relevance score of a campaign lens with
+// the mean fit of its best-scored ideas: an asset is worth what its best ideas
+// are worth to the campaign. With no scored idea the model's score stands.
+func ideaRelevance(model *models.AnalysisRelevance, ideas []models.Idea) *models.AnalysisRelevance {
+	var scores []int
+	for _, idea := range ideas {
+		if idea.FitScore != nil {
+			scores = append(scores, *idea.FitScore)
+		}
+	}
+	if len(scores) == 0 {
+		return model
+	}
+	slices.SortFunc(scores, func(a, b int) int { return cmp.Compare(b, a) })
+	top := scores[:min(len(scores), relevanceTopIdeas)]
+	sum := 0
+	for _, s := range top {
+		sum += s
+	}
+	out := &models.AnalysisRelevance{Score: int(math.Round(float64(sum) / float64(len(top))))}
+	if model != nil {
+		out.Why = model.Why
+	}
+	return out
 }
 
 // ideaNote is the idea's angle and rationale with its citations.

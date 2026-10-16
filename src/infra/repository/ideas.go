@@ -59,6 +59,7 @@ func (r *ideaRepository) selectIdeas(model any) *bun.SelectQuery {
 		Model(model).
 		ColumnExpr("i.id, i.title, i.note, i.verdict, i.remind_at, i.decided_at, i.decided_by").
 		ColumnExpr("i.origin, i.asset_analysis_id").
+		ColumnExpr("i.fit_score, i.fit_breakdown, i.fit_rubric_version").
 		ColumnExpr("i.created_by, i.created_by_name, i.created_at, i.updated_at").
 		ColumnExpr("c.id AS campaign_id").
 		Join("LEFT JOIN campaigns AS c ON c.id = i.campaign_id AND c.deleted_at IS NULL")

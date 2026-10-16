@@ -280,7 +280,7 @@ type Rating struct {
 // Breakdown is what an idea was rated on and where. It is stored with the idea
 // so the score can be recomputed and the UI can say which lens scored it.
 type Breakdown struct {
-	Lens LensKind `json:"lens"`
+	Lens LensKind `json:"lens" swaggertype:"string" enums:"campaign,workspace"`
 	// CampaignID is the campaign of a campaign lens, nil for the workspace lens.
 	CampaignID *string           `json:"campaign_id"`
 	Criteria   map[string]Rating `json:"criteria"`
