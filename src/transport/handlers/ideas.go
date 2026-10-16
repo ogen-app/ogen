@@ -129,6 +129,7 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Param    campaign_id query string false "only ideas attached to this campaign, or `none` for workspace-wide ideas"
 // @Param    origin      query string false "only ideas of this origin" Enums(manual, asset_analysis)
 // @Param    asset_id    query string false "only ideas an analysis of this asset distilled"
+// @Param    sort        query string false "created (default): oldest first; fit: highest fit_score first, unscored ideas last" Enums(created, fit)
 // @Success  200 {object} ideaListResponse
 // @Failure  400 {object} map[string]string
 // @Router   /api/ideas [get]
@@ -151,6 +152,12 @@ func (h *IdeasHandler) List(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "origin must be manual or asset_analysis")
 	}
 	filter.AssetID = c.Query("asset_id")
+	switch sort := repository.IdeaSort(c.Query("sort")); sort {
+	case "", repository.IdeaSortCreated, repository.IdeaSortFit:
+		filter.Sort = sort
+	default:
+		return fiber.NewError(fiber.StatusBadRequest, "sort must be created or fit")
+	}
 	list, err := h.svc.List(reqCtx(c), filter)
 	if err != nil {
 		return err

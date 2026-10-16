@@ -65,6 +65,43 @@ func TestAssetQuery_NextIdea(t *testing.T) {
 	}
 }
 
+func TestAssetQuery_NextIdeaPrefersFit(t *testing.T) {
+	fx := seedAssetQueryFixture(t)
+	fx.setIdeaCreated(t, map[string]time.Duration{"i-woken": 2 * time.Hour, "i-undecided": time.Hour})
+	setFit := func(id string, score any) {
+		t.Helper()
+		if _, err := fx.db.NewUpdate().TableExpr("ideas").Set("fit_score = ?", score).Where("id = ?", id).Exec(fx.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := func() string {
+		t.Helper()
+		pdf := fx.run(t, models.AssetQuery{Kind: anyOf("pdf")}).Assets[0]
+		if pdf.NextIdea == nil {
+			t.Fatal("pdf has no next idea")
+		}
+		return pdf.NextIdea.ID
+	}
+
+	setFit("i-undecided", 80)
+	if got := next(); got != "i-undecided" {
+		t.Errorf("next = %s, want the scored idea before the older unscored one", got)
+	}
+	setFit("i-woken", 90)
+	if got := next(); got != "i-woken" {
+		t.Errorf("next = %s, want the higher score", got)
+	}
+	setFit("i-woken", 80)
+	if got := next(); got != "i-woken" {
+		t.Errorf("next = %s, want the older of two equal scores", got)
+	}
+	// A decided idea never leads, however well it scored.
+	setFit("i-yes", 100)
+	if got := next(); got != "i-woken" {
+		t.Errorf("next = %s, want an undecided idea", got)
+	}
+}
+
 func TestAssetQuery_IdeasUndecidedTotal(t *testing.T) {
 	fx := seedAssetQueryFixture(t)
 	// A second asset with an undecided idea, so the sum spans assets.
