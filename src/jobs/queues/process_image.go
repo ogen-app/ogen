@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river"
 	"google.golang.org/grpc"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
@@ -44,7 +43,6 @@ const (
 	imagePresignTTL = time.Hour
 	// normalizedImageContentType is the MIME bound on the normalized.png PUT.
 	normalizedImageContentType = "image/png"
-	defaultImageJobTimeout     = 10 * time.Minute
 )
 
 // imageExtractor is the narrow slice of the image gRPC client the worker needs;
@@ -113,7 +111,6 @@ type ImageDeps struct {
 	Models              modelResolver
 	ConfidenceThreshold float64
 	AltTextMaxChars     int
-	JobTimeout          time.Duration
 	// Notifier drops an in-app notification to the asset's creator on a terminal
 	// status. Nil is a no-op.
 	Notifier *notify.Service
@@ -139,38 +136,11 @@ type ProcessImageTask struct {
 
 func (ProcessImageTask) Kind() string { return ProcessImageQueue }
 
-// InsertOpts routes the job to the dedicated image queue and bounds retries.
-// Transient failures (storage, gRPC Unavailable/DeadlineExceeded, embedder
-// outage) retry with backoff; terminal ones (unsupported/vector/oversize/over-
-// quota) short-circuit inside Work.
-func (ProcessImageTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: ImageQueue, MaxAttempts: 5}
-}
-
 type ProcessImageProcessor struct {
-	river.WorkerDefaults[ProcessImageTask]
 	Deps ImageDeps
 
 	memOnce sync.Once
 	mem     *memChunkStage
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ProcessImageProcessor{Deps: d.Image})
-	})
-}
-
-func (p *ProcessImageProcessor) Work(ctx context.Context, job *river.Job[ProcessImageTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-func (p *ProcessImageProcessor) Timeout(*river.Job[ProcessImageTask]) time.Duration {
-	if p.Deps.JobTimeout > 0 {
-		return p.Deps.JobTimeout
-	}
-	return defaultImageJobTimeout
 }
 
 // process runs one attempt in-process.

@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -36,21 +34,12 @@ type SubmitPostTask struct {
 	PostID string `json:"post_id"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (SubmitPostTask) Kind() string { return SubmitPostToZernioQueue }
 
-// InsertOpts sets per-kind defaults: 5 total attempts (4 retries) per
-// CON-69 §6. Retry backoff is River's default exponential-with-jitter (the
-// PRD notes exponential is preferable to backlite's fixed 30s). The
-// per-attempt timeout lives on the worker (submitPostWorker.Timeout).
-func (SubmitPostTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 5}
-}
-
-// SubmitPostProcessor is the River worker for submit_post_to_zernio. It
-// implements river.Worker directly; Process is the test seam Work delegates to.
+// SubmitPostProcessor holds submit_post_to_zernio's steps; Process runs
+// them inline.
 type SubmitPostProcessor struct {
-	river.WorkerDefaults[SubmitPostTask]
 	Deps ZernioDeps
 	// Tenants gates publishing on the owning tenant's lifecycle status:
 	// a suspended/deleted tenant's scheduled posts are not published. Nil = no gate.
@@ -67,12 +56,6 @@ type SubmitPostProcessor struct {
 	PollLeadTime time.Duration
 }
 
-// Work is the River entrypoint: it runs the job's steps in-process.
-func (p *SubmitPostProcessor) Work(ctx context.Context, job *river.Job[SubmitPostTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.run(ctx, job.Args, job.Attempt, job.MaxAttempts)
-}
-
 const (
 	// submitBaseTimeout bounds an attempt's API calls and DB work.
 	submitBaseTimeout = 30 * time.Second
@@ -86,18 +69,6 @@ const (
 	// handed to a media transfer stays valid.
 	mediaSourceTTL = time.Hour
 )
-
-// Timeout disables River's per-attempt deadline: run sets its own, sized
-// to the post's media.
-func (p *SubmitPostProcessor) Timeout(*river.Job[SubmitPostTask]) time.Duration {
-	return -1
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &SubmitPostProcessor{Deps: d.Zernio, Tenants: d.Tenants, Notifier: d.Notifier, Members: d.Users})
-	})
-}
 
 // Process runs one submit attempt in-process. Returns a non-nil error to ask
 // River to retry; returns nil for both success and terminal failure (Post
@@ -776,7 +747,7 @@ func (p *SubmitPostProcessor) enqueuePoll(ctx context.Context, post *models.Post
 		when = post.ScheduledAt.Add(p.pollLead())
 	}
 	task := PollZernioStatusTask{PostID: post.ID, PublisherPostID: post.PublisherPostID}
-	if err := p.Deps.Jobs.enqueue(ctx, task, &river.InsertOpts{ScheduledAt: when}); err != nil {
+	if err := p.Deps.Jobs.enqueue(ctx, task, &EnqueueOpts{ScheduledAt: when}); err != nil {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskFailed, post.Status, post.Status,
 			"failed to enqueue poll_zernio_status", errPayload(err))
 	}

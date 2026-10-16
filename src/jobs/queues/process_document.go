@@ -10,9 +10,7 @@ import (
 	"iter"
 	"log/slog"
 	"sync"
-	"time"
 
-	"github.com/riverqueue/river"
 	"google.golang.org/grpc"
 
 	documentsv1 "github.com/ogen-app/ogen/gen/documents/v1"
@@ -85,37 +83,11 @@ type ProcessDocumentTask struct {
 
 func (ProcessDocumentTask) Kind() string { return ProcessDocumentQueue }
 
-// InsertOpts bounds retries. Transient failures (storage, gRPC Unavailable /
-// DeadlineExceeded, embedder outage) retry with backoff; terminal ones
-// (unsupported/corrupt/encrypted document) short-circuit to "failed" inside Work.
-func (ProcessDocumentTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
-}
-
 type ProcessDocumentProcessor struct {
-	river.WorkerDefaults[ProcessDocumentTask]
 	Deps DocumentDeps
 
 	memOnce sync.Once
 	mem     *memChunkStage
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ProcessDocumentProcessor{Deps: d.Document})
-	})
-}
-
-// Work runs the job's steps in-process.
-func (p *ProcessDocumentProcessor) Work(ctx context.Context, job *river.Job[ProcessDocumentTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-// Timeout covers a worst-case extraction (large workbook exploding into many
-// row chunks) plus per-chunk embedding.
-func (p *ProcessDocumentProcessor) Timeout(*river.Job[ProcessDocumentTask]) time.Duration {
-	return 16 * time.Minute
 }
 
 // process runs one attempt in-process. lastAttempt flips an otherwise

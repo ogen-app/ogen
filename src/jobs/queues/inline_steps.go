@@ -2,28 +2,22 @@ package queues
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
-
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
-// Step-run jobs ogen still works itself. Until a kind is listed in
-// OUTBOX_RELAY_KINDS, its River worker here runs the same steps river-service
-// would, carrying out each action in-process with ogen's own clients. So each
-// such job has one implementation, its steps, whichever service runs it.
+// Inline runs. runLocal drives a job's steps to the end in-process, carrying
+// out each action with ogen's own clients the way river-service would. It
+// backs the processors' Process methods, which the tests run against fakes,
+// so the steps river-service drives are exercised end to end here too.
 
 // maxLocalSteps bounds one local run, as river-service bounds its own.
 const maxLocalSteps = 512
@@ -43,8 +37,8 @@ type localActions struct {
 
 // runLocal runs a step-run job to completion in-process, from its first
 // step. args is the job's args value, encoded as river-service would store
-// it. The returned error is what the River worker returns: nil when done, a
-// snooze or an error to retry.
+// it. It returns nil when done, a *SnoozeError when the job asked to run
+// again later, or the error a retry would carry.
 func runLocal(ctx context.Context, step stepFunc, kind string, args any, attempt, maxAttempts int, acts localActions) error {
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -78,7 +72,7 @@ func runLocal(ctx context.Context, step stepFunc, kind string, args any, attempt
 			}
 		case out.Retry != nil:
 			if out.Retry.After > 0 {
-				return river.JobSnooze(out.Retry.After)
+				return &SnoozeError{After: out.Retry.After}
 			}
 			return fmt.Errorf("%s: %s", kind, out.Retry.Reason)
 		default:
@@ -165,20 +159,12 @@ func (a localActions) openSource(ctx context.Context, client *http.Client, t *Me
 	return src.Body, nil
 }
 
-// finish carries out a done step's cancels on the worker's own River client,
-// then works its child jobs inline, one after another. Cancels are best
-// effort, as they are in river-service: a job left behind exits on its own
-// when it runs. A failing child is logged and skipped, so one can't starve
-// the rest; the next sweep tries it again.
+// finish works a done step's child jobs inline, one after another. A failing
+// child is logged and skipped, so one can't starve the rest; the next sweep
+// tries it again. Cancels need a queue, which only river-service has.
 func (a localActions) finish(ctx context.Context, kind string, d *StepDone) error {
 	if d == nil {
 		return nil
-	}
-	for _, m := range d.Cancel {
-		if _, err := cancelMatchingLocal(ctx, m); err != nil {
-			slog.WarnContext(ctx, "could not cancel queued jobs", logging.AttrComponent, "jobs.steps",
-				"job_kind", kind, "cancel_kind", m.Kind, logging.AttrError, err)
-		}
 	}
 	for _, c := range d.Enqueue {
 		step, ok := a.children[c.Kind]
@@ -193,60 +179,10 @@ func (a localActions) finish(ctx context.Context, kind string, d *StepDone) erro
 	return nil
 }
 
-// cancelLimit bounds the jobs one match cancels.
-const cancelLimit = 100
-
-// liveJobStates are the states a job can still be cancelled in.
-var liveJobStates = []rivertype.JobState{
-	rivertype.JobStateAvailable,
-	rivertype.JobStatePending,
-	rivertype.JobStateRetryable,
-	rivertype.JobStateRunning,
-	rivertype.JobStateScheduled,
+// SnoozeError is an inline run that asked to run again after After, without
+// using an attempt.
+type SnoozeError struct {
+	After time.Duration
 }
 
-// cancelMatchingLocal cancels the queued jobs m selects on the worker's River
-// client and returns how many River cancelled outright; a running one
-// finishes its attempt.
-func cancelMatchingLocal(ctx context.Context, m JobMatch) (int, error) {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil {
-		return 0, err
-	}
-	params := river.NewJobListParams().Kinds(m.Kind).States(liveJobStates...).First(cancelLimit)
-	if len(m.Args) > 0 {
-		where, named := matchSQL(m.Args)
-		params = params.Where(where, named)
-	}
-	res, err := client.JobList(ctx, params)
-	if err != nil {
-		return 0, fmt.Errorf("list %s jobs: %w", m.Kind, err)
-	}
-	cancelled := 0
-	for _, job := range res.Jobs {
-		row, err := client.JobCancel(ctx, job.ID)
-		if errors.Is(err, rivertype.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return cancelled, fmt.Errorf("cancel %s job %d: %w", m.Kind, job.ID, err)
-		}
-		if row.State == rivertype.JobStateCancelled {
-			cancelled++
-		}
-	}
-	return cancelled, nil
-}
-
-// matchSQL turns arg conditions into a JobList filter. Keys and values are
-// bound, never spliced in.
-func matchSQL(args []ArgMatch) (string, river.NamedArgs) {
-	conds := make([]string, 0, len(args))
-	named := river.NamedArgs{}
-	for i, a := range args {
-		k, v := fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i)
-		conds = append(conds, fmt.Sprintf("COALESCE(args->>@%s, '') = ANY(@%s)", k, v))
-		named[k], named[v] = a.Key, a.Values
-	}
-	return strings.Join(conds, " AND "), named
-}
+func (e *SnoozeError) Error() string { return fmt.Sprintf("snoozed for %s", e.After) }

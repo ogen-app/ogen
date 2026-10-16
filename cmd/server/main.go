@@ -222,20 +222,9 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		return nil
 	}
 
-	// A nil enqueuer turns registration notifications into a soft no-op.
-	var adminEmailEnqueuer grpcserver.AdminEmailEnqueuer
-	if enq, err := queues.NewInsertOnlyEnqueuer(db); err != nil {
-		slog.Error("grpc admin-email enqueuer init failed; registration notifications disabled (non-fatal)",
-			logging.AttrComponent, "boot", logging.AttrError, err)
-	} else {
-		// Route like the app's enqueuer, so a relayed send_email goes through
-		// the outbox; the app's relay delivers it. A bad OUTBOX_RELAY_KINDS
-		// already fails the app's boot.
-		if kinds, err := queues.RelayKinds(cfg.OutboxRelayKinds, cfg.RiverServiceAddr); err == nil && cfg.RiverServiceAddr != "" {
-			enq.Relay(outbox.NewWriter(db.DB), kinds)
-		}
-		adminEmailEnqueuer = enq
-	}
+	// Registration notifications go through the job outbox; the app's relay
+	// delivers them to river-service.
+	adminEmailEnqueuer := queues.NewEnqueuer(outbox.NewWriter(db.DB))
 
 	gs, err := grpcserver.New(grpcserver.Deps{
 		Token:            cfg.GRPCAuthToken,

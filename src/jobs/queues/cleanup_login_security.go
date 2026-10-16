@@ -5,13 +5,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/logging"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 // CleanupLoginSecurityQueue is the daily retention sweep for login-security
@@ -26,40 +23,14 @@ const loginAlertTokenRetention = 30 * 24 * time.Hour
 // CleanupLoginSecurityTask is the marker payload; the worker deletes by age.
 type CleanupLoginSecurityTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (CleanupLoginSecurityTask) Kind() string { return CleanupLoginSecurityQueue }
 
-// InsertOpts sets per-kind defaults. A failed sweep retries on the next tick;
-// active-state UniqueOpts prevents overlapping ticks from stacking.
-func (CleanupLoginSecurityTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
-
-// CleanupLoginSecurityProcessor is the River worker for the sweep.
+// CleanupLoginSecurityProcessor runs the sweep.
 type CleanupLoginSecurityProcessor struct {
-	river.WorkerDefaults[CleanupLoginSecurityTask]
 	Devices  repository.KnownDeviceRepository
 	Alerts   repository.LoginAlertTokenRepository
 	Sessions repository.SessionRepository
-}
-
-// Work is the River entrypoint; it delegates to Process.
-func (p *CleanupLoginSecurityProcessor) Work(ctx context.Context, job *river.Job[CleanupLoginSecurityTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Both tables are account-level, not tenant-scoped.
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *CleanupLoginSecurityProcessor) Timeout(*river.Job[CleanupLoginSecurityTask]) time.Duration {
-	return time.Minute
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, newCleanupLoginSecurity(d))
-	})
 }
 
 func newCleanupLoginSecurity(d Deps) *CleanupLoginSecurityProcessor {

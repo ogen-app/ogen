@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/riverqueue/river"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -111,36 +110,11 @@ type ProcessPDFTask struct {
 
 func (ProcessPDFTask) Kind() string { return ProcessPDFQueue }
 
-// InsertOpts bounds retries. Transient failures (storage, gRPC Unavailable /
-// DeadlineExceeded, embedder outage) retry with backoff; terminal ones (corrupt
-// PDF) short-circuit to "failed" inside Work.
-func (ProcessPDFTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
-}
-
 type ProcessPDFProcessor struct {
-	river.WorkerDefaults[ProcessPDFTask]
 	Deps PDFDeps
 
 	memOnce sync.Once
 	mem     *memChunkStage
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ProcessPDFProcessor{Deps: d.PDF})
-	})
-}
-
-// Work runs the job's steps in-process.
-func (p *ProcessPDFProcessor) Work(ctx context.Context, job *river.Job[ProcessPDFTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-// Timeout covers a worst-case parse (large PDF) plus per-chunk embedding.
-func (p *ProcessPDFProcessor) Timeout(*river.Job[ProcessPDFTask]) time.Duration {
-	return 16 * time.Minute
 }
 
 // process runs one attempt in-process. lastAttempt flips an otherwise

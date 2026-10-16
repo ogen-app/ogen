@@ -19,8 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -123,36 +121,11 @@ type ProcessURLTask struct {
 
 func (ProcessURLTask) Kind() string { return ProcessURLQueue }
 
-// InsertOpts bounds retries. Transient failures (network, 429/5xx, embedder
-// outage) retry with backoff; terminal ones (4xx, unscrapeable page)
-// short-circuit to "failed" inside Work.
-func (ProcessURLTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
-}
-
 type ProcessURLProcessor struct {
-	river.WorkerDefaults[ProcessURLTask]
 	Deps URLDeps
 
 	memOnce sync.Once
 	mem     *memChunkStage
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ProcessURLProcessor{Deps: d.URL})
-	})
-}
-
-// Work runs the job's steps in-process.
-func (p *ProcessURLProcessor) Work(ctx context.Context, job *river.Job[ProcessURLTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-// Timeout covers the Firecrawl render, N image downloads, and per-chunk embedding.
-func (p *ProcessURLProcessor) Timeout(*river.Job[ProcessURLTask]) time.Duration {
-	return 10 * time.Minute
 }
 
 // process runs one attempt in-process. lastAttempt flips an otherwise
