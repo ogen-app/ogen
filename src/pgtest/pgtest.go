@@ -1,7 +1,7 @@
 // Package pgtest provisions throwaway Postgres databases for tests.
 //
 // Each MustDB call creates a fresh, fully-migrated database (bun schema +
-// seed reference data + River service tables) on the Postgres pointed at by
+// seed reference data) on the Postgres pointed at by
 // TEST_DATABASE_DSN (default localhost:5432, database "postgres"). Databases
 // are isolated per call, mirroring the per-Describe in-memory SQLite DBs the
 // suites used before CON-87. The Makefile (and CI) provision the Postgres
@@ -34,7 +34,6 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/infra/database"
-	"github.com/ogen-app/ogen/src/jobs"
 )
 
 var (
@@ -150,9 +149,6 @@ func MustDB() *bun.DB {
 	db.SetMaxIdleConns(2)
 	if err := database.Migrate(ctx, db); err != nil {
 		panic(fmt.Sprintf("pgtest: migrate %s: %v", name, err))
-	}
-	if err := jobs.MigrateRiver(ctx, db.DB); err != nil {
-		panic(fmt.Sprintf("pgtest: river migrate %s: %v", name, err))
 	}
 	return db
 }

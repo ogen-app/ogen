@@ -15,8 +15,6 @@ const (
 	// tenantSweepTimeout bounds one tenant's part of a sweep, so a slow tenant
 	// cannot starve the rest.
 	tenantSweepTimeout = 60 * time.Second
-	// tenantSweepJobTimeout is the River deadline for a whole fanned-out sweep.
-	tenantSweepJobTimeout = 10 * time.Minute
 	// tenantStatusWriteTimeout bounds the best-effort health write a sweep makes
 	// for a tenant after its own deadline may already have passed.
 	tenantStatusWriteTimeout = 10 * time.Second
@@ -26,7 +24,7 @@ const (
 // each under its own tenantSweepTimeout derived from ctx, and returns once all
 // have finished. Results and errors come back index-aligned with items, so the
 // caller folds them without sharing state with fn. A panic in fn is recovered
-// and reported as that item's error: the work runs off the River worker's own
+// and reported as that item's error: the work runs off the calling
 // goroutine, where an unrecovered panic would crash the process.
 func forEachTenant[T, R any](ctx context.Context, items []T, fn func(ctx context.Context, item T) (R, error)) ([]R, []error) {
 	results := make([]R, len(items))

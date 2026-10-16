@@ -2,14 +2,10 @@ package queues
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -45,41 +41,16 @@ type WithdrawZernioPostTask struct {
 	Actor           string `json:"actor"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (WithdrawZernioPostTask) Kind() string { return WithdrawZernioPostQueue }
 
-// InsertOpts allows more attempts than cancel: there is no user waiting on a
-// status flip, and giving up leaves a post queued in Zernio until the orphan
-// sweep finds it.
-func (WithdrawZernioPostTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 8}
-}
-
-// WithdrawZernioPostProcessor is the River worker for withdraw_zernio_post.
+// WithdrawZernioPostProcessor runs withdraw_zernio_post.
 type WithdrawZernioPostProcessor struct {
-	river.WorkerDefaults[WithdrawZernioPostTask]
 	Deps ZernioDeps
 	// Notifier tells the author when the post went out before it could be
 	// withdrawn. Nil is a no-op.
 	Notifier *notify.Service
 	Members  memberLister
-}
-
-// Work is the River entrypoint: it runs the job's steps in-process.
-func (p *WithdrawZernioPostProcessor) Work(ctx context.Context, job *river.Job[WithdrawZernioPostTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{zernio: p.Deps.Client})
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *WithdrawZernioPostProcessor) Timeout(*river.Job[WithdrawZernioPostTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &WithdrawZernioPostProcessor{Deps: d.Zernio, Notifier: d.Notifier, Members: d.Users})
-	})
 }
 
 // Process runs one withdrawal attempt in-process. A transient Zernio error is
@@ -210,15 +181,4 @@ func withdrawPayload(task WithdrawZernioPostTask) string {
 		"publisher_post_id": task.PublisherPostID,
 		"reason":            task.Reason,
 	})
-}
-
-// enqueueWithdraw inserts a withdraw task from inside a running worker, on the
-// worker's own River client. It fails when the context carries no client.
-func enqueueWithdraw(ctx context.Context, task WithdrawZernioPostTask) error {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil {
-		return err
-	}
-	_, err = client.Insert(ctx, task, insertOptsWithRequestID(ctx, nil))
-	return err
 }

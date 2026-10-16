@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs"
@@ -25,14 +23,8 @@ const WithdrawReasonOrphan = "orphan_sweep"
 // data.
 type SweepZernioOrphansTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (SweepZernioOrphansTask) Kind() string { return SweepZernioOrphansQueue }
-
-// InsertOpts: one attempt (the next tick retries), and the active-state
-// uniqueness stops overlapping ticks from stacking.
-func (SweepZernioOrphansTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // OrphanSweepConfig tunes the sweep. Live false is a dry run: orphans are
 // counted and logged but left in Zernio.
@@ -52,28 +44,10 @@ type OrphanSweepConfig struct {
 // environment's tenants own are listed, so posts of another environment
 // sharing the Zernio account are never seen.
 type SweepZernioOrphansProcessor struct {
-	river.WorkerDefaults[SweepZernioOrphansTask]
 	Deps   ZernioDeps
 	Config OrphanSweepConfig
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
-}
-
-// Work is the River entrypoint: it runs the job's steps in-process.
-func (p *SweepZernioOrphansProcessor) Work(ctx context.Context, job *river.Job[SweepZernioOrphansTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *SweepZernioOrphansProcessor) Timeout(*river.Job[SweepZernioOrphansTask]) time.Duration {
-	return 5 * time.Minute
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &SweepZernioOrphansProcessor{Deps: d.Zernio, Config: d.OrphanSweep})
-	})
 }
 
 // Process sweeps every tenant profile in-process.

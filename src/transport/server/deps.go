@@ -22,6 +22,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/jobs/outbox"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -122,7 +123,7 @@ func (d *deps) phases() []func(context.Context) error {
 		d.initGRPCClients,
 		d.initIngestion,
 		d.initBilling,
-		d.initRiver,
+		d.initJobs,
 		d.initJobRPC,
 		d.initServices,
 		d.initGenkit,
@@ -202,9 +203,17 @@ func (d *deps) initIngestion(ctx context.Context) error {
 	return nil
 }
 
-// initRiver wires email (its workers ride River), builds the job client and
-// starts the worker pool.
-func (d *deps) initRiver(ctx context.Context) error {
+// ensureEnqueuer builds the enqueuer over the outbox once: billing enqueues
+// through it and is wired before the jobs, so whichever comes first builds it.
+func (d *deps) ensureEnqueuer() {
+	if d.enqueuer == nil {
+		d.enqueuer = queues.NewEnqueuer(outbox.NewWriter(d.db.DB))
+	}
+}
+
+// initJobs wires email (its jobs' halves run here), the enqueuer and the
+// outbox relay. The jobs themselves run in river-service.
+func (d *deps) initJobs(ctx context.Context) error {
 	r := d.r
 	var err error
 	d.email, err = initEmail(ctx, d.cfg, d.secretStore, r.emailTemplateRepo, r.emailSuppressionRepo, r.emailLogRepo, r.emailEventRepo, r.emailBodyRepo, r.userRepo, d.activity.recorder)
@@ -212,32 +221,12 @@ func (d *deps) initRiver(ctx context.Context) error {
 		return err
 	}
 	d.email.Deps.ReportPrefs = r.weeklyReportRepo
-	// The analysis and billing services enqueue from inside River workers, so
-	// they are built over the enqueuer before the client exists; the client is
-	// attached below.
-	if d.enqueuer == nil {
-		d.enqueuer = &queues.Enqueuer{}
-	}
+	d.ensureEnqueuer()
 	if err := d.initRelay(ctx); err != nil {
 		return err
 	}
 	d.analysis = newAssetAnalysis(d)
 	d.brandDistill = newBrandDistill(d)
-	client, err := newRiverClient(ctx, d)
-	if err != nil {
-		return err
-	}
-	d.enqueuer.Client = client
-	if err := client.Start(ctx); err != nil {
-		return err
-	}
-	d.shutdown.add(stageJobs, closeWithin(d.cfg.JobShutdownTimeout, func(ctx context.Context) error {
-		if err := client.Stop(ctx); err != nil {
-			slog.WarnContext(ctx, "job client did not stop within JOB_SHUTDOWN_TIMEOUT; jobs still running are rescued after their timeout",
-				logging.AttrComponent, "jobs", logging.AttrError, err)
-		}
-		return nil
-	}))
 	return nil
 }
 

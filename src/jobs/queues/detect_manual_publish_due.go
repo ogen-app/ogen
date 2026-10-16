@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -39,43 +37,17 @@ const manualPublishComp = "jobs.detect_manual_publish_due"
 // per-tick data.
 type DetectManualPublishDueTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (DetectManualPublishDueTask) Kind() string { return DetectManualPublishDueQueue }
-
-// InsertOpts mirrors the other periodic sweeps: one attempt (each tick records
-// its own outcome and the emit is idempotent per recipient), active-state
-// uniqueness so overlapping ticks don't stack.
-func (DetectManualPublishDueTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // DetectManualPublishDueProcessor wires one sweep tick. Posts resolves the
 // overdue manual-publish posts across tenants, Users resolves each tenant's
 // owner recipients, and Notifier drops the in-app notification. A nil Notifier
 // (notification center unwired) makes the sweep a harmless read-only no-op.
 type DetectManualPublishDueProcessor struct {
-	river.WorkerDefaults[DetectManualPublishDueTask]
 	Posts    manualPublishDueLister
 	Users    ownerLister
 	Notifier *notify.Service
-}
-
-func (p *DetectManualPublishDueProcessor) Work(ctx context.Context, job *river.Job[DetectManualPublishDueTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background job spans tenants; the enumeration runs cross-tenant and each
-	// emit re-scopes to the post's tenant.
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
-func (p *DetectManualPublishDueProcessor) Timeout(*river.Job[DetectManualPublishDueTask]) time.Duration {
-	return 60 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, newDetectManualPublishDue(d))
-	})
 }
 
 func newDetectManualPublishDue(d Deps) *DetectManualPublishDueProcessor {

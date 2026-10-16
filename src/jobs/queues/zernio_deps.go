@@ -1,5 +1,5 @@
-// Package queues holds the typed River queues that drive Ogen's
-// auto-publish pipeline.
+// Package queues holds Ogen's background jobs: their args, enqueue surface,
+// steps and maintenance passes. river-service runs them.
 package queues
 
 import (

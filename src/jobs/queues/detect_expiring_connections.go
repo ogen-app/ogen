@@ -3,15 +3,12 @@ package queues
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email/templates"
@@ -40,15 +37,8 @@ const detectComp = "jobs.detect_expiring_connections"
 // per-tick data.
 type DetectExpiringConnectionsTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (DetectExpiringConnectionsTask) Kind() string { return DetectExpiringConnectionsQueue }
-
-// InsertOpts mirrors the other periodic sweeps: one attempt (each tick records
-// its own outcome and the persist/enqueue are idempotent), active-state
-// uniqueness so overlapping ticks don't stack.
-func (DetectExpiringConnectionsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // DetectExpiringConnectionsProcessor wires one health-sweep tick. Zernio
 // supplies the client + social-account repo (enumeration/persistence), Users
@@ -56,7 +46,6 @@ func (DetectExpiringConnectionsTask) InsertOpts() river.InsertOpts {
 // and AppBaseURL builds the reconnect deep link. The email itself is enqueued as
 // a send_email job via the River client on the worker context.
 type DetectExpiringConnectionsProcessor struct {
-	river.WorkerDefaults[DetectExpiringConnectionsTask]
 	Zernio     ZernioDeps
 	Users      repository.UserRepository
 	EmailLogs  repository.EmailLogRepository
@@ -68,23 +57,6 @@ type DetectExpiringConnectionsProcessor struct {
 	// Jobs routes the expiry email, so it goes through the outbox once
 	// river-service owns send_email. Nil inserts on the worker's own client.
 	Jobs *Enqueuer
-}
-
-func (p *DetectExpiringConnectionsProcessor) Work(ctx context.Context, job *river.Job[DetectExpiringConnectionsTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background job spans tenants; sweepTenant re-scopes per tenant.
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
-func (p *DetectExpiringConnectionsProcessor) Timeout(*river.Job[DetectExpiringConnectionsTask]) time.Duration {
-	return tenantSweepJobTimeout
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, newDetectExpiringConnections(d))
-	})
 }
 
 func newDetectExpiringConnections(d Deps) *DetectExpiringConnectionsProcessor {
@@ -369,15 +341,7 @@ func (p *DetectExpiringConnectionsProcessor) enqueueEmail(ctx context.Context, o
 		IdempotencyKey: idemKey,
 		Vars:           vars,
 	}
-	if p.Jobs != nil {
-		return p.Jobs.insert(ctx, task, nil)
-	}
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil || client == nil {
-		return fmt.Errorf("river client unavailable for send_email enqueue: %w", err)
-	}
-	_, err = client.Insert(ctx, task, insertOptsWithRequestID(ctx, nil))
-	return err
+	return p.Jobs.enqueue(ctx, task, nil)
 }
 
 func (p *DetectExpiringConnectionsProcessor) reconnectURL(accountID string) string {

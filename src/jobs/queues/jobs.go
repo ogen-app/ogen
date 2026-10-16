@@ -3,18 +3,9 @@ package queues
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"slices"
 	"strconv"
-	"strings"
 	"time"
-
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
-	"github.com/riverqueue/river/rivertype"
-	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email/templates"
@@ -22,23 +13,18 @@ import (
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs/outbox"
-	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// This file holds the central River plumbing for the queue package: the
-// dependency bundle, the self-registration registry, the periodic-job set,
-// and the app-facing enqueue surface.
-//
-// Workers are NOT listed here. Each job is a processor (in its own file) that
-// implements river.Worker directly (Work/Timeout next to its logic) and
-// self-registers from an init() via register(). Adding a job therefore means
-// adding one file — no central list to edit.
+// Background jobs run in river-service. ogen enqueues them through the job
+// outbox and serves their steps (JobStepService) and maintenance passes
+// (MaintenanceService) over the job RPC listener. This file holds the
+// dependency bundle and the app-facing enqueue surface.
 
-// Deps bundles every dependency the workers need. server.go builds one and
-// passes it to RegisterAll; each worker's registrar picks what it needs. The
-// cleanup/reconcile repos are the same instances already held by the Zernio
-// bundle, so they aren't duplicated here.
+// Deps bundles every dependency the jobs' steps and maintenance passes need.
+// server.go builds one for the job RPC server. The cleanup/reconcile repos are
+// the same instances already held by the Zernio bundle, so they aren't
+// duplicated here.
 type Deps struct {
 	Zernio           ZernioDeps
 	PostLogRetention time.Duration
@@ -61,9 +47,6 @@ type Deps struct {
 	ProfileBootstrapper *zernio.Bootstrapper
 	Integration         *zernio.Integration
 
-	// Fences the Zernio profile teardown against a concurrent CON-190
-	// restore via the tenant row lock. nil disables teardown (fail-closed).
-	TenantFence TenantTeardownFence
 	// TeardownLease guards a teardown river-service runs, step by step,
 	// against a concurrent restore.
 	TeardownLease TeardownLease
@@ -152,351 +135,74 @@ type Deps struct {
 	NotificationRepo      repository.NotificationRepository
 	NotificationRetention time.Duration
 
-	// The weekly_report_dispatch sweep. A nil DB, Store or Collector makes it
-	// a no-op.
+	// The weekly report jobs. A nil Store or Collector makes them no-ops.
 	WeeklyReport WeeklyReportDeps
 
-	// Jobs is the app's enqueuer, for workers that enqueue a kind of another
-	// family: while families move to river-service one at a time, such an
-	// enqueue must follow the target kind's routing. Its River client is set
-	// after the workers are registered.
+	// Jobs is the app's enqueuer, for steps and sweeps that queue follow-up
+	// jobs (a re-queued analysis, a withdrawal).
 	Jobs *Enqueuer
-
-	// The notify_harbor_tenant_registered worker's config — the outbound
-	// webhook URL Harbor exposes + the HMAC signing secret. An empty URL makes the
-	// worker a no-op (feature off); an empty secret sends the body unsigned.
-	HarborNotify HarborNotifyDeps
 }
 
-// registrars is appended to by each worker file's init(). A job is registered
-// simply by existing in this package.
-var registrars []func(*river.Workers, Deps)
-
-// register records a worker registrar. Called from each job file's init().
-func register(fn func(*river.Workers, Deps)) {
-	registrars = append(registrars, fn)
+// JobArgs is a job's arguments: its kind, and fields mirrored field for field
+// by the jobs.v1 message river-service receives (see setArgs). Queue,
+// attempts and uniqueness are river-service's, per kind.
+type JobArgs interface {
+	Kind() string
 }
 
-// QueueConfigs is the River client's queue set: the default queue plus the
-// dedicated audio, image, ingest and analysis queues, each with its own worker
-// pool so heavy runs can't starve short jobs. A job inserted into a queue
-// missing here is never worked, so every InsertOpts Queue must appear —
-// TestEveryInsertQueueIsConfigured guards it.
-func QueueConfigs(defaultWorkers, audioWorkers, imageWorkers, ingestWorkers, analysisWorkers int) map[string]river.QueueConfig {
-	return map[string]river.QueueConfig{
-		river.QueueDefault: {MaxWorkers: defaultWorkers},
-		AudioQueue:         {MaxWorkers: audioWorkers},
-		ImageQueue:         {MaxWorkers: imageWorkers},
-		IngestQueue:        {MaxWorkers: ingestWorkers},
-		AnalysisQueue:      {MaxWorkers: analysisWorkers},
-	}
+// EnqueueOpts schedules a job. The zero value runs it as soon as river-service
+// picks it up.
+type EnqueueOpts struct {
+	ScheduledAt time.Time
 }
 
-// RegisterAll adds every self-registered worker to the River registry.
-func RegisterAll(workers *river.Workers, deps Deps) {
-	for _, fn := range registrars {
-		fn(workers, deps)
-	}
-}
-
-// periodicUniqueOpts is the uniqueness applied to the periodic markers
-// (cleanup/reconcile/analytics): a new tick is skipped only while a previous
-// one is still ACTIVE. Completed/cancelled/discarded are deliberately excluded
-// — including them (River's default ByState) would block the next tick until
-// the job cleaner removes the retained completed row, breaking the cadence.
-func periodicUniqueOpts() river.UniqueOpts {
-	return river.UniqueOpts{
-		ByState: []rivertype.JobState{
-			rivertype.JobStateAvailable,
-			rivertype.JobStatePending,
-			rivertype.JobStateRunning,
-			rivertype.JobStateScheduled,
-			rivertype.JobStateRetryable,
-		},
-	}
-}
-
-// PeriodicConfig carries the recurring-job cadences. The three recurring
-// sweeps (cleanup, reconcile, analytics) are River periodic jobs rather
-// than self-rescheduling tasks; River's scheduler owns the cadence and the
-// chain can't die on a single failed tick.
-type PeriodicConfig struct {
-	CleanupEvery      time.Duration
-	EmailCleanupEvery time.Duration
-	ReconcileEvery    time.Duration
-	AnalyticsEvery    time.Duration
-	IncludeAnalytics  bool // only when the Zernio integration is configured
-	FollowerEvery     time.Duration
-	IncludeFollowers  bool // Only when the Zernio integration is configured
-	// Expired headless-connect-session sweep. Gated on a configured
-	// interval so a zero value (e.g. in tests) can't create an invalid job.
-	ConnectSessionCleanupEvery time.Duration
-	// Expired plugin-pairing sweep. Positive-interval gated like the others.
-	PluginPairingCleanupEvery time.Duration
-	// Connection-health / expiry-notification sweep.
-	HealthCheckEvery        time.Duration
-	IncludeConnectionExpiry bool // only when the Zernio integration is configured
-	// Notification retention/expiry sweep. Gated on a positive interval
-	// so a zero value (e.g. in tests) can't create an invalid periodic job.
-	NotificationCleanupEvery time.Duration
-	// Manual-publish-due sweep. Positive-interval gated like the others.
-	ManualPublishDueEvery time.Duration
-	// Login-security retention sweep. Positive-interval gated like the others.
-	LoginSecurityCleanupEvery time.Duration
-	// Zernio orphan sweep. Positive-interval gated like the others.
-	OrphanSweepEvery time.Duration
-	// Abandoned-upload sweep. Positive-interval gated like the others.
-	PendingUploadSweepEvery time.Duration
-	// Missing asset-analysis lens backfill. Positive-interval gated like the
-	// others.
-	AnalysisBackfillEvery time.Duration
-	// Brand-proposal expiry sweep. Positive-interval gated like the others.
-	BrandDistillExpireEvery time.Duration
-	// Weekly report dispatch. Positive-interval gated like the others.
-	WeeklyReportEvery time.Duration
-	// Billing subscription re-sync and webhook-log prune. Positive-interval
-	// gated; both are zero while billing is off.
-	BillingReconcileEvery    time.Duration
-	BillingWebhookSweepEvery time.Duration
-
-	// Relayed reports whether river-service owns a job kind. Its periodic
-	// sweeps are then scheduled by river-service and left out here. Nil means
-	// ogen owns every kind.
-	Relayed func(kind string) bool
-}
-
-// PeriodicJobs builds the River periodic-job set. Every job runs once on
-// start (RunOnStart) and then every interval. Without RunOnStart the first
-// tick fires only one full interval after the client starts, and each process
-// restart re-bases that timer from zero — so a long-interval sweep (analytics
-// at 30m, cleanup at 1h) can be starved indefinitely in a frequently-restarting
-// environment (dev live-reload, crash-loops, rapid deploys) and never fire its
-// first tick. RunOnStart makes each boot deterministically produce one tick;
-// the active-state UniqueOpts dedupe overlapping inserts across a fast restart,
-// and every sweep is idempotent (upserts) or a no-op when there's nothing to
-// do, so the extra boot tick is harmless in a stable process too.
-//
-// A sweep with a zero interval is left out: River doesn't validate it and
-// PeriodicInterval(0).Next(t) == t would spin the periodic enqueuer. A sweep
-// river-service owns is left out too, so only its leader schedules it.
-func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
-	runOnStart := &river.PeriodicJobOpts{RunOnStart: true}
-	var jobs []*river.PeriodicJob
-	for _, s := range cfg.sweeps() {
-		if !s.enabled || s.every <= 0 || (cfg.Relayed != nil && cfg.Relayed(s.args.Kind())) {
-			continue
-		}
-		args := s.args
-		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(s.every), func() (river.JobArgs, *river.InsertOpts) {
-			return args, nil
-		}, runOnStart))
-	}
-	return jobs
-}
-
-type sweep struct {
-	every   time.Duration
-	enabled bool
-	args    river.JobArgs
-}
-
-func (cfg PeriodicConfig) sweeps() []sweep {
-	return []sweep{
-		{cfg.CleanupEvery, true, CleanupPostLogsTask{}},
-		{cfg.ReconcileEvery, true, ReconcileScheduledPostsTask{}},
-		{cfg.EmailCleanupEvery, true, CleanupEmailLogsTask{}},
-		{cfg.AnalyticsEvery, cfg.IncludeAnalytics, RefreshZernioAnalyticsTask{}},
-		{cfg.FollowerEvery, cfg.IncludeFollowers, RefreshZernioFollowersTask{}},
-		{cfg.ConnectSessionCleanupEvery, true, CleanupZernioConnectSessionsTask{}},
-		{cfg.PluginPairingCleanupEvery, true, CleanupPluginPairingsTask{}},
-		{cfg.HealthCheckEvery, cfg.IncludeConnectionExpiry, DetectExpiringConnectionsTask{}},
-		{cfg.NotificationCleanupEvery, true, CleanupNotificationsTask{}},
-		{cfg.ManualPublishDueEvery, true, DetectManualPublishDueTask{}},
-		{cfg.LoginSecurityCleanupEvery, true, CleanupLoginSecurityTask{}},
-		{cfg.OrphanSweepEvery, true, SweepZernioOrphansTask{}},
-		{cfg.PendingUploadSweepEvery, true, SweepPendingUploadsTask{}},
-		{cfg.AnalysisBackfillEvery, true, BackfillAssetAnalysesTask{}},
-		{cfg.BrandDistillExpireEvery, true, ExpireBrandDistillsTask{}},
-		{cfg.WeeklyReportEvery, true, WeeklyReportDispatchTask{}},
-		{cfg.BillingReconcileEvery, true, BillingReconcileTask{}},
-		{cfg.BillingWebhookSweepEvery, true, BillingWebhookSweepTask{}},
-	}
-}
-
-// RelayKinds normalizes OUTBOX_RELAY_KINDS and checks it: every entry must be
-// a relayable kind, and relaying anything needs river-service's address, or
-// the jobs would sit in the outbox undelivered.
-func RelayKinds(kinds []string, riverServiceAddr string) ([]string, error) {
-	var out []string
-	for _, k := range kinds {
-		k = strings.ToLower(strings.TrimSpace(k))
-		if k == "" || slices.Contains(out, k) {
-			continue
-		}
-		if !RelayableKind(k) {
-			return nil, fmt.Errorf("OUTBOX_RELAY_KINDS: unknown job kind %q", k)
-		}
-		out = append(out, k)
-	}
-	if len(out) > 0 && riverServiceAddr == "" {
-		return nil, errors.New("OUTBOX_RELAY_KINDS is set but RIVER_SERVICE_ADDR is empty, so relayed jobs would never be delivered")
-	}
-	return out, nil
-}
-
-// RelayableKind reports whether kind can be handed to river-service: a kind
-// with a jobs.v1 args message, or a periodic sweep river-service schedules.
-func RelayableKind(kind string) bool {
-	if hasArgsMessage(kind) {
-		return true
-	}
-	for _, s := range (PeriodicConfig{}).sweeps() {
-		if s.args.Kind() == kind {
-			return true
-		}
-	}
-	return false
-}
-
-// Enqueuer is the app-facing enqueue surface. It wraps the River client so
-// callers (the schedule service, the posts handler) depend on a tiny method
-// set rather than River directly. The client is generic over *sql.Tx
-// because River runs on bun's shared database/sql pool — so InsertTx joins
-// the exact bun transaction the schedule path opens.
-//
-// Kinds river-service owns go to the outbox instead, written in the same
-// transaction; see Relay.
+// Enqueuer is the app-facing enqueue surface: callers (the schedule service,
+// the posts handler) depend on a tiny method set rather than on the outbox.
+// Each enqueue writes a job_outbox row, in the caller's transaction when it
+// has one, and the relay delivers it to river-service.
 type Enqueuer struct {
-	Client *river.Client[*sql.Tx]
-
-	outbox  *outbox.Writer
-	relayed map[string]bool
+	outbox *outbox.Writer
 }
 
-// Relay sends the given job kinds to river-service through w instead of the
-// in-process River client. A periodic kind listed here is also no longer
-// scheduled by ogen (see PeriodicConfig.Relayed).
-func (e *Enqueuer) Relay(w *outbox.Writer, kinds []string) {
-	e.outbox = w
-	e.relayed = make(map[string]bool, len(kinds))
-	for _, k := range kinds {
-		e.relayed[k] = true
-	}
+// NewEnqueuer returns an enqueuer writing to w.
+func NewEnqueuer(w *outbox.Writer) *Enqueuer {
+	return &Enqueuer{outbox: w}
 }
 
-// Relays reports whether river-service owns kind.
-func (e *Enqueuer) Relays(kind string) bool {
-	return e != nil && e.outbox != nil && e.relayed[kind]
-}
-
-// insertTx enqueues args inside tx: into the outbox when river-service owns
-// the kind, otherwise into the in-process River queue. A nil enqueuer, or no
-// River client for a kind ogen still runs, is a no-op.
-func (e *Enqueuer) insertTx(ctx context.Context, tx *sql.Tx, args river.JobArgs, opts *river.InsertOpts) error {
-	if e.Relays(args.Kind()) {
-		req, err := enqueueRequest(args, opts)
-		if err != nil {
-			return err
-		}
-		return e.outbox.WriteTx(ctx, tx, args.Kind(), req)
-	}
-	if e == nil || e.Client == nil {
+// insertTx writes args to the outbox inside tx, so the job exists iff tx
+// commits. A nil enqueuer is a no-op.
+func (e *Enqueuer) insertTx(ctx context.Context, tx *sql.Tx, args JobArgs, opts *EnqueueOpts) error {
+	if e == nil || e.outbox == nil {
 		return nil
 	}
-	_, err := e.Client.InsertTx(ctx, tx, args, insertOptsWithRequestID(ctx, opts))
-	return err
+	req, err := enqueueRequest(args, opts)
+	if err != nil {
+		return err
+	}
+	return e.outbox.WriteTx(ctx, tx, args.Kind(), req)
 }
 
-// enqueue is insert for jobs enqueued by other jobs, where losing the job
-// matters: with no enqueuer wired it fails rather than doing nothing.
-func (e *Enqueuer) enqueue(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) error {
-	if e == nil || (e.Client == nil && !e.Relays(args.Kind())) {
+// insert is insertTx for callers with no transaction. A nil enqueuer is a
+// no-op.
+func (e *Enqueuer) insert(ctx context.Context, args JobArgs, opts *EnqueueOpts) error {
+	if e == nil || e.outbox == nil {
+		return nil
+	}
+	req, err := enqueueRequest(args, opts)
+	if err != nil {
+		return err
+	}
+	return e.outbox.Write(ctx, args.Kind(), req)
+}
+
+// enqueue is insert for jobs whose loss matters (a follow-up of another job,
+// a cancel the user asked for): with no enqueuer wired it fails rather than
+// doing nothing.
+func (e *Enqueuer) enqueue(ctx context.Context, args JobArgs, opts *EnqueueOpts) error {
+	if e == nil || e.outbox == nil {
 		return fmt.Errorf("jobs: no enqueuer for %s", args.Kind())
 	}
 	return e.insert(ctx, args, opts)
-}
-
-// insert is insertTx for callers with no transaction.
-func (e *Enqueuer) insert(ctx context.Context, args river.JobArgs, opts *river.InsertOpts) error {
-	if e.Relays(args.Kind()) {
-		req, err := enqueueRequest(args, opts)
-		if err != nil {
-			return err
-		}
-		return e.outbox.Write(ctx, args.Kind(), req)
-	}
-	if e == nil || e.Client == nil {
-		return nil
-	}
-	_, err := e.Client.Insert(ctx, args, insertOptsWithRequestID(ctx, opts))
-	return err
-}
-
-// NewInsertOnlyEnqueuer builds an Enqueuer over a fresh insert-only River client
-// (no queues/workers, never Started) on the shared DB pool. It exists for
-// callers that must enqueue jobs yet live OUTSIDE the main app's River client —
-// namely the internal gRPC server, which cmd/server constructs
-// independently of the HTTP app that owns the processing client. Jobs inserted
-// here are worked by that processing client; both share one river_job table.
-// Requires the River schema to already exist (MigrateRiver runs in server.New,
-// before the gRPC server is built).
-func NewInsertOnlyEnqueuer(db *bun.DB) (*Enqueuer, error) {
-	client, err := river.NewClient[*sql.Tx](riverdatabasesql.New(db.DB), &river.Config{})
-	if err != nil {
-		return nil, err
-	}
-	return &Enqueuer{Client: client}, nil
-}
-
-// requestIDMetadata returns River job metadata carrying the originating request
-// id when one is present on ctx, so a job's logs correlate back to the
-// HTTP request that enqueued it. Returns nil for system/periodic enqueues that
-// have no request id (River treats nil as empty metadata).
-func requestIDMetadata(ctx context.Context) []byte {
-	rid, ok := logging.RequestIDFrom(ctx)
-	if !ok {
-		return nil
-	}
-	b, err := json.Marshal(map[string]string{logging.AttrRequestID: rid})
-	if err != nil {
-		return nil
-	}
-	return b
-}
-
-// insertOptsWithRequestID merges the originating request id into opts as job
-// metadata (creating opts if nil). When ctx carries no request id, opts is
-// returned unchanged.
-func insertOptsWithRequestID(ctx context.Context, opts *river.InsertOpts) *river.InsertOpts {
-	meta := requestIDMetadata(ctx)
-	if meta == nil {
-		return opts
-	}
-	if opts == nil {
-		opts = &river.InsertOpts{}
-	}
-	opts.Metadata = meta
-	return opts
-}
-
-// WithJobRequestID re-attaches the originating request id (from the job row's
-// metadata) to a worker context so the job's log lines carry the same
-// request_id as the enqueuing request. Tenant attachment stays the worker's
-// responsibility (tenantctx.With). Takes the *rivertype.JobRow (not the
-// promoted job.Metadata field) so it is nil-safe: unit tests that construct a
-// river.Job without a JobRow, and jobs enqueued without metadata, both return
-// ctx unchanged rather than panicking.
-func WithJobRequestID(ctx context.Context, jr *rivertype.JobRow) context.Context {
-	if jr == nil || len(jr.Metadata) == 0 {
-		return ctx
-	}
-	var m struct {
-		RequestID string `json:"request_id"`
-	}
-	if err := json.Unmarshal(jr.Metadata, &m); err == nil && m.RequestID != "" {
-		ctx = logging.WithRequestID(ctx, m.RequestID)
-	}
-	return ctx
 }
 
 // EnqueueSubmitTx enqueues a submit task inside the given transaction, so
@@ -515,8 +221,7 @@ func (e *Enqueuer) EnqueueWithdrawTx(ctx context.Context, tx *sql.Tx, task Withd
 // EnqueueBootstrapProfileTx enqueues an eager Zernio profile-provisioning task
 // inside the given transaction, so it commits atomically with the tenant insert:
 // a rolled-back signup creates no job, a committed one
-// durably queues exactly one. A nil enqueuer (Zernio queue unwired) is a no-op —
-// the lazy on-connect bootstrap remains the fallback.
+// durably queues exactly one. A nil enqueuer is a no-op.
 func (e *Enqueuer) EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
 	return e.insertTx(ctx, tx, BootstrapZernioProfileTask{TenantID: tenantID}, nil)
 }
@@ -553,8 +258,7 @@ var dripSchedule = []struct {
 // EnqueueWelcomeEmailTx enqueues the transactional welcome email inside the
 // signup transaction, so the job exists iff the tenant/user do.
 // The enqueue is a local DB insert — the Resend call happens later in the
-// worker — so signup never blocks on Resend reachability. A nil enqueuer (email
-// queue unwired) is a no-op.
+// worker — so signup never blocks on Resend reachability. A nil enqueuer is a no-op.
 func (e *Enqueuer) EnqueueWelcomeEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error {
 	return e.insertTx(ctx, tx, SendEmailTask{
 		UserID:         userID,
@@ -586,8 +290,7 @@ func (e *Enqueuer) EnqueueAdminTenantRegisteredEmail(ctx context.Context, tenant
 
 // EnqueueNotifyHarborTenantRegisteredTx enqueues the CON-229 "notify Harbor a
 // new tenant registered" webhook job inside the signup transaction, so the
-// operator notification fires iff the tenant commits. A nil enqueuer (feature
-// unwired) is a no-op.
+// operator notification fires iff the tenant commits. A nil enqueuer is a no-op.
 func (e *Enqueuer) EnqueueNotifyHarborTenantRegisteredTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
 	return e.insertTx(ctx, tx, NotifyHarborTenantRegisteredTask{TenantID: tenantID}, nil)
 }
@@ -689,8 +392,7 @@ func (e *Enqueuer) EnqueueBillingEmailTx(ctx context.Context, tx *sql.Tx, userID
 // because the worker cannot rebuild them (only the token's hash is stored). The
 // enqueue is a local DB insert (the Resend call happens later in the worker), so
 // the request never blocks on Resend reachability. invitationID keys the
-// idempotency so each distinct invite queues its own mail. A nil enqueuer (email
-// queue unwired) is a no-op.
+// idempotency so each distinct invite queues its own mail. A nil enqueuer is a no-op.
 func (e *Enqueuer) EnqueueInvitationEmailTx(ctx context.Context, tx *sql.Tx, tenantID, invitationID, toEmail, inviteURL, inviterName, workspaceName, role string) error {
 	return e.insertTx(ctx, tx, SendEmailTask{
 		TenantID:       tenantID,
@@ -739,7 +441,7 @@ func (e *Enqueuer) EnqueueDripTx(ctx context.Context, tx *sql.Tx, userID, tenant
 			TemplateKey:    step.Key,
 			EmailKind:      models.EmailKindMarketing,
 			IdempotencyKey: step.Key + ":" + userID,
-		}, &river.InsertOpts{ScheduledAt: now.Add(step.Offset)}); err != nil {
+		}, &EnqueueOpts{ScheduledAt: now.Add(step.Offset)}); err != nil {
 			return err
 		}
 	}
@@ -840,9 +542,5 @@ func (e *Enqueuer) EnqueueProcessURLTx(ctx context.Context, tx *sql.Tx, assetID,
 
 // EnqueueCancel enqueues a cancellation task (non-transactional).
 func (e *Enqueuer) EnqueueCancel(ctx context.Context, postID string, target CancelTarget, actor string) error {
-	task := CancelZernioJobTask{PostID: postID, Target: target, Actor: actor}
-	if e == nil || (e.Client == nil && !e.Relays(task.Kind())) {
-		return fmt.Errorf("jobs: enqueuer not configured")
-	}
-	return e.insert(ctx, task, nil)
+	return e.enqueue(ctx, CancelZernioJobTask{PostID: postID, Target: target, Actor: actor}, nil)
 }

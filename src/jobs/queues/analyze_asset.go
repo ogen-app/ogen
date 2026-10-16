@@ -8,9 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
-
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
@@ -67,18 +64,6 @@ type AnalysisDeps struct {
 	BackfillBatch int
 }
 
-// analysisUniqueStates folds a new job for a lens into one that is waiting or
-// running. River requires running in any explicit ByState, so a save made
-// mid-run is not queued; the running job re-runs itself instead when the
-// asset changed under it (see Process).
-var analysisUniqueStates = []rivertype.JobState{
-	rivertype.JobStateAvailable,
-	rivertype.JobStatePending,
-	rivertype.JobStateRetryable,
-	rivertype.JobStateRunning,
-	rivertype.JobStateScheduled,
-}
-
 // AnalyzeAssetTask analyses one lens of an asset. Reason only labels the run;
 // uniqueness is per lens.
 type AnalyzeAssetTask struct {
@@ -90,44 +75,16 @@ type AnalyzeAssetTask struct {
 
 func (AnalyzeAssetTask) Kind() string { return AnalyzeAssetKind }
 
-func (AnalyzeAssetTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{
-		Queue:       AnalysisQueue,
-		MaxAttempts: 5,
-		UniqueOpts:  river.UniqueOpts{ByArgs: true, ByState: analysisUniqueStates},
-	}
-}
-
 func (t AnalyzeAssetTask) lens() assetanalysis.Lens {
 	return assetanalysis.Lens{TenantID: t.TenantID, AssetID: t.AssetID, CampaignID: t.CampaignID}
 }
 
 type AnalyzeAssetProcessor struct {
-	river.WorkerDefaults[AnalyzeAssetTask]
 	Deps AnalysisDeps
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &AnalyzeAssetProcessor{Deps: d.Analysis})
-		river.AddWorker(w, &ReanalyzeCampaignProcessor{Deps: d.Analysis})
-		river.AddWorker(w, newBackfillAssetAnalyses(d))
-		river.AddWorker(w, &DistillAssetIdeasProcessor{Deps: d.Analysis})
-	})
 }
 
 func newBackfillAssetAnalyses(d Deps) *BackfillAssetAnalysesProcessor {
 	return &BackfillAssetAnalysesProcessor{Deps: d.Analysis}
-}
-
-func (p *AnalyzeAssetProcessor) Work(ctx context.Context, job *river.Job[AnalyzeAssetTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-// Timeout covers a map-reduce run over a source near the token cap.
-func (p *AnalyzeAssetProcessor) Timeout(*river.Job[AnalyzeAssetTask]) time.Duration {
-	return 15 * time.Minute
 }
 
 // Process runs the lens in-process. On the last attempt a failure is stored
@@ -264,27 +221,8 @@ type ReanalyzeCampaignTask struct {
 
 func (ReanalyzeCampaignTask) Kind() string { return ReanalyzeCampaignKind }
 
-func (ReanalyzeCampaignTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{
-		Queue:       AnalysisQueue,
-		MaxAttempts: 3,
-		UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
-			rivertype.JobStateAvailable,
-			rivertype.JobStatePending,
-			rivertype.JobStateRunning,
-			rivertype.JobStateScheduled,
-		}},
-	}
-}
-
 type ReanalyzeCampaignProcessor struct {
-	river.WorkerDefaults[ReanalyzeCampaignTask]
 	Deps AnalysisDeps
-}
-
-func (p *ReanalyzeCampaignProcessor) Work(ctx context.Context, job *river.Job[ReanalyzeCampaignTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args)
 }
 
 // step queues the campaign's lenses in one go; it makes no outside call.
@@ -297,10 +235,6 @@ func (p *ReanalyzeCampaignProcessor) step(ctx context.Context, in StepInput) (St
 		return retry("reanalyze_campaign", err)
 	}
 	return done("rebriefed")
-}
-
-func (p *ReanalyzeCampaignProcessor) Timeout(*river.Job[ReanalyzeCampaignTask]) time.Duration {
-	return time.Minute
 }
 
 func (p *ReanalyzeCampaignProcessor) Process(ctx context.Context, task ReanalyzeCampaignTask) error {
@@ -321,24 +255,8 @@ type BackfillAssetAnalysesTask struct{}
 
 func (BackfillAssetAnalysesTask) Kind() string { return BackfillAssetAnalysesKind }
 
-// InsertOpts: one attempt, since the next tick picks up whatever this one
-// missed, and active-state uniqueness so overlapping ticks don't stack.
-func (BackfillAssetAnalysesTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: AnalysisQueue, MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
-
 type BackfillAssetAnalysesProcessor struct {
-	river.WorkerDefaults[BackfillAssetAnalysesTask]
 	Deps AnalysisDeps
-}
-
-func (p *BackfillAssetAnalysesProcessor) Work(ctx context.Context, job *river.Job[BackfillAssetAnalysesTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx)
-}
-
-func (p *BackfillAssetAnalysesProcessor) Timeout(*river.Job[BackfillAssetAnalysesTask]) time.Duration {
-	return 5 * time.Minute
 }
 
 // Process queues one batch per tenant. Inactive tenants are left out by the
@@ -364,11 +282,11 @@ func (p *BackfillAssetAnalysesProcessor) Process(ctx context.Context) error {
 // zero). A lens already waiting is not queued twice: the waiting job keeps
 // its own run time.
 func (e *Enqueuer) EnqueueAnalyzeAsset(ctx context.Context, tenantID, assetID string, campaignID *string, reason string, at time.Time) error {
-	return e.insert(ctx, AnalyzeAssetTask{TenantID: tenantID, AssetID: assetID, CampaignID: campaignID, Reason: reason}, &river.InsertOpts{ScheduledAt: at})
+	return e.insert(ctx, AnalyzeAssetTask{TenantID: tenantID, AssetID: assetID, CampaignID: campaignID, Reason: reason}, &EnqueueOpts{ScheduledAt: at})
 }
 
 // EnqueueReanalyzeCampaign schedules a campaign's re-analysis at at. While
 // one is waiting, further calls are no-ops.
 func (e *Enqueuer) EnqueueReanalyzeCampaign(ctx context.Context, tenantID, campaignID string, at time.Time) error {
-	return e.insert(ctx, ReanalyzeCampaignTask{TenantID: tenantID, CampaignID: campaignID}, &river.InsertOpts{ScheduledAt: at})
+	return e.insert(ctx, ReanalyzeCampaignTask{TenantID: tenantID, CampaignID: campaignID}, &EnqueueOpts{ScheduledAt: at})
 }

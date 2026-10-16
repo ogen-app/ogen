@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email/templates"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -21,9 +19,9 @@ import (
 
 // The weekly report runs as two jobs. weekly_report_dispatch ticks hourly and,
 // for every workspace whose Monday 09:00 has arrived in its own time zone,
-// enqueues build_weekly_report for that workspace and week. The build job is
-// unique by its args across every state, completed included, and River keeps
-// completed jobs for a day, which outlasts the Monday send window: so each
+// asks river-service for a build_weekly_report for that workspace and week.
+// river-service keeps the build unique by its args across every state,
+// completed included, for longer than the Monday send window: so each
 // workspace's week is built once, empty weeks included, with no table of its
 // own. The build collects the week, renders it and enqueues one send_email per
 // owner with the report in the job args.
@@ -37,14 +35,8 @@ const weeklyReportComp = "jobs.weekly_report"
 // WeeklyReportDispatchTask is a marker payload.
 type WeeklyReportDispatchTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (WeeklyReportDispatchTask) Kind() string { return WeeklyReportDispatchQueue }
-
-// InsertOpts mirrors the other periodic sweeps: one attempt, active-state
-// uniqueness so overlapping ticks don't stack.
-func (WeeklyReportDispatchTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // BuildWeeklyReportTask builds and mails one workspace's report for the week
 // starting WeekStart (YYYY-MM-DD, a Monday in the workspace's zone).
@@ -53,15 +45,8 @@ type BuildWeeklyReportTask struct {
 	WeekStart string `json:"week_start"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (BuildWeeklyReportTask) Kind() string { return BuildWeeklyReportQueue }
-
-// InsertOpts makes the build unique per (tenant, week) in every state, so a
-// later dispatcher tick the same Monday enqueues nothing. A failed build is
-// retried a few times; nothing is mailed until it succeeds.
-func (BuildWeeklyReportTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 3, UniqueOpts: river.UniqueOpts{ByArgs: true}}
-}
 
 // WeeklyReportStore is what the report jobs need from the report repository.
 type WeeklyReportStore interface {
@@ -82,7 +67,7 @@ type sentChecker interface {
 }
 
 // JobInserter enqueues jobs; nil uses the River client on the worker context.
-type JobInserter func(ctx context.Context, args []river.JobArgs) error
+type JobInserter func(ctx context.Context, args []JobArgs) error
 
 // WeeklyReportDeps wires both report jobs. A nil Store or Collector disables
 // them.
@@ -96,28 +81,11 @@ type WeeklyReportDeps struct {
 
 func (d WeeklyReportDeps) enabled() bool { return d.Store != nil && d.Collector != nil }
 
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &WeeklyReportDispatchProcessor{Deps: d.WeeklyReport})
-		river.AddWorker(w, &BuildWeeklyReportProcessor{Deps: d.WeeklyReport})
-	})
-}
-
 // WeeklyReportDispatchProcessor runs one dispatch tick.
 type WeeklyReportDispatchProcessor struct {
-	river.WorkerDefaults[WeeklyReportDispatchTask]
 	Deps   WeeklyReportDeps
 	Insert JobInserter
 	Now    func() time.Time
-}
-
-func (p *WeeklyReportDispatchProcessor) Work(ctx context.Context, job *river.Job[WeeklyReportDispatchTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(tenantctx.WithSystem(ctx))
-}
-
-func (p *WeeklyReportDispatchProcessor) Timeout(*river.Job[WeeklyReportDispatchTask]) time.Duration {
-	return tenantSweepJobTimeout
 }
 
 // Process enqueues a build for every workspace whose report is due. It never
@@ -132,7 +100,7 @@ func (p *WeeklyReportDispatchProcessor) Process(ctx context.Context) error {
 		slog.ErrorContext(ctx, "weekly report: list tenants failed", logging.AttrComponent, weeklyReportComp, logging.AttrError, err)
 		return nil
 	}
-	var builds []river.JobArgs
+	var builds []JobArgs
 	for _, t := range tenants {
 		loc, zone, err := settings.LookupWorkspaceTimezone(tenantctx.With(ctx, t.ID), p.Deps.Settings)
 		if err != nil {
@@ -154,19 +122,9 @@ func (p *WeeklyReportDispatchProcessor) Process(ctx context.Context) error {
 // BuildWeeklyReportProcessor builds one workspace's report and enqueues its
 // emails.
 type BuildWeeklyReportProcessor struct {
-	river.WorkerDefaults[BuildWeeklyReportTask]
 	Deps   WeeklyReportDeps
 	Insert JobInserter
 	Now    func() time.Time
-}
-
-func (p *BuildWeeklyReportProcessor) Work(ctx context.Context, job *river.Job[BuildWeeklyReportTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args)
-}
-
-func (p *BuildWeeklyReportProcessor) Timeout(*river.Job[BuildWeeklyReportTask]) time.Duration {
-	return 2 * time.Minute
 }
 
 // Process builds the report. A read failure returns the error so River retries
@@ -220,12 +178,12 @@ func (p *BuildWeeklyReportProcessor) Process(ctx context.Context, t BuildWeeklyR
 
 // sends builds one send_email job per owner who hasn't opted out and hasn't
 // already been sent this week's report.
-func (p *BuildWeeklyReportProcessor) sends(ctx context.Context, t BuildWeeklyReportTask, view models.WeeklyReportView) ([]river.JobArgs, error) {
+func (p *BuildWeeklyReportProcessor) sends(ctx context.Context, t BuildWeeklyReportTask, view models.WeeklyReportView) ([]JobArgs, error) {
 	owners, err := p.Deps.Store.ListRecipients(ctx, t.TenantID)
 	if err != nil {
 		return nil, err
 	}
-	var out []river.JobArgs
+	var out []JobArgs
 	for _, u := range owners {
 		key := "weekly_report:" + t.TenantID + ":" + t.WeekStart + ":" + u.ID
 		if p.Deps.EmailLogs != nil {
@@ -256,23 +214,15 @@ func clock(now func() time.Time) time.Time {
 	return time.Now().UTC()
 }
 
-// insertJobs enqueues args with insert, or with the River client carried by
-// the worker context when insert is nil.
-func insertJobs(ctx context.Context, insert JobInserter, args []river.JobArgs) error {
+// insertJobs hands args to insert. Each job's step sets insert: the dispatch
+// returns the builds to river-service, a build queues its emails through the
+// Enqueuer.
+func insertJobs(ctx context.Context, insert JobInserter, args []JobArgs) error {
 	if len(args) == 0 {
 		return nil
 	}
-	if insert != nil {
-		return insert(ctx, args)
+	if insert == nil {
+		return errors.New("weekly report: no job inserter")
 	}
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil {
-		return err
-	}
-	params := make([]river.InsertManyParams, len(args))
-	for i, a := range args {
-		params[i] = river.InsertManyParams{Args: a}
-	}
-	_, err = client.InsertMany(ctx, params)
-	return err
+	return insert(ctx, args)
 }

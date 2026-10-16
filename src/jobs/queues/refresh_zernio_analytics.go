@@ -8,8 +8,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/analytics/tracking"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -75,17 +73,8 @@ var defaultDecay = AnalyticsDecay{
 // ReconcileScheduledPostsTask, this queue carries no per-tick data.
 type RefreshZernioAnalyticsTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (RefreshZernioAnalyticsTask) Kind() string { return RefreshZernioAnalyticsQueue }
-
-// InsertOpts sets per-kind defaults. Cadence is owned by a River PeriodicJob
-// (registered when the Zernio integration is configured). Process never
-// returns an error — each tick records its own outcome — so a single attempt
-// is correct; idempotent upserts keep a re-run safe (§10). UniqueOpts (active
-// states only) prevents overlapping ticks from stacking.
-func (RefreshZernioAnalyticsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // RefreshZernioAnalyticsProcessor wires one refresh tick. Deps supplies
 // the post repo (match map), the analytics repo (upsert target), and the
@@ -93,7 +82,6 @@ func (RefreshZernioAnalyticsTask) InsertOpts() river.InsertOpts {
 // is optional (CON-93 §8, frontend-deferred) — a nil Hub publishes
 // nothing.
 type RefreshZernioAnalyticsProcessor struct {
-	river.WorkerDefaults[RefreshZernioAnalyticsTask]
 	Deps     ZernioDeps
 	Settings zernio.SettingsStore
 	Hub      eventhub.Hub
@@ -101,24 +89,6 @@ type RefreshZernioAnalyticsProcessor struct {
 	WindowDays int            // analytics lookback window (defaults to 90)
 	PageLimit  int            // page size, 1–100 (defaults to 100)
 	Decay      AnalyticsDecay // CON-236 age-based re-check cadence
-}
-
-// Work is the River entrypoint: it runs the job's steps in-process.
-func (p *RefreshZernioAnalyticsProcessor) Work(ctx context.Context, job *river.Job[RefreshZernioAnalyticsTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline. Each tenant has its own
-// tenantSweepTimeout inside it.
-func (p *RefreshZernioAnalyticsProcessor) Timeout(*river.Job[RefreshZernioAnalyticsTask]) time.Duration {
-	return tenantSweepJobTimeout
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, newRefreshZernioAnalytics(d))
-	})
 }
 
 func newRefreshZernioAnalytics(d Deps) *RefreshZernioAnalyticsProcessor {

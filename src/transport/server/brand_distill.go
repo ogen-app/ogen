@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/firebase/genkit/go/genkit"
 
@@ -16,10 +15,6 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/ingest"
 	"github.com/ogen-app/ogen/src/usecase/urlimport"
 )
-
-// brandDistillExpireEvery is how often proposals nobody committed within
-// branddistill.ExpireAfter are expired.
-const brandDistillExpireEvery = 6 * time.Hour
 
 // newBrandDistill builds the brand distillation service. Its website read
 // imports pages through the same use case as POST /assets/url; the model

@@ -18,8 +18,8 @@ import (
 )
 
 // New wires the API server and returns the Fiber app, ready to Listen. It
-// starts background work (River workers, the Zernio sync worker, catalog
-// refresh loops) on ctx, which must outlive the request lifecycle; those are
+// starts background work (the outbox relay, the job RPC listener, the Zernio
+// sync worker, catalog refresh loops) on ctx, which must outlive the request lifecycle; those are
 // stopped by the app's shutdown hooks. cipher is the secret store's KEK
 // cipher, reused to seal Zernio connect tokens at rest.
 func New(ctx context.Context, db, analyticsDB *bun.DB, cfg *config.Config, secretStore secrets.Store, cipher *envelope.Cipher, hub eventhub.Hub) (*fiber.App, error) {

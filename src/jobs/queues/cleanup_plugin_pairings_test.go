@@ -41,14 +41,3 @@ func TestCleanupPluginPairings(t *testing.T) {
 		t.Fatalf("unwired sweep must be a no-op: %v", err)
 	}
 }
-
-func TestPeriodicJobsPluginPairingCleanupNeedsInterval(t *testing.T) {
-	base := PeriodicConfig{CleanupEvery: time.Hour, ReconcileEvery: 5 * time.Minute}
-	if got := len(base.PeriodicJobs()); got != 2 {
-		t.Fatalf("zero interval must not register the sweep: got %d jobs", got)
-	}
-	base.PluginPairingCleanupEvery = 15 * time.Minute
-	if got := len(base.PeriodicJobs()); got != 3 {
-		t.Fatalf("positive interval must register the sweep: got %d jobs", got)
-	}
-}

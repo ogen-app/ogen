@@ -225,38 +225,22 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		return nil
 	}
 
-	// A nil enqueuer turns registration notifications into a soft no-op.
-	var adminEmailEnqueuer grpcserver.AdminEmailEnqueuer
-	if enq, err := queues.NewInsertOnlyEnqueuer(db); err != nil {
-		slog.Error("grpc admin-email enqueuer init failed; registration notifications disabled (non-fatal)",
-			logging.AttrComponent, "boot", logging.AttrError, err)
-	} else {
-		// Route like the app's enqueuer, so a relayed send_email goes through
-		// the outbox; the app's relay delivers it. A bad OUTBOX_RELAY_KINDS
-		// already fails the app's boot.
-		if kinds, err := queues.RelayKinds(cfg.OutboxRelayKinds, cfg.RiverServiceAddr); err == nil && cfg.RiverServiceAddr != "" {
-			enq.Relay(outbox.NewWriter(db.DB), kinds)
-		}
-		adminEmailEnqueuer = enq
-	}
+	// Registration notifications go through the job outbox; the app's relay
+	// delivers them to river-service.
+	adminEmailEnqueuer := queues.NewEnqueuer(outbox.NewWriter(db.DB))
 
 	// Harbor's billing surface. A billing misconfiguration already failed the
 	// HTTP app's boot, so an error here only disables these RPCs.
 	var billingAdmin grpcserver.BillingAdmin
-	if enq, ok := adminEmailEnqueuer.(*queues.Enqueuer); ok {
-		svc, err := server.NewBillingService(server.BillingRuntime{
-			Config: cfg, DB: db, Secrets: store, Hub: hub, Jobs: enq,
-			Notifier: notify.New(repository.NewNotificationRepository(db), hub),
-		})
-		if err != nil {
-			slog.Error("grpc billing admin init failed; billing RPCs disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
-		} else {
-			billingAdmin = svc
-		}
+	svc, err := server.NewBillingService(server.BillingRuntime{
+		Config: cfg, DB: db, Secrets: store, Hub: hub, Jobs: adminEmailEnqueuer,
+		Notifier: notify.New(repository.NewNotificationRepository(db), hub),
+	})
+	if err != nil {
+		slog.Error("grpc billing admin init failed; billing RPCs disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
+	} else {
+		billingAdmin = svc
 	}
-
-	// A nil enqueuer stores tester invites without queueing their email.
-	inviteEmails, _ := adminEmailEnqueuer.(*queues.Enqueuer)
 
 	gs, err := grpcserver.New(grpcserver.Deps{
 		Token:            cfg.GRPCAuthToken,
@@ -279,7 +263,7 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		HarborBaseURL:      cfg.HarborBaseURL,
 		Announcements:      repository.NewAnnouncementRepository(db),
 		Billing:            billingAdmin,
-		TenantInvites:      server.NewSignupAccessService(db, cfg, inviteEmails),
+		TenantInvites:      server.NewSignupAccessService(db, cfg, adminEmailEnqueuer),
 		Hub:                hub,
 	})
 	if err != nil {
