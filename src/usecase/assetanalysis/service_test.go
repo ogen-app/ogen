@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"expvar"
 	"slices"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -269,6 +271,122 @@ func TestRunCampaignLensRerunsOnBriefChange(t *testing.T) {
 	}
 	if existing := f.stub.reqs[1].Lens.ExistingIdeas; !slices.Contains(existing, "Idea one") || slices.Contains(existing, "Idea two") {
 		t.Fatalf("existing ideas = %v, want the triaged one only", existing)
+	}
+}
+
+// rated rates every criterion of the lens kind (with phases) at level.
+func rated(kind ideafit.LensKind, level int, caps ...ideafit.Cap) *asset_analysis.IdeaFit {
+	f := &asset_analysis.IdeaFit{Criteria: map[string]ideafit.Rating{}, Caps: append([]ideafit.Cap{}, caps...)}
+	for _, c := range ideafit.Criteria(kind, true) {
+		f.Criteria[c.Key] = ideafit.Rating{Level: level, Why: "because"}
+	}
+	return f
+}
+
+// answerFits answers with one idea per title, rated with the matching fit.
+func answerFits(titles []string, fits []*asset_analysis.IdeaFit) func(asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error) {
+	return func(req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error) {
+		resp, err := answer(titles...)(req)
+		for i := range resp.Analysis.Ideas {
+			resp.Analysis.Ideas[i].Fit = fits[i]
+		}
+		return resp, err
+	}
+}
+
+func scoredIdeas(t *testing.T, f *fixture, assetID string) map[string]models.Idea {
+	t.Helper()
+	ideas, err := f.repos.Ideas.List(f.ctx, repository.IdeaListFilter{AssetID: assetID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]models.Idea{}
+	for _, i := range ideas {
+		out[i.Title] = i
+	}
+	return out
+}
+
+func scoreOf(i models.Idea) any {
+	if i.FitScore == nil {
+		return nil
+	}
+	return *i.FitScore
+}
+
+func TestRunScoresIdeasAndDerivesRelevance(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "Some text.")
+	f.seedCampaign(t, "camp-1", "md-1")
+	camp := "camp-1"
+	c := ideafit.LensCampaign
+	partial := &asset_analysis.IdeaFit{Criteria: map[string]ideafit.Rating{"evidence": {Level: 5}}, Caps: []ideafit.Cap{}}
+	f.stub.reply = answerFits(
+		[]string{"Best", "Middling", "Weak", "Capped", "Unrated", "Partial"},
+		[]*asset_analysis.IdeaFit{rated(c, 5), rated(c, 3), rated(c, 1), rated(c, 5, ideafit.CapGuardrailBreach), nil, partial},
+	)
+	before := expvar.Get("ogen_asset_analysis_ideas_scored_total").(*expvar.Map).Get("campaign/high")
+
+	run(t, f, "md-1", &camp)
+
+	ideas := scoredIdeas(t, f, "md-1")
+	want := map[string]any{"Best": 100, "Middling": 55, "Weak": 10, "Capped": ideafit.CappedMax, "Unrated": nil, "Partial": nil}
+	for title, score := range want {
+		if got := scoreOf(ideas[title]); got != score {
+			t.Errorf("%s: fit_score = %v, want %v", title, got, score)
+		}
+	}
+	best := ideas["Best"]
+	if b := best.FitBreakdown; b == nil || b.Lens != ideafit.LensCampaign || b.CampaignID == nil || *b.CampaignID != camp ||
+		len(b.Criteria) != 7 || best.FitRubricVersion == nil || *best.FitRubricVersion != ideafit.RubricVersion {
+		t.Errorf("best idea breakdown = %+v, version %v", b, best.FitRubricVersion)
+	}
+	if u := ideas["Unrated"]; u.FitBreakdown != nil || u.FitRubricVersion != nil {
+		t.Errorf("unrated idea has a breakdown: %+v", u.FitBreakdown)
+	}
+	if p := ideas["Partial"]; p.FitBreakdown == nil || p.FitBreakdown.Criteria["evidence"].Level != 5 {
+		t.Errorf("partial idea lost its breakdown: %+v", p.FitBreakdown)
+	}
+	if got := f.lens(t, "md-1", &camp).Result.Relevance; got == nil || got.Score != 65 || got.Why != "fits" {
+		t.Errorf("relevance = %+v, want the mean of the top three (100, 55, 39) with the model's why", got)
+	}
+	if after := expvar.Get("ogen_asset_analysis_ideas_scored_total").(*expvar.Map).Get("campaign/high"); after == nil ||
+		(before != nil && after.(*expvar.Int).Value() <= before.(*expvar.Int).Value()) {
+		t.Error("the high-band counter did not move")
+	}
+
+	// A triaged idea keeps the score it was given; the rest are replaced.
+	best.Verdict, best.DecidedAt = new(models.IdeaVerdictYes), new(time.Now().UTC())
+	if _, err := f.repos.Ideas.Update(f.ctx, &best, "verdict", "decided_at"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.NewUpdate().Model((*models.Campaign)(nil)).Set("key_messages = 'new'").Where("id = ?", camp).Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.stub.reply = answerFits([]string{"Fresh"}, []*asset_analysis.IdeaFit{rated(c, 4)})
+	run(t, f, "md-1", &camp)
+	ideas = scoredIdeas(t, f, "md-1")
+	if len(ideas) != 2 || scoreOf(ideas["Best"]) != 100 || scoreOf(ideas["Fresh"]) != 78 {
+		t.Errorf("after re-run: Best=%v Fresh=%v (%d ideas)", scoreOf(ideas["Best"]), scoreOf(ideas["Fresh"]), len(ideas))
+	}
+	if got := f.lens(t, "md-1", &camp).Result.Relevance; got == nil || got.Score != 78 {
+		t.Errorf("relevance after re-run = %+v, want the new idea's 78", got)
+	}
+}
+
+func TestRunWorkspaceLensScoresWithoutRelevance(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "Some text.")
+	f.stub.reply = answerFits([]string{"Only"}, []*asset_analysis.IdeaFit{rated(ideafit.LensWorkspace, 4)})
+
+	run(t, f, "md-1", nil)
+
+	idea := scoredIdeas(t, f, "md-1")["Only"]
+	if scoreOf(idea) != 78 || idea.FitBreakdown == nil || idea.FitBreakdown.Lens != ideafit.LensWorkspace || idea.FitBreakdown.CampaignID != nil {
+		t.Errorf("workspace idea = %v %+v", scoreOf(idea), idea.FitBreakdown)
+	}
+	if r := f.lens(t, "md-1", nil).Result.Relevance; r != nil {
+		t.Errorf("workspace lens has relevance %+v", r)
 	}
 }
 
