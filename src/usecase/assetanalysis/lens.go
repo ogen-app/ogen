@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
@@ -24,18 +25,28 @@ const (
 	maxExistingIdeas  = 100
 	maxPostTitles     = 50
 	maxPostTitleRunes = 200
+	// maxActiveCampaigns and maxCampaignHintRunes bound the workspace lens's
+	// list of campaigns an idea could feed.
+	maxActiveCampaigns   = 10
+	maxCampaignHintRunes = 300
 )
 
 // buildLens gathers the context an analysis is read in. campaign is nil for
 // the workspace lens. lensID is the analysis being produced; its own inbox
 // ideas are about to be replaced, so they are not listed as already captured.
 func (s *Service) buildLens(ctx context.Context, tenantID string, asset *models.Asset, campaign *models.Campaign, lensID string) (asset_analysis.Lens, error) {
-	lens := asset_analysis.Lens{BrandBlock: s.brandBlock(ctx, campaign)}
+	today := s.now().UTC()
+	lens := asset_analysis.Lens{BrandBlock: s.brandBlock(ctx, campaign), Today: today.Format(time.DateOnly)}
 	if tenant, err := s.repos.Tenants.GetByID(ctx, tenantID); err == nil {
 		lens.WorkspaceName = tenant.Name
 	}
 	filter := repository.IdeaListFilter{Unfiled: true}
-	if campaign != nil {
+	if campaign == nil {
+		var err error
+		if lens.ActiveCampaigns, err = s.activeCampaigns(ctx, today); err != nil {
+			return lens, err
+		}
+	} else {
 		lens.Campaign = brief(campaign)
 		filter = repository.IdeaListFilter{CampaignID: campaign.ID}
 		var err error
@@ -90,7 +101,39 @@ func brief(c *models.Campaign) *asset_analysis.CampaignBrief {
 	if c.EstimatedPostCount != nil && *c.EstimatedPostCount > 0 {
 		b.Goal = fmt.Sprintf("%d posts per %s", *c.EstimatedPostCount, c.GoalCadence)
 	}
+	b.StartDate, b.EndDate = dateString(c.StartDate), dateString(c.EndDate)
 	return b
+}
+
+func dateString(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.DateOnly)
+}
+
+// activeCampaigns are the workspace's campaigns still being worked on,
+// newest first: not archived, in draft, scheduled or active, and not past
+// their end date.
+func (s *Service) activeCampaigns(ctx context.Context, today time.Time) ([]asset_analysis.CampaignHint, error) {
+	campaigns, err := s.repos.Campaigns.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list campaigns: %w", err)
+	}
+	campaigns = slices.DeleteFunc(campaigns, func(c models.Campaign) bool {
+		switch c.Status {
+		case models.StatusDraft, models.StatusScheduled, models.StatusActive:
+		default:
+			return true
+		}
+		return c.EndDate != nil && dateString(c.EndDate) < today.Format(time.DateOnly)
+	})
+	slices.SortStableFunc(campaigns, func(a, b models.Campaign) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	out := make([]asset_analysis.CampaignHint, 0, min(len(campaigns), maxActiveCampaigns))
+	for _, c := range campaigns[:min(len(campaigns), maxActiveCampaigns)] {
+		out = append(out, asset_analysis.CampaignHint{Name: c.Name, Description: clamp(c.Description, maxCampaignHintRunes)})
+	}
+	return out, nil
 }
 
 // siblings are the workspace summaries of the campaign's other ready assets.
@@ -136,9 +179,10 @@ func (s *Service) postTitles(ctx context.Context, campaignID string) ([]string, 
 
 // fingerprint identifies what an analysis was made from: the source text and
 // the lens's brand and brief. The hint lists (sibling summaries, ideas and
-// posts already captured) are left out on purpose: they shift whenever any
-// other asset is analysed, and re-reading an unchanged source against an
-// unchanged brief only to dodge a few more duplicates is not worth a run.
+// posts already captured, active campaigns) and today's date are left out on
+// purpose: they shift whenever any other asset is analysed or a day passes,
+// and re-reading an unchanged source against an unchanged brief only to dodge
+// a few more duplicates is not worth a run.
 func fingerprint(src asset_analysis.Source, partial bool, lens asset_analysis.Lens) string {
 	payload, _ := json.Marshal(struct {
 		Source   asset_analysis.Source

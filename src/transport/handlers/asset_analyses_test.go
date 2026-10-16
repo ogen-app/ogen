@@ -347,6 +347,15 @@ var _ = Describe("AssetAnalysesHandler", Ordered, func() {
 
 		update(fiber.Map{"key_messages": "sharper"})
 		Expect(triggers.rebriefs).To(Equal([]string{camp}))
+
+		dated := fiber.Map{"key_messages": "sharper", "start_date": "2026-11-01T00:00:00Z", "end_date": "2026-11-30T00:00:00Z"}
+		update(dated)
+		Expect(triggers.rebriefs).To(HaveLen(2), "the campaign dates are part of the brief")
+		update(dated)
+		Expect(triggers.rebriefs).To(HaveLen(2))
+		dated["estimated_post_count"] = 12
+		update(dated)
+		Expect(triggers.rebriefs).To(HaveLen(3), "the posting goal is part of the brief")
 	})
 
 	It("does not reveal another workspace's analyses", func() {

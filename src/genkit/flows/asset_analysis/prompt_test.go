@@ -105,6 +105,48 @@ func TestSystemPromptRubricPerLens(t *testing.T) {
 	}
 }
 
+func TestLensPromptCarriesDatesAndActiveCampaigns(t *testing.T) {
+	tpl, err := loadPrompts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := func(l Lens) string {
+		t.Helper()
+		out, err := flowkit.RenderTemplate(tpl.lens, lensData{Lens: l})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	ws := render(Lens{
+		WorkspaceName:   "Acme",
+		ActiveCampaigns: []CampaignHint{{Name: "Spring launch", Description: "New app"}, {Name: "Hiring"}},
+		Today:           "2026-10-16",
+	})
+	for _, want := range []string{"## Active campaigns", "- **Spring launch**: New app", "- **Hiring**\n", "## Today\n2026-10-16"} {
+		if !strings.Contains(ws+"\n", want) {
+			t.Errorf("workspace lens is missing %q:\n%s", want, ws)
+		}
+	}
+
+	for _, tt := range []struct {
+		start, end, want string
+	}{
+		{"2026-11-01", "2026-11-30", "**Runs**: from 2026-11-01 until 2026-11-30"},
+		{"2026-11-01", "", "**Runs**: from 2026-11-01\n"},
+		{"", "2026-11-30", "**Runs**: until 2026-11-30"},
+	} {
+		got := render(Lens{Campaign: &CampaignBrief{Name: "Launch", StartDate: tt.start, EndDate: tt.end}})
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("campaign lens is missing %q:\n%s", tt.want, got)
+		}
+	}
+	if got := render(Lens{Campaign: &CampaignBrief{Name: "Launch"}}); strings.Contains(got, "Runs") || strings.Contains(got, "Active campaigns") {
+		t.Errorf("undated campaign lens = %s", got)
+	}
+}
+
 func TestIdeaFitDecodesWhatItCan(t *testing.T) {
 	var idea Idea
 	err := json.Unmarshal([]byte(`{"title": "T", "fit": {"criteria": {

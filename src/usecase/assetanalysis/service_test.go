@@ -272,6 +272,51 @@ func TestRunCampaignLensRerunsOnBriefChange(t *testing.T) {
 	}
 }
 
+func TestRunLensCarriesDatesAndActiveCampaigns(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "Some text.")
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	set := func(id, sets string, args ...any) {
+		t.Helper()
+		if _, err := f.db.NewUpdate().Model((*models.Campaign)(nil)).Set(sets, args...).Where("id = ?", id).Exec(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, id := range []string{"old", "ended", "paused", "draft", "dated"} {
+		f.seedCampaign(t, id)
+		set(id, "created_at = ?", today.Add(time.Duration(i)*time.Hour))
+	}
+	set("ended", "end_date = ?", today.AddDate(0, 0, -1))
+	set("paused", "status = ?", models.StatusPaused)
+	set("draft", "status = ?, end_date = ?", models.StatusDraft, today)
+	set("dated", "start_date = ?, end_date = ?", today.AddDate(0, 0, 3), today.AddDate(0, 1, 0))
+
+	run(t, f, "md-1", nil)
+	lens := f.stub.reqs[0].Lens
+	var names []string
+	for _, c := range lens.ActiveCampaigns {
+		names = append(names, c.Name)
+	}
+	if want := []string{"Campaign dated", "Campaign draft", "Campaign old"}; !slices.Equal(names, want) {
+		t.Errorf("active campaigns = %v, want %v (newest first, no ended or paused)", names, want)
+	}
+	if lens.Today != today.Format(time.DateOnly) {
+		t.Errorf("today = %q", lens.Today)
+	}
+
+	camp := "dated"
+	set(camp, "asset_ids = ?", `["md-1"]`)
+	run(t, f, "md-1", &camp)
+	got := f.stub.reqs[1].Lens
+	if got.Campaign == nil || got.Campaign.StartDate != today.AddDate(0, 0, 3).Format(time.DateOnly) ||
+		got.Campaign.EndDate != today.AddDate(0, 1, 0).Format(time.DateOnly) {
+		t.Fatalf("campaign brief = %+v, want the campaign dates", got.Campaign)
+	}
+	if got.ActiveCampaigns != nil {
+		t.Errorf("campaign lens lists active campaigns: %v", got.ActiveCampaigns)
+	}
+}
+
 func TestRunSkipsGoneOrIneligibleTargets(t *testing.T) {
 	f := newFixture(t, nil)
 	f.seedAsset(t, "img-1", models.AssetTypeImage, models.AssetStatusReady, "a photo")

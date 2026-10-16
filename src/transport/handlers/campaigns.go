@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -573,13 +574,26 @@ func (h *CampaignsHandler) Update(c *fiber.Ctx) error {
 	return c.JSON(campaign)
 }
 
-// analysisBrief is what a campaign lens reads of the campaign; a change to any
-// of it re-runs the campaign's asset analyses.
-func analysisBrief(c *models.Campaign) [9]string {
-	return [9]string{
+// analysisBrief is what a campaign lens reads of the campaign, the dates and
+// posting goal included; a change to any of it re-runs the campaign's asset
+// analyses.
+func analysisBrief(c *models.Campaign) [13]string {
+	goal := ""
+	if c.EstimatedPostCount != nil {
+		goal = strconv.Itoa(*c.EstimatedPostCount)
+	}
+	return [13]string{
 		c.Name, c.Description, c.TargetPersona, c.KeyMessages, c.ToneGuidelines, c.Language,
 		c.CampaignTypeID, ptrOr(c.BrandVoiceID), ptrOr(c.BrandAudienceID),
+		dateOr(c.StartDate), dateOr(c.EndDate), goal, c.GoalCadence,
 	}
+}
+
+func dateOr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.DateOnly)
 }
 
 func ptrOr(p *string) string {
@@ -591,7 +605,7 @@ func ptrOr(p *string) string {
 
 // analysisUpdated queues the lenses of newly attached assets, drops those of
 // detached ones and, when the brief changed, a debounced re-run of the rest.
-func (h *CampaignsHandler) analysisUpdated(c *fiber.Ctx, campaign *models.Campaign, prevAssets []string, prevBrief [9]string) {
+func (h *CampaignsHandler) analysisUpdated(c *fiber.Ctx, campaign *models.Campaign, prevAssets []string, prevBrief [13]string) {
 	if h.analysis == nil {
 		return
 	}
