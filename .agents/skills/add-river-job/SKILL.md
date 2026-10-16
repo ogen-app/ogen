@@ -17,15 +17,16 @@ calls. A new job touches three repos:
 | `ogen` (this repo) | the Go task, its enqueue method, and either its **steps** (`JobStepService`) or its **maintenance pass** (`MaintenanceService`) |
 | `ogen-app/river-service` | the args type, its registration and schedule — see that repo's `add-step-job` skill |
 
-Until a kind is listed in ogen's `OUTBOX_RELAY_KINDS`, ogen's in-process River
-still runs it: its worker there runs **the same steps** in-process
-(`runLocal`), so each job has one implementation whichever service runs it.
+ogen has no job queue of its own: every enqueue is a `job_outbox` row the
+relay delivers to river-service. Tests run a job's steps inline (`runLocal`,
+behind each processor's `Process`), the same steps river-service drives.
 
 Canonical references in `src/jobs/queues/`:
 
 - `job_steps.go` — the step protocol: `StepInput`, `StepOutput`, actions,
   `done`/`retry`/`snooze`, `JobSteps` registration.
-- `local_steps.go` — `runLocal`, how ogen runs the same steps in-process.
+- `inline_steps.go` — `runLocal`, the inline step runner behind `Process`,
+  which the tests use.
 - `withdraw_zernio_post.go`, `post_first_comment.go` — one Zernio call.
 - `poll_zernio_status.go` — a call, then snooze until terminal.
 - `submit_post_to_zernio.go` — a multi-phase machine (retry, presign +
@@ -36,8 +37,7 @@ Canonical references in `src/jobs/queues/`:
   loop (`ingest_steps.go`).
 - `analyze_asset.go` — work run **detached** in ogen with a `Wait` step.
 - `maintenance.go` — sweeps that only touch ogen's tables.
-- `river.go` — `Enqueuer` (outbox or in-process River per kind),
-  `PeriodicConfig.sweeps()`, `RelayKinds`.
+- `jobs.go` — `Deps`, `JobArgs`, `EnqueueOpts` and the outbox `Enqueuer`.
 
 ## Step 0: Clarify scope
 
@@ -82,11 +82,9 @@ type <Kind>Task struct {
 	PostID string `json:"post_id"`
 }
 
+// Kind implements JobArgs. Queue, attempts and uniqueness are set on the
+// river-service args type.
 func (<Kind>Task) Kind() string { return <Kind>Queue }
-
-// InsertOpts must match the river-service args type: queue, attempts,
-// uniqueness.
-func (<Kind>Task) InsertOpts() river.InsertOpts { return river.InsertOpts{MaxAttempts: 5} }
 ```
 
 Enqueue through the `Enqueuer`, inside the caller's transaction:
@@ -97,12 +95,11 @@ func (e *Enqueuer) Enqueue<Kind>Tx(ctx context.Context, tx *sql.Tx, postID strin
 }
 ```
 
-`insertTx` writes a `job_outbox` row in `tx` when river-service owns the kind
-and inserts into ogen's River otherwise; the trace carrier and request id
-ride along automatically. No transaction: `e.insert`. From inside a job,
-where losing the follow-up matters: `e.enqueue` (fails when nothing is
-wired). Consumers depend on a narrow interface in **their** package, never on
-River.
+`insertTx` writes a `job_outbox` row in `tx`; the trace carrier and request
+id ride along automatically. Schedule with `&EnqueueOpts{ScheduledAt: …}`. No
+transaction: `e.insert`. From inside a job, where losing the follow-up
+matters: `e.enqueue` (fails when nothing is wired). Consumers depend on a
+narrow interface in **their** package, never on the outbox.
 
 ---
 
@@ -158,20 +155,19 @@ with `Wait`, tracking them on a row ogen owns (`assetanalysis.StartDetached`
 and the lens run slot). A restarted job adopts the run in flight; a stale
 heartbeat retries.
 
-Register the step in `NewJobSteps` (`job_steps.go`), and keep the River worker
-here as a thin `runLocal` wrapper:
+Register the step in `NewJobSteps` (`job_steps.go`), and give the processor a
+`Process` that runs it inline for the tests:
 
 ```go
-func (p *<Kind>Processor) Work(ctx context.Context, job *river.Job[<Kind>Task]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{zernio: p.Deps.Client})
+func (p *<Kind>Processor) Process(ctx context.Context, task <Kind>Task) error {
+	return runLocal(ctx, p.step, <Kind>Queue, task, 0, 0, localActions{zernio: p.Deps.Client})
 }
 ```
 
 **Fan-out sweeps** return `done("fanned_out", children...)` with one
 `ChildJob` per tenant; the child kind exists only between the two services
-(river-service registers it as internal). Locally, `localActions.children`
-runs them inline.
+(river-service registers it as internal). Inline runs work them through
+`localActions.children`.
 
 ---
 
@@ -179,8 +175,9 @@ runs them inline.
 
 A sweep that touches only ogen's tables (cleanups, reconcile,
 manual-publish-due, the analysis backfill) stays an ordinary processor and is
-listed in `MaintenanceTasks` (`maintenance.go`) under its kind. Give it a
-`new<Kind>(d Deps)` constructor shared by `init()` and `MaintenanceTasks`.
+listed in `MaintenanceTasks` (`maintenance.go`) under its kind and timeout;
+the pass runs under a system tenant scope. Give it a `new<Kind>(d Deps)`
+constructor.
 Update `TestMaintenanceTasksMatchTheContract` and the task list in
 `jobrpc.proto`'s `RunRequest` comment.
 
@@ -188,19 +185,15 @@ Update `TestMaintenanceTasksMatchTheContract` and the task list in
 
 ## Step 4: Periodic scheduling
 
-Add the sweep to `PeriodicConfig.sweeps()` in `river.go` (ogen schedules it
-until the kind is relayed; `Relayed` then leaves it out), with
-`MaxAttempts: 1` and `periodicUniqueOpts()` (active states only — River's
-default `ByState` includes `Completed` and would block the next tick).
-river-service schedules it with `queue.RegisterPeriodic` and a cadence env var
-of the same name as ogen's.
+river-service schedules every sweep (`queue.RegisterPeriodic` with a cadence
+env var, `sweepOpts()` for active-state uniqueness); nothing in ogen changes.
 
 ---
 
 ## Step 5: Tests
 
-- **Local run:** the processor's `Process`/`process` with fakes, as before;
-  it now goes through `runLocal`.
+- **Inline run:** the processor's `Process`/`process` with fakes (it runs
+  the steps through `runLocal`; a snooze comes back as `*SnoozeError`).
 - **river-service mode:** drive `p.step` with raw results, no local closures
   (`driveSteps` in `ingest_steps_test.go`, `runSteps` + `scriptedZernio` in
   `zernio_lifecycle_steps_test.go`).
@@ -215,14 +208,13 @@ Run `go test ./src/jobs/... ./src/transport/grpc/jobrpc/...` and `make lint`.
 ## Deploy order (every new kind)
 
 1. Tag the proto release.
-2. ogen with the task, its steps or maintenance pass (`OUTBOX_RELAY_KINDS`
-   unchanged: ogen still runs the kind in-process).
+2. ogen with the task, its steps or maintenance pass. Until river-service
+   knows the kind it refuses it at `Enqueue`, so the rows wait in the
+   outbox: ship river-service right after, or enqueue nothing yet.
 3. river-service with the args type and registration.
-4. Add the kind to `OUTBOX_RELAY_KINDS` in ogen. A periodic kind stops being
-   scheduled by ogen in that same deploy.
 
-Rolling back is removing the kind from `OUTBOX_RELAY_KINDS`; rows already
-relayed finish in river-service.
+A step river-service asks for before ogen has it comes back `UNIMPLEMENTED`,
+and the job snoozes until ogen catches up.
 
 ## Gotchas
 
