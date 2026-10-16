@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/activity"
@@ -27,15 +25,8 @@ const ReconcileScheduledPostsQueue = "reconcile_scheduled_posts"
 // task, this queue carries no per-tick data.
 type ReconcileScheduledPostsTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (ReconcileScheduledPostsTask) Kind() string { return ReconcileScheduledPostsQueue }
-
-// InsertOpts sets per-kind defaults. Cadence is owned by a River PeriodicJob;
-// a failed tick is picked up on the next interval, so one attempt is enough.
-// UniqueOpts (active states only) prevents overlapping ticks from stacking.
-func (ReconcileScheduledPostsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // FailureReasonReconciliationTimeout is the verbatim prefix every
 // reconciliation-timeout failure carries on Post.FailureReason. The
@@ -47,43 +38,30 @@ const FailureReasonReconciliationTimeout = "reconciliation_timeout"
 // ReconcileScheduledPostsProcessor wires the sweep handler.
 //
 // The sweep runs in a tight loop: load N stuck posts in one query,
-// transition each in its own transaction, log per-post. Cadence is owned
-// by a River PeriodicJob.
+// transition each in its own transaction, log per-post. river-service
+// schedules it.
 type ReconcileScheduledPostsProcessor struct {
-	river.WorkerDefaults[ReconcileScheduledPostsTask]
 	Repo     ReconcilePostRepo
 	LogRepo  ReconcileLogRepo
 	Activity *activity.Recorder // CON-125 reconciliation_timeout events; nil = no-op
 	Grace    time.Duration      // how long after scheduled_at before timing out
 	Limit    int                // max posts to process per tick (defaults to 100)
 	// Withdraw queues the removal of a timed-out post's Zernio copy, so a
-	// late publish can't contradict the failed status. Nil inserts on the
-	// worker's own River client.
+	// late publish can't contradict the failed status. Nil leaves the Zernio
+	// post to the orphan sweep.
 	Withdraw func(context.Context, WithdrawZernioPostTask) error
 }
 
-// Work is the River entrypoint; it delegates to Process.
-func (p *ReconcileScheduledPostsProcessor) Work(ctx context.Context, job *river.Job[ReconcileScheduledPostsTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background jobs span tenants (interim until per-tenant, PR4).
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *ReconcileScheduledPostsProcessor) Timeout(*river.Job[ReconcileScheduledPostsTask]) time.Duration {
-	return 30 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ReconcileScheduledPostsProcessor{
-			Repo:     d.Zernio.PostRepo,
-			LogRepo:  d.Zernio.PostLogRepo,
-			Activity: d.Zernio.ActivityRecorder,
-			Grace:    d.ReconcileGrace,
-		})
-	})
+func newReconcileScheduledPosts(d Deps) *ReconcileScheduledPostsProcessor {
+	return &ReconcileScheduledPostsProcessor{
+		Repo:     d.Zernio.PostRepo,
+		LogRepo:  d.Zernio.PostLogRepo,
+		Activity: d.Zernio.ActivityRecorder,
+		Grace:    d.ReconcileGrace,
+		Withdraw: func(ctx context.Context, task WithdrawZernioPostTask) error {
+			return d.Jobs.enqueue(ctx, task, nil)
+		},
+	}
 }
 
 // ReconcilePostRepo is the narrow surface the sweeper needs out of
@@ -101,6 +79,9 @@ type ReconcileLogRepo interface {
 
 // Process runs one sweep tick.
 func (p *ReconcileScheduledPostsProcessor) Process(ctx context.Context, _ ReconcileScheduledPostsTask) error {
+	if p.Repo == nil {
+		return nil
+	}
 	if p.Grace <= 0 {
 		p.Grace = time.Hour
 	}
@@ -172,7 +153,7 @@ func (p *ReconcileScheduledPostsProcessor) withdraw(ctx context.Context, post *m
 	}
 	enqueue := p.Withdraw
 	if enqueue == nil {
-		enqueue = enqueueWithdraw
+		return
 	}
 	task := WithdrawZernioPostTask{
 		PublisherPostID: post.PublisherPostID,

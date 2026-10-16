@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -147,5 +148,55 @@ func TestTenantTeardownFenceSerializesWithSetStatus(t *testing.T) {
 	}
 	if st != models.TenantStatusActive {
 		t.Fatalf("final status = %q, want active", st)
+	}
+}
+
+// TestTeardownLeaseHoldsOffARestore checks the remote teardown's guard: while
+// its lease is held a restore is refused, once it ends the restore goes
+// through, and renewing after a restore reports the tenant is live again.
+func TestTeardownLeaseHoldsOffARestore(t *testing.T) {
+	db := openClassificationDB(t)
+	ctx := t.Context()
+	tenantRepo := repository.NewTenantRepository(db)
+	fence := repository.NewTenantTeardownFence(db)
+
+	id := mintID(t)
+	seedTenant(t, db, id, "Acme", models.DefaultTierID)
+	if err := tenantRepo.SoftDeleteTx(ctx, nil, id, time.Now().UTC()); err != nil {
+		t.Fatalf("soft-delete: %v", err)
+	}
+
+	status, found, err := fence.BeginTeardownLease(ctx, id, time.Minute)
+	if err != nil || !found || status != models.TenantStatusDeleted {
+		t.Fatalf("BeginTeardownLease = %q, %v, %v", status, found, err)
+	}
+	if _, err := tenantRepo.SetStatus(ctx, id, models.TenantStatusActive, "", time.Now().UTC()); !errors.Is(err, repository.ErrZernioTeardownInProgress) {
+		t.Fatalf("restore under a lease = %v, want ErrZernioTeardownInProgress", err)
+	}
+	// Suspending is not a restore, so the lease doesn't block it.
+	if ok, err := tenantRepo.SetStatus(ctx, id, models.TenantStatusSuspended, "", time.Now().UTC()); err != nil || !ok {
+		t.Fatalf("suspend under a lease: %v, %v", ok, err)
+	}
+	if torn, err := fence.RenewTeardownLease(ctx, id, time.Minute); err != nil || !torn {
+		t.Fatalf("renew = %v, %v; want still torn down", torn, err)
+	}
+
+	if err := fence.EndTeardownLease(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := tenantRepo.SetStatus(ctx, id, models.TenantStatusActive, "", time.Now().UTC()); err != nil || !ok {
+		t.Fatalf("restore after the lease: %v, %v", ok, err)
+	}
+	if torn, err := fence.RenewTeardownLease(ctx, id, time.Minute); err != nil || torn {
+		t.Fatalf("renew after a restore = %v, %v; want false", torn, err)
+	}
+	if status, _, err := fence.BeginTeardownLease(ctx, id, time.Minute); err != nil || status != models.TenantStatusActive {
+		t.Fatalf("begin on an active tenant = %q, %v", status, err)
+	}
+	if ok, err := tenantRepo.SetStatus(ctx, id, models.TenantStatusDeleted, "", time.Now().UTC()); err != nil || !ok {
+		t.Fatalf("delete again: %v, %v", ok, err)
+	}
+	if torn, err := fence.RenewTeardownLease(ctx, mintID(t), time.Minute); err != nil || !torn {
+		t.Fatalf("renew for a hard-deleted tenant = %v, %v; want true", torn, err)
 	}
 }

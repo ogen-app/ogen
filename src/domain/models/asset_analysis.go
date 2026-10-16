@@ -158,6 +158,14 @@ type AssetAnalysis struct {
 	AnalyzedAt    *time.Time `bun:"analyzed_at"                                  json:"analyzed_at"`
 	CreatedAt     time.Time  `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt     time.Time  `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	// The lens's detached run (see AnalysisRunSlot) and when its job last
+	// stepped.
+	RunToken       *string    `bun:"run_token"                        json:"-"`
+	RunHeartbeatAt *time.Time `bun:"run_heartbeat_at"                 json:"-"`
+	RunDoneAt      *time.Time `bun:"run_done_at"                      json:"-"`
+	RunError       string     `bun:"run_error,notnull,default:''"      json:"-"`
+	RunErrorCode   string     `bun:"run_error_code,notnull,default:''" json:"-"`
+	LastActivityAt *time.Time `bun:"last_activity_at"                 json:"-"`
 }
 
 // AssetAnalysisRun records one analysis run that reached the model, for the

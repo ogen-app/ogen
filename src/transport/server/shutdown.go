@@ -19,17 +19,16 @@ const (
 	// stageDrainHandlers waits for handler background tasks, which may enqueue
 	// jobs or call gRPC clients that later stages shut down.
 	stageDrainHandlers shutdownStage = iota
-	// stageIntegrations stops the Zernio sync worker and closes the video gRPC
+	// stageIntegrations stops the Zernio sync worker, the outbox relay and the
+	// job RPC listener (draining in-flight steps), and closes the video gRPC
 	// client, which only request handlers use.
 	stageIntegrations
-	// stageJobs stops River, draining the jobs that are still running.
-	stageJobs
-	// stageJobClients closes the gRPC clients River jobs call (pdf, documents,
-	// audio, image). It must follow stageJobs: a draining ingest job would
-	// otherwise have its in-flight RPC aborted by the connection close.
+	// stageJobClients closes the sidecar gRPC clients (pdf, documents, audio,
+	// image). It must follow stageIntegrations: an in-flight job step may
+	// still be using one.
 	stageJobClients
 	// stageRecorders drains the usage and activity recorders. It must come
-	// last: request handlers, the Zernio worker and River jobs all call
+	// last: request handlers, the Zernio worker and job steps all call
 	// Record(), and a recorder that drains while they run silently drops the
 	// events they queue afterwards.
 	stageRecorders

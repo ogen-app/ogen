@@ -3,15 +3,12 @@ package queues
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email/templates"
@@ -40,23 +37,15 @@ const detectComp = "jobs.detect_expiring_connections"
 // per-tick data.
 type DetectExpiringConnectionsTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (DetectExpiringConnectionsTask) Kind() string { return DetectExpiringConnectionsQueue }
-
-// InsertOpts mirrors the other periodic sweeps: one attempt (each tick records
-// its own outcome and the persist/enqueue are idempotent), active-state
-// uniqueness so overlapping ticks don't stack.
-func (DetectExpiringConnectionsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // DetectExpiringConnectionsProcessor wires one health-sweep tick. Zernio
 // supplies the client + social-account repo (enumeration/persistence), Users
 // resolves the owner recipients, EmailLogs backs the durable notify-once dedupe,
 // and AppBaseURL builds the reconnect deep link. The email itself is enqueued as
-// a send_email job via the River client on the worker context.
+// a send_email job through Jobs.
 type DetectExpiringConnectionsProcessor struct {
-	river.WorkerDefaults[DetectExpiringConnectionsTask]
 	Zernio     ZernioDeps
 	Users      repository.UserRepository
 	EmailLogs  repository.EmailLogRepository
@@ -65,30 +54,21 @@ type DetectExpiringConnectionsProcessor struct {
 	// Notifier drops an in-app notification alongside the email. Nil
 	// (notification center unwired) is a no-op.
 	Notifier *notify.Service
+	// Jobs routes the expiry email, so it goes through the outbox once
+	// river-service owns send_email. Nil inserts on the worker's own client.
+	Jobs *Enqueuer
 }
 
-func (p *DetectExpiringConnectionsProcessor) Work(ctx context.Context, job *river.Job[DetectExpiringConnectionsTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background job spans tenants; sweepTenant re-scopes per tenant.
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
-func (p *DetectExpiringConnectionsProcessor) Timeout(*river.Job[DetectExpiringConnectionsTask]) time.Duration {
-	return tenantSweepJobTimeout
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &DetectExpiringConnectionsProcessor{
-			Zernio:     d.Zernio,
-			Users:      d.Users,
-			EmailLogs:  d.Email.Logs,
-			AppBaseURL: d.Email.AppBaseURL,
-			LeadDays:   d.ExpiryLeadDays,
-			Notifier:   d.Notifier,
-		})
-	})
+func newDetectExpiringConnections(d Deps) *DetectExpiringConnectionsProcessor {
+	return &DetectExpiringConnectionsProcessor{
+		Zernio:     d.Zernio,
+		Users:      d.Users,
+		EmailLogs:  d.Email.Logs,
+		AppBaseURL: d.Email.AppBaseURL,
+		LeadDays:   d.ExpiryLeadDays,
+		Notifier:   d.Notifier,
+		Jobs:       d.Jobs,
+	}
 }
 
 // Process runs one sweep tick. Per-tenant failures are recorded in the tick
@@ -174,6 +154,13 @@ func (p *DetectExpiringConnectionsProcessor) sweepTenant(ctx context.Context, te
 	if err != nil {
 		return res, err
 	}
+	return p.applyHealth(ctx, tenantID, profileID, healths, now)
+}
+
+// applyHealth records each tracked account's health and notifies the owners
+// of accounts that need reconnecting, once per account, stage and episode.
+func (p *DetectExpiringConnectionsProcessor) applyHealth(ctx context.Context, tenantID, profileID string, healths []zernio.AccountHealth, now time.Time) (sweepResult, error) {
+	var res sweepResult
 	if len(healths) == 0 {
 		return res, nil
 	}
@@ -331,15 +318,8 @@ func (p *DetectExpiringConnectionsProcessor) emitNotification(ctx context.Contex
 	})
 }
 
-// enqueueEmail inserts a send_email job for one owner. The River client is
-// pulled from the worker context (the client is built after the workers are
-// registered, so it can't ride the processor struct), mirroring the submit
-// worker's poll enqueue.
+// enqueueEmail enqueues a send_email job for one owner.
 func (p *DetectExpiringConnectionsProcessor) enqueueEmail(ctx context.Context, owner models.User, tenantID string, h zernio.AccountHealth, local models.SocialAccount, stage, idemKey string, now time.Time) error {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil || client == nil {
-		return fmt.Errorf("river client unavailable for send_email enqueue: %w", err)
-	}
 	vars := map[string]string{
 		"platform":      platformLabel(h.Platform),
 		"account_name":  accountLabel(h, local),
@@ -350,15 +330,15 @@ func (p *DetectExpiringConnectionsProcessor) enqueueEmail(ctx context.Context, o
 		vars["expires_at"] = h.TokenExpiresAt.UTC().Format("January 2, 2006")
 		vars["expires_in"] = humanizeUntil(*h.TokenExpiresAt, now)
 	}
-	_, err = client.Insert(ctx, SendEmailTask{
+	task := SendEmailTask{
 		UserID:         owner.ID,
 		TenantID:       tenantID,
 		TemplateKey:    templates.KeyConnectionExpiring,
 		EmailKind:      models.EmailKindTransactional,
 		IdempotencyKey: idemKey,
 		Vars:           vars,
-	}, insertOptsWithRequestID(ctx, nil))
-	return err
+	}
+	return p.Jobs.enqueue(ctx, task, nil)
 }
 
 func (p *DetectExpiringConnectionsProcessor) reconnectURL(accountID string) string {

@@ -34,3 +34,6 @@ prototyping/**/skills-lock.json
 CLAUDE.md
 **/CLAUDE.md
 /.claude/
+
+# Go test binaries (go test -c, ginkgo)
+*.test

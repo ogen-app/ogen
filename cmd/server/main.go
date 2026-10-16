@@ -37,6 +37,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
+	"github.com/ogen-app/ogen/src/jobs/outbox"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/httptransport"
@@ -104,6 +105,11 @@ func run(cfg *config.Config) error {
 	if err := database.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
+	if moved, err := queues.RetireRiver(ctx, db.DB); err != nil {
+		return err
+	} else if moved > 0 {
+		slog.InfoContext(ctx, "moved River's unfinished jobs to river-service", logging.AttrComponent, "boot", "jobs", moved)
+	}
 
 	analyticsDB := openAnalytics(ctx, cfg)
 	if analyticsDB != nil {
@@ -121,9 +127,8 @@ func run(cfg *config.Config) error {
 	// normal path while still bounding runaway clients.
 	hub := eventhub.New(eventhub.Config{MaxSubscribersPerUser: 30})
 
-	// Detached from the signal: server.New starts River and refresh loops with
-	// this ctx, and River hard-cancels running jobs when its Start ctx ends.
-	// Those are drained by the app's shutdown hooks instead.
+	// Detached from the signal: server.New starts the outbox relay and refresh
+	// loops with this ctx; the app's shutdown hooks stop them instead.
 	app, err := server.New(context.WithoutCancel(ctx), db, analyticsDB, cfg, store, cipher, hub)
 	if err != nil {
 		return fmt.Errorf("init server: %w", err)
@@ -221,14 +226,9 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		return nil
 	}
 
-	// A nil enqueuer turns registration notifications into a soft no-op.
-	var adminEmailEnqueuer grpcserver.AdminEmailEnqueuer
-	if enq, err := queues.NewInsertOnlyEnqueuer(db); err != nil {
-		slog.Error("grpc admin-email enqueuer init failed; registration notifications disabled (non-fatal)",
-			logging.AttrComponent, "boot", logging.AttrError, err)
-	} else {
-		adminEmailEnqueuer = enq
-	}
+	// Registration notifications go through the job outbox; the app's relay
+	// delivers them to river-service.
+	adminEmailEnqueuer := queues.NewEnqueuer(outbox.NewWriter(db.DB))
 
 	gs, err := grpcserver.New(grpcserver.Deps{
 		Token:            cfg.GRPCAuthToken,

@@ -3,12 +3,9 @@ package queues
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
@@ -31,75 +28,105 @@ type PostFirstCommentTask struct {
 	PublisherPostID string `json:"publisher_post_id"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (PostFirstCommentTask) Kind() string { return PostFirstCommentQueue }
-
-// InsertOpts allows 5 attempts and one live job per comment.
-func (PostFirstCommentTask) InsertOpts() river.InsertOpts {
-	unique := periodicUniqueOpts()
-	unique.ByArgs = true
-	return river.InsertOpts{MaxAttempts: 5, UniqueOpts: unique}
-}
 
 // PostFirstCommentProcessor posts the first comment through Zernio's comments
 // API once the post's delay has elapsed.
 type PostFirstCommentProcessor struct {
-	river.WorkerDefaults[PostFirstCommentTask]
 	Deps ZernioDeps
 	// Notifier tells the author when the comment couldn't be posted. Nil is
 	// a no-op.
 	Notifier *notify.Service
 }
 
-// Work is the River entrypoint; it delegates to Process.
-func (p *PostFirstCommentProcessor) Work(ctx context.Context, job *river.Job[PostFirstCommentTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args, job.Attempt >= job.MaxAttempts)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *PostFirstCommentProcessor) Timeout(*river.Job[PostFirstCommentTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &PostFirstCommentProcessor{Deps: d.Zernio, Notifier: d.Notifier})
-	})
-}
-
-// Process runs one attempt. It returns an error only for a transient failure
-// River should retry; lastAttempt turns that failure into a settled one, since
-// no retry follows.
+// Process runs one attempt in-process. It returns an error only for a
+// transient failure River should retry; lastAttempt turns that failure into a
+// settled one, since no retry follows.
 func (p *PostFirstCommentProcessor) Process(ctx context.Context, task PostFirstCommentTask, lastAttempt bool) error {
+	attempt, maxAttempts := 1, 2
+	if lastAttempt {
+		attempt = 2
+	}
+	return runLocal(ctx, p.step, PostFirstCommentQueue, task, attempt, maxAttempts, localActions{zernio: p.Deps.Client})
+}
+
+// firstCommentState carries the post's comment between the call and its
+// result.
+type firstCommentState struct {
+	AccountID string `json:"account_id"`
+	Message   string `json:"message"`
+}
+
+// step posts the comment in one call, then settles it.
+func (p *PostFirstCommentProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task PostFirstCommentTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
+	ctx = tenantctx.WithSystem(ctx)
 	post, err := p.Deps.PostRepo.GetByID(ctx, task.PostID)
 	if err != nil {
-		return fmt.Errorf("first comment: load post %s: %w", task.PostID, err)
+		return retry("first comment: load post "+task.PostID, err)
 	}
 	ctx = tenantctx.With(ctx, post.TenantID)
 	if post.Status != models.PostStatusPublished ||
 		post.PublisherPostID != task.PublisherPostID ||
 		post.FirstCommentStatus == nil || *post.FirstCommentStatus != models.FirstCommentPending {
-		return nil
-	}
-	accountID := cmp.Or(post.SocialAccountID, publishedAccountID(post))
-	if accountID == "" {
-		return p.fail(ctx, post, "no Zernio account recorded for the published post")
+		return done("skipped_settled")
 	}
 
-	message := platforms.FlattenSocialText(post.FirstComment)
-	commentID, err := p.Deps.Client.PostComment(ctx, post.PublisherPostID, accountID, message, "first-comment:"+post.ID)
+	var st firstCommentState
+	if err := decodeState(in.State, &st); err != nil {
+		return done("skipped_bad_state")
+	}
+	comment := func(c *zernio.Client) (string, error) {
+		return c.PostComment(ctx, post.PublisherPostID, st.AccountID, st.Message, "first-comment:"+post.ID)
+	}
+	if in.Result == nil {
+		st.AccountID = cmp.Or(post.SocialAccountID, publishedAccountID(post))
+		if st.AccountID == "" {
+			return p.settle(p.fail(ctx, post, "no Zernio account recorded for the published post"))
+		}
+		st.Message = platforms.FlattenSocialText(post.FirstComment)
+		call, err := zernio.Plan(func(c *zernio.Client) error { _, err := comment(c); return err })
+		if err != nil {
+			return StepOutput{}, err
+		}
+		return nextZernio(st, call)
+	}
+	if zernioDisabled(in.Result) {
+		return p.settle(p.fail(ctx, post, "the Zernio integration is off"))
+	}
+
+	var commentID string
+	err = zernio.Decode(zernioResult(in.Result), func(c *zernio.Client) error {
+		var err error
+		commentID, err = comment(c)
+		return err
+	})
 	if err != nil {
-		if zernio.IsTransientCommentError(err) && !lastAttempt {
+		if zernio.IsTransientCommentError(err) && !in.lastAttempt() {
 			jobs.ZernioFirstCommentRetried.Add(1)
 			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskRetried, post.Status, post.Status,
 				"first comment: transient Zernio error; River will retry", errPayload(err))
-			return err
+			return retry("first comment", err)
 		}
-		return p.fail(ctx, post, commentErrorMessage(err))
+		return p.settle(p.fail(ctx, post, commentErrorMessage(err)))
 	}
+	return p.settle(p.posted(ctx, post, commentID))
+}
 
+// settle ends the job, or retries it when persisting the outcome failed.
+func (p *PostFirstCommentProcessor) settle(err error) (StepOutput, error) {
+	if err != nil {
+		return retry("first comment", err)
+	}
+	return done("settled")
+}
+
+// posted records the posted comment.
+func (p *PostFirstCommentProcessor) posted(ctx context.Context, post *models.Post, commentID string) error {
 	now := time.Now().UTC()
 	post.FirstCommentStatus = new(models.FirstCommentPosted)
 	post.FirstCommentID = commentID
@@ -184,13 +211,8 @@ func publishedAccountID(post *models.Post) string {
 
 // enqueueFirstComment schedules the delayed first comment of a post that just
 // went live, delay minutes after Zernio published it.
-func enqueueFirstComment(ctx context.Context, post *models.Post, publishedAt time.Time) error {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil {
-		return err
-	}
+func enqueueFirstComment(ctx context.Context, jobs *Enqueuer, post *models.Post, publishedAt time.Time) error {
 	task := PostFirstCommentTask{PostID: post.ID, PublisherPostID: post.PublisherPostID}
 	when := publishedAt.Add(time.Duration(post.FirstCommentDelayMinutes) * time.Minute)
-	_, err = client.Insert(ctx, task, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: when}))
-	return err
+	return jobs.enqueue(ctx, task, &EnqueueOpts{ScheduledAt: when})
 }

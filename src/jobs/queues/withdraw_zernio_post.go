@@ -2,13 +2,10 @@ package queues
 
 import (
 	"context"
-	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -44,19 +41,11 @@ type WithdrawZernioPostTask struct {
 	Actor           string `json:"actor"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (WithdrawZernioPostTask) Kind() string { return WithdrawZernioPostQueue }
 
-// InsertOpts allows more attempts than cancel: there is no user waiting on a
-// status flip, and giving up leaves a post queued in Zernio until the orphan
-// sweep finds it.
-func (WithdrawZernioPostTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 8}
-}
-
-// WithdrawZernioPostProcessor is the River worker for withdraw_zernio_post.
+// WithdrawZernioPostProcessor runs withdraw_zernio_post.
 type WithdrawZernioPostProcessor struct {
-	river.WorkerDefaults[WithdrawZernioPostTask]
 	Deps ZernioDeps
 	// Notifier tells the author when the post went out before it could be
 	// withdrawn. Nil is a no-op.
@@ -64,53 +53,55 @@ type WithdrawZernioPostProcessor struct {
 	Members  memberLister
 }
 
-// Work is the River entrypoint; it delegates to Process.
-func (p *WithdrawZernioPostProcessor) Work(ctx context.Context, job *river.Job[WithdrawZernioPostTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *WithdrawZernioPostProcessor) Timeout(*river.Job[WithdrawZernioPostTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &WithdrawZernioPostProcessor{Deps: d.Zernio, Notifier: d.Notifier, Members: d.Users})
-	})
-}
-
-// Process runs one withdrawal attempt. A transient Zernio error is returned so
-// River retries; every other outcome is final.
+// Process runs one withdrawal attempt in-process. A transient Zernio error is
+// returned so River retries; every other outcome is final.
 func (p *WithdrawZernioPostProcessor) Process(ctx context.Context, task WithdrawZernioPostTask) error {
+	return runLocal(ctx, p.step, WithdrawZernioPostQueue, task, 0, 0, localActions{zernio: p.Deps.Client})
+}
+
+// step deletes the Zernio post in one call, then settles the outcome and
+// drops the post's pending status polls.
+func (p *WithdrawZernioPostProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task WithdrawZernioPostTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
 	if task.PublisherPostID == "" {
-		return nil
+		return done("skipped_no_zernio_post")
 	}
 	ctx = tenantctx.With(ctx, task.TenantID)
-	published, err := withdraw(ctx, p.Deps, task)
-	if err != nil {
-		return err
+	cancel := func(c *zernio.Client) error { return c.Cancel(ctx, task.PublisherPostID) }
+	if in.Result == nil {
+		call, err := zernio.Plan(cancel)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		return nextZernio(nil, call)
 	}
-	p.dropPolls(ctx, task)
+	if zernioDisabled(in.Result) {
+		return done("skipped_zernio_disabled")
+	}
+	published, err := withdraw(ctx, p.Deps, task, zernio.Decode(zernioResult(in.Result), cancel))
+	if err != nil {
+		return retry("withdraw", err)
+	}
 	if published {
 		p.notifyTooLate(ctx, task)
 	}
-	return nil
+	out, _ := done("withdrawn")
+	if task.PostID != "" {
+		out.Done.Cancel = []JobMatch{pollMatch(task.PostID, task.PublisherPostID)}
+	}
+	return out, nil
 }
 
-// dropPolls cancels the status polls still queued for the withdrawn post, so
-// none wakes for a post that is gone or no longer scheduled. Best effort: a
-// poll left behind exits on its own when it runs.
-func (p *WithdrawZernioPostProcessor) dropPolls(ctx context.Context, task WithdrawZernioPostTask) {
-	if task.PostID == "" {
-		return
-	}
-	if _, err := cancelPolls(ctx, task.PostID, task.PublisherPostID); err != nil {
-		slog.WarnContext(ctx, "could not cancel the status polls of a withdrawn post",
-			logging.AttrComponent, "jobs.withdraw", "post_id", task.PostID,
-			"publisher_post_id", task.PublisherPostID, logging.AttrError, err)
-	}
+// pollMatch selects the status polls of one Zernio submission of a post,
+// including polls enqueued before they carried the submission's id.
+func pollMatch(postID, publisherPostID string) JobMatch {
+	return JobMatch{Kind: PollZernioStatusQueue, Args: []ArgMatch{
+		{Key: "post_id", Values: []string{postID}},
+		{Key: "publisher_post_id", Values: []string{"", publisherPostID}},
+	}}
 }
 
 // notifyTooLate tells the workspace that a post it had unscheduled or deleted
@@ -127,15 +118,12 @@ func (p *WithdrawZernioPostProcessor) notifyTooLate(ctx context.Context, task Wi
 	emitPublishNotification(ctx, p.Notifier, p.Members, post, true)
 }
 
-// withdraw deletes the Zernio post named by task. It reports published=true
-// when Zernio had already published it (nothing left to withdraw), and returns
-// an error only for a transient failure worth retrying. Terminal API errors
-// are logged and dropped: the orphan sweep is the backstop.
-func withdraw(ctx context.Context, deps ZernioDeps, task WithdrawZernioPostTask) (published bool, err error) {
-	apiStart := time.Now()
-	cancelErr := deps.Client.Cancel(ctx, task.PublisherPostID)
-	jobs.ObserveZernioCall(time.Since(apiStart))
-
+// withdraw settles the deletion of the Zernio post named by task, given
+// Zernio's answer. It reports published=true when Zernio had already
+// published it (nothing left to withdraw), and returns an error only for a
+// transient failure worth retrying. Terminal API errors are logged and
+// dropped: the orphan sweep is the backstop.
+func withdraw(ctx context.Context, deps ZernioDeps, task WithdrawZernioPostTask, cancelErr error) (published bool, err error) {
 	payload := withdrawPayload(task)
 	switch {
 	case cancelErr == nil, errors.Is(cancelErr, zernio.ErrPostNotFound):
@@ -193,15 +181,4 @@ func withdrawPayload(task WithdrawZernioPostTask) string {
 		"publisher_post_id": task.PublisherPostID,
 		"reason":            task.Reason,
 	})
-}
-
-// enqueueWithdraw inserts a withdraw task from inside a running worker, on the
-// worker's own River client. It fails when the context carries no client.
-func enqueueWithdraw(ctx context.Context, task WithdrawZernioPostTask) error {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil {
-		return err
-	}
-	_, err = client.Insert(ctx, task, insertOptsWithRequestID(ctx, nil))
-	return err
 }

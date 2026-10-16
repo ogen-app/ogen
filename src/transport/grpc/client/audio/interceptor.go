@@ -13,7 +13,7 @@ import (
 // Correlation metadata keys. They MUST match audio-service's
 // internal/logging.RequestIDHeader / TenantIDHeader byte-for-byte (gRPC
 // lowercases metadata keys) so one request traces end-to-end across the gRPC
-// boundary: API request -> River job -> audio-service. This is
+// boundary: API request -> job -> audio-service. This is
 // transport-level only — no proto/message change.
 const (
 	requestIDHeader = "x-request-id"

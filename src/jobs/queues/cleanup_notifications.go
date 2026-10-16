@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -24,25 +22,18 @@ const cleanupNotificationsComp = "jobs.cleanup_notifications"
 // CleanupNotificationsTask is a marker payload — this queue carries no per-tick data.
 type CleanupNotificationsTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (CleanupNotificationsTask) Kind() string { return CleanupNotificationsQueue }
-
-// InsertOpts mirrors the other periodic sweeps: one attempt, active-state
-// uniqueness so overlapping ticks don't stack.
-func (CleanupNotificationsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // CleanupNotificationsProcessor reaps one tick across all tenants. A nil Repo
 // (notifications unwired, e.g. in tests) makes the tick a no-op.
 type CleanupNotificationsProcessor struct {
-	river.WorkerDefaults[CleanupNotificationsTask]
 	Repo      repository.NotificationRepository
 	Retention time.Duration
 }
 
-func (p *CleanupNotificationsProcessor) Work(ctx context.Context, job *river.Job[CleanupNotificationsTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
+// Process reaps expired and old notifications across every tenant.
+func (p *CleanupNotificationsProcessor) Process(ctx context.Context, _ CleanupNotificationsTask) error {
 	if p.Repo == nil {
 		return nil
 	}
@@ -61,15 +52,6 @@ func (p *CleanupNotificationsProcessor) Work(ctx context.Context, job *river.Job
 	return nil
 }
 
-func (p *CleanupNotificationsProcessor) Timeout(*river.Job[CleanupNotificationsTask]) time.Duration {
-	return 30 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupNotificationsProcessor{
-			Repo:      d.NotificationRepo,
-			Retention: d.NotificationRetention,
-		})
-	})
+func newCleanupNotifications(d Deps) *CleanupNotificationsProcessor {
+	return &CleanupNotificationsProcessor{Repo: d.NotificationRepo, Retention: d.NotificationRetention}
 }

@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	imageclient "github.com/ogen-app/ogen/src/transport/grpc/client/image"
 )
@@ -63,7 +61,7 @@ func TestReembedImage_WaitsForInFlightRun(t *testing.T) {
 	assets.content = "edited"
 	exts.ext = &models.ImageExtraction{ID: "e1", AssetID: "a1", Status: models.ImageExtractionStatusDescribing, UpdatedAt: time.Now()}
 	err := (&ReembedImageProcessor{Deps: d}).process(t.Context(), ReembedImageTask{AssetID: "a1"})
-	if _, ok := errors.AsType[*river.JobSnoozeError](err); !ok {
+	if _, ok := errors.AsType[*SnoozeError](err); !ok {
 		t.Fatalf("want a snooze while the run is in flight, got %v", err)
 	}
 	if chunks.calls != 0 {

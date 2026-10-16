@@ -2,18 +2,13 @@ package queues
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
-	"log/slog"
-	"time"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/activity"
-	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 )
@@ -59,41 +54,20 @@ type CancelZernioJobTask struct {
 	Actor string `json:"actor"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (CancelZernioJobTask) Kind() string { return CancelZernioJobQueue }
 
-// InsertOpts sets per-kind defaults: 3 total attempts. Per-attempt timeout
-// lives on the worker (cancelZernioJobWorker.Timeout).
-func (CancelZernioJobTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 3}
-}
-
-// CancelZernioJobProcessor is the River worker for cancel_zernio_job.
+// CancelZernioJobProcessor runs cancel_zernio_job.
 type CancelZernioJobProcessor struct {
-	river.WorkerDefaults[CancelZernioJobTask]
 	Deps ZernioDeps
 }
 
-// Work is the River entrypoint; it delegates to Process.
-func (p *CancelZernioJobProcessor) Work(ctx context.Context, job *river.Job[CancelZernioJobTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background jobs span tenants (interim until per-tenant, PR4).
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
+// Process executes one cancellation attempt in-process.
+func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZernioJobTask) error {
+	return runLocal(ctx, p.step, CancelZernioJobQueue, task, 0, 0, localActions{zernio: p.Deps.Client})
 }
 
-// Timeout is the per-attempt context deadline.
-func (p *CancelZernioJobProcessor) Timeout(*river.Job[CancelZernioJobTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CancelZernioJobProcessor{Deps: d.Zernio})
-	})
-}
-
-// Process executes one cancellation attempt.
+// step cancels the post's Zernio submission in one call, then lands the post.
 //
 // Outcome matrix:
 //   - Cancel succeeds → Post transitions to the chosen target and drops
@@ -102,15 +76,19 @@ func init() {
 //     is already gone.
 //   - Cancel returns ErrAlreadyPublished → no transition; the next
 //     poll cycle will land Published per the normal success path.
-//   - Cancel returns transient error → return error so River
-//     retries.
+//   - Cancel returns transient error → retry.
 //   - Cancel returns terminal error → log and leave Post in
 //     Scheduled; user sees a stuck post and can try again. Per
 //     CON-69 §9 we surface the failure rather than guessing.
-func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZernioJobTask) error {
+func (p *CancelZernioJobProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task CancelZernioJobTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
+	ctx = tenantctx.WithSystem(ctx)
 	post, err := p.Deps.PostRepo.GetRowByID(ctx, task.PostID)
 	if err != nil {
-		return fmt.Errorf("cancel: load post %s: %w", task.PostID, err)
+		return retry("cancel: load post "+task.PostID, err)
 	}
 	// Scope the rest of the job to the owning tenant.
 	ctx = tenantctx.With(ctx, post.TenantID)
@@ -118,7 +96,7 @@ func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZerni
 		// User raced themselves, or the poller landed Published first.
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventTaskSucceeded, post.Status, post.Status,
 			"cancel aborted: post is no longer Scheduled", `{"reason":"status_changed"}`)
-		return nil
+		return done("aborted_status_changed")
 	}
 	if post.PublisherPostID == "" {
 		// Submit never landed; just transition locally per the user's
@@ -126,48 +104,58 @@ func (p *CancelZernioJobProcessor) Process(ctx context.Context, task CancelZerni
 		return p.transition(ctx, post, task)
 	}
 
-	apiStart := time.Now()
-	cancelErr := p.Deps.Client.Cancel(ctx, post.PublisherPostID)
-	jobs.ObserveZernioCall(time.Since(apiStart))
-	if cancelErr == nil {
+	cancel := func(c *zernio.Client) error { return c.Cancel(ctx, post.PublisherPostID) }
+	if in.Result == nil {
+		call, err := zernio.Plan(cancel)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		return nextZernio(nil, call)
+	}
+	if zernioDisabled(in.Result) {
+		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
+			"Zernio cancel not attempted: the integration is off", `{"reason":"zernio_disabled"}`)
+		return done("skipped_zernio_disabled")
+	}
+	cancelErr := zernio.Decode(zernioResult(in.Result), cancel)
+	switch {
+	case cancelErr == nil:
 		jobs.ZernioCancelSucceeded.Add(1)
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
 			"Zernio cancel succeeded", publisherPostIDPayload(post.PublisherPostID))
 		return p.transition(ctx, post, task)
-	}
-	if errors.Is(cancelErr, zernio.ErrPostNotFound) {
+	case errors.Is(cancelErr, zernio.ErrPostNotFound):
 		// Nothing left on Zernio to cancel or to publish: the local
 		// transition is all that remains.
 		jobs.ZernioCancelSucceeded.Add(1)
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
 			"Zernio post already gone; cancelling locally", publisherPostIDPayload(post.PublisherPostID))
 		return p.transition(ctx, post, task)
-	}
-	if errors.Is(cancelErr, zernio.ErrAlreadyPublished) {
+	case errors.Is(cancelErr, zernio.ErrAlreadyPublished):
 		// Race: Zernio published before we could cancel. Don't move
 		// the Post locally — let the next poll land Published.
 		jobs.ZernioCancelAlreadyPublished.Add(1)
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
 			"cancel race: Zernio reports already published", `{"resolution":"poll_will_land_published"}`)
-		return nil
-	}
-	if zernio.IsTerminalAPIError(cancelErr) {
+		return done("already_published")
+	case zernio.IsTerminalAPIError(cancelErr):
 		jobs.ZernioCancelFailed.Add(1)
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventZernioCancel, post.Status, post.Status,
 			"Zernio cancel terminally failed", errPayload(cancelErr))
-		return nil
+		return done("failed")
+	default:
+		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventTaskRetried, post.Status, post.Status,
+			"transient cancel error; River will retry", errPayload(cancelErr))
+		return retry("cancel", cancelErr)
 	}
-	// Transient — retry per InsertOpts.
-	appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventTaskRetried, post.Status, post.Status,
-		"transient cancel error; River will retry", errPayload(cancelErr))
-	return cancelErr
 }
 
 // transition lands the post on the cancel target. It is reached only once the
 // Zernio post is deleted (or never existed), so it also drops the publisher
 // identity: a later schedule must create a fresh Zernio post, not retry a
-// deleted one.
-func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.Post, task CancelZernioJobTask) error {
+// deleted one. The deleted submission's pending status polls are cancelled
+// with it.
+func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.Post, task CancelZernioJobTask) (StepOutput, error) {
 	from := post.Status
 	to := task.Target.landingStatus()
 	heldID := post.PublisherPostID
@@ -176,13 +164,13 @@ func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.
 	if !from.CanTransition(to) {
 		appendLogActor(ctx, p.Deps, post.ID, task.Actor, models.PostLogEventStateTransitionBlocked, from, to,
 			"cancel target rejected by state machine", `{"reason":"invalid_transition"}`)
-		if heldID != "" {
-			if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
-				return fmt.Errorf("cancel: clear publisher_post_id: %w", err)
-			}
-			p.dropPolls(ctx, post, heldID, task.Actor)
+		if heldID == "" {
+			return done("blocked")
 		}
-		return nil
+		if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
+			return retry("cancel: clear publisher_post_id", err)
+		}
+		return p.dropPolls(ctx, post, heldID, task.Actor, "blocked")
 	}
 	// Converting to manual publishing keeps scheduled_at so the intended
 	// publish date still shows against the post — we only stop the
@@ -190,10 +178,7 @@ func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.
 	// automatic; the comment records the intent.
 	post.Status = to
 	if err := p.Deps.PostRepo.Update(ctx, post); err != nil {
-		return fmt.Errorf("cancel: persist new status: %w", err)
-	}
-	if heldID != "" {
-		p.dropPolls(ctx, post, heldID, task.Actor)
+		return retry("cancel: persist new status", err)
 	}
 	summary, action := "post cancelled and transitioned", "publish_cancelled"
 	if task.Target == CancelTargetManualPublish {
@@ -209,27 +194,22 @@ func (p *CancelZernioJobProcessor) transition(ctx context.Context, post *models.
 		activity.WithSource(activity.SourceJob),
 		activity.WithStatus(string(from)+"->"+string(to)),
 	)
-	return nil
+	if heldID == "" {
+		return done("cancelled")
+	}
+	return p.dropPolls(ctx, post, heldID, task.Actor, "cancelled")
 }
 
-// dropPolls cancels the status polls still queued for the Zernio post the
-// cancel just deleted. Best effort: a poll left behind exits on its own when
-// it wakes to a post that is no longer scheduled under that submission.
-func (p *CancelZernioJobProcessor) dropPolls(ctx context.Context, post *models.Post, heldID, actor string) {
-	n, err := cancelPolls(ctx, post.ID, heldID)
-	if err != nil {
-		slog.WarnContext(ctx, "could not cancel the status polls of an unscheduled post",
-			logging.AttrComponent, "jobs.cancel", "post_id", post.ID,
-			"publisher_post_id", heldID, logging.AttrError, err)
-		return
-	}
-	if n > 0 {
-		appendLogActor(ctx, p.Deps, post.ID, actor, models.PostLogEventTaskSucceeded, post.Status, post.Status,
-			"pending status polls cancelled", logs.MarshalCapped(map[string]any{
-				"publisher_post_id": heldID,
-				"cancelled_polls":   n,
-			}))
-	}
+// dropPolls ends the job by cancelling the status polls still queued for the
+// Zernio post the cancel just deleted. Best effort: a poll left behind exits
+// on its own when it wakes to a post that is no longer scheduled under that
+// submission.
+func (p *CancelZernioJobProcessor) dropPolls(ctx context.Context, post *models.Post, heldID, actor, outcome string) (StepOutput, error) {
+	appendLogActor(ctx, p.Deps, post.ID, actor, models.PostLogEventTaskSucceeded, post.Status, post.Status,
+		"pending status polls cancelled", publisherPostIDPayload(heldID))
+	out, _ := done(outcome)
+	out.Done.Cancel = []JobMatch{pollMatch(post.ID, heldID)}
+	return out, nil
 }
 
 func publisherPostIDPayload(id string) string {

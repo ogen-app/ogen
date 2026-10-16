@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -17,8 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -29,7 +29,6 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/kernel/pubdate"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
@@ -105,6 +104,9 @@ type URLDeps struct {
 	// Notifier drops an in-app notification to the asset's creator when ingest
 	// reaches a terminal status. Nil is a no-op.
 	Notifier *notify.Service
+	// Stages holds the page's chunks while they embed. Nil keeps them in
+	// memory, which serves only a run inside one process.
+	Stages chunkStage
 }
 
 // ProcessURLTask carries the asset to ingest. The scraped bytes are NOT in the
@@ -119,116 +121,292 @@ type ProcessURLTask struct {
 
 func (ProcessURLTask) Kind() string { return ProcessURLQueue }
 
-// InsertOpts bounds retries. Transient failures (network, 429/5xx, embedder
-// outage) retry with backoff; terminal ones (4xx, unscrapeable page)
-// short-circuit to "failed" inside Work.
-func (ProcessURLTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
-}
-
 type ProcessURLProcessor struct {
-	river.WorkerDefaults[ProcessURLTask]
 	Deps URLDeps
+
+	memOnce sync.Once
+	mem     *memChunkStage
 }
 
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ProcessURLProcessor{Deps: d.URL})
-	})
-}
-
-// Work scopes the job to the asset's tenant and processes it. lastAttempt lets
-// process() flip an otherwise-retryable outage to a terminal "failed" instead
-// of abandoning the asset in "processing".
-func (p *ProcessURLProcessor) Work(ctx context.Context, job *river.Job[ProcessURLTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	ctx = tenantctx.With(ctx, job.Args.TenantID)
-	return p.process(ctx, job.Args, job.Attempt >= job.MaxAttempts)
-}
-
-// Timeout covers the Firecrawl render, N image downloads, and per-chunk embedding.
-func (p *ProcessURLProcessor) Timeout(*river.Job[ProcessURLTask]) time.Duration {
-	return 10 * time.Minute
-}
-
+// process runs one attempt in-process. lastAttempt flips an otherwise
+// retryable outage to a terminal "failed" instead of abandoning the asset in
+// "processing".
 func (p *ProcessURLProcessor) process(ctx context.Context, in ProcessURLTask, lastAttempt bool) error {
+	attempt, maxAttempts := 1, 2
+	if lastAttempt {
+		attempt = 2
+	}
+	return runLocal(ctx, p.step, ProcessURLQueue, in, attempt, maxAttempts, localActions{})
+}
+
+func (p *ProcessURLProcessor) stages() chunkStage {
+	if p.Deps.Stages != nil {
+		return p.Deps.Stages
+	}
+	p.memOnce.Do(func() { p.mem = newMemChunkStage(p.Deps.Chunks) })
+	return p.mem
+}
+
+func (p *ProcessURLProcessor) embedLoop() embedLoop {
+	return embedLoop{stage: p.stages(), embedder: p.Deps.Embedder}
+}
+
+// urlState carries a run between steps: the scraped page while its images
+// are mirrored one by one, then how far embedding got.
+type urlState struct {
+	Phase string `json:"phase"`
+	Title string `json:"title,omitempty"`
+	// Markdown is the scraped page, gzipped: it rides along while the
+	// images are mirrored.
+	Markdown     []byte              `json:"markdown,omitempty"`
+	Refs         []imageRef          `json:"refs,omitempty"`
+	Next         int                 `json:"next,omitzero"`
+	Images       []models.AssetImage `json:"images,omitempty"`
+	Replacements map[string]string   `json:"replacements,omitempty"`
+	FailedImages int                 `json:"failed_images,omitzero"`
+	Embed        embedProgress       `json:"embed"`
+}
+
+// imageRef is one page image to mirror.
+type imageRef struct {
+	URL string `json:"url"`
+	Alt string `json:"alt,omitempty"`
+}
+
+const (
+	urlPhaseScrape = "scrape"
+	urlPhaseImages = "images"
+	urlPhaseEmbed  = "embed"
+)
+
+// step scrapes the page (Firecrawl), mirrors its images into storage one at a
+// time, persists the content, then stages and embeds its chunks.
+func (p *ProcessURLProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task ProcessURLTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
+	ctx = withTaskTenant(ctx, task.TenantID)
+	var st urlState
+	if err := decodeState(in.State, &st); err != nil {
+		return done("skipped_bad_state")
+	}
+	switch st.Phase {
+	case "":
+		return p.start(ctx, task, in.lastAttempt())
+	case urlPhaseScrape:
+		return p.scraped(ctx, task, in.Result)
+	case urlPhaseImages:
+		p.fetched(ctx, task, &st, in.Result)
+		return p.nextImage(ctx, task, &st)
+	case urlPhaseEmbed:
+		if err := p.embedLoop().settle(ctx, &st.Embed, in.Result); err != nil {
+			return retry("process_url "+task.AssetID, err)
+		}
+		return p.embedNext(ctx, task, &st, in.lastAttempt())
+	default:
+		return done("skipped_bad_state")
+	}
+}
+
+func scrapeRequest(in ProcessURLTask) firecrawl.ScrapeRequest {
+	req := firecrawl.ScrapeRequest{URL: in.SourceURL}
+	if in.Refresh {
+		// On refresh, bypass Firecrawl's cache.
+		req.MaxAge = new(0)
+	}
+	return req
+}
+
+func (p *ProcessURLProcessor) start(ctx context.Context, in ProcessURLTask, lastAttempt bool) (StepOutput, error) {
 	if p.Deps.Scraper == nil {
 		slog.WarnContext(ctx, "firecrawl not configured", logging.AttrComponent, "jobs.process_url", "asset_id", in.AssetID)
-		return nil
+		return done("skipped_unconfigured")
 	}
 	giveUp := func() error { return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, urlEmbedderUnavailable) }
 	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_url", in.AssetID, lastAttempt, giveUp); !ok {
-		return err
+		return settledOr(err)
 	}
 	if err := p.statusWriter().set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
-		return err
+		return retry("process_url", err)
 	}
 	p.publish(ctx, in, models.AssetStatusProcessing, "", 0, 0, 0, "")
 
-	res, err := p.scrape(ctx, in)
+	req := scrapeRequest(in)
+	call, err := firecrawl.Plan(func(c *firecrawl.Client) error { _, err := c.Scrape(ctx, req); return err })
+	if err != nil {
+		return StepOutput{}, err
+	}
+	raw, err := encodeState(urlState{Phase: urlPhaseScrape})
+	if err != nil {
+		return StepOutput{}, err
+	}
+	scraper := p.Deps.Scraper
+	return StepOutput{State: raw, HTTP: &HTTPCall{
+		Upstream: UpstreamFirecrawl, Method: call.Method, Path: call.Path, Body: call.Body,
+		local: func(ctx context.Context) (any, error) { return scraper.Scrape(ctx, req) },
+	}}, nil
+}
+
+// scraped settles the scrape: a transient failure retries, an unscrapeable
+// page fails the asset. Every successful scrape is a billable credit, so it
+// is metered here, which stays accurate across retries.
+func (p *ProcessURLProcessor) scraped(ctx context.Context, in ProcessURLTask, r *StepResult) (StepOutput, error) {
+	req := scrapeRequest(in)
+	res, err := localOr(r, func(r *StepResult) (*firecrawl.ScrapeResult, error) {
+		var res *firecrawl.ScrapeResult
+		err := firecrawl.Decode(firecrawl.Result{Status: r.Status, Body: r.Body, Err: r.Err}, func(c *firecrawl.Client) error {
+			var err error
+			res, err = c.Scrape(ctx, req)
+			return err
+		})
+		return res, err
+	})
 	if err != nil {
 		if firecrawl.IsTransient(err) {
-			return fmt.Errorf("process_url %s: scrape: %w", in.AssetID, err)
+			return retry("process_url "+in.AssetID+": scrape", err)
 		}
 		slog.WarnContext(ctx, "unscrapeable url", logging.AttrComponent, "jobs.process_url", "asset_id", in.AssetID, logging.AttrError, err)
-		return p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, err.Error())
+		return settledOr(p.finish(ctx, in, models.AssetStatusFailed, "", 0, 0, 0, err.Error()))
 	}
-
-	markdown, images, imgFailed := p.mirrorImages(ctx, in.AssetID, res.Markdown)
-	title := cmp.Or(strings.TrimSpace(res.Title), in.SourceURL)
-	if err := p.persistContent(ctx, in.AssetID, title, markdown, images); err != nil {
-		return err
-	}
+	p.Deps.Recorder.Record(ctx, firecrawl.VendorFirecrawl, "url_scrape", vendors.MeterEvent{
+		Model:     "scrape",
+		Operation: firecrawl.OpScrape,
+		Usage:     vendors.Usage{vendors.KindURLScrape: 1},
+	})
 	if t, ok := pubdate.Web(time.Now(), res.PublishedTime...); ok {
 		recordPublishedAt(ctx, p.Deps.Published, "process_url", in.AssetID, t)
 	}
-
-	// The title is prepended for context, like embed_asset.
-	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, textChunkSources(flows.ChunkText(title+"\n\n"+markdown)))
-	if err := storeChunks(ctx, p.Deps.Chunks, "process_url", in.AssetID, chunks, stats, true); err != nil {
-		return err
+	md, err := gzipText(res.Markdown)
+	if err != nil {
+		return StepOutput{}, err
 	}
+	st := &urlState{Phase: urlPhaseImages, Title: cmp.Or(strings.TrimSpace(res.Title), in.SourceURL), Markdown: md}
+	if p.Deps.Storage != nil {
+		st.Refs = imageRefs(ctx, in.AssetID, res.Markdown)
+	}
+	return p.nextImage(ctx, in, st)
+}
 
+// nextImage fetches the next page image, or, once all are mirrored, rewrites
+// the page's links, persists it and starts embedding.
+func (p *ProcessURLProcessor) nextImage(ctx context.Context, in ProcessURLTask, st *urlState) (StepOutput, error) {
+	if st.Next < len(st.Refs) {
+		ref := st.Refs[st.Next]
+		raw, err := encodeState(st)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		fetcher := p.fetcher()
+		return StepOutput{State: raw, HTTP: &HTTPCall{
+			Method: http.MethodGet, URL: ref.URL,
+			local: func(ctx context.Context) (any, error) {
+				data, ct, err := fetcher.Fetch(ctx, ref.URL)
+				return fetchedImage{data: data, contentType: ct}, err
+			},
+		}}, nil
+	}
+	markdown, err := gunzipText(st.Markdown)
+	if err != nil {
+		return StepOutput{}, err
+	}
+	markdown = replaceLinks(markdown, st.Replacements)
+	if err := p.persistContent(ctx, in.AssetID, st.Title, markdown, st.Images); err != nil {
+		return retry("process_url", err)
+	}
+	runID, err := models.NewID()
+	if err != nil {
+		return StepOutput{}, err
+	}
+	// The title is prepended for context, like embed_asset.
+	if err := p.stages().Begin(ctx, runID, in.AssetID, stageSources(textChunkSources(flows.ChunkText(st.Title+"\n\n"+markdown)))); err != nil {
+		return retry("process_url "+in.AssetID+": stage chunks", err)
+	}
+	next := &urlState{Phase: urlPhaseEmbed, Title: st.Title, Images: st.Images, FailedImages: st.FailedImages, Embed: embedProgress{RunID: runID}}
+	return p.embedNext(ctx, in, next, false)
+}
+
+// fetchedImage is a page image as downloaded.
+type fetchedImage struct {
+	data        []byte
+	contentType string
+}
+
+// fetched mirrors the image just downloaded. It is best-effort: a failed
+// image keeps its original external link and counts towards the failures
+// that flip the asset to "partial".
+func (p *ProcessURLProcessor) fetched(ctx context.Context, in ProcessURLTask, st *urlState, r *StepResult) {
+	ref := st.Refs[st.Next]
+	st.Next++
+	img, err := localOr(r, func(r *StepResult) (fetchedImage, error) {
+		switch {
+		case r.Err != "":
+			return fetchedImage{}, errors.New(r.Err)
+		case r.Status != http.StatusOK:
+			return fetchedImage{}, fmt.Errorf("image fetch %s: status %d", ref.URL, r.Status)
+		case len(r.Body) > maxImageBytes:
+			return fetchedImage{}, fmt.Errorf("image %s exceeds %d bytes", ref.URL, maxImageBytes)
+		}
+		return fetchedImage{data: r.Body, contentType: r.ContentType}, nil
+	})
+	if err != nil {
+		st.FailedImages++
+		return
+	}
+	stored, publicURL, ok := p.mirrorImage(ctx, in.AssetID, st.Next-1, ref.URL, ref.Alt, img)
+	switch {
+	case !ok:
+		st.FailedImages++
+	case stored != nil:
+		if st.Replacements == nil {
+			st.Replacements = map[string]string{}
+		}
+		stored.Idx = len(st.Images)
+		st.Images = append(st.Images, *stored)
+		st.Replacements[ref.URL] = publicURL
+	}
+}
+
+// embedNext embeds the next batch, or, once every chunk is settled, commits
+// the chunks and settles the asset.
+func (p *ProcessURLProcessor) embedNext(ctx context.Context, in ProcessURLTask, st *urlState, lastAttempt bool) (StepOutput, error) {
+	call, err := p.embedLoop().next(ctx, &st.Embed)
+	if err != nil {
+		return retry("process_url "+in.AssetID, err)
+	}
+	if call != nil {
+		raw, err := encodeState(st)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		return StepOutput{State: raw, HTTP: call}, nil
+	}
+	// Chunks left over from the page's earlier content are cleared even when
+	// nothing in it is embeddable.
+	committed, err := p.stages().Commit(ctx, st.Embed.RunID, in.AssetID, true)
+	if err != nil {
+		return retry("process_url "+in.AssetID+": store chunks", err)
+	}
+	stats := stageStats(committed)
 	final, err := stats.settle(lastAttempt)
 	if err != nil {
-		return fmt.Errorf("process_url %s: %w", in.AssetID, err)
+		return retry("process_url "+in.AssetID, err)
 	}
 	switch {
 	case final == models.AssetStatusFailed:
-		return p.finish(ctx, in, final, title, len(images), 0, imgFailed, urlAllChunksFailed)
-	case final == models.AssetStatusReady && imgFailed > 0:
+		return settledOr(p.finish(ctx, in, final, st.Title, len(st.Images), 0, st.FailedImages, urlAllChunksFailed))
+	case final == models.AssetStatusReady && st.FailedImages > 0:
 		final = models.AssetStatusPartial
 	}
-	if err := p.finish(ctx, in, final, title, len(images), len(chunks), imgFailed, ""); err != nil {
-		return err
+	if err := p.finish(ctx, in, final, st.Title, len(st.Images), stats.Embedded, st.FailedImages, ""); err != nil {
+		return retry("process_url", err)
 	}
 	// After the durable status write, so a retry from a late failure can't
 	// double-count.
 	if stats.Tokens > 0 {
 		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "url_embed", llm.EmbedUsage{Tokens: stats.Tokens})
 	}
-	return nil
-}
-
-// scrape fetches the page as Markdown and meters the call. On refresh it
-// bypasses Firecrawl's cache.
-func (p *ProcessURLProcessor) scrape(ctx context.Context, in ProcessURLTask) (*firecrawl.ScrapeResult, error) {
-	req := firecrawl.ScrapeRequest{URL: in.SourceURL}
-	if in.Refresh {
-		req.MaxAge = new(0)
-	}
-	res, err := p.Deps.Scraper.Scrape(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	// Every successful scrape is a billable credit, so recording after a 200 is
-	// accurate even across retries.
-	p.Deps.Recorder.Record(ctx, firecrawl.VendorFirecrawl, "url_scrape", vendors.MeterEvent{
-		Model:     "scrape",
-		Operation: firecrawl.OpScrape,
-		Usage:     vendors.Usage{vendors.KindURLScrape: 1},
-	})
-	return res, nil
+	return done(final)
 }
 
 // persistContent writes the title + rewritten Markdown, then replaces the
@@ -338,20 +516,11 @@ var (
 	htmlImgRe = regexp.MustCompile(`(?i)<img[^>]+src=["']([^"']+)["']`)
 )
 
-// mirrorImages downloads each http(s) image referenced in the Markdown into
-// tenant-scoped object storage and rewrites its links to the stored URL. It is
-// best-effort: a failed image keeps its original external link and increments
-// the returned failure count (which flips the asset to "partial"). With no
-// storage configured it is a no-op that leaves the Markdown unchanged.
-// imageMirrorParallelism caps how many images one URL asset fetches and
-// re-hosts at once.
-const imageMirrorParallelism = 4
-
-// mirrorImage fetches one image and re-hosts it under storage key slot pos.
+// mirrorImage re-hosts one fetched image under storage key slot pos.
 // ok is false on a failure; a nil img with ok true is a deliberate skip.
-func (p *ProcessURLProcessor) mirrorImage(ctx context.Context, assetID string, pos int, url, alt string) (img *models.AssetImage, publicURL string, ok bool) {
-	data, ct, err := p.fetcher().Fetch(ctx, url)
-	if err != nil || !strings.HasPrefix(ct, "image/") {
+func (p *ProcessURLProcessor) mirrorImage(ctx context.Context, assetID string, pos int, url, alt string, fetched fetchedImage) (img *models.AssetImage, publicURL string, ok bool) {
+	data, ct := fetched.data, fetched.contentType
+	if !strings.HasPrefix(ct, "image/") {
 		return nil, "", false
 	}
 	// SVGs can carry embedded scripts, so re-hosting an attacker-supplied one
@@ -362,7 +531,7 @@ func (p *ProcessURLProcessor) mirrorImage(ctx context.Context, assetID string, p
 		return nil, "", true
 	}
 	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/images/%d%s", assetID, pos, extForImage(ct, url)))
-	publicURL, err = p.Deps.Storage.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
+	publicURL, err := p.Deps.Storage.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
 	if err != nil {
 		return nil, "", false
 	}
@@ -384,20 +553,17 @@ func (p *ProcessURLProcessor) mirrorImage(ctx context.Context, assetID string, p
 	return img, publicURL, true
 }
 
-func (p *ProcessURLProcessor) mirrorImages(ctx context.Context, assetID, markdown string) (string, []models.AssetImage, int) {
-	if p.Deps.Storage == nil {
-		return markdown, nil, 0
-	}
-
-	type ref struct{ url, alt string }
+// imageRefs lists the page's http(s) images in page order, each once, at
+// most maxImagesPerAsset.
+func imageRefs(ctx context.Context, assetID, markdown string) []imageRef {
 	seen := make(map[string]bool)
-	var refs []ref
+	var refs []imageRef
 	add := func(u, alt string) {
 		if !isHTTPURL(u) || seen[u] {
 			return
 		}
 		seen[u] = true
-		refs = append(refs, ref{url: u, alt: alt})
+		refs = append(refs, imageRef{URL: u, Alt: alt})
 	}
 	for _, m := range mdImageRe.FindAllStringSubmatch(markdown, -1) {
 		add(m[2], m[1])
@@ -410,57 +576,14 @@ func (p *ProcessURLProcessor) mirrorImages(ctx context.Context, assetID, markdow
 			"asset_id", assetID, "found", len(refs), "cap", maxImagesPerAsset)
 		refs = refs[:maxImagesPerAsset]
 	}
+	return refs
+}
 
-	// Images are fetched and re-hosted a few at a time; each result lands in
-	// its ref's slot, so the order (and the idx numbering below) follows the
-	// page regardless of which download finishes first.
-	type mirrored struct {
-		img       *models.AssetImage
-		publicURL string
-		failed    bool
-	}
-	results := make([]mirrored, len(refs))
-	sem := make(chan struct{}, imageMirrorParallelism)
-	var wg sync.WaitGroup
-	for i, r := range refs {
-		sem <- struct{}{}
-		wg.Go(func() {
-			defer func() { <-sem }()
-			// A panic on one scraped image fails that image, not the process.
-			defer func() {
-				if rec := recover(); rec != nil {
-					slog.ErrorContext(ctx, "image mirror panicked", logging.AttrComponent, "jobs.process_url",
-						"asset_id", assetID, "url", r.url, logging.AttrError, fmt.Errorf("%v", rec))
-					results[i] = mirrored{failed: true}
-				}
-			}()
-			img, publicURL, ok := p.mirrorImage(ctx, assetID, i, r.url, r.alt)
-			results[i] = mirrored{img: img, publicURL: publicURL, failed: !ok}
-		})
-	}
-	wg.Wait()
-
-	var (
-		images       []models.AssetImage
-		replacements = make(map[string]string)
-		failed       int
-	)
-	for i, res := range results {
-		if res.failed {
-			failed++
-			continue
-		}
-		if res.img == nil {
-			continue // deliberately skipped (SVG)
-		}
-		res.img.Idx = len(images)
-		images = append(images, *res.img)
-		replacements[refs[i].url] = res.publicURL
-	}
-
-	// Apply replacements longest-key-first (deterministic) so a source URL that
-	// is a prefix of another (e.g. ".../a.png" vs ".../a.png?w=100") can't clobber
-	// the longer one before it is itself replaced.
+// replaceLinks rewrites mirrored images' links to their stored URLs,
+// longest-key-first (deterministic) so a source URL that is a prefix of
+// another (e.g. ".../a.png" vs ".../a.png?w=100") can't clobber the longer
+// one before it is itself replaced.
+func replaceLinks(markdown string, replacements map[string]string) string {
 	keys := make([]string, 0, len(replacements))
 	for k := range replacements {
 		keys = append(keys, k)
@@ -475,7 +598,7 @@ func (p *ProcessURLProcessor) mirrorImages(ctx context.Context, assetID, markdow
 	for _, oldURL := range keys {
 		out = strings.ReplaceAll(out, oldURL, replacements[oldURL])
 	}
-	return out, images, failed
+	return out
 }
 
 func (p *ProcessURLProcessor) fetcher() imageFetcher {

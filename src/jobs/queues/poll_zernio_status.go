@@ -3,14 +3,9 @@ package queues
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
-
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -34,25 +29,13 @@ type PollZernioStatusTask struct {
 	PublisherPostID string `json:"publisher_post_id,omitempty"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (PollZernioStatusTask) Kind() string { return PollZernioStatusQueue }
-
-// InsertOpts sets per-kind defaults: 3 total attempts for transient errors.
-// The non-terminal cadence is driven by river.JobSnooze in Process, not by
-// retries (snooze bumps max_attempts so it never consumes the retry budget).
-// Per-attempt timeout lives on the worker. Uniqueness by args over the active
-// states keeps one live poll per submission however often submit re-enqueues.
-func (PollZernioStatusTask) InsertOpts() river.InsertOpts {
-	unique := periodicUniqueOpts()
-	unique.ByArgs = true
-	return river.InsertOpts{MaxAttempts: 3, UniqueOpts: unique}
-}
 
 // PollZernioStatusProcessor implements the recurring poll. The
 // cadence per CON-69 §7: every 30s for the first 5 minutes after
 // scheduled_at, then every 60s.
 type PollZernioStatusProcessor struct {
-	river.WorkerDefaults[PollZernioStatusTask]
 	Deps ZernioDeps
 	// Notifier drops a publish-outcome notification when Zernio reports a terminal
 	// status. Nil is a no-op.
@@ -65,45 +48,38 @@ type PollZernioStatusProcessor struct {
 	FastWindow   time.Duration // default 5m after scheduled_at
 }
 
-// Work is the River entrypoint; it delegates to Process.
-func (p *PollZernioStatusProcessor) Work(ctx context.Context, job *river.Job[PollZernioStatusTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
+// Process executes one poll cycle in-process, for tests. On a non-terminal
+// status it returns a *SnoozeError to reschedule this same job per the cadence
+// rule; it returns a non-nil error only on transient Zernio failures, which
+// river-service retries; otherwise nil (terminal handled, or quietly exited).
+func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernioStatusTask) error {
+	return runLocal(ctx, p.step, PollZernioStatusQueue, task, 0, 0, localActions{zernio: p.Deps.Client})
+}
+
+// step reads the Zernio post's status in one call, then lands a terminal
+// status or snoozes until the next poll.
+func (p *PollZernioStatusProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task PollZernioStatusTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
 	// Background jobs span tenants (interim until per-tenant, PR4).
 	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *PollZernioStatusProcessor) Timeout(*river.Job[PollZernioStatusTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &PollZernioStatusProcessor{Deps: d.Zernio, Notifier: d.Notifier, Members: d.Users})
-	})
-}
-
-// Process executes one poll cycle. On a non-terminal status it returns
-// river.JobSnooze to reschedule this same job per the cadence rule; it returns
-// a non-nil error only on transient Zernio failures so River retries per its
-// backoff policy; otherwise nil (terminal handled, or quietly exited).
-func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernioStatusTask) error {
 	post, err := p.Deps.PostRepo.GetByID(ctx, task.PostID)
 	if err != nil {
-		return fmt.Errorf("poll: load post %s: %w", task.PostID, err)
+		return retry("poll: load post "+task.PostID, err)
 	}
 	// Scope the rest of the job to the owning tenant.
 	ctx = tenantctx.With(ctx, post.TenantID)
 	if post.Status != models.PostStatusScheduled {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, post.Status, post.Status,
 			"poll exited: post is no longer Scheduled", `{"reason":"status_changed"}`)
-		return nil
+		return done("exited_status_changed")
 	}
 	if post.PublisherPostID == "" {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskFailed, post.Status, post.Status,
 			"poll exited: publisher_post_id is empty", `{}`)
-		return nil
+		return done("exited_no_zernio_post")
 	}
 	if task.PublisherPostID != "" && task.PublisherPostID != post.PublisherPostID {
 		// The post was unscheduled and scheduled again: this poll belongs to a
@@ -115,13 +91,34 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 				"task_publisher_post_id":    task.PublisherPostID,
 				"current_publisher_post_id": post.PublisherPostID,
 			}))
-		return nil
+		return done("exited_superseded")
 	}
 	held := post.PublisherPostID
 
-	apiStart := time.Now()
-	job, statusErr := p.Deps.Client.Status(ctx, post.PublisherPostID)
-	jobs.ObserveZernioCall(time.Since(apiStart))
+	var job *zernio.Job
+	status := func(c *zernio.Client) error {
+		var err error
+		job, err = c.Status(ctx, held)
+		return err
+	}
+	if in.Result == nil {
+		call, err := zernio.Plan(status)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		return nextZernio(nil, call)
+	}
+	if zernioDisabled(in.Result) {
+		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
+			"poll skipped: the Zernio integration is off; awaiting reconcile", `{"reason":"zernio_disabled"}`)
+		return done("skipped_zernio_disabled")
+	}
+	statusErr := zernio.Decode(zernioResult(in.Result), status)
+	return p.land(ctx, post, held, job, statusErr)
+}
+
+// land applies one poll's answer.
+func (p *PollZernioStatusProcessor) land(ctx context.Context, post *models.Post, held string, job *zernio.Job, statusErr error) (StepOutput, error) {
 	if statusErr != nil {
 		// Transient → retry. Terminal API errors during polling are
 		// odd (404 if Zernio dropped the row) — log once and stop;
@@ -130,12 +127,12 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 			jobs.ZernioPollFailed.Add(1)
 			appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
 				"poll terminal API error; awaiting reconcile", errPayload(statusErr))
-			return nil
+			return done("failed")
 		}
 		jobs.ZernioPollRetried.Add(1)
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
 			"poll transient error; River will retry", errPayload(statusErr))
-		return statusErr
+		return retry("poll", statusErr)
 	}
 	jobs.ZernioPollSucceeded.Add(1)
 
@@ -173,7 +170,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 			"status", "published_at", "published_results", "published_url", "publisher_status",
 			"first_comment_status", "updated_at")
 		if err != nil {
-			return fmt.Errorf("poll: persist Published: %w", err)
+			return retry("poll: persist Published", err)
 		}
 		if !ok {
 			return p.movedOn(ctx, post)
@@ -208,7 +205,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 			"status", "failure_reason", "published_results", "publisher_status",
 			"first_comment_status", "updated_at")
 		if err != nil {
-			return fmt.Errorf("poll: persist Failed: %w", err)
+			return retry("poll: persist Failed", err)
 		}
 		if !ok {
 			return p.movedOn(ctx, post)
@@ -231,7 +228,7 @@ func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernio
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioPoll, post.Status, post.Status,
 			"unknown Zernio terminal status — ignoring", logs.MarshalCapped(map[string]string{"zernio_status": string(job.Status)}))
 	}
-	return nil
+	return done(string(job.Status))
 }
 
 // firstCommentOnPublish is the first-comment status of a post going live: sent
@@ -255,7 +252,7 @@ func (p *PollZernioStatusProcessor) scheduleFirstComment(ctx context.Context, po
 	if post.FirstCommentStatus == nil || *post.FirstCommentStatus != models.FirstCommentPending {
 		return
 	}
-	if err := enqueueFirstComment(ctx, post, *publishedAt); err != nil {
+	if err := enqueueFirstComment(ctx, p.Deps.Jobs, post, *publishedAt); err != nil {
 		fc := &PostFirstCommentProcessor{Deps: p.Deps, Notifier: p.Notifier}
 		if ferr := fc.fail(ctx, post, "could not schedule the first comment: "+err.Error()); ferr != nil {
 			appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskFailed, post.Status, post.Status,
@@ -273,69 +270,20 @@ func (p *PollZernioStatusProcessor) scheduleFirstComment(ctx context.Context, po
 // unchanged status touched the row and its updated_at every poll), then
 // snoozes this same job per the cadence rule. JobSnooze reschedules without
 // consuming a retry attempt.
-func (p *PollZernioStatusProcessor) snoozeNonTerminal(ctx context.Context, post *models.Post, held string, statusChanged bool) error {
+func (p *PollZernioStatusProcessor) snoozeNonTerminal(ctx context.Context, post *models.Post, held string, statusChanged bool) (StepOutput, error) {
 	if statusChanged {
 		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held, "publisher_status", "updated_at")
 		if err == nil && !ok {
 			return p.movedOn(ctx, post)
 		}
 	}
-	return river.JobSnooze(p.intervalFor(post))
+	return StepOutput{Retry: &StepRetry{Reason: "not yet published", After: p.intervalFor(post)}}, nil
 }
 
-func (p *PollZernioStatusProcessor) movedOn(ctx context.Context, post *models.Post) error {
+func (p *PollZernioStatusProcessor) movedOn(ctx context.Context, post *models.Post) (StepOutput, error) {
 	appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, models.PostStatusScheduled, models.PostStatusScheduled,
 		"poll exited: post moved on while polling", `{"reason":"status_changed"}`)
-	return nil
-}
-
-// pollLiveStates are the states a poll job can still run (or snooze back) from.
-var pollLiveStates = []rivertype.JobState{
-	rivertype.JobStateAvailable,
-	rivertype.JobStatePending,
-	rivertype.JobStateRetryable,
-	rivertype.JobStateRunning,
-	rivertype.JobStateScheduled,
-}
-
-// cancelPolls cancels the live poll_zernio_status jobs of one submission, so a
-// withdrawn Zernio post leaves no poll waiting in the queue for it. Polls of a
-// newer submission (another publisher_post_id) are kept; polls enqueued before
-// the task carried publisher_post_id match any. A running poll is cancelled
-// once its attempt ends. It runs inside a worker, on that worker's River
-// client, and reports how many jobs it cancelled.
-func cancelPolls(ctx context.Context, postID, publisherPostID string) (int, error) {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil {
-		return 0, err
-	}
-	params := river.NewJobListParams().
-		Kinds(PollZernioStatusQueue).
-		States(pollLiveStates...).
-		Where("args->>'post_id' = @post_id AND COALESCE(args->>'publisher_post_id', '') IN ('', @publisher_post_id)",
-			river.NamedArgs{"post_id": postID, "publisher_post_id": publisherPostID}).
-		First(100)
-	res, err := client.JobList(ctx, params)
-	if err != nil {
-		return 0, fmt.Errorf("list polls of post %s: %w", postID, err)
-	}
-	cancelled := 0
-	defer func() { jobs.ZernioPollCancelled.Add(int64(cancelled)) }()
-	for _, job := range res.Jobs {
-		row, err := client.JobCancel(ctx, job.ID)
-		if errors.Is(err, rivertype.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return cancelled, fmt.Errorf("cancel poll job %d: %w", job.ID, err)
-		}
-		// A running poll stays running until its attempt ends; only count
-		// the ones River cancelled outright.
-		if row.State == rivertype.JobStateCancelled {
-			cancelled++
-		}
-	}
-	return cancelled, nil
+	return done("exited_moved_on")
 }
 
 func (p *PollZernioStatusProcessor) intervalFor(post *models.Post) time.Duration {

@@ -2,7 +2,6 @@ package queues
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +10,6 @@ import (
 	"path"
 	"strings"
 	"time"
-
-	"github.com/riverqueue/river"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
@@ -38,21 +34,12 @@ type SubmitPostTask struct {
 	PostID string `json:"post_id"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (SubmitPostTask) Kind() string { return SubmitPostToZernioQueue }
 
-// InsertOpts sets per-kind defaults: 5 total attempts (4 retries) per
-// CON-69 §6. Retry backoff is River's default exponential-with-jitter (the
-// PRD notes exponential is preferable to backlite's fixed 30s). The
-// per-attempt timeout lives on the worker (submitPostWorker.Timeout).
-func (SubmitPostTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 5}
-}
-
-// SubmitPostProcessor is the River worker for submit_post_to_zernio. It
-// implements river.Worker directly; Process is the test seam Work delegates to.
+// SubmitPostProcessor holds submit_post_to_zernio's steps; Process runs
+// them inline.
 type SubmitPostProcessor struct {
-	river.WorkerDefaults[SubmitPostTask]
 	Deps ZernioDeps
 	// Tenants gates publishing on the owning tenant's lifecycle status:
 	// a suspended/deleted tenant's scheduled posts are not published. Nil = no gate.
@@ -69,50 +56,34 @@ type SubmitPostProcessor struct {
 	PollLeadTime time.Duration
 }
 
-// Work is the River entrypoint; it delegates to Process.
-func (p *SubmitPostProcessor) Work(ctx context.Context, job *river.Job[SubmitPostTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	// Background jobs span tenants (interim until per-tenant, PR4).
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
 const (
 	// submitBaseTimeout bounds an attempt's API calls and DB work.
 	submitBaseTimeout = 30 * time.Second
 	// minUploadBytesPerSec is the slowest upload throughput an attempt allows
 	// for; the attempt's deadline grows with the attachments' total size.
 	minUploadBytesPerSec = 1 << 20
-	// mediaUploadParallelism caps concurrent presign+PUT uploads per post.
-	mediaUploadParallelism = 3
 	// zernioMediaRetention is how long Zernio holds an upload in temporary
 	// storage; a post must publish within it. A day is kept back as margin.
 	zernioMediaRetention = 6 * 24 * time.Hour
+	// mediaSourceTTL is how long the signed download link of an attachment
+	// handed to a media transfer stays valid.
+	mediaSourceTTL = time.Hour
 )
 
-// Timeout disables River's per-attempt deadline: Process sets its own, sized
-// to the post's media.
-func (p *SubmitPostProcessor) Timeout(*river.Job[SubmitPostTask]) time.Duration {
-	return -1
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &SubmitPostProcessor{Deps: d.Zernio, Tenants: d.Tenants, Notifier: d.Notifier, Members: d.Users})
-	})
-}
-
-// Process runs one submit attempt. Returns a non-nil error to ask
-// River to retry; returns nil for both success and terminal
-// failure (Post moved to Failed inside this method when the failure
-// is terminal).
-//
-// The attempt's deadline is submitBaseTimeout plus the time the post's media
-// takes to upload at minUploadBytesPerSec.
+// Process runs one submit attempt in-process. Returns a non-nil error to ask
+// River to retry; returns nil for both success and terminal failure (Post
+// moved to Failed when the failure is terminal).
 func (p *SubmitPostProcessor) Process(ctx context.Context, task SubmitPostTask) error {
+	return p.run(ctx, task, 0, 0)
+}
+
+// run runs the steps in-process. The attempt's deadline is submitBaseTimeout
+// plus the time the post's media takes to upload at minUploadBytesPerSec.
+func (p *SubmitPostProcessor) run(ctx context.Context, task SubmitPostTask, attempt, maxAttempts int) error {
 	ctx, cancel := context.WithTimeout(ctx, submitBaseTimeout+p.uploadBudget(ctx, task.PostID))
 	defer cancel()
-	return p.process(ctx, task)
+	return runLocal(ctx, p.step, SubmitPostToZernioQueue, task, attempt, maxAttempts,
+		localActions{zernio: p.Deps.Client, storage: p.Deps.Storage})
 }
 
 // uploadBudget is the extra time the post's attachments may take to upload.
@@ -135,93 +106,169 @@ func (p *SubmitPostProcessor) uploadBudget(ctx context.Context, postID string) t
 	return time.Duration(total/minUploadBytesPerSec) * time.Second
 }
 
-func (p *SubmitPostProcessor) process(ctx context.Context, task SubmitPostTask) error {
+// Submit phases. A submit retries a prior Zernio post or creates a fresh one:
+// each attachment Zernio doesn't still hold is presigned and transferred, then
+// the post is submitted. A dedupe 409 pages through Zernio's recent posts for
+// the earlier copy, and a post that left Scheduled meanwhile has its new
+// Zernio post withdrawn.
+const (
+	submitPhaseRetry    = "retry"
+	submitPhasePresign  = "presign"
+	submitPhasePut      = "put"
+	submitPhaseSubmit   = "submit"
+	submitPhaseDedupe   = "dedupe"
+	submitPhaseWithdraw = "withdraw"
+)
+
+type submitState struct {
+	Phase string `json:"phase"`
+	// TenantID lets the steps after a Zernio post may exist go on when the
+	// Ogen post is gone, so that Zernio post is withdrawn.
+	TenantID  string         `json:"tenant_id,omitempty"`
+	AccountID string         `json:"account_id,omitempty"`
+	Uploads   []submitUpload `json:"uploads,omitempty"`
+	// Next is the upload in progress; UploadURL and PublicURL its presign.
+	Next      int    `json:"next,omitzero"`
+	UploadURL string `json:"upload_url,omitempty"`
+	PublicURL string `json:"public_url,omitempty"`
+	// Content is what was submitted, for the dedupe search, and Pages the
+	// search's pages so far.
+	Content string          `json:"content,omitempty"`
+	Pages   []zernio.Result `json:"pages,omitempty"`
+	// Withdraw is the Zernio post to withdraw.
+	Withdraw string `json:"withdraw,omitempty"`
+}
+
+// submitUpload is one attachment the post carries to Zernio. URL is its
+// Zernio public URL once uploaded, or a recorded upload Zernio still holds.
+type submitUpload struct {
+	AttachmentID string `json:"attachment_id"`
+	Segment      int    `json:"segment"`
+	MediaType    string `json:"media_type"`
+	MimeType     string `json:"mime_type"`
+	Key          string `json:"key"`
+	Size         int64  `json:"size"`
+	AltText      string `json:"alt_text,omitempty"`
+	URL          string `json:"url,omitempty"`
+}
+
+// settled ends the job once an outcome is recorded, or retries it when
+// recording failed.
+func settled(err error) (StepOutput, error) {
+	if err != nil {
+		return retry("submit", err)
+	}
+	return done("settled")
+}
+
+func (p *SubmitPostProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task SubmitPostTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
+	var st submitState
+	if err := decodeState(in.State, &st); err != nil {
+		return done("skipped_bad_state")
+	}
+	// Background jobs span tenants (interim until per-tenant, PR4).
+	ctx = tenantctx.WithSystem(ctx)
 	post, err := p.Deps.PostRepo.GetByID(ctx, task.PostID)
 	if err != nil {
-		return fmt.Errorf("submit: load post %s: %w", task.PostID, err)
+		if !zernioPostMayExist(st.Phase) {
+			return retry("submit: load post "+task.PostID, err)
+		}
+		// Deleted mid-flight (or unreadable): carry on with what the state
+		// holds. The guarded write that follows finds no scheduled post and
+		// withdraws the Zernio post, or fails and retries.
+		post = &models.Post{ID: task.PostID, Status: models.PostStatusScheduled}
+		post.TenantID = st.TenantID
 	}
 	ctx = tenantctx.With(ctx, post.TenantID)
+	if st.Phase == "" {
+		return p.start(ctx, post)
+	}
+	if zernioDisabled(in.Result) {
+		return settled(p.terminal(ctx, post, "integration_disabled", "Zernio integration is not configured"))
+	}
+	switch st.Phase {
+	case submitPhaseRetry:
+		return p.retried(ctx, post, in.Result)
+	case submitPhasePresign:
+		return p.presigned(ctx, post, &st, in.Result)
+	case submitPhasePut:
+		return p.put(ctx, post, &st, in.Result)
+	case submitPhaseSubmit:
+		return p.submitted(ctx, post, &st, in.Result)
+	case submitPhaseDedupe:
+		st.Pages = append(st.Pages, zernioResult(in.Result))
+		return p.dedupe(ctx, post, &st)
+	case submitPhaseWithdraw:
+		return p.withdrawn(ctx, post, &st, in.Result)
+	default:
+		return done("skipped_bad_state")
+	}
+}
+
+// zernioPostMayExist reports whether a Zernio post for this submit may exist
+// by the given phase, so a vanished Ogen post must not stop the job.
+func zernioPostMayExist(phase string) bool {
+	switch phase {
+	case submitPhaseRetry, submitPhaseSubmit, submitPhaseDedupe, submitPhaseWithdraw:
+		return true
+	default:
+		return false
+	}
+}
+
+// start checks the post can still go out, then retries its prior Zernio post
+// or begins a fresh one.
+func (p *SubmitPostProcessor) start(ctx context.Context, post *models.Post) (StepOutput, error) {
 	if post.Status != models.PostStatusScheduled {
 		// User cancelled or reconciliation moved this post; abort quietly. The
 		// poll task does the same check.
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, post.Status, post.Status,
 			"submit aborted: post no longer Scheduled", `{"reason":"status_changed"}`)
-		return nil
+		return done("aborted_status_changed")
 	}
 	// A suspended/deleted tenant publishes nothing. The post stays Scheduled so
 	// it resumes if the tenant is reactivated.
 	active, err := tenantIsActive(ctx, p.Tenants, post.TenantID)
 	if err != nil {
-		return fmt.Errorf("submit: tenant status %s: %w", post.TenantID, err)
+		return retry("submit: tenant status "+post.TenantID, err)
 	}
 	if !active {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskSucceeded, post.Status, post.Status,
 			"submit aborted: tenant not active", `{"reason":"tenant_not_active"}`)
-		return nil
+		return done("aborted_tenant_not_active")
 	}
 	// A manual retry of a previously-failed post still carries the prior
 	// attempt's PublisherPostID: Zernio's retry endpoint reuses that job
 	// identity instead of creating a duplicate post. When that post no
-	// longer exists, retryExisting clears the id and we fall through to a
-	// fresh create.
+	// longer exists, the id is cleared and a fresh post is created.
 	if post.PublisherPostID != "" {
-		if done, err := p.retryExisting(ctx, post); done {
-			return err
+		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
+			"calling Zernio POST /posts/:id/retry", publisherPostIDPayload(post.PublisherPostID))
+		call, err := zernio.Plan(func(c *zernio.Client) error { _, err := c.Retry(ctx, post.PublisherPostID); return err })
+		if err != nil {
+			return StepOutput{}, err
 		}
+		return nextZernio(submitState{Phase: submitPhaseRetry, TenantID: post.TenantID}, call)
 	}
-
-	platform := post.Platform
-	if platform == nil {
-		return p.terminal(ctx, post, "missing_platform", "post has no platform set")
-	}
-	supported := zernio.LookupSupportedBySqid(platform.ID)
-	if supported == nil {
-		return p.terminal(ctx, post, "unsupported_platform",
-			fmt.Sprintf("platform %s (%s) is not Zernio-supported", platform.Name, platform.ID))
-	}
-	if p.Deps.ProfileID == nil {
-		return p.terminal(ctx, post, "integration_disabled", "Zernio integration is not configured")
-	}
-	profileID, perr := p.Deps.ProfileID(ctx)
-	if perr != nil || profileID == "" {
-		return p.terminal(ctx, post, "no_profile", "Zernio profile id not yet bootstrapped")
-	}
-	accountID, aerr := p.resolveAccountID(ctx, post, profileID, supported.ZernioID)
-	if accountID == "" {
-		// resolveAccountID either wrote a terminal PostLog (aerr == nil, no
-		// retry) or hit a transient error River should retry.
-		return aerr
-	}
-
-	variant, mediaItems, err := p.buildVariant(ctx, post, supported.ZernioID, accountID)
-	if err != nil {
-		return err
-	}
-	req := p.buildRequest(ctx, post, variant, mediaItems)
-	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, post.Status, post.Status,
-		"calling Zernio POST /posts", logs.MarshalCapped(req))
-
-	apiStart := time.Now()
-	job, submitErr := p.Deps.Client.Submit(ctx, req)
-	jobs.ObserveZernioCall(time.Since(apiStart))
-	if submitErr != nil {
-		return p.handleSubmitErr(ctx, post, req, accountID, submitErr)
-	}
-	jobs.ZernioSubmitSucceeded.Add(1)
-	return p.persistSuccess(ctx, post, job, accountID)
+	return p.create(ctx, post)
 }
 
-// retryExisting re-drives a prior Zernio job through POST /posts/:id/retry.
-// It reports false when the Zernio post is gone (404): the stale identity has
-// been cleared and the caller should create a fresh post. A 404 means no
-// Zernio post exists, so creating one cannot duplicate it.
-func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Post) (bool, error) {
-	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
-		"calling Zernio POST /posts/:id/retry", publisherPostIDPayload(post.PublisherPostID))
-	job, retryErr := p.Deps.Client.Retry(ctx, post.PublisherPostID)
+// retried settles Zernio's answer to the retry of the prior post. A 404
+// means no Zernio post exists, so creating one cannot duplicate it.
+func (p *SubmitPostProcessor) retried(ctx context.Context, post *models.Post, res *StepResult) (StepOutput, error) {
+	var job *zernio.Job
+	retryErr := zernio.Decode(zernioResult(res), func(c *zernio.Client) error {
+		var err error
+		job, err = c.Retry(ctx, post.PublisherPostID)
+		return err
+	})
 	switch {
 	case retryErr == nil:
-		return true, p.persistSuccess(ctx, post, job, "")
+		return p.persistSuccess(ctx, post, job, "")
 	case zernio.IsStatus(retryErr, http.StatusNotFound):
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioRetry, post.Status, post.Status,
 			"Zernio post no longer exists; submitting a fresh post", publisherPostIDPayload(post.PublisherPostID))
@@ -231,46 +278,235 @@ func (p *SubmitPostProcessor) retryExisting(ctx context.Context, post *models.Po
 		post.UpdatedAt = time.Now().UTC()
 		ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held, "publisher_post_id", "publisher_status", "updated_at")
 		if err != nil {
-			return true, fmt.Errorf("submit: clear stale publisher_post_id: %w", err)
+			return retry("submit: clear stale publisher_post_id", err)
 		}
 		if !ok {
-			return true, p.movedOn(ctx, post)
+			return settled(p.movedOn(ctx, post))
 		}
-		return false, nil
+		return p.create(ctx, post)
 	case zernio.IsTerminalAPIError(retryErr):
-		return true, p.terminal(ctx, post, "zernio_retry_rejected", retryErr.Error())
+		return settled(p.terminal(ctx, post, "zernio_retry_rejected", retryErr.Error()))
 	default:
-		return true, p.transient(ctx, post, "transient Zernio retry error; River will retry", retryErr)
+		return settled(p.transient(ctx, post, "transient Zernio retry error; River will retry", retryErr))
 	}
 }
 
-// buildVariant uploads the post's attachments to Zernio and returns the
-// platform variant plus the top-level mediaItems. A thread carries its media
+// create resolves where the post goes, then starts on its media.
+func (p *SubmitPostProcessor) create(ctx context.Context, post *models.Post) (StepOutput, error) {
+	platform := post.Platform
+	if platform == nil {
+		return settled(p.terminal(ctx, post, "missing_platform", "post has no platform set"))
+	}
+	supported := zernio.LookupSupportedBySqid(platform.ID)
+	if supported == nil {
+		return settled(p.terminal(ctx, post, "unsupported_platform",
+			fmt.Sprintf("platform %s (%s) is not Zernio-supported", platform.Name, platform.ID)))
+	}
+	if p.Deps.ProfileID == nil {
+		return settled(p.terminal(ctx, post, "integration_disabled", "Zernio integration is not configured"))
+	}
+	profileID, perr := p.Deps.ProfileID(ctx)
+	if perr != nil || profileID == "" {
+		return settled(p.terminal(ctx, post, "no_profile", "Zernio profile id not yet bootstrapped"))
+	}
+	accountID, aerr := p.resolveAccountID(ctx, post, profileID, supported.ZernioID)
+	if accountID == "" {
+		// resolveAccountID either wrote a terminal PostLog (aerr == nil, no
+		// retry) or hit a transient error River should retry.
+		return settled(aerr)
+	}
+	uploads, err := p.planUploads(ctx, post)
+	if err != nil {
+		return settled(p.transient(ctx, post, "transient error uploading media to Zernio; River will retry", err))
+	}
+	return p.nextUpload(ctx, post, &submitState{TenantID: post.TenantID, AccountID: accountID, Uploads: uploads})
+}
+
+// planUploads lists the attachments the post carries, in position order, each
+// placed on its thread segment. Nil deps (Storage/PostAttachmentRepo) or no
+// attachments ⇒ none (a text-only post). Attachments whose MIME type Zernio
+// doesn't accept are skipped, not fatal; so is a thread attachment whose
+// segment_index is out of range (defence in depth; the gate range-checks it
+// first). A NULL segment_index puts the attachment on the root message.
+func (p *SubmitPostProcessor) planUploads(ctx context.Context, post *models.Post) ([]submitUpload, error) {
+	if p.Deps.Storage == nil || p.Deps.PostAttachmentRepo == nil {
+		return nil, nil
+	}
+	atts, err := p.Deps.PostAttachmentRepo.ListByPostID(ctx, post.ID)
+	if err != nil {
+		return nil, fmt.Errorf("submit: list attachments: %w", err)
+	}
+	thread := post.IsThread()
+	var uploads []submitUpload
+	now := time.Now()
+	for i := range atts {
+		att := &atts[i]
+		seg := 0
+		if thread && att.SegmentIndex != nil {
+			seg = *att.SegmentIndex
+		}
+		if thread && (seg < 0 || seg >= len(post.ThreadSegments)) {
+			slog.WarnContext(ctx, "skipping thread attachment with out-of-range segment_index",
+				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID)
+			continue
+		}
+		mediaType := zernio.MediaType(att.MimeType)
+		if mediaType == "" {
+			slog.WarnContext(ctx, "skipping attachment: unsupported media type for Zernio",
+				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID, "mime", att.MimeType)
+			continue
+		}
+		u := submitUpload{
+			AttachmentID: att.ID, Segment: seg, MediaType: mediaType, MimeType: att.MimeType,
+			Key: att.S3Key, Size: att.SizeBytes, AltText: att.AltText,
+		}
+		// Reuse the previous upload while Zernio still holds it at publish time.
+		if reusableUpload(att, post, now) {
+			u.URL = att.PublisherMediaURL
+		}
+		uploads = append(uploads, u)
+	}
+	return uploads, nil
+}
+
+// nextUpload presigns the next attachment not yet on Zernio, or submits the
+// post once they all are.
+func (p *SubmitPostProcessor) nextUpload(ctx context.Context, post *models.Post, st *submitState) (StepOutput, error) {
+	for st.Next < len(st.Uploads) && st.Uploads[st.Next].URL != "" {
+		st.Next++
+	}
+	if st.Next == len(st.Uploads) {
+		return p.submit(ctx, post, st)
+	}
+	u := st.Uploads[st.Next]
+	call, err := zernio.Plan(func(c *zernio.Client) error { _, err := c.PresignMedia(ctx, path.Base(u.Key), u.MimeType); return err })
+	if err != nil {
+		return StepOutput{}, err
+	}
+	st.Phase = submitPhasePresign
+	return nextZernio(st, call)
+}
+
+// presigned streams the attachment to the upload URL Zernio handed out.
+func (p *SubmitPostProcessor) presigned(ctx context.Context, post *models.Post, st *submitState, res *StepResult) (StepOutput, error) {
+	u := st.Uploads[st.Next]
+	var presign *zernio.MediaPresign
+	err := zernio.Decode(zernioResult(res), func(c *zernio.Client) error {
+		var err error
+		presign, err = c.PresignMedia(ctx, path.Base(u.Key), u.MimeType)
+		return err
+	})
+	if err != nil {
+		return settled(p.uploadFailed(ctx, post, fmt.Errorf("submit: presign media %s: %w", u.AttachmentID, err)))
+	}
+	source, err := p.Deps.Storage.PresignedGetURL(ctx, u.Key, mediaSourceTTL)
+	if err != nil {
+		return settled(p.uploadFailed(ctx, post, fmt.Errorf("submit: download attachment %s: %w", u.AttachmentID, err)))
+	}
+	st.Phase, st.UploadURL, st.PublicURL = submitPhasePut, presign.UploadURL, presign.PublicURL
+	raw, err := encodeState(st)
+	if err != nil {
+		return StepOutput{}, err
+	}
+	return StepOutput{State: raw, Transfer: &MediaTransfer{
+		SourceURL: source, UploadURL: presign.UploadURL, ContentType: u.MimeType, Size: u.Size, storageKey: u.Key,
+	}}, nil
+}
+
+// put records a finished upload for the next attempt, then moves on.
+func (p *SubmitPostProcessor) put(ctx context.Context, post *models.Post, st *submitState, res *StepResult) (StepOutput, error) {
+	u := &st.Uploads[st.Next]
+	if err := transferErr(res); err != nil {
+		return settled(p.uploadFailed(ctx, post, fmt.Errorf("submit: upload media %s: %w", u.AttachmentID, err)))
+	}
+	u.URL = st.PublicURL
+	if err := p.Deps.PostAttachmentRepo.SetPublisherMedia(ctx, u.AttachmentID, u.URL, time.Now().UTC()); err != nil {
+		slog.WarnContext(ctx, "failed to record Zernio media upload; a retry will upload it again",
+			logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", u.AttachmentID, logging.AttrError, err)
+	}
+	st.Next++
+	st.UploadURL, st.PublicURL = "", ""
+	return p.nextUpload(ctx, post, st)
+}
+
+// transferErr is a media transfer's failure, if any.
+func transferErr(res *StepResult) error {
+	switch {
+	case res == nil:
+		return errors.New("no result")
+	case res.Err != "":
+		return errors.New(res.Err)
+	case res.Status >= 400:
+		return &zernio.APIError{Status: res.Status, Message: strings.TrimSpace(string(res.Body))}
+	default:
+		return nil
+	}
+}
+
+// uploadFailed is transient: the post stays Scheduled and River retries.
+func (p *SubmitPostProcessor) uploadFailed(ctx context.Context, post *models.Post, err error) error {
+	msg := "transient error uploading media to Zernio; River will retry"
+	if post.IsThread() {
+		msg = "transient error uploading thread media to Zernio; River will retry"
+	}
+	return p.transient(ctx, post, msg, err)
+}
+
+// submit sends the post with its uploaded media.
+func (p *SubmitPostProcessor) submit(ctx context.Context, post *models.Post, st *submitState) (StepOutput, error) {
+	if post.Platform == nil || zernio.LookupSupportedBySqid(post.Platform.ID) == nil {
+		return settled(p.terminal(ctx, post, "unsupported_platform", "post platform changed while submitting"))
+	}
+	req := p.buildRequest(ctx, post, p.buildVariant(post, st), mediaItems(post, st.Uploads))
+	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, post.Status, post.Status,
+		"calling Zernio POST /posts", logs.MarshalCapped(req))
+	call, err := zernio.Plan(func(c *zernio.Client) error { _, err := c.Submit(ctx, req); return err })
+	if err != nil {
+		return StepOutput{}, err
+	}
+	st.Phase, st.Content = submitPhaseSubmit, req.Content
+	st.Uploads = nil
+	return nextZernio(st, call)
+}
+
+// submitted settles Zernio's answer to the submit: dedupe recovery for a
+// 409, terminal for a rejected request, otherwise a River retry.
+func (p *SubmitPostProcessor) submitted(ctx context.Context, post *models.Post, st *submitState, res *StepResult) (StepOutput, error) {
+	var job *zernio.Job
+	err := zernio.Decode(zernioResult(res), func(c *zernio.Client) error {
+		var err error
+		job, err = c.Submit(ctx, zernio.SubmitRequest{})
+		return err
+	})
+	switch {
+	case err == nil:
+		jobs.ZernioSubmitSucceeded.Add(1)
+		return p.persistSuccess(ctx, post, job, st.AccountID)
+	case errors.Is(err, zernio.ErrDuplicateContent):
+		st.Phase, st.Pages = submitPhaseDedupe, nil
+		return p.dedupe(ctx, post, st)
+	case zernio.IsTerminalAPIError(err):
+		jobs.ZernioSubmitFailed.Add(1)
+		return settled(p.terminal(ctx, post, "zernio_rejected", err.Error()))
+	default:
+		return settled(p.transient(ctx, post, "transient Zernio error; River will retry", err))
+	}
+}
+
+// buildVariant returns the platform variant. A thread carries its media
 // inside per-segment threadItems; an ordinary post carries a flat mediaItems
-// array. The post title rides in the variant's platformSpecificData, the only
-// place Zernio reads it. An upload failure is transient: the post stays Scheduled and River
-// retries.
-func (p *SubmitPostProcessor) buildVariant(ctx context.Context, post *models.Post, zernioPlatform, accountID string) (zernio.PlatformVariant, []map[string]any, error) {
-	variant := zernio.PlatformVariant{Platform: zernioPlatform, AccountID: accountID}
+// array (see mediaItems). The post title rides in the variant's
+// platformSpecificData, the only place Zernio reads it.
+func (p *SubmitPostProcessor) buildVariant(post *models.Post, st *submitState) zernio.PlatformVariant {
+	variant := zernio.PlatformVariant{Platform: zernio.LookupSupportedBySqid(post.Platform.ID).ZernioID, AccountID: st.AccountID}
 	var data zernio.PlatformSpecificData
 	// Only platforms with a title limit take a title; for the rest a stray
 	// title would be noise in their platformSpecificData.
 	if post.Platform.TextConstraints.MaxTitleChars > 0 {
 		data.Title = strings.TrimSpace(post.Title)
 	}
-	var items []map[string]any
 	if post.IsThread() {
-		threadItems, err := p.buildThreadItems(ctx, post)
-		if err != nil {
-			return variant, nil, p.transient(ctx, post, "transient error uploading thread media to Zernio; River will retry", err)
-		}
-		data.ThreadItems = threadItems
-	} else {
-		var err error
-		items, err = p.buildMediaItems(ctx, post)
-		if err != nil {
-			return variant, nil, p.transient(ctx, post, "transient error uploading media to Zernio; River will retry", err)
-		}
+		data.ThreadItems = threadItems(post, st.Uploads)
 	}
 	// A first comment without a delay rides the publish request; a delayed
 	// one is posted by PostFirstCommentProcessor once the post is live.
@@ -280,7 +516,45 @@ func (p *SubmitPostProcessor) buildVariant(ctx context.Context, post *models.Pos
 	if data.Title != "" || len(data.ThreadItems) > 0 || data.FirstComment != "" {
 		variant.PlatformSpecificData = &data
 	}
-	return variant, items, nil
+	return variant
+}
+
+// mediaItem is one upload's mediaItems descriptor {url, type, altText?}.
+func mediaItem(u submitUpload) map[string]any {
+	item := map[string]any{"url": u.URL, "type": u.MediaType}
+	if u.AltText != "" {
+		item["altText"] = u.AltText
+	}
+	return item
+}
+
+// mediaItems is an ordinary post's top-level mediaItems, in position order;
+// nil for a thread, whose media rides in its segments.
+func mediaItems(post *models.Post, uploads []submitUpload) []map[string]any {
+	if post.IsThread() || len(uploads) == 0 {
+		return nil
+	}
+	items := make([]map[string]any, 0, len(uploads))
+	for _, u := range uploads {
+		items = append(items, mediaItem(u))
+	}
+	return items
+}
+
+// threadItems is a native thread's per-segment payload: one ThreadItem per
+// thread_segment (item 0 = root), each with its own text and media in
+// position order. Markdown is flattened per segment so each message publishes
+// as plain text (Zernio ships the content verbatim); VisibleLen counts this
+// same flattened form, so a segment that passed the per-message gate fits.
+func threadItems(post *models.Post, uploads []submitUpload) []zernio.ThreadItem {
+	items := make([]zernio.ThreadItem, len(post.ThreadSegments))
+	for i := range post.ThreadSegments {
+		items[i] = zernio.ThreadItem{Content: platforms.FlattenSocialText(post.ThreadSegments[i].Content)}
+	}
+	for _, u := range uploads {
+		items[u.Segment].MediaItems = append(items[u.Segment].MediaItems, mediaItem(u))
+	}
+	return items
 }
 
 // buildRequest assembles the submit request. ScheduledFor is the UTC source of
@@ -312,28 +586,22 @@ func (p *SubmitPostProcessor) buildRequest(ctx context.Context, post *models.Pos
 	}
 }
 
-// handleSubmitErr settles a failed submit: dedupe recovery for a 409, terminal
-// for a rejected request, otherwise a River retry.
-func (p *SubmitPostProcessor) handleSubmitErr(ctx context.Context, post *models.Post, req zernio.SubmitRequest, accountID string, err error) error {
-	if errors.Is(err, zernio.ErrDuplicateContent) {
-		return p.recoverDuplicate(ctx, post, req.Content, accountID)
-	}
-	if zernio.IsTerminalAPIError(err) {
-		jobs.ZernioSubmitFailed.Add(1)
-		return p.terminal(ctx, post, "zernio_rejected", err.Error())
-	}
-	return p.transient(ctx, post, "transient Zernio error; River will retry", err)
-}
-
-// recoverDuplicate handles Zernio's 24h dedupe 409 by searching the whole
-// window, across all statuses, for the content actually submitted.
-func (p *SubmitPostProcessor) recoverDuplicate(ctx context.Context, post *models.Post, content, accountID string) error {
-	recovered, err := p.Deps.Client.FindByContent(ctx, content, 24*time.Hour)
+// dedupe handles Zernio's 24h dedupe 409 by searching the whole window,
+// across all statuses, for the content actually submitted, a page per step.
+func (p *SubmitPostProcessor) dedupe(ctx context.Context, post *models.Post, st *submitState) (StepOutput, error) {
+	var recovered *zernio.Job
+	next, err := zernio.Replay(st.Pages, func(c *zernio.Client) error {
+		var err error
+		recovered, err = c.FindByContent(ctx, st.Content, 24*time.Hour)
+		return err
+	})
 	switch {
+	case next != nil:
+		return nextZernio(st, *next)
 	case err != nil:
 		// Retrying 409s again and re-attempts recovery rather than dead-ending
 		// the post.
-		return p.transient(ctx, post, "transient error locating dedupe match; River will retry", err)
+		return settled(p.transient(ctx, post, "transient error locating dedupe match; River will retry", err))
 	case recovered != nil && !recovered.Status.IsTerminal():
 		// A still-pending earlier job (almost always this post's own prior
 		// attempt): adopt it and keep polling. Counted here because
@@ -341,20 +609,20 @@ func (p *SubmitPostProcessor) recoverDuplicate(ctx context.Context, post *models
 		jobs.ZernioSubmitSucceeded.Add(1)
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, post.Status, post.Status,
 			"recovered pending Zernio job after 409 dedupe", logs.MarshalCapped(recovered))
-		return p.persistSuccess(ctx, post, recovered, accountID)
+		return p.persistSuccess(ctx, post, recovered, st.AccountID)
 	case recovered != nil:
 		// The content already ran to a terminal state in this window; adopting a
 		// finished job would be wrong, so fail with the cause named.
 		jobs.ZernioSubmitFailed.Add(1)
-		return p.terminal(ctx, post, "zernio_duplicate_content",
+		return settled(p.terminal(ctx, post, "zernio_duplicate_content",
 			fmt.Sprintf("identical content was already %s on Zernio within the last 24h (job %s); edit the content to submit again",
-				recovered.Status, recovered.ID))
+				recovered.Status, recovered.ID)))
 	default:
 		// Duplicate per Zernio, but no matching job located (normalisation
 		// mismatch, or beyond the search window).
 		jobs.ZernioSubmitFailed.Add(1)
-		return p.terminal(ctx, post, "zernio_duplicate_content",
-			"Zernio rejected this as duplicate content submitted within the last 24h; edit the content or wait for the dedupe window to pass")
+		return settled(p.terminal(ctx, post, "zernio_duplicate_content",
+			"Zernio rejected this as duplicate content submitted within the last 24h; edit the content or wait for the dedupe window to pass"))
 	}
 }
 
@@ -405,7 +673,7 @@ func (p *SubmitPostProcessor) resolveAccountID(ctx context.Context, post *models
 // lands while the post is still scheduled under the submission this job
 // loaded; if the user unscheduled or deleted it while the submit was in flight,
 // the Zernio post just created belongs to nothing and is withdrawn instead.
-func (p *SubmitPostProcessor) persistSuccess(ctx context.Context, post *models.Post, job *zernio.Job, accountID string) error {
+func (p *SubmitPostProcessor) persistSuccess(ctx context.Context, post *models.Post, job *zernio.Job, accountID string) (StepOutput, error) {
 	held := post.PublisherPostID
 	post.Publisher = zernio.PublisherID
 	post.PublisherPostID = job.ID
@@ -414,7 +682,7 @@ func (p *SubmitPostProcessor) persistSuccess(ctx context.Context, post *models.P
 	ok, err := p.Deps.PostRepo.UpdateSubmission(ctx, post, held,
 		"publisher", "publisher_post_id", "publisher_status", "updated_at")
 	if err != nil {
-		return fmt.Errorf("submit: persist publisher_post_id: %w", err)
+		return retry("submit: persist publisher_post_id", err)
 	}
 	if !ok {
 		return p.withdrawLanded(ctx, post, job.ID)
@@ -432,164 +700,7 @@ func (p *SubmitPostProcessor) persistSuccess(ctx context.Context, post *models.P
 		activity.WithStatus("submitted"),
 	)
 	p.enqueuePoll(ctx, post)
-	return nil
-}
-
-// buildMediaItems uploads each of the post's attachments to Zernio (presign →
-// PUT bytes → publicUrl) and returns the mediaItems array for the submit
-// request, in position order, carrying altText. Nil deps
-// (Storage/PostAttachmentRepo) or no attachments ⇒ nil (a text-only post).
-// Attachments whose MIME type Zernio doesn't accept are skipped, not fatal.
-func (p *SubmitPostProcessor) buildMediaItems(ctx context.Context, post *models.Post) ([]map[string]any, error) {
-	if p.Deps.Storage == nil || p.Deps.PostAttachmentRepo == nil {
-		return nil, nil
-	}
-	atts, err := p.Deps.PostAttachmentRepo.ListByPostID(ctx, post.ID)
-	if err != nil {
-		return nil, fmt.Errorf("submit: list attachments: %w", err)
-	}
-	if len(atts) == 0 {
-		return nil, nil
-	}
-	uploaded, err := p.uploadAll(ctx, post, atts)
-	if err != nil {
-		return nil, err
-	}
-	items := make([]map[string]any, 0, len(uploaded))
-	for _, item := range uploaded {
-		if item != nil {
-			items = append(items, item)
-		}
-	}
-	return items, nil
-}
-
-// buildThreadItems builds the ordered per-segment payload for a native thread:
-// one ThreadItem per thread_segment (item 0 = root), each carrying
-// its own text and its own media. Attachments are grouped by segment_index and
-// uploaded to Zernio (presign → PUT) exactly like buildMediaItems, preserving
-// position order within a segment. Nil storage/repo ⇒ a text-only thread.
-//
-// segment_index is optional — a NULL index means the attachment
-// belongs to the root message (segment 0), the whole-post default of the
-// delimited-body flow. Only a non-NULL, out-of-range index can't be placed, so it
-// is skipped with a warning (defence in depth; the gate range-checks it first).
-func (p *SubmitPostProcessor) buildThreadItems(ctx context.Context, post *models.Post) ([]zernio.ThreadItem, error) {
-	items := make([]zernio.ThreadItem, len(post.ThreadSegments))
-	for i := range post.ThreadSegments {
-		// Flatten Markdown per segment so each message publishes as plain
-		// text (Zernio ships the content verbatim). VisibleLen counts this same
-		// flattened form, so a segment that passed the per-message gate fits here.
-		items[i] = zernio.ThreadItem{Content: platforms.FlattenSocialText(post.ThreadSegments[i].Content)}
-	}
-	if p.Deps.Storage == nil || p.Deps.PostAttachmentRepo == nil {
-		return items, nil
-	}
-	atts, err := p.Deps.PostAttachmentRepo.ListByPostID(ctx, post.ID)
-	if err != nil {
-		return nil, fmt.Errorf("submit: list attachments: %w", err)
-	}
-	placed := make([]models.PostAttachment, 0, len(atts))
-	segs := make([]int, 0, len(atts))
-	for i := range atts {
-		seg := 0 // NULL segment_index → root message (segment 0)
-		if atts[i].SegmentIndex != nil {
-			seg = *atts[i].SegmentIndex
-		}
-		if seg < 0 || seg >= len(items) {
-			slog.WarnContext(ctx, "skipping thread attachment with out-of-range segment_index",
-				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", atts[i].ID)
-			continue
-		}
-		placed = append(placed, atts[i])
-		segs = append(segs, seg)
-	}
-	uploaded, err := p.uploadAll(ctx, post, placed)
-	if err != nil {
-		return nil, err
-	}
-	for i, item := range uploaded {
-		if item != nil {
-			items[segs[i]].MediaItems = append(items[segs[i]].MediaItems, item)
-		}
-	}
-	return items, nil
-}
-
-// uploadAll uploads atts to Zernio, up to mediaUploadParallelism at a time,
-// and returns their mediaItems descriptors index-aligned with atts. An
-// attachment whose MIME type Zernio doesn't accept is skipped (nil entry), not
-// fatal; the first upload failure cancels the rest.
-func (p *SubmitPostProcessor) uploadAll(ctx context.Context, post *models.Post, atts []models.PostAttachment) ([]map[string]any, error) {
-	items := make([]map[string]any, len(atts))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(mediaUploadParallelism)
-	for i := range atts {
-		att := &atts[i]
-		mediaType := zernio.MediaType(att.MimeType)
-		if mediaType == "" {
-			slog.WarnContext(ctx, "skipping attachment: unsupported media type for Zernio",
-				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID, "mime", att.MimeType)
-			continue
-		}
-		g.Go(func() (err error) {
-			// Off River's goroutine an unrecovered panic would crash the
-			// process; it fails this attempt instead, and River retries.
-			defer func() {
-				if r := recover(); r != nil {
-					err = fmt.Errorf("submit: upload media %s panicked: %v", att.ID, r)
-				}
-			}()
-			item, err := p.uploadMedia(gctx, post, att, mediaType)
-			items[i] = item
-			return err
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-// uploadMedia returns one attachment's mediaItems descriptor {url, type,
-// altText?}. It reuses the attachment's previous upload while Zernio still
-// holds it at publish time; otherwise it streams the file from our storage to
-// Zernio (presign + PUT) and records the new public URL for the next attempt.
-func (p *SubmitPostProcessor) uploadMedia(ctx context.Context, post *models.Post, att *models.PostAttachment, mediaType string) (map[string]any, error) {
-	url := att.PublisherMediaURL
-	if !reusableUpload(att, post, time.Now()) {
-		var err error
-		if url, err = p.putMedia(ctx, att); err != nil {
-			return nil, err
-		}
-		if err := p.Deps.PostAttachmentRepo.SetPublisherMedia(ctx, att.ID, url, time.Now().UTC()); err != nil {
-			slog.WarnContext(ctx, "failed to record Zernio media upload; a retry will upload it again",
-				logging.AttrComponent, "jobs.submit", "post_id", post.ID, "attachment_id", att.ID, logging.AttrError, err)
-		}
-	}
-
-	item := map[string]any{"url": url, "type": mediaType}
-	if att.AltText != "" {
-		item["altText"] = att.AltText
-	}
-	return item, nil
-}
-
-func (p *SubmitPostProcessor) putMedia(ctx context.Context, att *models.PostAttachment) (string, error) {
-	rc, err := p.Deps.Storage.Download(ctx, att.S3Key)
-	if err != nil {
-		return "", fmt.Errorf("submit: download attachment %s: %w", att.ID, err)
-	}
-	defer rc.Close()
-
-	presign, err := p.Deps.Client.PresignMedia(ctx, path.Base(att.S3Key), att.MimeType)
-	if err != nil {
-		return "", fmt.Errorf("submit: presign media %s: %w", att.ID, err)
-	}
-	if err := p.Deps.Client.UploadMedia(ctx, presign.UploadURL, att.MimeType, rc, att.SizeBytes); err != nil {
-		return "", fmt.Errorf("submit: upload media %s: %w", att.ID, err)
-	}
-	return presign.PublicURL, nil
+	return done("submitted")
 }
 
 // reusableUpload reports whether att's recorded Zernio upload will still be in
@@ -631,16 +742,12 @@ func (p *SubmitPostProcessor) recordPublish(ctx context.Context, post *models.Po
 }
 
 func (p *SubmitPostProcessor) enqueuePoll(ctx context.Context, post *models.Post) {
-	client, err := river.ClientFromContextSafely[*sql.Tx](ctx)
-	if err != nil || client == nil {
-		return
-	}
 	when := time.Now().UTC().Add(p.pollLead())
 	if post.ScheduledAt != nil && post.ScheduledAt.After(time.Now()) {
 		when = post.ScheduledAt.Add(p.pollLead())
 	}
 	task := PollZernioStatusTask{PostID: post.ID, PublisherPostID: post.PublisherPostID}
-	if _, err := client.Insert(ctx, task, insertOptsWithRequestID(ctx, &river.InsertOpts{ScheduledAt: when})); err != nil {
+	if err := p.Deps.Jobs.enqueue(ctx, task, &EnqueueOpts{ScheduledAt: when}); err != nil {
 		appendLog(ctx, p.Deps, post.ID, models.PostLogEventTaskFailed, post.Status, post.Status,
 			"failed to enqueue poll_zernio_status", errPayload(err))
 	}
@@ -690,28 +797,43 @@ func (p *SubmitPostProcessor) movedOn(ctx context.Context, post *models.Post) er
 }
 
 // withdrawLanded deletes a Zernio post whose Ogen post left scheduled while
-// the submit creating it was in flight. A failed withdrawal is queued for
-// retry; if even that fails the orphan sweep finds the post later.
-func (p *SubmitPostProcessor) withdrawLanded(ctx context.Context, post *models.Post, publisherPostID string) error {
-	task := WithdrawZernioPostTask{
+// the submit creating it was in flight.
+func (p *SubmitPostProcessor) withdrawLanded(ctx context.Context, post *models.Post, publisherPostID string) (StepOutput, error) {
+	task := p.landedWithdrawal(post, publisherPostID)
+	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, models.PostStatusScheduled, models.PostStatusScheduled,
+		"submit landed after the post left Scheduled; withdrawing the Zernio post", withdrawPayload(task))
+	call, err := zernio.Plan(func(c *zernio.Client) error { return c.Cancel(ctx, publisherPostID) })
+	if err != nil {
+		return StepOutput{}, err
+	}
+	return nextZernio(submitState{Phase: submitPhaseWithdraw, TenantID: post.TenantID, Withdraw: publisherPostID}, call)
+}
+
+// withdrawn settles the withdrawal. One that failed is queued for retry; if
+// even that fails the orphan sweep finds the post later.
+func (p *SubmitPostProcessor) withdrawn(ctx context.Context, post *models.Post, st *submitState, res *StepResult) (StepOutput, error) {
+	task := p.landedWithdrawal(post, st.Withdraw)
+	cancelErr := zernio.Decode(zernioResult(res), func(c *zernio.Client) error { return c.Cancel(ctx, st.Withdraw) })
+	_, err := withdraw(ctx, p.Deps, task, cancelErr)
+	if err == nil {
+		return done("withdrawn_landed")
+	}
+	if qerr := p.Deps.Jobs.enqueue(ctx, task, nil); qerr != nil {
+		slog.ErrorContext(ctx, "could not withdraw or queue the withdrawal of an orphaned Zernio post",
+			logging.AttrComponent, "jobs.submit", "post_id", post.ID,
+			"publisher_post_id", st.Withdraw, logging.AttrError, errors.Join(err, qerr))
+	}
+	return done("withdraw_queued")
+}
+
+func (p *SubmitPostProcessor) landedWithdrawal(post *models.Post, publisherPostID string) WithdrawZernioPostTask {
+	return WithdrawZernioPostTask{
 		PublisherPostID: publisherPostID,
 		PostID:          post.ID,
 		TenantID:        post.TenantID,
 		Reason:          WithdrawReasonUnscheduled,
 		Actor:           models.ActorSystem,
 	}
-	appendLog(ctx, p.Deps, post.ID, models.PostLogEventZernioSubmit, models.PostStatusScheduled, models.PostStatusScheduled,
-		"submit landed after the post left Scheduled; withdrawing the Zernio post", withdrawPayload(task))
-	_, err := withdraw(ctx, p.Deps, task)
-	if err == nil {
-		return nil
-	}
-	if qerr := enqueueWithdraw(ctx, task); qerr != nil {
-		slog.ErrorContext(ctx, "could not withdraw or queue the withdrawal of an orphaned Zernio post",
-			logging.AttrComponent, "jobs.submit", "post_id", post.ID,
-			"publisher_post_id", publisherPostID, logging.AttrError, errors.Join(err, qerr))
-	}
-	return nil
 }
 
 // memberLister lists the tenant's members from a tenant-scoped context — the

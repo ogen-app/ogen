@@ -16,8 +16,6 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/jobs"
-	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/pgtest"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
@@ -565,7 +563,6 @@ func TestBackfillQueuesMissingLensesInBatches(t *testing.T) {
 	f.seedCampaign(t, "camp-a", "md-done", "img-1")
 	run(t, f, "md-done", nil)
 	f.seedSuspendedTenantAsset(t, "t-suspended", "md-frozen")
-	f.migrateRiver(t)
 
 	n, err := f.svc.Backfill(f.ctx, 2)
 	if err != nil || n != 2 {
@@ -621,23 +618,22 @@ func (f *fixture) seedSuspendedTenantAsset(t *testing.T, tenantID, assetID strin
 
 func TestBackfillRequeuesStrandedPendingLenses(t *testing.T) {
 	f := newFixture(t, nil)
-	f.migrateRiver(t)
+	lenses := map[string]string{}
 	for _, id := range []string{"md-stranded", "md-queued", "md-fresh"} {
 		f.seedAsset(t, id, models.AssetTypeMarkdown, models.AssetStatusReady, "text")
-		if _, err := f.repos.Analyses.Ensure(f.ctx, f.db, id, nil); err != nil {
+		row, err := f.repos.Analyses.Ensure(f.ctx, f.db, id, nil)
+		if err != nil {
 			t.Fatal(err)
 		}
+		lenses[id] = row.ID
 	}
 	if _, err := f.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
 		Set("updated_at = ?", time.Now().Add(-time.Hour)).
 		Where("asset_id IN (?)", bun.List([]string{"md-stranded", "md-queued"})).Exec(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	enq, err := queues.NewInsertOnlyEnqueuer(f.db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := enq.EnqueueAnalyzeAsset(f.ctx, tenant, "md-queued", nil, assetanalysis.ReasonIngested, time.Time{}); err != nil {
+	// md-queued's job is stepping on it; md-stranded's never ran.
+	if err := f.repos.Analyses.TouchLens(f.ctx, lenses["md-queued"]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -647,14 +643,5 @@ func TestBackfillRequeuesStrandedPendingLenses(t *testing.T) {
 	want := []queued{{"md-stranded", "", assetanalysis.ReasonBackfill}}
 	if !slices.Equal(f.jobs.analyses, want) {
 		t.Fatalf("queued = %+v, want only the stale pending lens without a job", f.jobs.analyses)
-	}
-}
-
-// migrateRiver adds River's tables, which backfill reads to find lenses whose
-// job was never queued.
-func (f *fixture) migrateRiver(t *testing.T) {
-	t.Helper()
-	if err := jobs.MigrateRiver(f.ctx, f.db.DB); err != nil {
-		t.Fatal(err)
 	}
 }

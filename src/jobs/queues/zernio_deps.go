@@ -1,5 +1,5 @@
-// Package queues holds the typed River queues that drive Ogen's
-// auto-publish pipeline.
+// Package queues holds Ogen's background jobs: their args, enqueue surface,
+// steps and maintenance passes. river-service runs them.
 package queues
 
 import (
@@ -53,4 +53,7 @@ type ZernioDeps struct {
 	// (publish_submitted/succeeded/failed/cancelled, analytics_refreshed).
 	// nil = no-op.
 	ActivityRecorder *activity.Recorder
+	// Jobs enqueues the follow-up jobs these jobs schedule (a delayed first
+	// comment, a withdrawal). Nil fails those enqueues.
+	Jobs *Enqueuer
 }

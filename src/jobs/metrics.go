@@ -9,8 +9,8 @@ import (
 // Metrics surfaces Ogen's job-queue health to operators.
 // Counters are exposed via expvar at /debug/vars; latency averages
 // live as a small in-process histogram so we don't pull a metrics
-// library for the MVP. River's tables cover per-queue depth
-// (upcoming/running/succeeded/failed) — this is what's left.
+// library for the MVP. Queue depth and job outcomes live in river-service
+// (River UI); these are the outcomes ogen's steps see.
 //
 // Field naming is "ogen_jobs_*" so the expvar surface stays distinct
 // from runtime/expvar's stock keys (memstats, cmdline, etc.).

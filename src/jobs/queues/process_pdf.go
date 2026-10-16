@@ -3,23 +3,26 @@ package queues
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/riverqueue/river"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	pdfv1 "github.com/ogen-app/ogen/gen/pdf/v1"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/pubdate"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/transport/grpc/client/pdf"
 	"github.com/ogen-app/ogen/src/usecase/notify"
@@ -90,6 +93,9 @@ type PDFDeps struct {
 	// Notifier drops an in-app notification to the asset's creator when ingest
 	// reaches a terminal status. Nil is a no-op.
 	Notifier *notify.Service
+	// Stages holds the parsed chunks while they embed. Nil keeps them in
+	// memory, which serves only a run inside one process.
+	Stages chunkStage
 }
 
 // ProcessPDFTask carries the asset to ingest. The PDF bytes are NOT in the args
@@ -104,106 +110,227 @@ type ProcessPDFTask struct {
 
 func (ProcessPDFTask) Kind() string { return ProcessPDFQueue }
 
-// InsertOpts bounds retries. Transient failures (storage, gRPC Unavailable /
-// DeadlineExceeded, embedder outage) retry with backoff; terminal ones (corrupt
-// PDF) short-circuit to "failed" inside Work.
-func (ProcessPDFTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: IngestQueue, MaxAttempts: 5}
-}
-
 type ProcessPDFProcessor struct {
-	river.WorkerDefaults[ProcessPDFTask]
 	Deps PDFDeps
+
+	memOnce sync.Once
+	mem     *memChunkStage
 }
 
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ProcessPDFProcessor{Deps: d.PDF})
-	})
-}
-
-// Work scopes the job to the asset's tenant and processes it. lastAttempt lets
-// process() flip an otherwise-retryable embedder outage to a terminal "failed"
-// instead of abandoning the asset in "processing".
-func (p *ProcessPDFProcessor) Work(ctx context.Context, job *river.Job[ProcessPDFTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	ctx = tenantctx.With(ctx, job.Args.TenantID)
-	return p.process(ctx, job.Args, job.Attempt >= job.MaxAttempts)
-}
-
-// Timeout covers a worst-case parse (large PDF) plus per-chunk embedding.
-func (p *ProcessPDFProcessor) Timeout(*river.Job[ProcessPDFTask]) time.Duration {
-	return 16 * time.Minute
-}
-
+// process runs one attempt in-process. lastAttempt flips an otherwise
+// retryable embedder outage to a terminal "failed" instead of abandoning the
+// asset in "processing".
 func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, lastAttempt bool) error {
+	attempt, maxAttempts := 1, 2
+	if lastAttempt {
+		attempt = 2
+	}
+	return runLocal(ctx, p.step, ProcessPDFQueue, in, attempt, maxAttempts, localActions{})
+}
+
+func (p *ProcessPDFProcessor) stages() chunkStage {
+	if p.Deps.Stages != nil {
+		return p.Deps.Stages
+	}
+	p.memOnce.Do(func() { p.mem = newMemChunkStage(p.Deps.Chunks) })
+	return p.mem
+}
+
+// pdfState carries a run between steps: what the parse left for the file row,
+// and how far embedding got.
+type pdfState struct {
+	Phase     string        `json:"phase"`
+	Embed     embedProgress `json:"embed"`
+	ThumbKey  *string       `json:"thumb_key,omitempty"`
+	Size      int           `json:"size,omitzero"`
+	PageCount int           `json:"page_count,omitzero"`
+}
+
+const (
+	pdfPhaseParse = "parse"
+	pdfPhaseEmbed = "embed"
+)
+
+// step parses the PDF (pdf-service), stages its chunks and embeds them a
+// batch at a time, then persists the file row and settles the asset.
+func (p *ProcessPDFProcessor) step(ctx context.Context, in StepInput) (StepOutput, error) {
+	var task ProcessPDFTask
+	if err := json.Unmarshal(in.Args, &task); err != nil {
+		return done("skipped_bad_args")
+	}
+	ctx = withTaskTenant(ctx, task.TenantID)
+	var st pdfState
+	if err := decodeState(in.State, &st); err != nil {
+		return done("skipped_bad_state")
+	}
+	switch st.Phase {
+	case "":
+		return p.start(ctx, task, in.lastAttempt())
+	case pdfPhaseParse:
+		return p.parsed(ctx, task, &st, in.Result)
+	case pdfPhaseEmbed:
+		if err := p.embedLoop().settle(ctx, &st.Embed, in.Result); err != nil {
+			return retry("process_pdf "+task.AssetID, err)
+		}
+		return p.embedNext(ctx, task, &st, in.lastAttempt())
+	default:
+		return done("skipped_bad_state")
+	}
+}
+
+func (p *ProcessPDFProcessor) embedLoop() embedLoop {
+	return embedLoop{stage: p.stages(), embedder: p.Deps.Embedder}
+}
+
+func (p *ProcessPDFProcessor) originalKey(ctx context.Context, assetID string) string {
+	return storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original.pdf", assetID))
+}
+
+func (p *ProcessPDFProcessor) parseOptions(in ProcessPDFTask) pdf.Options {
+	return pdf.Options{Filename: in.OriginalName, RenderThumbnail: true, ThumbnailDPI: p.thumbnailDPI()}
+}
+
+// start checks the job can run, then has pdf-service parse the stored
+// original.
+func (p *ProcessPDFProcessor) start(ctx context.Context, in ProcessPDFTask, lastAttempt bool) (StepOutput, error) {
 	if p.Deps.Client == nil {
 		slog.WarnContext(ctx, "pdf-service not configured", logging.AttrComponent, "jobs.process_pdf", "asset_id", in.AssetID)
-		return nil
+		return done("skipped_unconfigured")
 	}
 	status := p.statusWriter()
 	if p.Deps.Storage == nil {
 		// Best-effort status write; the returned error is more descriptive.
 		_ = status.fail(ctx, in.AssetID, models.UploadCodeInternalError, status.notConfiguredReason())
-		return fmt.Errorf("process_pdf %s: storage not configured", in.AssetID)
+		return retry("process_pdf "+in.AssetID, errors.New("storage not configured"))
 	}
 	giveUp := func() error {
 		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, status.unavailableReason())
 	}
 	if ok, err := requireEmbedder(ctx, p.Deps.Embedder, "process_pdf", in.AssetID, lastAttempt, giveUp); !ok {
-		return err
+		return settledOr(err)
 	}
 	if err := status.set(ctx, in.AssetID, models.AssetStatusProcessing); err != nil {
-		return err
+		return retry("process_pdf", err)
 	}
 
-	key := storage.TenantKey(ctx, fmt.Sprintf("assets/%s/original.pdf", in.AssetID))
-	original, err := openOriginal(ctx, p.Deps.Storage, "process_pdf", in.AssetID, key)
+	key := p.originalKey(ctx, in.AssetID)
+	src, err := sourceURL(ctx, p.Deps.Storage, key)
 	if err != nil {
-		return err
+		return retry("process_pdf "+in.AssetID+": sign original", err)
 	}
-	// The sniffer keeps both ends of the file, where the creation date sits.
-	sniff := pubdate.NewSniffer(pdfMetaWindow)
-	// Corrupt/unsupported PDFs are terminal; service-down/deadline retry.
-	res, err := p.Deps.Client.Parse(ctx, io.TeeReader(original, sniff), pdf.Options{
-		Filename:        in.OriginalName,
-		RenderThumbnail: true,
-		ThumbnailDPI:    p.thumbnailDPI(),
+	opts := p.parseOptions(in)
+	return sidecarStep(pdfState{Phase: pdfPhaseParse}, sidecarPDF, 0,
+		&StreamSource{SourceURL: src, ChunkField: chunkField(&pdfv1.ParseRequest{}, "chunk")},
+		func(cc grpc.ClientConnInterface) error {
+			_, err := pdf.Over(cc).Parse(ctx, bytes.NewReader(nil), opts)
+			return err
+		},
+		func(ctx context.Context) (any, error) {
+			original, err := openOriginal(ctx, p.Deps.Storage, "process_pdf", in.AssetID, key)
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = original.Close() }()
+			return p.Deps.Client.Parse(ctx, original, opts)
+		})
+}
+
+// parsed settles the parse: a corrupt or unsupported PDF fails the asset, a
+// service outage retries. Otherwise the chunks are staged, the thumbnail
+// stored and the original's creation date and size read, then embedding
+// starts.
+func (p *ProcessPDFProcessor) parsed(ctx context.Context, in ProcessPDFTask, st *pdfState, r *StepResult) (StepOutput, error) {
+	opts := p.parseOptions(in)
+	res, err := localOr(r, func(r *StepResult) (*pdf.Result, error) {
+		var res *pdf.Result
+		err := sidecarResult(r, func(cc grpc.ClientConnInterface) error {
+			var err error
+			res, err = pdf.Over(cc).Parse(ctx, bytes.NewReader(nil), opts)
+			return err
+		})
+		return res, err
 	})
-	_ = original.Close()
+	status := p.statusWriter()
 	if err != nil {
 		if isTerminalParseErr(err) {
 			slog.WarnContext(ctx, "unparseable pdf", logging.AttrComponent, "jobs.process_pdf", "asset_id", in.AssetID, logging.AttrError, err)
-			return status.fail(ctx, in.AssetID, models.UploadCodeInvalidFile, "the PDF could not be read (corrupt, encrypted, or unsupported)")
+			return settledOr(status.fail(ctx, in.AssetID, models.UploadCodeInvalidFile, "the PDF could not be read (corrupt, encrypted, or unsupported)"))
 		}
-		return fmt.Errorf("process_pdf %s: parse: %w", in.AssetID, err)
+		return retry("process_pdf "+in.AssetID+": parse", err)
 	}
 
+	runID, err := models.NewID()
+	if err != nil {
+		return StepOutput{}, err
+	}
+	if err := p.stages().Begin(ctx, runID, in.AssetID, stageSources(pdfChunkSources(res.Chunks))); err != nil {
+		return retry("process_pdf "+in.AssetID+": stage chunks", err)
+	}
+	// The thumbnail is non-fatal.
+	st.ThumbKey = p.uploadThumbnail(ctx, in.AssetID, res.ThumbnailPNG)
+	st.PageCount = res.PageCount
+	size, err := p.sniffOriginal(ctx, in)
+	if err != nil {
+		return retry("process_pdf "+in.AssetID, err)
+	}
+	st.Size = size
+	st.Phase, st.Embed = pdfPhaseEmbed, embedProgress{RunID: runID}
+	return p.embedNext(ctx, in, st, false)
+}
+
+// sniffOriginal reads the stored original once for its size and the creation
+// date that sits near either end of the file.
+func (p *ProcessPDFProcessor) sniffOriginal(ctx context.Context, in ProcessPDFTask) (int, error) {
+	original, err := openOriginal(ctx, p.Deps.Storage, "process_pdf", in.AssetID, p.originalKey(ctx, in.AssetID))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = original.Close() }()
+	sniff := pubdate.NewSniffer(pdfMetaWindow)
+	if _, err := io.Copy(sniff, original); err != nil {
+		return 0, fmt.Errorf("process_pdf %s: read original: %w", in.AssetID, err)
+	}
 	if t, ok := sniff.PDF(time.Now()); ok {
 		recordPublishedAt(ctx, p.Deps.Published, "process_pdf", in.AssetID, t)
 	}
+	return original.N(), nil
+}
 
-	chunks, stats := embedChunks(ctx, p.Deps.Embedder, in.AssetID, pdfChunkSources(res.Chunks))
-	if err := storeChunks(ctx, p.Deps.Chunks, "process_pdf", in.AssetID, chunks, stats, false); err != nil {
-		return err
+// embedNext embeds the next batch, or, once every chunk is settled, commits
+// the chunks, persists the file row and settles the asset.
+func (p *ProcessPDFProcessor) embedNext(ctx context.Context, in ProcessPDFTask, st *pdfState, lastAttempt bool) (StepOutput, error) {
+	call, err := p.embedLoop().next(ctx, &st.Embed)
+	if err != nil {
+		return retry("process_pdf "+in.AssetID, err)
 	}
-
-	// The thumbnail is non-fatal; the file row is retried so the asset never
-	// lands "ready" without its file row, page count or thumbnail.
-	thumbKey := p.uploadThumbnail(ctx, in.AssetID, res.ThumbnailPNG)
-	if err := p.persistFile(ctx, in, key, thumbKey, original.N(), res.PageCount); err != nil {
-		return err
+	if call != nil {
+		raw, err := encodeState(st)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		return StepOutput{State: raw, HTTP: call}, nil
 	}
+	committed, err := p.stages().Commit(ctx, st.Embed.RunID, in.AssetID, false)
+	if err != nil {
+		return retry("process_pdf "+in.AssetID+": store chunks", err)
+	}
+	stats := stageStats(committed)
 
+	// The file row is retried so the asset never lands "ready" without its
+	// file row, page count or thumbnail.
+	if err := p.persistFile(ctx, in, p.originalKey(ctx, in.AssetID), st.ThumbKey, st.Size, st.PageCount); err != nil {
+		return retry("process_pdf", err)
+	}
+	status := p.statusWriter()
 	final, err := stats.settle(lastAttempt)
 	if err != nil {
-		return fmt.Errorf("process_pdf %s: %w", in.AssetID, err)
+		return retry("process_pdf "+in.AssetID, err)
 	}
 	if final == models.AssetStatusFailed {
-		return status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, status.unavailableReason())
+		return settledOr(status.fail(ctx, in.AssetID, models.UploadCodeServiceUnavailable, status.unavailableReason()))
 	}
 	if err := status.set(ctx, in.AssetID, final); err != nil {
-		return err
+		return retry("process_pdf", err)
 	}
 	// One usage event per ingest, after the durable writes so a retry from a
 	// late failure can't double-count. The Gemini embed response carries no
@@ -211,7 +338,7 @@ func (p *ProcessPDFProcessor) process(ctx context.Context, in ProcessPDFTask, la
 	if stats.Tokens > 0 {
 		p.Deps.Recorder.RecordResp(ctx, llm.VendorGemini, p.Deps.EmbedModel, "pdf_extract", llm.EmbedUsage{Tokens: stats.Tokens})
 	}
-	return nil
+	return done(final)
 }
 
 // pdfChunkSources yields the parsed chunks with their page bounds. pdfium pages
