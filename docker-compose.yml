@@ -27,6 +27,12 @@ services:
             DOCUMENTS_SERVICE_ADDR: "${DOCUMENTS_SERVICE_ADDR-document-service:50051}"
             AUDIO_SERVICE_ADDR: "${AUDIO_SERVICE_ADDR-audio-service:50051}"
             IMAGE_SERVICE_ADDR: "${IMAGE_SERVICE_ADDR-image-service:50051}"
+            # Background jobs run in river-service (service below): ogen relays its
+            # job outbox to it and serves the jobs' steps on the job RPC listener.
+            RIVER_SERVICE_ADDR: "${RIVER_SERVICE_ADDR-river-service:9092}"
+            RIVER_SERVICE_AUTH_TOKEN: "${RIVER_SERVICE_AUTH_TOKEN:-ogen-river-service-dev}"
+            JOB_RPC_ADDR: ":9093"
+            RIVER_RPC_AUTH_TOKEN: "${RIVER_RPC_AUTH_TOKEN:-ogen-river-rpc-dev}"
         volumes:
             - ./ogen-keys:/var/lib/ogen/keys
         ports:
@@ -102,21 +108,61 @@ services:
             timeout: 2s
             retries: 30
 
-    # River job-queue dashboard (CON-87 WS3). Standalone UI image that reads
-    # River's tables — it runs no migrations of its own, so it needs them to
-    # already exist. The API creates them via jobs.MigrateRiver at boot;
-    # riverui therefore depends on the API and restarts until the schema is
-    # present. UI at http://localhost:9004.
-    riverui:
-        image: ghcr.io/riverqueue/riverui:latest
-        environment:
-            DATABASE_URL: "${DATABASE_DSN:-postgres://ogen:ogen@postgres:5432/ogen?sslmode=disable}"
-        ports:
-            - "9004:8080"
+    # river_service schema for river-service's River tables. Production creates
+    # it once with its own role (river-service README); locally the ogen
+    # superuser owns it.
+    river-schema:
+        image: pgvector/pgvector:pg17
+        command:
+            [
+                "psql",
+                "${DATABASE_DSN:-postgres://ogen:ogen@postgres:5432/ogen?sslmode=disable}",
+                "-c",
+                "CREATE SCHEMA IF NOT EXISTS river_service",
+            ]
         depends_on:
             postgres:
                 condition: service_healthy
+        restart: "no"
+
+    # river-service runs every background job. Built from a sibling checkout of
+    # ogen-app/river-service (override RIVER_SERVICE_PATH if it isn't at
+    # ../river-service). One instance works every queue here; production splits
+    # them across two services.
+    river-service:
+        build:
+            context: ${RIVER_SERVICE_PATH:-../river-service}
+        environment:
+            DATABASE_DSN: "${DATABASE_DSN:-postgres://ogen:ogen@postgres:5432/ogen?sslmode=disable}"
+            RIVER_SCHEMA: river_service
+            RIVER_QUEUES: default,analysis,audio,image,ingest
+            GRPC_ADDR: ":9092"
+            GRPC_AUTH_TOKEN: "${RIVER_SERVICE_AUTH_TOKEN:-ogen-river-service-dev}"
+            OGEN_GRPC_ADDR: "dns:///api:9093"
+            OGEN_RPC_AUTH_TOKEN: "${RIVER_RPC_AUTH_TOKEN:-ogen-river-rpc-dev}"
+            PDF_SERVICE_ADDR: pdf-service:50051
+            DOCUMENTS_SERVICE_ADDR: document-service:50051
+            IMAGE_SERVICE_ADDR: image-service:50051
+            AUDIO_SERVICE_ADDR: audio-service:50051
+            LOG_FORMAT: text
+        depends_on:
+            river-schema:
+                condition: service_completed_successfully
             api:
+                condition: service_started
+        restart: unless-stopped
+
+    # River job-queue dashboard over river-service's schema (it runs no
+    # migrations; river-service creates the tables at boot). UI at
+    # http://localhost:9004.
+    riverui:
+        image: ghcr.io/riverqueue/riverui:latest
+        environment:
+            DATABASE_URL: "${DATABASE_DSN:-postgres://ogen:ogen@postgres:5432/ogen?sslmode=disable}&search_path=river_service"
+        ports:
+            - "9004:8080"
+        depends_on:
+            river-service:
                 condition: service_started
         restart: unless-stopped
 
