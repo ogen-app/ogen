@@ -41,6 +41,7 @@ func (d *deps) initJobRPC(ctx context.Context) error {
 		ConfigCredentials: map[string]string{"harbor_webhook_secret": d.cfg.HarborWebhookSecret},
 		Maintenance:       queues.MaintenanceTasks(qd),
 		Email:             queues.NewSendEmail(qd),
+		Steps:             queues.NewJobSteps(qd),
 	})
 	if err != nil {
 		return err
