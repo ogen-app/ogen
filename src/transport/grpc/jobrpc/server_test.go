@@ -3,6 +3,7 @@ package jobrpc
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,15 @@ const token = "river-token"
 func dial(t *testing.T, d Deps) *grpc.ClientConn {
 	t.Helper()
 	d.Token = token
+	if d.Steps == nil {
+		d.Steps = &fakeSteps{}
+	}
+	if d.Maintenance == nil {
+		d.Maintenance = map[string]func(context.Context) error{}
+	}
+	if d.Email == nil {
+		d.Email = &fakeEmailJobs{}
+	}
 	srv, err := New(d)
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +59,22 @@ func dial(t *testing.T, d Deps) *grpc.ClientConn {
 
 func authed(ctx context.Context, tok string) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+}
+
+func TestNewRequiresEveryJobService(t *testing.T) {
+	full := Deps{Token: token, Steps: &fakeSteps{}, Maintenance: map[string]func(context.Context) error{}, Email: &fakeEmailJobs{}}
+	if _, err := New(full); err != nil {
+		t.Fatalf("complete deps: %v", err)
+	}
+	for name, d := range map[string]Deps{
+		"steps":       {Token: token, Maintenance: full.Maintenance, Email: full.Email},
+		"maintenance": {Token: token, Steps: full.Steps, Email: full.Email},
+		"email":       {Token: token, Steps: full.Steps, Maintenance: full.Maintenance},
+	} {
+		if _, err := New(d); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("without %s: err = %v", name, err)
+		}
+	}
 }
 
 func TestNewRequiresAToken(t *testing.T) {
