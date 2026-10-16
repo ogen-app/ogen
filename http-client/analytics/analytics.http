@@ -16,7 +16,7 @@
 #     go submit → poll → published via the integration; see the auto-publish
 #     schedule flow in posts/schedule.http and publishers/zernio/zernio.http).
 #   - The refresh worker must have run at least once (default cadence
-#     ZERNIO_ANALYTICS_REFRESH_INTERVAL=30m, lookback ZERNIO_ANALYTICS_WINDOW_DAYS=90)
+#     river-service's ZERNIO_ANALYTICS_REFRESH_INTERVAL, lookback ZERNIO_ANALYTICS_WINDOW_DAYS=90)
 #     to populate a snapshot. Until a post is covered, the per-post endpoint
 #     returns 200 { "status": "pending" } rather than 404 — so clients can poll.
 #
@@ -144,7 +144,7 @@ Accept: application/json
 # best-times / content-decay / posting-frequency are LIVE read-through proxies:
 # the request path calls Zernio, scoped to the tenant's Zernio profile. followers
 # is served ENTIRELY from local snapshots — a daily refresh_zernio_followers job
-# (ZERNIO_FOLLOWER_REFRESH_INTERVAL=24h) populates follower_stats_snapshots.
+# (river-service's ZERNIO_FOLLOWER_REFRESH_INTERVAL, 24h) populates follower_stats_snapshots.
 #
 # Graceful add-on gating (the three proxies + followers upstream need Zernio's
 # Analytics add-on):
