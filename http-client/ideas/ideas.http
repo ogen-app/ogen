@@ -17,6 +17,14 @@ Accept: application/json
 GET {{baseUrl}}/api/ideas?campaign_id=none
 Accept: application/json
 
+### List an asset's analysis ideas, best fit first (unscored last)  [protected]
+GET {{baseUrl}}/api/ideas?asset_id={{assetId}}&sort=fit
+Accept: application/json
+
+### Unknown sort (expects 400)  [protected]
+GET {{baseUrl}}/api/ideas?sort=score
+Accept: application/json
+
 ### Capture an idea (title only → workspace-wide, waiting)  [protected]
 # @name captureIdea
 POST {{baseUrl}}/api/ideas

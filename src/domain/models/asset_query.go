@@ -219,8 +219,8 @@ type AssetIdeaCounts struct {
 	No        int `json:"no"`
 }
 
-// AssetNextIdea is the idea an asset's row names: the oldest one counted in
-// its undecided ideas.
+// AssetNextIdea is the idea an asset's row names: the best-fitting one counted
+// in its undecided ideas.
 type AssetNextIdea struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -279,8 +279,9 @@ type AssetListItem struct {
 	// that draw on the whole bank.
 	CampaignIDs []string        `json:"campaign_ids"`
 	IdeaCounts  AssetIdeaCounts `json:"idea_counts"`
-	// NextIdea is the oldest of the ideas IdeaCounts.Undecided counts; null
-	// exactly when that count is 0.
+	// NextIdea is the highest-fit of the ideas IdeaCounts.Undecided counts,
+	// oldest first among equal or missing scores; null exactly when that
+	// count is 0.
 	NextIdea *AssetNextIdea `json:"next_idea" extensions:"x-nullable"`
 	// PublishedAt is when the source was published, read from its metadata at
 	// ingest; null when unknown.

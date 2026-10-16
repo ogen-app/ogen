@@ -21,7 +21,20 @@ type IdeaListFilter struct {
 	Origin *models.IdeaOrigin
 	// AssetID keeps only ideas an analysis of this asset produced.
 	AssetID string
+	// Sort orders the list; the zero value is IdeaSortCreated.
+	Sort IdeaSort
 }
+
+// IdeaSort is an order IdeaRepository.List can return ideas in.
+type IdeaSort string
+
+const (
+	// IdeaSortCreated lists the oldest first.
+	IdeaSortCreated IdeaSort = "created"
+	// IdeaSortFit lists the highest fit score first and unscored ideas last,
+	// oldest first among equals.
+	IdeaSortFit IdeaSort = "fit"
+)
 
 // IdeaRepository persists the workspace Ideas backlog. Every query
 // runs through bun's Model API so the TenantScoped hooks scope tenant_id.
@@ -79,6 +92,9 @@ func (r *ideaRepository) List(ctx context.Context, filter IdeaListFilter) ([]mod
 	}
 	if filter.AssetID != "" {
 		q = q.Where("i.asset_analysis_id IN (SELECT id FROM asset_analyses WHERE asset_id = ?)", filter.AssetID)
+	}
+	if filter.Sort == IdeaSortFit {
+		q = q.OrderExpr("i.fit_score DESC NULLS LAST")
 	}
 	if err := q.OrderExpr("i.created_at ASC, i.id ASC").Scan(ctx); err != nil {
 		return nil, err

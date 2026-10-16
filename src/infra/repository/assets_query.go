@@ -677,8 +677,9 @@ func (r *assetRepository) Query(ctx context.Context, q models.AssetQuery) (*mode
 // its order keys and the idea its row names.
 //
 // The next idea is looked up after the limit, so only the page's rows with an
-// undecided idea pay for it. It is the oldest of the ideas i_undecided counts:
-// the same lenses and the same rule.
+// undecided idea pay for it. It is the best-fitting of the ideas i_undecided
+// counts (the same lenses and the same rule), oldest first among equal or
+// missing scores.
 func writeAssetPage(b *sqlBuf, q models.AssetQuery, tid string, preds []assetPred) {
 	keys := rowOrder(q)
 	order := orderBy(keys)
@@ -706,7 +707,7 @@ func writeAssetPage(b *sqlBuf, q models.AssetQuery, tid string, preds []assetPre
 				AND i.origin = 'asset_analysis' AND `+undecidedIdeaSQL+` AND `, q.Limit+1, tid, tid, q.Now)
 	lensInScope(b, q)
 	b.add(`
-			ORDER BY i.created_at, i.id LIMIT 1
+			ORDER BY i.fit_score DESC NULLS LAST, i.created_at, i.id LIMIT 1
 		) ni ON true
 	) p) AS page`)
 }

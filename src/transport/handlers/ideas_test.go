@@ -35,6 +35,7 @@ type ideaWire struct {
 	CreatedByName string     `json:"created_by_name"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+	FitScore      *int       `json:"fit_score"`
 }
 
 var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
@@ -257,6 +258,34 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		Expect(ids(list(admin, "?campaign_id="+camp))).To(Equal([]string{second.ID}))
 		Expect(ids(list(admin, "?campaign_id=none"))).To(Equal([]string{first.ID, third.ID}))
 		Expect(list(admin, "?campaign_id=unknown")).To(BeEmpty())
+	})
+
+	It("sorts by fit score, unscored last, and reads the fit fields back as null when unset", func() {
+		first := capture(admin, fiber.Map{"title": "unscored"})
+		second := capture(admin, fiber.Map{"title": "middling"})
+		third := capture(admin, fiber.Map{"title": "best"})
+		for id, score := range map[string]int{second.ID: 55, third.ID: 90} {
+			_, err := db.NewUpdate().TableExpr("ideas").
+				Set("fit_score = ?, fit_rubric_version = 1, fit_breakdown = ?", score, `{"lens":"workspace","campaign_id":null,"criteria":{},"caps":[]}`).
+				Where("id = ?", id).Exec(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		Expect(ids(list(admin, "?sort=fit"))).To(Equal([]string{third.ID, second.ID, first.ID}))
+		Expect(ids(list(admin, "?sort=created"))).To(Equal([]string{first.ID, second.ID, third.ID}))
+		Expect(ids(list(admin, ""))).To(Equal([]string{first.ID, second.ID, third.ID}))
+		Expect(do(admin, "GET", "/api/ideas?sort=score", nil).StatusCode).To(Equal(400))
+
+		resp := do(admin, "GET", "/api/ideas?sort=fit", nil)
+		var body struct {
+			Ideas []map[string]json.RawMessage `json:"ideas"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+		Expect(string(body.Ideas[0]["fit_score"])).To(Equal("90"))
+		Expect(string(body.Ideas[0]["fit_breakdown"])).To(ContainSubstring(`"lens":"workspace"`))
+		for _, key := range []string{"fit_score", "fit_breakdown", "fit_rubric_version"} {
+			Expect(body.Ideas[2]).To(HaveKeyWithValue(key, json.RawMessage("null")), key)
+		}
 	})
 
 	It("attaches, re-attaches, and detaches without losing id, verdict, or author", func() {
