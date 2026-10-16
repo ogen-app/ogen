@@ -242,7 +242,11 @@ steps: river-service asks ogen's `JobStepService` what to do next, makes the
 call with a key it leases from ogen, and passes the raw result back, until ogen
 says done. Sweeps that only touch ogen's tables run whole through
 `MaintenanceService`. river-service schedules every periodic sweep. The
-[River UI](https://riverqueue.com/ui) dashboard reads its schema.
+[River UI](https://riverqueue.com/ui) dashboard reads its schema. The API
+refuses to boot without the four job settings below unless `JOBS_DISABLED=true`.
+A database that still has ogen's old in-process River tables gets them retired
+at boot: under the migration lock, every unfinished job moves to `job_outbox`
+(keeping its schedule) and River's tables go, in one transaction.
 
 ---
 
@@ -509,9 +513,10 @@ All runtime knobs are env vars, loaded by
 | `GRPC_ADDR` / `GRPC_AUTH_TOKEN` | `127.0.0.1:9091` / empty | Internal operator gRPC surface; starts only when both are set. |
 | `HARBOR_WEBHOOK_URL` / `HARBOR_WEBHOOK_SECRET` / `HARBOR_BASE_URL` | empty | New-tenant operator notification: Harbor inbound webhook, HMAC signing key, and "View in Harbor" deep-link base. Empty URL turns the feature off. |
 | `SENTRY_DSN` | empty | Turns on error monitoring + OTel tracing; empty disables all telemetry. Also `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, `SENTRY_TRACES_SAMPLE_RATE` (`0.1`), `OTEL_SERVICE_NAME` (`ogen-api`). |
-| `RIVER_SERVICE_ADDR` / `RIVER_SERVICE_AUTH_TOKEN` | empty | river-service's JobService (e.g. `dns:///river-service.railway.internal:9092`) and its bearer token. Every job is written to `job_outbox` in its enqueuing transaction; the relay delivers it here. Unset, jobs wait in the outbox. |
+| `RIVER_SERVICE_ADDR` / `RIVER_SERVICE_AUTH_TOKEN` | empty | river-service's JobService (e.g. `dns:///river-service.railway.internal:9092`) and its bearer token. Every job is written to `job_outbox` in its enqueuing transaction; the relay delivers it here. Required, with `JOB_RPC_ADDR` and `RIVER_RPC_AUTH_TOKEN`, unless `JOBS_DISABLED`. |
+| `JOBS_DISABLED` | `false` | Boot without river-service: jobs wait in `job_outbox` and never run. For an API run on its own; never in a deployed environment. |
 | `OUTBOX_RELAY_POLL_INTERVAL` / `OUTBOX_RELAY_BATCH` / `OUTBOX_RETENTION_DAYS` | `2s` / `100` / `7` | The relay delivers on every committed write (LISTEN/NOTIFY) and at least every poll interval, claims up to the batch size per pass, and deletes delivered rows after the retention. A row river-service refuses is retried with backoff (1s doubling to 5m). Health at `/debug/vars`: `ogen_outbox_pending`, `ogen_outbox_lag_seconds`, `ogen_outbox_sent`, `ogen_outbox_failed`. |
-| `JOB_RPC_ADDR` / `RIVER_RPC_AUTH_TOKEN` | empty | Listener river-service's jobs call ogen on (`jobrpc.v1`: job steps, credential leases, maintenance sweeps, email), e.g. `:9093`, and the bearer token it requires. The token must differ from `GRPC_AUTH_TOKEN`: neither opens the other's services. Empty address disables it. |
+| `JOB_RPC_ADDR` / `RIVER_RPC_AUTH_TOKEN` | empty | Listener river-service's jobs call ogen on (`jobrpc.v1`: job steps, credential leases, maintenance sweeps, email), e.g. `:9093`, and the bearer token it requires. The token must differ from `GRPC_AUTH_TOKEN`: neither opens the other's services. |
 | `JOB_RPC_MAX_CONCURRENCY` / `CREDENTIAL_LEASE_TTL` | `8` / `5m` | Job RPCs in flight at once (past it callers get `RESOURCE_EXHAUSTED` and back off), and how long a leased vendor key is good for. Only the Zernio, Gemini, Resend and Firecrawl keys and `HARBOR_WEBHOOK_SECRET` (which river-service signs the new-tenant webhook with) are leasable. |
 | `RECONCILE_GRACE` | `1h` | Reconciliation timeout for stuck Scheduled posts. |
 | `ZERNIO_ORPHAN_SWEEP_LIVE` / `ZERNIO_ORPHAN_SWEEP_MIN_AGE` | `false` / `1h` | Sweep for posts still queued in Zernio that no scheduled Ogen post holds. Dry run (logs + `ogen_jobs_zernio_orphans_found`) until `LIVE=true`, then withdraws them. Only profiles of this environment's tenants are listed; posts younger than `MIN_AGE` are left alone. |

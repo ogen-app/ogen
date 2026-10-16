@@ -13,11 +13,6 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 )
 
-// AnalysisQueue is the dedicated River queue analyses run on: a long
-// transcript can keep a worker for minutes, which must not hold up ingestion,
-// publishing or email.
-const AnalysisQueue = "analysis"
-
 const (
 	AnalyzeAssetKind          = "analyze_asset"
 	ReanalyzeCampaignKind     = "reanalyze_campaign"

@@ -48,10 +48,10 @@ type PollZernioStatusProcessor struct {
 	FastWindow   time.Duration // default 5m after scheduled_at
 }
 
-// Process executes one poll cycle in-process. On a non-terminal status it
-// returns river.JobSnooze to reschedule this same job per the cadence rule; it
-// returns a non-nil error only on transient Zernio failures so River retries
-// per its backoff policy; otherwise nil (terminal handled, or quietly exited).
+// Process executes one poll cycle in-process, for tests. On a non-terminal
+// status it returns a *SnoozeError to reschedule this same job per the cadence
+// rule; it returns a non-nil error only on transient Zernio failures, which
+// river-service retries; otherwise nil (terminal handled, or quietly exited).
 func (p *PollZernioStatusProcessor) Process(ctx context.Context, task PollZernioStatusTask) error {
 	return runLocal(ctx, p.step, PollZernioStatusQueue, task, 0, 0, localActions{zernio: p.Deps.Client})
 }
