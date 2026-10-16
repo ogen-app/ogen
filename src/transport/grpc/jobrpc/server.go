@@ -70,11 +70,21 @@ type Deps struct {
 }
 
 // New builds the job-RPC server. An empty token is rejected: the caller must
-// not start the listener rather than run it open.
+// not start the listener rather than run it open. So is a server missing one
+// of the services river-service's jobs need: every job of that kind would
+// fail on it, so it fails the boot instead.
 func New(d Deps) (*grpc.Server, error) {
 	token := strings.TrimSpace(d.Token)
 	if token == "" {
 		return nil, errors.New("jobrpc: RIVER_RPC_AUTH_TOKEN is required")
+	}
+	switch {
+	case d.Steps == nil:
+		return nil, errors.New("jobrpc: job steps are not wired")
+	case d.Maintenance == nil:
+		return nil, errors.New("jobrpc: maintenance tasks are not wired")
+	case d.Email == nil:
+		return nil, errors.New("jobrpc: email jobs are not wired")
 	}
 	limit := d.MaxConcurrency
 	if limit <= 0 {
