@@ -87,6 +87,9 @@ Respond ONLY with the JSON object. No markdown fences, no text before or after i
 {{- if .Goal}}
 **Goal**: {{.Goal}}
 {{- end}}
+{{- if or .StartDate .EndDate}}
+**Runs**: {{if .StartDate}}from {{.StartDate}}{{end}}{{if and .StartDate .EndDate}} {{end}}{{if .EndDate}}until {{.EndDate}}{{end}}
+{{- end}}
 {{- if .Description}}
 **Description**: {{.Description}}
 {{- end}}
@@ -120,6 +123,18 @@ Respond ONLY with the JSON object. No markdown fences, no text before or after i
 {{- range .PostTitles}}
 - {{.}}
 {{- end}}
+{{- end}}
+{{- if .ActiveCampaigns}}
+
+## Active campaigns
+{{- range .ActiveCampaigns}}
+- **{{.Name}}**{{if .Description}}: {{.Description}}{{end}}
+{{- end}}
+{{- end}}
+{{- if .Today}}
+
+## Today
+{{.Today}}
 {{- end}}
 
 ## Output language

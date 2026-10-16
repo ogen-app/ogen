@@ -51,6 +51,16 @@ type CampaignBrief struct {
 	Phases []string
 	// Goal is the campaign's posting goal in words, empty when unset.
 	Goal string
+	// StartDate and EndDate are the campaign window as YYYY-MM-DD, empty when
+	// unset.
+	StartDate string
+	EndDate   string
+}
+
+// CampaignHint is a live campaign the workspace lens may suggest an idea for.
+type CampaignHint struct {
+	Name        string
+	Description string
 }
 
 // SiblingSummary is another campaign asset's workspace summary.
@@ -72,6 +82,11 @@ type Lens struct {
 	// repeating them.
 	ExistingIdeas []string
 	PostTitles    []string
+	// ActiveCampaigns are the workspace's live campaigns, for the workspace
+	// lens's campaign_potential rating. Empty for a campaign lens.
+	ActiveCampaigns []CampaignHint
+	// Today is the run's date as YYYY-MM-DD, for timeliness and evergreen.
+	Today string
 }
 
 // AnalyzeRequest is the input to the flow.
