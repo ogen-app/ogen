@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
 	"github.com/ogen-app/ogen/src/kernel/textgist"
 )
@@ -44,6 +45,8 @@ type cleaner struct {
 	labels    map[string]bool
 	recording bool
 	campaign  bool
+	// phases is set when the campaign's type has phases to rate phase_fit on.
+	phases bool
 	// existing holds normalised idea titles already in scope.
 	existing map[string]bool
 }
@@ -88,6 +91,7 @@ func (c cleaner) ideas(in []Idea) []Idea {
 			Angle:        clampRunes(strings.TrimSpace(idea.Angle), maxIdeaText),
 			Rationale:    clampRunes(strings.TrimSpace(idea.Rationale), maxIdeaText),
 			SourceLabels: c.knownLabels(idea.SourceLabels),
+			Fit:          c.fit(idea.Fit),
 		})
 		if len(out) == maxIdeas {
 			break
@@ -130,6 +134,26 @@ func (c cleaner) decisions(in []Decision) []Decision {
 		}
 	}
 	return out
+}
+
+// fit keeps the ratings and caps the lens's rubric knows. It is nil when
+// nothing usable is left, so the idea is saved unscored.
+func (c cleaner) fit(in *IdeaFit) *IdeaFit {
+	if in == nil {
+		return nil
+	}
+	criteria, caps := ideafit.Clean(c.lensKind(), c.phases, in.Criteria, in.Caps)
+	if len(criteria) == 0 && len(caps) == 0 {
+		return nil
+	}
+	return &IdeaFit{Criteria: criteria, Caps: caps}
+}
+
+func (c cleaner) lensKind() ideafit.LensKind {
+	if c.campaign {
+		return ideafit.LensCampaign
+	}
+	return ideafit.LensWorkspace
 }
 
 // knownLabel returns label when the source has it, else empty: a made-up

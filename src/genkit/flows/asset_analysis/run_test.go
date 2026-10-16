@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/ogen-app/ogen/src/domain/ideafit"
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 )
 
@@ -50,7 +52,8 @@ const meetingReply = `Here you go:
   "gist": "  The **launch plan**, its   new date\nand who owns it.  ",
   "summary": "The team agreed the launch plan.",
   "ideas": [
-    {"title": "Why we moved the launch", "angle": "Behind the scenes", "rationale": "Fits the brief", "sourceLabels": ["00:10–00:40", "99:99"]},
+    {"title": "Why we moved the launch", "angle": "Behind the scenes", "rationale": "Fits the brief", "sourceLabels": ["00:10–00:40", "99:99"],
+     "fit": {"criteria": {"message_fit": {"level": 5, "why": " The key message "}, "made_up": {"level": 3}, "phase_fit": {"level": 4, "phase": "Launch"}}, "caps": ["off_brief", "nope"]}},
     {"title": "why we moved the LAUNCH!", "angle": "dup", "rationale": "dup", "sourceLabels": []},
     {"title": "Already have this one", "angle": "x", "rationale": "x", "sourceLabels": []}
   ],
@@ -118,6 +121,19 @@ func TestAnalyzeFullContextCleansTheReply(t *testing.T) {
 	if len(a.Ideas) != 1 || a.Ideas[0].Title != "Why we moved the launch" || len(a.Ideas[0].SourceLabels) != 1 {
 		t.Errorf("ideas = %+v, want the one new idea with its one real label", a.Ideas)
 	}
+	wantFit := &IdeaFit{
+		Criteria: map[string]ideafit.Rating{
+			"message_fit": {Level: 5, Why: "The key message"},
+			"phase_fit":   {Level: 4, Phase: "Launch"},
+		},
+		Caps: []ideafit.Cap{ideafit.CapOffBrief},
+	}
+	if !reflect.DeepEqual(a.Ideas[0].Fit, wantFit) {
+		t.Errorf("fit = %+v, want %+v", a.Ideas[0].Fit, wantFit)
+	}
+	if !strings.Contains(s.calls[0].System, "phase_fit") {
+		t.Error("system prompt does not rate phase_fit for a campaign with phases")
+	}
 	if a.Entities[0].Kind != "other" {
 		t.Errorf("entity kind = %q, want other", a.Entities[0].Kind)
 	}
@@ -148,6 +164,9 @@ func TestAnalyzeDocumentDropsMeetingAndRelevance(t *testing.T) {
 	a := resp.Analysis
 	if a.Participants != nil || a.Commitments != nil || a.Decisions != nil || a.OpenQuestions != nil || a.Relevance != nil {
 		t.Fatalf("document analysis kept meeting or campaign fields: %+v", a)
+	}
+	if a.Ideas[0].Fit != nil {
+		t.Errorf("workspace lens kept campaign-only ratings: %+v", a.Ideas[0].Fit)
 	}
 	if strings.Contains(s.calls[0].System, "commitments") || strings.Contains(s.calls[0].Prompt, "ISO code") {
 		t.Error("document workspace prompt carries meeting or campaign-language text")
