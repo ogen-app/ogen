@@ -20,6 +20,7 @@ services:
       RIVER_SERVICE_AUTH_TOKEN: "${RIVER_SERVICE_AUTH_TOKEN:-ogen-river-service-dev}"
       JOB_RPC_ADDR: ":9093"
       RIVER_RPC_AUTH_TOKEN: "${RIVER_RPC_AUTH_TOKEN:-ogen-river-rpc-dev}"
+      JOBS_DISABLED: "${JOBS_DISABLED:-false}"
     volumes:
       - ./ogen-keys:/var/lib/ogen/keys
     ports:
