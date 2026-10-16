@@ -412,10 +412,12 @@ type Config struct {
 	// Background jobs run in river-service. Every enqueue writes the job outbox
 	// in the enqueuing transaction, and the relay delivers it to river-service's
 	// JobService at RIVER_SERVICE_ADDR (e.g.
-	// dns:///river-service.railway.internal:9092); without it jobs wait in the
-	// outbox. The relay delivers due rows on every write and at least every
-	// OUTBOX_RELAY_POLL_INTERVAL, and keeps delivered rows for
-	// OUTBOX_RETENTION_DAYS.
+	// dns:///river-service.railway.internal:9092). The relay delivers due rows
+	// on every write and at least every OUTBOX_RELAY_POLL_INTERVAL, and keeps
+	// delivered rows for OUTBOX_RETENTION_DAYS. The API refuses to boot without
+	// RIVER_SERVICE_ADDR, JOB_RPC_ADDR and both tokens, unless JOBS_DISABLED
+	// says to run without background jobs (they then wait in the outbox).
+	JobsDisabled            bool          `envconfig:"JOBS_DISABLED" default:"false"`
 	RiverServiceAddr        string        `envconfig:"RIVER_SERVICE_ADDR"`
 	RiverServiceAuthToken   string        `envconfig:"RIVER_SERVICE_AUTH_TOKEN"`
 	OutboxRelayPollInterval time.Duration `envconfig:"OUTBOX_RELAY_POLL_INTERVAL" default:"2s"`

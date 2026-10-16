@@ -196,6 +196,9 @@ func (d *deps) initIngestion(ctx context.Context) error {
 // initJobs wires email (its jobs' halves run here), the enqueuer and the
 // outbox relay. The jobs themselves run in river-service.
 func (d *deps) initJobs(ctx context.Context) error {
+	if err := requireJobPipeline(ctx, d.cfg); err != nil {
+		return err
+	}
 	r := d.r
 	var err error
 	d.email, err = initEmail(ctx, d.cfg, d.secretStore, r.emailTemplateRepo, r.emailSuppressionRepo, r.emailLogRepo, r.emailEventRepo, r.emailBodyRepo, r.userRepo, d.activity.recorder)
