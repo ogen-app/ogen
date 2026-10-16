@@ -106,6 +106,11 @@ func run(cfg *config.Config) error {
 	if err := database.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
+	if moved, err := queues.RetireRiver(ctx, db.DB); err != nil {
+		return err
+	} else if moved > 0 {
+		slog.InfoContext(ctx, "moved River's unfinished jobs to river-service", logging.AttrComponent, "boot", "jobs", moved)
+	}
 
 	analyticsDB := openAnalytics(ctx, cfg)
 	if analyticsDB != nil {
@@ -123,9 +128,8 @@ func run(cfg *config.Config) error {
 	// normal path while still bounding runaway clients.
 	hub := eventhub.New(eventhub.Config{MaxSubscribersPerUser: 30})
 
-	// Detached from the signal: server.New starts River and refresh loops with
-	// this ctx, and River hard-cancels running jobs when its Start ctx ends.
-	// Those are drained by the app's shutdown hooks instead.
+	// Detached from the signal: server.New starts the outbox relay and refresh
+	// loops with this ctx; the app's shutdown hooks stop them instead.
 	app, err := server.New(context.WithoutCancel(ctx), db, analyticsDB, cfg, store, cipher, hub)
 	if err != nil {
 		return fmt.Errorf("init server: %w", err)
