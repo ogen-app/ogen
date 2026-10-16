@@ -2,38 +2,54 @@ package queues
 
 import (
 	"context"
+	"time"
 
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
-// MaintenanceTasks returns the housekeeping sweeps river-service schedules and
-// ogen runs, keyed by kind (jobrpc.v1 MaintenanceService). Each runs exactly as
-// its River worker does, built from the same deps, under the worker's own
-// timeout.
+// MaintenanceTasks returns the sweeps river-service schedules and ogen runs
+// whole, keyed by kind (jobrpc.v1 MaintenanceService). They only touch ogen's
+// own tables and storage. Each runs across tenants, under its own timeout.
 func MaintenanceTasks(d Deps) map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		CleanupPostLogsQueue:              sweepRunner(newCleanupPostLogs(d), CleanupPostLogsTask{}),
-		CleanupNotificationsQueue:         sweepRunner(newCleanupNotifications(d), CleanupNotificationsTask{}),
-		CleanupLoginSecurityQueue:         sweepRunner(newCleanupLoginSecurity(d), CleanupLoginSecurityTask{}),
-		CleanupPluginPairingsQueue:        sweepRunner(newCleanupPluginPairings(d), CleanupPluginPairingsTask{}),
-		SweepPendingUploadsQueue:          sweepRunner(newSweepPendingUploads(d), SweepPendingUploadsTask{}),
-		CleanupEmailLogsQueue:             sweepRunner(newCleanupEmailLogs(d), CleanupEmailLogsTask{}),
-		CleanupZernioConnectSessionsQueue: sweepRunner(newCleanupZernioConnectSessions(d), CleanupZernioConnectSessionsTask{}),
-		ReconcileScheduledPostsQueue:      sweepRunner(newReconcileScheduledPosts(d), ReconcileScheduledPostsTask{}),
-		DetectManualPublishDueQueue:       sweepRunner(newDetectManualPublishDue(d), DetectManualPublishDueTask{}),
-		BackfillAssetAnalysesKind:         sweepRunner(newBackfillAssetAnalyses(d), BackfillAssetAnalysesTask{}),
+		CleanupPostLogsQueue: sweep(30*time.Second, func(ctx context.Context) error {
+			return newCleanupPostLogs(d).Process(ctx, CleanupPostLogsTask{})
+		}),
+		CleanupNotificationsQueue: sweep(30*time.Second, func(ctx context.Context) error {
+			return newCleanupNotifications(d).Process(ctx, CleanupNotificationsTask{})
+		}),
+		CleanupLoginSecurityQueue: sweep(time.Minute, func(ctx context.Context) error {
+			return newCleanupLoginSecurity(d).Process(ctx, CleanupLoginSecurityTask{})
+		}),
+		CleanupPluginPairingsQueue: sweep(30*time.Second, func(ctx context.Context) error {
+			return newCleanupPluginPairings(d).Process(ctx, CleanupPluginPairingsTask{})
+		}),
+		SweepPendingUploadsQueue: sweep(5*time.Minute, func(ctx context.Context) error {
+			return newSweepPendingUploads(d).Process(ctx, SweepPendingUploadsTask{})
+		}),
+		CleanupEmailLogsQueue: sweep(30*time.Second, func(ctx context.Context) error {
+			return newCleanupEmailLogs(d).Process(ctx, CleanupEmailLogsTask{})
+		}),
+		CleanupZernioConnectSessionsQueue: sweep(30*time.Second, func(ctx context.Context) error {
+			return newCleanupZernioConnectSessions(d).Process(ctx, CleanupZernioConnectSessionsTask{})
+		}),
+		ReconcileScheduledPostsQueue: sweep(30*time.Second, func(ctx context.Context) error {
+			return newReconcileScheduledPosts(d).Process(ctx, ReconcileScheduledPostsTask{})
+		}),
+		DetectManualPublishDueQueue: sweep(time.Minute, func(ctx context.Context) error {
+			return newDetectManualPublishDue(d).Process(ctx, DetectManualPublishDueTask{})
+		}),
+		BackfillAssetAnalysesKind: sweep(5*time.Minute, func(ctx context.Context) error {
+			return newBackfillAssetAnalyses(d).Process(ctx)
+		}),
 	}
 }
 
-func sweepRunner[T river.JobArgs](w river.Worker[T], args T) func(context.Context) error {
+// sweep runs one pass across tenants within timeout.
+func sweep(timeout time.Duration, run func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
-		job := &river.Job[T]{JobRow: &rivertype.JobRow{Kind: args.Kind()}, Args: args}
-		if d := w.Timeout(job); d > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, d)
-			defer cancel()
-		}
-		return w.Work(ctx, job)
+		ctx, cancel := context.WithTimeout(tenantctx.WithSystem(ctx), timeout)
+		defer cancel()
+		return run(ctx)
 	}
 }

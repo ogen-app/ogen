@@ -19,7 +19,8 @@ import (
 )
 
 // emailRuntime bundles the CON-154 email collaborators built at boot: the job
-// dependency set (injected into the River workers) and the two public handlers.
+// dependency set (served to river-service's email jobs) and the two public
+// handlers.
 type emailRuntime struct {
 	Deps    queues.EmailDeps
 	Handler *handlers.EmailHandler

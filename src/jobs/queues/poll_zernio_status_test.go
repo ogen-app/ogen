@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs/queues"
@@ -129,14 +127,14 @@ func TestPollNonTerminalSnoozes(t *testing.T) {
 	proc := &queues.PollZernioStatusProcessor{Deps: deps}
 	err := proc.Process(t.Context(), queues.PollZernioStatusTask{PostID: post.ID})
 
-	// Non-terminal → reschedule via river.JobSnooze (not a failure, not a
+	// Non-terminal → reschedule via a snooze (not a failure, not a
 	// completion). The job is rescheduled without consuming a retry attempt.
-	snooze, ok := errors.AsType[*river.JobSnoozeError](err)
+	snooze, ok := errors.AsType[*queues.SnoozeError](err)
 	if !ok {
 		t.Fatalf("expected a river JobSnooze, got %v", err)
 	}
-	if snooze.Duration <= 0 {
-		t.Errorf("snooze duration should be positive, got %s", snooze.Duration)
+	if snooze.After <= 0 {
+		t.Errorf("snooze duration should be positive, got %s", snooze.After)
 	}
 	// The Post stays Scheduled; Zernio's status is persisted for visibility.
 	got, _ := postRepo.GetByID(t.Context(), post.ID)

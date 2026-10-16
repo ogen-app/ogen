@@ -18,7 +18,7 @@ import (
 // QueryExecModeCacheStatement each new text costs an extra Parse/Describe
 // round trip and leaves a server-side prepared statement behind on the
 // connection. The simple protocol runs such a query in one round trip and
-// keeps nothing on the server. Parameterised queries (River's) keep the
+// keeps nothing on the server. Parameterised queries keep the
 // default extended-protocol mode, so their argument encoding is unchanged.
 func openPool(dsn string) (*sql.DB, error) {
 	cfg, err := pgx.ParseConfig(dsn)

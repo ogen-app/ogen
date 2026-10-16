@@ -3,7 +3,7 @@ package zernio
 import "github.com/ogen-app/ogen/src/infra/vendors"
 
 // VendorZernio is the vendor slug on Zernio usage events (CON-86, the
-// publisher family). The Zernio River workers build vendors.MeterEvent values
+// publisher family). The Zernio jobs' steps build vendors.MeterEvent values
 // with this name and hand them to the usage.Recorder.
 const VendorZernio = "zernio"
 

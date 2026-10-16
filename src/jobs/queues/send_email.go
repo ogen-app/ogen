@@ -5,10 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
-	"time"
 	"unicode/utf8"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email"
@@ -48,41 +45,15 @@ type SendEmailTask struct {
 	Vars map[string]string `json:"vars,omitempty"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (SendEmailTask) Kind() string { return SendEmailQueue }
 
-// InsertOpts bounds retries and dedupes by args. The hard idempotency backstops
-// are the Resend Idempotency-Key header + the email_logs unique index; ByArgs
-// just stops an accidental duplicate enqueue from queueing twice.
-func (SendEmailTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 5, UniqueOpts: river.UniqueOpts{ByArgs: true}}
-}
-
-// SendEmailProcessor is the River worker for send_email.
+// SendEmailProcessor runs send_email.
 type SendEmailProcessor struct {
-	river.WorkerDefaults[SendEmailTask]
 	Deps EmailDeps
 	// Tenants skips mail for a suspended/deleted tenant — e.g. a drip
 	// step scheduled before the tenant was frozen. Nil = no gate.
 	Tenants TenantStatusReader
-}
-
-// Work is the River entrypoint; it runs under the task's tenant scope so the
-// recipient lookup is correctly isolated.
-func (p *SendEmailProcessor) Work(ctx context.Context, job *river.Job[SendEmailTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *SendEmailProcessor) Timeout(*river.Job[SendEmailTask]) time.Duration {
-	return 30 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, NewSendEmail(d))
-	})
 }
 
 // NewSendEmail builds the send_email worker. ogen's email job RPCs drive the

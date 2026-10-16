@@ -27,8 +27,7 @@ const (
 	runSlotStale = time.Minute
 	// runHeartbeatEvery is how often a detached run refreshes its slot.
 	runHeartbeatEvery = 15 * time.Second
-	// detachedRunTimeout bounds one detached run, like the attempt timeout of
-	// an analysis run inside a River worker.
+	// detachedRunTimeout bounds one detached run.
 	detachedRunTimeout = 15 * time.Minute
 )
 

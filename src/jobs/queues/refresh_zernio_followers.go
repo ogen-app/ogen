@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs"
@@ -31,41 +29,18 @@ const defaultFollowerBackfillDays = 30
 // per-tick data.
 type RefreshZernioFollowersTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (RefreshZernioFollowersTask) Kind() string { return RefreshZernioFollowersQueue }
-
-// InsertOpts mirrors the analytics refresh: one attempt (each tick records its
-// own outcome and the upsert is idempotent), active-state uniqueness so
-// overlapping ticks don't stack.
-func (RefreshZernioFollowersTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // RefreshZernioFollowersProcessor wires one follower-refresh tick. Deps
 // supplies the social-account repo (tenant/profile enumeration), the follower
 // repo (upsert target), and the Zernio client. Settings records the
 // zernio.followers.* health keys.
 type RefreshZernioFollowersProcessor struct {
-	river.WorkerDefaults[RefreshZernioFollowersTask]
 	Deps     ZernioDeps
 	Settings zernio.SettingsStore
 
 	BackfillDays int // first-run lookback (defaults to 30)
-}
-
-func (p *RefreshZernioFollowersProcessor) Work(ctx context.Context, job *river.Job[RefreshZernioFollowersTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(ctx, job.Args)
-}
-
-func (p *RefreshZernioFollowersProcessor) Timeout(*river.Job[RefreshZernioFollowersTask]) time.Duration {
-	return tenantSweepJobTimeout
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, newRefreshZernioFollowers(d))
-	})
 }
 
 func newRefreshZernioFollowers(d Deps) *RefreshZernioFollowersProcessor {
