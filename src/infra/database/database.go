@@ -25,8 +25,8 @@ const (
 )
 
 // New opens a Postgres connection pool via the pgx stdlib driver and wraps it
-// with bun using the Postgres dialect. The same pool (exposed as db.DB) is
-// shared with the River job queue so bun and River draw from one pool.
+// with bun using the Postgres dialect. The same pool (exposed as db.DB)
+// backs the job outbox, so an enqueue joins the caller's transaction.
 func New(dsn string, debug bool) (*bun.DB, error) {
 	sqldb, err := openPool(dsn)
 	if err != nil {

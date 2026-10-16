@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 )
@@ -99,8 +97,8 @@ func TestEditedAnalysisSnoozesUntilTheAssetIsQuiet(t *testing.T) {
 	task := queues.AnalyzeAssetTask{TenantID: "t1", AssetID: "a1", Reason: assetanalysis.ReasonEdited}
 
 	err := proc.Process(t.Context(), task, false)
-	snooze, ok := errors.AsType[*river.JobSnoozeError](err)
-	if !ok || snooze.Duration != 90*time.Second {
+	snooze, ok := errors.AsType[*queues.SnoozeError](err)
+	if !ok || snooze.After != 90*time.Second {
 		t.Fatalf("a recently edited asset should snooze for the rest of the debounce, got %v", err)
 	}
 	if len(runner.ran) != 0 {
@@ -150,8 +148,8 @@ func TestAnalysisRerunsWhenTheAssetChangedMidRun(t *testing.T) {
 	proc := &queues.AnalyzeAssetProcessor{Deps: queues.AnalysisDeps{Runner: runner}}
 
 	err := proc.Process(t.Context(), queues.AnalyzeAssetTask{TenantID: "t1", AssetID: "a1", Reason: assetanalysis.ReasonRetry}, false)
-	snooze, ok := errors.AsType[*river.JobSnoozeError](err)
-	if !ok || snooze.Duration != 2*time.Minute || len(runner.ran) != 1 {
+	snooze, ok := errors.AsType[*queues.SnoozeError](err)
+	if !ok || snooze.After != 2*time.Minute || len(runner.ran) != 1 {
 		t.Fatalf("a run raced by an edit should snooze to re-read it, got %v after %d runs", err, len(runner.ran))
 	}
 }

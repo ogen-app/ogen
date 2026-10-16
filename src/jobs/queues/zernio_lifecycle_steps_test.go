@@ -317,3 +317,41 @@ type switchingBilling struct{ live bool }
 func (b *switchingBilling) HasLiveSubscription(context.Context, string) (bool, error) {
 	return b.live, nil
 }
+
+// A failed local soft-delete must leave the profile id set, so the retry
+// finds the remaining rows again (the remote deletes are idempotent).
+func TestTrialTeardownStepsKeepTheProfileUntilLocalRowsAreGone(t *testing.T) {
+	accounts := &fakeLocalAccounts{active: []string{"s1", "s2"}, failDeletes: 1}
+	steps, settings, ctx := trialTeardownSteps(t, fakeBillingLive{}, models.TenantStatusActive, accounts)
+	z := &scriptedZernio{replies: map[string]zernio.Result{
+		"GET /accounts":        {Status: 200, Body: []byte(`{"accounts":[]}`)},
+		"DELETE /profiles/p-1": {Status: 200, Body: []byte(`{}`)},
+	}}
+	raw, _ := json.Marshal(trialArgs)
+	in := queues.StepInput{Kind: queues.TeardownZernioProfileQueue, Args: raw}
+	var last queues.StepOutput
+	for range 10 {
+		out, err := steps.Step(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = out
+		if out.HTTP == nil {
+			break
+		}
+		res := z.answer(*out.HTTP)
+		in.State, in.Result = out.State, &res
+	}
+	if last.Retry == nil {
+		t.Fatalf("first attempt = %+v, want a retry on the local soft-delete", last)
+	}
+	if _, found, _ := settings.Get(ctx, zernio.SettingProfileID); !found {
+		t.Fatal("profile id cleared before the local rows were disconnected")
+	}
+	if out := runSteps(t, steps, queues.TeardownZernioProfileQueue, trialArgs, z); out.Done == nil || len(accounts.active) != 0 {
+		t.Fatalf("retry: %+v, local rows %v", out, accounts.active)
+	}
+	if _, found, _ := settings.Get(ctx, zernio.SettingProfileID); found {
+		t.Fatal("profile id kept after a complete teardown")
+	}
+}

@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email/templates"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -68,9 +66,9 @@ func (f fakeSentLog) ExistsByIdempotencyKey(_ context.Context, key string) (bool
 	return f[key], nil
 }
 
-type capture struct{ args []river.JobArgs }
+type capture struct{ args []JobArgs }
 
-func (c *capture) insert(_ context.Context, args []river.JobArgs) error {
+func (c *capture) insert(_ context.Context, args []JobArgs) error {
 	c.args = append(c.args, args...)
 	return nil
 }
@@ -90,7 +88,7 @@ func TestWeeklyReportDispatchEnqueuesDueBuilds(t *testing.T) {
 	if err := p.Process(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	want := []river.JobArgs{
+	want := []JobArgs{
 		BuildWeeklyReportTask{TenantID: "tn-busy", WeekStart: "2026-10-12"},
 		BuildWeeklyReportTask{TenantID: "tn-idle", WeekStart: "2026-10-12"},
 	}
@@ -139,15 +137,6 @@ func TestWeeklyReportDispatchUsesWorkspaceZone(t *testing.T) {
 	}
 	if err := p.Process(t.Context()); err != nil || len(got.args) != 0 {
 		t.Fatalf("err=%v builds=%v", err, got.args)
-	}
-}
-
-// The build is unique per (tenant, week) in every state, completed included,
-// which is what keeps a later tick from building the week again.
-func TestBuildWeeklyReportIsUniquePerWeek(t *testing.T) {
-	opts := BuildWeeklyReportTask{}.InsertOpts()
-	if !opts.UniqueOpts.ByArgs || len(opts.UniqueOpts.ByState) != 0 {
-		t.Fatalf("unique opts = %+v (empty ByState is River's default, which includes completed)", opts.UniqueOpts)
 	}
 }
 
@@ -202,15 +191,4 @@ func TestBuildWeeklyReport(t *testing.T) {
 			t.Fatalf("err=%v sends=%v", err, got.args)
 		}
 	})
-}
-
-func TestPeriodicJobsWeeklyReportNeedsInterval(t *testing.T) {
-	base := PeriodicConfig{CleanupEvery: time.Hour, ReconcileEvery: 5 * time.Minute}
-	if got := len(base.PeriodicJobs()); got != 2 {
-		t.Fatalf("zero interval must not register the dispatcher: got %d jobs", got)
-	}
-	base.WeeklyReportEvery = time.Hour
-	if got := len(base.PeriodicJobs()); got != 3 {
-		t.Fatalf("positive interval must register the dispatcher: got %d jobs", got)
-	}
 }

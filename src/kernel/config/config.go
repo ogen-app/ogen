@@ -61,8 +61,8 @@ type Config struct {
 	EnablePprof bool `envconfig:"ENABLE_PPROF" default:"false"`
 
 	// Connection-pool sizing. Postgres lifts SQLite's single-writer
-	// ceiling, so the API runs a real pool shared by bun and the River
-	// job queue. Size MaxOpen for combined HTTP + worker load. MaxIdle matches
+	// ceiling, so the API runs a real pool. Size MaxOpen for combined HTTP and
+	// job-step load. MaxIdle matches
 	// it so a burst does not close and reopen connections (TCP + TLS + auth);
 	// the pool's idle timeout still releases connections nobody uses.
 	DBMaxOpenConns    int    `envconfig:"DB_MAX_OPEN_CONNS" default:"25"`
@@ -257,19 +257,9 @@ type Config struct {
 	AudioServiceAddr         string        `envconfig:"AUDIO_SERVICE_ADDR"           default:""`
 	AudioServiceTimeout      time.Duration `envconfig:"AUDIO_SERVICE_TIMEOUT"        default:"10m"`
 	AudioServiceMaxRecvBytes int           `envconfig:"AUDIO_SERVICE_MAX_RECV_BYTES" default:"33554432"`
-	// AudioJobWorkers sizes the dedicated `audio` queue's worker pool (kept small
-	// so long audio can't starve the default queue); AudioJobTimeout bounds a
-	// single job attempt (checkpointed, so a longer run resumes). Segmentation:
-	// AudioSegmentMaxMs windows + AudioSegmentOverlapMs overlap. AudioMaxDurationMs
-	// is the pre-spend max-duration tier gate (0 = no cap; a CON-208 tier lowers
-	// it). The transcription model is the transcribe/main slot, set in Harbor.
-	// Raw-audio embedding is deferred (CON-282 PRD); it gets a flag when it is
-	// built, not before (CON-312 removed the unused stub).
-	AudioJobWorkers       int           `envconfig:"AUDIO_JOB_WORKERS"        default:"2"`
-	AudioJobTimeout       time.Duration `envconfig:"AUDIO_JOB_TIMEOUT"        default:"3h"`
-	AudioSegmentMaxMs     int64         `envconfig:"AUDIO_SEGMENT_MAX_MS"     default:"300000"`
-	AudioSegmentOverlapMs int64         `envconfig:"AUDIO_SEGMENT_OVERLAP_MS" default:"5000"`
-	AudioMaxDurationMs    int64         `envconfig:"AUDIO_MAX_DURATION_MS"    default:"14400000"`
+	AudioSegmentMaxMs        int64         `envconfig:"AUDIO_SEGMENT_MAX_MS"     default:"300000"`
+	AudioSegmentOverlapMs    int64         `envconfig:"AUDIO_SEGMENT_OVERLAP_MS" default:"5000"`
+	AudioMaxDurationMs       int64         `envconfig:"AUDIO_MAX_DURATION_MS"    default:"14400000"`
 
 	// Image microservice, mirroring audio/document-service. image-service
 	// is the SINGLE image ingress: both content-bank IMG assets and post-attachment
@@ -285,17 +275,6 @@ type Config struct {
 	ImageServiceAddr         string        `envconfig:"IMAGE_SERVICE_ADDR"           default:""`
 	ImageServiceTimeout      time.Duration `envconfig:"IMAGE_SERVICE_TIMEOUT"        default:"3m"`
 	ImageServiceMaxRecvBytes int           `envconfig:"IMAGE_SERVICE_MAX_RECV_BYTES" default:"33554432"`
-	// Note: the decompression-bomb pixel ceiling is enforced INSIDE image-service
-	// (its own IMAGE_MAX_PIXELS env), not here — the current contract has no field to
-	// pass it over, so it is deliberately NOT duplicated as dead ogen config. The
-	// upload byte cap + alt-text storage length live in operator-controlled global
-	// config, read via GlobalLimits().
-	//
-	// ImageJobWorkers sizes the dedicated `image` queue's worker pool (kept small so
-	// heavy vision runs can't starve the default queue); ImageJobTimeout bounds a
-	// single content-bank Extract job attempt.
-	ImageJobWorkers int           `envconfig:"IMAGE_JOB_WORKERS" default:"2"`
-	ImageJobTimeout time.Duration `envconfig:"IMAGE_JOB_TIMEOUT" default:"10m"`
 	// Vision models are the vision/* slots, set in Harbor. classify runs at
 	// low media_resolution; extract/escalate at high resolution.
 	// VisionConfidenceThreshold gates the one-shot escalation.
@@ -318,14 +297,7 @@ type Config struct {
 	// stay distinguishable on the Zernio dashboard. Defaults to "dev".
 	ZernioEnv string `envconfig:"ZERNIO_ENV" default:"dev"`
 
-	// Analytics refresh. The refresh_zernio_analytics
-	// queue batch-fetches engagement analytics on this cadence and only
-	// considers posts published within the lookback window (Zernio caps
-	// the analytics range at 366 days). CON-236 made this the BASE (finest)
-	// tick and added a per-post age-based decay gate on top, so the default
-	// moved from 30m to 1h (matching the fresh-bucket cadence).
-	ZernioAnalyticsRefreshInterval time.Duration `envconfig:"ZERNIO_ANALYTICS_REFRESH_INTERVAL" default:"1h"`
-	ZernioAnalyticsWindowDays      int           `envconfig:"ZERNIO_ANALYTICS_WINDOW_DAYS"      default:"90"`
+	ZernioAnalyticsWindowDays int `envconfig:"ZERNIO_ANALYTICS_WINDOW_DAYS"      default:"90"`
 
 	// Analytics refresh decay schedule. A post is re-checked more often
 	// while it's young and its numbers still move, then progressively less. The
@@ -339,31 +311,9 @@ type Config struct {
 	ZernioAnalyticsWarmEvery   time.Duration `envconfig:"ZERNIO_ANALYTICS_WARM_EVERY"   default:"24h"`
 	ZernioAnalyticsColdEvery   time.Duration `envconfig:"ZERNIO_ANALYTICS_COLD_EVERY"   default:"168h"`
 
-	// Follower-stats refresh. The refresh_zernio_followers queue
-	// snapshots each connected account's follower count on this cadence. Zernio
-	// refreshes follower counts once per day, so a 24h default matches the
-	// upstream granularity. ZernioFollowerRetentionDays carries the retention
-	// default for parity with the analytics-DB policy; the migration installs a
-	// fixed policy (operators adjust it out of band, like UsageRetentionDays).
-	ZernioFollowerRefreshInterval time.Duration `envconfig:"ZERNIO_FOLLOWER_REFRESH_INTERVAL" default:"24h"`
-	ZernioFollowerRetentionDays   int           `envconfig:"ZERNIO_FOLLOWER_RETENTION_DAYS"   default:"365"`
+	ZernioFollowerRetentionDays int `envconfig:"ZERNIO_FOLLOWER_RETENTION_DAYS"   default:"365"`
 
-	// Connection-expiry notifications. The detect_expiring_connections
-	// queue reads each connected account's Zernio health on this cadence and
-	// emails workspace owners when Zernio flags it warning (expiring soon) or
-	// error / needs-reconnect. ConnectionExpiryLeadDays only applies when Zernio
-	// reports no status and the token expiry is all there is to go on.
-	// Profile-driven, so it no-ops when Zernio is unconfigured. Durable
-	// per-(account,stage,episode,owner) dedupe (via email_logs) keeps each
-	// unhealthy episode to one notification per stage.
-	ZernioHealthCheckInterval time.Duration `envconfig:"ZERNIO_HEALTH_CHECK_INTERVAL" default:"6h"`
-	ConnectionExpiryLeadDays  int           `envconfig:"CONNECTION_EXPIRY_LEAD_DAYS"  default:"7"`
-
-	// Manual-publish-due sweep. The detect_manual_publish_due queue
-	// notifies workspace owners once a post left for manual publishing reaches its
-	// scheduled time and nobody has published it yet. Per-post dedupe keeps it to
-	// one notification while unread.
-	ManualPublishDueSweepEvery time.Duration `envconfig:"MANUAL_PUBLISH_DUE_SWEEP_EVERY" default:"1h"`
+	ConnectionExpiryLeadDays int `envconfig:"CONNECTION_EXPIRY_LEAD_DAYS"  default:"7"`
 
 	// Weekly report email. Every WEEKLY_REPORT_CHECK_EVERY the dispatcher
 	// mails each workspace whose Monday 09:00 has arrived in its own time zone.
@@ -487,20 +437,6 @@ type Config struct {
 	HarborWebhookSecret string `envconfig:"HARBOR_WEBHOOK_SECRET" default:""`
 	HarborBaseURL       string `envconfig:"HARBOR_BASE_URL"       default:""`
 
-	// River background-job queue (CON-69 §1, §3; CON-87 WS3). Workers
-	// process `submit_post_to_zernio`, `poll_zernio_status`,
-	// `cancel_zernio_job`, plus the periodic `reconcile_scheduled_posts`,
-	// `cleanup_post_logs`, and `refresh_zernio_analytics`. JobWorkers sizes
-	// the worker pool on the default queue; River owns leasing, retry/
-	// backoff, and completed-job retention internally.
-	JobWorkers int `envconfig:"JOB_WORKERS" default:"4"`
-	// IngestJobWorkers sizes the dedicated `ingest` queue, where PDF, document
-	// and URL ingestion run, so minutes-long parses and embeds never hold the
-	// default queue's workers.
-	IngestJobWorkers int `envconfig:"INGEST_JOB_WORKERS" default:"2"`
-	// AnalysisJobWorkers sizes the dedicated `analysis` queue, where asset
-	// analyses run, so a long transcript never holds ingestion or publishing.
-	AnalysisJobWorkers int `envconfig:"ANALYSIS_JOB_WORKERS" default:"4"`
 	// AnalysisFullContextMaxTokens is the largest source analysed in one model
 	// call; a larger one is read in parts and the notes reduced.
 	AnalysisFullContextMaxTokens int `envconfig:"ANALYSIS_FULL_CONTEXT_MAX_TOKENS" default:"150000"`
@@ -513,31 +449,19 @@ type Config struct {
 	// AnalysisEditDebounce is how long a note or Markdown asset must sit
 	// unedited before its analyses re-run, so typing costs one run.
 	AnalysisEditDebounce time.Duration `envconfig:"ANALYSIS_EDIT_DEBOUNCE" default:"5m"`
-	// AnalysisBackfillInterval is how often the sweep queues the analyses
-	// that assets and campaign memberships are missing; 0 disables it.
-	AnalysisBackfillInterval time.Duration `envconfig:"ANALYSIS_BACKFILL_INTERVAL" default:"15m"`
 	// AnalysisBackfillBatch caps the analyses one backfill tick queues per
 	// tenant.
 	AnalysisBackfillBatch int `envconfig:"ANALYSIS_BACKFILL_BATCH" default:"20"`
-	// River's stop budget on shutdown. Running jobs get JobSoftStopTimeout to
-	// finish; any still running then have their contexts cancelled and are
-	// rescheduled, and the stop gives up at JobShutdownTimeout. Every shutdown
-	// stage together must fit the platform's grace before SIGKILL (Railway:
-	// RAILWAY_DEPLOYMENT_DRAINING_SECONDS, set it to 300 for these defaults).
-	JobSoftStopTimeout time.Duration `envconfig:"JOB_SOFT_STOP_TIMEOUT" default:"210s"`
-	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"240s"`
 
-	// river-service takes over job kinds one family at a time. Kinds listed in
-	// OUTBOX_RELAY_KINDS are written to the job outbox in the enqueuing
-	// transaction and relayed to river-service's JobService at
-	// RIVER_SERVICE_ADDR (e.g. dns:///river-service.railway.internal:9092); a
-	// periodic kind listed there is scheduled by river-service instead. Empty
-	// keeps every kind in-process. The relay delivers due rows on every write
-	// and at least every OUTBOX_RELAY_POLL_INTERVAL, and keeps delivered rows
-	// for OUTBOX_RETENTION_DAYS.
+	// Background jobs run in river-service. Every enqueue writes the job outbox
+	// in the enqueuing transaction, and the relay delivers it to river-service's
+	// JobService at RIVER_SERVICE_ADDR (e.g.
+	// dns:///river-service.railway.internal:9092); without it jobs wait in the
+	// outbox. The relay delivers due rows on every write and at least every
+	// OUTBOX_RELAY_POLL_INTERVAL, and keeps delivered rows for
+	// OUTBOX_RETENTION_DAYS.
 	RiverServiceAddr        string        `envconfig:"RIVER_SERVICE_ADDR"`
 	RiverServiceAuthToken   string        `envconfig:"RIVER_SERVICE_AUTH_TOKEN"`
-	OutboxRelayKinds        []string      `envconfig:"OUTBOX_RELAY_KINDS"`
 	OutboxRelayPollInterval time.Duration `envconfig:"OUTBOX_RELAY_POLL_INTERVAL" default:"2s"`
 	OutboxRelayBatch        int           `envconfig:"OUTBOX_RELAY_BATCH" default:"100"`
 	OutboxRetentionDays     int           `envconfig:"OUTBOX_RETENTION_DAYS" default:"7"`
@@ -558,21 +482,11 @@ type Config struct {
 	// reconciliation_timeout from a Zernio-reported failure.
 	ReconcileGrace time.Duration `envconfig:"RECONCILE_GRACE" default:"1h"`
 
-	// Zernio orphan sweep: posts still queued in Zernio that no scheduled
-	// Ogen post holds. Off-live by default — it logs and counts what it would
-	// withdraw until ZERNIO_ORPHAN_SWEEP_LIVE=true. MinAge leaves young Zernio
-	// posts alone so an in-flight submit is never taken for an orphan.
-	ZernioOrphanSweepInterval time.Duration `envconfig:"ZERNIO_ORPHAN_SWEEP_INTERVAL" default:"1h"`
-	ZernioOrphanSweepLive     bool          `envconfig:"ZERNIO_ORPHAN_SWEEP_LIVE" default:"false"`
-	ZernioOrphanSweepMinAge   time.Duration `envconfig:"ZERNIO_ORPHAN_SWEEP_MIN_AGE" default:"1h"`
+	ZernioOrphanSweepLive   bool          `envconfig:"ZERNIO_ORPHAN_SWEEP_LIVE" default:"false"`
+	ZernioOrphanSweepMinAge time.Duration `envconfig:"ZERNIO_ORPHAN_SWEEP_MIN_AGE" default:"1h"`
 
-	// Abandoned-upload sweep: presigned video uploads never finalized. A
-	// record past its URL's expiry plus Grace has its object deleted. Off-live
-	// by default — it logs and counts what it would delete until
-	// PENDING_UPLOAD_SWEEP_LIVE=true.
-	PendingUploadSweepInterval time.Duration `envconfig:"PENDING_UPLOAD_SWEEP_INTERVAL" default:"1h"`
-	PendingUploadSweepGrace    time.Duration `envconfig:"PENDING_UPLOAD_SWEEP_GRACE" default:"2h"`
-	PendingUploadSweepLive     bool          `envconfig:"PENDING_UPLOAD_SWEEP_LIVE" default:"false"`
+	PendingUploadSweepGrace time.Duration `envconfig:"PENDING_UPLOAD_SWEEP_GRACE" default:"2h"`
+	PendingUploadSweepLive  bool          `envconfig:"PENDING_UPLOAD_SWEEP_LIVE" default:"false"`
 
 	// PostLog retention. Older entries are removed by the
 	// cleanup_post_logs recurring task. 0 disables cleanup entirely.
@@ -613,14 +527,7 @@ type Config struct {
 	// Starts at 90 days, expandable later.
 	ActivityRetentionDays int `envconfig:"ACTIVITY_RETENTION_DAYS" default:"90"`
 
-	// Notification center. The cleanup_notifications periodic task
-	// reaps faded notifications so the inbox and table stay lean:
-	// NotificationsCleanupEvery is the sweep cadence (0 disables the task);
-	// NotificationsRetentionDays drops read/dismissed rows older than this (0
-	// keeps them — only an explicit expires_at then fades a row). Mirrors
-	// PostLogRetentionDays.
-	NotificationsCleanupEvery  time.Duration `envconfig:"NOTIFICATIONS_CLEANUP_EVERY"  default:"24h"`
-	NotificationsRetentionDays int           `envconfig:"NOTIFICATIONS_RETENTION_DAYS" default:"90"`
+	NotificationsRetentionDays int `envconfig:"NOTIFICATIONS_RETENTION_DAYS" default:"90"`
 
 	// PluginMaxVideoBytes caps one video sent by a design-tool plugin. The
 	// export is held in memory in the plugin's iframe before upload, so this

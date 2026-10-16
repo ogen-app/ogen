@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river"
 	"google.golang.org/grpc"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
@@ -26,7 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// ProcessAudioKind is the River worker kind for audio ingestion:
+// ProcessAudioKind is the job kind for audio ingestion:
 // download the original, probe + tier-gate, normalize once, segment, transcribe
 // each segment via audio-service (Gemini multimodal), then — on full completion
 // — assemble time-anchored transcript chunks, embed them, and store them in the
@@ -58,7 +57,6 @@ const (
 	// the deps leave them zero (mirrors the config defaults).
 	defaultSegmentMaxMs     int64 = 300_000 // 5 min
 	defaultSegmentOverlapMs int64 = 5_000   // 5 s
-	defaultAudioJobTimeout        = 3 * time.Hour
 )
 
 // audioTranscriber is the narrow slice of the audio gRPC client the worker
@@ -143,7 +141,6 @@ type AudioDeps struct {
 	SegmentMaxMs     int64
 	SegmentOverlapMs int64
 	MaxDurationMs    int64
-	JobTimeout       time.Duration
 	// Notifier drops an in-app notification to the asset's creator on a terminal
 	// status. Nil is a no-op.
 	Notifier *notify.Service
@@ -169,42 +166,11 @@ type ProcessAudioTask struct {
 
 func (ProcessAudioTask) Kind() string { return ProcessAudioKind }
 
-// InsertOpts routes the job to the dedicated audio queue and bounds retries.
-// Transient failures (storage, gRPC Unavailable/DeadlineExceeded, normalization
-// Internal) retry with backoff and resume from the first incomplete segment;
-// terminal ones (unusable/silent audio, over-limit) short-circuit inside Work.
-func (ProcessAudioTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: AudioQueue, MaxAttempts: 10}
-}
-
 type ProcessAudioProcessor struct {
-	river.WorkerDefaults[ProcessAudioTask]
 	Deps AudioDeps
 
 	memOnce sync.Once
 	mem     *memChunkStage
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ProcessAudioProcessor{Deps: d.Audio})
-	})
-}
-
-// Work runs the job's steps in-process.
-func (p *ProcessAudioProcessor) Work(ctx context.Context, job *river.Job[ProcessAudioTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-// Timeout bounds a single attempt. Each attempt makes checkpointed progress
-// (normalize, then per-segment), so a run longer than one timeout simply resumes
-// on the next attempt.
-func (p *ProcessAudioProcessor) Timeout(*river.Job[ProcessAudioTask]) time.Duration {
-	if p.Deps.JobTimeout > 0 {
-		return p.Deps.JobTimeout
-	}
-	return defaultAudioJobTimeout
 }
 
 // process runs one attempt in-process. lastAttempt flips an otherwise

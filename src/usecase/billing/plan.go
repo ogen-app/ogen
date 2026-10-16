@@ -13,7 +13,6 @@ import (
 
 	billingdom "github.com/ogen-app/ogen/src/domain/billing"
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -448,14 +447,16 @@ func (s *Service) mirrorAfter(ctx context.Context, snap billingdom.Subscription,
 // RunScheduledChange advances one scheduled downgrade: at effective_at - 1h
 // it switches the provider without proration (so the renewal charges the new
 // price); at effective_at it moves the tier. Each step is idempotent, so a
-// duplicate job or the reconcile sweep re-driving it is harmless.
+// duplicate job or the reconcile sweep re-driving it is harmless. It calls the
+// provider directly; the billing_apply_scheduled_change job runs the same
+// pieces through river-service, which knows the attempt.
 func (s *Service) RunScheduledChange(ctx context.Context, changeID string) error {
 	call, err := s.NextScheduledChange(ctx, changeID)
 	if err != nil || call == nil {
 		return err
 	}
 	snap, callErr := s.d.Provider.ChangePlan(ctx, call.SubscriptionID, call.VariantID, call.Opts())
-	revert, err := s.ScheduledChangePushed(ctx, changeID, snap, callErr, queues.IsLastAttempt(ctx))
+	revert, err := s.ScheduledChangePushed(ctx, changeID, snap, callErr, false)
 	if err != nil || revert == nil {
 		return err
 	}

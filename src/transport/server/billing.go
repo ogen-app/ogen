@@ -13,7 +13,6 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
-	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -114,9 +113,7 @@ func NewBillingService(rt BillingRuntime) (*billing.Service, error) {
 // gate on for the cookie chain. It runs before River: the billing jobs are
 // registered with it, and it enqueues through the same enqueuer River gets.
 func (d *deps) initBilling(ctx context.Context) error {
-	if d.enqueuer == nil {
-		d.enqueuer = &queues.Enqueuer{}
-	}
+	d.ensureEnqueuer()
 	svc, err := NewBillingService(BillingRuntime{
 		Config: d.cfg, DB: d.db, Secrets: d.secretStore, Hub: d.hub,
 		Notifier: d.notifier, Jobs: d.enqueuer, Activity: d.activity.recorder,

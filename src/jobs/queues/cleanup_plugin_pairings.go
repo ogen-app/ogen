@@ -5,12 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/kernel/logging"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 // CleanupPluginPairingsQueue is the recurring sweep that drops expired plugin
@@ -22,37 +19,12 @@ const CleanupPluginPairingsQueue = "cleanup_plugin_pairings"
 // CleanupPluginPairingsTask is the marker payload.
 type CleanupPluginPairingsTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (CleanupPluginPairingsTask) Kind() string { return CleanupPluginPairingsQueue }
 
-// InsertOpts: cadence is owned by a River PeriodicJob, so one attempt is
-// enough; active-state uniqueness keeps overlapping ticks from stacking.
-func (CleanupPluginPairingsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
-
-// CleanupPluginPairingsProcessor is the River worker for the sweep.
+// CleanupPluginPairingsProcessor runs the sweep.
 type CleanupPluginPairingsProcessor struct {
-	river.WorkerDefaults[CleanupPluginPairingsTask]
 	Repo repository.PluginPairingRepository
-}
-
-// Work is the River entrypoint. Pairings aren't tenant-scoped, so the delete
-// runs in a system context.
-func (p *CleanupPluginPairingsProcessor) Work(ctx context.Context, job *river.Job[CleanupPluginPairingsTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return p.Process(tenantctx.WithSystem(ctx), job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *CleanupPluginPairingsProcessor) Timeout(*river.Job[CleanupPluginPairingsTask]) time.Duration {
-	return 30 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, newCleanupPluginPairings(d))
-	})
 }
 
 func newCleanupPluginPairings(d Deps) *CleanupPluginPairingsProcessor {

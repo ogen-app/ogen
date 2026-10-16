@@ -2,11 +2,8 @@ package queues
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/riverqueue/river"
 
 	jobsv1 "github.com/ogen-app/ogen/gen/jobs/v1"
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -17,7 +14,7 @@ import (
 // river-service runs it under the kind ogen asked for.
 func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 	campaign := "c1"
-	kinds := []river.JobArgs{
+	kinds := []JobArgs{
 		SubmitPostTask{PostID: "p1"},
 		PollZernioStatusTask{PostID: "p1", PublisherPostID: "z1"},
 		CancelZernioJobTask{PostID: "p1", Target: CancelTargetDraft, Actor: "u1"},
@@ -50,9 +47,6 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 			if field == nil || string(field.Name()) != args.Kind() {
 				t.Fatalf("args field = %v, want %s", field, args.Kind())
 			}
-			if !RelayableKind(args.Kind()) {
-				t.Errorf("RelayableKind(%s) = false", args.Kind())
-			}
 		})
 	}
 }
@@ -62,7 +56,7 @@ func TestEnqueueRequestFields(t *testing.T) {
 	req, err := enqueueRequest(SendEmailTask{
 		UserID: "u1", TemplateKey: "drip_day2", EmailKind: models.EmailKindMarketing,
 		IdempotencyKey: "drip_day2:u1", Vars: map[string]string{"k": "v"},
-	}, &river.InsertOpts{ScheduledAt: at})
+	}, &EnqueueOpts{ScheduledAt: at})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,37 +104,5 @@ func TestEnqueueRequestKeepsFieldsMainAdded(t *testing.T) {
 	}
 	if r := req.GetTeardownZernioProfile().GetReason(); r != TeardownReasonTrialUnpaid {
 		t.Errorf("teardown reason = %q", r)
-	}
-}
-
-func TestRelayKinds(t *testing.T) {
-	got, err := RelayKinds([]string{" Send_Email", "send_email", "cleanup_post_logs", ""}, "dns:///river-service:9092")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(got, ",") != "send_email,cleanup_post_logs" {
-		t.Errorf("RelayKinds = %v", got)
-	}
-	if _, err := RelayKinds([]string{"send_emails"}, "dns:///river-service:9092"); err == nil || !strings.Contains(err.Error(), `"send_emails"`) {
-		t.Errorf("unknown kind: err = %v", err)
-	}
-	if _, err := RelayKinds([]string{"send_email"}, ""); err == nil || !strings.Contains(err.Error(), "RIVER_SERVICE_ADDR") {
-		t.Errorf("no address: err = %v", err)
-	}
-	if got, err := RelayKinds(nil, ""); err != nil || len(got) != 0 {
-		t.Errorf("empty: %v, %v", got, err)
-	}
-}
-
-// TestPeriodicJobsSkipRelayedSweeps checks that a sweep river-service owns is
-// not also scheduled by ogen.
-func TestPeriodicJobsSkipRelayedSweeps(t *testing.T) {
-	cfg := PeriodicConfig{CleanupEvery: time.Hour, ReconcileEvery: 5 * time.Minute, EmailCleanupEvery: time.Hour}
-	if got := len(cfg.PeriodicJobs()); got != 3 {
-		t.Fatalf("periodic jobs = %d, want 3", got)
-	}
-	cfg.Relayed = func(kind string) bool { return kind == CleanupEmailLogsQueue }
-	if got := len(cfg.PeriodicJobs()); got != 2 {
-		t.Fatalf("periodic jobs with cleanup_email_logs relayed = %d, want 2", got)
 	}
 }

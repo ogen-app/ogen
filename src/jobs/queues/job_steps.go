@@ -199,7 +199,7 @@ type JobSteps struct {
 	kinds map[string]stepFunc
 }
 
-// NewJobSteps builds the steps from the same deps as the River workers.
+// NewJobSteps builds every kind's steps from the job deps.
 func NewJobSteps(d Deps) *JobSteps {
 	s := &JobSteps{deps: d, kinds: map[string]stepFunc{}}
 	s.registerZernioLifecycle()

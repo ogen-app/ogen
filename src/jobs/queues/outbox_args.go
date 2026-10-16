@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"google.golang.org/protobuf/reflect/protoreflect"
-
-	"github.com/riverqueue/river"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	jobsv1 "github.com/ogen-app/ogen/gen/jobs/v1"
@@ -16,7 +13,7 @@ import (
 // enqueueRequest converts a job's args to the jobs.v1 request river-service
 // receives: the matching args message, field for field, and the schedule from
 // opts. Queue, attempts and uniqueness are river-service's own per kind.
-func enqueueRequest(args river.JobArgs, opts *river.InsertOpts) (*jobsv1.EnqueueRequest, error) {
+func enqueueRequest(args JobArgs, opts *EnqueueOpts) (*jobsv1.EnqueueRequest, error) {
 	req := &jobsv1.EnqueueRequest{}
 	if opts != nil && !opts.ScheduledAt.IsZero() {
 		req.ScheduledAt = timestamppb.New(opts.ScheduledAt)
@@ -33,7 +30,7 @@ func enqueueRequest(args river.JobArgs, opts *river.InsertOpts) (*jobsv1.Enqueue
 
 // setArgs fills req's args oneof from args and reports whether the kind has a
 // jobs.v1 message.
-func setArgs(req *jobsv1.EnqueueRequest, args river.JobArgs) (bool, error) {
+func setArgs(req *jobsv1.EnqueueRequest, args JobArgs) (bool, error) {
 	switch a := args.(type) {
 	case SubmitPostTask:
 		req.Args = &jobsv1.EnqueueRequest_SubmitPostToZernio{SubmitPostToZernio: &jobsv1.SubmitPostToZernioArgs{PostId: a.PostID}}
@@ -100,7 +97,7 @@ func SendEmailTaskFromArgs(a *jobsv1.SendEmailArgs) (SendEmailTask, error) {
 	return t, nil
 }
 
-func setIngestArgs(req *jobsv1.EnqueueRequest, args river.JobArgs) bool {
+func setIngestArgs(req *jobsv1.EnqueueRequest, args JobArgs) bool {
 	switch a := args.(type) {
 	case ProcessPDFTask:
 		req.Args = &jobsv1.EnqueueRequest_ProcessPdf{ProcessPdf: &jobsv1.ProcessPdfArgs{
@@ -140,11 +137,4 @@ func setIngestArgs(req *jobsv1.EnqueueRequest, args river.JobArgs) bool {
 		return false
 	}
 	return true
-}
-
-// hasArgsMessage reports whether kind names a jobs.v1 EnqueueRequest args
-// field, which is how river-service's contract names its kinds.
-func hasArgsMessage(kind string) bool {
-	oneof := (&jobsv1.EnqueueRequest{}).ProtoReflect().Descriptor().Oneofs().ByName("args")
-	return oneof.Fields().ByName(protoreflect.Name(kind)) != nil
 }

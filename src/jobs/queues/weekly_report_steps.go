@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
@@ -20,7 +18,7 @@ func (s *JobSteps) registerWeeklyReport() {
 	d := s.deps
 	dispatch := &WeeklyReportDispatchProcessor{Deps: d.WeeklyReport}
 	s.kinds[WeeklyReportDispatchQueue] = dispatch.step
-	build := &BuildWeeklyReportProcessor{Deps: d.WeeklyReport, Insert: func(ctx context.Context, args []river.JobArgs) error {
+	build := &BuildWeeklyReportProcessor{Deps: d.WeeklyReport, Insert: func(ctx context.Context, args []JobArgs) error {
 		for _, a := range args {
 			if err := d.Jobs.enqueue(ctx, a, nil); err != nil {
 				return err
@@ -35,7 +33,7 @@ func (s *JobSteps) registerWeeklyReport() {
 func (p *WeeklyReportDispatchProcessor) step(ctx context.Context, _ StepInput) (StepOutput, error) {
 	var children []ChildJob
 	tick := *p
-	tick.Insert = func(_ context.Context, args []river.JobArgs) error {
+	tick.Insert = func(_ context.Context, args []JobArgs) error {
 		for _, a := range args {
 			raw, err := json.Marshal(a)
 			if err != nil {
