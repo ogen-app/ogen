@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/infra/firecrawl"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -62,16 +60,7 @@ type DistillBrandTask struct {
 
 func (DistillBrandTask) Kind() string { return DistillBrandKind }
 
-func (DistillBrandTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{
-		Queue:       AnalysisQueue,
-		MaxAttempts: 5,
-		UniqueOpts:  river.UniqueOpts{ByArgs: true, ByState: analysisUniqueStates},
-	}
-}
-
 type DistillBrandProcessor struct {
-	river.WorkerDefaults[DistillBrandTask]
 	Deps BrandDistillDeps
 }
 
@@ -79,33 +68,6 @@ type DistillBrandProcessor struct {
 type ExpireBrandDistillsTask struct{}
 
 func (ExpireBrandDistillsTask) Kind() string { return ExpireBrandDistillKind }
-
-// InsertOpts: one attempt; the next tick catches up.
-func (ExpireBrandDistillsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: AnalysisQueue, MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
-
-type ExpireBrandDistillsProcessor struct {
-	river.WorkerDefaults[ExpireBrandDistillsTask]
-	Deps BrandDistillDeps
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &DistillBrandProcessor{Deps: d.BrandDistill})
-		river.AddWorker(w, &ExpireBrandDistillsProcessor{Deps: d.BrandDistill})
-	})
-}
-
-func (p *DistillBrandProcessor) Work(ctx context.Context, job *river.Job[DistillBrandTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-// Timeout covers reading ten pages or a long document and composing.
-func (p *DistillBrandProcessor) Timeout(*river.Job[DistillBrandTask]) time.Duration {
-	return 20 * time.Minute
-}
 
 // Process moves the run on in-process. On the last attempt a failure is
 // stored on the run so it never stays open.
@@ -298,11 +260,13 @@ func (m mappedSite) Map(context.Context, firecrawl.MapRequest) ([]firecrawl.Link
 	return m.links, m.err
 }
 
-func (p *ExpireBrandDistillsProcessor) Work(ctx context.Context, _ *river.Job[ExpireBrandDistillsTask]) error {
-	if p.Deps.Runner == nil {
+// expireBrandDistills expires proposals nobody committed in time; ogen runs
+// it for river-service's expire_brand_distills sweep.
+func expireBrandDistills(ctx context.Context, d BrandDistillDeps) error {
+	if d.Runner == nil {
 		return nil
 	}
-	n, err := p.Deps.Runner.Expire(ctx)
+	n, err := d.Runner.Expire(ctx)
 	if n > 0 {
 		slog.InfoContext(ctx, "expired brand proposals", logging.AttrComponent, "jobs.expire_brand_distills", "expired", n)
 	}

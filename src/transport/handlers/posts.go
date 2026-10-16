@@ -65,13 +65,13 @@ type PostsHandler struct {
 	// allowlistRepo answers "is this Zernio platform allowed to
 	// auto-publish?" when the user moves a post to Scheduled.
 	// nil disables the allowlist branch entirely;
-	// posts go straight to Scheduled with no River enqueue.
+	// posts go straight to Scheduled with no job enqueue.
 	allowlistRepo repository.AutoPublishAllowlistRepository
 	// jobsClient enqueues the Zernio cancellation task. nil
 	// disables the cancel endpoint (503).
 	jobsClient CancelEnqueuer
 	// db is the Bun DB handle. Held so the schedule path can run the
-	// status update + PostLog write + River enqueue in a single
+	// status update + PostLog write + job enqueue in a single
 	// transaction.
 	db *bun.DB
 	// scheduleSvc schedules a post for publishing: the single

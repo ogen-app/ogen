@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -42,28 +40,11 @@ type ReembedImageTask struct {
 
 func (ReembedImageTask) Kind() string { return ReembedImageQueue }
 
-// InsertOpts routes the job to the image queue beside the ingestion runs.
-func (ReembedImageTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: ImageQueue, MaxAttempts: 5}
-}
-
 type ReembedImageProcessor struct {
-	river.WorkerDefaults[ReembedImageTask]
 	Deps ImageDeps
 
 	memOnce sync.Once
 	mem     *memChunkStage
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &ReembedImageProcessor{Deps: d.Image})
-	})
-}
-
-func (p *ReembedImageProcessor) Work(ctx context.Context, job *river.Job[ReembedImageTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
 }
 
 // process runs one attempt in-process.

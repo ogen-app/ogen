@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
@@ -39,27 +37,8 @@ type DistillAssetIdeasTask struct {
 
 func (DistillAssetIdeasTask) Kind() string { return DistillAssetIdeasKind }
 
-func (DistillAssetIdeasTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{
-		Queue:       AnalysisQueue,
-		MaxAttempts: 5,
-		UniqueOpts:  river.UniqueOpts{ByArgs: true, ByState: analysisUniqueStates},
-	}
-}
-
 type DistillAssetIdeasProcessor struct {
-	river.WorkerDefaults[DistillAssetIdeasTask]
 	Deps AnalysisDeps
-}
-
-func (p *DistillAssetIdeasProcessor) Work(ctx context.Context, job *river.Job[DistillAssetIdeasTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{})
-}
-
-// Timeout covers one call over a source near the full-context cap.
-func (p *DistillAssetIdeasProcessor) Timeout(*river.Job[DistillAssetIdeasTask]) time.Duration {
-	return 10 * time.Minute
 }
 
 // Process runs the distill in-process. On the last attempt a failure is

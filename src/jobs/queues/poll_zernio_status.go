@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/jobs"
@@ -31,25 +29,13 @@ type PollZernioStatusTask struct {
 	PublisherPostID string `json:"publisher_post_id,omitempty"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (PollZernioStatusTask) Kind() string { return PollZernioStatusQueue }
-
-// InsertOpts sets per-kind defaults: 3 total attempts for transient errors.
-// The non-terminal cadence is driven by river.JobSnooze in Process, not by
-// retries (snooze bumps max_attempts so it never consumes the retry budget).
-// Per-attempt timeout lives on the worker. Uniqueness by args over the active
-// states keeps one live poll per submission however often submit re-enqueues.
-func (PollZernioStatusTask) InsertOpts() river.InsertOpts {
-	unique := periodicUniqueOpts()
-	unique.ByArgs = true
-	return river.InsertOpts{MaxAttempts: 3, UniqueOpts: unique}
-}
 
 // PollZernioStatusProcessor implements the recurring poll. The
 // cadence per CON-69 §7: every 30s for the first 5 minutes after
 // scheduled_at, then every 60s.
 type PollZernioStatusProcessor struct {
-	river.WorkerDefaults[PollZernioStatusTask]
 	Deps ZernioDeps
 	// Notifier drops a publish-outcome notification when Zernio reports a terminal
 	// status. Nil is a no-op.
@@ -60,23 +46,6 @@ type PollZernioStatusProcessor struct {
 	FastInterval time.Duration // default 30s
 	SlowInterval time.Duration // default 60s
 	FastWindow   time.Duration // default 5m after scheduled_at
-}
-
-// Work is the River entrypoint: it runs the job's steps in-process.
-func (p *PollZernioStatusProcessor) Work(ctx context.Context, job *river.Job[PollZernioStatusTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{zernio: p.Deps.Client})
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *PollZernioStatusProcessor) Timeout(*river.Job[PollZernioStatusTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &PollZernioStatusProcessor{Deps: d.Zernio, Notifier: d.Notifier, Members: d.Users})
-	})
 }
 
 // Process executes one poll cycle in-process. On a non-terminal status it

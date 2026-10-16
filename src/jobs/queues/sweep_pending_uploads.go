@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
@@ -23,14 +21,8 @@ const SweepPendingUploadsQueue = "sweep_pending_uploads"
 // data.
 type SweepPendingUploadsTask struct{}
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (SweepPendingUploadsTask) Kind() string { return SweepPendingUploadsQueue }
-
-// InsertOpts: one attempt (the next tick retries), and the active-state
-// uniqueness stops overlapping ticks from stacking.
-func (SweepPendingUploadsTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 1, UniqueOpts: periodicUniqueOpts()}
-}
 
 // PendingUploadSweepConfig tunes the sweep. Live false is a dry run: abandoned
 // uploads are counted and logged but left in storage.
@@ -49,30 +41,11 @@ type PendingUploadSweepConfig struct {
 // was not retried. Every tenant is swept, suspended and deleted ones included,
 // since this only reclaims storage.
 type SweepPendingUploadsProcessor struct {
-	river.WorkerDefaults[SweepPendingUploadsTask]
 	Repo    repository.PendingUploadRepository
 	Storage storage.Storage
 	Config  PendingUploadSweepConfig
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
-}
-
-// Work is the River entrypoint; it delegates to Process.
-func (p *SweepPendingUploadsProcessor) Work(ctx context.Context, job *river.Job[SweepPendingUploadsTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	ctx = tenantctx.WithSystem(ctx)
-	return p.Process(ctx, job.Args)
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *SweepPendingUploadsProcessor) Timeout(*river.Job[SweepPendingUploadsTask]) time.Duration {
-	return 5 * time.Minute
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, newSweepPendingUploads(d))
-	})
 }
 
 func newSweepPendingUploads(d Deps) *SweepPendingUploadsProcessor {

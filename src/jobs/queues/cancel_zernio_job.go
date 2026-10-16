@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
-
-	"github.com/riverqueue/river"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -57,36 +54,12 @@ type CancelZernioJobTask struct {
 	Actor string `json:"actor"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (CancelZernioJobTask) Kind() string { return CancelZernioJobQueue }
 
-// InsertOpts sets per-kind defaults: 3 total attempts. Per-attempt timeout
-// lives on the worker (cancelZernioJobWorker.Timeout).
-func (CancelZernioJobTask) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{MaxAttempts: 3}
-}
-
-// CancelZernioJobProcessor is the River worker for cancel_zernio_job.
+// CancelZernioJobProcessor runs cancel_zernio_job.
 type CancelZernioJobProcessor struct {
-	river.WorkerDefaults[CancelZernioJobTask]
 	Deps ZernioDeps
-}
-
-// Work is the River entrypoint: it runs the job's steps in-process.
-func (p *CancelZernioJobProcessor) Work(ctx context.Context, job *river.Job[CancelZernioJobTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{zernio: p.Deps.Client})
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *CancelZernioJobProcessor) Timeout(*river.Job[CancelZernioJobTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CancelZernioJobProcessor{Deps: d.Zernio})
-	})
 }
 
 // Process executes one cancellation attempt in-process.

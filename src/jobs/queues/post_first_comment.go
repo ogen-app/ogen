@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/riverqueue/river"
-
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
@@ -30,41 +28,16 @@ type PostFirstCommentTask struct {
 	PublisherPostID string `json:"publisher_post_id"`
 }
 
-// Kind implements river.JobArgs.
+// Kind implements JobArgs.
 func (PostFirstCommentTask) Kind() string { return PostFirstCommentQueue }
-
-// InsertOpts allows 5 attempts and one live job per comment.
-func (PostFirstCommentTask) InsertOpts() river.InsertOpts {
-	unique := periodicUniqueOpts()
-	unique.ByArgs = true
-	return river.InsertOpts{MaxAttempts: 5, UniqueOpts: unique}
-}
 
 // PostFirstCommentProcessor posts the first comment through Zernio's comments
 // API once the post's delay has elapsed.
 type PostFirstCommentProcessor struct {
-	river.WorkerDefaults[PostFirstCommentTask]
 	Deps ZernioDeps
 	// Notifier tells the author when the comment couldn't be posted. Nil is
 	// a no-op.
 	Notifier *notify.Service
-}
-
-// Work is the River entrypoint: it runs the job's steps in-process.
-func (p *PostFirstCommentProcessor) Work(ctx context.Context, job *river.Job[PostFirstCommentTask]) error {
-	ctx = WithJobRequestID(ctx, job.JobRow)
-	return runLocal(ctx, p.step, job.Kind, job.Args, job.Attempt, job.MaxAttempts, localActions{zernio: p.Deps.Client})
-}
-
-// Timeout is the per-attempt context deadline.
-func (p *PostFirstCommentProcessor) Timeout(*river.Job[PostFirstCommentTask]) time.Duration {
-	return 20 * time.Second
-}
-
-func init() {
-	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &PostFirstCommentProcessor{Deps: d.Zernio, Notifier: d.Notifier})
-	})
 }
 
 // Process runs one attempt in-process. It returns an error only for a
@@ -241,5 +214,5 @@ func publishedAccountID(post *models.Post) string {
 func enqueueFirstComment(ctx context.Context, jobs *Enqueuer, post *models.Post, publishedAt time.Time) error {
 	task := PostFirstCommentTask{PostID: post.ID, PublisherPostID: post.PublisherPostID}
 	when := publishedAt.Add(time.Duration(post.FirstCommentDelayMinutes) * time.Minute)
-	return jobs.enqueue(ctx, task, &river.InsertOpts{ScheduledAt: when})
+	return jobs.enqueue(ctx, task, &EnqueueOpts{ScheduledAt: when})
 }

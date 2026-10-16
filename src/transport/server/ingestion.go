@@ -136,7 +136,7 @@ type ingestion struct {
 	url      queues.URLDeps
 }
 
-// newIngestion builds the per-kind River worker deps.
+// newIngestion builds the per-kind ingest job deps.
 func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) ingestion {
 	cfg, r, store, rec := d.cfg, d.r, d.store, d.usage.recorder
 	in := ingestion{
@@ -189,7 +189,6 @@ func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) 
 			SegmentMaxMs:     cfg.AudioSegmentMaxMs,
 			SegmentOverlapMs: cfg.AudioSegmentOverlapMs,
 			MaxDurationMs:    cfg.AudioMaxDurationMs,
-			JobTimeout:       cfg.AudioJobTimeout,
 			Notifier:         d.notifier,
 			Stages:           r.chunkStageRepo,
 		},
@@ -206,7 +205,6 @@ func newIngestion(d *deps, callbacks embedding.Callbacks, embedder ai.Embedder) 
 			EmbedModel:          cfg.EmbedModel,
 			ConfidenceThreshold: cfg.VisionConfidenceThreshold,
 			AltTextMaxChars:     cfg.AltTextGenMaxChars,
-			JobTimeout:          cfg.ImageJobTimeout,
 			Notifier:            d.notifier,
 			Stages:              r.chunkStageRepo,
 		},

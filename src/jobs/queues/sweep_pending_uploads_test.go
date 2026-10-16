@@ -146,14 +146,3 @@ func TestSweepPendingUploads(t *testing.T) {
 		}
 	})
 }
-
-func TestPeriodicJobsPendingUploadSweepNeedsInterval(t *testing.T) {
-	base := queues.PeriodicConfig{CleanupEvery: time.Hour, ReconcileEvery: 5 * time.Minute}
-	if got := len(base.PeriodicJobs()); got != 2 {
-		t.Fatalf("without an interval: got %d jobs, want 2", got)
-	}
-	base.PendingUploadSweepEvery = time.Hour
-	if got := len(base.PeriodicJobs()); got != 3 {
-		t.Fatalf("with an interval: got %d jobs, want 3", got)
-	}
-}

@@ -34,8 +34,7 @@ const (
 	// finishTries bounds the attempts to record a run's outcome; a lost
 	// outcome would make the job run the model again.
 	finishTries = 3
-	// detachedRunTimeout bounds one detached run, like the attempt timeout of
-	// an analysis run inside a River worker.
+	// detachedRunTimeout bounds one detached run.
 	detachedRunTimeout = 15 * time.Minute
 )
 
