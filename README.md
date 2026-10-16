@@ -10,8 +10,9 @@ draft, and publish social content end-to-end:
 - **Draft** in a Markdown-first editor backed by an LLM assistant that can search assets, rewrite posts, and produce platform-specific variants.
 - **Publish** automatically to LinkedIn, X, Facebook, Instagram, Threads, and YouTube via the [Zernio](https://zernio.com) broker — durable background jobs handle submission, polling, cancellation, and reconciliation, with a per-post audit log capturing every state change.
 
-This repository is the **API** — a Go 1.26 monolith (Fiber + Bun + PostgreSQL,
-with an in-process [River](https://riverqueue.com) job queue). The React + Vite
+This repository is the **API** — a Go 1.26 monolith (Fiber + Bun + PostgreSQL).
+Its background jobs run in
+[`ogen-app/river-service`](https://github.com/ogen-app/river-service). The React + Vite
 SPA lives in its own repository,
 [`ogen-app/ui`](https://github.com/ogen-app/ui), and deploys separately.
 
@@ -93,8 +94,9 @@ C4Context
 ### Containers (C4 level 2)
 
 Inside the Ogen boundary, the **API** monolith is the hub: it serves the SPA over
-REST + SSE, owns the control-plane and analytics databases, drains its own
-in-process River worker pool, runs the Genkit AI flows, and exposes an
+REST + SSE, owns the control-plane and analytics databases, hands its
+background jobs to river-service (and serves their steps), runs the Genkit AI
+flows, and exposes an
 internal-only gRPC surface that Harbor uses to manage secrets, tenants, plans,
 the platform catalog, per-flow model assignments, email, and announcements. PDF, video, document, audio, and image processing are
 split out into private-network sidecar services.
@@ -108,8 +110,8 @@ C4Container
 
     System_Boundary(ogen, "Ogen") {
         Container(spa, "Web App", "React + Vite (ogen-app/ui)", "Planning & Markdown-first drafting UI; separate deploy")
-        Container(api, "API", "Go 1.26 · Fiber · Bun · Genkit · River", "REST + SSE, background workers, AI flows, operator gRPC surface")
-        ContainerDb(pg, "Control-plane DB", "PostgreSQL 17 + pgvector", "Domain data, sessions, encrypted secrets, embeddings, River job tables")
+        Container(api, "API", "Go 1.26 · Fiber · Bun · Genkit", "REST + SSE, job outbox + job steps, AI flows, operator gRPC surface")
+        ContainerDb(pg, "Control-plane DB", "PostgreSQL 17 + pgvector", "Domain data, sessions, encrypted secrets, embeddings, job outbox; river-service's River schema")
         ContainerDb(ts, "Analytics DB", "TimescaleDB (PG17)", "Usage/cost, activity, follower snapshots — hypertables + continuous aggregates")
         ContainerDb(obj, "Object Storage", "S3-compatible (R2 / MinIO)", "Images, PDFs, audio, video, thumbnails, posters")
         Container(pdf, "pdf-service", "Go + pdfium", "PDF text, page-aware chunks, thumbnail — private network")
@@ -118,6 +120,7 @@ C4Container
         Container(audio, "audio-service", "Go + ffmpeg + Gemini", "Audio transcode + transcribe → time-anchored transcript — private network")
         Container(image, "image-service", "Go + libvips + Gemini", "Image normalize + EXIF-strip + vision extraction (classify/describe/alt) → anchored chunks — private network")
         Container(harbor, "Harbor", "Go + Next.js (ogen-app/harbor)", "Ops dashboard: tenants, plans, models, secrets, email, usage")
+        Container(river, "river-service", "Go · River", "Runs every background job: queue, schedule, outside calls — private network")
         Container(riverui, "River UI", "riverui image", "Background-job dashboard")
     }
 
@@ -211,40 +214,35 @@ src/
     publishers/                    # Publisher abstraction; publishers/zernio is the concrete impl
     storage/ secrets/ crypto/ email/ firecrawl/ embedding/ eventhub/ vendors/ geoip/
   kernel/                          # cross-cutting: config/ logging/ telemetry/ tenantctx/ netguard/ usage/ activity/ background/
-  jobs/ jobs/queues/               # River runtime + workers (submit/poll/cancel/reconcile, analytics, PDF/URL, email)
+  jobs/ jobs/queues/ jobs/outbox/  # job outbox + relay, and each job's steps / maintenance pass (run by river-service)
   genkit/                          # Genkit AI flows (assistants, content plan, quality, embeddings)
   analytics/                       # post-analytics read models (overview / performers / lessons / per-post)
   pgtest/ integration/             # test harness (real Postgres) + //go:build integration suite
 ```
 
 **Persistence.** Domain data, sessions, the encrypted `secret` table, vector
-embeddings (`assets_chunks.embedding` as a pgvector `halfvec(3072)`), and River's
-own job tables all live in the **control-plane PostgreSQL 17 + pgvector**
-database. Bun is the ORM; migrations under `src/infra/database/migrations/` run on
-every boot. Because River shares the same pool, background-job state, Post Log
-entries, and domain rows can co-commit in one transaction (used for the
-auto-publish schedule decision). A **separate TimescaleDB** database
+embeddings (`assets_chunks.embedding` as a pgvector `halfvec(3072)`), and the
+job outbox all live in the **control-plane PostgreSQL 17 + pgvector** database.
+Bun is the ORM; migrations under `src/infra/database/migrations/` run on every
+boot. A job is written to `job_outbox` in the same transaction as the change
+that caused it (used for the auto-publish schedule decision), so it exists iff
+the change commits. A **separate TimescaleDB** database
 (`ANALYTICS_DSN`) holds the metering and analytics hypertables + continuous
 aggregates, kept isolated so the extension dependency stays quarantined and the
 control plane stays vanilla. Analytics is fail-open: a connect/migrate failure at
 boot disables it rather than taking down the API.
 
-**Background jobs.** [River](https://riverqueue.com) is Postgres-native — no
-external broker — and owns leasing, retry/backoff, periodic scheduling, and
-completed-job retention. Workers process `submit_post_to_zernio`,
-`poll_zernio_status`, `cancel_zernio_job`, `process_pdf`, `process_document`,
-`process_url`, `process_audio` (on a dedicated `audio` queue so long
-transcriptions can't starve short ingestion), `process_image` (likewise on a
-dedicated `image` queue so heavy vision runs can't starve short ingestion),
-`reembed_image` (rebuilds an image's chunks after its description is edited),
-`send_email`, `bootstrap_zernio_profile` / `teardown_zernio_profile` (per-workspace
-Zernio profile on signup / workspace delete), `notify_harbor_tenant_registered`,
-plus periodic `reconcile_scheduled_posts`,
-`refresh_zernio_analytics`, `refresh_zernio_followers`,
-`detect_expiring_connections`, `detect_manual_publish_due`, and the `cleanup_*`
-sweepers. The
-[River UI](https://riverqueue.com/ui) dashboard (a standalone container) reads
-those tables directly.
+**Background jobs.** Jobs run in
+[river-service](https://github.com/ogen-app/river-service), on open-source
+[River](https://riverqueue.com) in its own `river_service` schema. ogen keeps
+every decision and write: an enqueue writes `job_outbox` in the caller's
+transaction and the relay delivers it to river-service's `JobService`. A job
+that calls something outside ogen (Zernio, Gemini, Firecrawl, a sidecar) runs as
+steps: river-service asks ogen's `JobStepService` what to do next, makes the
+call with a key it leases from ogen, and passes the raw result back, until ogen
+says done. Sweeps that only touch ogen's tables run whole through
+`MaintenanceService`. river-service schedules every periodic sweep. The
+[River UI](https://riverqueue.com/ui) dashboard reads its schema.
 
 ---
 
@@ -258,7 +256,7 @@ those tables directly.
 | **Content bank** | Markdown notes, PDF, office/text document, audio (transcribed to time-anchored chunks), image (vision-extracted to source-anchored blocks + alt text), and URL assets (scraped via Firecrawl), with paragraph-/source-aware chunking, Gemini embeddings, and pgvector similarity search used to ground the assistants. Document, audio, and image ingestion run in the `document-service` / `audio-service` / `image-service` sidecars. |
 | **Attachments** | Image, PDF, and video uploads on S3-compatible storage, processed by the `image-service` / `pdf-service` / `video-service` sidecars (EXIF/geo-strip + alt text, thumbnails, page counts, duration/codec/poster). A content-bank image can be attached to a post directly (re-stripped from the original). Post reads expose a `cover_url`. Per-platform constraints surface as soft validation warnings. |
 | **Figma plugin** | A "Send to Ogen" Figma plugin pushes rendered frames (PNG/JPG) into the content bank as `origin: figma` image assets, optionally attaching them to a post. It pairs once by polling (the user approves a write key in the web app; the plugin collects a hashed, revocable `ogp_` token with its read key), then calls a bearer-only `/api/plugins/figma/*` API with wildcard CORS. Every call re-checks the member and workspace; members and owners can list and disconnect connections. |
-| **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are River jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. Native threads on X and Threads; YouTube titles go in `platformSpecificData`; a reschedule whose Zernio post is gone creates a fresh one. Markdown is flattened to platform text at egress and limits count visible length. Deleting a workspace tears down its Zernio profile. |
+| **Zernio auto-publish** | `Publisher` abstraction with Zernio as the concrete impl. Submit / poll / cancel / retry are background jobs; a reconciliation sweeper guards against stuck `Scheduled` posts. Headless account connect avoids Zernio's hosted picker. Native threads on X and Threads; YouTube titles go in `platformSpecificData`; a reschedule whose Zernio post is gone creates a fresh one. Markdown is flattened to platform text at egress and limits count visible length. Deleting a workspace tears down its Zernio profile. |
 | **Post Log** | Auditable per-post history — state transitions, validation outcomes, background-task lifecycle, Zernio interactions, reconciliation timeouts, user actions. Sanitized of secrets, size-capped, configurable retention. |
 | **Analytics** | Cumulative overview KPIs, best/worst performers with age-adjusted "against typical", all-time lessons (heatmap + lifespan curve), and per-post drill-down — backed by TimescaleDB continuous aggregates. Filterable by platform (repeatable `?platform=`) and, on overview/performers, by `campaign_id`; accounts are labelled with display name + avatar. |
 | **Activity & notifications** | Durable per-user notification inbox (REST + SSE with `Last-Event-ID` replay), server-side Activity daily reports, and producers such as expiring connections and manual-publish-due posts. |
@@ -269,7 +267,7 @@ those tables directly.
 | **Email** | Transactional + drip email via Resend, with embedded templates, one-click unsubscribe, and delivery webhooks. Delivery events (delivered/opened/clicked/bounced…) and rendered bodies are persisted for the Harbor Emails tab. New-tenant signups notify operators via a signed Harbor webhook. |
 | **Secrets** | Envelope-encrypted at rest (per-secret DEK wrapped by an on-disk KEK). Rotatable via the operator gRPC surface without restart. |
 | **Operator surface** | Internal gRPC `SecretsService`, `TenantAdminService`, `PlanAdminService`, `PlatformAdminService`, `ModelConfigAdminService`, `EmailAdminService`, and `AnnouncementAdminService`, consumed by the Harbor ops dashboard over the private network. |
-| **Observability** | Sentry error monitoring + OpenTelemetry tracing (HTTP → Genkit → model → DB → gRPC → River), continuing the UI's `sentry-trace`. Fail-open: disabled unless `SENTRY_DSN` is set. |
+| **Observability** | Sentry error monitoring + OpenTelemetry tracing (HTTP → Genkit → model → DB → gRPC → job outbox → river-service), continuing the UI's `sentry-trace`. Fail-open: disabled unless `SENTRY_DSN` is set. |
 
 ---
 
@@ -316,11 +314,11 @@ segment use the same model.
 | Flow | Purpose | Triggered by |
 |------|---------|--------------|
 | `embed_asset` | Chunks an asset's Markdown (paragraph-aware, with overlap) and writes embeddings into `assets_chunks`. | Asset save callback. |
-| `process_pdf` (River) | Calls `pdf-service` for text + page-aware chunks + thumbnail, uploads to S3, then chunks + embeds. | PDF upload. |
-| `process_url` (River) | Scrapes a URL to Markdown via Firecrawl, mirrors images to S3, stores it as a URL asset, then chunks + embeds. | URL asset creation. |
-| `process_document` (River) | Calls `document-service` for office/text docs (docx/pptx/xlsx/odt/epub/csv/html/eml/…) → source-anchored chunks, then embeds. | Document upload. |
-| `process_audio` (River, dedicated `audio` queue) | Probes + tier-gates, normalizes once, segments, transcribes each segment via `audio-service` (Gemini multimodal), assembles time-anchored transcript chunks, then embeds. Checkpointed + resumable. | Audio upload / finalize. |
-| `process_image` (River, dedicated `image` queue) | Presigns the original + a normalized slot, runs the full `image-service` pipeline (normalize + EXIF-strip + classify + per-shape extraction + description + alt text), persists the extraction/blocks, embeds the searchable text, and snapshots cost. | Image asset upload. |
+| `process_pdf` (job, `ingest` queue) | Calls `pdf-service` for text + page-aware chunks + thumbnail, uploads to S3, then chunks + embeds. | PDF upload. |
+| `process_url` (job, `ingest` queue) | Scrapes a URL to Markdown via Firecrawl, mirrors images to S3, stores it as a URL asset, then chunks + embeds. | URL asset creation. |
+| `process_document` (job, `ingest` queue) | Calls `document-service` for office/text docs (docx/pptx/xlsx/odt/epub/csv/html/eml/…) → source-anchored chunks, then embeds. | Document upload. |
+| `process_audio` (job, `audio` queue) | Probes + tier-gates, normalizes once, segments, transcribes each segment via `audio-service` (Gemini multimodal), assembles time-anchored transcript chunks, then embeds. Checkpointed + resumable. | Audio upload / finalize. |
+| `process_image` (job, `image` queue) | Presigns the original + a normalized slot, runs the full `image-service` pipeline (normalize + EXIF-strip + classify + per-shape extraction + description + alt text), persists the extraction/blocks, embeds the searchable text, and snapshots cost. | Image asset upload. |
 | `content_plan` | Per-phase, per-platform post drafts for a campaign; parallel K-sized batches against Anthropic with SSE progress. | `POST /api/campaigns/:id/generate-draft` (SSE). |
 | `post_assistant` | Interactive post editor. Haiku planner loop + Sonnet `editPost` write-tool; streams `explanation_delta` / `content_delta`; tool use over the asset library. | `POST /api/posts/:id/assistant` (SSE). |
 | `campaign_assistant` | Campaign-level planning assistant; flows-as-tools (content plan, enrich brief, draft post, consistency check) under a Haiku orchestration loop. `enrich_brief` edits the campaign's existing brief rather than rewriting it. | Campaign assistant endpoint (SSE). |
@@ -334,10 +332,9 @@ Ogen runs as a small fleet of containers. In production they are deployed on
 [Railway](https://railway.app); the sidecar services are reached **only** over
 Railway's private network (`*.railway.internal`), never a public port.
 
-Set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=300` on the API service. Railway sends
-SIGTERM when the new deployment is up and SIGKILL after that many seconds (0 by
-default); the API needs the time to drain HTTP and let River jobs finish or
-reschedule (`JOB_SOFT_STOP_TIMEOUT` / `JOB_SHUTDOWN_TIMEOUT`). Schema and River
+Background jobs run in [river-service](https://github.com/ogen-app/river-service)
+(its README has the Railway setup). ogen enqueues them through the job outbox
+and serves their steps on the job RPC listener (`JOB_RPC_ADDR`). Schema
 migrations take a Postgres advisory lock, so replicas booting together migrate
 one at a time.
 
@@ -363,7 +360,8 @@ one at a time.
 - **Object storage** — Cloudflare R2 in production, MinIO locally (any S3-compatible endpoint via `STORAGE_*`).
 - **pdf-service / video-service / document-service / audio-service / image-service** — gRPC on `:50051`, private network only. audio-service and image-service additionally call the Gemini Developer API — for transcription and vision extraction, respectively (both share `gemini_api_key`).
 - **Harbor** — reads both databases and calls the API's operator gRPC surface; shares the control-plane Postgres server via its own `harbor` database.
-- **River UI** — job dashboard reading the control-plane database.
+- **river-service** — runs every background job (two Railway services: light and heavy queues), private network only.
+- **River UI** — job dashboard reading river-service's `river_service` schema.
 
 **Secrets & keys.** API keys (Anthropic, Zernio, Gemini, Firecrawl, Resend,
 webhook + link-signing secrets) are **not** required as env vars. They are seeded
@@ -491,7 +489,7 @@ All runtime knobs are env vars, loaded by
 | `ADDR` | `:9001` | HTTP listen address (the Docker image sets `:3000`). |
 | `DATABASE_DSN` | `postgres://ogen:ogen@localhost:5432/ogen?sslmode=disable` | Control-plane Postgres (pgvector). |
 | `ANALYTICS_DSN` | empty | Isolated analytics TimescaleDB. Empty disables usage metering + analytics (fail-open). |
-| `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 25 | Shared pool sizing for HTTP + River workers; idle connections close after 5 minutes unused. |
+| `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` | 25 / 25 | Shared pool sizing for HTTP and job steps; idle connections close after 5 minutes unused. |
 | `GEMINI_API_KEY` | empty | Gemini Embedding 2 key — first-boot seed; rotate via the operator surface. Empty disables embedding/RAG. |
 | `EMBED_MODEL` / `EMBED_DIMENSIONS` | `gemini-embedding-2` / `3072` | Embedding model + vector width (must match `assets_chunks.embedding`). |
 | `ANTHROPIC_API_KEY` | empty | Claude key (first-boot seed). Models are assigned per flow slot in Harbor, not via env; see [AI flows](#ai-flows-genkit). |
@@ -507,17 +505,13 @@ All runtime knobs are env vars, loaded by
 | `GRPC_ADDR` / `GRPC_AUTH_TOKEN` | `127.0.0.1:9091` / empty | Internal operator gRPC surface; starts only when both are set. |
 | `HARBOR_WEBHOOK_URL` / `HARBOR_WEBHOOK_SECRET` / `HARBOR_BASE_URL` | empty | New-tenant operator notification: Harbor inbound webhook, HMAC signing key, and "View in Harbor" deep-link base. Empty URL turns the feature off. |
 | `SENTRY_DSN` | empty | Turns on error monitoring + OTel tracing; empty disables all telemetry. Also `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`, `SENTRY_TRACES_SAMPLE_RATE` (`0.1`), `OTEL_SERVICE_NAME` (`ogen-api`). |
-| `JOB_WORKERS` | 4 | River default-queue worker pool. |
-| `JOB_SOFT_STOP_TIMEOUT` / `JOB_SHUTDOWN_TIMEOUT` | `210s` / `240s` | On shutdown, running jobs get the soft-stop time to finish; any still running are then cancelled and rescheduled (no attempt used) for the next replica, and the stop gives up at the shutdown timeout. The soft stop is kept at least 15s below the shutdown timeout. On Railway set `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=300` so the whole shutdown fits before SIGKILL (the default 0 kills running jobs on every deploy). |
-| `RIVER_SERVICE_ADDR` / `RIVER_SERVICE_AUTH_TOKEN` | empty | river-service's JobService (e.g. `dns:///river-service.railway.internal:9092`) and its bearer token. Set, ogen runs the job outbox relay. |
-| `OUTBOX_RELAY_KINDS` | empty | Job kinds river-service owns, comma-separated (e.g. `send_email,cleanup_email_logs`). They are written to `job_outbox` in the enqueuing transaction and relayed instead of running in-process; a periodic kind listed here is scheduled by river-service. Empty keeps every kind in-process. Needs `RIVER_SERVICE_ADDR`. |
+| `RIVER_SERVICE_ADDR` / `RIVER_SERVICE_AUTH_TOKEN` | empty | river-service's JobService (e.g. `dns:///river-service.railway.internal:9092`) and its bearer token. Every job is written to `job_outbox` in its enqueuing transaction; the relay delivers it here. Unset, jobs wait in the outbox. |
 | `OUTBOX_RELAY_POLL_INTERVAL` / `OUTBOX_RELAY_BATCH` / `OUTBOX_RETENTION_DAYS` | `2s` / `100` / `7` | The relay delivers on every committed write (LISTEN/NOTIFY) and at least every poll interval, claims up to the batch size per pass, and deletes delivered rows after the retention. A row river-service refuses is retried with backoff (1s doubling to 5m). Health at `/debug/vars`: `ogen_outbox_pending`, `ogen_outbox_lag_seconds`, `ogen_outbox_sent`, `ogen_outbox_failed`. |
-| `JOB_RPC_ADDR` / `RIVER_RPC_AUTH_TOKEN` | empty | Listener river-service's jobs call ogen on (`jobrpc.v1`: credential leases, housekeeping sweeps), e.g. `:9093`, and the bearer token it requires. The token must differ from `GRPC_AUTH_TOKEN`: neither opens the other's services. Empty address disables it. |
+| `JOB_RPC_ADDR` / `RIVER_RPC_AUTH_TOKEN` | empty | Listener river-service's jobs call ogen on (`jobrpc.v1`: job steps, credential leases, maintenance sweeps, email), e.g. `:9093`, and the bearer token it requires. The token must differ from `GRPC_AUTH_TOKEN`: neither opens the other's services. Empty address disables it. |
 | `JOB_RPC_MAX_CONCURRENCY` / `CREDENTIAL_LEASE_TTL` | `8` / `5m` | Job RPCs in flight at once (past it callers get `RESOURCE_EXHAUSTED` and back off), and how long a leased vendor key is good for. Only the Zernio, Gemini, Resend and Firecrawl keys and `HARBOR_WEBHOOK_SECRET` (which river-service signs the new-tenant webhook with) are leasable. |
-| `INGEST_JOB_WORKERS` | 2 | Worker pool of the `ingest` queue (PDF, document and URL ingestion). |
 | `RECONCILE_GRACE` | `1h` | Reconciliation timeout for stuck Scheduled posts. |
-| `ZERNIO_ORPHAN_SWEEP_INTERVAL` / `ZERNIO_ORPHAN_SWEEP_LIVE` / `ZERNIO_ORPHAN_SWEEP_MIN_AGE` | `1h` / `false` / `1h` | Sweep for posts still queued in Zernio that no scheduled Ogen post holds. Dry run (logs + `ogen_jobs_zernio_orphans_found`) until `LIVE=true`, then withdraws them. Only profiles of this environment's tenants are listed; posts younger than `MIN_AGE` are left alone. |
-| `PENDING_UPLOAD_SWEEP_INTERVAL` / `PENDING_UPLOAD_SWEEP_GRACE` / `PENDING_UPLOAD_SWEEP_LIVE` | `1h` / `2h` / `false` | Sweep for presigned video uploads (web app and Figma plugin) never finalized. A record past its URL's expiry plus `GRACE` has its object deleted. Dry run (logs + `ogen_jobs_pending_uploads_found`) until `LIVE=true`; deletions count in `ogen_jobs_pending_uploads_swept`. Covers every tenant. |
+| `ZERNIO_ORPHAN_SWEEP_LIVE` / `ZERNIO_ORPHAN_SWEEP_MIN_AGE` | `false` / `1h` | Sweep for posts still queued in Zernio that no scheduled Ogen post holds. Dry run (logs + `ogen_jobs_zernio_orphans_found`) until `LIVE=true`, then withdraws them. Only profiles of this environment's tenants are listed; posts younger than `MIN_AGE` are left alone. |
+| `PENDING_UPLOAD_SWEEP_GRACE` / `PENDING_UPLOAD_SWEEP_LIVE` | `2h` / `false` | Sweep for presigned video uploads (web app and Figma plugin) never finalized. A record past its URL's expiry plus `GRACE` has its object deleted. Dry run (logs + `ogen_jobs_pending_uploads_found`) until `LIVE=true`; deletions count in `ogen_jobs_pending_uploads_swept`. Covers every tenant. |
 | `POSTLOG_RETENTION_DAYS` | `90` | Post Log retention window. |
 
 ### Testing
@@ -593,7 +587,7 @@ feature lands looking like the rest of the codebase.
 |-------|----------------|-------------------|
 | **`add-entity`** | Adding a new resource / table / domain entity — a full vertical slice. | Migration up/down, `bun`-tagged model, narrow `Repository` + impl, Fiber handler with swag annotations, `server.New` wiring, ginkgo tests against real Postgres, and an `http-client/` example. |
 | **`add-genkit-flow`** | Adding an AI assistant / generator / classifier — anything LLM-driven. | A flow package mirroring `post_assistant` / `content_plan`: types, prompt template, `run.go` with the SSE-streaming closure, optional tools, context cache, runtime init, streaming handler, and tests. |
-| **`add-river-job`** | Adding a background/async task, queue worker, or recurring sweep. | River args type, worker/processor, self-registration, transactional enqueue, periodic scheduling, and tests. |
+| **`add-river-job`** | Adding a background/async task, queue worker, or recurring sweep. | Proto args message, outbox enqueue, the job's steps or maintenance pass, the river-service side, and tests. |
 | **`add-grpc-service`** | Adding a gRPC service/client or a private-network sidecar. | buf-managed proto codegen, (client-)streaming RPCs, health service, graceful shutdown, status-error mapping, and a nil-disabled thin client — the `pdf-service` pattern. |
 | **`email-templates`** | Adding/editing an email, its copy/design, or the drip schedule. | The Maizzle authoring project + DB seeds + embedded-default → seed-on-boot → DB-wins lifecycle, the `[[ ]]` Go delimiters, and the brand tokens (CON-154). |
 | **`opentelemetry-tracing`** | Wiring, debugging, or extending tracing / Sentry — missing or unparented spans, broken `sentry-trace` / `traceparent` propagation, sampling. | The `telemetry.Init` wiring point, Sentry-via-OTLP export, the sampler + propagator, and the Fiber `c.Context()` vs `c.UserContext()` span-parenting trap. |
