@@ -47,6 +47,7 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		bobUser   *models.User
 		admin     *http.Cookie
 		bob       *http.Cookie
+		ideaHub   *quietHub
 	)
 
 	BeforeAll(func() {
@@ -84,7 +85,8 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth, nil).Register(app)
 		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
-		handlers.NewIdeasHandler(ideas.New(repository.NewIdeaRepository(db), userRepo), auth, nil).Register(app)
+		ideaHub = &quietHub{}
+		handlers.NewIdeasHandler(ideas.New(repository.NewIdeaRepository(db), userRepo), auth, nil).WithEventHub(ideaHub).Register(app)
 
 		adminUser = seedTenantUser(db, "Admin", "admin@example.com", "admin-password")
 		bobUser = seedTenantUser(db, "Bob", "bob@example.com", "bob-password")
@@ -576,5 +578,62 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		moved := decodeIdea(do(admin, "PATCH", "/api/ideas/analysed-1", fiber.Map{"campaign_id": campaignID}), 200)
 		Expect(*moved.CampaignID).To(Equal(campaignID))
 		Expect(moved.Title).To(Equal("From the report"))
+	})
+
+	// ── Bulk ─────────────────────────────────────────────────────────────────
+
+	It("selects every match of a filter with ids_only", func() {
+		one := capture(admin, fiber.Map{"title": "one"})
+		two := capture(bob, fiber.Map{"title": "two"})
+		decided := capture(admin, fiber.Map{"title": "decided"})
+		decodeIdea(do(admin, "PUT", "/api/ideas/"+decided.ID+"/verdict", fiber.Map{"verdict": "yes", "remind_at": nil}), 200)
+
+		var body struct {
+			IDs   []string `json:"ids"`
+			Total int      `json:"total"`
+		}
+		resp := do(admin, "GET", "/api/ideas?pile=waiting&ids_only=true&limit=1", nil)
+		Expect(resp.StatusCode).To(Equal(200))
+		Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+		Expect(body.IDs).To(ConsistOf(one.ID, two.ID))
+		Expect(body.Total).To(Equal(2))
+
+		Expect(do(admin, "GET", "/api/ideas?ids_only=maybe", nil).StatusCode).To(Equal(400))
+	})
+
+	It("deletes a selection in one request and reports the ids it could not delete", func() {
+		one := capture(admin, fiber.Map{"title": "one"})
+		two := capture(bob, fiber.Map{"title": "two"})
+		keep := capture(admin, fiber.Map{"title": "keep"})
+		theirs := capture(signupTenant("Other", "owner@other.example"), fiber.Map{"title": "theirs"})
+
+		resp := do(bob, "POST", "/api/ideas/bulk-delete", fiber.Map{"ids": []string{one.ID, two.ID, "ghost", theirs.ID}})
+		Expect(resp.StatusCode).To(Equal(200))
+		var body struct {
+			Deleted []string `json:"deleted"`
+			Failed  []struct {
+				ID   string `json:"id"`
+				Code string `json:"code"`
+			} `json:"failed"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+		Expect(body.Deleted).To(ConsistOf(one.ID, two.ID))
+		Expect(body.Failed).To(HaveLen(2))
+		for _, f := range body.Failed {
+			Expect(f.ID).To(BeElementOf("ghost", theirs.ID))
+			Expect(f.Code).To(Equal("not_found"))
+		}
+		Expect(ids(list(admin, ""))).To(Equal([]string{keep.ID}))
+
+		Expect(ideaHub.events).To(HaveLen(1))
+		ev := ideaHub.events[0]
+		Expect(ev.Type).To(Equal("ideas.deleted"))
+		Expect(ev.Topic).To(Equal("entity:ideas:list"))
+		Expect(ev.TenantID).To(Equal(adminUser.TenantID))
+		Expect(ev.Payload).To(HaveKeyWithValue("ids", ConsistOf(one.ID, two.ID)))
+
+		for _, bad := range []string{`{"ids": []}`, `{"ids": "x"}`, `{"ids": ["a"], "verdict": "no"}`, `[]`} {
+			Expect(doRaw(admin, "POST", "/api/ideas/bulk-delete", bad).StatusCode).To(Equal(400), bad)
+		}
 	})
 })

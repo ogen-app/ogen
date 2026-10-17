@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/listquery"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
 
@@ -22,11 +26,49 @@ type IdeasHandler struct {
 	svc      *ideas.Service
 	auth     fiber.Handler
 	activity *activity.Recorder
+	hub      eventhub.Hub
 }
 
 // NewIdeasHandler builds the handler. A nil rec records nothing.
 func NewIdeasHandler(svc *ideas.Service, auth fiber.Handler, rec *activity.Recorder) *IdeasHandler {
 	return &IdeasHandler{svc: svc, auth: auth, activity: rec}
+}
+
+// WithEventHub makes bulk deletes publish ideas.deleted. A nil hub (the
+// default) disables eventing.
+func (h *IdeasHandler) WithEventHub(hub eventhub.Hub) *IdeasHandler {
+	h.hub = hub
+	return h
+}
+
+// Bus contract of idea changes: EventIdeasDeleted on IdeasTopic after a bulk
+// delete, carrying {ids}. A refetch hint for every Ideas list and the asset
+// counts that read ideas.
+const (
+	IdeasTopic        = "entity:ideas:list"
+	EventIdeasDeleted = "ideas.deleted"
+)
+
+// publishIdeasDeleted announces committed deletes to every member of the
+// workspace. It fails closed without a tenant in ctx, because an event with
+// neither filter set would reach every tenant. Best-effort.
+func (h *IdeasHandler) publishIdeasDeleted(c *fiber.Ctx, ids []string) {
+	ctx := reqCtx(c)
+	if h.hub == nil || len(ids) == 0 {
+		return
+	}
+	tenantID, ok := tenantctx.From(ctx)
+	if !ok {
+		return
+	}
+	evID, err := models.NewID()
+	if err != nil {
+		return
+	}
+	_ = h.hub.Publish(ctx, eventhub.Event{
+		ID: evID, Topic: IdeasTopic, Type: EventIdeasDeleted, TenantID: tenantID,
+		Payload: map[string][]string{"ids": ids},
+	})
 }
 
 func (h *IdeasHandler) recordActivity(c *fiber.Ctx, typ, ideaID string, payload map[string]any) {
@@ -44,6 +86,7 @@ func (h *IdeasHandler) Register(app *fiber.App) {
 	g := app.Group("/api/ideas", h.auth)
 	g.Get("/", h.List)
 	g.Post("/", h.Create)
+	g.Post("/bulk-delete", h.BulkDelete)
 	g.Patch("/:id", h.Update)
 	g.Put("/:id/verdict", h.SetVerdict)
 	g.Delete("/:id", h.Delete)
@@ -165,6 +208,8 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Description  `group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). `source`, `campaign` and `author` groups go by name with `none` last; `fit` and `origin` keep their value order; `created` groups are `1d`, `7d`, `30d` and `earlier`.
 // @Description
 // @Description  Without `limit` the list is unpaged, up to 1,000 ideas.
+// @Description
+// @Description  `ids_only=true` returns `{ids, total}` instead: every id the filters (pile included) match, unpaged and in no particular order, for selecting every match. Over 5,000 it answers 422 `too_many` with `total`.
 // @Tags         ideas
 // @Produce      json
 // @Security     CookieAuth
@@ -196,14 +241,26 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Param        limit           query  int     false  "Page size, at most 200; unpaged up to 1,000 when absent"
 // @Param        cursor          query  string  false  "next_cursor of the previous page"
 // @Param        tz              query  string  false  "IANA time zone of the date presets and created groups (default UTC)"
-// @Success      200  {object}  ideaListResponse
+// @Param        ids_only        query  bool    false  "Return {ids, total} of every match instead of a page"
+// @Success      200  {object}  ideaListResponse   "With ids_only=true the body is an ideaIDsResponse"
 // @Failure      400  {object}  map[string]string  "code: invalid_filter | invalid_cursor"
+// @Failure      422  {object}  map[string]string  "code: too_many (ids_only over 5,000), with total"
 // @Failure      404  {object}  map[string]string  "scope_campaign names no live campaign"
 // @Router       /api/ideas [get]
 func (h *IdeasHandler) List(c *fiber.Ctx) error {
-	q, err := ideas.ParseQuery(queryValuesOf(c), time.Now().UTC())
+	v := queryValuesOf(c)
+	q, err := ideas.ParseQuery(v, time.Now().UTC())
 	if err != nil {
 		return listQueryFailure(c, err)
+	}
+	if raw := listquery.Single(v, "ids_only"); raw != "" {
+		idsOnly, err := strconv.ParseBool(raw)
+		if err != nil {
+			return listQueryFailure(c, listquery.Invalid("ids_only", "must be true or false"))
+		}
+		if idsOnly {
+			return h.listIDs(c, q)
+		}
 	}
 	res, err := h.svc.Query(reqCtx(c), q)
 	switch {
@@ -228,6 +285,85 @@ func (h *IdeasHandler) List(c *fiber.Ctx) error {
 	if res.NextCursor != "" {
 		resp.NextCursor = &res.NextCursor
 	}
+	return c.JSON(resp)
+}
+
+// IdeaCodeTooMany is the code of the 422 refusing to select more than
+// ideas.MaxSelection ideas.
+const IdeaCodeTooMany = "too_many"
+
+// ideaIDsResponse is the GET body with ids_only=true.
+type ideaIDsResponse struct {
+	IDs   []string `json:"ids"`
+	Total int      `json:"total"`
+}
+
+func (h *IdeasHandler) listIDs(c *fiber.Ctx, q models.IdeaQuery) error {
+	ids, total, err := h.svc.QueryIDs(reqCtx(c), q)
+	switch {
+	case errors.Is(err, ideas.ErrTooMany):
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"code": IdeaCodeTooMany, "error": fmt.Sprintf("a selection holds at most %d ideas", ideas.MaxSelection), "total": total,
+		})
+	case errors.Is(err, ideas.ErrScopeNotFound):
+		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
+	case err != nil:
+		return err
+	}
+	return c.JSON(ideaIDsResponse{IDs: ids, Total: total})
+}
+
+// bulkIdeasRequest names the ideas a bulk action acts on.
+type bulkIdeasRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// bulkFailure is one id a bulk action did not act on.
+type bulkFailure struct {
+	ID   string `json:"id"`
+	Code string `json:"code" enums:"not_found,forbidden"`
+}
+
+// bulkDeleteResponse lists what a bulk delete did, id by id.
+type bulkDeleteResponse struct {
+	Deleted []string      `json:"deleted"`
+	Failed  []bulkFailure `json:"failed"`
+}
+
+// BulkDelete godoc
+// @Summary      Delete a selection of ideas
+// @Description  Hard-deletes 1–500 ideas in one transaction, with the permissions of a single delete. An id that is unknown, gone or in another workspace is reported in `failed` (`not_found`) without failing the rest. Publishes one `ideas.deleted` on `entity:ideas:list` with the deleted ids. Select every match of a filter first with `GET /api/ideas?…&ids_only=true`.
+// @Tags         ideas
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        body  body  bulkIdeasRequest  true  "the ids"
+// @Success      200  {object}  bulkDeleteResponse
+// @Failure      400  {object}  map[string]string
+// @Router       /api/ideas/bulk-delete [post]
+func (h *IdeasHandler) BulkDelete(c *fiber.Ctx) error {
+	if _, err := bodyKeys(c, []string{"ids"}); err != nil {
+		return err
+	}
+	var req bulkIdeasRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "ids must be an array of strings")
+	}
+	deleted, failed, err := h.svc.BulkDelete(reqCtx(c), req.IDs)
+	if errors.Is(err, ideas.ErrBulkSize) {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	if err != nil {
+		return err
+	}
+	resp := bulkDeleteResponse{Deleted: deleted, Failed: make([]bulkFailure, len(failed))}
+	for i, f := range failed {
+		resp.Failed[i] = bulkFailure{ID: f.ID, Code: f.Code}
+	}
+	for _, id := range deleted {
+		h.recordActivity(c, "idea_deleted", id, map[string]any{"bulk": true})
+	}
+	h.publishIdeasDeleted(c, deleted)
 	return c.JSON(resp)
 }
 
