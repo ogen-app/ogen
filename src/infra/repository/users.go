@@ -242,12 +242,19 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 }
 
 func (r *userRepository) Delete(ctx context.Context, id string) (bool, error) {
-	res, err := r.db.NewDelete().Model((*models.User)(nil)).Where("id = ?", id).Exec(ctx)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	var n int64
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := deletePrivateViewsOf(ctx, tx, id); err != nil {
+			return err
+		}
+		res, err := tx.NewDelete().Model((*models.User)(nil)).Where("id = ?", id).Exec(ctx)
+		if err != nil {
+			return err
+		}
+		n, _ = res.RowsAffected()
+		return nil
+	})
+	return n > 0, err
 }
 
 func (r *userRepository) SetRoleGuarded(ctx context.Context, id, tenantID, newRole string) (*models.User, error) {
@@ -290,6 +297,9 @@ func (r *userRepository) RemoveMemberGuarded(ctx context.Context, id, tenantID s
 			if err := ensureNotLastOwnerTx(ctx, tx, tenantID); err != nil {
 				return err
 			}
+		}
+		if err := deletePrivateViewsOf(ctx, tx, id); err != nil {
+			return err
 		}
 		_, err := tx.NewDelete().Model((*models.User)(nil)).
 			Where("id = ?", id).Where("tenant_id = ?", tenantID).Exec(ctx)

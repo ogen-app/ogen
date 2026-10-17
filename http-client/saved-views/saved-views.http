@@ -1,0 +1,56 @@
+@baseUrl = http://localhost:9001
+
+# Saved views (smart groups) of any filterable list. surface names the list;
+# "ideas" is the one registered. Run "Login" from sessions/sessions.http first.
+
+### List my views and every shared one, with counts  [protected]
+GET {{baseUrl}}/api/saved-views?surface=ideas&counts=total,undecided&tz=Europe/Kyiv
+Accept: application/json
+
+### Save a private view (paging and the pile tab are dropped)  [protected]
+# @name createView
+POST {{baseUrl}}/api/saved-views
+Content-Type: application/json
+
+{
+  "surface": "ideas",
+  "name": "Strong PDF ideas",
+  "query": "origin=asset_analysis&kind=pdf&fit=high&sort=fit&group=source&pile=waiting&limit=50",
+  "shared": false
+}
+
+> {% client.global.set("viewId", response.body.id) %}
+
+### Share it and narrow it  [protected]
+PATCH {{baseUrl}}/api/saved-views/{{viewId}}
+Content-Type: application/json
+
+{
+  "shared": true,
+  "query": "origin=asset_analysis&kind=pdf,audio&fit=high"
+}
+
+### Rename it  [protected]
+PATCH {{baseUrl}}/api/saved-views/{{viewId}}
+Content-Type: application/json
+
+{
+  "name": "Strong source ideas"
+}
+
+### Unknown parameter (expects 400 invalid_query, param colour)  [protected]
+POST {{baseUrl}}/api/saved-views
+Content-Type: application/json
+
+{
+  "surface": "ideas",
+  "name": "Broken",
+  "query": "colour=red"
+}
+
+### Unknown surface (expects 400 unknown_surface)  [protected]
+GET {{baseUrl}}/api/saved-views?surface=posts
+Accept: application/json
+
+### Delete it  [protected]
+DELETE {{baseUrl}}/api/saved-views/{{viewId}}

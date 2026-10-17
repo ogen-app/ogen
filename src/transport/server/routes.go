@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/linkpreview"
+	"github.com/ogen-app/ogen/src/usecase/savedviews"
 )
 
 // linkPreviewTimeout bounds one outbound page fetch for a link preview.
@@ -149,6 +150,7 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).Register(app)
+	handlers.NewSavedViewsHandler(savedviews.New(r.savedViewRepo, d.hub, ideas.NewSurface(r.ideaRepo)), r.userRepo, d.auth).Register(app)
 	handlers.NewAssetAnalysesHandler(r.assetAnalysisRepo, r.ideaRepo, r.pieceRepo, r.campaignRepo, d.analysis, d.auth).Register(app)
 	handlers.NewSeriesHandler(d.svc.series, d.auth, d.activity.recorder).Register(app)
 }
