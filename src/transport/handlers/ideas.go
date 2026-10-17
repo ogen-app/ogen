@@ -115,6 +115,10 @@ type ideaListResponse struct {
 	Groups []models.AssetGroupCount `json:"groups"`
 	// NextCursor continues the list in the same sort; null on the last page.
 	NextCursor *string `json:"next_cursor" extensions:"x-nullable"`
+	// IDs is present only with ids_only=true, and then the body is an
+	// ideaIDsResponse ({ids, total}). Swagger allows one schema per status,
+	// so the list schema carries it.
+	IDs []string `json:"ids,omitempty"`
 }
 
 // ideaPiles is the size of each pile tab.
@@ -244,7 +248,7 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Param        ids_only        query  bool    false  "Return {ids, total} of every match instead of a page"
 // @Success      200  {object}  ideaListResponse   "With ids_only=true the body is an ideaIDsResponse"
 // @Failure      400  {object}  map[string]string  "code: invalid_filter | invalid_cursor"
-// @Failure      422  {object}  map[string]string  "code: too_many (ids_only over 5,000), with total"
+// @Failure      422  {object}  ideaTooManyResponse  "ids_only over 5,000"
 // @Failure      404  {object}  map[string]string  "scope_campaign names no live campaign"
 // @Router       /api/ideas [get]
 func (h *IdeasHandler) List(c *fiber.Ctx) error {
@@ -298,12 +302,20 @@ type ideaIDsResponse struct {
 	Total int      `json:"total"`
 }
 
+// ideaTooManyResponse is the 422 refusing an ids_only selection: Total is
+// the size of the match.
+type ideaTooManyResponse struct {
+	Code  string `json:"code" enums:"too_many"`
+	Error string `json:"error"`
+	Total int    `json:"total"`
+}
+
 func (h *IdeasHandler) listIDs(c *fiber.Ctx, q models.IdeaQuery) error {
 	ids, total, err := h.svc.QueryIDs(reqCtx(c), q)
 	switch {
 	case errors.Is(err, ideas.ErrTooMany):
-		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
-			"code": IdeaCodeTooMany, "error": fmt.Sprintf("a selection holds at most %d ideas", ideas.MaxSelection), "total": total,
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(ideaTooManyResponse{
+			Code: IdeaCodeTooMany, Error: fmt.Sprintf("a selection holds at most %d ideas", ideas.MaxSelection), Total: total,
 		})
 	case errors.Is(err, ideas.ErrScopeNotFound):
 		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
