@@ -5687,12 +5687,9 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "code: too_many (ids_only over 5,000), with total",
+                        "description": "ids_only over 5,000",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/handlers.ideaTooManyResponse"
                         }
                     }
                 }
@@ -14047,6 +14044,13 @@ const docTemplate = `{
                         "$ref": "#/definitions/models.Idea"
                     }
                 },
+                "ids": {
+                    "description": "IDs is present only with ids_only=true, and then the body is an\nideaIDsResponse ({ids, total}). Swagger allows one schema per status,\nso the list schema carries it.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "next_cursor": {
                     "description": "NextCursor continues the list in the same sort; null on the last page.",
                     "type": "string",
@@ -14082,6 +14086,23 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "yes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ideaTooManyResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "enum": [
+                        "too_many"
+                    ]
+                },
+                "error": {
+                    "type": "string"
+                },
+                "total": {
                     "type": "integer"
                 }
             }
