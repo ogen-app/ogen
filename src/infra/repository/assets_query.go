@@ -21,9 +21,12 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/textgist"
 )
 
-// ErrInvalidAssetCursor is returned for a cursor the asset list did not issue,
-// or issued for another sort order.
-var ErrInvalidAssetCursor = errors.New("invalid cursor")
+// ErrInvalidCursor is returned for a cursor a list did not issue, or issued
+// for another sort order or grouping.
+var ErrInvalidCursor = errors.New("invalid cursor")
+
+// ErrInvalidAssetCursor is ErrInvalidCursor as the asset list returns it.
+var ErrInvalidAssetCursor = ErrInvalidCursor
 
 // assetKindSQL classifies an asset row a joined with its file af into a
 // models.AssetKind.
@@ -106,56 +109,63 @@ func rowOrder(q models.AssetQuery) []assetSortKey {
 	return keys
 }
 
-// assetCursor is the position after the last row of a page.
-type assetCursor struct {
+// listCursor is the position after the last row of a page.
+type listCursor struct {
 	Sort  string            `json:"s"`
 	Group string            `json:"g,omitempty"`
 	Keys  []json.RawMessage `json:"k"`
 }
 
-func encodeAssetCursor(q models.AssetQuery, keys []json.RawMessage) string {
-	b, _ := json.Marshal(assetCursor{Sort: q.Sort, Group: q.Group, Keys: keys})
+func encodeCursor(sort, group string, keys []json.RawMessage) string {
+	b, _ := json.Marshal(listCursor{Sort: sort, Group: group, Keys: keys})
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func encodeAssetCursor(q models.AssetQuery, keys []json.RawMessage) string {
+	return encodeCursor(q.Sort, q.Group, keys)
 }
 
 // decodeAssetCursor reads a cursor back into one SQL argument per order key.
 func decodeAssetCursor(raw string, q models.AssetQuery) ([]any, error) {
+	return decodeCursor(raw, q.Sort, q.Group, rowOrder(q))
+}
+
+// decodeCursor reads a cursor of sort and group back into one SQL argument
+// per key of order.
+func decodeCursor(raw, sort, group string, order []assetSortKey) ([]any, error) {
 	b, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return nil, ErrInvalidAssetCursor
+		return nil, ErrInvalidCursor
 	}
-	var c assetCursor
-	if err := json.Unmarshal(b, &c); err != nil || c.Sort != q.Sort || c.Group != q.Group {
-		return nil, ErrInvalidAssetCursor
+	var c listCursor
+	if err := json.Unmarshal(b, &c); err != nil || c.Sort != sort || c.Group != group {
+		return nil, ErrInvalidCursor
 	}
-	keys := rowOrder(q)
-	if len(c.Keys) != len(keys) {
-		return nil, ErrInvalidAssetCursor
+	if len(c.Keys) != len(order) {
+		return nil, ErrInvalidCursor
 	}
-	args := make([]any, len(keys))
-	for i, k := range keys {
+	args := make([]any, len(order))
+	for i, k := range order {
+		var err error
 		switch k.cast {
 		case "bigint":
-			var n int64
-			if err := json.Unmarshal(c.Keys[i], &n); err != nil {
-				return nil, ErrInvalidAssetCursor
-			}
-			args[i] = n
+			args[i], err = cursorValue[int64](c.Keys[i])
 		case "timestamptz":
-			var t time.Time
-			if err := json.Unmarshal(c.Keys[i], &t); err != nil {
-				return nil, ErrInvalidAssetCursor
-			}
-			args[i] = t
+			args[i], err = cursorValue[time.Time](c.Keys[i])
 		default:
-			var s string
-			if err := json.Unmarshal(c.Keys[i], &s); err != nil {
-				return nil, ErrInvalidAssetCursor
-			}
-			args[i] = s
+			args[i], err = cursorValue[string](c.Keys[i])
+		}
+		if err != nil {
+			return nil, ErrInvalidCursor
 		}
 	}
 	return args, nil
+}
+
+func cursorValue[T any](raw json.RawMessage) (T, error) {
+	var v T
+	err := json.Unmarshal(raw, &v)
+	return v, err
 }
 
 // sqlBuf accumulates SQL text with its positional arguments in order.

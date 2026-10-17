@@ -465,7 +465,12 @@ func ideaRows(row *models.AssetAnalysis, ideas []asset_analysis.Idea) ([]models.
 			CampaignID:      row.CampaignID,
 			Origin:          models.IdeaOriginAssetAnalysis,
 			AssetAnalysisID: new(row.ID),
+			Angle:           nonEmpty(idea.Angle),
+			Rationale:       nonEmpty(idea.Rationale),
 			CreatedByName:   ideaAuthor,
+		}
+		if len(idea.SourceLabels) > 0 {
+			i.Sources = idea.SourceLabels
 		}
 		if idea.Fit != nil {
 			b := &ideafit.Breakdown{Lens: ideafit.LensWorkspace, Criteria: idea.Fit.Criteria, Caps: idea.Fit.Caps}
@@ -507,6 +512,14 @@ func ideaRelevance(model *models.AnalysisRelevance, ideas []models.Idea) *models
 		out.Why = model.Why
 	}
 	return out
+}
+
+// nonEmpty is s, or nil when it is blank.
+func nonEmpty(s string) *string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return &s
 }
 
 // ideaNote is the idea's angle and rationale with its citations.

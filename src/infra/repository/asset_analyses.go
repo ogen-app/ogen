@@ -233,6 +233,11 @@ func (r *assetAnalysisRepository) SaveResult(ctx context.Context, tx bun.Tx, a *
 	if len(ideas) == 0 {
 		return nil
 	}
+	for i := range ideas {
+		if ideas[i].SourceAssetID == nil {
+			ideas[i].SourceAssetID = new(a.AssetID)
+		}
+	}
 	_, err := tx.NewInsert().Model(&ideas).Exec(ctx)
 	return err
 }

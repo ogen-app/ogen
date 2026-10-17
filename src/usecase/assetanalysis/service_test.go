@@ -206,6 +206,10 @@ func TestRunWorkspaceLensStoresAnalysisAndIdeas(t *testing.T) {
 		ideas[0].Note != "angle\n\nwhy\n\nSources: Part 1" || ideas[0].Verdict != nil {
 		t.Fatalf("ideas = %+v", ideas)
 	}
+	if i := ideas[0]; i.SourceAsset == nil || i.SourceAsset.ID != "md-1" || i.Angle == nil || *i.Angle != "angle" ||
+		i.Rationale == nil || *i.Rationale != "why" || !slices.Equal(i.Sources, []string{"Part 1"}) || i.Author != nil {
+		t.Fatalf("idea fields = %+v", i)
+	}
 	runs, err := f.repos.Analyses.CountRunsSince(f.ctx, time.Now().Add(-time.Hour))
 	if err != nil || runs != 1 {
 		t.Fatalf("runs = %d, %v", runs, err)

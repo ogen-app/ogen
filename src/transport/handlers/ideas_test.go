@@ -16,6 +16,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
@@ -499,5 +500,81 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		Expect(got).To(HaveLen(1))
 		Expect(got[0].Title).To(Equal("ours"))
 		Expect(got[0].Verdict).To(BeNil())
+	})
+
+	// ── List query ───────────────────────────────────────────────────────────
+
+	It("pages, counts piles, and names the author", func() {
+		for _, title := range []string{"one", "two", "three"} {
+			capture(admin, fiber.Map{"title": title})
+		}
+		resp := do(admin, "GET", "/api/ideas?limit=2&sort=created_desc", nil)
+		Expect(resp.StatusCode).To(Equal(200))
+		var page struct {
+			Ideas []struct {
+				Title  string `json:"title"`
+				Author *struct {
+					ID   *string `json:"id"`
+					Name string  `json:"name"`
+				} `json:"author"`
+			} `json:"ideas"`
+			Total           int            `json:"total"`
+			TotalUnfiltered int            `json:"total_unfiltered"`
+			Piles           map[string]int `json:"piles"`
+			NextCursor      *string        `json:"next_cursor"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&page)).To(Succeed())
+		Expect(page.Ideas).To(HaveLen(2))
+		Expect(page.Ideas[0].Title).To(Equal("three"))
+		Expect(page.Ideas[0].Author).NotTo(BeNil())
+		Expect(*page.Ideas[0].Author.ID).To(Equal(adminUser.ID))
+		Expect(page.Ideas[0].Author.Name).To(Equal("Admin"))
+		Expect(page.Total).To(Equal(3))
+		Expect(page.TotalUnfiltered).To(Equal(3))
+		Expect(page.Piles).To(Equal(map[string]int{"waiting": 3, "yes": 0, "later": 0, "no": 0}))
+		Expect(page.NextCursor).NotTo(BeNil())
+
+		rest := list(admin, "?limit=2&sort=created_desc&cursor="+*page.NextCursor)
+		Expect(rest).To(HaveLen(1))
+		Expect(rest[0].Title).To(Equal("one"))
+	})
+
+	It("rejects an unknown filter value, a foreign cursor and an unknown scope", func() {
+		expectCode := func(path string, status int, code string) {
+			GinkgoHelper()
+			resp := do(admin, "GET", path, nil)
+			Expect(resp.StatusCode).To(Equal(status))
+			if code != "" {
+				var body map[string]string
+				Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+				Expect(body["code"]).To(Equal(code))
+			}
+		}
+		expectCode("/api/ideas?pile=someday", 400, "invalid_filter")
+		expectCode("/api/ideas?sort=random", 400, "invalid_filter")
+		expectCode("/api/ideas?limit=2&cursor=bm90LWEtY3Vyc29y", 400, "invalid_cursor")
+		expectCode("/api/ideas?scope_campaign=nope", 404, "")
+	})
+
+	It("refuses edits to an analysed idea's text but moves it between campaigns", func() {
+		campaignID := createCampaign(admin, "Launch")
+		ctx := tenantctx.With(context.Background(), adminUser.TenantID)
+		now := time.Now().UTC()
+		_, err := db.NewInsert().Model(&models.Idea{
+			ID: "analysed-1", Title: "From the report", Origin: models.IdeaOriginAssetAnalysis,
+			CreatedByName: "Ogen", CreatedAt: now, UpdatedAt: now,
+		}).Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, body := range []fiber.Map{{"title": "Mine now"}, {"note": "edited"}, {"title": "x", "campaign_id": campaignID}} {
+			resp := do(admin, "PATCH", "/api/ideas/analysed-1", body)
+			Expect(resp.StatusCode).To(Equal(fiber.StatusConflict))
+			var got map[string]string
+			Expect(json.NewDecoder(resp.Body).Decode(&got)).To(Succeed())
+			Expect(got["code"]).To(Equal("idea_read_only"))
+		}
+		moved := decodeIdea(do(admin, "PATCH", "/api/ideas/analysed-1", fiber.Map{"campaign_id": campaignID}), 200)
+		Expect(*moved.CampaignID).To(Equal(campaignID))
+		Expect(moved.Title).To(Equal("From the report"))
 	})
 })
