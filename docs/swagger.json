@@ -5471,6 +5471,7 @@
                         "CookieAuth": []
                     }
                 ],
+                "description": "Filters, counts, groups and pages the workspace's ideas.\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.\n\n`scope_campaign` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. `piles` count the match of every filter but `pile`. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. `facet_labels.source_asset` labels every asset of the source_asset facet.\n\n`group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). `source`, `campaign` and `author` groups go by name with `none` last; `fit` and `origin` keep their value order; `created` groups are `1d`, `7d`, `30d` and `earlier`.\n\nWithout `limit` the list is unpaged, up to 1,000 ideas.",
                 "produces": [
                     "application/json"
                 ],
@@ -5481,34 +5482,170 @@
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "only ideas attached to this campaign, or `none` for workspace-wide ideas",
-                        "name": "campaign_id",
+                        "description": "waiting, yes, later, no",
+                        "name": "pile",
                         "in": "query"
                     },
                     {
-                        "enum": [
-                            "manual",
-                            "asset_analysis"
-                        ],
                         "type": "string",
-                        "description": "only ideas of this origin",
+                        "description": "Piles to exclude",
+                        "name": "pile_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Title or note substring (at most 200 characters)",
+                        "name": "text",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "asset_analysis, manual",
                         "name": "origin",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "only ideas an analysis of this asset distilled",
+                        "description": "Origins to exclude",
+                        "name": "origin_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Asset ids, or none",
+                        "name": "source_asset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Asset ids (or none) to exclude",
+                        "name": "source_asset_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "One source asset id (same as source_asset)",
                         "name": "asset_id",
                         "in": "query"
                     },
                     {
-                        "enum": [
-                            "created",
-                            "fit"
-                        ],
                         "type": "string",
-                        "description": "created (default): oldest first; fit: highest fit_score first, unscored ideas last",
+                        "description": "Source asset kinds: pdf, web, audio, note, image, document, spreadsheet, csv, presentation",
+                        "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Kinds to exclude",
+                        "name": "kind_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids, or none",
+                        "name": "campaign_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids (or none) to exclude",
+                        "name": "campaign_id_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "high, medium, low, unscored",
+                        "name": "fit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Fit bands to exclude",
+                        "name": "fit_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Phase names the fit rating placed the idea in",
+                        "name": "phase",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Phases to exclude",
+                        "name": "phase_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "User ids of manual ideas' authors",
+                        "name": "author",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Authors to exclude",
+                        "name": "author_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Preset start of the created window: 1d, 7d, 30d, month (not with created_after)",
+                        "name": "created",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 or YYYY-MM-DD, inclusive",
+                        "name": "created_after",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 or YYYY-MM-DD, exclusive",
+                        "name": "created_before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign id to confine the read to",
+                        "name": "scope_campaign",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "created (default, oldest first), created_desc, fit (best first, unscored last), waiting (longest waiting first)",
                         "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "source, campaign, fit, origin, author, created",
+                        "name": "group",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "origin, source_asset, kind, campaign_id, fit, phase, author, created",
+                        "name": "facets",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size, at most 200; unpaged up to 1,000 when absent",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "next_cursor of the previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone of the date presets and created groups (default UTC)",
+                        "name": "tz",
                         "in": "query"
                     }
                 ],
@@ -5520,7 +5657,16 @@
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "code: invalid_filter | invalid_cursor",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "scope_campaign names no live campaign",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -10526,6 +10672,222 @@
                 }
             }
         },
+        "/api/saved-views": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The caller's own views of the surface plus every shared one, newest first. `counts` adds each valid view's counts by name, all computed in one round trip: every surface has `total`; `ideas` adds `undecided` (its waiting pile). A view whose stored query no longer parses reads back with `valid: false` and no counts. `can_edit` says whether the caller may change it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "List saved views of a list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The list: ideas",
+                        "name": "surface",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated count names",
+                        "name": "counts",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone of the date presets the counts read (default UTC)",
+                        "name": "tz",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.savedViewListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "code: unknown_surface | invalid_filter",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "`query` is the list's query string. Paging and display parameters (`cursor`, `limit`, `facets`, `tz`, and per list e.g. `pile`) are dropped; the rest is validated by the list's own parser and stored canonical: keys sorted, values sorted and comma-joined.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Save a view of a list",
+                "parameters": [
+                    {
+                        "description": "the view",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.createSavedViewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.SavedView"
+                        }
+                    },
+                    "400": {
+                        "description": "code: unknown_surface | invalid_query (with param)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/saved-views/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Delete a saved view",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Saved view id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "saved-views"
+                ],
+                "summary": "Rename, re-filter or (un)share a saved view (presence-aware)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Saved view id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "any of name, query, shared",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.updateSavedViewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SavedView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/security/login-alerts/{token}": {
             "get": {
                 "description": "Public and read-only: mail scanners follow links with GET, so this never changes anything. Returns the sign-in the alert reported and whether its link is still usable (status pending, used or expired).",
@@ -13366,6 +13728,24 @@
                 }
             }
         },
+        "handlers.createSavedViewRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "query": {
+                    "description": "Query is the list's query string, as the list's endpoint takes it.",
+                    "type": "string"
+                },
+                "shared": {
+                    "type": "boolean"
+                },
+                "surface": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.createSessionRequest": {
             "type": "object",
             "required": [
@@ -13514,14 +13894,83 @@
                 }
             }
         },
+        "handlers.ideaFacetLabels": {
+            "type": "object",
+            "properties": {
+                "source_asset": {
+                    "description": "SourceAsset labels every asset of the source_asset facet, zero counts\nincluded; present only when that facet is requested.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.IdeaFacetAsset"
+                    }
+                }
+            }
+        },
         "handlers.ideaListResponse": {
             "type": "object",
             "properties": {
+                "facet_labels": {
+                    "$ref": "#/definitions/handlers.ideaFacetLabels"
+                },
+                "facets": {
+                    "description": "Facets holds, per requested field, its values with the number of ideas\nthat have each.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/models.AssetFacetCount"
+                        }
+                    }
+                },
+                "groups": {
+                    "description": "Groups lists, with group, every non-empty group of the whole match with\nits row count, in display order; empty without group.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AssetGroupCount"
+                    }
+                },
                 "ideas": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.Idea"
                     }
+                },
+                "next_cursor": {
+                    "description": "NextCursor continues the list in the same sort; null on the last page.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "piles": {
+                    "description": "Piles counts the match per pile, ignoring the pile filter, so the four\nadd up to the match of every other filter.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.ideaPiles"
+                        }
+                    ]
+                },
+                "total": {
+                    "description": "Total counts the ideas matching every filter, TotalUnfiltered every\nidea in scope (\"9 of 47\").",
+                    "type": "integer"
+                },
+                "total_unfiltered": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ideaPiles": {
+            "type": "object",
+            "properties": {
+                "later": {
+                    "type": "integer"
+                },
+                "no": {
+                    "type": "integer"
+                },
+                "waiting": {
+                    "type": "integer"
+                },
+                "yes": {
+                    "type": "integer"
                 }
             }
         },
@@ -14681,6 +15130,17 @@
                 }
             }
         },
+        "handlers.savedViewListResponse": {
+            "type": "object",
+            "properties": {
+                "views": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.SavedView"
+                    }
+                }
+            }
+        },
         "handlers.scheduleRequest": {
             "type": "object",
             "properties": {
@@ -14968,6 +15428,20 @@
                 },
                 "title": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.updateSavedViewRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "query": {
+                    "type": "string"
+                },
+                "shared": {
+                    "type": "boolean"
                 }
             }
         },
@@ -16362,8 +16836,22 @@
         "models.Idea": {
             "type": "object",
             "properties": {
+                "angle": {
+                    "description": "Angle, Rationale and Sources are the parts of an analysis idea that Note\nalso carries as text: nil on manual ideas, and on older analysis ideas\nwhose note did not split cleanly.",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "asset_analysis_id": {
                     "type": "string",
+                    "x-nullable": true
+                },
+                "author": {
+                    "description": "Author is derived on reads: the writer of a manual idea, nil for an\nanalysis idea.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IdeaAuthor"
+                        }
+                    ],
                     "x-nullable": true
                 },
                 "campaign_id": {
@@ -16401,6 +16889,10 @@
                     "type": "integer",
                     "x-nullable": true
                 },
+                "group_key": {
+                    "description": "GroupKey is the group a grouped list lists the idea under.",
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -16415,16 +16907,27 @@
                         "asset_analysis"
                     ]
                 },
+                "rationale": {
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "remind_at": {
                     "type": "string"
                 },
                 "source_asset": {
-                    "description": "SourceAsset is hydrated on reads while the analysis still exists.",
+                    "description": "SourceAsset is hydrated on reads while the asset exists.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/models.IdeaSourceAsset"
                         }
                     ]
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "x-nullable": true
                 },
                 "title": {
                     "type": "string"
@@ -16443,11 +16946,97 @@
                 }
             }
         },
-        "models.IdeaSourceAsset": {
+        "models.IdeaAuthor": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.IdeaFacetAsset": {
             "type": "object",
             "properties": {
                 "id": {
                     "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "pdf",
+                        "web",
+                        "audio",
+                        "note",
+                        "image",
+                        "document",
+                        "spreadsheet",
+                        "csv",
+                        "presentation"
+                    ]
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.IdeaReading": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "campaign_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.IdeaSourceAsset": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "description": "Domain is a web page's host without \"www.\"; null for other kinds.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "duration_ms": {
+                    "description": "DurationMS is a recording's length; null when unknown or not a recording.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "pdf",
+                        "web",
+                        "audio",
+                        "note",
+                        "image",
+                        "document",
+                        "spreadsheet",
+                        "csv",
+                        "presentation"
+                    ]
+                },
+                "page_count": {
+                    "description": "PageCount is null when the file is not paged.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "reading": {
+                    "description": "Reading is the campaign lens the idea was read in; null for the\nworkspace lens.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IdeaReading"
+                        }
+                    ],
+                    "x-nullable": true
                 },
                 "title": {
                     "type": "string"
@@ -17281,6 +17870,52 @@
                 },
                 "version_number": {
                     "type": "integer"
+                }
+            }
+        },
+        "models.SavedView": {
+            "type": "object",
+            "properties": {
+                "can_edit": {
+                    "description": "CanEdit is whether the caller may rename, change, share or delete it.",
+                    "type": "boolean"
+                },
+                "counts": {
+                    "description": "Counts holds the counts the list asked for, by name; absent when it\nasked for none or the view is not valid.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "query": {
+                    "description": "Query is the canonical query string: parameters by name, values sorted\nand comma-joined.",
+                    "type": "string"
+                },
+                "shared": {
+                    "type": "boolean"
+                },
+                "surface": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "valid": {
+                    "description": "Valid is false when the stored query no longer parses for its surface.",
+                    "type": "boolean"
                 }
             }
         },
