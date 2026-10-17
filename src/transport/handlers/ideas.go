@@ -10,7 +10,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
@@ -50,12 +49,44 @@ func (h *IdeasHandler) Register(app *fiber.App) {
 	g.Delete("/:id", h.Delete)
 }
 
-// ideaCampaignNone is the ?campaign_id value that lists only workspace-wide ideas.
-const ideaCampaignNone = "none"
+// IdeaCodeReadOnly is the code of the 409 refusing an edit of an analysed
+// idea's text.
+const IdeaCodeReadOnly = "idea_read_only"
 
-// ideaListResponse is the wrapped GET body — an object, not a bare array.
+// ideaListResponse is one page of the ideas list.
 type ideaListResponse struct {
 	Ideas []models.Idea `json:"ideas"`
+	// Total counts the ideas matching every filter, TotalUnfiltered every
+	// idea in scope ("9 of 47").
+	Total           int `json:"total"`
+	TotalUnfiltered int `json:"total_unfiltered"`
+	// Piles counts the match per pile, ignoring the pile filter, so the four
+	// add up to the match of every other filter.
+	Piles ideaPiles `json:"piles"`
+	// Facets holds, per requested field, its values with the number of ideas
+	// that have each.
+	Facets      map[string][]models.AssetFacetCount `json:"facets"`
+	FacetLabels ideaFacetLabels                     `json:"facet_labels"`
+	// Groups lists, with group, every non-empty group of the whole match with
+	// its row count, in display order; empty without group.
+	Groups []models.AssetGroupCount `json:"groups"`
+	// NextCursor continues the list in the same sort; null on the last page.
+	NextCursor *string `json:"next_cursor" extensions:"x-nullable"`
+}
+
+// ideaPiles is the size of each pile tab.
+type ideaPiles struct {
+	Waiting int `json:"waiting"`
+	Yes     int `json:"yes"`
+	Later   int `json:"later"`
+	No      int `json:"no"`
+}
+
+// ideaFacetLabels labels facet values that are ids.
+type ideaFacetLabels struct {
+	// SourceAsset labels every asset of the source_asset facet, zero counts
+	// included; present only when that facet is requested.
+	SourceAsset []models.IdeaFacetAsset `json:"source_asset,omitempty"`
 }
 
 // createIdeaRequest is the POST body. Only title is required; any author or
@@ -89,10 +120,12 @@ type ideaVerdictRequest struct {
 var ideaVerdictFields = []string{"verdict", "remind_at"}
 
 // ideaError maps a service error onto the HTTP response.
-func ideaError(err error) error {
+func ideaError(c *fiber.Ctx, err error) error {
 	switch {
 	case errors.Is(err, ideas.ErrNotFound):
 		return fiber.NewError(fiber.StatusNotFound, "idea not found")
+	case errors.Is(err, ideas.ErrReadOnly):
+		return rejectCode(c, fiber.StatusConflict, IdeaCodeReadOnly, err.Error())
 	case ideas.IsValidation(err):
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	default:
@@ -122,47 +155,80 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 }
 
 // List godoc
-// @Summary  List workspace ideas
-// @Tags     ideas
-// @Produce  json
-// @Security CookieAuth
-// @Param    campaign_id query string false "only ideas attached to this campaign, or `none` for workspace-wide ideas"
-// @Param    origin      query string false "only ideas of this origin" Enums(manual, asset_analysis)
-// @Param    asset_id    query string false "only ideas an analysis of this asset distilled"
-// @Param    sort        query string false "created (default): oldest first; fit: highest fit_score first, unscored ideas last" Enums(created, fit)
-// @Success  200 {object} ideaListResponse
-// @Failure  400 {object} map[string]string
-// @Router   /api/ideas [get]
+// @Summary      List workspace ideas
+// @Description  Filters, counts, groups and pages the workspace's ideas.
+// @Description
+// @Description  Every filter takes a comma-separated list meaning "any of these"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.
+// @Description
+// @Description  `scope_campaign` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. `piles` count the match of every filter but `pile`. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. `facet_labels.source_asset` labels every asset of the source_asset facet.
+// @Description
+// @Description  `group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). `source`, `campaign` and `author` groups go by name with `none` last; `fit` and `origin` keep their value order; `created` groups are `1d`, `7d`, `30d` and `earlier`.
+// @Description
+// @Description  Without `limit` the list is unpaged, up to 1,000 ideas.
+// @Tags         ideas
+// @Produce      json
+// @Security     CookieAuth
+// @Param        pile            query  string  false  "waiting, yes, later, no"
+// @Param        pile_not        query  string  false  "Piles to exclude"
+// @Param        text            query  string  false  "Title or note substring (at most 200 characters)"
+// @Param        origin          query  string  false  "asset_analysis, manual"
+// @Param        origin_not      query  string  false  "Origins to exclude"
+// @Param        source_asset    query  string  false  "Asset ids, or none"
+// @Param        source_asset_not query string  false  "Asset ids (or none) to exclude"
+// @Param        asset_id        query  string  false  "One source asset id (same as source_asset)"
+// @Param        kind            query  string  false  "Source asset kinds: pdf, web, audio, note, image, document, spreadsheet, csv, presentation"
+// @Param        kind_not        query  string  false  "Kinds to exclude"
+// @Param        campaign_id     query  string  false  "Campaign ids, or none"
+// @Param        campaign_id_not query  string  false  "Campaign ids (or none) to exclude"
+// @Param        fit             query  string  false  "high, medium, low, unscored"
+// @Param        fit_not         query  string  false  "Fit bands to exclude"
+// @Param        phase           query  string  false  "Phase names the fit rating placed the idea in"
+// @Param        phase_not       query  string  false  "Phases to exclude"
+// @Param        author          query  string  false  "User ids of manual ideas' authors"
+// @Param        author_not      query  string  false  "Authors to exclude"
+// @Param        created         query  string  false  "Preset start of the created window: 1d, 7d, 30d, month (not with created_after)"
+// @Param        created_after   query  string  false  "RFC 3339 or YYYY-MM-DD, inclusive"
+// @Param        created_before  query  string  false  "RFC 3339 or YYYY-MM-DD, exclusive"
+// @Param        scope_campaign  query  string  false  "Campaign id to confine the read to"
+// @Param        sort            query  string  false  "created (default, oldest first), created_desc, fit (best first, unscored last), waiting (longest waiting first)"
+// @Param        group           query  string  false  "source, campaign, fit, origin, author, created"
+// @Param        facets          query  string  false  "origin, source_asset, kind, campaign_id, fit, phase, author, created"
+// @Param        limit           query  int     false  "Page size, at most 200; unpaged up to 1,000 when absent"
+// @Param        cursor          query  string  false  "next_cursor of the previous page"
+// @Param        tz              query  string  false  "IANA time zone of the date presets and created groups (default UTC)"
+// @Success      200  {object}  ideaListResponse
+// @Failure      400  {object}  map[string]string  "code: invalid_filter | invalid_cursor"
+// @Failure      404  {object}  map[string]string  "scope_campaign names no live campaign"
+// @Router       /api/ideas [get]
 func (h *IdeasHandler) List(c *fiber.Ctx) error {
-	var filter repository.IdeaListFilter
-	switch campaignID := c.Query("campaign_id"); campaignID {
-	case "":
-	case ideaCampaignNone:
-		filter.Unfiled = true
-	default:
-		filter.CampaignID = campaignID
-	}
-	switch origin := c.Query("origin"); origin {
-	case "":
-	case "manual":
-		filter.Origin = new(models.IdeaOriginManual)
-	case string(models.IdeaOriginAssetAnalysis):
-		filter.Origin = new(models.IdeaOriginAssetAnalysis)
-	default:
-		return fiber.NewError(fiber.StatusBadRequest, "origin must be manual or asset_analysis")
-	}
-	filter.AssetID = c.Query("asset_id")
-	switch sort := repository.IdeaSort(c.Query("sort")); sort {
-	case "", repository.IdeaSortCreated, repository.IdeaSortFit:
-		filter.Sort = sort
-	default:
-		return fiber.NewError(fiber.StatusBadRequest, "sort must be created or fit")
-	}
-	list, err := h.svc.List(reqCtx(c), filter)
+	q, err := ideas.ParseQuery(queryValuesOf(c), time.Now().UTC())
 	if err != nil {
-		return err
+		return listQueryFailure(c, err)
 	}
-	return c.JSON(ideaListResponse{Ideas: list})
+	res, err := h.svc.Query(reqCtx(c), q)
+	switch {
+	case errors.Is(err, ideas.ErrScopeNotFound):
+		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
+	case err != nil:
+		return listQueryFailure(c, err)
+	}
+	resp := ideaListResponse{
+		Ideas: res.Ideas, Total: res.Total, TotalUnfiltered: res.TotalUnfiltered,
+		Piles: ideaPiles{
+			Waiting: res.Piles[models.IdeaPileWaiting], Yes: res.Piles[models.IdeaPileYes],
+			Later: res.Piles[models.IdeaPileLater], No: res.Piles[models.IdeaPileNo],
+		},
+		Facets:      res.Facets,
+		FacetLabels: ideaFacetLabels{SourceAsset: res.SourceAssetLabels},
+		Groups:      res.Groups,
+	}
+	if resp.Facets == nil {
+		resp.Facets = map[string][]models.AssetFacetCount{}
+	}
+	if res.NextCursor != "" {
+		resp.NextCursor = &res.NextCursor
+	}
+	return c.JSON(resp)
 }
 
 // Create godoc
@@ -191,7 +257,7 @@ func (h *IdeasHandler) Create(c *fiber.Ctx) error {
 		UserID:     session.UserID,
 	})
 	if err != nil {
-		return ideaError(err)
+		return ideaError(c, err)
 	}
 	h.recordActivity(c, "idea_captured", idea.ID, map[string]any{"campaign_id": idea.CampaignID})
 	return c.Status(fiber.StatusCreated).JSON(idea)
@@ -231,7 +297,7 @@ func (h *IdeasHandler) Update(c *fiber.Ctx) error {
 		CampaignID:  req.CampaignID.Value,
 	})
 	if err != nil {
-		return ideaError(err)
+		return ideaError(c, err)
 	}
 	h.recordActivity(c, "idea_updated", idea.ID, map[string]any{"fields": fields})
 	return c.JSON(idea)
@@ -274,7 +340,7 @@ func (h *IdeasHandler) SetVerdict(c *fiber.Ctx) error {
 	}
 	idea, previous, err := h.svc.SetVerdict(reqCtx(c), c.Params("id"), verdict, req.RemindAt, session.UserID)
 	if err != nil {
-		return ideaError(err)
+		return ideaError(c, err)
 	}
 	h.recordActivity(c, "idea_decided", idea.ID, map[string]any{
 		"verdict":          idea.Verdict,
@@ -295,7 +361,7 @@ func (h *IdeasHandler) SetVerdict(c *fiber.Ctx) error {
 func (h *IdeasHandler) Delete(c *fiber.Ctx) error {
 	idea, err := h.svc.Delete(reqCtx(c), c.Params("id"))
 	if err != nil {
-		return ideaError(err)
+		return ideaError(c, err)
 	}
 	h.recordActivity(c, "idea_deleted", idea.ID, map[string]any{"verdict": idea.Verdict})
 	return c.SendStatus(fiber.StatusNoContent)

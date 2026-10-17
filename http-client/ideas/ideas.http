@@ -21,9 +21,44 @@ Accept: application/json
 GET {{baseUrl}}/api/ideas?asset_id={{assetId}}&sort=fit
 Accept: application/json
 
-### Unknown sort (expects 400)  [protected]
+### Unknown sort (expects 400 invalid_filter)  [protected]
 GET {{baseUrl}}/api/ideas?sort=score
 Accept: application/json
+
+### First page of the waiting pile, best fit first, with facets  [protected]
+# @name ideasPage
+GET {{baseUrl}}/api/ideas?pile=waiting&sort=fit&limit=50&facets=origin,source_asset,kind,campaign_id,fit,phase,author,created&tz=Europe/Kyiv
+Accept: application/json
+
+> {% client.global.set("ideasCursor", response.body.next_cursor) %}
+
+### Next page of the same list  [protected]
+GET {{baseUrl}}/api/ideas?pile=waiting&sort=fit&limit=50&cursor={{ideasCursor}}
+Accept: application/json
+
+### Analysed PDF and audio ideas that fit well, grouped by source  [protected]
+GET {{baseUrl}}/api/ideas?origin=asset_analysis&kind=pdf,audio&fit=high,medium&group=source&sort=fit&limit=50
+Accept: application/json
+
+### Written ideas from the last 7 days, newest first, grouped by author  [protected]
+GET {{baseUrl}}/api/ideas?source_asset=none&created=7d&tz=Europe/Kyiv&group=author&sort=created_desc&limit=50
+Accept: application/json
+
+### Text search, excluding ideas already answered no  [protected]
+GET {{baseUrl}}/api/ideas?text=agents&pile_not=no&limit=50
+Accept: application/json
+
+### One campaign's ideas only (totals, piles and facets too)  [protected]
+GET {{baseUrl}}/api/ideas?scope_campaign={{campaignId}}&facets=fit,origin&limit=50
+Accept: application/json
+
+### Edit an analysed idea's title (expects 409 idea_read_only)  [protected]
+PATCH {{baseUrl}}/api/ideas/{{analysedIdeaId}}
+Content-Type: application/json
+
+{
+  "title": "My own words"
+}
 
 ### Capture an idea (title only → workspace-wide, waiting)  [protected]
 # @name captureIdea

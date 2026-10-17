@@ -9,7 +9,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -30,10 +29,6 @@ const (
 	remindMaxAge = 365 * 24 * time.Hour
 )
 
-// largeBacklog is the per-tenant size above which List logs a warning — the
-// signal to add pagination and server-side counts.
-const largeBacklog = 2000
-
 // Validation errors. The handler maps these to HTTP 400.
 var (
 	ErrEmptyTitle         = errors.New("idea title is required")
@@ -50,6 +45,13 @@ var (
 
 // ErrNotFound is returned when no idea matches (unknown id or cross-tenant).
 var ErrNotFound = errors.New("idea not found")
+
+// ErrReadOnly refuses an edit of an analysis idea's title or note: its text
+// and its fit score belong together. Its campaign stays editable.
+var ErrReadOnly = errors.New("an analysed idea's title and note cannot be edited")
+
+// ErrScopeNotFound means a list's campaign scope names no live campaign.
+var ErrScopeNotFound = errors.New("campaign not found")
 
 // IsValidation reports whether err is a 400-worthy input error.
 func IsValidation(err error) bool {
@@ -83,16 +85,15 @@ func (s *Service) stamp() time.Time {
 	return s.now().UTC().Truncate(time.Microsecond)
 }
 
-// List returns the ideas in scope, oldest first. It is never nil.
-func (s *Service) List(ctx context.Context, filter repository.IdeaListFilter) ([]models.Idea, error) {
-	list, err := s.repo.List(ctx, filter)
-	if err != nil {
-		return nil, err
+// Query reads one page of the ideas list. It returns ErrScopeNotFound when the
+// campaign scope names no live campaign and repository.ErrInvalidCursor for a
+// cursor of another sort or grouping.
+func (s *Service) Query(ctx context.Context, q models.IdeaQuery) (*models.IdeaQueryResult, error) {
+	res, err := s.repo.Query(ctx, q)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrScopeNotFound
 	}
-	if len(list) > largeBacklog {
-		slog.WarnContext(ctx, "ideas: large backlog, consider pagination", "count", len(list))
-	}
-	return list, nil
+	return res, err
 }
 
 // Get returns one idea, or ErrNotFound.
@@ -145,6 +146,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*models.Idea, err
 	if err := s.repo.Create(ctx, idea); err != nil {
 		return nil, err
 	}
+	idea.DeriveAuthor()
 	return idea, nil
 }
 
@@ -164,6 +166,9 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (*model
 	idea, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, nil, err
+	}
+	if idea.Origin == models.IdeaOriginAssetAnalysis && (in.Title != nil || in.Note != nil) {
+		return nil, nil, ErrReadOnly
 	}
 	var columns []string
 	if in.Title != nil {
