@@ -42,6 +42,12 @@ type IdeaRepository interface {
 	// CountViews counts each query's match and its waiting ideas, in one
 	// round trip.
 	CountViews(ctx context.Context, qs []models.IdeaQuery) ([]models.IdeaViewCounts, error)
+	// QueryIDs returns up to limit ids of the ideas q matches and the size of
+	// the whole match; sql.ErrNoRows for an unknown campaign scope.
+	QueryIDs(ctx context.Context, q models.IdeaQuery, limit int) ([]string, int, error)
+	// DeleteMany hard-deletes the ideas of ids in one statement and returns
+	// those it deleted.
+	DeleteMany(ctx context.Context, ids []string) ([]string, error)
 	// GetByID returns sql.ErrNoRows for an unknown or cross-tenant id.
 	GetByID(ctx context.Context, id string) (*models.Idea, error)
 	Create(ctx context.Context, idea *models.Idea) error
@@ -288,6 +294,21 @@ func (r *ideaRepository) Delete(ctx context.Context, id string) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// DeleteMany hard-deletes the ideas of ids in one statement and returns the
+// ids it deleted; an unknown or cross-tenant id is skipped.
+func (r *ideaRepository) DeleteMany(ctx context.Context, ids []string) ([]string, error) {
+	deleted := []string{}
+	if len(ids) == 0 {
+		return deleted, nil
+	}
+	_, err := r.db.NewDelete().
+		Model((*models.Idea)(nil)).
+		Where("id IN (?)", bun.List(ids)).
+		Returning("id").
+		Exec(ctx, &deleted)
+	return deleted, err
 }
 
 // LiveCampaignExists deliberately uses Scan, not Exists: bun's Exists skips the

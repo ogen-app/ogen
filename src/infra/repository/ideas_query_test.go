@@ -388,6 +388,27 @@ func TestIdeaQueryPayload(t *testing.T) {
 	}
 }
 
+func TestIdeaQueryIDs(t *testing.T) {
+	fx := seedIdeaQueryFixture(t)
+	v, _ := url.ParseQuery("pile=waiting&limit=1&sort=fit")
+	q, err := ideas.ParseQuery(v, fx.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, total, err := fx.repo.QueryIDs(fx.ctx, q, 10)
+	slices.Sort(ids)
+	if err != nil || total != 3 || !slices.Equal(ids, []string{iqAudio, iqBob, iqPDF1}) {
+		t.Errorf("ids = %v, total %d, %v; want every waiting idea, ignoring the page size", ids, total, err)
+	}
+	if ids, total, _ := fx.repo.QueryIDs(fx.ctx, q, 2); len(ids) != 2 || total != 3 {
+		t.Errorf("capped: %d ids, total %d; want 2 of 3", len(ids), total)
+	}
+	q.ScopeCampaign = "iq-c-gone"
+	if _, _, err := fx.repo.QueryIDs(fx.ctx, q, 10); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("deleted scope: err = %v, want sql.ErrNoRows", err)
+	}
+}
+
 func TestIdeaCountViews(t *testing.T) {
 	fx := seedIdeaQueryFixture(t)
 	var qs []models.IdeaQuery

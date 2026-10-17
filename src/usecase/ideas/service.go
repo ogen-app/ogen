@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,6 +54,29 @@ var ErrReadOnly = errors.New("an analysed idea's title and note cannot be edited
 // ErrScopeNotFound means a list's campaign scope names no live campaign.
 var ErrScopeNotFound = errors.New("campaign not found")
 
+// Bulk limits: how many ids a selection of every match may hold, and how many
+// one bulk request may name.
+const (
+	MaxSelection = 5000
+	MaxBulkIDs   = 500
+)
+
+// ErrTooMany is a selection of every match over MaxSelection ideas.
+var ErrTooMany = errors.New("too many ideas to select")
+
+// ErrBulkSize is a bulk request naming no ids or more than MaxBulkIDs.
+var ErrBulkSize = errors.New("ids must name 1 to 500 ideas")
+
+// BulkCodeNotFound marks an id a bulk request could not act on because no
+// idea of the workspace has it.
+const BulkCodeNotFound = "not_found"
+
+// BulkFailure is one id a bulk request did not act on, and why.
+type BulkFailure struct {
+	ID   string
+	Code string
+}
+
 // IsValidation reports whether err is a 400-worthy input error.
 func IsValidation(err error) bool {
 	for _, target := range []error{
@@ -94,6 +118,44 @@ func (s *Service) Query(ctx context.Context, q models.IdeaQuery) (*models.IdeaQu
 		return nil, ErrScopeNotFound
 	}
 	return res, err
+}
+
+// QueryIDs returns the id of every idea q matches, ignoring paging, and the
+// size of the match. Over MaxSelection it returns ErrTooMany with the size.
+func (s *Service) QueryIDs(ctx context.Context, q models.IdeaQuery) ([]string, int, error) {
+	ids, total, err := s.repo.QueryIDs(ctx, q, MaxSelection)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, 0, ErrScopeNotFound
+	case err != nil:
+		return nil, 0, err
+	case total > MaxSelection:
+		return nil, total, ErrTooMany
+	}
+	return ids, total, nil
+}
+
+// BulkDelete hard-deletes the ideas of ids in one transaction, with the
+// permissions of a single delete: any member may delete any idea. It returns
+// the ids deleted and, for the rest, why not.
+func (s *Service) BulkDelete(ctx context.Context, ids []string) ([]string, []BulkFailure, error) {
+	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
+	ids = slices.DeleteFunc(ids, func(id string) bool { return strings.TrimSpace(id) == "" })
+	if len(ids) == 0 || len(ids) > MaxBulkIDs {
+		return nil, nil, ErrBulkSize
+	}
+	deleted, err := s.repo.DeleteMany(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	failed := []BulkFailure{}
+	for _, id := range ids {
+		if !slices.Contains(deleted, id) {
+			failed = append(failed, BulkFailure{ID: id, Code: BulkCodeNotFound})
+		}
+	}
+	slices.Sort(deleted)
+	return deleted, failed, nil
 }
 
 // Get returns one idea, or ErrNotFound.

@@ -521,6 +521,44 @@ func (r *ideaRepository) pageIdeas(ctx context.Context, rows []ideaPageRow) ([]m
 	return out, nil
 }
 
+// QueryIDs returns the ids of the ideas q matches, at most limit of them in no
+// particular order, with the size of the whole match. It ignores paging,
+// facets and grouping, and returns sql.ErrNoRows when the campaign scope
+// names no live campaign.
+func (r *ideaRepository) QueryIDs(ctx context.Context, q models.IdeaQuery, limit int) ([]string, int, error) {
+	tid, ok := tenantctx.From(ctx)
+	if !ok {
+		return nil, 0, tenantctx.ErrNoTenant
+	}
+	preds := ideaPreds(q)
+	var b sqlBuf
+	writeIdeaFacts(&b, q, tid)
+	b.add(`SELECT (SELECT count(*) FROM facts f`)
+	where(&b, preds, "")
+	b.add(`) AS total,
+	(SELECT coalesce(json_agg(s.id), '[]') FROM (SELECT f.id FROM facts f`)
+	where(&b, preds, "")
+	b.add(` LIMIT ?) s) AS ids,
+	`, limit)
+	writeIdeaScopeFound(&b, q, tid)
+	var row struct {
+		Total      int             `bun:"total"`
+		IDs        json.RawMessage `bun:"ids"`
+		ScopeFound bool            `bun:"scope_found"`
+	}
+	if err := r.db.NewRaw(b.sb.String(), b.args...).Scan(ctx, &row); err != nil {
+		return nil, 0, err
+	}
+	if !row.ScopeFound {
+		return nil, 0, sql.ErrNoRows
+	}
+	ids := []string{}
+	if err := json.Unmarshal(row.IDs, &ids); err != nil {
+		return nil, 0, fmt.Errorf("decode idea ids: %w", err)
+	}
+	return ids, row.Total, nil
+}
+
 // CountViews counts, for each query, its match and the waiting ideas in it, in
 // one statement. A query whose campaign scope names no live campaign counts 0.
 func (r *ideaRepository) CountViews(ctx context.Context, qs []models.IdeaQuery) ([]models.IdeaViewCounts, error) {

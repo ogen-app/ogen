@@ -40,7 +40,7 @@ var Params = func() map[string]bool {
 // VolatileParams are the parameters a request carries that are not part of
 // what a list shows: paging, the facets asked for, the viewer's time zone, and
 // the pile tab.
-var VolatileParams = []string{"limit", "cursor", "facets", "tz", "pile", "pile" + listquery.NotSuffix}
+var VolatileParams = []string{"limit", "cursor", "facets", "tz", "ids_only", "pile", "pile" + listquery.NotSuffix}
 
 // ParseQuery reads the ideas list parameters at the clock now. It rejects an
 // unknown value with a *listquery.Error; parameters it does not know are

@@ -52,6 +52,18 @@ Accept: application/json
 GET {{baseUrl}}/api/ideas?scope_campaign={{campaignId}}&facets=fit,origin&limit=50
 Accept: application/json
 
+### Select every waiting idea from PDFs (ids only, up to 5,000)  [protected]
+GET {{baseUrl}}/api/ideas?pile=waiting&kind=pdf&ids_only=true
+Accept: application/json
+
+### Delete a selection (unknown ids come back in failed)  [protected]
+POST {{baseUrl}}/api/ideas/bulk-delete
+Content-Type: application/json
+
+{
+  "ids": ["{{ideaId}}", "not-an-idea"]
+}
+
 ### Edit an analysed idea's title (expects 409 idea_read_only)  [protected]
 PATCH {{baseUrl}}/api/ideas/{{analysedIdeaId}}
 Content-Type: application/json

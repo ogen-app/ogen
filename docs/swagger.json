@@ -5471,7 +5471,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Filters, counts, groups and pages the workspace's ideas.\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.\n\n`scope_campaign` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. `piles` count the match of every filter but `pile`. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. `facet_labels.source_asset` labels every asset of the source_asset facet.\n\n`group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). `source`, `campaign` and `author` groups go by name with `none` last; `fit` and `origin` keep their value order; `created` groups are `1d`, `7d`, `30d` and `earlier`.\n\nWithout `limit` the list is unpaged, up to 1,000 ideas.",
+                "description": "Filters, counts, groups and pages the workspace's ideas.\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.\n\n`scope_campaign` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. `piles` count the match of every filter but `pile`. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. `facet_labels.source_asset` labels every asset of the source_asset facet.\n\n`group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). `source`, `campaign` and `author` groups go by name with `none` last; `fit` and `origin` keep their value order; `created` groups are `1d`, `7d`, `30d` and `earlier`.\n\nWithout `limit` the list is unpaged, up to 1,000 ideas.\n\n`ids_only=true` returns `{ids, total}` instead: every id the filters (pile included) match, unpaged and in no particular order, for selecting every match. Over 5,000 it answers 422 `too_many` with `total`.",
                 "produces": [
                     "application/json"
                 ],
@@ -5647,11 +5647,17 @@
                         "description": "IANA time zone of the date presets and created groups (default UTC)",
                         "name": "tz",
                         "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Return {ids, total} of every match instead of a page",
+                        "name": "ids_only",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "With ids_only=true the body is an ideaIDsResponse",
                         "schema": {
                             "$ref": "#/definitions/handlers.ideaListResponse"
                         }
@@ -5667,6 +5673,15 @@
                     },
                     "404": {
                         "description": "scope_campaign names no live campaign",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "code: too_many (ids_only over 5,000), with total",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -5708,6 +5723,54 @@
                         "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/models.Idea"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/ideas/bulk-delete": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Hard-deletes 1–500 ideas in one transaction, with the permissions of a single delete. An id that is unknown, gone or in another workspace is reported in `failed` (`not_found`) without failing the rest. Publishes one `ideas.deleted` on `entity:ideas:list` with the deleted ids. Select every match of a filter first with `GET /api/ideas?…\u0026ids_only=true`.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Delete a selection of ideas",
+                "parameters": [
+                    {
+                        "description": "the ids",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.bulkIdeasRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.bulkDeleteResponse"
                         }
                     },
                     "400": {
@@ -13314,6 +13377,49 @@
                         "problem",
                         "opportunity"
                     ]
+                }
+            }
+        },
+        "handlers.bulkDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "failed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.bulkFailure"
+                    }
+                }
+            }
+        },
+        "handlers.bulkFailure": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "enum": [
+                        "not_found",
+                        "forbidden"
+                    ]
+                },
+                "id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.bulkIdeasRequest": {
+            "type": "object",
+            "properties": {
+                "ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
