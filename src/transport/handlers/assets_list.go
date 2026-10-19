@@ -3,24 +3,12 @@ package handlers
 import (
 	"database/sql"
 	"errors"
-	"fmt"
-	"slices"
-	"strconv"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/infra/repository"
-)
-
-const (
-	defaultAssetPageSize = 50
-	maxAssetPageSize     = 200
-	minAssetTextLen      = 2
-	maxAssetTextLen      = 200
+	"github.com/ogen-app/ogen/src/usecase/assets"
 )
 
 // assetListResponse is one page of the asset list. Total counts the assets
@@ -52,200 +40,11 @@ type assetIDsResponse struct {
 	IDs []string `json:"ids"`
 }
 
-// assetQueryError is a rejected list parameter.
-type assetQueryError struct {
-	code, msg string
-}
-
-func (e *assetQueryError) Error() string { return e.msg }
-
-func invalidFilter(format string, args ...any) error {
-	return &assetQueryError{models.AssetCodeInvalidFilter, fmt.Sprintf(format, args...)}
-}
-
-// queryValues returns a parameter's values: every occurrence split on commas,
-// trimmed, without blanks or duplicates.
-func queryValues(c *fiber.Ctx, key string) []string {
-	var out []string
-	for _, raw := range c.Context().QueryArgs().PeekMulti(key) {
-		for v := range strings.SplitSeq(string(raw), ",") {
-			if v = strings.TrimSpace(v); v != "" && !slices.Contains(out, v) {
-				out = append(out, v)
-			}
-		}
-	}
-	return out
-}
-
-// valueFilter reads key and key_not, rejecting values outside allowed when it
-// is non-nil.
-func valueFilter(c *fiber.Ctx, key string, allowed []string) (models.AssetValueFilter, error) {
-	f := models.AssetValueFilter{Any: queryValues(c, key), Not: queryValues(c, key+"_not")}
-	if allowed != nil {
-		for _, v := range slices.Concat(f.Any, f.Not) {
-			if !slices.Contains(allowed, v) {
-				return f, invalidFilter("%s: unknown value %q (allowed: %s)", key, v, strings.Join(allowed, ", "))
-			}
-		}
-	}
-	return f, nil
-}
-
-func timeParam(c *fiber.Ctx, key string) (*time.Time, error) {
-	raw := strings.TrimSpace(c.Query(key))
-	if raw == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return nil, invalidFilter("%s must be an RFC 3339 timestamp", key)
-	}
-	return &t, nil
-}
-
-// dateWindow reads key_after and key_before, or the preset key, which starts
-// the window at the preset in tz. Location must already be read.
-func dateWindow(c *fiber.Ctx, key string, now time.Time) (after, before *time.Time, err error) {
-	if after, err = timeParam(c, key+"_after"); err != nil {
-		return nil, nil, err
-	}
-	if before, err = timeParam(c, key+"_before"); err != nil {
-		return nil, nil, err
-	}
-	preset := strings.TrimSpace(c.Query(key))
-	if preset == "" {
-		return after, before, nil
-	}
-	if after != nil {
-		return nil, nil, invalidFilter("%s and %s_after cannot be combined", key, key)
-	}
-	loc, err := queryLocation(c)
-	if err != nil {
-		return nil, nil, err
-	}
-	since, ok := models.AssetDateSince(preset, now, loc)
-	if !ok {
-		return nil, nil, invalidFilter("%s: unknown value %q (allowed: %s)", key, preset, strings.Join(models.AssetDatePresets, ", "))
-	}
-	return &since, before, nil
-}
-
-// queryLocation reads tz, UTC when absent.
-func queryLocation(c *fiber.Ctx) (*time.Location, error) {
-	tz := strings.TrimSpace(c.Query("tz"))
-	if tz == "" {
-		return time.UTC, nil
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return nil, invalidFilter("tz: unknown time zone %q", tz)
-	}
-	return loc, nil
-}
-
-// parseAssetQuery reads the list parameters. idsOnly reports ids_only=true.
-func parseAssetQuery(c *fiber.Ctx, now time.Time) (q models.AssetQuery, idsOnly bool, err error) {
-	q = models.AssetQuery{Now: now, Location: time.UTC, Sort: models.AssetSortUpdatedDesc, Limit: defaultAssetPageSize}
-	if err := parseAssetFilters(c, &q); err != nil {
-		return q, false, err
-	}
-	if err := parseAssetPaging(c, &q); err != nil {
-		return q, false, err
-	}
-	if raw := strings.TrimSpace(c.Query("ids_only")); raw != "" {
-		if idsOnly, err = strconv.ParseBool(raw); err != nil {
-			return q, false, invalidFilter("ids_only must be true or false")
-		}
-	}
-	return q, idsOnly, nil
-}
-
-// parseAssetFilters reads the parameters that choose which assets match.
-func parseAssetFilters(c *fiber.Ctx, q *models.AssetQuery) (err error) {
-	q.Title = models.AssetValueFilter{Any: queryValues(c, "title"), Not: queryValues(c, "title_not")}
-	if q.Kind, err = valueFilter(c, "kind", models.AssetKinds); err != nil {
-		return err
-	}
-	if q.Status, err = valueFilter(c, "status", models.AssetListStatuses); err != nil {
-		return err
-	}
-	if q.Campaign, err = valueFilter(c, "campaign", nil); err != nil {
-		return err
-	}
-	if q.Tag, err = valueFilter(c, "tag", nil); err != nil {
-		return err
-	}
-	if q.Ideas, err = valueFilter(c, "ideas", models.AssetIdeasValues); err != nil {
-		return err
-	}
-	for _, sum := range queryValues(c, "checksum") {
-		sum = strings.ToLower(sum)
-		if len(sum) != 64 || strings.Trim(sum, "0123456789abcdef") != "" {
-			return invalidFilter("checksum: %q is not a hex SHA-256", sum)
-		}
-		q.Checksums = append(q.Checksums, sum)
-	}
-	if q.UpdatedAfter, q.UpdatedBefore, err = dateWindow(c, "updated", q.Now); err != nil {
-		return err
-	}
-	if q.CreatedAfter, q.CreatedBefore, err = dateWindow(c, "created", q.Now); err != nil {
-		return err
-	}
-	q.Text = strings.TrimSpace(c.Query("text"))
-	switch n := utf8.RuneCountInString(q.Text); {
-	case n > 0 && n < minAssetTextLen:
-		return &assetQueryError{models.AssetCodeQueryTooShort, fmt.Sprintf("text must be at least %d characters", minAssetTextLen)}
-	case n > maxAssetTextLen:
-		return &assetQueryError{models.AssetCodeQueryTooLong, fmt.Sprintf("text must be at most %d characters", maxAssetTextLen)}
-	}
-	q.ScopeCampaign = strings.TrimSpace(c.Query("scope_campaign"))
-	return nil
-}
-
-// parseAssetPaging reads the sort, page and facet parameters.
-func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
-	if s := strings.TrimSpace(c.Query("sort")); s != "" {
-		if !slices.Contains(models.AssetSorts, s) {
-			return invalidFilter("sort: unknown value %q (allowed: %s)", s, strings.Join(models.AssetSorts, ", "))
-		}
-		q.Sort = s
-	}
-	if q.Sort == models.AssetSortRelevance && q.Text == "" {
-		return invalidFilter("sort=relevance needs text")
-	}
-	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > maxAssetPageSize {
-			return invalidFilter("limit must be between 1 and %d", maxAssetPageSize)
-		}
-		q.Limit = n
-	}
-	q.Cursor = strings.TrimSpace(c.Query("cursor"))
-	q.Facets = queryValues(c, "facets")
-	for _, f := range q.Facets {
-		if !slices.Contains(models.AssetFacets, f) {
-			return invalidFilter("facets: unknown field %q (allowed: %s)", f, strings.Join(models.AssetFacets, ", "))
-		}
-	}
-	if g := strings.TrimSpace(c.Query("group")); g != "" {
-		if !slices.Contains(models.AssetGroups, g) {
-			return invalidFilter("group: unknown value %q (allowed: %s)", g, strings.Join(models.AssetGroups, ", "))
-		}
-		q.Group = g
-	}
-	loc, err := queryLocation(c)
-	if err != nil {
-		return err
-	}
-	q.Location = loc
-	return nil
-}
-
 // List godoc
 // @Summary      List assets
 // @Description  Filters, counts and pages the workspace's assets, without their content (GET /:id has it).
 // @Description
-// @Description  Every filter takes a comma-separated list meaning "any of these"; its `_not` twin excludes values. Different fields combine with AND. `campaign` and `tag` take ids plus `none` (in no campaign, untagged). An asset belongs to every live campaign listing it and to every campaign that draws on the whole bank. `ideas` matches an asset with at least one analysis idea of that verdict (`undecided`, `yes`, `later`, `no`; a `later` idea whose reminder has passed counts as `undecided`), `none` an analysed asset without ideas, `unread` one with no finished analysis. `status=pending` includes assets still processing. `updated_after` is inclusive, `updated_before` exclusive.
+// @Description  Every filter takes a comma-separated list meaning "any of these"; its `_not` twin excludes values. Different fields combine with AND. `campaign` and `tag` take ids plus `none` (in no campaign, untagged). An asset belongs to every live campaign listing it and to every campaign that draws on the whole bank. `ideas` matches an asset with at least one analysis idea of that verdict (`undecided`, `yes`, `later`, `no`; a `later` idea whose reminder has passed counts as `undecided`), `none` an analysed asset without ideas, `unread` one with no finished analysis. `status=pending` includes assets still processing. `updated_after` and `created_after` are inclusive, `updated_before` and `created_before` exclusive; each takes an RFC 3339 instant or a `YYYY-MM-DD` day, which means the start of that day in `tz`.
 // @Description
 // @Description  `text` searches inside the assets (full-text with English stemming; "quoted phrases", `-word` and `or` work) and adds `match` to each row: the number of matching chunks and the best one's `snippet` (HTML-escaped, matched words in `<mark>`), `source_label` and `chunk_index`.
 // @Description
@@ -273,11 +72,11 @@ func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
 // @Param        tag_not         query     string  false  "Tag ids (or none) to exclude"
 // @Param        ideas           query     string  false  "undecided, yes, later, no, none, unread"
 // @Param        ideas_not       query     string  false  "Ideas values to exclude"
-// @Param        updated_after   query     string  false  "RFC 3339, inclusive"
-// @Param        updated_before  query     string  false  "RFC 3339, exclusive"
+// @Param        updated_after   query     string  false  "RFC 3339, or a YYYY-MM-DD day starting in tz; inclusive"
+// @Param        updated_before  query     string  false  "RFC 3339, or a YYYY-MM-DD day starting in tz; exclusive"
 // @Param        updated         query     string  false  "Preset start of the updated window: 1d, 7d, 30d, month (not with updated_after)"
-// @Param        created_after   query     string  false  "RFC 3339, inclusive"
-// @Param        created_before  query     string  false  "RFC 3339, exclusive"
+// @Param        created_after   query     string  false  "RFC 3339, or a YYYY-MM-DD day starting in tz; inclusive"
+// @Param        created_before  query     string  false  "RFC 3339, or a YYYY-MM-DD day starting in tz; exclusive"
 // @Param        created         query     string  false  "Preset start of the created window: 1d, 7d, 30d, month (not with created_after)"
 // @Param        checksum        query     string  false  "SHA-256 sums of asset files"
 // @Param        text            query     string  false  "Text to find inside the assets (2–200 characters)"
@@ -287,7 +86,7 @@ func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
 // @Param        cursor          query     string  false  "next_cursor of the previous page"
 // @Param        facets          query     string  false  "kind, status, campaign, tag, ideas, updated, created"
 // @Param        group           query     string  false  "ideas, campaign, tag, kind, created"
-// @Param        tz              query     string  false  "IANA time zone of the date presets and created groups (default UTC)"
+// @Param        tz              query     string  false  "IANA time zone of the date presets, day bounds and created groups (default UTC)"
 // @Param        ids_only        query     bool    false  "Return every matching id instead of a page"
 // @Success      200  {object}  assetListResponse  "With ids_only=true only ids is present"
 // @Failure      400  {object}  map[string]string  "code: invalid_filter | invalid_cursor | query_too_short | query_too_long"
@@ -296,12 +95,14 @@ func parseAssetPaging(c *fiber.Ctx, q *models.AssetQuery) error {
 // @Router       /api/content-bank/assets [get]
 func (h *AssetsHandler) List(c *fiber.Ctx) error {
 	ctx := reqCtx(c)
-	q, idsOnly, err := parseAssetQuery(c, time.Now().UTC())
+	v := queryValuesOf(c)
+	q, err := assets.ParseQuery(v, time.Now().UTC())
 	if err != nil {
-		if qe, ok := errors.AsType[*assetQueryError](err); ok {
-			return rejectCode(c, fiber.StatusBadRequest, qe.code, qe.msg)
-		}
-		return err
+		return listQueryFailure(c, err)
+	}
+	idsOnly, err := assets.IDsOnly(v)
+	if err != nil {
+		return listQueryFailure(c, err)
 	}
 	if idsOnly {
 		ids, err := h.repo.QueryIDs(ctx, q)
@@ -338,12 +139,11 @@ func (h *AssetsHandler) List(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
+// assetQueryFailure maps a rejected cursor to its 400 and a campaign scope
+// naming no live campaign to a 404.
 func assetQueryFailure(c *fiber.Ctx, err error) error {
-	switch {
-	case errors.Is(err, repository.ErrInvalidAssetCursor):
-		return rejectCode(c, fiber.StatusBadRequest, models.AssetCodeInvalidCursor, "cursor is not from this list or this sort")
-	case errors.Is(err, sql.ErrNoRows):
+	if errors.Is(err, sql.ErrNoRows) {
 		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
 	}
-	return err
+	return listQueryFailure(c, err)
 }
