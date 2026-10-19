@@ -800,6 +800,84 @@ func (r *assetRepository) QueryIDs(ctx context.Context, q models.AssetQuery) ([]
 	return ids, nil
 }
 
+// ErrMixedViewScope is returned by CountViews for queries that do not share
+// their clock and campaign scope, which the one facts table they count reads.
+var ErrMixedViewScope = errors.New("asset views must share now and scope_campaign")
+
+// CountViews counts every query's match against one facts table, built once
+// without text. Each distinct text gets its own hits table, joined in for the
+// views that search it, so N views cost one facts scan and one search per
+// text. An ARRAY rather than json_build_array keeps the number of views free
+// of the 100-argument limit on functions.
+func (r *assetRepository) CountViews(ctx context.Context, qs []models.AssetQuery) ([]models.AssetViewCounts, error) {
+	if len(qs) == 0 {
+		return nil, nil
+	}
+	tid, ok := tenantctx.From(ctx)
+	if !ok {
+		return nil, tenantctx.ErrNoTenant
+	}
+	base := qs[0]
+	for _, q := range qs[1:] {
+		if !q.Now.Equal(base.Now) || q.ScopeCampaign != base.ScopeCampaign {
+			return nil, ErrMixedViewScope
+		}
+	}
+	base.Text = ""
+	var texts []string
+	for _, q := range qs {
+		if q.Text != "" && !slices.Contains(texts, q.Text) {
+			texts = append(texts, q.Text)
+		}
+	}
+
+	var b sqlBuf
+	writeAssetFacts(&b, base, tid)
+	for i, text := range texts {
+		b.add(fmt.Sprintf(`, hits_%d AS MATERIALIZED (
+	SELECT DISTINCT ac.asset_id FROM assets_chunks ac
+	WHERE ac.tenant_id = ? AND `+chunkTSV+` @@ websearch_to_tsquery('english', ?)
+)`, i), tid, text)
+	}
+	b.add(`
+SELECT to_json(ARRAY[`)
+	for i, q := range qs {
+		if i > 0 {
+			b.add(`, `)
+		}
+		hits := slices.Index(texts, q.Text)
+		q.Text = ""
+		b.add(`count(*) FILTER (WHERE TRUE`)
+		for _, p := range assetPreds(q) {
+			b.add(` AND (`+p.sql+`)`, p.args...)
+		}
+		if hits >= 0 {
+			b.add(fmt.Sprintf(` AND h%d.asset_id IS NOT NULL`, hits))
+		}
+		b.add(`)`)
+	}
+	b.add(`]::bigint[]) AS counts FROM facts f`)
+	for i := range texts {
+		b.add(fmt.Sprintf(` LEFT JOIN hits_%[1]d h%[1]d ON h%[1]d.asset_id = f.id`, i))
+	}
+
+	var row struct {
+		Counts json.RawMessage `bun:"counts"`
+	}
+	if err := r.db.NewRaw(b.sb.String(), b.args...).Scan(ctx, &row); err != nil {
+		return nil, err
+	}
+	var totals []int
+	if err := json.Unmarshal(row.Counts, &totals); err != nil {
+		return nil, fmt.Errorf("decode view counts: %w", err)
+	}
+	out := make([]models.AssetViewCounts, len(totals))
+	for i, n := range totals {
+		out[i].Total = n
+	}
+	return out, nil
+}
+
 // assetFacetCounts turns the facet rows into each requested field's counts,
 // with every value of the field present: a value nothing matches gets 0.
 // Fixed vocabularies keep their order; tags and campaigns go by count, then

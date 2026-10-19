@@ -310,6 +310,11 @@ type AssetGroupCount struct {
 	Count int    `json:"count"`
 }
 
+// AssetViewCounts is what a saved view of the asset list counts: its match.
+type AssetViewCounts struct {
+	Total int `json:"total"`
+}
+
 // AssetQueryResult is one page of the asset list.
 type AssetQueryResult struct {
 	Assets []AssetListItem
