@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"time"
 
@@ -236,6 +237,26 @@ var _ = Describe("AssetsHandler", Ordered, func() {
 				Expect(ungrouped.Total).To(Equal(0))
 				Expect(ungrouped.Raw).To(ContainSubstring(`"groups":[]`))
 				Expect(ungrouped.Raw).To(ContainSubstring(`"ideas_undecided_total":0`))
+			})
+
+			It("takes days for the date bounds, meaning their start in tz, as it takes instants", func() {
+				createPiece("First", `[{"type":"paragraph"}]`)
+				createPiece("Second", `[{"type":"paragraph"}]`)
+				kyiv, err := time.LoadLocation("Europe/Kyiv")
+				Expect(err).NotTo(HaveOccurred())
+				local := time.Now().In(kyiv)
+				today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, kyiv)
+				tomorrow := today.AddDate(0, 0, 1)
+
+				for _, field := range []string{"created", "updated"} {
+					days := listAssets("?" + field + "_after=" + today.Format(time.DateOnly) + "&" + field + "_before=" +
+						tomorrow.Format(time.DateOnly) + "&tz=Europe/Kyiv&ids_only=false")
+					instants := listAssets("?" + field + "_after=" + url.QueryEscape(today.Format(time.RFC3339)) + "&" +
+						field + "_before=" + url.QueryEscape(tomorrow.Format(time.RFC3339)))
+					Expect(days.Total).To(Equal(2))
+					Expect(days.Raw).To(Equal(instants.Raw))
+					Expect(listAssets("?" + field + "_before=" + today.Format(time.DateOnly) + "&tz=Europe/Kyiv").Total).To(Equal(0))
+				}
 			})
 
 			It("404s an unknown scope campaign", func() {

@@ -46,6 +46,7 @@ type savedViewListResponse struct {
 
 // createSavedViewRequest is the POST body.
 type createSavedViewRequest struct {
+	// Surface is the list: ideas or assets.
 	Surface string `json:"surface"`
 	Name    string `json:"name"`
 	// Query is the list's query string, as the list's endpoint takes it.
@@ -94,13 +95,13 @@ func savedViewError(c *fiber.Ctx, err error) error {
 
 // List godoc
 // @Summary      List saved views of a list
-// @Description  The caller's own views of the surface plus every shared one, newest first. `counts` adds each valid view's counts by name, all computed in one round trip: every surface has `total`; `ideas` adds `undecided` (its waiting pile). A view whose stored query no longer parses reads back with `valid: false` and no counts. `can_edit` says whether the caller may change it.
+// @Description  The caller's own views of the surface plus every shared one, newest first. `counts` adds each valid view's counts by name, all computed in one round trip: every surface has `total`; `ideas` adds `undecided` (its waiting pile), `assets` has `total` alone. A view whose stored query no longer parses reads back with `valid: false` and no counts. `can_edit` says whether the caller may change it.
 // @Tags         saved-views
 // @Produce      json
 // @Security     CookieAuth
-// @Param        surface  query  string  true   "The list: ideas"
+// @Param        surface  query  string  true   "The list: ideas | assets"
 // @Param        counts   query  string  false  "Comma-separated count names"
-// @Param        tz       query  string  false  "IANA time zone of the date presets the counts read (default UTC)"
+// @Param        tz       query  string  false  "IANA time zone of the date presets and day bounds the counts read (default UTC)"
 // @Success      200  {object}  savedViewListResponse
 // @Failure      400  {object}  map[string]string  "code: unknown_surface | invalid_filter"
 // @Router       /api/saved-views [get]
@@ -123,7 +124,7 @@ func (h *SavedViewsHandler) List(c *fiber.Ctx) error {
 
 // Create godoc
 // @Summary      Save a view of a list
-// @Description  `query` is the list's query string. Paging and display parameters (`cursor`, `limit`, `facets`, `tz`, and per list e.g. `pile`) are dropped; the rest is validated by the list's own parser and stored canonical: keys sorted, values sorted and comma-joined.
+// @Description  `query` is the list's query string. Paging and display parameters (`cursor`, `limit`, `facets`, `tz`, and per list e.g. `pile` on ideas, `ids_only`, `scope_campaign` and `checksum` on assets) are dropped; the rest is validated by the list's own parser and stored canonical: keys sorted, values sorted and comma-joined.
 // @Tags         saved-views
 // @Accept       json
 // @Produce      json
