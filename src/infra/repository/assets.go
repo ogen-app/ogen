@@ -23,6 +23,10 @@ type AssetRepository interface {
 	// QueryIDs returns the ids of every asset Query would list for q, in its
 	// sort order, unpaginated. q's Cursor, Limit and Facets are ignored.
 	QueryIDs(ctx context.Context, q models.AssetQuery) ([]string, error)
+	// CountViews counts, in one round trip, the assets each query matches, as
+	// Query's Total would. Paging, sort, grouping and facets are ignored. The
+	// queries must share Now and ScopeCampaign.
+	CountViews(ctx context.Context, qs []models.AssetQuery) ([]models.AssetViewCounts, error)
 	// ListMeta returns the id, title, status and type of the tenant's assets in
 	// ids, or of all its assets when ids is nil, oldest first, in one query
 	// with no content, tags or files.
