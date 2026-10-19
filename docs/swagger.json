@@ -3520,7 +3520,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Filters, counts and pages the workspace's assets, without their content (GET /:id has it).\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its `_not` twin excludes values. Different fields combine with AND. `campaign` and `tag` take ids plus `none` (in no campaign, untagged). An asset belongs to every live campaign listing it and to every campaign that draws on the whole bank. `ideas` matches an asset with at least one analysis idea of that verdict (`undecided`, `yes`, `later`, `no`; a `later` idea whose reminder has passed counts as `undecided`), `none` an analysed asset without ideas, `unread` one with no finished analysis. `status=pending` includes assets still processing. `updated_after` is inclusive, `updated_before` exclusive.\n\n`text` searches inside the assets (full-text with English stemming; \"quoted phrases\", `-word` and `or` work) and adds `match` to each row: the number of matching chunks and the best one's `snippet` (HTML-escaped, matched words in `\u003cmark\u003e`), `source_label` and `chunk_index`.\n\n`scope_campaign` confines the whole read, totals and counts included, to one campaign's assets; the campaign facet is not returned there. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value, with 0 for those nothing matches. The date presets of `updated` and `created`, as filters and facets, are since the start of today (`1d`), of the day 6 or 29 days ago (`7d`, `30d`) and of the month (`month`), in `tz`.\n\nIdeas and readings come from one analysis lens: the workspace lens in the bank, and under `scope_campaign` that campaign's lens alone. `idea_counts`, `next_idea`, `ideas_undecided_total`, the `ideas` filter, facet, sort and grouping, `gist` and `analysis_status` all read it, so on a campaign page an asset whose campaign lens has not run reads as not analysed (`unread`, no gist, no status) even when its workspace lens is ready.\n\nEvery row carries `next_idea`: the highest `fit_score` of the ideas `idea_counts.undecided` counts (`{id, title}`), oldest first among equal or missing scores, null exactly when that count is 0. `ideas_undecided_total` sums `idea_counts.undecided` over every matching asset, not just the page.\n\n`group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). Paging runs across groups, so a group may span pages. `ideas` groups are `undecided`, `answered` (ideas, none undecided) and `none`; `created` groups are the disjoint bands `1d` (today), `7d` (the 6 days before), `30d` (the 23 days before those) and `earlier`; `kind` groups follow the kind order; `campaign` and `tag` groups go by name with `none` last, and list an asset under each of its campaigns or tags that the field's filter allows, so `groups` counts appearances while `total` counts assets.\n\n`ids_only=true` returns `{ids}`: every matching id in sort order, unpaginated.",
+                "description": "Filters, counts and pages the workspace's assets, without their content (GET /:id has it).\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its `_not` twin excludes values. Different fields combine with AND. `campaign` and `tag` take ids plus `none` (in no campaign, untagged). An asset belongs to every live campaign listing it and to every campaign that draws on the whole bank. `ideas` matches an asset with at least one analysis idea of that verdict (`undecided`, `yes`, `later`, `no`; a `later` idea whose reminder has passed counts as `undecided`), `none` an analysed asset without ideas, `unread` one with no finished analysis. `status=pending` includes assets still processing. `updated_after` and `created_after` are inclusive, `updated_before` and `created_before` exclusive; each takes an RFC 3339 instant or a `YYYY-MM-DD` day, which means the start of that day in `tz`.\n\n`text` searches inside the assets (full-text with English stemming; \"quoted phrases\", `-word` and `or` work) and adds `match` to each row: the number of matching chunks and the best one's `snippet` (HTML-escaped, matched words in `\u003cmark\u003e`), `source_label` and `chunk_index`.\n\n`scope_campaign` confines the whole read, totals and counts included, to one campaign's assets; the campaign facet is not returned there. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value, with 0 for those nothing matches. The date presets of `updated` and `created`, as filters and facets, are since the start of today (`1d`), of the day 6 or 29 days ago (`7d`, `30d`) and of the month (`month`), in `tz`.\n\nIdeas and readings come from one analysis lens: the workspace lens in the bank, and under `scope_campaign` that campaign's lens alone. `idea_counts`, `next_idea`, `ideas_undecided_total`, the `ideas` filter, facet, sort and grouping, `gist` and `analysis_status` all read it, so on a campaign page an asset whose campaign lens has not run reads as not analysed (`unread`, no gist, no status) even when its workspace lens is ready.\n\nEvery row carries `next_idea`: the highest `fit_score` of the ideas `idea_counts.undecided` counts (`{id, title}`), oldest first among equal or missing scores, null exactly when that count is 0. `ideas_undecided_total` sums `idea_counts.undecided` over every matching asset, not just the page.\n\n`group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). Paging runs across groups, so a group may span pages. `ideas` groups are `undecided`, `answered` (ideas, none undecided) and `none`; `created` groups are the disjoint bands `1d` (today), `7d` (the 6 days before), `30d` (the 23 days before those) and `earlier`; `kind` groups follow the kind order; `campaign` and `tag` groups go by name with `none` last, and list an asset under each of its campaigns or tags that the field's filter allows, so `groups` counts appearances while `total` counts assets.\n\n`ids_only=true` returns `{ids}`: every matching id in sort order, unpaginated.",
                 "produces": [
                     "application/json"
                 ],
@@ -3603,13 +3603,13 @@
                     },
                     {
                         "type": "string",
-                        "description": "RFC 3339, inclusive",
+                        "description": "RFC 3339, or a YYYY-MM-DD day starting in tz; inclusive",
                         "name": "updated_after",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "RFC 3339, exclusive",
+                        "description": "RFC 3339, or a YYYY-MM-DD day starting in tz; exclusive",
                         "name": "updated_before",
                         "in": "query"
                     },
@@ -3621,13 +3621,13 @@
                     },
                     {
                         "type": "string",
-                        "description": "RFC 3339, inclusive",
+                        "description": "RFC 3339, or a YYYY-MM-DD day starting in tz; inclusive",
                         "name": "created_after",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "RFC 3339, exclusive",
+                        "description": "RFC 3339, or a YYYY-MM-DD day starting in tz; exclusive",
                         "name": "created_before",
                         "in": "query"
                     },
@@ -3687,7 +3687,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "IANA time zone of the date presets and created groups (default UTC)",
+                        "description": "IANA time zone of the date presets, day bounds and created groups (default UTC)",
                         "name": "tz",
                         "in": "query"
                     },
@@ -10739,7 +10739,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "The caller's own views of the surface plus every shared one, newest first. `counts` adds each valid view's counts by name, all computed in one round trip: every surface has `total`; `ideas` adds `undecided` (its waiting pile). A view whose stored query no longer parses reads back with `valid: false` and no counts. `can_edit` says whether the caller may change it.",
+                "description": "The caller's own views of the surface plus every shared one, newest first. `counts` adds each valid view's counts by name, all computed in one round trip: every surface has `total`; `ideas` adds `undecided` (its waiting pile), `assets` has `total` alone. A view whose stored query no longer parses reads back with `valid: false` and no counts. `can_edit` says whether the caller may change it.",
                 "produces": [
                     "application/json"
                 ],
@@ -10750,7 +10750,7 @@
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "The list: ideas",
+                        "description": "The list: ideas | assets",
                         "name": "surface",
                         "in": "query",
                         "required": true
@@ -10763,7 +10763,7 @@
                     },
                     {
                         "type": "string",
-                        "description": "IANA time zone of the date presets the counts read (default UTC)",
+                        "description": "IANA time zone of the date presets and day bounds the counts read (default UTC)",
                         "name": "tz",
                         "in": "query"
                     }
@@ -10792,7 +10792,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "`query` is the list's query string. Paging and display parameters (`cursor`, `limit`, `facets`, `tz`, and per list e.g. `pile`) are dropped; the rest is validated by the list's own parser and stored canonical: keys sorted, values sorted and comma-joined.",
+                "description": "`query` is the list's query string. Paging and display parameters (`cursor`, `limit`, `facets`, `tz`, and per list e.g. `pile` on ideas, `ids_only`, `scope_campaign` and `checksum` on assets) are dropped; the rest is validated by the list's own parser and stored canonical: keys sorted, values sorted and comma-joined.",
                 "consumes": [
                     "application/json"
                 ],
@@ -13845,6 +13845,7 @@
                     "type": "boolean"
                 },
                 "surface": {
+                    "description": "Surface is the list: ideas or assets.",
                     "type": "string"
                 }
             }
