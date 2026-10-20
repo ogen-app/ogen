@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/pgtest"
+	"github.com/ogen-app/ogen/src/usecase/inviteaccept"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin/oauthtest"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
@@ -53,6 +54,8 @@ func newFixture(t *testing.T) *fixture {
 		Sessions:   repository.NewSessionRepository(db),
 		Signup:     signup.New(db, accounts, repository.NewTenantRepository(db), nil),
 		Emails:     emails,
+		Invites: inviteaccept.New(db, repository.NewUserRepository(db), accounts,
+			repository.NewInvitationRepository(db), repository.NewSessionRepository(db), nil),
 	})
 	return &fixture{db: db, issuer: issuer, svc: svc, emails: emails}
 }

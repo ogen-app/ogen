@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	. "github.com/onsi/ginkgo/v2"
@@ -16,6 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/transport/handlers"
+	"github.com/ogen-app/ogen/src/usecase/inviteaccept"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin/oauthtest"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
@@ -74,6 +76,8 @@ func newGoogleLoginService(db *bun.DB, issuer *oauthtest.Issuer) *oauthlogin.Ser
 		Users:      repository.NewUserRepository(db),
 		Sessions:   repository.NewSessionRepository(db),
 		Signup:     signup.New(db, accounts, repository.NewTenantRepository(db), nil),
+		Invites: inviteaccept.New(db, repository.NewUserRepository(db), accounts,
+			repository.NewInvitationRepository(db), repository.NewSessionRepository(db), nil),
 	})
 }
 
@@ -109,7 +113,7 @@ var _ = Describe("GoogleAuthHandler", Ordered, func() {
 
 	AfterEach(func() {
 		ctx := context.Background()
-		for _, table := range []string{"account_identities", "oauth_states", "oauth_pending_signups", "sessions", "users", "accounts"} {
+		for _, table := range []string{"account_identities", "oauth_states", "oauth_pending_signups", "users_invitations", "sessions", "users", "accounts"} {
 			_, err := db.NewDelete().TableExpr(table).Where("1 = 1").Exec(ctx)
 			Expect(err).NotTo(HaveOccurred())
 		}
@@ -243,6 +247,26 @@ var _ = Describe("GoogleAuthHandler", Ordered, func() {
 			}
 			Expect(json.NewDecoder(done.Body).Decode(&body)).To(Succeed())
 			Expect(body.Code).To(Equal("email_in_use"))
+		})
+
+		It("accepts an invitation with the invited Google address", func() {
+			owner := seedTenantUserWithRole(db, "Owner", "owner@acme.com", "password-owner", models.RoleOwner)
+			token, hash, err := models.NewInvitationToken()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = db.NewInsert().Model(&models.Invitation{ID: "inv-g", TenantID: owner.TenantID, Email: jane.Email, Role: models.RoleMember, TokenHash: hash, InvitedBy: owner.ID, ExpiresAt: time.Now().UTC().Add(time.Hour)}).Exec(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+
+			stranger := oauthtest.Identity{Subject: "other", Email: "other@gmail.com", EmailVerified: true}
+			resp := flow.signIn("?intent=invite&invite_token="+token, stranger)
+			Expect(resp.Header.Get("Location")).To(Equal("/auth/login?error=invite_email_mismatch"))
+
+			resp = flow.signIn("?intent=invite&invite_token="+token, jane)
+			Expect(resp.Header.Get("Location")).To(Equal("/"))
+			session := cookieNamed(resp, testCookieName)
+			Expect(session).NotTo(BeNil())
+			s, err := repository.NewSessionRepository(db).GetByID(context.Background(), session.Value)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(s.TenantID).To(Equal(owner.TenantID))
 		})
 
 		It("rejects an incomplete sign-up form", func() {

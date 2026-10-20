@@ -13,8 +13,31 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
-// linkExisting links a verified identity to the account its address matches
-// and signs that account in.
+// signInLinking links a verified identity to the account its address matches
+// and signs that account in to its oldest live workspace.
+func (s *Service) signInLinking(ctx context.Context, account *models.Account, c *Claims) (*Result, error) {
+	l, err := s.linkExisting(ctx, account, c, true)
+	if err != nil {
+		return nil, err
+	}
+	if l.session == nil {
+		return nil, &Error{Code: CodeNoActiveWorkspace}
+	}
+	return &Result{Session: l.session, Account: account, User: l.user, Linked: true, PasswordCleared: l.hadPassword}, nil
+}
+
+// linked is what linkExisting did.
+type linked struct {
+	identity *models.AccountIdentity
+	// user is the account's oldest live membership, nil when it has none. It
+	// receives the notice and, when asked, the new session.
+	user        *models.User
+	session     *models.Session
+	hadPassword bool
+}
+
+// linkExisting links a verified identity to the account its address matches,
+// opening a session on its oldest live workspace when openSession is set.
 //
 // Ogen never verified the addresses typed into a password signup, so the
 // existing password may belong to someone who registered the address before
@@ -24,12 +47,12 @@ import (
 // "Forgot password". All of it happens under the account row lock, so a
 // concurrent password login (which checks the hash under the same lock) either
 // finishes first and is signed out, or sees no password.
-func (s *Service) linkExisting(ctx context.Context, account *models.Account, c *Claims) (*Result, error) {
-	linked, err := s.d.Identities.ListForAccount(ctx, account.ID)
+func (s *Service) linkExisting(ctx context.Context, account *models.Account, c *Claims, openSession bool) (*linked, error) {
+	existing, err := s.d.Identities.ListForAccount(ctx, account.ID)
 	if err != nil {
 		return nil, err
 	}
-	if slices.ContainsFunc(linked, func(i models.AccountIdentity) bool { return i.Provider == s.d.Provider.Name() }) {
+	if slices.ContainsFunc(existing, func(i models.AccountIdentity) bool { return i.Provider == s.d.Provider.Name() }) {
 		// The account is connected to a different Google account already.
 		return nil, &Error{Code: CodeAlreadyConnected}
 	}
@@ -43,7 +66,7 @@ func (s *Service) linkExisting(ctx context.Context, account *models.Account, c *
 		return nil, err
 	}
 	var session *models.Session
-	if user != nil {
+	if user != nil && openSession {
 		if session, err = s.newSession(account.ID, user); err != nil {
 			return nil, err
 		}
@@ -61,13 +84,12 @@ func (s *Service) linkExisting(ctx context.Context, account *models.Account, c *
 		if _, err := s.d.Sessions.DeleteAllForAccount(ctx, tx, account.ID, ""); err != nil {
 			return err
 		}
-		if session == nil {
-			return nil
+		if session != nil {
+			if _, err := tx.NewInsert().Model(session).Exec(ctx); err != nil {
+				return err
+			}
 		}
-		if _, err := tx.NewInsert().Model(session).Exec(ctx); err != nil {
-			return err
-		}
-		if s.d.Emails == nil {
+		if user == nil || s.d.Emails == nil {
 			return nil
 		}
 		return s.d.Emails.EnqueueGoogleLinkedEmailTx(ctx, tx.Tx, user.ID, user.TenantID, identity.ID, c.Email, hadPassword)
@@ -79,11 +101,8 @@ func (s *Service) linkExisting(ctx context.Context, account *models.Account, c *
 	if err != nil {
 		return nil, fmt.Errorf("oauthlogin: link identity: %w", err)
 	}
-	if user == nil {
-		return nil, &Error{Code: CodeNoActiveWorkspace}
-	}
 	account.PasswordHash = ""
-	return &Result{Session: session, Account: account, User: user, Linked: true, PasswordCleared: hadPassword}, nil
+	return &linked{identity: identity, user: user, session: session, hadPassword: hadPassword}, nil
 }
 
 // lockAndClearPassword takes the account row lock, removes its password and

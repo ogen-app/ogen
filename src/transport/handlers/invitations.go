@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/inviteaccept"
 )
 
 // Invitation rate-limit budget. Creating an invite sends mail on
@@ -38,10 +39,6 @@ const (
 	inviteThrottledMsg   = "Too many invitations. Please wait a minute and try again."
 	invitationInvalidMsg = "This invitation link is invalid or has expired."
 )
-
-// errInvitationInvalid is the internal sentinel the accept transaction returns
-// for any unusable token; it maps to a 410 + invitationInvalidMsg.
-var errInvitationInvalid = errors.New("invitation invalid")
 
 // InvitationEmailEnqueuer enqueues the transactional invitation email inside the
 // invite-minting transaction, so the mail exists iff the invitation row does.
@@ -74,20 +71,13 @@ type InvitationsHandler struct {
 	ipLimiter     *keyedRateLimiter
 	acceptLimiter *keyedRateLimiter
 
-	limiter  *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
+	// accept spends the token, checks the team-seat quota and creates the
+	// membership; the Google sign-in flow shares it.
+	accept   *inviteaccept.Service
 	activity *activity.Recorder
 	// devices enrols the browser that accepts as a new account as its first
 	// known device.
 	devices deviceTracker
-}
-
-// seatQuota checks the team_seats entitlement for the workspace an invite joins.
-// Accepting is unauthenticated (acceptNew) or signed in as a different workspace
-// (acceptExisting), so the seat counter — which reads the tenant from the context
-// (userRepository.CountInTenant) — is scoped explicitly to the invite's tenant;
-// without this the count would span every tenant and wrongly block.
-func (h *InvitationsHandler) seatQuota(ctx context.Context, tenantID string) (entitlements.Decision, error) {
-	return h.limiter.Require(tenantctx.With(ctx, tenantID), tenantID, "team_seats")
 }
 
 // InvitationsOptions carries the handler's nil-safe collaborators.
@@ -112,7 +102,7 @@ type InvitationsOptions struct {
 func NewInvitationsHandler(db *bun.DB, userRepo repository.UserRepository, accountRepo repository.AccountRepository, tenantRepo repository.TenantRepository, inviteRepo repository.InvitationRepository, sessionRepo repository.SessionRepository, appBaseURL, cookieName string, secureCookie bool, auth fiber.Handler, opts InvitationsOptions) *InvitationsHandler {
 	return &InvitationsHandler{
 		emailJobs:     opts.EmailJobs,
-		limiter:       opts.Limiter,
+		accept:        inviteaccept.New(db, userRepo, accountRepo, inviteRepo, sessionRepo, opts.Limiter),
 		activity:      opts.Activity,
 		db:            db,
 		userRepo:      userRepo,
@@ -443,15 +433,9 @@ func (h *InvitationsHandler) Accept(c *fiber.Ctx) error {
 	// in. The atomic single-use consume happens inside the path's transaction, so
 	// a token spent between here and there still yields one indistinguishable 410,
 	// and a rejected accept (bad credentials / not signed in) leaves it unspent.
-	inv, err := h.inviteRepo.GetByTokenHash(reqCtx(c), models.HashInvitationToken(c.Params("token")))
+	inv, err := h.accept.Pending(reqCtx(c), models.HashInvitationToken(c.Params("token")))
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fiber.NewError(fiber.StatusGone, invitationInvalidMsg)
-		}
-		return err
-	}
-	if inv.Status != models.InvitationPending || time.Now().UTC().After(inv.ExpiresAt) {
-		return fiber.NewError(fiber.StatusGone, invitationInvalidMsg)
+		return acceptError(err)
 	}
 
 	account, err := h.accountRepo.GetByEmail(reqCtx(c), inv.Email)
@@ -464,6 +448,19 @@ func (h *InvitationsHandler) Accept(c *fiber.Ctx) error {
 	return h.acceptNew(c, inv, req)
 }
 
+// acceptError maps the shared accept core's errors onto responses.
+func acceptError(err error) error {
+	switch {
+	case errors.Is(err, inviteaccept.ErrInvalid):
+		return fiber.NewError(fiber.StatusGone, invitationInvalidMsg)
+	case errors.Is(err, inviteaccept.ErrAlreadyMember):
+		return fiber.NewError(fiber.StatusConflict, "you are already a member of this workspace")
+	case errors.Is(err, inviteaccept.ErrAccountExists):
+		return fiber.NewError(fiber.StatusConflict, "this email already has an Ogen account — sign in to accept")
+	}
+	return err
+}
+
 // acceptExisting attaches a membership to an account that already owns the
 // invited address — no new credentials, no new session. The caller
 // must be signed in as that account, so a stray link can't graft a workspace
@@ -473,53 +470,16 @@ func (h *InvitationsHandler) acceptExisting(c *fiber.Ctx, inv *models.Invitation
 	if h.callerAccountID(c) != account.ID {
 		return fiber.NewError(fiber.StatusForbidden, "sign in as "+inv.Email+" to accept this invitation")
 	}
-	// Already a member? The unique(tenant, account) index is the hard backstop;
-	// this is the friendly pre-check.
-	if _, err := h.userRepo.GetMembership(reqCtx(c), account.ID, inv.TenantID); err == nil {
-		return fiber.NewError(fiber.StatusConflict, "you are already a member of this workspace")
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-
-	// Attaching an existing account is still a new seat, so the
-	// team_seats quota gates it exactly as acceptNew, before the token is consumed.
-	seatDec, err := h.seatQuota(reqCtx(c), inv.TenantID)
+	membership, err := h.accept.JoinExisting(reqCtx(c), inv, account)
 	if err != nil {
-		return err
-	}
-
-	now := time.Now().UTC()
-	uid, err := models.NewID()
-	if err != nil {
-		return err
-	}
-	membership := &models.User{ID: uid, AccountID: account.ID, TenantID: inv.TenantID, Name: account.Name, Email: account.Email, Role: inv.Role, CreatedAt: now, UpdatedAt: now}
-
-	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, cerr := h.inviteRepo.ConsumeByTokenTx(ctx, tx, inv.TokenHash, now); cerr != nil {
-			if errors.Is(cerr, sql.ErrNoRows) {
-				return errInvitationInvalid
-			}
-			return cerr
-		}
-		return h.userRepo.CreateTx(ctx, tx, membership)
-	}); err != nil {
-		if errors.Is(err, errInvitationInvalid) {
-			return fiber.NewError(fiber.StatusGone, invitationInvalidMsg)
-		}
-		if isUniqueViolation(err) {
-			return fiber.NewError(fiber.StatusConflict, "you are already a member of this workspace")
-		}
-		return err
+		return acceptError(err)
 	}
 
 	h.activity.Record(
-		logging.WithUserID(tenantctx.With(reqCtx(c), inv.TenantID), uid),
+		logging.WithUserID(tenantctx.With(reqCtx(c), inv.TenantID), membership.ID),
 		activity.CategoryAuthentication, "invitation_accepted",
-		activity.WithEntity("user", uid), activity.WithSource(activity.SourceAPI),
+		activity.WithEntity("user", membership.ID), activity.WithSource(activity.SourceAPI),
 	)
-	// The seat is now taken — fire any near-limit crossing.
-	h.limiter.DispatchCrossing(tenantctx.With(c.Context(), inv.TenantID), inv.TenantID, seatDec)
 
 	// No cookie: the caller stays in whatever workspace their session is on; the
 	// client offers to switch to the newly joined one.
@@ -538,66 +498,13 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 	if req.Name == "" || len(req.Password) < 8 {
 		return fiber.NewError(fiber.StatusBadRequest, "name and a password of at least 8 characters are required")
 	}
-	// The team_seats quota gates the workspace gaining a member. Require
-	// returns a *QuotaExceededError (→ 402) when at cap in enforce mode. Checked
-	// before the token is consumed so an over-cap workspace leaves the invite
-	// valid (the owner can free a seat or upgrade, then the invitee retries).
-	seatDec, err := h.seatQuota(reqCtx(c), inv.TenantID)
+	hash, err := models.HashPassword(req.Password)
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-
-	var (
-		newUser *models.User
-		session *models.Session
-	)
-	err = h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, cerr := h.inviteRepo.ConsumeByTokenTx(ctx, tx, inv.TokenHash, now); cerr != nil {
-			if errors.Is(cerr, sql.ErrNoRows) {
-				return errInvitationInvalid
-			}
-			return cerr
-		}
-		uid, err := models.NewID()
-		if err != nil {
-			return err
-		}
-		aid, err := models.NewID()
-		if err != nil {
-			return err
-		}
-		hash, err := models.HashPassword(req.Password)
-		if err != nil {
-			return err
-		}
-		// accounts.email is the uniqueness backstop: if the address gained an
-		// account between the peek and here (a raced signup), this insert fires it
-		// and the whole tx rolls back — the invite is left unconsumed and the caller
-		// can log in as that account and accept again.
-		account := &models.Account{ID: aid, Email: inv.Email, PasswordHash: hash, Name: req.Name, CreatedAt: now, UpdatedAt: now}
-		if err := h.accountRepo.CreateTx(ctx, tx, account); err != nil {
-			return err
-		}
-		newUser = &models.User{ID: uid, AccountID: aid, TenantID: inv.TenantID, Name: req.Name, Email: inv.Email, Role: inv.Role, CreatedAt: now, UpdatedAt: now}
-		if err := h.userRepo.CreateTx(ctx, tx, newUser); err != nil {
-			return err
-		}
-		tokenStr, err := models.NewSessionToken()
-		if err != nil {
-			return err
-		}
-		session = &models.Session{ID: tokenStr, AccountID: aid, UserID: uid, TenantID: inv.TenantID, ExpiresAt: now.Add(sessionTTL), CreatedAt: now}
-		return h.sessionRepo.CreateTx(ctx, tx, session)
-	})
+	newUser, session, err := h.accept.JoinNew(reqCtx(c), inv, inviteaccept.NewAccount{Name: req.Name, PasswordHash: hash})
 	if err != nil {
-		if errors.Is(err, errInvitationInvalid) {
-			return fiber.NewError(fiber.StatusGone, invitationInvalidMsg)
-		}
-		if isUniqueViolation(err) {
-			return fiber.NewError(fiber.StatusConflict, "this email already has an Ogen account — sign in to accept")
-		}
-		return err
+		return acceptError(err)
 	}
 
 	setSessionCookie(c, h.cookieName, session, h.secureCookie)
@@ -608,10 +515,6 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 		activity.CategoryAuthentication, "invitation_accepted",
 		activity.WithEntity("user", newUser.ID), activity.WithSource(activity.SourceAPI),
 	)
-	// The member now exists — fire any near-limit crossing to the
-	// workspace owners (tenant-scoped ctx so the notifier resolves the invite's
-	// tenant, not the acceptor's absent one).
-	h.limiter.DispatchCrossing(tenantctx.With(c.Context(), inv.TenantID), inv.TenantID, seatDec)
 
 	resp := acceptInvitationResponse{User: newUser, Session: session}
 	if t, terr := h.tenantRepo.GetByID(reqCtx(c), inv.TenantID); terr == nil {

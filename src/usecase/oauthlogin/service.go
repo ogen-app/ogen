@@ -35,14 +35,17 @@ const sessionTTL = 7 * 24 * time.Hour
 // Error codes the transport puts in the redirect after a failed sign-in. The UI
 // maps each to a sentence.
 const (
-	CodeCancelled         = "google_cancelled"
-	CodeStateInvalid      = "google_state_invalid"
-	CodeEmailUnverified   = "google_email_unverified"
-	CodeUnavailable       = "google_unavailable"
-	CodeAlreadyConnected  = "google_already_connected"
-	CodeLinkedElsewhere   = "google_linked_elsewhere"
-	CodeNoActiveWorkspace = "no_active_workspace"
-	CodeThrottled         = "throttled"
+	CodeCancelled           = "google_cancelled"
+	CodeStateInvalid        = "google_state_invalid"
+	CodeEmailUnverified     = "google_email_unverified"
+	CodeUnavailable         = "google_unavailable"
+	CodeAlreadyConnected    = "google_already_connected"
+	CodeLinkedElsewhere     = "google_linked_elsewhere"
+	CodeInviteInvalid       = "invite_invalid"
+	CodeInviteEmailMismatch = "invite_email_mismatch"
+	CodeInviteSeatsFull     = "invite_seats_full"
+	CodeNoActiveWorkspace   = "no_active_workspace"
+	CodeThrottled           = "throttled"
 )
 
 // Error is a sign-in that ended without a session. Intent and ReturnTo come
@@ -90,6 +93,7 @@ type Deps struct {
 	Sessions   repository.SessionRepository
 	Signup     SignupCreator
 	Emails     LinkEnqueuer
+	Invites    InviteJoiner
 }
 
 // Service runs provider sign-ins.
@@ -113,11 +117,13 @@ func (s *Service) clock() time.Time {
 func (s *Service) ProviderName() string { return s.d.Provider.Name() }
 
 // StartInput is a request to begin a sign-in. AccountID is the signed-in
-// account connecting the provider from Settings (intent link).
+// account connecting the provider from Settings (intent link); InviteToken is
+// the invitation being accepted (intent invite).
 type StartInput struct {
-	Intent    string
-	ReturnTo  string
-	AccountID string
+	Intent      string
+	ReturnTo    string
+	AccountID   string
+	InviteToken string
 }
 
 // ErrNotSignedIn rejects connecting a provider without a session.
@@ -147,6 +153,11 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Started, error) {
 			return nil, ErrNotSignedIn
 		}
 		row.AccountID = in.AccountID
+	case models.OAuthIntentInvite:
+		if in.InviteToken == "" || s.d.Invites == nil {
+			return nil, ErrInvalidIntent
+		}
+		row.InviteHash = models.HashInvitationToken(in.InviteToken)
 	default:
 		return nil, ErrInvalidIntent
 	}
@@ -210,6 +221,8 @@ type Result struct {
 	// account; PasswordCleared when linking removed the account's password.
 	Linked          bool
 	PasswordCleared bool
+	// Joined is set when an invitation added the account to its workspace.
+	Joined bool
 
 	// Set for ResultPendingSignup.
 	PendingToken string
@@ -249,6 +262,8 @@ func (s *Service) Callback(ctx context.Context, in CallbackInput) (*Result, erro
 	switch st.Intent {
 	case models.OAuthIntentLink:
 		res, err = s.connect(ctx, st, in.SessionAccountID, claims)
+	case models.OAuthIntentInvite:
+		res, err = s.acceptInvite(ctx, st, claims)
 	default:
 		res, err = s.signIn(ctx, st, claims)
 	}
@@ -296,7 +311,7 @@ func (s *Service) signIn(ctx context.Context, st *models.OAuthState, c *Claims) 
 		if err != nil {
 			return nil, err
 		}
-		return s.linkExisting(ctx, account, c)
+		return s.signInLinking(ctx, account, c)
 	}
 	if err != nil {
 		return nil, err
