@@ -103,7 +103,7 @@ var _ = Describe("GoogleAuthHandler", Ordered, func() {
 	BeforeEach(func() {
 		issuer := oauthtest.New(GinkgoT())
 		app := fiber.New()
-		handlers.NewGoogleAuthHandler(newGoogleLoginService(db, issuer), testCookieName, false, nil).Register(app)
+		handlers.NewGoogleAuthHandler(newGoogleLoginService(db, issuer), repository.NewSessionRepository(db), testCookieName, false, nil).Register(app)
 		flow = googleFlow{app: app, issuer: issuer}
 	})
 
@@ -143,7 +143,7 @@ var _ = Describe("GoogleAuthHandler", Ordered, func() {
 
 		It("reports Google disabled and serves no Google routes without a client", func() {
 			app := fiber.New()
-			handlers.NewGoogleAuthHandler(nil, testCookieName, false, nil).Register(app)
+			handlers.NewGoogleAuthHandler(nil, nil, testCookieName, false, nil).Register(app)
 			Expect(probe(app)).To(BeFalse())
 			resp, err := app.Test(httptest.NewRequest("GET", "/api/auth/google/start", nil))
 			Expect(err).NotTo(HaveOccurred())
