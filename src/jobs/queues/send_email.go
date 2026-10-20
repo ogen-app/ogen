@@ -293,6 +293,9 @@ func templateData(rcpt emailRecipient, appURL, unsubURL string, vars map[string]
 		Location:       vars["location"],
 		SecureURL:      vars["secure_url"],
 		MaskedEmail:    vars["masked_email"],
+		GoogleEmail:    vars["google_email"],
+		// A var is a string, so the flag rides as "true".
+		PasswordCleared: vars["password_cleared"] == "true",
 	}
 }
 

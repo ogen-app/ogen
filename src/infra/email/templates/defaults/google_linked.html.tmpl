@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+</head>
+<body xml:lang="en" style="margin:0;width:100%;height:100%;padding:0;word-break:break-word;"><div role="article" aria-roledescription="email" lang="en" dir="ltr" style="background-color:#f2f1ef;font-family:'Zalando Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:max(16px,1rem);">
+<div style="margin:0 auto;max-width:560px;padding:24px;color:#151515;">
+<div style="padding:16px 4px;"><p style="margin:0;font-size:18px;line-height:28px;font-weight:700;letter-spacing:-.025em;color:#151515;">Ogen</p></div>
+<div style="border-radius:4px;border:1px solid #e0deda;background-color:#fffffe;padding:40px 32px;">
+<h1 style="margin:0 0 20px;font-size:26px;line-height:32px;font-weight:700;color:#151515;">Google sign-in is now connected</h1>
+<p style="margin:0 0 16px;font-size:15px;line-height:24px;color:#57534d;">Hi [[ .Name ]],</p>
+<p style="margin:0 0 16px;font-size:15px;line-height:24px;color:#57534d;">Your Google account (<strong style="color:#151515;">[[ .GoogleEmail ]]</strong>) can now sign in to your Ogen account.</p>
+[[- if .PasswordCleared ]]
+<p style="margin:0 0 24px;font-size:15px;line-height:24px;color:#57534d;">To keep your account safe, the password it had before was removed. To sign in with a password again, set a new one with "Forgot password".</p>
+<div style="margin:0 0 24px;">
+<a href="[[ .AppURL ]]/auth/forgot" style="display:inline-block;border-radius:4px;background-color:#151515;padding:12px 24px;font-size:15px;font-weight:600;color:#fffffe;text-decoration:none;">Set a password</a>
+</div>
+[[- end ]]
+<p style="margin:0;font-size:13px;line-height:20px;color:#8a857d;">If you didn't just sign in with Google, reset your password and contact us by replying to this email.</p>
+</div>
+<div style="padding:24px 4px;"><p style="margin:0;font-size:12px;line-height:18px;color:#8a857d;">— The Ogen team</p></div>
+</div>
+</div>
+</body>
+</html>

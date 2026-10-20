@@ -22,6 +22,7 @@ const (
 	KeyDripDay7           = "drip_day7"
 	KeyConnectionExpiring = "connection_expiring"
 	KeyNewDeviceLogin     = "new_device_login"
+	KeyGoogleLinked       = "google_linked"
 	// KeyAdminTenantRegistered is the internal operator notification sent to
 	// admins when a new tenant registers. Unlike the templates above it
 	// is not customer-facing, so it is hand-authored rather than Maizzle-compiled.
@@ -92,6 +93,11 @@ type Data struct {
 	Location    string
 	SecureURL   string
 	MaskedEmail string
+	// GoogleEmail / PasswordCleared feed the google_linked notice: the Google
+	// address now signing in to the account, and whether linking removed the
+	// account's password. Empty and ignored for every other template.
+	GoogleEmail     string
+	PasswordCleared bool
 }
 
 //go:embed defaults/*.tmpl
@@ -129,6 +135,8 @@ const (
 	varLocation       = "Approximate location of the IP, e.g. \"Kyiv, Ukraine\" (empty when unknown)."
 	varSecureURL      = "The single-use \"This wasn't me\" link; expires in 24 hours."
 	varMaskedEmail    = "The account's email address with the local part masked, e.g. j***@acme.com."
+	varGoogleEmail    = "The Google account's address that can now sign in to this Ogen account."
+	varPwdCleared     = "True when linking Google removed the account's previous password."
 )
 
 // transactionalVars / marketingVars build the per-template variable doc sets.
@@ -195,6 +203,16 @@ func newDeviceLoginVars() models.StringMap {
 	return m
 }
 
+// googleLinkedVars documents the google_linked notice's placeholders: the
+// standard transactional set plus the Google address and whether the password
+// was removed.
+func googleLinkedVars() models.StringMap {
+	m := transactionalVars()
+	m["GoogleEmail"] = varGoogleEmail
+	m["PasswordCleared"] = varPwdCleared
+	return m
+}
+
 // adminTenantRegisteredVars documents the admin_tenant_registered template's
 // placeholders. This is internal operator mail: WorkspaceName carries
 // the new tenant's name, the rest are the registration details + Harbor deep
@@ -236,6 +254,7 @@ var defaultSpecs = []defaultSpec{
 	{KeyDripDay7, models.EmailKindMarketing, "A quick check-in from Ogen", marketingVars()},
 	{KeyConnectionExpiring, models.EmailKindTransactional, connectionExpiringSubject, connectionExpiringVars()},
 	{KeyNewDeviceLogin, models.EmailKindTransactional, "New sign-in to your Ogen account", newDeviceLoginVars()},
+	{KeyGoogleLinked, models.EmailKindTransactional, "Google sign-in is now connected to your Ogen account", googleLinkedVars()},
 	{KeyAdminTenantRegistered, models.EmailKindTransactional, "New tenant registered: [[ .WorkspaceName ]]", adminTenantRegisteredVars()},
 }
 

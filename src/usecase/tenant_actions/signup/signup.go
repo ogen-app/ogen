@@ -55,12 +55,26 @@ type HarborEnqueuer interface {
 	EnqueueNotifyHarborTenantRegisteredTx(ctx context.Context, tx *sql.Tx, tenantID string) error
 }
 
-// Input is the data a signup needs.
+// ErrIdentityLinked is returned when the provider identity a signup carries is
+// already linked to an account.
+var ErrIdentityLinked = errors.New("identity already linked")
+
+// Input is the data a signup needs. A password signup sets Password; a
+// provider signup sets Identity instead, and the account starts with no
+// password.
 type Input struct {
 	TenantName string
 	UserName   string
 	Email      string
 	Password   string
+	Identity   *Identity
+}
+
+// Identity is a verified provider identity the new account signs in through.
+type Identity struct {
+	Provider string
+	Subject  string
+	Email    string
 }
 
 // Result is what a committed signup produced. Session.ID is the raw session
@@ -106,10 +120,17 @@ func (s *Service) clock() time.Time {
 
 // Create runs the signup transactionally. It returns ErrEmailInUse (map to 409)
 // when the email already identifies an account — both from the up-front check
-// and, under a race, from the accounts.email unique-constraint backstop.
+// and, under a race, from the accounts.email unique-constraint backstop. A
+// provider signup returns ErrIdentityLinked when its identity is already linked.
 func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
-	// The unique constraint on accounts.email is the TOCTOU backstop.
-	if _, err := s.accounts.GetByEmail(ctx, in.Email); err == nil {
+	// The unique constraint on accounts.email is the TOCTOU backstop. A provider
+	// address is matched ignoring case, the way sign-in links it, so a Google
+	// signup can't create a near-duplicate of a typed-in address.
+	lookup := s.accounts.GetByEmail
+	if in.Identity != nil {
+		lookup = s.accounts.GetByEmailFold
+	}
+	if _, err := lookup(ctx, in.Email); err == nil {
 		return nil, ErrEmailInUse
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("signup: check email: %w", err)
@@ -125,13 +146,16 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 	}
 
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		for _, m := range []any{e.tenant, e.account, e.user, e.session} {
+		for _, m := range e.rows() {
 			if _, err := tx.NewInsert().Model(m).Exec(ctx); err != nil {
 				return err
 			}
 		}
 		return s.enqueueSideEffectsTx(ctx, tx.Tx, e.user.ID, e.tenant.ID)
 	}); err != nil {
+		if isUniqueViolationOn(err, identitySubjectConstraint) {
+			return nil, ErrIdentityLinked
+		}
 		// A concurrent signup with the same email passes the pre-check but
 		// loses the race to the accounts.email unique constraint.
 		if isUniqueViolation(err) {
@@ -145,39 +169,59 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 
 // signupEntities are the rows a signup inserts.
 type signupEntities struct {
-	tenant  *models.Tenant
-	account *models.Account
-	user    *models.User
-	session *models.Session
+	tenant   *models.Tenant
+	account  *models.Account
+	identity *models.AccountIdentity // nil for a password signup
+	user     *models.User
+	session  *models.Session
+}
+
+// rows lists the entities in insert (foreign-key) order.
+func (e *signupEntities) rows() []any {
+	rows := []any{e.tenant, e.account}
+	if e.identity != nil {
+		rows = append(rows, e.identity)
+	}
+	return append(rows, e.user, e.session)
 }
 
 // newSignupEntities generates the ids, password hash and session token
-// and assembles the rows. The account holds the credential; the user row
-// is that account's owner membership of the new workspace. New
-// workspaces start on the seeded default tier.
+// and assembles the rows. The account holds the credential (a password, or the
+// linked identity); the user row is that account's owner membership of the new
+// workspace. New workspaces start on the seeded default tier.
 func newSignupEntities(in Input, slug string, now time.Time) (*signupEntities, error) {
-	var tenantID, accountID, userID string
-	for _, id := range []*string{&tenantID, &accountID, &userID} {
+	var tenantID, accountID, userID, identityID string
+	for _, id := range []*string{&tenantID, &accountID, &userID, &identityID} {
 		v, err := models.NewID()
 		if err != nil {
 			return nil, fmt.Errorf("generate id: %w", err)
 		}
 		*id = v
 	}
-	hash, err := models.HashPassword(in.Password)
-	if err != nil {
-		return nil, fmt.Errorf("hash password: %w", err)
+	var hash string
+	if in.Identity == nil {
+		var err error
+		if hash, err = models.HashPassword(in.Password); err != nil {
+			return nil, fmt.Errorf("hash password: %w", err)
+		}
 	}
 	token, err := models.NewSessionToken()
 	if err != nil {
 		return nil, fmt.Errorf("generate session token: %w", err)
 	}
-	return &signupEntities{
+	e := &signupEntities{
 		tenant:  &models.Tenant{ID: tenantID, Name: in.TenantName, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now},
 		account: &models.Account{ID: accountID, Email: in.Email, PasswordHash: hash, Name: in.UserName, CreatedAt: now, UpdatedAt: now},
 		user:    &models.User{ID: userID, AccountID: accountID, TenantID: tenantID, Name: in.UserName, Email: in.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now},
 		session: &models.Session{ID: token, AccountID: accountID, UserID: userID, TenantID: tenantID, ExpiresAt: now.Add(sessionTTL), CreatedAt: now},
-	}, nil
+	}
+	if in.Identity != nil {
+		e.identity = &models.AccountIdentity{
+			ID: identityID, AccountID: accountID, Provider: in.Identity.Provider, Subject: in.Identity.Subject,
+			Email: in.Identity.Email, LinkedAt: now, LastUsedAt: &now,
+		}
+	}
+	return e, nil
 }
 
 // enqueueSideEffectsTx enqueues the Zernio profile bootstrap, the welcome
@@ -240,4 +284,13 @@ func slugify(name string) string {
 func isUniqueViolation(err error) bool {
 	pgErr, ok := errors.AsType[*pgconn.PgError](err)
 	return ok && pgErr.Code == "23505"
+}
+
+// identitySubjectConstraint is the unique (provider, subject) constraint on
+// account_identities.
+const identitySubjectConstraint = "account_identities_provider_subject_key"
+
+func isUniqueViolationOn(err error, constraint string) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }

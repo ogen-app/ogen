@@ -89,6 +89,7 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 	handlers.NewLoginAlertsHandler(d.svc.loginSecurity).Register(app)
 	google := handlers.NewGoogleAuthHandler(d.svc.googleLogin, cfg.SessionCookieName, secure, rec)
 	google.SetLoginSecurity(d.svc.loginSecurity, cfg.DeviceCookieName)
+	tenants.ShareSignupThrottle(google)
 	google.Register(app)
 
 	handlers.NewWorkspacesHandler(d.db, r.workspaceRepo, r.userRepo, r.accountRepo, r.tenantRepo, r.sessionRepo, d.enqueuer, d.auth, rec).Register(app)
