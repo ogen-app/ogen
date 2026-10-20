@@ -41,6 +41,7 @@ type CleanupLoginSecurityProcessor struct {
 	Devices  repository.KnownDeviceRepository
 	Alerts   repository.LoginAlertTokenRepository
 	Sessions repository.SessionRepository
+	OAuth    repository.OAuthRepository
 }
 
 // Work is the River entrypoint; it delegates to Process.
@@ -58,13 +59,14 @@ func (p *CleanupLoginSecurityProcessor) Timeout(*river.Job[CleanupLoginSecurityT
 
 func init() {
 	register(func(w *river.Workers, d Deps) {
-		river.AddWorker(w, &CleanupLoginSecurityProcessor{Devices: d.KnownDeviceRepo, Alerts: d.LoginAlertTokenRepo, Sessions: d.SessionRepo})
+		river.AddWorker(w, &CleanupLoginSecurityProcessor{Devices: d.KnownDeviceRepo, Alerts: d.LoginAlertTokenRepo, Sessions: d.SessionRepo, OAuth: d.OAuthRepo})
 	})
 }
 
 // Process deletes alert tokens older than the retention window, devices
 // unseen for longer than the device cookie lives (such a browser has lost the
-// cookie, so its row can never match again), and expired sessions.
+// cookie, so its row can never match again), expired sessions, and expired
+// provider sign-in states and pending signups.
 func (p *CleanupLoginSecurityProcessor) Process(ctx context.Context, _ CleanupLoginSecurityTask) error {
 	now := time.Now().UTC()
 	if p.Alerts != nil {
@@ -90,6 +92,14 @@ func (p *CleanupLoginSecurityProcessor) Process(ctx context.Context, _ CleanupLo
 		}
 		jobs.ExpiredSessionsSwept.Add(int64(n))
 		logSwept(ctx, "sessions", n)
+	}
+	if p.OAuth != nil {
+		n, err := p.OAuth.DeleteExpiredBefore(ctx, now)
+		if err != nil {
+			return err
+		}
+		jobs.OAuthRowsSwept.Add(int64(n))
+		logSwept(ctx, "oauth sign-in rows", n)
 	}
 	return nil
 }

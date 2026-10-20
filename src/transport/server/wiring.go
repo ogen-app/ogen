@@ -31,6 +31,8 @@ type repos struct {
 	sessionRepo              repository.SessionRepository
 	knownDeviceRepo          repository.KnownDeviceRepository
 	loginAlertTokenRepo      repository.LoginAlertTokenRepository
+	accountIdentityRepo      repository.AccountIdentityRepository
+	oauthRepo                repository.OAuthRepository
 	settingRepo              repository.SettingRepository
 	tagRepo                  repository.TagRepository
 	chunksRepo               repository.AssetChunksRepository
@@ -148,6 +150,8 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		invitationRepo:           repository.NewInvitationRepository(db),
 		knownDeviceRepo:          repository.NewKnownDeviceRepository(db),
 		loginAlertTokenRepo:      repository.NewLoginAlertTokenRepository(db),
+		accountIdentityRepo:      repository.NewAccountIdentityRepository(db),
+		oauthRepo:                repository.NewOAuthRepository(db),
 		tierVersionRepo:          repository.NewTenantTierVersionRepository(db),
 		tierAssignmentRepo:       repository.NewTenantTierAssignmentRepository(db),
 	}

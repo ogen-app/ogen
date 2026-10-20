@@ -107,6 +107,7 @@ func queueDeps(d *deps) queues.Deps {
 		KnownDeviceRepo:       r.knownDeviceRepo,
 		SessionRepo:           r.sessionRepo,
 		LoginAlertTokenRepo:   r.loginAlertTokenRepo,
+		OAuthRepo:             r.oauthRepo,
 		Tenants:               r.tenantRepo,
 		Users:                 r.userRepo,
 		AppBaseURL:            cfg.AppBaseURL,
