@@ -144,6 +144,20 @@ func TestInviteRefusals(t *testing.T) {
 		}
 	})
 
+	t.Run("existing account on an address google isn't authoritative for", func(t *testing.T) {
+		f := newFixture(t)
+		who := oauthtest.Identity{Subject: "s", Email: "jane@acme.com", EmailVerified: true}
+		token := f.seedInvite(t, who.Email)
+		f.seedAccount(t, "acc-1", who.Email, "")
+		_, err := f.acceptInvite(t, token, who)
+		if got := codeOf(t, err); got != oauthlogin.CodeLinkRequiresPassword {
+			t.Fatalf("code %q", got)
+		}
+		if f.passwordIsNull(t, "acc-1") || f.inviteStatus(t) != models.InvitationPending {
+			t.Fatal("a refused link must leave the password and the invite alone")
+		}
+	})
+
 	t.Run("spent invitation", func(t *testing.T) {
 		f := newFixture(t)
 		token := f.seedInvite(t, jane.Email)
