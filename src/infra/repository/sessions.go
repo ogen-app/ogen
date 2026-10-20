@@ -25,6 +25,11 @@ type SessionRepository interface {
 	// the login is refused) or waits until the session exists (and then revokes
 	// it). Reports whether the session was created.
 	CreateForCredential(ctx context.Context, session *models.Session, verifiedHash string) (bool, error)
+	// CreateForIdentity is CreateForCredential for a provider sign-in: it inserts
+	// the session only while the identity it was verified through is still
+	// linked, read under a share lock, so a concurrent disconnect or
+	// secure-account action can't leave a session behind.
+	CreateForIdentity(ctx context.Context, session *models.Session, identityID string) (bool, error)
 	GetByID(ctx context.Context, id string) (*models.Session, error)
 	// GetForAuth loads a session together with the account's membership of the
 	// workspace a request acts in (workspaceID, or the session's stored default
@@ -85,7 +90,7 @@ func (r *sessionRepository) CreateForCredential(ctx context.Context, session *mo
 	created := false
 	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var current string
-		err := tx.NewSelect().Table("accounts").Column("password_hash").
+		err := tx.NewSelect().Table("accounts").ColumnExpr("COALESCE(password_hash, '')").
 			Where("id = ?", session.AccountID).For("SHARE").Scan(ctx, &current)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -95,6 +100,28 @@ func (r *sessionRepository) CreateForCredential(ctx context.Context, session *mo
 		}
 		if current != verifiedHash {
 			return nil
+		}
+		if _, err := tx.NewInsert().Model(session).Exec(ctx); err != nil {
+			return err
+		}
+		created = true
+		return nil
+	})
+	return created, err
+}
+
+func (r *sessionRepository) CreateForIdentity(ctx context.Context, session *models.Session, identityID string) (bool, error) {
+	created := false
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var id string
+		err := tx.NewSelect().Table("account_identities").Column("id").
+			Where("id = ?", identityID).Where("account_id = ?", session.AccountID).
+			For("SHARE").Scan(ctx, &id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
 		}
 		if _, err := tx.NewInsert().Model(session).Exec(ctx); err != nil {
 			return err

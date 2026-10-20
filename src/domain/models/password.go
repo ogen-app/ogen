@@ -77,8 +77,12 @@ func HashPassword(password string) (string, error) {
 	return encoded, nil
 }
 
-// VerifyPassword returns true when password matches the PHC-encoded hash.
+// VerifyPassword returns true when password matches the PHC-encoded hash. An
+// empty hash belongs to an account without a password and matches nothing.
 func VerifyPassword(password, encoded string) (bool, error) {
+	if encoded == "" {
+		return false, nil
+	}
 	p, salt, hash, err := decodeArgon2Hash(encoded)
 	if err != nil {
 		return false, fmt.Errorf("decode hash: %w", err)

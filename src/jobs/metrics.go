@@ -113,6 +113,7 @@ var (
 	LoginAlertTokensSwept = expvar.NewInt("ogen_jobs_login_alert_tokens_swept")
 	KnownDevicesSwept     = expvar.NewInt("ogen_jobs_known_devices_swept")
 	ExpiredSessionsSwept  = expvar.NewInt("ogen_jobs_expired_sessions_swept")
+	OAuthRowsSwept        = expvar.NewInt("ogen_jobs_oauth_rows_swept")
 
 	// Post Log lifecycle.
 	PostLogTruncations = expvar.NewInt("ogen_jobs_postlog_truncations")

@@ -35,12 +35,37 @@ func TestCleanupLoginSecurity(t *testing.T) {
 		}
 	}
 
+	for _, s := range []models.OAuthState{
+		{StateHash: "s-live", Provider: "google", Intent: models.OAuthIntentSignin, Nonce: "n", PKCEVerifier: "v", ReturnTo: "/", ExpiresAt: now.Add(time.Minute)},
+		{StateHash: "s-gone", Provider: "google", Intent: models.OAuthIntentSignin, Nonce: "n", PKCEVerifier: "v", ReturnTo: "/", ExpiresAt: now.Add(-time.Minute)},
+	} {
+		if _, err := db.NewInsert().Model(&s).Exec(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.NewInsert().Model(&models.OAuthPendingSignup{TokenHash: "p-gone", Provider: "google", Subject: "sub", Email: "a@x.io", ReturnTo: "/", ExpiresAt: now.Add(-time.Minute)}).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+
 	p := &CleanupLoginSecurityProcessor{
 		Devices: repository.NewKnownDeviceRepository(db),
 		Alerts:  repository.NewLoginAlertTokenRepository(db),
+		OAuth:   repository.NewOAuthRepository(db),
 	}
 	if err := p.Process(ctx, CleanupLoginSecurityTask{}); err != nil {
 		t.Fatalf("process: %v", err)
+	}
+
+	var states []string
+	if err := db.NewSelect().Model((*models.OAuthState)(nil)).Column("state_hash").Scan(ctx, &states); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.NewSelect().Model((*models.OAuthPendingSignup)(nil)).Count(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0] != "s-live" || pending != 0 {
+		t.Fatalf("after sweep: states %v, pending %d; want only the live state", states, pending)
 	}
 
 	var devices, tokens []string

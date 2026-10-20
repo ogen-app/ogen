@@ -17,6 +17,12 @@ const (
 	LoginAlertExpired = "expired"
 )
 
+// Login methods recorded on an alert token.
+const (
+	LoginMethodPassword = "password"
+	LoginMethodGoogle   = "google"
+)
+
 // LoginAlertToken backs one new-device alert email. It snapshots what the email
 // showed (IP, device, location, time) so the secure-account page can show the
 // same thing, and it is the single-use capability to secure the account. Only
@@ -33,6 +39,7 @@ type LoginAlertToken struct {
 	IP          string     `bun:"ip,notnull"                                   json:"ip"`
 	DeviceLabel string     `bun:"device_label,notnull"                         json:"device_label"`
 	Location    string     `bun:"location,notnull"                             json:"location"`
+	Method      string     `bun:"method,notnull,default:'password'"            json:"method"`
 	LoginAt     time.Time  `bun:"login_at,notnull"                             json:"login_at"`
 	ExpiresAt   time.Time  `bun:"expires_at,notnull"                           json:"expires_at"`
 	ConsumedAt  *time.Time `bun:"consumed_at"                                  json:"consumed_at,omitempty"`

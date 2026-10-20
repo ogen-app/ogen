@@ -108,6 +108,7 @@ type Deps struct {
 	KnownDeviceRepo     repository.KnownDeviceRepository
 	SessionRepo         repository.SessionRepository
 	LoginAlertTokenRepo repository.LoginAlertTokenRepository
+	OAuthRepo           repository.OAuthRepository
 
 	// Reads a tenant's lifecycle status so per-tenant jobs (publish,
 	// bootstrap, email) skip suspended/deleted tenants. repository.TenantRepository
