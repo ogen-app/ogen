@@ -540,6 +540,9 @@ type NewDeviceLoginVars struct {
 	Location    string
 	SecureURL   string
 	MaskedEmail string
+	// LoginMethod names the provider the sign-in went through ("Google");
+	// empty for a password sign-in.
+	LoginMethod string
 }
 
 // EnqueueNewDeviceLoginEmailTx enqueues the transactional new-device alert
@@ -563,6 +566,7 @@ func (e *Enqueuer) EnqueueNewDeviceLoginEmailTx(ctx context.Context, tx *sql.Tx,
 			"location":     v.Location,
 			"secure_url":   v.SecureURL,
 			"masked_email": v.MaskedEmail,
+			"login_method": v.LoginMethod,
 		},
 	}, insertOptsWithRequestID(ctx, nil))
 	return err

@@ -17,6 +17,9 @@
 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;width:100%;border-collapse:collapse;font-size:15px;line-height:24px;">
 <tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">When</td><td style="padding:4px 0;color:#151515;">[[ .LoginTime ]]</td></tr>
 <tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">Device</td><td style="padding:4px 0;color:#151515;">[[ .DeviceLabel ]]</td></tr>
+[[- if .LoginMethod ]]
+<tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">Signed in with</td><td style="padding:4px 0;color:#151515;">[[ .LoginMethod ]]</td></tr>
+[[- end ]]
 <tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">IP address</td><td style="padding:4px 0;color:#151515;">[[ .IPAddress ]]</td></tr>
 [[- if .Location ]]
 <tr><td style="padding:4px 16px 4px 0;color:#8a857d;white-space:nowrap;vertical-align:top;">Approximate location</td><td style="padding:4px 0;color:#151515;">[[ .Location ]]</td></tr>

@@ -37,6 +37,23 @@ func TestRenderNewDeviceLogin(t *testing.T) {
 		}
 	}
 
+	for _, body := range []string{r.HTML, r.Text} {
+		if strings.Contains(body, "Signed in with") {
+			t.Errorf("a password sign-in names no provider: %q", body)
+		}
+	}
+	data.LoginMethod = "Google"
+	r, err = Render(tmpl, data)
+	if err != nil {
+		t.Fatalf("render with provider: %v", err)
+	}
+	for _, body := range []string{r.HTML, r.Text} {
+		if !strings.Contains(body, "Signed in with") || !strings.Contains(body, "Google") {
+			t.Errorf("a Google sign-in must say so: %q", body)
+		}
+	}
+	data.LoginMethod = ""
+
 	data.Location = ""
 	r, err = Render(tmpl, data)
 	if err != nil {

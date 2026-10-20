@@ -203,7 +203,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 		activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI))
 
 	setSessionCookie(c, h.cookieName, session, h.secureCookie)
-	h.devices.observe(c, session, account.Email)
+	h.devices.observe(c, session, account.Email, models.LoginMethodPassword)
 
 	return c.Status(fiber.StatusCreated).JSON(session)
 }

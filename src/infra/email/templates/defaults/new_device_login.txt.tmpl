@@ -6,6 +6,9 @@ We noticed a new sign-in to your Ogen account ([[ .MaskedEmail ]]).
 
 When: [[ .LoginTime ]]
 Device: [[ .DeviceLabel ]]
+[[- if .LoginMethod ]]
+Signed in with: [[ .LoginMethod ]]
+[[- end ]]
 IP address: [[ .IPAddress ]]
 [[- if .Location ]]
 Approximate location: [[ .Location ]]

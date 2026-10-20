@@ -59,12 +59,14 @@ type AlertEnqueuer interface {
 // Deps are the Service's collaborators. Geo, Emails and Activity may be nil:
 // no location, no email, no activity events respectively.
 type Deps struct {
-	DB         *bun.DB
-	Devices    repository.KnownDeviceRepository
-	Alerts     repository.LoginAlertTokenRepository
-	Sessions   repository.SessionRepository
-	Users      repository.UserRepository
-	Accounts   repository.AccountRepository
+	DB       *bun.DB
+	Devices  repository.KnownDeviceRepository
+	Alerts   repository.LoginAlertTokenRepository
+	Sessions repository.SessionRepository
+	Users    repository.UserRepository
+	Accounts repository.AccountRepository
+	// Identities lets securing a Google sign-in disconnect Google; nil skips it.
+	Identities repository.AccountIdentityRepository
 	Geo        Locator
 	Emails     AlertEnqueuer
 	Activity   *activity.Recorder
@@ -101,9 +103,20 @@ type Login struct {
 	UserAgent string
 	// DeviceToken is the device cookie the request carried, "" when none.
 	DeviceToken string
+	// Method is how the login was made, a models.LoginMethod* value; ""
+	// means a password.
+	Method string
 }
 
-// Observe runs after a successful password login. A known device is refreshed
+// method is the login method stored on the alert token.
+func (in Login) method() string {
+	if in.Method == "" {
+		return models.LoginMethodPassword
+	}
+	return in.Method
+}
+
+// Observe runs after a successful login. A known device is refreshed
 // silently; an unknown one is enrolled and, unless it is the account's first
 // device or the hourly cap is reached, triggers the alert email. It returns
 // the device token the caller must (re)issue as the cookie, or "" if none
@@ -244,7 +257,7 @@ func (s *Service) createAlert(ctx context.Context, tx bun.Tx, in Login, d *model
 	}
 	tok := &models.LoginAlertToken{
 		ID: id, AccountID: in.AccountID, DeviceID: &d.ID, UserID: in.UserID, TenantID: in.TenantID,
-		TokenHash: hash, IP: in.IP, DeviceLabel: d.DeviceLabel, Location: location,
+		TokenHash: hash, IP: in.IP, DeviceLabel: d.DeviceLabel, Location: location, Method: in.method(),
 		LoginAt: now, ExpiresAt: now.Add(models.LoginAlertTokenTTL), CreatedAt: now,
 	}
 	if err := s.d.Alerts.Create(ctx, tx, tok); err != nil {
@@ -260,7 +273,17 @@ func (s *Service) createAlert(ctx context.Context, tx bun.Tx, in Login, d *model
 		Location:    location,
 		SecureURL:   s.secureURL(raw),
 		MaskedEmail: MaskEmail(in.Email),
+		LoginMethod: methodLabel(in.method()),
 	})
+}
+
+// methodLabel names a provider login for the alert email; a password login
+// gets no label.
+func methodLabel(method string) string {
+	if method == models.LoginMethodGoogle {
+		return "Google"
+	}
+	return ""
 }
 
 func (s *Service) secureURL(token string) string {
@@ -285,6 +308,7 @@ func (s *Service) recordNewDevice(ctx context.Context, in Login, out enrolOutcom
 		activity.WithTags(tags...),
 		activity.WithPayload(map[string]any{
 			"device_label": DeviceLabel(in.UserAgent),
+			"method":       in.method(),
 			"ip":           in.IP,
 			"location":     out.location,
 			"alert_sent":   out.alertSent,

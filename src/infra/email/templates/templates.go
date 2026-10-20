@@ -93,6 +93,9 @@ type Data struct {
 	Location    string
 	SecureURL   string
 	MaskedEmail string
+	// LoginMethod names the provider a new-device sign-in went through
+	// ("Google"); empty for a password sign-in, and the template drops the row.
+	LoginMethod string
 	// GoogleEmail / PasswordCleared feed the google_linked notice: the Google
 	// address now signing in to the account, and whether linking removed the
 	// account's password. Empty and ignored for every other template.
@@ -135,6 +138,7 @@ const (
 	varLocation       = "Approximate location of the IP, e.g. \"Kyiv, Ukraine\" (empty when unknown)."
 	varSecureURL      = "The single-use \"This wasn't me\" link; expires in 24 hours."
 	varMaskedEmail    = "The account's email address with the local part masked, e.g. j***@acme.com."
+	varLoginMethod    = "The provider the sign-in went through, e.g. \"Google\" (empty for a password sign-in)."
 	varGoogleEmail    = "The Google account's address that can now sign in to this Ogen account."
 	varPwdCleared     = "True when linking Google removed the account's previous password."
 )
@@ -200,6 +204,7 @@ func newDeviceLoginVars() models.StringMap {
 	m["Location"] = varLocation
 	m["SecureURL"] = varSecureURL
 	m["MaskedEmail"] = varMaskedEmail
+	m["LoginMethod"] = varLoginMethod
 	return m
 }
 

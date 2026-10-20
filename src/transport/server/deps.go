@@ -264,6 +264,7 @@ func (d *deps) initServices(context.Context) error {
 		Sessions:   r.sessionRepo,
 		Users:      r.userRepo,
 		Accounts:   r.accountRepo,
+		Identities: r.accountIdentityRepo,
 		Geo:        geo,
 		Emails:     d.enqueuer,
 		Activity:   d.activity.recorder,

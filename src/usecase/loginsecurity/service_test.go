@@ -71,6 +71,7 @@ func newFixture(t *testing.T) *fixture {
 		Sessions:   repository.NewSessionRepository(db),
 		Users:      repository.NewUserRepository(db),
 		Accounts:   repository.NewAccountRepository(db),
+		Identities: repository.NewAccountIdentityRepository(db),
 		Geo:        fakeGeo{},
 		Emails:     f.emails,
 		AppBaseURL: "https://app.example/",

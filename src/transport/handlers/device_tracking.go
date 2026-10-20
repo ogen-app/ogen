@@ -28,12 +28,15 @@ type deviceTracker struct {
 	secure     bool
 }
 
-// observe runs new-device detection for a password login.
-func (t deviceTracker) observe(c *fiber.Ctx, s *models.Session, email string) {
+// observe runs new-device detection for a login made with method (a
+// models.LoginMethod* value).
+func (t deviceTracker) observe(c *fiber.Ctx, s *models.Session, email, method string) {
 	if t.sec == nil {
 		return
 	}
-	t.setCookie(c, t.sec.Observe(reqCtx(c), t.login(c, s, email)))
+	in := t.login(c, s, email)
+	in.Method = method
+	t.setCookie(c, t.sec.Observe(reqCtx(c), in))
 }
 
 // enroll silently marks this browser as known for a brand-new account.
