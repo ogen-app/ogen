@@ -45,7 +45,10 @@ const (
 	CodeInviteEmailMismatch = "invite_email_mismatch"
 	CodeInviteSeatsFull     = "invite_seats_full"
 	CodeNoActiveWorkspace   = "no_active_workspace"
-	CodeThrottled           = "throttled"
+	// CodeLinkRequiresPassword: an account has this address, but Google isn't
+	// authoritative for it, so it isn't linked automatically.
+	CodeLinkRequiresPassword = "google_link_requires_password"
+	CodeThrottled            = "throttled"
 )
 
 // Error is a sign-in that ended without a session. Intent and ReturnTo come

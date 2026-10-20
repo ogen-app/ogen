@@ -115,6 +115,7 @@ func (h *GoogleAuthHandler) Providers(c *fiber.Ctx) error {
 // @Param        invite_token  query  string  false  "Invitation token (intent=invite); the Google address must be the invited one"
 // @Success      302
 // @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string  "intent=link without a live session"
 // @Router       /api/auth/google/start [get]
 func (h *GoogleAuthHandler) Start(c *fiber.Ctx) error {
 	in := oauthlogin.StartInput{

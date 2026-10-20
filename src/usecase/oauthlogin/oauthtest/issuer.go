@@ -42,6 +42,8 @@ type Identity struct {
 	Email         string
 	EmailVerified bool
 	Name          string
+	// HostedDomain is sent as the hd claim when set (a Workspace account).
+	HostedDomain string
 }
 
 type grant struct {
@@ -148,6 +150,9 @@ func (i *Issuer) token(w http.ResponseWriter, r *http.Request) {
 		"nonce":          g.nonce,
 		"iat":            now.Unix(),
 		"exp":            now.Add(time.Hour).Unix(),
+	}
+	if g.identity.HostedDomain != "" {
+		claims["hd"] = g.identity.HostedDomain
 	}
 	if i.Tamper != nil {
 		i.Tamper(claims)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -23,6 +24,24 @@ type Claims struct {
 	Email         string
 	EmailVerified bool
 	Name          string
+	// HostedDomain is the Google Workspace domain (the hd claim), "" for a
+	// consumer account.
+	HostedDomain string
+}
+
+// Authoritative reports whether the provider vouches for the address as
+// belonging to this person now, which is what linking an existing account by
+// email needs. Google is authoritative for its own consumer addresses and for
+// a Workspace account's own domain. For any other address email_verified
+// only records a check made when the Google account was created; the
+// address may have changed hands since (a former employee, a lapsed domain).
+func (c *Claims) Authoritative() bool {
+	_, domain, ok := strings.Cut(strings.ToLower(c.Email), "@")
+	if !ok || !c.EmailVerified {
+		return false
+	}
+	return domain == "gmail.com" || domain == "googlemail.com" ||
+		(c.HostedDomain != "" && strings.EqualFold(c.HostedDomain, domain))
 }
 
 // Provider is one OpenID Connect sign-in provider.
@@ -158,6 +177,7 @@ func (p *oidcProvider) exchange(ctx context.Context, code, verifier, nonce strin
 		EmailVerified boolClaim `json:"email_verified"`
 		Name          string    `json:"name"`
 		GivenName     string    `json:"given_name"`
+		HostedDomain  string    `json:"hd"`
 	}
 	if err := idToken.Claims(&c); err != nil {
 		return nil, fmt.Errorf("%w: claims: %w", ErrTokenInvalid, err)
@@ -170,6 +190,7 @@ func (p *oidcProvider) exchange(ctx context.Context, code, verifier, nonce strin
 		Email:         c.Email,
 		EmailVerified: bool(c.EmailVerified),
 		Name:          cmp.Or(c.Name, c.GivenName),
+		HostedDomain:  c.HostedDomain,
 	}, nil
 }
 

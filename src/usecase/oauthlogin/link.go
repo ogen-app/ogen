@@ -47,7 +47,15 @@ type linked struct {
 // "Forgot password". All of it happens under the account row lock, so a
 // concurrent password login (which checks the hash under the same lock) either
 // finishes first and is signed out, or sees no password.
+//
+// That trade is only safe when the provider is authoritative for the address.
+// Otherwise the match is refused with CodeLinkRequiresPassword: the owner
+// signs in with their password and connects Google from Settings, where the
+// session proves the account.
 func (s *Service) linkExisting(ctx context.Context, account *models.Account, c *Claims, openSession bool) (*linked, error) {
+	if !c.Authoritative() {
+		return nil, &Error{Code: CodeLinkRequiresPassword}
+	}
 	existing, err := s.d.Identities.ListForAccount(ctx, account.ID)
 	if err != nil {
 		return nil, err

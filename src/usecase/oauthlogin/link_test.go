@@ -8,6 +8,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
+	"github.com/ogen-app/ogen/src/usecase/oauthlogin/oauthtest"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
@@ -55,6 +56,50 @@ func TestSignInLinksMatchingAccount(t *testing.T) {
 	res, err = f.signIn(t, oauthlogin.StartInput{}, jane)
 	if err != nil || res.Linked {
 		t.Fatalf("second sign-in: %+v err=%v", res, err)
+	}
+}
+
+func TestSignInLinksOnlyWhereGoogleIsAuthoritative(t *testing.T) {
+	cases := []struct {
+		name string
+		who  oauthtest.Identity
+		link bool
+	}{
+		{"consumer account on another domain", oauthtest.Identity{Subject: "s", Email: "jane@acme.com", EmailVerified: true}, false},
+		{"workspace account for another domain", oauthtest.Identity{Subject: "s", Email: "jane@acme.com", EmailVerified: true, HostedDomain: "other.com"}, false},
+		{"workspace account for its own domain", oauthtest.Identity{Subject: "s", Email: "jane@acme.com", EmailVerified: true, HostedDomain: "Acme.com"}, true},
+		{"googlemail address", oauthtest.Identity{Subject: "s", Email: "jane@googlemail.com", EmailVerified: true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.seedAccount(t, "acc-1", tc.who.Email, "")
+
+			res, err := f.signIn(t, oauthlogin.StartInput{}, tc.who)
+			if tc.link {
+				if err != nil || !res.Linked {
+					t.Fatalf("want a link: %+v err=%v", res, err)
+				}
+				return
+			}
+			if got := codeOf(t, err); got != oauthlogin.CodeLinkRequiresPassword {
+				t.Fatalf("code %q", got)
+			}
+			if f.passwordIsNull(t, "acc-1") {
+				t.Fatal("a refused link must leave the password alone")
+			}
+			if n := f.count(t, (*models.AccountIdentity)(nil), "account_id = ?", "acc-1"); n != 0 {
+				t.Fatal("a refused link must not link the identity")
+			}
+		})
+	}
+}
+
+func TestUnauthoritativeAddressStillSignsUp(t *testing.T) {
+	f := newFixture(t)
+	res, err := f.signIn(t, oauthlogin.StartInput{}, oauthtest.Identity{Subject: "s", Email: "new@acme.com", EmailVerified: true})
+	if err != nil || res.Kind != oauthlogin.ResultPendingSignup {
+		t.Fatalf("no account to take over, so a newcomer can still sign up: %+v err=%v", res, err)
 	}
 }
 
