@@ -88,8 +88,17 @@ type Config struct {
 	// and iCloud Private Relay's egress feeds) consulted before the database,
 	// which places relay egress addresses only coarsely.
 	DeviceCookieName string `envconfig:"DEVICE_COOKIE_NAME" default:"ogen_device"`
-	GeoIPDBPath      string `envconfig:"GEOIP_DB_PATH"      default:""`
-	GeoIPFeedPaths   string `envconfig:"GEOIP_FEED_PATHS"   default:""`
+
+	// Sign in with Google (OpenID Connect, authorization code + PKCE). Off
+	// until both the client id and secret are set; the login page then hides
+	// the button. The redirect URL must match one registered on the Google
+	// OAuth client; empty means APP_BASE_URL + /api/auth/google/callback, which
+	// is right whenever the UI proxies /api on its own origin.
+	GoogleOAuthClientID     string `envconfig:"GOOGLE_OAUTH_CLIENT_ID"     default:""`
+	GoogleOAuthClientSecret string `envconfig:"GOOGLE_OAUTH_CLIENT_SECRET" default:""`
+	GoogleOAuthRedirectURL  string `envconfig:"GOOGLE_OAUTH_REDIRECT_URL"  default:""`
+	GeoIPDBPath             string `envconfig:"GEOIP_DB_PATH"      default:""`
+	GeoIPFeedPaths          string `envconfig:"GEOIP_FEED_PATHS"   default:""`
 
 	// Embeddings. Generated via the hosted Gemini Embedding 2 API
 	// (google.golang.org/genai through the Genkit googlegenai plugin).

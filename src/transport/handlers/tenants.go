@@ -156,15 +156,7 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 		return err
 	}
 
-	c.Cookie(&fiber.Cookie{
-		Name:     h.cookieName,
-		Value:    res.Session.ID,
-		Path:     "/",
-		Expires:  res.Session.ExpiresAt,
-		HTTPOnly: true,
-		Secure:   h.secureCookie,
-		SameSite: "Lax",
-	})
+	setSessionCookie(c, h.cookieName, res.Session, h.secureCookie)
 	h.devices.enroll(c, res.Session, res.User.Email)
 
 	h.activity.Record(

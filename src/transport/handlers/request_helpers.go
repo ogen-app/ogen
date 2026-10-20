@@ -7,8 +7,28 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
+
+// setSessionCookie hands the browser a freshly opened session.
+func setSessionCookie(c *fiber.Ctx, name string, s *models.Session, secure bool) {
+	c.Cookie(&fiber.Cookie{
+		Name:     name,
+		Value:    s.ID,
+		Path:     "/",
+		Expires:  s.ExpiresAt,
+		HTTPOnly: true,
+		Secure:   secure,
+		SameSite: "Lax",
+	})
+}
+
+// withActor attributes an event to a tenant and user on a route that runs
+// before (or without) the auth middleware.
+func withActor(ctx context.Context, tenantID, userID string) context.Context {
+	return logging.WithUserID(tenantctx.With(ctx, tenantID), userID)
+}
 
 // rejectCode writes a {code,error} rejection: a stable, machine-readable code
 // beside the human message. It returns nil because the response is already
