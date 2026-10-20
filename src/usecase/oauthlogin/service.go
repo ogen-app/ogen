@@ -40,6 +40,7 @@ const (
 	CodeEmailUnverified   = "google_email_unverified"
 	CodeUnavailable       = "google_unavailable"
 	CodeAlreadyConnected  = "google_already_connected"
+	CodeLinkedElsewhere   = "google_linked_elsewhere"
 	CodeNoActiveWorkspace = "no_active_workspace"
 	CodeThrottled         = "throttled"
 )
@@ -111,11 +112,16 @@ func (s *Service) clock() time.Time {
 // ProviderName is the provider key, e.g. "google".
 func (s *Service) ProviderName() string { return s.d.Provider.Name() }
 
-// StartInput is a request to begin a sign-in.
+// StartInput is a request to begin a sign-in. AccountID is the signed-in
+// account connecting the provider from Settings (intent link).
 type StartInput struct {
-	Intent   string
-	ReturnTo string
+	Intent    string
+	ReturnTo  string
+	AccountID string
 }
+
+// ErrNotSignedIn rejects connecting a provider without a session.
+var ErrNotSignedIn = errors.New("oauthlogin: sign in to connect an account")
 
 // Started is what the transport needs to send the browser to the provider.
 type Started struct {
@@ -133,7 +139,15 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Started, error) {
 	if intent == "" {
 		intent = models.OAuthIntentSignin
 	}
-	if intent != models.OAuthIntentSignin {
+	row := &models.OAuthState{Intent: intent, ReturnTo: SafeReturnTo(in.ReturnTo)}
+	switch intent {
+	case models.OAuthIntentSignin:
+	case models.OAuthIntentLink:
+		if in.AccountID == "" {
+			return nil, ErrNotSignedIn
+		}
+		row.AccountID = in.AccountID
+	default:
 		return nil, ErrInvalidIntent
 	}
 	state, stateHash, err := models.NewOAuthToken()
@@ -146,29 +160,26 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Started, error) {
 	}
 	verifier := oauth2.GenerateVerifier()
 	now := s.clock()
-	row := &models.OAuthState{
-		StateHash:    stateHash,
-		Provider:     s.d.Provider.Name(),
-		Intent:       intent,
-		Nonce:        nonce,
-		PKCEVerifier: verifier,
-		ReturnTo:     SafeReturnTo(in.ReturnTo),
-		ExpiresAt:    now.Add(models.OAuthStateTTL),
-		CreatedAt:    now,
-	}
+	row.StateHash = stateHash
+	row.Provider = s.d.Provider.Name()
+	row.Nonce = nonce
+	row.PKCEVerifier = verifier
+	row.ExpiresAt = now.Add(models.OAuthStateTTL)
+	row.CreatedAt = now
 	if err := s.d.OAuth.CreateState(ctx, row); err != nil {
 		return nil, fmt.Errorf("oauthlogin: store state: %w", err)
 	}
 	return &Started{AuthURL: s.d.Provider.AuthCodeURL(state, nonce, verifier), State: state}, nil
 }
 
-// CallbackInput is the provider's redirect back, plus the state cookie the
-// browser carried.
+// CallbackInput is the provider's redirect back, plus what the browser carried:
+// the state cookie and, when signed in, its session's account.
 type CallbackInput struct {
-	State         string
-	CookieState   string
-	Code          string
-	ProviderError string
+	State            string
+	CookieState      string
+	Code             string
+	ProviderError    string
+	SessionAccountID string
 }
 
 // ResultKind says how a successful callback ended.
@@ -180,6 +191,9 @@ const (
 	// ResultPendingSignup found no account: the newcomer names a workspace
 	// next, with PendingToken.
 	ResultPendingSignup
+	// ResultConnected linked the identity to the signed-in account from
+	// Settings; no new session.
+	ResultConnected
 )
 
 // Result is a callback that succeeded.
@@ -231,7 +245,13 @@ func (s *Service) Callback(ctx context.Context, in CallbackInput) (*Result, erro
 		return nil, fail(CodeEmailUnverified, nil)
 	}
 
-	res, err := s.signIn(ctx, st, claims)
+	var res *Result
+	switch st.Intent {
+	case models.OAuthIntentLink:
+		res, err = s.connect(ctx, st, in.SessionAccountID, claims)
+	default:
+		res, err = s.signIn(ctx, st, claims)
+	}
 	if err != nil {
 		if e, ok := errors.AsType[*Error](err); ok {
 			e.Intent, e.ReturnTo = st.Intent, st.ReturnTo

@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
@@ -39,7 +40,11 @@ const loginPagePath = "/auth/login"
 // page reads. A nil service turns Google off: the probe reports it disabled and
 // the Google routes are not registered.
 type GoogleAuthHandler struct {
-	svc          *oauthlogin.Service
+	svc *oauthlogin.Service
+	// sessions resolves the browser's session for connecting Google from
+	// Settings. The Google routes are public, so this is read directly rather
+	// than through the auth middleware.
+	sessions     repository.SessionRepository
 	cookieName   string
 	secureCookie bool
 	failLimiter  *keyedRateLimiter
@@ -52,9 +57,10 @@ type GoogleAuthHandler struct {
 }
 
 // NewGoogleAuthHandler returns the handler; svc may be nil.
-func NewGoogleAuthHandler(svc *oauthlogin.Service, cookieName string, secureCookie bool, rec *activity.Recorder) *GoogleAuthHandler {
+func NewGoogleAuthHandler(svc *oauthlogin.Service, sessions repository.SessionRepository, cookieName string, secureCookie bool, rec *activity.Recorder) *GoogleAuthHandler {
 	return &GoogleAuthHandler{
 		svc:           svc,
+		sessions:      sessions,
 		cookieName:    cookieName,
 		secureCookie:  secureCookie,
 		failLimiter:   newKeyedRateLimiter(oauthFailPerIPBurst, oauthFailRateWindow),
@@ -103,18 +109,27 @@ func (h *GoogleAuthHandler) Providers(c *fiber.Ctx) error {
 // @Summary      Start Google sign-in
 // @Description  Sends the browser to Google. Navigate to it (it is not an XHR endpoint). The same flow signs in an existing account or starts a sign-up; the callback decides.
 // @Tags         auth
-// @Param        intent     query  string  false  "signin (default)"
+// @Param        intent     query  string  false  "signin (default), or link to connect Google to the signed-in account"
 // @Param        return_to  query  string  false  "Same-site path to land on after signing in"
 // @Success      302
 // @Failure      400  {object}  map[string]string
 // @Router       /api/auth/google/start [get]
 func (h *GoogleAuthHandler) Start(c *fiber.Ctx) error {
-	started, err := h.svc.Start(reqCtx(c), oauthlogin.StartInput{
+	in := oauthlogin.StartInput{
 		Intent:   c.Query("intent"),
 		ReturnTo: c.Query("return_to"),
-	})
-	if errors.Is(err, oauthlogin.ErrInvalidIntent) {
+	}
+	if in.Intent == models.OAuthIntentLink {
+		if s := h.currentSession(c); s != nil {
+			in.AccountID = s.AccountID
+		}
+	}
+	started, err := h.svc.Start(reqCtx(c), in)
+	switch {
+	case errors.Is(err, oauthlogin.ErrInvalidIntent):
 		return fiber.NewError(fiber.StatusBadRequest, "unsupported intent")
+	case errors.Is(err, oauthlogin.ErrNotSignedIn):
+		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 	}
 	if err != nil {
 		return err
@@ -148,12 +163,17 @@ func (h *GoogleAuthHandler) Callback(c *fiber.Ctx) error {
 		return h.redirectError(c, &oauthlogin.Error{Code: oauthlogin.CodeThrottled})
 	}
 
-	res, err := h.svc.Callback(reqCtx(c), oauthlogin.CallbackInput{
+	in := oauthlogin.CallbackInput{
 		State:         c.Query("state"),
 		CookieState:   cookieState,
 		Code:          c.Query("code"),
 		ProviderError: c.Query("error"),
-	})
+	}
+	session := h.currentSession(c)
+	if session != nil {
+		in.SessionAccountID = session.AccountID
+	}
+	res, err := h.svc.Callback(reqCtx(c), in)
 	if err != nil {
 		e, ok := errors.AsType[*oauthlogin.Error](err)
 		if !ok {
@@ -166,10 +186,31 @@ func (h *GoogleAuthHandler) Callback(c *fiber.Ctx) error {
 		}
 		return h.redirectError(c, e)
 	}
-	if res.Kind == oauthlogin.ResultPendingSignup {
+	switch res.Kind {
+	case oauthlogin.ResultPendingSignup:
 		return c.Redirect(withQuery(registerGooglePath, "token", res.PendingToken), fiber.StatusFound)
+	case oauthlogin.ResultConnected:
+		if res.Linked {
+			h.activity.Record(withActor(reqCtx(c), session.TenantID, session.UserID), activity.CategoryAuthentication, "identity_linked",
+				activity.WithEntity("user", session.UserID), activity.WithSource(activity.SourceAPI),
+				activity.WithPayload(map[string]any{"provider": h.svc.ProviderName(), "via": res.Intent, "password_cleared": false}))
+		}
+		return c.Redirect(withQuery(res.ReturnTo, "linked", h.svc.ProviderName()), fiber.StatusFound)
 	}
 	return h.signedIn(c, res)
+}
+
+// currentSession returns the browser's live session, or nil when it has none.
+func (h *GoogleAuthHandler) currentSession(c *fiber.Ctx) *models.Session {
+	token := c.Cookies(h.cookieName)
+	if token == "" || h.sessions == nil {
+		return nil
+	}
+	s, err := h.sessions.GetByID(reqCtx(c), token)
+	if err != nil || !time.Now().UTC().Before(s.ExpiresAt) {
+		return nil
+	}
+	return s
 }
 
 // registerGooglePath is the UI step where a newcomer names their workspace.
