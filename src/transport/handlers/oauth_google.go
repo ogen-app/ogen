@@ -236,7 +236,7 @@ func (h *GoogleAuthHandler) signedIn(c *fiber.Ctx, res *oauthlogin.Result) error
 	h.activity.Record(actor, activity.CategoryAuthentication, "login",
 		activity.WithEntity("user", res.User.ID), activity.WithSource(activity.SourceAPI),
 		activity.WithPayload(map[string]any{"method": h.svc.ProviderName()}))
-	h.devices.observe(c, res.Session, res.Account.Email)
+	h.devices.observe(c, res.Session, res.Account.Email, models.LoginMethodGoogle)
 	return c.Redirect(res.ReturnTo, fiber.StatusFound)
 }
 

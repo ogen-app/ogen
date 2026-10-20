@@ -30,6 +30,9 @@ type Preview struct {
 	IP       string    `json:"ip"`
 	Location string    `json:"location"`
 	Email    string    `json:"email"`
+	// Method is how the sign-in was made: password or google. Securing a
+	// Google sign-in also disconnects Google.
+	Method string `json:"method"`
 }
 
 // Preview reports the sign-in an alert link refers to and whether the link can
@@ -51,6 +54,7 @@ func (s *Service) Preview(ctx context.Context, rawToken string) (*Preview, error
 		Device:   tok.DeviceLabel,
 		IP:       tok.IP,
 		Location: tok.Location,
+		Method:   tok.Method,
 	}
 	if acc, err := s.d.Accounts.GetByID(ctx, tok.AccountID); err == nil {
 		p.Email = MaskEmail(acc.Email)
@@ -65,6 +69,9 @@ type Secured struct {
 	// can't sign in anyway.
 	ResetURL        string `json:"reset_url"`
 	SessionsRevoked int    `json:"sessions_revoked"`
+	// IdentityRemoved is set when the alerted sign-in came through Google and
+	// Google was disconnected.
+	IdentityRemoved bool `json:"identity_removed"`
 }
 
 // Secure spends an alert token and, in the same transaction, replaces the
@@ -74,8 +81,11 @@ type Secured struct {
 // could sign straight back in with the password they have, and that login would
 // enrol silently because the devices were just cleared. Login re-checks the
 // password hash under the account row lock before creating a session, so a
-// login racing this transaction can't leave a session behind either. It sends
-// no email and opens no session: the owner is already in the flow.
+// login racing this transaction can't leave a session behind either. When the
+// alerted sign-in came through Google it also disconnects Google; a Google
+// login racing it holds the identity row and is likewise signed out or
+// refused. It sends no email and opens no session: the owner is already in the
+// flow.
 func (s *Service) Secure(ctx context.Context, rawToken string) (*Secured, error) {
 	if !models.ValidLoginAlertToken(rawToken) {
 		return nil, ErrNotFound
@@ -103,6 +113,15 @@ func (s *Service) Secure(ctx context.Context, rawToken string) (*Secured, error)
 		if err = s.d.Accounts.UpdatePasswordTx(ctx, tx, tok.AccountID, lockedHash); err != nil {
 			return err
 		}
+		// A Google sign-in means the intruder holds the Google account or linked
+		// one; a new password alone wouldn't keep them out. Unlinked before the
+		// sessions go, so a Google login that held the identity row commits its
+		// session first and is revoked with the rest.
+		if tok.Method == models.LoginMethodGoogle && s.d.Identities != nil {
+			if res.IdentityRemoved, err = s.d.Identities.DeleteForAccount(ctx, tx, tok.AccountID, models.IdentityProviderGoogle); err != nil {
+				return err
+			}
+		}
 		if res.SessionsRevoked, err = s.d.Sessions.DeleteAllForAccount(ctx, tx, tok.AccountID, ""); err != nil {
 			return err
 		}
@@ -129,6 +148,7 @@ func (s *Service) Secure(ctx context.Context, rawToken string) (*Secured, error)
 		activity.WithPayload(map[string]any{
 			"sessions_revoked": res.SessionsRevoked,
 			"devices_cleared":  devices,
+			"identity_removed": res.IdentityRemoved,
 			"token_id":         tok.ID,
 		}),
 	)
