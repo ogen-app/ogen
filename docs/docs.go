@@ -15,6 +15,95 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/account/auth-methods": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "How the signed-in account can sign in: whether it has a password, and its connected providers. An account without a password sets one through POST /api/password-reset.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "account"
+                ],
+                "summary": "Sign-in methods",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/oauthlogin.AuthMethods"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/account/identities/{provider}": {
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Disconnects the provider from the signed-in account and signs its other sessions out. Refused with 409 last_sign_in_method when the account has no password, since it could no longer sign in.",
+                "tags": [
+                    "account"
+                ],
+                "summary": "Disconnect a sign-in provider",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider, e.g. google",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/activity/report/{date}": {
             "get": {
                 "security": [
@@ -986,6 +1075,211 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/google/callback": {
+            "get": {
+                "description": "Google redirects here. Always answers 302: into the app with a session cookie on success, or to the login page with ?error=\u003ccode\u003e.",
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Google sign-in callback",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Authorization code",
+                        "name": "code",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "State issued by start",
+                        "name": "state",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Set by Google when the user cancelled",
+                        "name": "error",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "302": {
+                        "description": "Found"
+                    }
+                }
+            }
+        },
+        "/api/auth/google/complete": {
+            "post": {
+                "description": "Creates the workspace, a passwordless account linked to the Google identity, and a session (cookie set). Shares the per-IP throttle of POST /api/tenants. 409 bodies carry a code: email_in_use or google_already_linked.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Complete a Google sign-up",
+                "parameters": [
+                    {
+                        "description": "Pending token and workspace name",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.completeGoogleSignupRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.completeGoogleSignupResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/google/pending/{token}": {
+            "get": {
+                "description": "Returns the verified Google address behind a pending sign-up, for the \"name your workspace\" step. Unknown, used and expired tokens all answer 404.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Preview a Google sign-up",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Pending sign-up token from the callback redirect",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/oauthlogin.PendingPreview"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/google/start": {
+            "get": {
+                "description": "Sends the browser to Google. Navigate to it (it is not an XHR endpoint). The same flow signs in an existing account or starts a sign-up; the callback decides.",
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Start Google sign-in",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "signin (default); link to connect Google to the signed-in account; invite to accept invite_token",
+                        "name": "intent",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Same-site path to land on after signing in",
+                        "name": "return_to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Invitation token (intent=invite); the Google address must be the invited one",
+                        "name": "invite_token",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "302": {
+                        "description": "Found"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/providers": {
+            "get": {
+                "description": "Reports which external sign-in providers are configured, so the login and register pages show only working buttons.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Sign-in providers",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.providersResponse"
                         }
                     }
                 }
@@ -13730,6 +14024,39 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.completeGoogleSignupRequest": {
+            "type": "object",
+            "required": [
+                "tenant_name",
+                "token"
+            ],
+            "properties": {
+                "tenant_name": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.completeGoogleSignupResponse": {
+            "type": "object",
+            "properties": {
+                "return_to": {
+                    "type": "string"
+                },
+                "session": {
+                    "$ref": "#/definitions/models.Session"
+                },
+                "tenant": {
+                    "$ref": "#/definitions/models.Tenant"
+                },
+                "user": {
+                    "$ref": "#/definitions/models.User"
+                }
+            }
+        },
         "handlers.connectLinkRequest": {
             "type": "object",
             "required": [
@@ -15212,6 +15539,22 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.providerStatus": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.providersResponse": {
+            "type": "object",
+            "properties": {
+                "google": {
+                    "$ref": "#/definitions/handlers.providerStatus"
+                }
+            }
+        },
         "handlers.publisherView": {
             "type": "object",
             "properties": {
@@ -15776,6 +16119,10 @@ const docTemplate = `{
                 "login_at": {
                     "type": "string"
                 },
+                "method": {
+                    "description": "Method is how the sign-in was made: password or google. Securing a\nGoogle sign-in also disconnects Google.",
+                    "type": "string"
+                },
                 "status": {
                     "type": "string"
                 }
@@ -15784,12 +16131,33 @@ const docTemplate = `{
         "loginsecurity.Secured": {
             "type": "object",
             "properties": {
+                "identity_removed": {
+                    "description": "IdentityRemoved is set when the alerted sign-in came through Google and\nGoogle was disconnected.",
+                    "type": "boolean"
+                },
                 "reset_url": {
                     "description": "ResetURL is a fresh single-use password-reset link. It is empty when the\naccount has no live workspace to attach a reset token to; such an account\ncan't sign in anyway.",
                     "type": "string"
                 },
                 "sessions_revoked": {
                     "type": "integer"
+                }
+            }
+        },
+        "models.AccountIdentity": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "last_used_at": {
+                    "type": "string"
+                },
+                "linked_at": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
                 }
             }
         },
@@ -18463,6 +18831,34 @@ const docTemplate = `{
                 "requires_video_title": {
                     "description": "RequiresVideoTitle blocks publishing a video post whose title is empty.\nA product rule for YouTube, where an untitled upload would be titled from\nthe description's first line or \"Untitled Video\"; feed/Reel platforms\nhave no separate title, so this stays false for them.",
                     "type": "boolean"
+                }
+            }
+        },
+        "oauthlogin.AuthMethods": {
+            "type": "object",
+            "properties": {
+                "has_password": {
+                    "type": "boolean"
+                },
+                "identities": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.AccountIdentity"
+                    }
+                }
+            }
+        },
+        "oauthlogin.PendingPreview": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },

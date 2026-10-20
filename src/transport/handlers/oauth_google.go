@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"expvar"
 	"log/slog"
 	"net/url"
 	"time"
@@ -186,8 +187,10 @@ func (h *GoogleAuthHandler) Callback(c *fiber.Ctx) error {
 		if e.Code == oauthlogin.CodeStateInvalid {
 			h.failLimiter.penalize(ip)
 		}
+		googleOutcomes.Add(e.Code, 1)
 		return h.redirectError(c, e)
 	}
+	googleOutcomes.Add(outcomeOf(res), 1)
 	switch res.Kind {
 	case oauthlogin.ResultPendingSignup:
 		return c.Redirect(withQuery(registerGooglePath, "token", res.PendingToken), fiber.StatusFound)
@@ -200,6 +203,25 @@ func (h *GoogleAuthHandler) Callback(c *fiber.Ctx) error {
 		return c.Redirect(withQuery(res.ReturnTo, "linked", h.svc.ProviderName()), fiber.StatusFound)
 	}
 	return h.signedIn(c, res)
+}
+
+// googleOutcomes counts how Google callbacks end, keyed by outcome or error
+// code, under /debug/vars.
+var googleOutcomes = expvar.NewMap("ogen_google_signin_outcomes")
+
+// outcomeOf names a successful callback for googleOutcomes.
+func outcomeOf(res *oauthlogin.Result) string {
+	switch {
+	case res.Kind == oauthlogin.ResultPendingSignup:
+		return "pending_signup"
+	case res.Kind == oauthlogin.ResultConnected:
+		return "connected"
+	case res.Joined:
+		return "joined"
+	case res.Linked:
+		return "linked"
+	}
+	return "signed_in"
 }
 
 // currentSession returns the browser's live session, or nil when it has none.
@@ -309,6 +331,7 @@ func (h *GoogleAuthHandler) Complete(c *fiber.Ctx) error {
 
 	setSessionCookie(c, h.cookieName, res.Session, h.secureCookie)
 	h.devices.enroll(c, res.Session, res.User.Email)
+	googleOutcomes.Add("signup_completed", 1)
 	h.activity.Record(withActor(reqCtx(c), res.Tenant.ID, res.User.ID), activity.CategoryAuthentication, "signup",
 		activity.WithEntity("tenant", res.Tenant.ID), activity.WithSource(activity.SourceAPI),
 		activity.WithPayload(map[string]any{"method": h.svc.ProviderName()}))
