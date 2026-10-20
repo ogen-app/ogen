@@ -33,6 +33,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/loginsecurity"
 	"github.com/ogen-app/ogen/src/usecase/notes"
 	"github.com/ogen-app/ogen/src/usecase/notify"
+	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 	"github.com/ogen-app/ogen/src/usecase/plugins"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
@@ -84,6 +85,7 @@ type services struct {
 	series            *series.Service
 	signup            *signup.Service
 	loginSecurity     *loginsecurity.Service
+	googleLogin       *oauthlogin.Service // nil while Google sign-in is not configured
 	plugins           *plugins.Service
 	withdraw          *withdraw.Service
 }
@@ -267,6 +269,8 @@ func (d *deps) initServices(context.Context) error {
 		Activity:   d.activity.recorder,
 		AppBaseURL: d.cfg.AppBaseURL,
 	})
+
+	d.svc.googleLogin = newGoogleLogin(d)
 
 	d.svc.plugins = plugins.New(plugins.Deps{
 		DB:       d.db,

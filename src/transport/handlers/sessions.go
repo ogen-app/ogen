@@ -202,15 +202,7 @@ func (h *SessionsHandler) Create(c *fiber.Ctx) error {
 	h.activity.Record(h.authCtx(c, session.TenantID, user.ID), activity.CategoryAuthentication, "login",
 		activity.WithEntity("user", user.ID), activity.WithSource(activity.SourceAPI))
 
-	c.Cookie(&fiber.Cookie{
-		Name:     h.cookieName,
-		Value:    token,
-		Path:     "/",
-		Expires:  session.ExpiresAt,
-		HTTPOnly: true,
-		Secure:   h.secureCookie,
-		SameSite: "Lax",
-	})
+	setSessionCookie(c, h.cookieName, session, h.secureCookie)
 	h.devices.observe(c, session, account.Email)
 
 	return c.Status(fiber.StatusCreated).JSON(session)

@@ -8,10 +8,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
 	github.com/aws/smithy-go v1.25.1
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/firebase/genkit/go v1.6.1
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/getsentry/sentry-go/otel v0.49.0
 	github.com/getsentry/sentry-go/otel/otlp v0.49.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/gofiber/contrib/otelfiber/v2 v2.2.3
 	github.com/gofiber/fiber/v2 v2.52.14
@@ -41,6 +43,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.41.0
 	google.golang.org/genai v1.51.0

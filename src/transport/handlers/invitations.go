@@ -600,15 +600,7 @@ func (h *InvitationsHandler) acceptNew(c *fiber.Ctx, inv *models.Invitation, req
 		return err
 	}
 
-	c.Cookie(&fiber.Cookie{
-		Name:     h.cookieName,
-		Value:    session.ID,
-		Path:     "/",
-		Expires:  session.ExpiresAt,
-		HTTPOnly: true,
-		Secure:   h.secureCookie,
-		SameSite: "Lax",
-	})
+	setSessionCookie(c, h.cookieName, session, h.secureCookie)
 	h.devices.enroll(c, session, inv.Email)
 
 	h.activity.Record(
