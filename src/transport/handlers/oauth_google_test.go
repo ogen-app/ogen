@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin/oauthtest"
+	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
 // googleFlow drives the browser's side of a Google sign-in against a fiber app
@@ -62,15 +64,29 @@ func (g googleFlow) signIn(query string, who oauthtest.Identity) *http.Response 
 }
 
 func newGoogleLoginService(db *bun.DB, issuer *oauthtest.Issuer) *oauthlogin.Service {
+	accounts := repository.NewAccountRepository(db)
 	return oauthlogin.New(oauthlogin.Deps{
 		DB:         db,
 		Provider:   issuer.Provider(GinkgoT()),
 		OAuth:      repository.NewOAuthRepository(db),
 		Identities: repository.NewAccountIdentityRepository(db),
-		Accounts:   repository.NewAccountRepository(db),
+		Accounts:   accounts,
 		Users:      repository.NewUserRepository(db),
 		Sessions:   repository.NewSessionRepository(db),
+		Signup:     signup.New(db, accounts, repository.NewTenantRepository(db), nil),
 	})
+}
+
+// postJSON sends a JSON body and returns the response.
+func postJSON(app *fiber.App, path string, body any) *http.Response {
+	GinkgoHelper()
+	b, err := json.Marshal(body)
+	Expect(err).NotTo(HaveOccurred())
+	req := httptest.NewRequest("POST", path, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req, -1)
+	Expect(err).NotTo(HaveOccurred())
+	return resp
 }
 
 var _ = Describe("GoogleAuthHandler", Ordered, func() {
@@ -97,6 +113,8 @@ var _ = Describe("GoogleAuthHandler", Ordered, func() {
 			_, err := db.NewDelete().TableExpr(table).Where("1 = 1").Exec(ctx)
 			Expect(err).NotTo(HaveOccurred())
 		}
+		_, err := db.NewDelete().TableExpr("tenants").Where("id != ?", models.DefaultTenantID).Exec(ctx)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	linkJane := func() *models.User {
@@ -168,9 +186,68 @@ var _ = Describe("GoogleAuthHandler", Ordered, func() {
 			Expect(cookieNamed(resp, testCookieName)).To(BeNil())
 		})
 
-		It("reports an unlinked Google account", func() {
+		It("links a password account with the same address and removes its password", func() {
+			u := seedTenantUser(db, "Jane", "JANE@gmail.com", "password-jane")
 			resp := flow.signIn("", jane)
-			Expect(resp.Header.Get("Location")).To(Equal("/auth/login?error=google_not_linked"))
+			Expect(resp.Header.Get("Location")).To(Equal("/"))
+			Expect(cookieNamed(resp, testCookieName)).NotTo(BeNil())
+
+			account, err := repository.NewAccountRepository(db).GetByID(context.Background(), u.AccountID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(account.HasPassword()).To(BeFalse())
+		})
+
+		It("hands a newcomer to the workspace step, then signs them up", func() {
+			resp := flow.signIn("?return_to=%2Fcampaigns", jane)
+			loc, err := url.Parse(resp.Header.Get("Location"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loc.Path).To(Equal("/auth/register/google"))
+			token := loc.Query().Get("token")
+			Expect(token).NotTo(BeEmpty())
+			Expect(cookieNamed(resp, testCookieName)).To(BeNil(), "no session before the workspace exists")
+
+			preview, err := flow.app.Test(httptest.NewRequest("GET", "/api/auth/google/pending/"+token, nil), -1)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(preview.StatusCode).To(Equal(fiber.StatusOK))
+			var p struct {
+				Email string `json:"email"`
+			}
+			Expect(json.NewDecoder(preview.Body).Decode(&p)).To(Succeed())
+			Expect(p.Email).To(Equal(jane.Email))
+
+			done := postJSON(flow.app, "/api/auth/google/complete", fiber.Map{"token": token, "tenant_name": "Acme"})
+			Expect(done.StatusCode).To(Equal(fiber.StatusCreated))
+			var body struct {
+				Tenant   models.Tenant `json:"tenant"`
+				ReturnTo string        `json:"return_to"`
+			}
+			Expect(json.NewDecoder(done.Body).Decode(&body)).To(Succeed())
+			Expect(body.Tenant.Name).To(Equal("Acme"))
+			Expect(body.ReturnTo).To(Equal("/campaigns"))
+			Expect(cookieNamed(done, testCookieName)).NotTo(BeNil())
+
+			again := postJSON(flow.app, "/api/auth/google/complete", fiber.Map{"token": token, "tenant_name": "Acme"})
+			Expect(again.StatusCode).To(Equal(fiber.StatusNotFound))
+		})
+
+		It("answers 409 email_in_use when the address was registered meanwhile", func() {
+			resp := flow.signIn("", jane)
+			loc, err := url.Parse(resp.Header.Get("Location"))
+			Expect(err).NotTo(HaveOccurred())
+			seedTenantUser(db, "Jane", jane.Email, "password-jane")
+
+			done := postJSON(flow.app, "/api/auth/google/complete", fiber.Map{"token": loc.Query().Get("token"), "tenant_name": "Acme"})
+			Expect(done.StatusCode).To(Equal(fiber.StatusConflict))
+			var body struct {
+				Code string `json:"code"`
+			}
+			Expect(json.NewDecoder(done.Body).Decode(&body)).To(Succeed())
+			Expect(body.Code).To(Equal("email_in_use"))
+		})
+
+		It("rejects an incomplete sign-up form", func() {
+			resp := postJSON(flow.app, "/api/auth/google/complete", fiber.Map{"token": "x"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusBadRequest))
 		})
 
 		It("throttles a client that keeps failing", func() {

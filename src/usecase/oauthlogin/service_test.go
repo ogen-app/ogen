@@ -1,6 +1,8 @@
 package oauthlogin_test
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"net/url"
 	"testing"
@@ -12,12 +14,26 @@ import (
 	"github.com/ogen-app/ogen/src/pgtest"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin/oauthtest"
+	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
+
+type linkedEmail struct {
+	userID, identityID, googleEmail string
+	passwordCleared                 bool
+}
+
+type fakeLinkEmails struct{ sent []linkedEmail }
+
+func (f *fakeLinkEmails) EnqueueGoogleLinkedEmailTx(_ context.Context, _ *sql.Tx, userID, _, identityID, googleEmail string, passwordCleared bool) error {
+	f.sent = append(f.sent, linkedEmail{userID, identityID, googleEmail, passwordCleared})
+	return nil
+}
 
 type fixture struct {
 	db     *bun.DB
 	issuer *oauthtest.Issuer
 	svc    *oauthlogin.Service
+	emails *fakeLinkEmails
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -25,16 +41,38 @@ func newFixture(t *testing.T) *fixture {
 	db := pgtest.MustDB()
 	t.Cleanup(func() { _ = db.Close() })
 	issuer := oauthtest.New(t)
+	accounts := repository.NewAccountRepository(db)
+	emails := &fakeLinkEmails{}
 	svc := oauthlogin.New(oauthlogin.Deps{
 		DB:         db,
 		Provider:   issuer.Provider(t),
 		OAuth:      repository.NewOAuthRepository(db),
 		Identities: repository.NewAccountIdentityRepository(db),
-		Accounts:   repository.NewAccountRepository(db),
+		Accounts:   accounts,
 		Users:      repository.NewUserRepository(db),
 		Sessions:   repository.NewSessionRepository(db),
+		Signup:     signup.New(db, accounts, repository.NewTenantRepository(db), nil),
+		Emails:     emails,
 	})
-	return &fixture{db: db, issuer: issuer, svc: svc}
+	return &fixture{db: db, issuer: issuer, svc: svc, emails: emails}
+}
+
+func (f *fixture) count(t *testing.T, model any, where string, args ...any) int {
+	t.Helper()
+	n, err := f.db.NewSelect().Model(model).Where(where, args...).Count(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func (f *fixture) passwordIsNull(t *testing.T, accountID string) bool {
+	t.Helper()
+	var isNull bool
+	if err := f.db.NewSelect().Table("accounts").ColumnExpr("password_hash IS NULL").Where("id = ?", accountID).Scan(t.Context(), &isNull); err != nil {
+		t.Fatal(err)
+	}
+	return isNull
 }
 
 // seedAccount creates an account with an owner membership of the default
@@ -150,7 +188,6 @@ func TestCallbackOutcomes(t *testing.T) {
 		{name: "token for another client", who: jane, tamper: func(c map[string]any) { c["aud"] = "someone-else" }, want: oauthlogin.CodeStateInvalid},
 		{name: "token from another issuer", who: jane, tamper: func(c map[string]any) { c["iss"] = "https://evil.example" }, want: oauthlogin.CodeStateInvalid},
 		{name: "replayed nonce", who: jane, tamper: func(c map[string]any) { c["nonce"] = "other" }, want: oauthlogin.CodeStateInvalid},
-		{name: "unlinked identity", who: oauthtest.Identity{Subject: "stranger", Email: "s@gmail.com", EmailVerified: true}, want: oauthlogin.CodeNotLinked},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

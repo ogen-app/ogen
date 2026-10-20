@@ -37,5 +37,7 @@ func newGoogleLogin(d *deps) *oauthlogin.Service {
 		Accounts:   r.accountRepo,
 		Users:      r.userRepo,
 		Sessions:   r.sessionRepo,
+		Signup:     d.svc.signup,
+		Emails:     d.enqueuer,
 	})
 }

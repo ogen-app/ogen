@@ -24,6 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
 const component = "oauthlogin"
@@ -38,7 +39,7 @@ const (
 	CodeStateInvalid      = "google_state_invalid"
 	CodeEmailUnverified   = "google_email_unverified"
 	CodeUnavailable       = "google_unavailable"
-	CodeNotLinked         = "google_not_linked"
+	CodeAlreadyConnected  = "google_already_connected"
 	CodeNoActiveWorkspace = "no_active_workspace"
 	CodeThrottled         = "throttled"
 )
@@ -65,7 +66,19 @@ func (e *Error) Unwrap() error { return e.Err }
 // ErrInvalidIntent rejects a Start with an intent this service doesn't run.
 var ErrInvalidIntent = errors.New("oauthlogin: unsupported intent")
 
-// Deps are the Service's collaborators.
+// SignupCreator creates a workspace with its owning account. Implemented by
+// *signup.Service.
+type SignupCreator interface {
+	Create(ctx context.Context, in signup.Input) (*signup.Result, error)
+}
+
+// LinkEnqueuer queues the "Google sign-in is now connected" notice inside the
+// linking transaction. Implemented by *queues.Enqueuer.
+type LinkEnqueuer interface {
+	EnqueueGoogleLinkedEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID, identityID, googleEmail string, passwordCleared bool) error
+}
+
+// Deps are the Service's collaborators. Emails may be nil (no notice mail).
 type Deps struct {
 	DB         *bun.DB
 	Provider   Provider
@@ -74,6 +87,8 @@ type Deps struct {
 	Accounts   repository.AccountRepository
 	Users      repository.UserRepository
 	Sessions   repository.SessionRepository
+	Signup     SignupCreator
+	Emails     LinkEnqueuer
 }
 
 // Service runs provider sign-ins.
@@ -156,13 +171,34 @@ type CallbackInput struct {
 	ProviderError string
 }
 
-// Result is a sign-in that opened a session.
+// ResultKind says how a successful callback ended.
+type ResultKind int
+
+const (
+	// ResultSignedIn opened a session.
+	ResultSignedIn ResultKind = iota
+	// ResultPendingSignup found no account: the newcomer names a workspace
+	// next, with PendingToken.
+	ResultPendingSignup
+)
+
+// Result is a callback that succeeded.
 type Result struct {
+	Kind     ResultKind
 	Intent   string
 	ReturnTo string
-	Session  *models.Session
-	Account  *models.Account
-	User     *models.User
+
+	// Set for ResultSignedIn.
+	Session *models.Session
+	Account *models.Account
+	User    *models.User
+	// Linked is set when this sign-in linked the identity to an existing
+	// account; PasswordCleared when linking removed the account's password.
+	Linked          bool
+	PasswordCleared bool
+
+	// Set for ResultPendingSignup.
+	PendingToken string
 }
 
 // Callback finishes a sign-in. Every failure is an *Error carrying the code for
@@ -195,7 +231,7 @@ func (s *Service) Callback(ctx context.Context, in CallbackInput) (*Result, erro
 		return nil, fail(CodeEmailUnverified, nil)
 	}
 
-	res, err := s.signIn(ctx, claims)
+	res, err := s.signIn(ctx, st, claims)
 	if err != nil {
 		if e, ok := errors.AsType[*Error](err); ok {
 			e.Intent, e.ReturnTo = st.Intent, st.ReturnTo
@@ -227,11 +263,20 @@ func (s *Service) spendState(ctx context.Context, in CallbackInput) (*models.OAu
 	return st, nil
 }
 
-// signIn opens a session for the account a verified identity is linked to.
-func (s *Service) signIn(ctx context.Context, c *Claims) (*Result, error) {
+// signIn opens a session for the account a verified identity is linked to. An
+// unlinked identity whose address matches an account is linked to it; with no
+// such account the newcomer is handed on to name a workspace.
+func (s *Service) signIn(ctx context.Context, st *models.OAuthState, c *Claims) (*Result, error) {
 	identity, err := s.d.Identities.GetBySubject(ctx, s.d.Provider.Name(), c.Subject)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, &Error{Code: CodeNotLinked}
+		account, err := s.d.Accounts.GetByEmailFold(ctx, c.Email)
+		if errors.Is(err, sql.ErrNoRows) {
+			return s.pendingSignup(ctx, st, c)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return s.linkExisting(ctx, account, c)
 	}
 	if err != nil {
 		return nil, err
@@ -261,18 +306,9 @@ func (s *Service) openSession(ctx context.Context, identity *models.AccountIdent
 	if err != nil {
 		return nil, err
 	}
-	token, err := models.NewSessionToken()
+	session, err := s.newSession(account.ID, user)
 	if err != nil {
 		return nil, err
-	}
-	now := s.clock()
-	session := &models.Session{
-		ID:        token,
-		AccountID: account.ID,
-		UserID:    user.ID,
-		TenantID:  user.TenantID,
-		ExpiresAt: now.Add(sessionTTL),
-		CreatedAt: now,
 	}
 	created, err := s.d.Sessions.CreateForIdentity(ctx, session, identity.ID)
 	if err != nil {

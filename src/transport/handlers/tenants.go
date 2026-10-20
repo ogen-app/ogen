@@ -91,6 +91,12 @@ func (h *TenantsHandler) SetLoginSecurity(sec LoginSecurity, cookieName string) 
 	h.devices = deviceTracker{sec: sec, cookieName: cookieName, secure: h.secureCookie}
 }
 
+// ShareSignupThrottle makes a Google sign-up spend the same per-IP budget as
+// this signup.
+func (h *TenantsHandler) ShareSignupThrottle(g *GoogleAuthHandler) {
+	g.signupLimiter = h.ipLimiter
+}
+
 func (h *TenantsHandler) Register(app *fiber.App) {
 	app.Post("/api/tenants", h.Signup) // public self-service signup
 

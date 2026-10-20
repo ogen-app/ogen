@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/riverqueue/river"
@@ -562,6 +563,28 @@ func (e *Enqueuer) EnqueueNewDeviceLoginEmailTx(ctx context.Context, tx *sql.Tx,
 			"location":     v.Location,
 			"secure_url":   v.SecureURL,
 			"masked_email": v.MaskedEmail,
+		},
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueGoogleLinkedEmailTx enqueues the transactional "Google sign-in is now
+// connected" notice inside the transaction that links the identity, so the mail
+// exists iff the link does. identityID keys the idempotency. A nil enqueuer is a
+// no-op.
+func (e *Enqueuer) EnqueueGoogleLinkedEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID, identityID, googleEmail string, passwordCleared bool) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+		UserID:         userID,
+		TenantID:       tenantID,
+		TemplateKey:    templates.KeyGoogleLinked,
+		EmailKind:      models.EmailKindTransactional,
+		IdempotencyKey: "google_linked:" + identityID,
+		Vars: map[string]string{
+			"google_email":     googleEmail,
+			"password_cleared": strconv.FormatBool(passwordCleared),
 		},
 	}, insertOptsWithRequestID(ctx, nil))
 	return err
