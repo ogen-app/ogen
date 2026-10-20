@@ -10,6 +10,10 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
 )
 
@@ -114,11 +118,26 @@ func (p *oidcProvider) AuthCodeURL(state, nonce, verifier string) string {
 	)
 }
 
-func (p *oidcProvider) Exchange(ctx context.Context, code, verifier, nonce string) (*Claims, error) {
+func (p *oidcProvider) Exchange(ctx context.Context, code, verifier, nonce string) (claims *Claims, err error) {
+	ctx, span := tracer.Start(ctx, "oauthlogin.exchange", trace.WithAttributes(attribute.String("provider", p.name)))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "exchange failed")
+		}
+		span.End()
+	}()
 	ctx, cancel := context.WithTimeout(ctx, exchangeTimeout)
 	defer cancel()
 	ctx = oidc.ClientContext(ctx, p.client)
+	return p.exchange(ctx, code, verifier, nonce)
+}
 
+// tracer spans the code exchange; the token and key fetches inside it are
+// client spans of the traced default transport.
+var tracer = otel.Tracer("ogen/oauthlogin")
+
+func (p *oidcProvider) exchange(ctx context.Context, code, verifier, nonce string) (*Claims, error) {
 	tok, err := p.oauth.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return nil, fmt.Errorf("oauthlogin: exchange code: %w", err)

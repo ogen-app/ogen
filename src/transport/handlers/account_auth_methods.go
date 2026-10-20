@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -73,7 +74,9 @@ func (h *AccountAuthMethodsHandler) Unlink(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	provider := c.Params("provider")
+	// Cloned: the activity recorder keeps it past the handler, and fiber's
+	// params alias fasthttp buffers that are reused.
+	provider := strings.Clone(c.Params("provider"))
 	err = h.methods.Unlink(reqCtx(c), session.AccountID, provider, session.ID)
 	switch {
 	case errors.Is(err, oauthlogin.ErrUnknownProvider), errors.Is(err, oauthlogin.ErrNotLinked):
