@@ -109,15 +109,17 @@ func (h *GoogleAuthHandler) Providers(c *fiber.Ctx) error {
 // @Summary      Start Google sign-in
 // @Description  Sends the browser to Google. Navigate to it (it is not an XHR endpoint). The same flow signs in an existing account or starts a sign-up; the callback decides.
 // @Tags         auth
-// @Param        intent     query  string  false  "signin (default), or link to connect Google to the signed-in account"
-// @Param        return_to  query  string  false  "Same-site path to land on after signing in"
+// @Param        intent        query  string  false  "signin (default); link to connect Google to the signed-in account; invite to accept invite_token"
+// @Param        return_to     query  string  false  "Same-site path to land on after signing in"
+// @Param        invite_token  query  string  false  "Invitation token (intent=invite); the Google address must be the invited one"
 // @Success      302
 // @Failure      400  {object}  map[string]string
 // @Router       /api/auth/google/start [get]
 func (h *GoogleAuthHandler) Start(c *fiber.Ctx) error {
 	in := oauthlogin.StartInput{
-		Intent:   c.Query("intent"),
-		ReturnTo: c.Query("return_to"),
+		Intent:      c.Query("intent"),
+		ReturnTo:    c.Query("return_to"),
+		InviteToken: c.Query("invite_token"),
 	}
 	if in.Intent == models.OAuthIntentLink {
 		if s := h.currentSession(c); s != nil {
@@ -225,6 +227,11 @@ func (h *GoogleAuthHandler) signedIn(c *fiber.Ctx, res *oauthlogin.Result) error
 		h.activity.Record(actor, activity.CategoryAuthentication, "identity_linked",
 			activity.WithEntity("user", res.User.ID), activity.WithSource(activity.SourceAPI),
 			activity.WithPayload(map[string]any{"provider": h.svc.ProviderName(), "via": res.Intent, "password_cleared": res.PasswordCleared}))
+	}
+	if res.Joined {
+		h.activity.Record(actor, activity.CategoryAuthentication, "invitation_accepted",
+			activity.WithEntity("user", res.User.ID), activity.WithSource(activity.SourceAPI),
+			activity.WithPayload(map[string]any{"method": h.svc.ProviderName()}))
 	}
 	h.activity.Record(actor, activity.CategoryAuthentication, "login",
 		activity.WithEntity("user", res.User.ID), activity.WithSource(activity.SourceAPI),

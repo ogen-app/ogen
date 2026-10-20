@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/inviteaccept"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 )
 
@@ -39,5 +40,6 @@ func newGoogleLogin(d *deps) *oauthlogin.Service {
 		Sessions:   r.sessionRepo,
 		Signup:     d.svc.signup,
 		Emails:     d.enqueuer,
+		Invites:    inviteaccept.New(d.db, r.userRepo, r.accountRepo, r.invitationRepo, r.sessionRepo, d.entitlements.limiter),
 	})
 }
