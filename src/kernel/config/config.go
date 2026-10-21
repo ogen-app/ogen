@@ -413,6 +413,33 @@ type Config struct {
 	// periodic task drops older rows. 0 disables cleanup entirely.
 	EmailLogRetentionDays int `envconfig:"EMAIL_LOG_RETENTION_DAYS" default:"90"`
 
+	// Billing. BillingProvider "none" (the default) turns billing off: the
+	// billing routes answer 503, new workspaces are not gated, and nothing is
+	// called upstream. "lemonsqueezy" enables Lemon Squeezy as merchant of
+	// record. The API key and webhook secret live in the encrypted secret
+	// store (LemonSqueezyAPIKey / LemonSqueezyWebhookSecret are first-boot
+	// seeds only); everything here is non-secret.
+	BillingProvider string `envconfig:"BILLING_PROVIDER" default:"none"`
+	// LemonSqueezyTestMode declares the store mode. Checkouts are created in
+	// it, and webhooks or subscriptions from the other mode are ignored.
+	LemonSqueezyTestMode bool   `envconfig:"LEMONSQUEEZY_TEST_MODE" default:"true"`
+	LemonSqueezyStoreID  string `envconfig:"LEMONSQUEEZY_STORE_ID"  default:""`
+	// LemonSqueezyVariants maps tier version price ids to Lemon Squeezy
+	// variants, as JSON: {"<price_id>":"<variant_id>"} or, for a price that can
+	// carry the free month, {"<price_id>":{"variant":"<id>","trial_variant":"<id>"}}.
+	// Test and live variant ids differ, so this changes at cutover.
+	LemonSqueezyVariants      string        `envconfig:"LEMONSQUEEZY_VARIANTS"     default:""`
+	LemonSqueezyBaseURL       string        `envconfig:"LEMONSQUEEZY_BASE_URL"     default:"https://api.lemonsqueezy.com/v1"`
+	LemonSqueezyHTTPTimeout   time.Duration `envconfig:"LEMONSQUEEZY_HTTP_TIMEOUT" default:"15s"`
+	LemonSqueezyAPIKey        string        `envconfig:"LEMONSQUEEZY_API_KEY"        default:""`
+	LemonSqueezyWebhookSecret string        `envconfig:"LEMONSQUEEZY_WEBHOOK_SECRET" default:""`
+	// BillingReconcileInterval re-reads every live subscription from the
+	// provider (its webhooks retry only three times). 0 disables the sweep.
+	BillingReconcileInterval time.Duration `envconfig:"BILLING_RECONCILE_INTERVAL" default:"1h"`
+	// BillingTrialTeardownLive tears down the Zernio profile of a workspace
+	// whose free month ended without a payment. False only reports it.
+	BillingTrialTeardownLive bool `envconfig:"BILLING_TRIAL_TEARDOWN_LIVE" default:"false"`
+
 	// Envelope encryption. KEKPath points at a Docker-volume directory;
 	// the actual key file lives at <KEKPath>/kek.v1. The versioned
 	// filename leaves room for KEK rotation later without a path

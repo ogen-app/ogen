@@ -22,6 +22,10 @@ type TenantTier struct {
 	Description string    `bun:"description,notnull,default:''"                json:"description"`
 	CreatedAt   time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt   time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+
+	// FreeTrial marks the one tier whose checkout carries the marketing free
+	// month. At most one tier is marked (partial unique index).
+	FreeTrial bool `bun:"free_trial,notnull,default:false" json:"-"`
 }
 
 // DefaultTierID is the tier seeded by the CON-208 migration. Every pre-existing

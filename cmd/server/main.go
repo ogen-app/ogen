@@ -199,6 +199,8 @@ func initSecrets(ctx context.Context, cfg *config.Config, db *bun.DB) (secrets.S
 		{Name: secrets.NameResendWebhookSecret, EnvValue: cfg.ResendWebhookSecret},
 		{Name: secrets.NameEmailLinkSecret, EnvValue: cfg.EmailLinkSecret},
 		{Name: secrets.NameFirecrawlAPIKey, EnvValue: cfg.FirecrawlAPIKey},
+		{Name: secrets.NameLemonSqueezyAPIKey, EnvValue: cfg.LemonSqueezyAPIKey},
+		{Name: secrets.NameLemonSqueezyWebhookSecret, EnvValue: cfg.LemonSqueezyWebhookSecret},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("migrate secrets from env: %w", err)
