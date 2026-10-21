@@ -300,13 +300,16 @@ func (r *assetAnalysisRepository) DeleteRun(ctx context.Context, id string) erro
 	return err
 }
 
-// CountRunsSince uses Count, which unlike Exists runs the TenantScoped hook.
+// CountRunsSince scans a count(*) select: bun's Count skips the BeforeSelect
+// hook, so it would count every tenant's runs.
 func (r *assetAnalysisRepository) CountRunsSince(ctx context.Context, since time.Time) (int64, error) {
-	n, err := r.db.NewSelect().
+	var n int64
+	err := r.db.NewSelect().
 		Model((*models.AssetAnalysisRun)(nil)).
+		ColumnExpr("count(*)").
 		Where("aar.created_at >= ?", since).
-		Count(ctx)
-	return int64(n), err
+		Scan(ctx, &n)
+	return n, err
 }
 
 // missingLensesSQL finds the absent and stranded lenses of active tenants. A
