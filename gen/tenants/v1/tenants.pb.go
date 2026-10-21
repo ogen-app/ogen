@@ -191,16 +191,22 @@ func (x *Group) GetUpdatedAt() *timestamppb.Timestamp {
 }
 
 type Tenant struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Slug          string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
-	Tier          *Tier                  `protobuf:"bytes,4,opt,name=tier,proto3" json:"tier,omitempty"`     // always set (tier is required)
-	Groups        []*Group               `protobuf:"bytes,5,rep,name=groups,proto3" json:"groups,omitempty"` // possibly empty
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Status        string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`                                 // CON-190: active | suspended | deleted
-	StatusReason  string                 `protobuf:"bytes,9,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"` // operator note; '' when active
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Slug         string                 `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
+	Tier         *Tier                  `protobuf:"bytes,4,opt,name=tier,proto3" json:"tier,omitempty"`     // always set (tier is required)
+	Groups       []*Group               `protobuf:"bytes,5,rep,name=groups,proto3" json:"groups,omitempty"` // possibly empty
+	CreatedAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Status       string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`                                 // CON-190: active | suspended | deleted
+	StatusReason string                 `protobuf:"bytes,9,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"` // operator note; '' when active
+	// CON-322 billing summary: ” when billing is off (BILLING_PROVIDER=none);
+	// not_required (grandfathered or comped); awaiting_checkout (gated, never
+	// subscribed); otherwise the Lemon Squeezy status of the workspace's current
+	// subscription (on_trial | active | past_due | unpaid | paused | cancelled |
+	// expired).
+	BillingStatus string `protobuf:"bytes,10,opt,name=billing_status,json=billingStatus,proto3" json:"billing_status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -294,6 +300,13 @@ func (x *Tenant) GetStatus() string {
 func (x *Tenant) GetStatusReason() string {
 	if x != nil {
 		return x.StatusReason
+	}
+	return ""
+}
+
+func (x *Tenant) GetBillingStatus() string {
+	if x != nil {
+		return x.BillingStatus
 	}
 	return ""
 }
@@ -1668,7 +1681,7 @@ const file_tenants_v1_tenants_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc4\x02\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xeb\x02\n" +
 	"\x06Tenant\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -1680,7 +1693,9 @@ const file_tenants_v1_tenants_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x16\n" +
 	"\x06status\x18\b \x01(\tR\x06status\x12#\n" +
-	"\rstatus_reason\x18\t \x01(\tR\fstatusReason\"\x12\n" +
+	"\rstatus_reason\x18\t \x01(\tR\fstatusReason\x12%\n" +
+	"\x0ebilling_status\x18\n" +
+	" \x01(\tR\rbillingStatus\"\x12\n" +
 	"\x10ListTiersRequest\";\n" +
 	"\x11ListTiersResponse\x12&\n" +
 	"\x05tiers\x18\x01 \x03(\v2\x10.tenants.v1.TierR\x05tiers\"\x13\n" +

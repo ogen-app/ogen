@@ -37,6 +37,10 @@ const (
 	NameEmailLinkSecret     = "email_link_secret"
 	// CON-222 URL assets: Firecrawl.dev web-scrape API key.
 	NameFirecrawlAPIKey = "firecrawl_api_key"
+	// CON-322 billing: Lemon Squeezy API key and webhook signing secret. Test
+	// and live mode have separate values, rotated here at cutover.
+	NameLemonSqueezyAPIKey        = "lemonsqueezy_api_key"
+	NameLemonSqueezyWebhookSecret = "lemonsqueezy_webhook_secret"
 )
 
 // AllowedNames is the closed set of accepted secret names. Anything
@@ -49,6 +53,8 @@ var AllowedNames = []string{
 	NameResendWebhookSecret,
 	NameEmailLinkSecret,
 	NameFirecrawlAPIKey,
+	NameLemonSqueezyAPIKey,
+	NameLemonSqueezyWebhookSecret,
 }
 
 // MaxValueLen is the inclusive upper bound on a plaintext secret. The
