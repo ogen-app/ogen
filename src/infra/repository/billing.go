@@ -212,6 +212,18 @@ func (r *billingRepository) ListUnpaidExpired(ctx context.Context, testMode bool
 		Where("bs.status = ?", models.SubscriptionStatusExpired).
 		Where("bs.first_paid_at IS NULL").
 		Where("bs.teardown_at IS NULL").
+		// A workspace another subscription still entitles is never torn down;
+		// filtering it here keeps those rows from filling every batch. Mirrors
+		// billing.Live.
+		Where(`NOT EXISTS (
+			SELECT 1 FROM billing_subscriptions AS live_bs
+			WHERE live_bs.tenant_id = bs.tenant_id
+			  AND live_bs.test_mode = bs.test_mode
+			  AND live_bs.invalidated_at IS NULL
+			  AND (live_bs.status IN (?) OR (live_bs.status = ? AND live_bs.ends_at > now())))`,
+			bun.List([]string{models.SubscriptionStatusOnTrial, models.SubscriptionStatusActive, models.SubscriptionStatusPastDue,
+				models.SubscriptionStatusUnpaid, models.SubscriptionStatusPaused}),
+			models.SubscriptionStatusCancelled).
 		OrderExpr("bs.id").
 		Limit(limit).
 		Scan(ctx)

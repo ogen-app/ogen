@@ -48,12 +48,18 @@ const (
 
 // Direction ranks a move between two prices by their yearly net amount (a
 // monthly price counts twelve times), so a monthly-to-yearly switch on one
-// tier is an upgrade. Equal amounts fall back to the tier name order.
+// tier is an upgrade. Equal amounts fall back to the tier name order, then to
+// the interval (yearly above monthly), so two different prices never rank the
+// same.
 func Direction(from, to Price) string {
 	if from.ID == to.ID {
 		return DirectionSame
 	}
-	c := cmp.Or(cmp.Compare(yearly(to), yearly(from)), cmp.Compare(to.TierName, from.TierName))
+	c := cmp.Or(
+		cmp.Compare(yearly(to), yearly(from)),
+		cmp.Compare(to.TierName, from.TierName),
+		cmp.Compare(intervalRank(to), intervalRank(from)),
+	)
 	switch {
 	case c > 0:
 		return DirectionUpgrade
@@ -62,6 +68,13 @@ func Direction(from, to Price) string {
 	default:
 		return DirectionSame
 	}
+}
+
+func intervalRank(p Price) int {
+	if p.Interval == "year" {
+		return 1
+	}
+	return 0
 }
 
 func yearly(p Price) int64 {

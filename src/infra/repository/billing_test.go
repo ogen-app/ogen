@@ -125,8 +125,16 @@ func TestBillingTrialUsedAndReconcileListing(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].ID != trial.ID {
 		t.Fatalf("reconcile list = %+v %v", list, err)
 	}
+	// The workspace's live trial still entitles it: nothing to tear down.
+	if unpaid, err := repo.ListUnpaidExpired(ctx, true, 10); err != nil || len(unpaid) != 0 {
+		t.Fatalf("unpaid expired with a live subscription = %+v %v", unpaid, err)
+	}
+	trial.Status = models.SubscriptionStatusExpired
+	if err := repo.UpdateSubscription(ctx, nil, trial); err != nil {
+		t.Fatal(err)
+	}
 	unpaid, err := repo.ListUnpaidExpired(ctx, true, 10)
-	if err != nil || len(unpaid) != 1 || unpaid[0].ID != expired.ID {
+	if err != nil || len(unpaid) != 2 {
 		t.Fatalf("unpaid expired = %+v %v", unpaid, err)
 	}
 	live, err := repo.ListTestModeLive(ctx)
