@@ -35,12 +35,6 @@ const sessionTTL = 7 * 24 * time.Hour
 // create a workspace instead.
 var ErrEmailInUse = errors.New("email already in use")
 
-// ProfileEnqueuer enqueues the Zernio profile-bootstrap job inside the
-// signup transaction. nil disables it (no profile provisioning).
-type ProfileEnqueuer interface {
-	EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error
-}
-
 // EmailEnqueuer enqueues the welcome + onboarding-drip jobs inside the
 // signup transaction. nil disables it (no lifecycle mail).
 type EmailEnqueuer interface {
@@ -91,18 +85,25 @@ type Service struct {
 	db       *bun.DB
 	accounts repository.AccountRepository
 	tenants  repository.TenantRepository
-	profiles ProfileEnqueuer
 	emails   EmailEnqueuer
 	harbor   HarborEnqueuer
+	// billingRequired gates new workspaces until they check out.
+	billingRequired bool
 
 	// now is injectable so tests can pin "current time". nil → time.Now().UTC().
 	now func() time.Time
 }
 
-// New wires a signup Service. profiles may be nil (no profile bootstrap).
-func New(db *bun.DB, accounts repository.AccountRepository, tenants repository.TenantRepository, profiles ProfileEnqueuer) *Service {
-	return &Service{db: db, accounts: accounts, tenants: tenants, profiles: profiles}
+// New wires a signup Service. The workspace's Zernio profile is not created
+// here: the first connect link bootstraps it, so a signup that never connects
+// an account costs nothing upstream.
+func New(db *bun.DB, accounts repository.AccountRepository, tenants repository.TenantRepository) *Service {
+	return &Service{db: db, accounts: accounts, tenants: tenants}
 }
+
+// SetBillingRequired makes every new workspace check out before use (on
+// while billing is enabled).
+func (s *Service) SetBillingRequired(required bool) { s.billingRequired = required }
 
 // SetEmailEnqueuer wires the lifecycle-email enqueuer (nil-safe: no mail sent).
 func (s *Service) SetEmailEnqueuer(e EmailEnqueuer) { s.emails = e }
@@ -144,6 +145,7 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("signup: %w", err)
 	}
+	e.tenant.BillingRequired = s.billingRequired
 
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		for _, m := range e.rows() {
@@ -224,17 +226,11 @@ func newSignupEntities(in Input, slug string, now time.Time) (*signupEntities, e
 	return e, nil
 }
 
-// enqueueSideEffectsTx enqueues the Zernio profile bootstrap, the welcome
-// and onboarding-drip mails and the Harbor new-tenant notification inside
-// the signup transaction, so each job exists iff the tenant commits. The
-// enqueues are local inserts; the external calls happen in the workers,
-// so signup never blocks on Zernio or Harbor reachability.
+// enqueueSideEffectsTx enqueues the welcome and onboarding-drip mails and the
+// Harbor new-tenant notification inside the signup transaction, so each job
+// exists iff the tenant commits. The enqueues are local inserts; the external
+// calls happen in the workers, so signup never blocks on Harbor reachability.
 func (s *Service) enqueueSideEffectsTx(ctx context.Context, tx *sql.Tx, userID, tenantID string) error {
-	if s.profiles != nil {
-		if err := s.profiles.EnqueueBootstrapProfileTx(ctx, tx, tenantID); err != nil {
-			return err
-		}
-	}
 	if s.emails != nil {
 		if err := s.emails.EnqueueWelcomeEmailTx(ctx, tx, userID, tenantID); err != nil {
 			return err

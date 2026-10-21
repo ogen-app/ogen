@@ -78,13 +78,23 @@ type FigmaPluginDeps struct {
 	MediaPreviews   repository.MediaPreviewRepository
 	Storage         storage.Storage
 	Previews        PreviewRenderer
+
+	// BillingGate, when set, holds a workspace that must check out first.
+	BillingGate BillingGate
+}
+
+func pluginAuthOptions(gate BillingGate) []AuthOption {
+	if gate == nil {
+		return nil
+	}
+	return []AuthOption{WithBillingGate(gate)}
 }
 
 func NewFigmaPluginHandler(d FigmaPluginDeps) *FigmaPluginHandler {
 	return &FigmaPluginHandler{
 		pairing:     d.Pairing,
 		appBaseURL:  strings.TrimRight(d.AppBaseURL, "/"),
-		auth:        RequirePluginToken(d.Tokens, d.Users),
+		auth:        RequirePluginToken(d.Tokens, d.Users, pluginAuthOptions(d.BillingGate)...),
 		users:       d.Users,
 		posts:       d.Posts,
 		platforms:   d.Platforms,

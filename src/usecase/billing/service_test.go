@@ -323,7 +323,7 @@ func TestScheduledDowngrade(t *testing.T) {
 	if err != nil || st.ScheduledChange == nil || st.ScheduledChange.Direction != billingdom.DirectionDowngrade || st.ScheduledChange.TierID != "pro" {
 		t.Fatalf("plan state = %+v %v", st, err)
 	}
-	changeID := strings.Split(h.jobs.steps[0], "@")[0]
+	changeID, _, _ := strings.Cut(h.jobs.steps[0], "@")
 	maxVersion := h.maxPrice.TierVersionID + "/" + models.AssignmentReasonSubscriptionStarted
 
 	// Not due yet: nothing happens.
@@ -366,7 +366,7 @@ func TestKeepCurrentPlanCancelsDowngrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := h.svc.PlanState(ctx, tenantID, "")
-	changeID := strings.Split(h.jobs.steps[0], "@")[0]
+	changeID, _, _ := strings.Cut(h.jobs.steps[0], "@")
 	h.now = st.ScheduledChange.EffectiveAt.Add(-30 * time.Minute)
 	if err := h.svc.RunScheduledChange(ctx, changeID); err != nil {
 		t.Fatal(err)

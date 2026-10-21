@@ -34,7 +34,15 @@ import (
 // Every authenticated request costs one query: the session joined to its
 // membership of the active workspace. The membership is also the gate that
 // keeps a soft-deleted workspace unreachable, so it is resolved every time.
-func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.UserRepository, cookieName string) fiber.Handler {
+//
+// WithBillingGate turns on the billing gate: a workspace that must check out
+// first gets 402 billing_required on every route outside the billing
+// allowlist (see billing_gate.go).
+func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.UserRepository, cookieName string, opts ...AuthOption) fiber.Handler {
+	var o authOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return func(c *fiber.Ctx) error {
 		token := c.Cookies(cookieName)
 		if token == "" {
@@ -73,17 +81,12 @@ func RequireAuth(sessionRepo repository.SessionRepository, userRepo repository.U
 				// member, or soft-deleted) is refused, never silently redirected.
 				return fiber.NewError(fiber.StatusForbidden, "not a member of this workspace")
 			}
-			// No header and the default is gone (its workspace was deleted, or the
-			// membership removed): fall back to any live workspace so the account
-			// isn't stranded on a dead default. 401 only when nothing remains.
-			user, err := userRepo.GetByAccountID(reqCtx(c), session.AccountID)
-			if errors.Is(err, sql.ErrNoRows) {
-				return fiber.NewError(fiber.StatusUnauthorized, "no accessible workspace")
-			}
-			if err != nil {
+			if membership, err = fallbackMembership(c, userRepo, session.AccountID, o.billingGate); err != nil {
 				return err
 			}
-			membership = &repository.Membership{UserID: user.ID, TenantID: user.TenantID}
+		}
+		if o.billingGate != nil && membership.BillingGated && !billingAllowed(c.Path()) {
+			return errBillingRequired
 		}
 		session.UserID = membership.UserID
 		session.TenantID = membership.TenantID

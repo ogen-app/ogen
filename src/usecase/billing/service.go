@@ -104,6 +104,9 @@ type Deps struct {
 	Jobs     Jobs
 	Hub      eventhub.Hub
 	Activity *activity.Recorder
+	// Configured reports whether the provider's API key and webhook secret
+	// are set; nil reads as configured.
+	Configured func(ctx context.Context) bool
 	// Now defaults to time.Now.
 	Now func() time.Time
 }
@@ -140,6 +143,14 @@ func New(d Deps) *Service {
 
 // Settings returns the billing settings.
 func (s *Service) Settings() billingdom.Settings { return s.d.Settings }
+
+// Configured reports whether billing is on and its secrets are set.
+func (s *Service) Configured(ctx context.Context) bool {
+	if !s.Enabled() {
+		return false
+	}
+	return s.d.Configured == nil || s.d.Configured(ctx)
+}
 
 // Enabled reports whether billing is on.
 func (s *Service) Enabled() bool { return s != nil && s.d.Settings.Enabled() && s.d.Provider != nil }
@@ -261,6 +272,45 @@ func (s *Service) currentSubscription(subs []models.BillingSubscription) *models
 		}
 	}
 	return nil
+}
+
+// CheckVariants compares every mapped variant with its price row: the amount,
+// the interval and the store mode must match. A mismatch is logged and
+// counted, never fatal, so an edit in the provider dashboard cannot take the
+// API down. It returns how many mappings disagree.
+func (s *Service) CheckVariants(ctx context.Context) (int, error) {
+	if !s.Configured(ctx) {
+		return 0, nil
+	}
+	ids := s.d.Settings.Variants.PriceIDs()
+	prices, err := s.d.Repo.Prices(ctx, ids)
+	if err != nil {
+		return 0, err
+	}
+	bad := 0
+	for _, priceID := range ids {
+		variantID, _ := s.d.Settings.Variants.Variant(priceID)
+		price, ok := prices[priceID]
+		if !ok {
+			bad++
+			slog.ErrorContext(ctx, "billing: LEMONSQUEEZY_VARIANTS names an unknown price", logging.AttrComponent, "billing", "price_id", priceID)
+			continue
+		}
+		v, err := s.variant(ctx, variantID)
+		if err != nil {
+			bad++
+			slog.ErrorContext(ctx, "billing: variant unreadable", logging.AttrComponent, "billing", "variant_id", variantID, logging.AttrError, err)
+			continue
+		}
+		if v.PriceMinor != price.NetMinor || v.Interval != price.Interval || v.TestMode != s.d.Settings.TestMode {
+			bad++
+			slog.ErrorContext(ctx, "billing: variant does not match its price row", logging.AttrComponent, "billing",
+				"price_id", priceID, "variant_id", variantID, "variant_price", v.PriceMinor, "price_net", price.NetMinor,
+				"variant_interval", v.Interval, "price_interval", price.Interval, "variant_test_mode", v.TestMode)
+		}
+	}
+	variantPriceMismatch.Set(int64(bad))
+	return bad, nil
 }
 
 // HasLiveSubscription implements queues.BillingLiveChecker.

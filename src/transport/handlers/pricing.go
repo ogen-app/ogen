@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"cmp"
+	"context"
 	"math"
 	"slices"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/billing"
 )
 
 // PricingHandler serves CON-243's read surface: the unauthenticated marketing
@@ -21,6 +23,20 @@ type PricingHandler struct {
 	catalog  *entitlements.Catalog
 	auth     fiber.Handler
 	limiter  *entitlements.Limiter // Live usage counts for /me/entitlements (nil-safe)
+	billing  BillingPlanReader     // Billing facts for both reads (nil = billing off)
+}
+
+// BillingPlanReader is the billing half of the plan reads: workspace billing
+// facts for the entitlements read, purchasability for public pricing.
+type BillingPlanReader interface {
+	PlanState(ctx context.Context, tenantID, accountID string) (billing.PlanState, error)
+	PricingFlags(ctx context.Context) (billing.PricingFlags, error)
+}
+
+// WithBilling adds the billing facts to both reads.
+func (h *PricingHandler) WithBilling(b BillingPlanReader) *PricingHandler {
+	h.billing = b
+	return h
 }
 
 // NewPricingHandler builds the handler over the entitlement resolver, the
@@ -41,7 +57,32 @@ func (h *PricingHandler) Register(app *fiber.App) {
 // pricingResponse wraps the ordered tiers so the envelope can grow (e.g. an
 // applied VAT rate) without a breaking change.
 type pricingResponse struct {
-	Tiers []entitlements.Resolution `json:"tiers"`
+	Tiers []pricingTier `json:"tiers"`
+}
+
+// pricingTier is a Resolution plus billing purchasability. Its Prices shadow
+// the embedded ones to carry a per-price available flag.
+type pricingTier struct {
+	entitlements.Resolution
+	// Available: the tier can be bought now (billing on and at least one of its
+	// prices sold by a provider variant).
+	Available bool `json:"available"`
+	// FreeTrial marks the tier carrying the marketing free month; TrialDays is
+	// its length (null without the offer).
+	FreeTrial bool           `json:"free_trial"`
+	TrialDays *int           `json:"trial_days"`
+	Prices    []pricingPrice `json:"prices"`
+}
+
+type pricingPrice struct {
+	models.TenantTierVersionPrice
+	Available bool `json:"available"`
+}
+
+// myEntitlementsResponse is the Resolution plus the workspace's billing facts.
+type myEntitlementsResponse struct {
+	*entitlements.Resolution
+	billing.PlanState
 }
 
 // Pricing godoc
@@ -69,15 +110,31 @@ func (h *PricingHandler) Pricing(c *fiber.Ctx) error {
 		return err
 	}
 
-	tiers := make([]entitlements.Resolution, 0, len(versions))
+	var flags billing.PricingFlags
+	if h.billing != nil {
+		if flags, err = h.billing.PricingFlags(reqCtx(c)); err != nil {
+			return err
+		}
+	}
+	tiers := make([]pricingTier, 0, len(versions))
 	for i := range versions {
 		v := &versions[i]
-		tiers = append(tiers, entitlements.Enrich(h.catalog, v, pricesByVersion[v.ID]))
+		res := entitlements.Enrich(h.catalog, v, pricesByVersion[v.ID])
+		tier := pricingTier{Resolution: res, Prices: make([]pricingPrice, 0, len(res.Prices))}
+		for _, p := range res.Prices {
+			mapped := flags.Enabled && flags.MappedPrices[p.ID]
+			tier.Available = tier.Available || mapped
+			tier.Prices = append(tier.Prices, pricingPrice{TenantTierVersionPrice: p, Available: mapped})
+		}
+		if flags.FreeTrialTierID != "" && flags.FreeTrialTierID == res.TierID {
+			tier.FreeTrial, tier.TrialDays = true, new(flags.TrialDays)
+		}
+		tiers = append(tiers, tier)
 	}
 	// Cheapest monthly net price first (Trial → Pro → Max); price-less tiers last,
 	// then by tier id for a stable order.
-	slices.SortStableFunc(tiers, func(a, b entitlements.Resolution) int {
-		return cmp.Or(cmp.Compare(minMonthlyNet(a), minMonthlyNet(b)), cmp.Compare(a.TierID, b.TierID))
+	slices.SortStableFunc(tiers, func(a, b pricingTier) int {
+		return cmp.Or(cmp.Compare(minMonthlyNet(a.Resolution), minMonthlyNet(b.Resolution)), cmp.Compare(a.TierID, b.TierID))
 	})
 
 	return c.JSON(pricingResponse{Tiers: tiers})
@@ -89,22 +146,34 @@ func (h *PricingHandler) Pricing(c *fiber.Ctx) error {
 // @Tags         pricing
 // @Produce      json
 // @Security     CookieAuth
-// @Success      200  {object}  entitlements.Resolution
+// @Success      200  {object}  myEntitlementsResponse
 // @Failure      401  {object}  map[string]string
 // @Router       /api/me/entitlements [get]
 func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
 	tenantID, ok := tenantctx.From(reqCtx(c))
-	if !ok {
-		if s, ok := c.Locals("session").(*models.Session); ok && s != nil {
+	var accountID string
+	if s, ok := c.Locals("session").(*models.Session); ok && s != nil {
+		accountID = s.AccountID
+		if tenantID == "" {
 			tenantID = s.TenantID
 		}
 	}
-	if tenantID == "" {
+	if !ok && tenantID == "" {
 		return fiber.NewError(fiber.StatusUnauthorized, "authentication required")
 	}
+	body, err := h.entitlementsBody(c, tenantID, accountID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(body)
+}
+
+// entitlementsBody is the GET /api/me/entitlements body; a 200 plan change
+// answers with it too.
+func (h *PricingHandler) entitlementsBody(c *fiber.Ctx, tenantID, accountID string) (any, error) {
 	res, err := h.resolver.ResolveCurrent(reqCtx(c), tenantID)
 	if err != nil {
-		return notFound(err, "no entitlements resolved for this workspace")
+		return nil, notFound(err, "no entitlements resolved for this workspace")
 	}
 	// Attach live usage to each numeric feature that has a registered
 	// counter, so the client can render "N of M" and warn before the 402 rather
@@ -120,7 +189,13 @@ func (h *PricingHandler) MyEntitlements(c *fiber.Ctx) error {
 			res.Entitlements[i].Current = &n
 		}
 	}
-	return c.JSON(res)
+	out := myEntitlementsResponse{Resolution: res}
+	if h.billing != nil {
+		if out.PlanState, err = h.billing.PlanState(reqCtx(c), tenantID, accountID); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // minMonthlyNet returns the lowest monthly net price of a tier, or math.MaxInt64

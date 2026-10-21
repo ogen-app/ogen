@@ -16,10 +16,11 @@ import (
 // tenants alias t: the workspace must check out and has never had a
 // subscription that still counts. Test-mode subscriptions stop counting when
 // the cutover invalidates them; subscriptions from the other mode are never
-// stored, so the expression needs no mode.
-const BillingGateSQL = `(t.billing_required AND NOT EXISTS (
+// stored, so the expression needs no mode. The CASE keeps the EXISTS off the
+// path of every workspace that is not flagged, so the auth query stays cheap.
+const BillingGateSQL = `(CASE WHEN t.billing_required THEN NOT EXISTS (
 	SELECT 1 FROM billing_subscriptions AS gate_bs
-	WHERE gate_bs.tenant_id = t.id AND gate_bs.invalidated_at IS NULL))`
+	WHERE gate_bs.tenant_id = t.id AND gate_bs.invalidated_at IS NULL) ELSE false END)`
 
 // BillingRepository persists the billing mirror. The tables carry a plain
 // tenant_id; every method takes the tenant explicitly (webhooks and sweeps run
@@ -96,6 +97,20 @@ type BillingRepository interface {
 
 	// Prices resolves price rows with their tier, keyed by price id.
 	Prices(ctx context.Context, ids []string) (map[string]billing.Price, error)
+
+	// CountConnectedAccounts counts a workspace's connected (not
+	// disconnected) social accounts: the connected_accounts entitlement.
+	CountConnectedAccounts(ctx context.Context, tenantID string) (int64, error)
+}
+
+func (r *billingRepository) CountConnectedAccounts(ctx context.Context, tenantID string) (int64, error) {
+	// A raw table count: bun's Count skips the TenantScoped hook, so the
+	// tenant is filtered explicitly.
+	n, err := r.db.NewSelect().TableExpr("social_accounts").
+		Where("tenant_id = ?", tenantID).
+		Where("deleted_at IS NULL").
+		Count(ctx)
+	return int64(n), err
 }
 
 type billingRepository struct {
@@ -181,7 +196,7 @@ func (r *billingRepository) ListByStatus(ctx context.Context, testMode bool, sta
 	q := r.db.NewSelect().Model(&out).
 		Where("bs.test_mode = ?", testMode).
 		Where("bs.invalidated_at IS NULL").
-		Where("bs.status IN (?)", bun.In(statuses))
+		Where("bs.status IN (?)", bun.List(statuses))
 	if updatedSince != nil {
 		q = q.Where("bs.updated_at >= ?", *updatedSince)
 	}
@@ -221,7 +236,7 @@ func (r *billingRepository) Invalidate(ctx context.Context, db bun.IDB, ids []st
 		Set("invalidated_at = ?", at).
 		Set("invalidated_reason = ?", reason).
 		Set("updated_at = ?", at).
-		Where("id IN (?)", bun.In(ids)).
+		Where("id IN (?)", bun.List(ids)).
 		Where("invalidated_at IS NULL").
 		Exec(ctx)
 	return err
@@ -311,7 +326,7 @@ func (r *billingRepository) OpenScheduledChange(ctx context.Context, db bun.IDB,
 	c := new(models.BillingScheduledChange)
 	err := r.idb(db).NewSelect().Model(c).
 		Where("bsc.billing_subscription_id = ?", subscriptionID).
-		Where("bsc.status IN (?)", bun.In([]string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied})).
+		Where("bsc.status IN (?)", bun.List([]string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied})).
 		Scan(ctx)
 	if err != nil {
 		return nil, err
@@ -325,7 +340,7 @@ func (r *billingRepository) SetScheduledChangeStatus(ctx context.Context, db bun
 		Set("error = ?", errMsg).
 		Set("updated_at = ?", at).
 		Where("id = ?", id).
-		Where("status IN (?)", bun.In(from)).
+		Where("status IN (?)", bun.List(from)).
 		Exec(ctx)
 	if err != nil {
 		return false, err
@@ -405,7 +420,7 @@ func (r *billingRepository) TenantNames(ctx context.Context, ids []string) (map[
 		ID   string `bun:"id"`
 		Name string `bun:"name"`
 	}
-	if err := r.db.NewSelect().TableExpr("tenants").Column("id", "name").Where("id IN (?)", bun.In(ids)).Scan(ctx, &rows); err != nil {
+	if err := r.db.NewSelect().TableExpr("tenants").Column("id", "name").Where("id IN (?)", bun.List(ids)).Scan(ctx, &rows); err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -483,7 +498,7 @@ func (r *billingRepository) Prices(ctx context.Context, ids []string) (map[strin
 		Join("JOIN tenant_tier_versions AS v ON v.id = p.tier_version_id").
 		Join("JOIN tenant_tiers AS tt ON tt.id = v.tier_id").
 		ColumnExpr("p.id, v.tier_id, tt.name AS tier_name, p.tier_version_id, p.currency, p.billing_interval, p.net_minor").
-		Where("p.id IN (?)", bun.In(ids)).
+		Where("p.id IN (?)", bun.List(ids)).
 		Scan(ctx, &rows)
 	if err != nil {
 		return nil, err

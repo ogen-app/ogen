@@ -1383,6 +1383,110 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/billing": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The owner's billing card: the subscription in the provider's own status vocabulary, card brand and last four, and the net (VAT-exclusive) price. subscription is null when the workspace never bought; portal is false when there is no customer portal to open; test_mode marks the sandbox period.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "billing"
+                ],
+                "summary": "Workspace billing",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/billing.BillingView"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/billing/portal": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "A fresh, signed link to the provider's customer portal (card, invoices, cancellation). It expires within 24 hours; never cache it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "billing"
+                ],
+                "summary": "Billing portal link",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.portalResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/brand/facts": {
             "post": {
                 "security": [
@@ -7698,7 +7802,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/entitlements.Resolution"
+                            "$ref": "#/definitions/handlers.myEntitlementsResponse"
                         }
                     },
                     "401": {
@@ -12886,6 +12990,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/webhooks/lemonsqueezy": {
+            "post": {
+                "description": "Signature-verified (X-Signature, HMAC-SHA256 of the raw body) ingest of subscription and payment events. Redeliveries are recognised by body hash; snapshots older than the mirror are ignored; events from the other store mode are acknowledged and ignored. A failure answers 500 so the provider retries.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "billing"
+                ],
+                "summary": "Lemon Squeezy webhook",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "HMAC-SHA256 hex of the body",
+                        "name": "X-Signature",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Acknowledged"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/webhooks/resend": {
             "post": {
                 "description": "Signature-verified ingest of Resend events. Bounces/complaints\nsuppress the address; delivery events update the send audit.",
@@ -12925,6 +13082,96 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/workspace/plan": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Without a live subscription: 202 with a hosted checkout to redirect to (checkout.trial says whether the free month applies). With one: 200 with the entitlements read after the change. An upgrade lands now with proration; a downgrade is scheduled for the renewal (scheduled_change); choosing the current plan cancels a pending downgrade; a tier change during the free month ends it and charges now. tier_id is a tier or tier version id; price_id defaults to the monthly price.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "billing"
+                ],
+                "summary": "Choose the workspace plan",
+                "parameters": [
+                    {
+                        "description": "Plan choice",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.changePlanRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.myEntitlementsResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.checkoutResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -12986,7 +13233,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Creates a new, independent workspace owned by the authenticated account, provisions its Zernio profile, and returns it. Does not switch — the caller chooses when to move into it (CON-147).",
+                "description": "Creates a new, independent workspace owned by the authenticated account and returns it. Its Zernio profile is created by its first connect link. Does not switch — the caller chooses when to move into it (CON-147).",
                 "consumes": [
                     "application/json"
                 ],
@@ -13148,6 +13395,103 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "billing.BillingView": {
+            "type": "object",
+            "properties": {
+                "portal": {
+                    "description": "Portal reports whether there is a customer portal to send the owner to.",
+                    "type": "boolean"
+                },
+                "subscription": {
+                    "description": "Subscription is nil when the workspace never bought.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/billing.SubscriptionView"
+                        }
+                    ]
+                },
+                "test_mode": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "billing.CardView": {
+            "type": "object",
+            "properties": {
+                "brand": {
+                    "type": "string"
+                },
+                "last_four": {
+                    "type": "string"
+                }
+            }
+        },
+        "billing.Checkout": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "trial": {
+                    "description": "Trial reports whether the free month was applied to this checkout.",
+                    "type": "boolean"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "billing.PriceView": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "integer"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "period": {
+                    "type": "string"
+                }
+            }
+        },
+        "billing.ScheduledChangeView": {
+            "type": "object",
+            "properties": {
+                "direction": {
+                    "type": "string"
+                },
+                "effective_at": {
+                    "type": "string"
+                },
+                "tier_id": {
+                    "type": "string"
+                },
+                "version_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "billing.SubscriptionView": {
+            "type": "object",
+            "properties": {
+                "card": {
+                    "$ref": "#/definitions/billing.CardView"
+                },
+                "ends_at": {
+                    "type": "string"
+                },
+                "price": {
+                    "$ref": "#/definitions/billing.PriceView"
+                },
+                "renews_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "campaignphase.Source": {
             "type": "string",
             "enum": [
@@ -13194,41 +13538,6 @@ const docTemplate = `{
                 },
                 "value": {},
                 "value_type": {
-                    "type": "string"
-                }
-            }
-        },
-        "entitlements.Resolution": {
-            "type": "object",
-            "properties": {
-                "change_reason": {
-                    "type": "string"
-                },
-                "entitlements": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/entitlements.EntitlementValue"
-                    }
-                },
-                "prices": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/models.TenantTierVersionPrice"
-                    }
-                },
-                "purchasable": {
-                    "type": "boolean"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "tier_id": {
-                    "type": "string"
-                },
-                "version": {
-                    "type": "integer"
-                },
-                "version_id": {
                     "type": "string"
                 }
             }
@@ -14176,6 +14485,25 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.changePlanRequest": {
+            "type": "object",
+            "properties": {
+                "price_id": {
+                    "type": "string"
+                },
+                "tier_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.checkoutResponse": {
+            "type": "object",
+            "properties": {
+                "checkout": {
+                    "$ref": "#/definitions/billing.Checkout"
+                }
+            }
+        },
         "handlers.cloneCampaignTypeRequest": {
             "type": "object",
             "required": [
@@ -14753,6 +15081,59 @@ const docTemplate = `{
                 "before": {
                     "description": "Before bounds the update to notifications the caller has actually seen\n(seq \u003c= Before), so one that arrives mid-click stays unread. 0 = all.",
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.myEntitlementsResponse": {
+            "type": "object",
+            "properties": {
+                "billing_period": {
+                    "type": "string"
+                },
+                "billing_required": {
+                    "type": "boolean"
+                },
+                "change_reason": {
+                    "type": "string"
+                },
+                "entitlements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/entitlements.EntitlementValue"
+                    }
+                },
+                "prices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.TenantTierVersionPrice"
+                    }
+                },
+                "purchasable": {
+                    "type": "boolean"
+                },
+                "renews_at": {
+                    "type": "string"
+                },
+                "scheduled_change": {
+                    "$ref": "#/definitions/billing.ScheduledChangeView"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tier_id": {
+                    "type": "string"
+                },
+                "trial_eligible": {
+                    "type": "boolean"
+                },
+                "trial_ends_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                },
+                "version_id": {
+                    "type": "string"
                 }
             }
         },
@@ -15484,6 +15865,17 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.portalResponse": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.postAnalyticsResponse": {
             "type": "object",
             "properties": {
@@ -15755,14 +16147,86 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.pricingPrice": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "billing_interval": {
+                    "type": "string"
+                },
+                "country_code": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "net_minor": {
+                    "type": "integer"
+                },
+                "tier_version_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.pricingResponse": {
             "type": "object",
             "properties": {
                 "tiers": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/entitlements.Resolution"
+                        "$ref": "#/definitions/handlers.pricingTier"
                     }
+                }
+            }
+        },
+        "handlers.pricingTier": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "description": "Available: the tier can be bought now (billing on and at least one of its\nprices sold by a provider variant).",
+                    "type": "boolean"
+                },
+                "change_reason": {
+                    "type": "string"
+                },
+                "entitlements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/entitlements.EntitlementValue"
+                    }
+                },
+                "free_trial": {
+                    "description": "FreeTrial marks the tier carrying the marketing free month; TrialDays is\nits length (null without the offer).",
+                    "type": "boolean"
+                },
+                "prices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.pricingPrice"
+                    }
+                },
+                "purchasable": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "tier_id": {
+                    "type": "string"
+                },
+                "trial_days": {
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                },
+                "version_id": {
+                    "type": "string"
                 }
             }
         },

@@ -135,70 +135,15 @@ func (s *Service) Attention(ctx context.Context, pageSize int, pageToken string)
 	}
 	offset, _ := strconv.Atoi(pageToken)
 	since := s.now().Add(-attentionWindow)
-	mode := s.d.Settings.TestMode
 	var items []AttentionItem
-
-	troubled, err := s.d.Repo.ListByStatus(ctx, mode, []string{models.SubscriptionStatusPastDue, models.SubscriptionStatusUnpaid, models.SubscriptionStatusPaused}, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	for i := range troubled {
-		items = append(items, AttentionItem{TenantID: troubled[i].TenantID, Reason: troubled[i].Status, Subscription: &troubled[i], Since: troubled[i].ProviderUpdatedAt})
-	}
-	expired, err := s.d.Repo.ListByStatus(ctx, mode, []string{models.SubscriptionStatusExpired}, &since)
-	if err != nil {
-		return nil, "", err
-	}
-	for i := range expired {
-		sub := &expired[i]
-		item := AttentionItem{TenantID: sub.TenantID, Reason: AttentionExpired, Subscription: sub, Since: sub.ProviderUpdatedAt}
-		if sub.FirstPaidAt == nil {
-			item.Reason = AttentionExpiredNeverPaid
-			item.TeardownStatus = "dry_run"
-			if sub.TeardownAt != nil {
-				item.TeardownStatus = "enqueued"
-			}
-		}
-		items = append(items, item)
-	}
-	live, err := s.d.Repo.ListByStatus(ctx, mode, []string{models.SubscriptionStatusOnTrial, models.SubscriptionStatusActive, models.SubscriptionStatusPastDue,
-		models.SubscriptionStatusUnpaid, models.SubscriptionStatusPaused, models.SubscriptionStatusCancelled}, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	byTenant := map[string][]models.BillingSubscription{}
-	for _, sub := range live {
-		if billingdom.Live(sub.Status, sub.EndsAt, s.now()) {
-			byTenant[sub.TenantID] = append(byTenant[sub.TenantID], sub)
-		}
-	}
-	for _, subs := range byTenant {
-		if len(subs) < 2 {
-			continue
-		}
-		slices.SortFunc(subs, func(a, b models.BillingSubscription) int { return b.CreatedAt.Compare(a.CreatedAt) })
-		for i := range subs[1:] {
-			dup := subs[1+i]
-			items = append(items, AttentionItem{TenantID: dup.TenantID, Reason: AttentionDuplicate, Subscription: &dup, Since: subs[0].CreatedAt})
-		}
-	}
-	unresolved, err := s.d.Repo.ListFailedWebhookEvents(ctx, since, true)
-	if err != nil {
-		return nil, "", err
-	}
-	for i := range unresolved {
-		items = append(items, AttentionItem{Reason: AttentionUnresolvedWebhook, WebhookEvent: &unresolved[i], Since: unresolved[i].ReceivedAt})
-	}
-	failed, err := s.d.Repo.ListScheduledChangesByStatus(ctx, models.ScheduledChangeFailed, since)
-	if err != nil {
-		return nil, "", err
-	}
-	for _, c := range failed {
-		sub, err := s.d.Repo.GetSubscription(ctx, c.BillingSubscriptionID)
+	for _, collect := range []func(context.Context, time.Time) ([]AttentionItem, error){
+		s.troubledItems, s.expiredItems, s.duplicateItems, s.unresolvedWebhookItems, s.failedChangeItems,
+	} {
+		found, err := collect(ctx, since)
 		if err != nil {
-			continue
+			return nil, "", err
 		}
-		items = append(items, AttentionItem{TenantID: c.TenantID, Reason: AttentionScheduledChangeFailed, Subscription: sub, Since: c.UpdatedAt})
+		items = append(items, found...)
 	}
 
 	slices.SortStableFunc(items, func(a, b AttentionItem) int { return b.Since.Compare(a.Since) })
@@ -222,6 +167,85 @@ func (s *Service) Attention(ctx context.Context, pageSize int, pageToken string)
 		next = strconv.Itoa(end)
 	}
 	return items[offset:end], next, nil
+}
+
+// troubledItems: subscriptions in dunning or paused.
+func (s *Service) troubledItems(ctx context.Context, _ time.Time) ([]AttentionItem, error) {
+	subs, err := s.d.Repo.ListByStatus(ctx, s.d.Settings.TestMode, []string{models.SubscriptionStatusPastDue, models.SubscriptionStatusUnpaid, models.SubscriptionStatusPaused}, nil)
+	var out []AttentionItem
+	for i := range subs {
+		out = append(out, AttentionItem{TenantID: subs[i].TenantID, Reason: subs[i].Status, Subscription: &subs[i], Since: subs[i].ProviderUpdatedAt})
+	}
+	return out, err
+}
+
+// expiredItems: subscriptions that ended recently, flagging trials that never
+// paid and whether their teardown ran.
+func (s *Service) expiredItems(ctx context.Context, since time.Time) ([]AttentionItem, error) {
+	subs, err := s.d.Repo.ListByStatus(ctx, s.d.Settings.TestMode, []string{models.SubscriptionStatusExpired}, &since)
+	var out []AttentionItem
+	for i := range subs {
+		sub := &subs[i]
+		item := AttentionItem{TenantID: sub.TenantID, Reason: AttentionExpired, Subscription: sub, Since: sub.ProviderUpdatedAt}
+		if sub.FirstPaidAt == nil {
+			item.Reason, item.TeardownStatus = AttentionExpiredNeverPaid, "dry_run"
+			if sub.TeardownAt != nil {
+				item.TeardownStatus = "enqueued"
+			}
+		}
+		out = append(out, item)
+	}
+	return out, err
+}
+
+// duplicateItems: every live subscription of a workspace but its newest.
+func (s *Service) duplicateItems(ctx context.Context, _ time.Time) ([]AttentionItem, error) {
+	live, err := s.d.Repo.ListByStatus(ctx, s.d.Settings.TestMode, []string{models.SubscriptionStatusOnTrial, models.SubscriptionStatusActive, models.SubscriptionStatusPastDue,
+		models.SubscriptionStatusUnpaid, models.SubscriptionStatusPaused, models.SubscriptionStatusCancelled}, nil)
+	if err != nil {
+		return nil, err
+	}
+	byTenant := map[string][]models.BillingSubscription{}
+	for _, sub := range live {
+		if billingdom.Live(sub.Status, sub.EndsAt, s.now()) {
+			byTenant[sub.TenantID] = append(byTenant[sub.TenantID], sub)
+		}
+	}
+	var out []AttentionItem
+	for _, subs := range byTenant {
+		slices.SortFunc(subs, func(a, b models.BillingSubscription) int { return b.CreatedAt.Compare(a.CreatedAt) })
+		for i := 1; i < len(subs); i++ {
+			out = append(out, AttentionItem{TenantID: subs[i].TenantID, Reason: AttentionDuplicate, Subscription: &subs[i], Since: subs[0].CreatedAt})
+		}
+	}
+	return out, nil
+}
+
+// unresolvedWebhookItems: failed deliveries whose workspace was not found.
+func (s *Service) unresolvedWebhookItems(ctx context.Context, since time.Time) ([]AttentionItem, error) {
+	events, err := s.d.Repo.ListFailedWebhookEvents(ctx, since, true)
+	var out []AttentionItem
+	for i := range events {
+		out = append(out, AttentionItem{Reason: AttentionUnresolvedWebhook, WebhookEvent: &events[i], Since: events[i].ReceivedAt})
+	}
+	return out, err
+}
+
+// failedChangeItems: scheduled downgrades that could not be applied.
+func (s *Service) failedChangeItems(ctx context.Context, since time.Time) ([]AttentionItem, error) {
+	changes, err := s.d.Repo.ListScheduledChangesByStatus(ctx, models.ScheduledChangeFailed, since)
+	if err != nil {
+		return nil, err
+	}
+	var out []AttentionItem
+	for _, c := range changes {
+		sub, err := s.d.Repo.GetSubscription(ctx, c.BillingSubscriptionID)
+		if err != nil {
+			continue
+		}
+		out = append(out, AttentionItem{TenantID: c.TenantID, Reason: AttentionScheduledChangeFailed, Subscription: sub, Since: c.UpdatedAt})
+	}
+	return out, nil
 }
 
 // SetBillingRequired comps or exempts a workspace, or puts it back behind the

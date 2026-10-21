@@ -30,13 +30,17 @@ type WorkspacesHandler struct {
 	accountRepo   repository.AccountRepository
 	tenantRepo    repository.TenantRepository
 	sessionRepo   repository.SessionRepository
-	// profileJobs provisions a per-workspace Zernio profile on create (reusing the
-	// signup bootstrap, CON-102) and tears it down on delete. nil
-	// disables both (create/delete still succeed; the profile is left orphaned).
+	// profileJobs tears a workspace's Zernio profile down on delete. nil
+	// disables it (delete still succeeds; the profile is left orphaned).
 	profileJobs ProfileLifecycleEnqueuer
 	auth        fiber.Handler
 	activity    *activity.Recorder
+	// billingRequired gates new workspaces until they check out.
+	billingRequired bool
 }
+
+// SetBillingRequired makes every new workspace check out before use.
+func (h *WorkspacesHandler) SetBillingRequired(required bool) { h.billingRequired = required }
 
 // NewWorkspacesHandler builds the handler.
 func NewWorkspacesHandler(
@@ -104,7 +108,7 @@ func (h *WorkspacesHandler) List(c *fiber.Ctx) error {
 
 // Create godoc
 // @Summary      Create a workspace
-// @Description  Creates a new, independent workspace owned by the authenticated account, provisions its Zernio profile, and returns it. Does not switch — the caller chooses when to move into it (CON-147).
+// @Description  Creates a new, independent workspace owned by the authenticated account and returns it. Its Zernio profile is created by its first connect link. Does not switch — the caller chooses when to move into it (CON-147).
 // @Tags         workspaces
 // @Accept       json
 // @Produce      json
@@ -149,7 +153,7 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	now := time.Now().UTC()
 	// tenant.tier_id is required (NOT NULL); a new workspace starts on
 	// the seeded default tier, reassignable later by Harbor.
-	tenant := &models.Tenant{ID: tenantID, Name: req.Name, Slug: slug, TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now}
+	tenant := &models.Tenant{ID: tenantID, Name: req.Name, Slug: slug, TierID: models.DefaultTierID, BillingRequired: h.billingRequired, CreatedAt: now, UpdatedAt: now}
 	// The creator owns the new workspace (CON-26 role model).
 	membership := &models.User{ID: userID, AccountID: account.ID, TenantID: tenantID, Name: account.Name, Email: account.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now}
 
@@ -157,18 +161,9 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 		if _, err := tx.NewInsert().Model(tenant).Exec(ctx); err != nil {
 			return err
 		}
-		if err := h.userRepo.CreateTx(ctx, tx, membership); err != nil {
-			return err
-		}
-		// Per-workspace Zernio profile, enqueued in-tx so the job exists iff the
-		// workspace does — same pattern as signup. Creation never blocks
-		// on Zernio being reachable.
-		if h.profileJobs != nil {
-			if err := h.profileJobs.EnqueueBootstrapProfileTx(ctx, tx.Tx, tenantID); err != nil {
-				return err
-			}
-		}
-		return nil
+		// The workspace's Zernio profile is created by its first connect link,
+		// so a workspace that never connects an account costs nothing upstream.
+		return h.userRepo.CreateTx(ctx, tx, membership)
 	}); err != nil {
 		if isUniqueViolation(err) {
 			// Lost a slug race; the caller can retry.
