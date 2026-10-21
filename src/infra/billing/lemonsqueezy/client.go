@@ -53,15 +53,7 @@ func (e *APIError) Retryable() bool {
 
 // IsRetryable reports whether err is worth retrying: a retryable APIError or a
 // transport failure. Configuration and other 4xx errors are terminal.
-func IsRetryable(err error) bool {
-	if err == nil || errors.Is(err, billing.ErrNotConfigured) || errors.Is(err, billing.ErrNotFound) {
-		return false
-	}
-	if apiErr, ok := errors.AsType[*APIError](err); ok {
-		return apiErr.Retryable()
-	}
-	return true
-}
+func IsRetryable(err error) bool { return billing.IsRetryable(err) }
 
 // Client implements billing.Provider for Lemon Squeezy.
 type Client struct {
