@@ -11,6 +11,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 type analysisFixture struct {
@@ -340,5 +341,9 @@ func TestAssetAnalysisRunLedger(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("runs since = %d, want 2", n)
+	}
+	other := tenantctx.With(context.Background(), "other-tenant")
+	if n, err := f.analyses.CountRunsSince(other, since); err != nil || n != 0 {
+		t.Fatalf("other tenant's runs = %d, %v; want 0", n, err)
 	}
 }
