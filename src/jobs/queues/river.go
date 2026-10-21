@@ -61,6 +61,12 @@ type Deps struct {
 	// restore via the tenant row lock. nil disables teardown (fail-closed).
 	TenantFence TenantTeardownFence
 
+	// Billing runs the billing sweeps and scheduled plan changes; BillingLive
+	// gates the unpaid-trial teardown. Nil when billing is off: the jobs are
+	// no-ops and that teardown is skipped.
+	Billing     BillingJobs
+	BillingLive BillingLiveChecker
+
 	// The process_pdf worker's dependencies (pdf-service client,
 	// embedder, storage, asset repos). A nil Client (no PDF_SERVICE_ADDR) makes
 	// the job a no-op.
@@ -222,6 +228,10 @@ type PeriodicConfig struct {
 	// Missing asset-analysis lens backfill. Positive-interval gated like the
 	// others.
 	AnalysisBackfillEvery time.Duration
+	// Billing subscription re-sync and webhook-log prune. Positive-interval
+	// gated; both are zero while billing is off.
+	BillingReconcileEvery    time.Duration
+	BillingWebhookSweepEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -311,6 +321,16 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.AnalysisBackfillEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.AnalysisBackfillEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return BackfillAssetAnalysesTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.BillingReconcileEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.BillingReconcileEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return BillingReconcileTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.BillingWebhookSweepEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.BillingWebhookSweepEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return BillingWebhookSweepTask{}, nil
 		}, runOnStart))
 	}
 	return jobs
@@ -438,6 +458,16 @@ func (e *Enqueuer) EnqueueTeardownProfileTx(ctx context.Context, tx *sql.Tx, ten
 		return nil
 	}
 	_, err := e.Client.InsertTx(ctx, tx, TeardownZernioProfileTask{TenantID: tenantID}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueTrialTeardownTx enqueues the unpaid-trial Zernio teardown inside the
+// transaction that records the expiry, so it exists iff the expiry does.
+func (e *Enqueuer) EnqueueTrialTeardownTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, TeardownZernioProfileTask{TenantID: tenantID, Reason: TeardownReasonTrialUnpaid}, insertOptsWithRequestID(ctx, nil))
 	return err
 }
 
@@ -590,6 +620,24 @@ func (e *Enqueuer) EnqueueGoogleLinkedEmailTx(ctx context.Context, tx *sql.Tx, u
 			"google_email":     googleEmail,
 			"password_cleared": strconv.FormatBool(passwordCleared),
 		},
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
+// EnqueueBillingEmailTx enqueues a transactional billing notice to one owner
+// inside the transaction that records the billing change, so the mail exists
+// iff the change does. idempotencyKey distinguishes one notice per event.
+// A nil enqueuer is a no-op.
+func (e *Enqueuer) EnqueueBillingEmailTx(ctx context.Context, tx *sql.Tx, userID, tenantID, templateKey, idempotencyKey string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+		UserID:         userID,
+		TenantID:       tenantID,
+		TemplateKey:    templateKey,
+		EmailKind:      models.EmailKindTransactional,
+		IdempotencyKey: idempotencyKey,
 	}, insertOptsWithRequestID(ctx, nil))
 	return err
 }

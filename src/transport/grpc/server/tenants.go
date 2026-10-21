@@ -34,6 +34,24 @@ type tenantAdminService struct {
 	versionRepo    repository.TenantTierVersionRepository
 	assignmentRepo repository.TenantTierAssignmentRepository
 	hub            eventhub.Hub // Entitlement-invalidation events (nil-safe)
+	// billingStatus summarises a tenant's billing for the tenant list; nil
+	// leaves billing_status empty.
+	billingStatus func(ctx context.Context, t *models.Tenant) (string, error)
+}
+
+// withBillingStatus stamps billing_status on a tenant proto. A failed read is
+// logged and leaves the field empty: the tenant list must still render.
+func (s *tenantAdminService) withBillingStatus(ctx context.Context, t *models.Tenant, p *tenantsv1.Tenant) *tenantsv1.Tenant {
+	if s.billingStatus == nil {
+		return p
+	}
+	st, err := s.billingStatus(ctx, t)
+	if err != nil {
+		slog.WarnContext(ctx, "billing status read failed", logging.AttrComponent, "grpcserver", "tenant_id", t.ID, logging.AttrError, err)
+		return p
+	}
+	p.BillingStatus = st
+	return p
 }
 
 func newTenantAdminService(
@@ -102,7 +120,7 @@ func (s *tenantAdminService) GetTenant(ctx context.Context, req *tenantsv1.GetTe
 		}
 		return nil, s.internal(ctx, "get tenant", err)
 	}
-	return &tenantsv1.GetTenantResponse{Tenant: toTenantProto(tenant)}, nil
+	return &tenantsv1.GetTenantResponse{Tenant: s.withBillingStatus(ctx, tenant, toTenantProto(tenant))}, nil
 }
 
 func (s *tenantAdminService) ListTenants(ctx context.Context, req *tenantsv1.ListTenantsRequest) (*tenantsv1.ListTenantsResponse, error) {
@@ -122,7 +140,7 @@ func (s *tenantAdminService) ListTenants(ctx context.Context, req *tenantsv1.Lis
 	}
 	out := make([]*tenantsv1.Tenant, 0, len(tenants))
 	for i := range tenants {
-		out = append(out, toTenantProto(&tenants[i]))
+		out = append(out, s.withBillingStatus(ctx, &tenants[i], toTenantProto(&tenants[i])))
 	}
 	return &tenantsv1.ListTenantsResponse{Tenants: out, Total: int32(total)}, nil
 }

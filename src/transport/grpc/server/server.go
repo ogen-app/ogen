@@ -75,6 +75,9 @@ type Deps struct {
 	HarborBaseURL      string
 
 	Announcements repository.AnnouncementRepository
+	// Billing backs BillingAdminService and the tenant list's billing_status;
+	// nil leaves both off.
+	Billing BillingAdmin
 	// Hub carries the entitlement-invalidation event an operator tier change
 	// publishes onto the tenant's /api/events stream.
 	Hub eventhub.Hub
@@ -104,12 +107,17 @@ func New(d Deps) (*grpc.Server, error) {
 	resolver := entitlements.NewResolver(d.TierVersions, d.TierAssignments, d.Tenants, catalog)
 
 	secretsv1.RegisterSecretsServiceServer(srv, newSecretsService(d.Secrets))
-	tenantsv1.RegisterTenantAdminServiceServer(srv, newTenantAdminService(d.Tiers, d.Groups, d.Tenants, d.TierVersions, d.TierAssignments, d.Hub))
+	tenantAdmin := newTenantAdminService(d.Tiers, d.Groups, d.Tenants, d.TierVersions, d.TierAssignments, d.Hub)
+	if d.Billing != nil {
+		tenantAdmin.billingStatus = d.Billing.BillingStatus
+	}
+	tenantsv1.RegisterTenantAdminServiceServer(srv, tenantAdmin)
 	registerPlatformAdmin(srv, d.Platforms, d.PlatformLimits)
 	registerModelConfigAdmin(srv, d.FlowModelConfigs, modelprobe.New(d.Secrets))
 	registerPlanAdmin(srv, d.TierVersions, d.TierAssignments, catalog, resolver, d.Hub)
 	registerEmailAdmin(srv, d.EmailLogs, d.EmailEvents, d.EmailBodies, d.LiveEmailBodies, d.Tenants, d.Users, d.AdminEmailEnqueuer, d.HarborBaseURL)
 	registerAnnouncementAdmin(srv, d.Announcements)
+	registerBillingAdmin(srv, d.Billing)
 	return srv, nil
 }
 

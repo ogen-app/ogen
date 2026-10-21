@@ -42,6 +42,10 @@ type Tenant struct {
 	// to, or entered — but the row survives for support-side recovery. Plain
 	// timestamp, NOT a bun `,soft_delete` column: see the migration comment.
 	DeletedAt *time.Time `bun:"deleted_at" json:"deleted_at,omitempty"`
+	// BillingRequired keeps a workspace behind the billing gate until it has
+	// a subscription. Stamped on new workspaces while billing is on; existing
+	// ones stay false (grandfathered). Operator field, off the REST contract.
+	BillingRequired bool `bun:"billing_required,notnull,default:false" json:"-"`
 
 	// Tier and Groups are hydrated on the operator/admin read path only (CON-208
 	// TenantAdminService), never scanned from the tenants table (bun:"-"), and —
