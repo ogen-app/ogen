@@ -108,6 +108,13 @@ func TestPastDueNotifiesAndKeepsTier(t *testing.T) {
 	if len(items) != 1 || items[0].Reason != AttentionPastDue {
 		t.Fatalf("attention = %+v", items)
 	}
+	// A malformed or negative page token starts from the top instead of
+	// panicking on the slice.
+	for _, token := range []string{"-1", "x"} {
+		if items, _, err := h.svc.Attention(t.Context(), 50, token); err != nil || len(items) != 1 {
+			t.Fatalf("attention with token %q = %+v %v", token, items, err)
+		}
+	}
 	if g, _ := h.svc.Gated(t.Context(), tenantID); g {
 		t.Fatal("past_due re-gated")
 	}

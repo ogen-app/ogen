@@ -70,7 +70,7 @@ type pricingTier struct {
 	// FreeTrial marks the tier carrying the marketing free month; TrialDays is
 	// its length (null without the offer).
 	FreeTrial bool           `json:"free_trial"`
-	TrialDays *int           `json:"trial_days"`
+	TrialDays *int           `json:"trial_days" extensions:"x-nullable"`
 	Prices    []pricingPrice `json:"prices"`
 }
 

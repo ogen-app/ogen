@@ -199,6 +199,7 @@ func (h *BillingHandler) ChangePlan(c *fiber.Ctx) error {
 // @Success      200  "Acknowledged"
 // @Failure      401  {object}  map[string]string
 // @Failure      413  {object}  map[string]string
+// @Failure      500  {object}  map[string]string  "processing failed; the provider retries"
 // @Failure      503  {object}  map[string]string
 // @Router       /api/webhooks/lemonsqueezy [post]
 func (h *BillingHandler) Webhook(c *fiber.Ctx) error {

@@ -180,22 +180,34 @@ func (p *TeardownZernioProfileProcessor) teardownUnpaidTrial(ctx context.Context
 			return err
 		}
 	}
-	if err := p.teardown(ctx, profileID); err != nil {
+	if err := p.deleteRemoteProfile(ctx, profileID); err != nil {
 		return err
 	}
+	// The local rows go before the profile pointer: a failed soft-delete
+	// retries with the profile id still set, so the remaining rows are found
+	// again (the remote deletes are idempotent).
 	now := time.Now().UTC()
 	for _, a := range local {
 		if _, err := p.Accounts.SoftDelete(ctx, a.ID, now); err != nil {
 			return fmt.Errorf("disconnect local account %s: %w", a.ID, err)
 		}
 	}
-	return nil
+	return p.clearProfileSettings(ctx)
 }
 
 // teardown disconnects every account on the profile, then deletes the profile,
 // then clears the local profile pointer. Idempotent: an already-gone account or
 // profile (404) is treated as a no-op so a retry — or a re-enqueue — converges.
 func (p *TeardownZernioProfileProcessor) teardown(ctx context.Context, profileID string) error {
+	if err := p.deleteRemoteProfile(ctx, profileID); err != nil {
+		return err
+	}
+	return p.clearProfileSettings(ctx)
+}
+
+// deleteRemoteProfile disconnects every account on the profile upstream, then
+// deletes the profile. 404s are successes.
+func (p *TeardownZernioProfileProcessor) deleteRemoteProfile(ctx context.Context, profileID string) error {
 	client := p.Integration.Client
 
 	// Disconnect every account first: Zernio blocks profile deletion with a 400
@@ -225,7 +237,11 @@ func (p *TeardownZernioProfileProcessor) teardown(ctx context.Context, profileID
 	default:
 		return fmt.Errorf("list accounts: %w", err)
 	}
+	return nil
+}
 
+// clearProfileSettings drops the local profile pointer.
+func (p *TeardownZernioProfileProcessor) clearProfileSettings(ctx context.Context) error {
 	// Clear the local profile keys so a re-run is a clean no-op and no stale id
 	// lingers. Unlike the remote deletes, a failure here MUST fail the job so
 	// River retries — otherwise a dangling profile_id survives a "successful"

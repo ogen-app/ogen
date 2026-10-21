@@ -133,7 +133,12 @@ func (s *Service) Attention(ctx context.Context, pageSize int, pageToken string)
 	if pageSize <= 0 {
 		pageSize = 50
 	}
-	offset, _ := strconv.Atoi(pageToken)
+	// The token is operator input: anything that is not a non-negative offset
+	// starts from the top.
+	offset, err := strconv.Atoi(pageToken)
+	if err != nil || offset < 0 {
+		offset = 0
+	}
 	since := s.now().Add(-attentionWindow)
 	var items []AttentionItem
 	for _, collect := range []func(context.Context, time.Time) ([]AttentionItem, error){
@@ -422,7 +427,7 @@ func (s *Service) InvalidateTestSubscriptions(ctx context.Context, dryRun bool) 
 		if err != nil {
 			return nil, err
 		}
-		s.emit(ctx, []notice{{tenantID: tenantID, subID: byTenant[tenantID][0], typ: "reentry_required", level: models.NotificationLevelWarning,
+		s.emit(ctx, []notice{{tenantID: tenantID, subID: byTenant[tenantID][0], typ: "reentry_required", episode: models.InvalidatedReasonModeCutover, level: models.NotificationLevelWarning,
 			title: "Please re-enter your payment details", body: "Billing moved from its test period to live payments. Choose your plan again to keep going."}})
 		s.publish(ctx, tenantID, true)
 	}

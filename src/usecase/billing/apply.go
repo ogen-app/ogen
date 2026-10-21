@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 
 	"github.com/uptrace/bun"
 
@@ -351,7 +352,7 @@ func reassignReason(isNew bool, from, to billingdom.Price) string {
 // and the teardown are enqueued in the transaction; notices are emitted after.
 func (s *Service) transitions(ctx context.Context, tx bun.Tx, sub *models.BillingSubscription, before models.BillingSubscription, isNew bool) ([]notice, error) {
 	n := func(typ string, level models.NotificationLevel, title, body string) notice {
-		return notice{tenantID: sub.TenantID, subID: sub.ID, typ: typ, level: level, title: title, body: body}
+		return notice{tenantID: sub.TenantID, subID: sub.ID, typ: typ, episode: strconv.FormatInt(sub.ProviderUpdatedAt.UnixNano(), 10), level: level, title: title, body: body}
 	}
 	var out []notice
 	if isNew {

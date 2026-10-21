@@ -47,6 +47,10 @@ func TestDirection(t *testing.T) {
 		// 29000 a year is less than 12 x 2900 = 34800, so yearly is cheaper.
 		{proM, proY, DirectionDowngrade},
 		{proY, proM, DirectionUpgrade},
+		// A yearly price equal to twelve months on the same tier is still a
+		// change: yearly ranks above monthly.
+		{proM, Price{ID: "pro-y-even", TierName: "Pro", Interval: "year", NetMinor: 34800}, DirectionUpgrade},
+		{Price{ID: "pro-y-even", TierName: "Pro", Interval: "year", NetMinor: 34800}, proM, DirectionDowngrade},
 		// Equal amounts fall back to the tier name.
 		{Price{ID: "a", TierName: "Alpha", Interval: "month", NetMinor: 100}, Price{ID: "b", TierName: "Beta", Interval: "month", NetMinor: 100}, DirectionUpgrade},
 	}
