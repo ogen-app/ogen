@@ -45,6 +45,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/telemetry"
 	grpcserver "github.com/ogen-app/ogen/src/transport/grpc/server"
 	"github.com/ogen-app/ogen/src/transport/server"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
 const (
@@ -232,6 +233,21 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		adminEmailEnqueuer = enq
 	}
 
+	// Harbor's billing surface. A billing misconfiguration already failed the
+	// HTTP app's boot, so an error here only disables these RPCs.
+	var billingAdmin grpcserver.BillingAdmin
+	if enq, ok := adminEmailEnqueuer.(*queues.Enqueuer); ok {
+		svc, err := server.NewBillingService(server.BillingRuntime{
+			Config: cfg, DB: db, Secrets: store, Hub: hub, Jobs: enq,
+			Notifier: notify.New(repository.NewNotificationRepository(db), hub),
+		})
+		if err != nil {
+			slog.Error("grpc billing admin init failed; billing RPCs disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
+		} else {
+			billingAdmin = svc
+		}
+	}
+
 	gs, err := grpcserver.New(grpcserver.Deps{
 		Token:            cfg.GRPCAuthToken,
 		Secrets:          store,
@@ -252,6 +268,7 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		AdminEmailEnqueuer: adminEmailEnqueuer,
 		HarborBaseURL:      cfg.HarborBaseURL,
 		Announcements:      repository.NewAnnouncementRepository(db),
+		Billing:            billingAdmin,
 		Hub:                hub,
 	})
 	if err != nil {
