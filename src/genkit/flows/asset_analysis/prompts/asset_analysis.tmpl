@@ -22,28 +22,7 @@
 - Do not repeat an idea listed under "Ideas already captured".
 - Follow the brand guardrails.
 
-## Rating each idea
-Rate every idea against {{if .Campaign}}the campaign{{else}}the workspace and its brand{{end}} on each criterion below, with a level from 1 to 5 and a reason of at most 12 words.
-- First compare the ideas with each other, then rate. Keep level 5 for real standouts. If every idea is weak, rate them all low; do not spread the levels to look precise.
-- When there is nothing to judge a criterion against ({{if .Campaign}}no key messages, no audience, no dates{{else}}no audience, no active campaigns{{end}}), rate it 3.
-{{- range .Rubric.Criteria}}
-
-**{{.Key}}** — {{.Question}}
-{{- range .Anchors}}
-- {{.}}
-{{- end}}
-{{- if eq .Hint "phase"}}
-Also give "phase": the name of the phase it fits best.
-{{- else if eq .Hint "campaign"}}
-Also give "campaign": the name of the active campaign it would feed best, or leave it empty.
-{{- end}}
-{{- end}}
-
-Then flag each cap that applies, whatever the levels. A capped idea is ranked low:
-{{- range .Rubric.Caps}}
-- {{.Cap}}: {{.Meaning}}
-{{- end}}
-Use an empty list when none applies.
+{{template "rubric" .}}
 
 ## Response format
 Respond with a single JSON object, keys in exactly this order:
@@ -51,8 +30,7 @@ Respond with a single JSON object, keys in exactly this order:
   "language": "en",
   "gist": "…",
   "summary": "…",
-  "ideas": [{"title": "…", "angle": "…", "rationale": "…", "sourceLabels": ["…"], "fit": {"criteria": {
-{{- range $i, $c := .Rubric.Criteria}}{{if $i}}, {{end}}"{{$c.Key}}": {"level": 3{{if eq $c.Hint "phase"}}, "phase": "…"{{else if eq $c.Hint "campaign"}}, "campaign": "…"{{end}}, "why": "…"}{{end}}}, "caps": []}}],
+  "ideas": [{{template "ideaJSON" .}}],
   "keyPoints": ["…"],
   "topics": ["…"],
   "entities": [{"name": "…", "kind": "person|org|product|place|other"}]
@@ -148,3 +126,31 @@ The source was too long to read in one pass, so it was read in parts. These are 
 {{if .Label}}[{{.Label}}] {{end}}{{.Text}}
 {{- end}}
 </source>{{end}}
+
+
+{{/* rubric and ideaJSON are shared with idea_distill.tmpl; both take systemData. */}}
+{{define "rubric"}}## Rating each idea
+Rate every idea against {{if .Campaign}}the campaign{{else}}the workspace and its brand{{end}} on each criterion below, with a level from 1 to 5 and a reason of at most 12 words.
+- First compare the ideas with each other, then rate. Keep level 5 for real standouts. If every idea is weak, rate them all low; do not spread the levels to look precise.
+- When there is nothing to judge a criterion against ({{if .Campaign}}no key messages, no audience, no dates{{else}}no audience, no active campaigns{{end}}), rate it 3.
+{{- range .Rubric.Criteria}}
+
+**{{.Key}}** — {{.Question}}
+{{- range .Anchors}}
+- {{.}}
+{{- end}}
+{{- if eq .Hint "phase"}}
+Also give "phase": the name of the phase it fits best.
+{{- else if eq .Hint "campaign"}}
+Also give "campaign": the name of the active campaign it would feed best, or leave it empty.
+{{- end}}
+{{- end}}
+
+Then flag each cap that applies, whatever the levels. A capped idea is ranked low:
+{{- range .Rubric.Caps}}
+- {{.Cap}}: {{.Meaning}}
+{{- end}}
+Use an empty list when none applies.{{end}}
+
+{{define "ideaJSON"}}{"title": "…", "angle": "…", "rationale": "…", "sourceLabels": ["…"], "fit": {"criteria": {
+{{- range $i, $c := .Rubric.Criteria}}{{if $i}}, {{end}}"{{$c.Key}}": {"level": 3{{if eq $c.Hint "phase"}}, "phase": "…"{{else if eq $c.Hint "campaign"}}, "campaign": "…"{{end}}, "why": "…"}{{end}}}, "caps": []}}{{end}}

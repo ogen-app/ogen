@@ -147,6 +147,7 @@ func TestDefaultsFor(t *testing.T) {
 		{FlowEmbed, SlotMain}:                     "emb",
 		{FlowAssetAnalysis, SlotAnalyze}:          "gen",
 		{FlowAssetAnalysis, SlotMap}:              "plan",
+		{FlowIdeaDistill, SlotDistill}:            "gen",
 	}
 	for k, want := range cases {
 		if got := d.For(k[0], k[1]); got != want {

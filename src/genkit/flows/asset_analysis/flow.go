@@ -21,20 +21,23 @@ import (
 //go:embed prompts/*.tmpl
 var promptFS embed.FS
 
-// usageFeature attributes the flow's spend in the usage events.
-const usageFeature = "asset_analysis"
+// AnalyzeAssetFlow and DistillIdeasFlow are the singleton Genkit flows,
+// registered for Dev-UI discovery. Set by InitAssetAnalysis.
+var (
+	AnalyzeAssetFlow *core.Flow[AnalyzeRequest, *AnalyzeResponse, struct{}]
+	DistillIdeasFlow *core.Flow[DistillRequest, *DistillResponse, struct{}]
+)
 
-// AnalyzeAssetFlow is the singleton Genkit flow, registered for Dev-UI
-// discovery. Set by InitAssetAnalysis.
-var AnalyzeAssetFlow *core.Flow[AnalyzeRequest, *AnalyzeResponse, struct{}]
-
-// analyzeRunner is the closure NewAnalyzeAssetCallback hands out. Set by
-// InitAssetAnalysis.
-var analyzeRunner func(ctx context.Context, req AnalyzeRequest) (*AnalyzeResponse, error)
+// analyzeRunner and distillRunner are the closures the callbacks hand out.
+// Set by InitAssetAnalysis.
+var (
+	analyzeRunner func(ctx context.Context, req AnalyzeRequest) (*AnalyzeResponse, error)
+	distillRunner func(ctx context.Context, req DistillRequest) (*DistillResponse, error)
+)
 
 // InitAssetAnalysis parses the prompt templates and registers the
-// analyzeAsset flow. Must be called after the Genkit instance has been
-// initialised with the Anthropic plugin.
+// analyzeAsset and distillAssetIdeas flows. Must be called after the Genkit
+// instance has been initialised with the Anthropic plugin.
 func InitAssetAnalysis(g *genkit.Genkit, cfg FlowConfig) error {
 	tpl, err := loadPrompts()
 	if err != nil {
@@ -42,7 +45,8 @@ func InitAssetAnalysis(g *genkit.Genkit, cfg FlowConfig) error {
 	}
 	r := &runner{cfg: cfg, tpl: tpl, gen: genkitGenerator(g, cfg), resolve: modelconfig.Resolve}
 	AnalyzeAssetFlow = genkit.DefineFlow(g, "analyzeAsset", r.analyze)
-	analyzeRunner = r.analyze
+	DistillIdeasFlow = genkit.DefineFlow(g, "distillAssetIdeas", r.distill)
+	analyzeRunner, distillRunner = r.analyze, r.distill
 	return nil
 }
 
@@ -50,6 +54,13 @@ func InitAssetAnalysis(g *genkit.Genkit, cfg FlowConfig) error {
 func NewAnalyzeAssetCallback() func(ctx context.Context, req AnalyzeRequest) (*AnalyzeResponse, error) {
 	return func(ctx context.Context, req AnalyzeRequest) (*AnalyzeResponse, error) {
 		return analyzeRunner(ctx, req)
+	}
+}
+
+// NewDistillIdeasCallback returns the callback the distill job invokes.
+func NewDistillIdeasCallback() func(ctx context.Context, req DistillRequest) (*DistillResponse, error) {
+	return func(ctx context.Context, req DistillRequest) (*DistillResponse, error) {
+		return distillRunner(ctx, req)
 	}
 }
 
@@ -64,12 +75,23 @@ func loadPrompts() (prompts, error) {
 	if err != nil {
 		return prompts{}, err
 	}
+	// The distill blocks are parsed into a copy of the analysis set so they
+	// can use its rubric, lens and source blocks.
+	distill, err := main.Clone()
+	if err != nil {
+		return prompts{}, fmt.Errorf("clone asset_analysis.tmpl: %w", err)
+	}
+	if distill, err = parseInto(distill, "idea_distill"); err != nil {
+		return prompts{}, err
+	}
 	p := prompts{
-		system:    main.Lookup("system"),
-		lens:      main.Lookup("lens"),
-		source:    main.Lookup("source"),
-		mapSystem: mapTpl.Lookup("system"),
-		mapSource: mapTpl.Lookup("source"),
+		system:         main.Lookup("system"),
+		lens:           main.Lookup("lens"),
+		source:         main.Lookup("source"),
+		mapSystem:      mapTpl.Lookup("system"),
+		mapSource:      mapTpl.Lookup("source"),
+		distillSystem:  distill.Lookup("distillSystem"),
+		distillRequest: distill.Lookup("distillRequest"),
 	}
 	if p.system == nil || p.lens == nil || p.source == nil {
 		return prompts{}, fmt.Errorf("asset_analysis.tmpl must define system, lens and source blocks")
@@ -77,19 +99,27 @@ func loadPrompts() (prompts, error) {
 	if p.mapSystem == nil || p.mapSource == nil {
 		return prompts{}, fmt.Errorf("asset_analysis_map.tmpl must define system and source blocks")
 	}
+	if p.distillSystem == nil || p.distillRequest == nil {
+		return prompts{}, fmt.Errorf("idea_distill.tmpl must define distillSystem and distillRequest blocks")
+	}
 	return p, nil
 }
 
 func parsePrompt(name string) (*template.Template, error) {
+	return parseInto(template.New(name).Funcs(templateFuncs), name)
+}
+
+// parseInto parses the named prompt file into tpl's set.
+func parseInto(tpl *template.Template, name string) (*template.Template, error) {
 	raw, err := promptFS.ReadFile("prompts/" + name + ".tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("load %s.tmpl: %w", name, err)
 	}
-	tpl, err := template.New(name).Funcs(templateFuncs).Parse(string(raw))
+	out, err := tpl.Parse(string(raw))
 	if err != nil {
 		return nil, fmt.Errorf("parse %s.tmpl: %w", name, err)
 	}
-	return tpl, nil
+	return out, nil
 }
 
 // genkitGenerator runs one generation and meters it. The call streams, but
@@ -98,12 +128,14 @@ func parsePrompt(name string) (*template.Template, error) {
 // anyway. Streaming is still required, because the Anthropic SDK refuses a
 // blocking call whose max_tokens could take over 10 minutes (above ~21K).
 func genkitGenerator(g *genkit.Genkit, cfg FlowConfig) generator {
-	maxTokens := cmp.Or(cfg.MaxOutputTokens, defaultMaxOutputTokens)
+	defaultMax := cmp.Or(cfg.MaxOutputTokens, defaultMaxOutputTokens)
 	return func(ctx context.Context, call modelCall) (string, error) {
+		maxTokens := cmp.Or(call.MaxTokens, defaultMax)
+		flow := cmp.Or(call.Flow, modelconfig.FlowAssetAnalysis)
 		usage := flowkit.Usage{
 			Recorder:  cfg.Recorder,
 			Model:     call.Model,
-			Feature:   usageFeature,
+			Feature:   flow,
 			Component: logComponent,
 		}
 		resp, err := genkit.Generate(ctx, g,
@@ -111,7 +143,7 @@ func genkitGenerator(g *genkit.Genkit, cfg FlowConfig) generator {
 			ai.WithSystem("%s", call.System),
 			ai.WithPrompt("%s", call.Prompt),
 			ai.WithStreaming(discardChunks),
-			ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowAssetAnalysis, usage.Record)),
+			ai.WithMiddleware(cfg.Provider.CallMiddleware(flow, usage.Record)),
 			cfg.Provider.CallConfig(call.Model.Model, maxTokens),
 		)
 		if errors.Is(err, llm.ErrRefused) {
