@@ -23,6 +23,23 @@ var ErrInvalidSignature = errors.New("billing: invalid webhook signature")
 // ErrNotFound is returned when the provider has no such object.
 var ErrNotFound = errors.New("billing: not found at provider")
 
+// IsRetryable reports whether a provider error may succeed on retry. An error
+// that knows (a Retryable() bool method, like an HTTP 429/5xx) decides;
+// configuration, not-found and signature errors never retry; anything else
+// (a transport failure) does.
+func IsRetryable(err error) bool {
+	if err == nil || errors.Is(err, ErrNotConfigured) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidSignature) {
+		return false
+	}
+	if r, ok := errors.AsType[interface {
+		error
+		Retryable() bool
+	}](err); ok {
+		return r.Retryable()
+	}
+	return true
+}
+
 // Provider is a merchant-of-record adapter.
 type Provider interface {
 	// CreateCheckout opens a hosted checkout for one variant.
