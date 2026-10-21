@@ -48,6 +48,9 @@ func newEntitlementLimiter(cfg *config.Config, r *repos, resolver *entitlements.
 		Register("media_storage_bytes", tenantScoped(r.mediaStorageBytes)).
 		Register(assetanalysis.FeatureMonthlyRuns, tenantScoped(func(ctx context.Context) (int64, error) {
 			return r.assetAnalysisRepo.CountRunsSince(ctx, monthStart(time.Now()))
+		})).
+		Register(assetanalysis.FeatureMonthlyDistills, tenantScoped(func(ctx context.Context) (int64, error) {
+			return r.ideaDistillRepo.CountChargesSince(ctx, monthStart(time.Now()))
 		}))
 }
 

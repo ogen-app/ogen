@@ -44,6 +44,7 @@ type Jobs interface {
 	// runs it now.
 	EnqueueAnalyzeAsset(ctx context.Context, tenantID, assetID string, campaignID *string, reason string, at time.Time) error
 	EnqueueReanalyzeCampaign(ctx context.Context, tenantID, campaignID string, at time.Time) error
+	EnqueueDistillIdeas(ctx context.Context, tenantID, runID string) error
 }
 
 // ErrNotRetryable means the lens is neither failed nor skipped.

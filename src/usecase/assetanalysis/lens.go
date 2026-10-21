@@ -36,29 +36,11 @@ const (
 // ideas are about to be replaced, so they are not listed as already captured.
 // Ideas a distill run added are kept by the re-run, so they are listed.
 func (s *Service) buildLens(ctx context.Context, tenantID string, asset *models.Asset, campaign *models.Campaign, lensID string) (asset_analysis.Lens, error) {
-	today := s.now().UTC()
-	lens := asset_analysis.Lens{BrandBlock: s.brandBlock(ctx, campaign), Today: today.Format(time.DateOnly)}
-	if tenant, err := s.repos.Tenants.GetByID(ctx, tenantID); err == nil {
-		lens.WorkspaceName = tenant.Name
+	lens, err := s.lensContext(ctx, tenantID, asset, campaign)
+	if err != nil {
+		return lens, err
 	}
-	filter := repository.IdeaListFilter{Unfiled: true}
-	if campaign == nil {
-		var err error
-		if lens.ActiveCampaigns, err = s.activeCampaigns(ctx, today); err != nil {
-			return lens, err
-		}
-	} else {
-		lens.Campaign = brief(campaign)
-		filter = repository.IdeaListFilter{CampaignID: campaign.ID}
-		var err error
-		if lens.Siblings, err = s.siblings(ctx, asset.ID, campaign); err != nil {
-			return lens, err
-		}
-		if lens.PostTitles, err = s.postTitles(ctx, campaign.ID); err != nil {
-			return lens, err
-		}
-	}
-	ideas, err := s.repos.Ideas.List(ctx, filter)
+	ideas, err := s.repos.Ideas.List(ctx, ideaScope(campaign))
 	if err != nil {
 		return lens, fmt.Errorf("list ideas: %w", err)
 	}
@@ -72,6 +54,36 @@ func (s *Service) buildLens(ctx context.Context, tenantID string, asset *models.
 		lens.ExistingIdeas = lens.ExistingIdeas[len(lens.ExistingIdeas)-maxExistingIdeas:]
 	}
 	return lens, nil
+}
+
+// lensContext is the lens without its idea list: workspace, brand, and the
+// campaign's brief, siblings and posts or the workspace's live campaigns.
+func (s *Service) lensContext(ctx context.Context, tenantID string, asset *models.Asset, campaign *models.Campaign) (asset_analysis.Lens, error) {
+	today := s.now().UTC()
+	lens := asset_analysis.Lens{BrandBlock: s.brandBlock(ctx, campaign), Today: today.Format(time.DateOnly)}
+	if tenant, err := s.repos.Tenants.GetByID(ctx, tenantID); err == nil {
+		lens.WorkspaceName = tenant.Name
+	}
+	var err error
+	if campaign == nil {
+		lens.ActiveCampaigns, err = s.activeCampaigns(ctx, today)
+		return lens, err
+	}
+	lens.Campaign = brief(campaign)
+	if lens.Siblings, err = s.siblings(ctx, asset.ID, campaign); err != nil {
+		return lens, err
+	}
+	lens.PostTitles, err = s.postTitles(ctx, campaign.ID)
+	return lens, err
+}
+
+// ideaScope keeps the ideas a lens reads against: the campaign's for a
+// campaign lens, the workspace-wide ones otherwise.
+func ideaScope(campaign *models.Campaign) repository.IdeaListFilter {
+	if campaign == nil {
+		return repository.IdeaListFilter{Unfiled: true}
+	}
+	return repository.IdeaListFilter{CampaignID: campaign.ID}
 }
 
 // brandBlock renders the brand voice, audience, guardrails and facts. It

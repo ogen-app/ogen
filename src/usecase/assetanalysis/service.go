@@ -77,16 +77,18 @@ type Repos struct {
 	Ideas     repository.IdeaRepository
 	Brands    repository.BrandRepository
 	Tenants   repository.TenantRepository
+	Distills  repository.IdeaDistillRepository
 }
 
 // Service runs analyses. It is safe for concurrent use.
 type Service struct {
-	db       *bun.DB
-	repos    Repos
-	limiter  *entitlements.Limiter
-	hub      eventhub.Hub
-	analyzer atomic.Pointer[Analyzer]
-	now      func() time.Time
+	db        *bun.DB
+	repos     Repos
+	limiter   *entitlements.Limiter
+	hub       eventhub.Hub
+	analyzer  atomic.Pointer[Analyzer]
+	distiller atomic.Pointer[Distiller]
+	now       func() time.Time
 
 	jobs            Jobs
 	rebriefDebounce time.Duration
@@ -108,6 +110,16 @@ func (s *Service) SetAnalyzer(a Analyzer) {
 		return
 	}
 	s.analyzer.Store(&a)
+}
+
+// SetDistiller binds the distill flow once the model runtime is up; nil
+// unbinds it.
+func (s *Service) SetDistiller(d Distiller) {
+	if d == nil {
+		s.distiller.Store(nil)
+		return
+	}
+	s.distiller.Store(&d)
 }
 
 // Lens names one analysis: an asset and the campaign it is read for (nil for

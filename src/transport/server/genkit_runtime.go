@@ -66,6 +66,7 @@ type genkitRuntime struct {
 	checkBriefFn        func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPostsFn        func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 	analyzeAssetFn      func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error)
+	distillIdeasFn      func(ctx context.Context, req asset_analysis.DistillRequest) (*asset_analysis.DistillResponse, error)
 
 	cfg                 *config.Config
 	hub                 eventhub.Hub
@@ -275,6 +276,18 @@ func (r *genkitRuntime) AnalyzeAsset(ctx context.Context, req asset_analysis.Ana
 	return fn(ctx, req)
 }
 
+// DistillIdeas runs the idea distill flow. The distill job treats
+// ErrAnthropicUnavailable as transient and retries.
+func (r *genkitRuntime) DistillIdeas(ctx context.Context, req asset_analysis.DistillRequest) (*asset_analysis.DistillResponse, error) {
+	r.mu.RLock()
+	fn := r.distillIdeasFn
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil, ErrAnthropicUnavailable
+	}
+	return fn(ctx, req)
+}
+
 // rebuild fetches the current Anthropic key (if any), constructs a
 // fresh Genkit instance with a fresh Anthropic plugin, re-registers
 // the two flows, and atomically swaps the cached callbacks. Holding
@@ -303,6 +316,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		r.checkBriefFn = nil
 		r.checkPostsFn = nil
 		r.analyzeAssetFn = nil
+		r.distillIdeasFn = nil
 		r.g = nil
 		r.plugin = nil
 		return nil
@@ -357,14 +371,15 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		return fmt.Errorf("init campaign assistant: %w", err)
 	}
 
-	analyzeAssetFn, err := initAssetAnalysis(g, r.cfg, provider, r.recorder, r.checker)
+	analysisFlows, err := initAssetAnalysis(g, r.cfg, provider, r.recorder, r.checker)
 	if err != nil {
 		return fmt.Errorf("init asset analysis: %w", err)
 	}
 
 	r.g = g
 	r.plugin = plugin
-	r.analyzeAssetFn = analyzeAssetFn
+	r.analyzeAssetFn = analysisFlows.analyze
+	r.distillIdeasFn = analysisFlows.distill
 	r.contentPlanFn = contentPlanFn
 	r.postAssistantFn = postAssistantFn
 	r.postQualityFn = postQualityFn
