@@ -23,6 +23,10 @@ const (
 	KeyConnectionExpiring = "connection_expiring"
 	KeyNewDeviceLogin     = "new_device_login"
 	KeyGoogleLinked       = "google_linked"
+	// Billing notices to workspace owners: a failed renewal payment, and the
+	// sandbox-to-live cutover asking them to check out again.
+	KeyBillingPaymentFailed   = "billing_payment_failed"
+	KeyBillingReentryRequired = "billing_reentry_required"
 	// KeyAdminTenantRegistered is the internal operator notification sent to
 	// admins when a new tenant registers. Unlike the templates above it
 	// is not customer-facing, so it is hand-authored rather than Maizzle-compiled.
@@ -279,6 +283,8 @@ var defaultSpecs = []defaultSpec{
 	{KeyConnectionExpiring, models.EmailKindTransactional, connectionExpiringSubject, connectionExpiringVars()},
 	{KeyNewDeviceLogin, models.EmailKindTransactional, "New sign-in to your Ogen account", newDeviceLoginVars()},
 	{KeyGoogleLinked, models.EmailKindTransactional, "Google sign-in is now connected to your Ogen account", googleLinkedVars()},
+	{KeyBillingPaymentFailed, models.EmailKindTransactional, "Your Ogen payment didn't go through", transactionalVars()},
+	{KeyBillingReentryRequired, models.EmailKindTransactional, "Please re-enter your payment details for Ogen", transactionalVars()},
 	{KeyAdminTenantRegistered, models.EmailKindTransactional, "New tenant registered: [[ .WorkspaceName ]]", adminTenantRegisteredVars()},
 	{KeyWeeklyReport, models.EmailKindTransactional, weeklyReportSubject, weeklyReportVars()},
 }

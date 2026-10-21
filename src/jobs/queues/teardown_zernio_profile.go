@@ -11,6 +11,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
@@ -38,9 +39,22 @@ type TenantTeardownFence interface {
 // it never fails the delete.
 const TeardownZernioProfileQueue = "teardown_zernio_profile"
 
-// TeardownZernioProfileTask carries the tenant whose profile to delete.
+// TeardownReasonTrialUnpaid tears down the profile of a live workspace whose
+// free trial ended without a payment, releasing its paid connected accounts.
+const TeardownReasonTrialUnpaid = "trial_unpaid"
+
+// TeardownZernioProfileTask carries the tenant whose profile to delete. An
+// empty Reason is the workspace-delete teardown.
 type TeardownZernioProfileTask struct {
 	TenantID string `json:"tenant_id"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// BillingLiveChecker reports whether a tenant has a subscription that still
+// entitles it. The unpaid-trial teardown re-checks it under the tenant lock,
+// so a workspace that subscribed in the meantime keeps its profile.
+type BillingLiveChecker interface {
+	HasLiveSubscription(ctx context.Context, tenantID string) (bool, error)
 }
 
 // Kind implements river.JobArgs.
@@ -69,6 +83,11 @@ type TeardownZernioProfileProcessor struct {
 	// (unwired) skips teardown rather than delete an unfenced profile. In prod it
 	// is always wired (repository.NewTenantTeardownFence).
 	Fence TenantTeardownFence
+	// Billing and Accounts serve the unpaid-trial teardown: the live
+	// subscription re-check, and disconnecting the local account rows of a
+	// workspace that stays in use. A nil Billing skips that teardown.
+	Billing  BillingLiveChecker
+	Accounts repository.SocialAccountRepository
 }
 
 // Work is the River entrypoint. Like bootstrap, this job is scoped to a single
@@ -113,6 +132,9 @@ func (p *TeardownZernioProfileProcessor) Work(ctx context.Context, job *river.Jo
 	// (A hard-deleted tenant yields status "" and no lock; nothing can restore
 	// it, so proceeding is safe.)
 	err = p.Fence.WithTenantLock(ctx, tid, func(ctx context.Context, status string) error {
+		if job.Args.Reason == TeardownReasonTrialUnpaid {
+			return p.teardownUnpaidTrial(ctx, tid, profileID, status)
+		}
 		if status == models.TenantStatusActive {
 			slog.InfoContext(ctx, "teardown skipped: tenant active (restored)", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid)
 			return nil
@@ -133,6 +155,40 @@ func (p *TeardownZernioProfileProcessor) Work(ctx context.Context, job *river.Jo
 	}
 
 	slog.InfoContext(ctx, "teardown ok", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid, "profile_id", profileID)
+	return nil
+}
+
+// teardownUnpaidTrial releases the profile of a workspace that stays in use:
+// only while it is active and still has no live subscription, and it also
+// marks the local account rows disconnected so the app stops showing them.
+func (p *TeardownZernioProfileProcessor) teardownUnpaidTrial(ctx context.Context, tenantID, profileID, status string) error {
+	if status != models.TenantStatusActive || p.Billing == nil {
+		slog.InfoContext(ctx, "unpaid-trial teardown skipped", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tenantID, "status", status)
+		return nil
+	}
+	live, err := p.Billing.HasLiveSubscription(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if live {
+		slog.InfoContext(ctx, "unpaid-trial teardown skipped: subscribed since", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tenantID)
+		return nil
+	}
+	var local []models.SocialAccount
+	if p.Accounts != nil {
+		if local, err = p.Accounts.ListActive(ctx, profileID); err != nil {
+			return err
+		}
+	}
+	if err := p.teardown(ctx, profileID); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, a := range local {
+		if _, err := p.Accounts.SoftDelete(ctx, a.ID, now); err != nil {
+			return fmt.Errorf("disconnect local account %s: %w", a.ID, err)
+		}
+	}
 	return nil
 }
 
@@ -209,6 +265,8 @@ func init() {
 			Integration: d.Integration,
 			Settings:    d.AnalyticsSettings,
 			Fence:       d.TenantFence,
+			Billing:     d.BillingLive,
+			Accounts:    d.Zernio.SocialAccountRepo,
 		})
 	})
 }
