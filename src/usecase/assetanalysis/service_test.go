@@ -63,6 +63,12 @@ type jobRecorder struct {
 	analyses []queued
 	at       []time.Time
 	rebriefs []string
+	distills []string
+}
+
+func (j *jobRecorder) EnqueueDistillIdeas(_ context.Context, _, runID string) error {
+	j.distills = append(j.distills, runID)
+	return nil
 }
 
 func (j *jobRecorder) EnqueueAnalyzeAsset(_ context.Context, _, assetID string, campaignID *string, reason string, at time.Time) error {
@@ -113,6 +119,7 @@ func newFixture(t *testing.T, limiter *entitlements.Limiter) *fixture {
 		Ideas:     repository.NewIdeaRepository(db),
 		Brands:    repository.NewBrandRepository(db),
 		Tenants:   repository.NewTenantRepository(db),
+		Distills:  repository.NewIdeaDistillRepository(db),
 	}
 	f := &fixture{
 		db:    db,
@@ -329,7 +336,13 @@ func TestRunScoresIdeasAndDerivesRelevance(t *testing.T) {
 		[]string{"Best", "Middling", "Weak", "Capped", "Unrated", "Partial"},
 		[]*asset_analysis.IdeaFit{rated(c, 5), rated(c, 3), rated(c, 1), rated(c, 5, ideafit.CapGuardrailBreach), nil, partial},
 	)
-	before := expvar.Get("ogen_asset_analysis_ideas_scored_total").(*expvar.Map).Get("campaign/high")
+	highBand := func() int64 {
+		if v, ok := expvar.Get("ogen_asset_analysis_ideas_scored_total").(*expvar.Map).Get("campaign/high").(*expvar.Int); ok {
+			return v.Value()
+		}
+		return 0
+	}
+	before := highBand()
 
 	run(t, f, "md-1", &camp)
 
@@ -354,8 +367,7 @@ func TestRunScoresIdeasAndDerivesRelevance(t *testing.T) {
 	if got := f.lens(t, "md-1", &camp).Result.Relevance; got == nil || got.Score != 65 || got.Why != "fits" {
 		t.Errorf("relevance = %+v, want the mean of the top three (100, 55, 39) with the model's why", got)
 	}
-	if after := expvar.Get("ogen_asset_analysis_ideas_scored_total").(*expvar.Map).Get("campaign/high"); after == nil ||
-		(before != nil && after.(*expvar.Int).Value() <= before.(*expvar.Int).Value()) {
+	if highBand() <= before {
 		t.Error("the high-band counter did not move")
 	}
 

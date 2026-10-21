@@ -42,8 +42,10 @@ type AnalysisRunner interface {
 // AnalysisDeps are the analysis workers' dependencies. A nil Runner makes
 // every analysis job a no-op.
 type AnalysisDeps struct {
-	Runner  AnalysisRunner
-	Tenants TenantStatusReader
+	Runner AnalysisRunner
+	// Distiller runs distill jobs; nil makes them no-ops.
+	Distiller DistillRunner
+	Tenants   TenantStatusReader
 	// BackfillBatch caps the lenses one backfill tick queues per tenant, so
 	// one large library cannot fill the analysis queue.
 	BackfillBatch int
@@ -94,6 +96,7 @@ func init() {
 		river.AddWorker(w, &AnalyzeAssetProcessor{Deps: d.Analysis})
 		river.AddWorker(w, &ReanalyzeCampaignProcessor{Deps: d.Analysis})
 		river.AddWorker(w, &BackfillAssetAnalysesProcessor{Deps: d.Analysis})
+		river.AddWorker(w, &DistillAssetIdeasProcessor{Deps: d.Analysis})
 	})
 }
 

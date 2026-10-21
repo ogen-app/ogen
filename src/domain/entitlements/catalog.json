@@ -121,6 +121,17 @@
     "description": "Analysis runs per month; every campaign lens and every re-run counts one."
   },
   {
+    "key": "idea_distills_per_month",
+    "name": "More ideas from an asset",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-397",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "monthly",
+    "description": "Requests per month for more ideas from an analysed asset; each request counts one, whether or not it finds new ideas."
+  },
+  {
     "key": "posts_total",
     "name": "Posts",
     "category": "posts_publishing",

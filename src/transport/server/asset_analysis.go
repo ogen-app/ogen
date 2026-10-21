@@ -29,6 +29,7 @@ func newAssetAnalysis(d *deps) *assetanalysis.Service {
 		Ideas:     r.ideaRepo,
 		Brands:    r.brandRepo,
 		Tenants:   r.tenantRepo,
+		Distills:  r.ideaDistillRepo,
 	}, d.entitlements.limiter, d.hub)
 	svc.SetJobs(d.enqueuer, d.cfg.AnalysisRebriefDebounce, d.cfg.AnalysisEditDebounce)
 
@@ -42,14 +43,21 @@ func newAssetAnalysis(d *deps) *assetanalysis.Service {
 	return svc
 }
 
-// initAssetAnalysis registers the analyzeAsset flow and returns its callback.
+// assetAnalysisFlows are the callbacks of the analysis flows.
+type assetAnalysisFlows struct {
+	analyze func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error)
+	distill func(ctx context.Context, req asset_analysis.DistillRequest) (*asset_analysis.DistillResponse, error)
+}
+
+// initAssetAnalysis registers the analyzeAsset and distillAssetIdeas flows
+// and returns their callbacks.
 func initAssetAnalysis(
 	g *genkit.Genkit,
 	cfg *config.Config,
 	provider *llm.Provider,
 	recorder *usage.Recorder,
 	checker *usage.Checker,
-) (func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error), error) {
+) (assetAnalysisFlows, error) {
 	flowCfg := asset_analysis.FlowConfig{
 		Provider:             provider,
 		Recorder:             recorder,
@@ -58,9 +66,12 @@ func initAssetAnalysis(
 		MaxSourceTokens:      cfg.AnalysisMaxSourceTokens,
 	}
 	if err := asset_analysis.InitAssetAnalysis(g, flowCfg); err != nil {
-		return nil, fmt.Errorf("init asset analysis flow: %w", err)
+		return assetAnalysisFlows{}, fmt.Errorf("init asset analysis flow: %w", err)
 	}
-	return asset_analysis.NewAnalyzeAssetCallback(), nil
+	return assetAnalysisFlows{
+		analyze: asset_analysis.NewAnalyzeAssetCallback(),
+		distill: asset_analysis.NewDistillIdeasCallback(),
+	}, nil
 }
 
 // monthStart is the start of now's calendar month in UTC, where the monthly

@@ -294,6 +294,7 @@ func (d *deps) initGenkit(ctx context.Context) error {
 		return err
 	}
 	d.analysis.SetAnalyzer(d.genkit.AnalyzeAsset)
+	d.analysis.SetDistiller(d.genkit.DistillIdeas)
 	slog.Info("genkit flows registered", logging.AttrComponent, "genkit")
 	return nil
 }
