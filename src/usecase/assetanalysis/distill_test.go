@@ -297,6 +297,55 @@ func TestDistillSettlesFailures(t *testing.T) {
 	}
 }
 
+func TestDistillReleasesTheChargeWhenTheSaveFails(t *testing.T) {
+	f := newFixture(t, nil)
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
+	run(t, f, "md-1", nil)
+	var r *models.IdeaDistillRun
+	// With FKs on, deleting the run mid-call makes inserting its ideas fail.
+	withDistiller(f, func(req asset_analysis.DistillRequest) (*asset_analysis.DistillResponse, error) {
+		if _, err := f.db.NewDelete().Model((*models.IdeaDistillRun)(nil)).Where("id = ?", r.ID).Exec(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		return distilled("More")(req)
+	})
+	r = f.requestDistill(t, "md-1", nil, "", 3)
+	if _, err := f.db.Exec("SET session_replication_role = origin"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.svc.Distill(f.ctx, tenant, r.ID); err == nil {
+		t.Fatal("a failed save was not returned for a retry")
+	}
+	if n, _ := f.repos.Distills.CountChargesSince(f.ctx, time.Now().Add(-time.Hour)); n != 0 {
+		t.Fatalf("charges = %d, want the failed save's charge released", n)
+	}
+}
+
+func TestDistillCountsCitationsOfThisAssetOnly(t *testing.T) {
+	f := newFixture(t, nil)
+	d := withDistiller(f, distilled("More"))
+	f.seedAsset(t, "md-1", models.AssetTypeMarkdown, models.AssetStatusReady, "text")
+	f.seedAsset(t, "md-2", models.AssetTypeMarkdown, models.AssetStatusReady, "other text")
+	run(t, f, "md-1", nil)
+	f.stub.reply = answer("Other asset idea")
+	run(t, f, "md-2", nil)
+
+	r := f.requestDistill(t, "md-1", nil, "", 3)
+	if err := f.svc.Distill(f.ctx, tenant, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range d.reqs[0].Prior {
+		own := p.Title != "Other asset idea"
+		if own && !slices.Equal(p.Sources, []string{"Part 1"}) || !own && p.Sources != nil {
+			t.Fatalf("prior %q sources = %v", p.Title, p.Sources)
+		}
+	}
+	if !slices.Contains(d.reqs[0].KnownTitles, "Other asset idea") {
+		t.Fatal("the other asset's idea is no longer checked for repeats")
+	}
+}
+
 func TestDistillOfADetachedAssetIsDropped(t *testing.T) {
 	f := newFixture(t, nil)
 	d := withDistiller(f, distilled("More"))

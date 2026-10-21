@@ -227,8 +227,13 @@ func (s *Service) Distill(ctx context.Context, tenantID, runID string) error {
 		}
 		return retryErr
 	}
+	if err := s.saveDistill(ctx, t, resp); err != nil {
+		// The retry calls the model again and records its own charge.
+		s.releaseCharge(ctx, chargeID)
+		return err
+	}
 	s.limiter.DispatchCrossing(ctx, tenantID, dec)
-	return s.saveDistill(ctx, t, resp)
+	return nil
 }
 
 // FailDistill marks a run failed after its last attempt, so it never stays
@@ -313,7 +318,7 @@ func (s *Service) distillRequest(ctx context.Context, tenantID string, t *distil
 	if err != nil {
 		return asset_analysis.DistillRequest{}, fmt.Errorf("list ideas: %w", err)
 	}
-	prior, known := priorIdeas(ideas, t.lens.ID)
+	prior, known := priorIdeas(ideas, t.lens.ID, t.asset.ID)
 	return asset_analysis.DistillRequest{
 		CampaignID:  ptrValue(t.run.CampaignID),
 		Source:      src,
@@ -329,8 +334,9 @@ func (s *Service) distillRequest(ctx context.Context, tenantID string, t *distil
 
 // priorIdeas orders the ideas in scope for the prompt, this lens's first and
 // then the rest, newest first in each, capped at maxPriorIdeas. known holds
-// every title.
-func priorIdeas(ideas []models.Idea, lensID string) (prior []asset_analysis.PriorIdea, known []string) {
+// every title. Only ideas from assetID carry their citations: a label like
+// "Part 1" means another part in another source.
+func priorIdeas(ideas []models.Idea, lensID, assetID string) (prior []asset_analysis.PriorIdea, known []string) {
 	ordered := slices.Clone(ideas)
 	own := func(i models.Idea) bool { return i.AssetAnalysisID != nil && *i.AssetAnalysisID == lensID }
 	slices.SortStableFunc(ordered, func(a, b models.Idea) int {
@@ -348,12 +354,15 @@ func priorIdeas(ideas []models.Idea, lensID string) (prior []asset_analysis.Prio
 		if len(prior) == maxPriorIdeas {
 			continue
 		}
-		prior = append(prior, asset_analysis.PriorIdea{
+		p := asset_analysis.PriorIdea{
 			Title:   idea.Title,
 			Angle:   ptrValue(idea.Angle),
 			Verdict: priorVerdict(idea.Verdict),
-			Sources: idea.Sources,
-		})
+		}
+		if idea.SourceAssetID != nil && *idea.SourceAssetID == assetID {
+			p.Sources = idea.Sources
+		}
+		prior = append(prior, p)
 	}
 	return prior, known
 }
