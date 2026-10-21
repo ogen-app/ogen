@@ -133,6 +133,11 @@ func (r *ideaDistillRepository) SaveIdeas(ctx context.Context, tx bun.Tx, run *m
 		return nil
 	}
 	for i := range ideas {
+		// One insert would give every idea the same created_at, leaving their
+		// order to the random ids; a microsecond apart keeps the flow's order.
+		if ideas[i].CreatedAt.IsZero() {
+			ideas[i].CreatedAt = now.Add(time.Duration(i) * time.Microsecond)
+		}
 		ideas[i].DistillRunID = new(run.ID)
 		ideas[i].AssetAnalysisID = new(run.AnalysisID)
 		ideas[i].SourceAssetID = new(run.AssetID)

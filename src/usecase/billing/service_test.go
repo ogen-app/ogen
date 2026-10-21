@@ -348,6 +348,9 @@ func TestScheduledDowngrade(t *testing.T) {
 	if got := h.currentVersion(tenantID); got != maxVersion {
 		t.Fatalf("tier moved early: %s", got)
 	}
+	if h.notifier.has("plan_changed") {
+		t.Fatal("plan_changed sent at the provider step, before the tier moved")
+	}
 	// T: the tier moves.
 	h.now = st.ScheduledChange.EffectiveAt.Add(time.Minute)
 	if err := h.svc.RunScheduledChange(ctx, changeID); err != nil {
@@ -355,6 +358,9 @@ func TestScheduledDowngrade(t *testing.T) {
 	}
 	if got := h.currentVersion(tenantID); got != h.proPrice.TierVersionID+"/"+models.AssignmentReasonDowngrade {
 		t.Fatalf("assignment after the boundary = %s", got)
+	}
+	if !h.notifier.has("plan_changed") {
+		t.Fatal("no plan_changed once the downgrade landed")
 	}
 	if st, _ := h.svc.PlanState(ctx, tenantID, ""); st.ScheduledChange != nil {
 		t.Fatal("applied change still shown")
