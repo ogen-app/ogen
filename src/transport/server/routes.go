@@ -160,6 +160,7 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).WithEventHub(d.hub).Register(app)
 	handlers.NewSavedViewsHandler(savedviews.New(r.savedViewRepo, d.hub, ideas.NewSurface(r.ideaRepo), assets.NewSurface(r.pieceRepo)), r.userRepo, d.auth).Register(app)
 	handlers.NewAssetAnalysesHandler(r.assetAnalysisRepo, r.ideaRepo, r.pieceRepo, r.campaignRepo, d.analysis, d.auth).Register(app)
+	handlers.NewAssetIdeaDistillHandler(r.pieceRepo, d.analysis, d.auth, d.activity.recorder).Register(app)
 	handlers.NewSeriesHandler(d.svc.series, d.auth, d.activity.recorder).Register(app)
 }
 
