@@ -39,7 +39,15 @@ const pluginTokenLocal = "plugin_token"
 // suspended or deleted workspace are all refused with the one 401 code. On
 // success it sets the same locals as RequireAuth (session, tenant, user id),
 // so handlers built for cookie sessions run unchanged.
-func RequirePluginToken(tokens repository.PluginTokenRepository, users repository.UserRepository) fiber.Handler {
+//
+// With WithBillingGate, a workspace that must check out first gets 402
+// billing_required on every plugin route except identifying itself and
+// disconnecting.
+func RequirePluginToken(tokens repository.PluginTokenRepository, users repository.UserRepository, opts ...AuthOption) fiber.Handler {
+	var o authOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	return func(c *fiber.Ctx) error {
 		raw, ok := bearerToken(c.Get(fiber.HeaderAuthorization))
 		if !ok || !models.LooksLikePluginToken(raw) {
@@ -59,6 +67,15 @@ func RequirePluginToken(tokens repository.PluginTokenRepository, users repositor
 		}
 		if err != nil {
 			return err
+		}
+		if o.billingGate != nil && !pluginBillingAllowed(c.Method(), c.Path()) {
+			gated, err := o.billingGate(ctx, membership.TenantID)
+			if err != nil {
+				return err
+			}
+			if gated {
+				return errBillingRequired
+			}
 		}
 
 		c.Locals(pluginTokenLocal, token)

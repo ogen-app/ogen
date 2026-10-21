@@ -149,6 +149,10 @@ func (r *sessionRepository) GetByID(ctx context.Context, id string) (*models.Ses
 type Membership struct {
 	UserID   string
 	TenantID string
+	// BillingGated reports that the workspace must check out before it can be
+	// used (BillingGateSQL). Read in the same query, so the gate costs nothing
+	// extra per request.
+	BillingGated bool
 }
 
 type sessionWithMembership struct {
@@ -156,6 +160,7 @@ type sessionWithMembership struct {
 
 	MemberID       string `bun:"member_id,scanonly"`
 	MemberTenantID string `bun:"member_tenant_id,scanonly"`
+	MemberGated    bool   `bun:"member_billing_gated,scanonly"`
 }
 
 func (r *sessionRepository) GetForAuth(ctx context.Context, id, workspaceID string) (*models.Session, *Membership, error) {
@@ -168,6 +173,7 @@ func (r *sessionRepository) GetForAuth(ctx context.Context, id, workspaceID stri
 		ColumnExpr("s.*").
 		ColumnExpr("COALESCE(u.id, '') AS member_id").
 		ColumnExpr("COALESCE(u.tenant_id, '') AS member_tenant_id").
+		ColumnExpr("COALESCE((SELECT "+BillingGateSQL+" FROM tenants AS t WHERE t.id = u.tenant_id), false) AS member_billing_gated").
 		Join(`LEFT JOIN users AS u ON u.account_id = s.account_id
 			AND u.tenant_id = COALESCE(NULLIF(?, ''), s.tenant_id)
 			AND EXISTS (SELECT 1 FROM tenants AS t WHERE t.id = u.tenant_id AND t.status = ?)`,
@@ -184,7 +190,7 @@ func (r *sessionRepository) GetForAuth(ctx context.Context, id, workspaceID stri
 	if row.MemberID == "" {
 		return &session, nil, nil
 	}
-	return &session, &Membership{UserID: row.MemberID, TenantID: row.MemberTenantID}, nil
+	return &session, &Membership{UserID: row.MemberID, TenantID: row.MemberTenantID, BillingGated: row.MemberGated}, nil
 }
 
 func (r *sessionRepository) SetDefaultWorkspace(ctx context.Context, sessionID, userID, tenantID string) error {

@@ -47,6 +47,9 @@ func newEntitlementLimiter(cfg *config.Config, r *repos, resolver *entitlements.
 			return r.pieceRepo.CountByType(ctx, models.AssetTypeURL)
 		})).
 		Register("media_storage_bytes", tenantScoped(r.mediaStorageBytes)).
+		// Connected social accounts are the paid resource behind a workspace;
+		// the cap is checked before a connect link is issued.
+		Register("connected_accounts", entitlements.CounterFunc(r.billingRepo.CountConnectedAccounts)).
 		Register(assetanalysis.FeatureMonthlyRuns, tenantScoped(func(ctx context.Context) (int64, error) {
 			return r.assetAnalysisRepo.CountRunsSince(ctx, monthStart(time.Now()))
 		})).

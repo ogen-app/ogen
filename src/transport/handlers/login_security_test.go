@@ -109,7 +109,7 @@ var _ = Describe("Login security", Ordered, func() {
 		sessions := handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil)
 		sessions.SetLoginSecurity(sec, testDeviceCookie)
 		sessions.Register(a)
-		tenants := handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth, nil)
+		tenants := handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo), tenantRepo, testCookieName, false, auth, nil)
 		tenants.SetLoginSecurity(sec, testDeviceCookie)
 		tenants.Register(a)
 		handlers.NewInvitationsHandler(db, userRepo, accountRepo, tenantRepo, repository.NewInvitationRepository(db), sessionRepo, "https://app.example", testCookieName, false, auth,

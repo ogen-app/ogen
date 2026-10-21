@@ -28,6 +28,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
+	"github.com/ogen-app/ogen/src/usecase/billing"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
@@ -69,6 +70,7 @@ type deps struct {
 	email        emailRuntime
 	enqueuer     *queues.Enqueuer
 	analysis     *assetanalysis.Service
+	billing      *billing.Service
 	brandDistill *branddistill.Service
 	svc          services
 	genkit       *genkitRuntime
@@ -116,6 +118,7 @@ func (d *deps) phases() []func(context.Context) error {
 		d.initStorage,
 		d.initGRPCClients,
 		d.initIngestion,
+		d.initBilling,
 		d.initRiver,
 		d.initServices,
 		d.initGenkit,
@@ -205,9 +208,12 @@ func (d *deps) initRiver(ctx context.Context) error {
 		return err
 	}
 	d.email.Deps.ReportPrefs = r.weeklyReportRepo
-	// The analysis service enqueues from inside River workers, so it is built
-	// over the enqueuer before the client exists; the client is attached below.
-	d.enqueuer = &queues.Enqueuer{}
+	// The analysis and billing services enqueue from inside River workers, so
+	// they are built over the enqueuer before the client exists; the client is
+	// attached below.
+	if d.enqueuer == nil {
+		d.enqueuer = &queues.Enqueuer{}
+	}
 	d.analysis = newAssetAnalysis(d)
 	d.brandDistill = newBrandDistill(d)
 	client, err := newRiverClient(ctx, d)
@@ -250,8 +256,9 @@ func (d *deps) initServices(context.Context) error {
 	// transaction.
 	d.svc.withdraw = withdraw.New(d.db, r.postRepo, r.campaignRepo, r.postLogRepo, d.enqueuer)
 
-	d.svc.signup = signup.New(d.db, r.accountRepo, r.tenantRepo, d.enqueuer)
+	d.svc.signup = signup.New(d.db, r.accountRepo, r.tenantRepo)
 	d.svc.signup.SetEmailEnqueuer(d.enqueuer)
+	d.svc.signup.SetBillingRequired(d.billing.Enabled())
 	// Without a Harbor webhook URL no registration webhook jobs are queued.
 	if d.cfg.HarborWebhookURL != "" {
 		d.svc.signup.SetHarborEnqueuer(d.enqueuer)

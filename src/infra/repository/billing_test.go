@@ -252,3 +252,27 @@ func TestBillingScheduledChanges(t *testing.T) {
 		t.Fatalf("open change = %+v %v", open, err)
 	}
 }
+
+func TestGetForAuthReportsBillingGate(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	newBillingTenant(t, db, "t-gated", true)
+	newBillingAccount(t, db, "acc-1")
+	if _, err := db.NewInsert().Model(&models.User{ID: "u-1", AccountID: "acc-1", TenantID: "t-gated", Name: "u", Email: "acc-1@example.com", Role: models.RoleOwner}).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sessions := repository.NewSessionRepository(db)
+	if err := sessions.Create(ctx, &models.Session{ID: "sess-1", AccountID: "acc-1", UserID: "u-1", TenantID: "t-gated", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	_, m, err := sessions.GetForAuth(ctx, "sess-1", "")
+	if err != nil || m == nil || !m.BillingGated {
+		t.Fatalf("gated membership = %+v %v", m, err)
+	}
+	if err := repository.NewBillingRepository(db).InsertSubscription(ctx, nil, newSub("t-gated", "9")); err != nil {
+		t.Fatal(err)
+	}
+	if _, m, _ = sessions.GetForAuth(ctx, "sess-1", ""); m == nil || m.BillingGated {
+		t.Fatalf("membership after checkout = %+v", m)
+	}
+}

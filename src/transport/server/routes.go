@@ -44,11 +44,26 @@ func registerRoutes(app *fiber.App, d *deps) {
 }
 
 // registerBillingRoutes serves the public pricing catalog, the in-app
-// entitlement view, and usage metering.
+// entitlement view, the owner's billing and plan change, the billing webhook,
+// and usage metering.
 func registerBillingRoutes(app *fiber.App, d *deps) {
 	e := d.entitlements
-	handlers.NewPricingHandler(e.resolver, d.r.tierVersionRepo, e.catalog, d.auth, e.limiter).Register(app)
+	pricing := handlers.NewPricingHandler(e.resolver, d.r.tierVersionRepo, e.catalog, d.auth, e.limiter)
+	if d.billing.Enabled() {
+		pricing.WithBilling(d.billing)
+	}
+	pricing.Register(app)
+	handlers.NewBillingHandler(d.billing, d.r.userRepo, d.r.accountRepo, pricing, d.auth).Register(app)
 	handlers.NewUsageHandler(d.usage.events, d.usage.limits, d.usage.defaults, d.auth, d.cfg.UsageAdminToken).Register(app)
+}
+
+// billingGate is the gate for handlers that report it as data, or nil while
+// billing is off.
+func (d *deps) billingGate() handlers.BillingGate {
+	if !d.billing.Enabled() {
+		return nil
+	}
+	return d.r.billingRepo.Gated
 }
 
 // registerNotificationRoutes serves the ephemeral event stream, the durable
@@ -86,6 +101,7 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 	sessions.Register(app)
 	tenants := handlers.NewTenantsHandler(d.svc.signup, r.tenantRepo, cfg.SessionCookieName, secure, d.auth, rec)
 	tenants.SetLoginSecurity(d.svc.loginSecurity, cfg.DeviceCookieName)
+	tenants.SetBillingGate(d.billingGate())
 	tenants.Register(app)
 	handlers.NewLoginAlertsHandler(d.svc.loginSecurity).Register(app)
 	google := handlers.NewGoogleAuthHandler(d.svc.googleLogin, r.sessionRepo, cfg.SessionCookieName, secure, rec)
@@ -95,7 +111,9 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 	methods := oauthlogin.NewMethods(d.db, r.accountIdentityRepo, r.sessionRepo)
 	handlers.NewAccountAuthMethodsHandler(methods, r.accountRepo, d.auth, rec).Register(app)
 
-	handlers.NewWorkspacesHandler(d.db, r.workspaceRepo, r.userRepo, r.accountRepo, r.tenantRepo, r.sessionRepo, d.enqueuer, d.auth, rec).Register(app)
+	workspaces := handlers.NewWorkspacesHandler(d.db, r.workspaceRepo, r.userRepo, r.accountRepo, r.tenantRepo, r.sessionRepo, d.enqueuer, d.auth, rec)
+	workspaces.SetBillingRequired(d.billing.Enabled())
+	workspaces.Register(app)
 	handlers.NewPasswordResetHandler(d.db, r.userRepo, r.accountRepo, cfg.AppBaseURL, d.enqueuer, rec).Register(app)
 	handlers.NewInvitationsHandler(d.db, r.userRepo, r.accountRepo, r.tenantRepo, r.invitationRepo, r.sessionRepo, cfg.AppBaseURL, cfg.SessionCookieName, secure, d.auth, handlers.InvitationsOptions{
 		EmailJobs:        d.enqueuer,
@@ -113,7 +131,8 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 // until their secret is set.
 func registerIntegrationRoutes(app *fiber.App, d *deps) {
 	z, r := d.zernio, d.r
-	handlers.NewZernioHandler(z.Integration, z.Bootstrapper, z.Settings, r.platformRepo, r.socialAccountRepo, r.postRepo, z.Worker, z.RateLimiter, d.auth, r.zernioConnectSessionRepo, d.cipher, d.cfg.AppBaseURL).Register(app)
+	handlers.NewZernioHandler(z.Integration, z.Bootstrapper, z.Settings, r.platformRepo, r.socialAccountRepo, r.postRepo, z.Worker, z.RateLimiter, d.auth, r.zernioConnectSessionRepo, d.cipher, d.cfg.AppBaseURL).
+		WithLimiter(d.entitlements.limiter).Register(app)
 	handlers.NewFigmaPluginHandler(handlers.FigmaPluginDeps{
 		Pairing:       d.svc.plugins,
 		AppBaseURL:    d.cfg.AppBaseURL,
@@ -130,6 +149,7 @@ func registerIntegrationRoutes(app *fiber.App, d *deps) {
 		MediaPreviews:   r.mediaPreviewRepo,
 		Storage:         d.store,
 		Previews:        d.clients.previewRenderer(),
+		BillingGate:     d.billingGate(),
 	}).Register(app)
 	handlers.NewFigmaConnectionsHandler(d.svc.plugins, r.userRepo, d.auth, d.activity.recorder).Register(app)
 	d.email.Handler.Register(app)

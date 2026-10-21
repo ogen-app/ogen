@@ -52,7 +52,7 @@ func newFixture(t *testing.T) *fixture {
 		Accounts:   accounts,
 		Users:      repository.NewUserRepository(db),
 		Sessions:   repository.NewSessionRepository(db),
-		Signup:     signup.New(db, accounts, repository.NewTenantRepository(db), nil),
+		Signup:     signup.New(db, accounts, repository.NewTenantRepository(db)),
 		Emails:     emails,
 		Invites: inviteaccept.New(db, repository.NewUserRepository(db), accounts,
 			repository.NewInvitationRepository(db), repository.NewSessionRepository(db), nil),

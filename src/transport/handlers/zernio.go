@@ -12,6 +12,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/infra/crypto/envelope"
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -52,6 +53,16 @@ type ZernioHandler struct {
 	connectSessions repository.ZernioConnectSessionRepository
 	cipher          *envelope.Cipher
 	appBaseURL      string
+
+	// limiter caps connected accounts (connected_accounts) before a connect
+	// link is issued; nil skips the check.
+	limiter *entitlements.Limiter
+}
+
+// WithLimiter enforces the connected_accounts entitlement on connect links.
+func (h *ZernioHandler) WithLimiter(l *entitlements.Limiter) *ZernioHandler {
+	h.limiter = l
+	return h
 }
 
 func NewZernioHandler(
@@ -267,6 +278,16 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid_platform")
 	}
 
+	// The plan's connected-accounts cap is checked before anything is
+	// provisioned: an account over it would never be usable.
+	var hold quotaHold
+	if h.limiter != nil {
+		var err error
+		if hold, err = requireQuotaAmount(c, h.limiter, "connected_accounts", 1); err != nil {
+			return err
+		}
+	}
+
 	if allow, retryAfter := h.rateLimiter.Allow(); !allow {
 		seconds := max(int(math.Ceil(retryAfter.Seconds())), 1)
 		c.Set("Retry-After", strconv.Itoa(seconds))
@@ -290,6 +311,7 @@ func (h *ZernioHandler) CreateConnectLink(c *fiber.Ctx) error {
 
 	// Log the redacted URL only — the query string carries a short-lived token.
 	slog.InfoContext(reqCtx(c), "connect link issued", logging.AttrComponent, "zernio", "platform", req.Platform, "profile", link.ProfileID, "url", redactConnectURL(link.URL))
+	hold.dispatch(reqCtx(c))
 
 	return c.JSON(connectLinkResponse{
 		Platform:   req.Platform,

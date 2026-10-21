@@ -22,22 +22,14 @@ import (
 )
 
 // fakeLifecycleEnqueuer records the tenant ids the workspace handler asks to
-// bootstrap (on create) and tear down (on delete) their Zernio profile. It lets
-// the CON-203 tests assert the tx-coupling: a committed delete enqueues exactly
-// one teardown, a rolled-back delete enqueues none. It ignores the *sql.Tx (the
-// real enqueuer inserts a River job into it) and returns nil so the handler's
-// transaction commits normally.
+// tear down (on delete) their Zernio profile. It lets the CON-203 tests assert
+// the tx-coupling: a committed delete enqueues exactly one teardown, a
+// rolled-back delete enqueues none. It ignores the *sql.Tx (the real enqueuer
+// inserts a River job into it) and returns nil so the handler's transaction
+// commits normally.
 type fakeLifecycleEnqueuer struct {
-	mu           sync.Mutex
-	bootstrapped []string
-	tornDown     []string
-}
-
-func (f *fakeLifecycleEnqueuer) EnqueueBootstrapProfileTx(_ context.Context, _ *sql.Tx, tenantID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.bootstrapped = append(f.bootstrapped, tenantID)
-	return nil
+	mu       sync.Mutex
+	tornDown []string
 }
 
 func (f *fakeLifecycleEnqueuer) EnqueueTeardownProfileTx(_ context.Context, _ *sql.Tx, tenantID string) error {
@@ -83,11 +75,10 @@ var _ = Describe("Workspaces (CON-147)", Ordered, func() {
 		tagRepo := repository.NewTagRepository(db)
 		settingRepo := repository.NewSettingRepository(db)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-		// signup's own bootstrap enqueuer stays nil (creation still succeeds); the
-		// workspace handler gets a recording fake so the CON-203 teardown enqueue
-		// (and its tx-coupling) can be asserted.
+		// The workspace handler gets a recording fake so the CON-203 teardown
+		// enqueue (and its tx-coupling) can be asserted.
 		enq = &fakeLifecycleEnqueuer{}
-		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo, nil), tenantRepo, testCookieName, false, auth, nil).Register(app)
+		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo), tenantRepo, testCookieName, false, auth, nil).Register(app)
 		handlers.NewWorkspacesHandler(db, workspaceRepo, userRepo, accountRepo, tenantRepo, sessionRepo, enq, auth, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewUsersHandler(db, userRepo, accountRepo, settingRepo, auth, nil, nil).Register(app)
