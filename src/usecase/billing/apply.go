@@ -188,7 +188,7 @@ func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscriptio
 			return err
 		}
 		entitlements = moved
-		ns, err := s.transitions(ctx, tx, sub, before, isNew)
+		ns, err := s.transitions(ctx, tx, sub, before, isNew, moved)
 		if err != nil {
 			return err
 		}
@@ -350,7 +350,7 @@ func reassignReason(isNew bool, from, to billingdom.Price) string {
 
 // transitions turns a status change into owner notices and side effects. Emails
 // and the teardown are enqueued in the transaction; notices are emitted after.
-func (s *Service) transitions(ctx context.Context, tx bun.Tx, sub *models.BillingSubscription, before models.BillingSubscription, isNew bool) ([]notice, error) {
+func (s *Service) transitions(ctx context.Context, tx bun.Tx, sub *models.BillingSubscription, before models.BillingSubscription, isNew, moved bool) ([]notice, error) {
 	n := func(typ string, level models.NotificationLevel, title, body string) notice {
 		return notice{tenantID: sub.TenantID, subID: sub.ID, typ: typ, episode: strconv.FormatInt(sub.ProviderUpdatedAt.UnixNano(), 10), level: level, title: title, body: body}
 	}
@@ -358,7 +358,9 @@ func (s *Service) transitions(ctx context.Context, tx bun.Tx, sub *models.Billin
 	if isNew {
 		out = append(out, n("subscription_started", models.NotificationLevelSuccess, "Your plan is active", "Thanks for subscribing. Your workspace is ready."))
 	}
-	if !isNew && before.TierVersionPriceID != nil && sub.TierVersionPriceID != nil && *before.TierVersionPriceID != *sub.TierVersionPriceID {
+	// Only a tier that actually moved is a plan change: a price change the
+	// scheduled job or a reverted downgrade made leaves the plan as it was.
+	if !isNew && moved {
 		out = append(out, n("plan_changed", models.NotificationLevelInfo, "Your plan changed", "Your workspace's plan was updated."))
 	}
 	if !isNew && before.Status == sub.Status {
