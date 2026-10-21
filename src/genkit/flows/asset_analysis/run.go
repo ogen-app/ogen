@@ -35,6 +35,10 @@ type modelCall struct {
 	Model  modelconfig.Resolved
 	System string
 	Prompt string
+	// Flow attributes the call's spend and refusals; empty is the analysis.
+	Flow string
+	// MaxTokens caps the reply; zero is the flow config's cap.
+	MaxTokens int64
 }
 
 // generator runs one model call and returns its text. Production wraps
@@ -44,6 +48,9 @@ type generator func(ctx context.Context, call modelCall) (string, error)
 type prompts struct {
 	system, lens, source *template.Template
 	mapSystem, mapSource *template.Template
+	// distillSystem and distillRequest share the analysis's rubric, lens and
+	// source blocks.
+	distillSystem, distillRequest *template.Template
 }
 
 type runner struct {

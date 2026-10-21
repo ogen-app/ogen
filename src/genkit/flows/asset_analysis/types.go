@@ -212,6 +212,9 @@ type Strategy string
 const (
 	StrategyFull      Strategy = "full"
 	StrategyMapReduce Strategy = "map_reduce"
+	// StrategyCoverage is a distill run over a source too long for one call:
+	// it reads the parts the existing ideas drew on least.
+	StrategyCoverage Strategy = "coverage"
 )
 
 // AnalyzeResponse is the flow's result.
@@ -227,6 +230,59 @@ type AnalyzeResponse struct {
 	// map-reduce run.
 	ModelID    string
 	MapModelID string
+}
+
+// Verdicts a prior idea is shown to the model with.
+const (
+	PriorRejected  = "rejected"
+	PriorAccepted  = "accepted"
+	PriorLater     = "later"
+	PriorUndecided = "undecided"
+)
+
+// PriorIdea is an idea the team already has, as a distill run shows it.
+type PriorIdea struct {
+	Title   string
+	Angle   string
+	Verdict string
+	// Sources are the segment labels the idea cites; they steer a long
+	// source's distill run toward the parts no idea drew on yet.
+	Sources []string
+}
+
+// DistillRequest asks for more ideas from a source that was analysed before.
+type DistillRequest struct {
+	// CampaignID only labels logs; the lens content is in Lens.
+	CampaignID string
+	Source     Source
+	// Lens is the analysis's context. Its ExistingIdeas are not read: Prior
+	// and KnownTitles carry the existing ideas.
+	Lens Lens
+	// Summary and KeyPoints are the stored analysis, shown when the source is
+	// too long to send whole.
+	Summary   string
+	KeyPoints []string
+	// Prior are the ideas the model is shown, capped by the caller.
+	Prior []PriorIdea
+	// KnownTitles are every idea title in scope; a new idea matching one is
+	// dropped.
+	KnownTitles []string
+	// Focus is the team's optional direction for the batch.
+	Focus string
+	// Count is how many ideas to ask for, 1 to 10.
+	Count int
+}
+
+// DistillResponse is the result of a distill run.
+type DistillResponse struct {
+	Ideas    []Idea
+	Strategy Strategy
+	// SourceTokens is the (estimated) size of the source that was sent.
+	SourceTokens int
+	ModelID      string
+	// Dropped counts the ideas the model wrote that were not kept: repeats of
+	// known ideas, of each other, or beyond Count.
+	Dropped int
 }
 
 // FlowConfig holds static settings.
@@ -250,6 +306,8 @@ type FlowConfig struct {
 	MaxParallelMaps int
 	// MaxOutputTokens caps one model call. 0 falls back to 32768.
 	MaxOutputTokens int64
+	// DistillMaxOutputTokens caps a distill call. 0 falls back to 8192.
+	DistillMaxOutputTokens int64
 }
 
 // ValidationError means the request cannot be analysed (empty source).

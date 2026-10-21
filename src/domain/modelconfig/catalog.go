@@ -54,6 +54,7 @@ const (
 	FlowVision            = "vision"
 	FlowTranscribe        = "transcribe"
 	FlowAssetAnalysis     = "asset_analysis"
+	FlowIdeaDistill       = "idea_distill"
 )
 
 // Slot keys — stable identifiers persisted in flow_model_config.slot_key.
@@ -68,6 +69,7 @@ const (
 	SlotAltText      = "alt_text"
 	SlotAnalyze      = "analyze"
 	SlotMap          = "map"
+	SlotDistill      = "distill"
 )
 
 // Requirements is the hard compatibility contract a slot places on any model
@@ -171,6 +173,10 @@ var catalog = []Flow{
 			Requires: Requirements{NeedsStructuredOutput: true, MinContextWindow: 200_000}},
 		{Key: SlotMap, Description: "Takes notes on each section of a source too long for one call.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true}},
+	}},
+	{Key: FlowIdeaDistill, Description: "More ideas from an analysed asset, on request, steering clear of the ideas it already has.", Slots: []Slot{
+		{Key: SlotDistill, Description: "Reads the source and writes the new ideas.", Capability: CapabilityChat, Vendors: anthropicOnly,
+			Requires: Requirements{NeedsStructuredOutput: true, MinContextWindow: 200_000}},
 	}},
 	{Key: FlowEmbed, Description: "Embedding pipeline (assets, PDFs, queries).", Slots: []Slot{
 		{Key: SlotMain, Description: "Embeds text into the shared vector space.", Capability: CapabilityEmbed, GlobalOnly: true,
