@@ -87,10 +87,12 @@ lint:
 # email.v1 (EmailAdminService) in v1.7.0 (CON-298); announcements.v1
 # (AnnouncementAdminService) in v1.8.0 (CON-230); NotifyOperatorsTenantRegistered
 # on EmailAdminService in v1.9.0 (CON-229); modelconfig.v1 in v1.10.0 (CON-308);
-# modelconfig.v1 vision_input/audio_input + FlowSlot.vendors in v1.11.0 (CON-310)
+# modelconfig.v1 vision_input/audio_input + FlowSlot.vendors in v1.11.0 (CON-310);
+# billing.v1 (BillingAdminService) + Tenant.billing_status in v1.17.0 (CON-322;
+# v1.13–v1.16 added the river-service jobs.v1 / jobrpc.v1 contracts, CON-332)
 # — publish the proto repo tag before `make proto` can resolve it.
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.12.0
+PROTO_VERSION := v1.17.0
 
 proto:
 	buf generate $(PROTO_MODULE):$(PROTO_VERSION)
