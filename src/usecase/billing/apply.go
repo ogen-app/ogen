@@ -168,44 +168,14 @@ func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscriptio
 			return err
 		}
 		isNew := prev == nil
-
-		tenantID := custom["tenant_id"]
-		if !isNew {
-			tenantID = prev.TenantID
-		}
-		tenant, err := s.d.Tenants.GetByID(ctx, tenantID)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && tenant.DeletedAt != nil) || tenantID == "" {
-			return fmt.Errorf("%w (tenant %q, subscription %s)", errUnresolvedTenant, tenantID, snap.ID)
-		}
-		if err != nil {
+		if res.tenantID, err = s.resolveTenant(ctx, prev, custom, snap.ID); err != nil {
 			return err
 		}
-		res.tenantID = tenantID
-
 		if !isNew && !snap.UpdatedAt.After(prev.ProviderUpdatedAt) {
 			res.outcome = models.WebhookOutcomeStale
 			return nil
 		}
-
-		sub := prev
-		if isNew {
-			id, err := models.NewID()
-			if err != nil {
-				return err
-			}
-			sub = &models.BillingSubscription{ID: id, TenantID: tenantID, Provider: s.provider(), ProviderSubscriptionID: snap.ID, CreatedAt: s.now()}
-			if acc := custom["account_id"]; acc != "" {
-				sub.AccountID = new(acc)
-			}
-		}
-		before := *sub
-		s.copySnapshot(sub, snap)
-		sub.UpdatedAt = s.now()
-		if isNew {
-			err = s.d.Repo.InsertSubscription(ctx, tx, sub)
-		} else {
-			err = s.d.Repo.UpdateSubscription(ctx, tx, sub)
-		}
+		sub, before, err := s.saveSnapshot(ctx, tx, prev, res.tenantID, snap, custom)
 		if err != nil {
 			return err
 		}
@@ -232,6 +202,50 @@ func (s *Service) applySnapshot(ctx context.Context, snap billingdom.Subscriptio
 		s.emit(ctx, notices)
 	}
 	return res, nil
+}
+
+// resolveTenant finds the subscription's workspace: the mirror's for a known
+// subscription, else the checkout's custom data. A missing or deleted
+// workspace is errUnresolvedTenant.
+func (s *Service) resolveTenant(ctx context.Context, prev *models.BillingSubscription, custom map[string]string, subID string) (string, error) {
+	tenantID := custom["tenant_id"]
+	if prev != nil {
+		tenantID = prev.TenantID
+	}
+	tenant, err := s.d.Tenants.GetByID(ctx, tenantID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && tenant.DeletedAt != nil) || tenantID == "" {
+		return "", fmt.Errorf("%w (tenant %q, subscription %s)", errUnresolvedTenant, tenantID, subID)
+	}
+	if err != nil {
+		return "", err
+	}
+	return tenantID, nil
+}
+
+// saveSnapshot inserts or updates the mirror row and returns it with the state
+// it had before.
+func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.BillingSubscription, tenantID string, snap billingdom.Subscription, custom map[string]string) (*models.BillingSubscription, models.BillingSubscription, error) {
+	sub := prev
+	if sub == nil {
+		id, err := models.NewID()
+		if err != nil {
+			return nil, models.BillingSubscription{}, err
+		}
+		sub = &models.BillingSubscription{ID: id, TenantID: tenantID, Provider: s.provider(), ProviderSubscriptionID: snap.ID, CreatedAt: s.now()}
+		if acc := custom["account_id"]; acc != "" {
+			sub.AccountID = new(acc)
+		}
+	}
+	before := *sub
+	s.copySnapshot(sub, snap)
+	sub.UpdatedAt = s.now()
+	var err error
+	if prev == nil {
+		err = s.d.Repo.InsertSubscription(ctx, tx, sub)
+	} else {
+		err = s.d.Repo.UpdateSubscription(ctx, tx, sub)
+	}
+	return sub, before, err
 }
 
 // copySnapshot writes the provider's view onto the mirror row.
@@ -280,16 +294,8 @@ func (s *Service) followPlan(ctx context.Context, tx bun.IDB, sub *models.Billin
 		return false, nil // an older duplicate, or no longer live
 	}
 	if !isNew {
-		change, err := s.d.Repo.OpenScheduledChange(ctx, tx, sub.ID)
-		switch {
-		case err == nil && change.ToTierVersionPriceID == newPrice:
-			return false, nil // the scheduled job moves the tier at the boundary
-		case err == nil:
-			if _, err := s.d.Repo.SetScheduledChangeStatus(ctx, tx, change.ID, []string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied},
-				models.ScheduledChangeCancelled, "plan changed at the provider", s.now()); err != nil {
-				return false, err
-			}
-		case !errors.Is(err, sql.ErrNoRows):
+		scheduled, err := s.settleOpenChange(ctx, tx, sub.ID, newPrice)
+		if err != nil || scheduled {
 			return false, err
 		}
 	}
@@ -305,18 +311,40 @@ func (s *Service) followPlan(ctx context.Context, tx bun.IDB, sub *models.Billin
 	if cur, err := s.d.Assignments.CoveringAt(ctx, sub.TenantID, s.now()); err == nil && cur.TierVersionID == target.TierVersionID {
 		return false, nil // already there (an in-app change reassigned first)
 	}
-	reason := models.AssignmentReasonSubscriptionStarted
-	if !isNew {
-		reason = models.AssignmentReasonUpgrade
-		if from, ok := prices[deref(before.TierVersionPriceID)]; ok && billingdom.Direction(from, target) == billingdom.DirectionDowngrade {
-			reason = models.AssignmentReasonDowngrade
-		}
+	reason := reassignReason(isNew, prices[deref(before.TierVersionPriceID)], target)
+	return s.d.Assignments.ReassignTx(ctx, tx, sub.TenantID, target.TierID, &target.TierVersionID, reason, s.now())
+}
+
+// settleOpenChange handles a pending scheduled change when the subscription's
+// price moved: it reports true when the move is that change (its job moves the
+// tier at the boundary), and cancels it otherwise.
+func (s *Service) settleOpenChange(ctx context.Context, tx bun.IDB, subID, newPrice string) (bool, error) {
+	change, err := s.d.Repo.OpenScheduledChange(ctx, tx, subID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
 	}
-	found, err := s.d.Assignments.ReassignTx(ctx, tx, sub.TenantID, target.TierID, &target.TierVersionID, reason, s.now())
 	if err != nil {
 		return false, err
 	}
-	return found, nil
+	if change.ToTierVersionPriceID == newPrice {
+		return true, nil
+	}
+	_, err = s.d.Repo.SetScheduledChangeStatus(ctx, tx, change.ID, []string{models.ScheduledChangePending, models.ScheduledChangeProviderApplied},
+		models.ScheduledChangeCancelled, "plan changed at the provider", s.now())
+	return false, err
+}
+
+// reassignReason names a tier move: the first subscription, or an upgrade or
+// downgrade by price rank (an unknown previous price counts as an upgrade).
+func reassignReason(isNew bool, from, to billingdom.Price) string {
+	switch {
+	case isNew:
+		return models.AssignmentReasonSubscriptionStarted
+	case from.ID != "" && billingdom.Direction(from, to) == billingdom.DirectionDowngrade:
+		return models.AssignmentReasonDowngrade
+	default:
+		return models.AssignmentReasonUpgrade
+	}
 }
 
 // transitions turns a status change into owner notices and side effects. Emails
@@ -335,18 +363,18 @@ func (s *Service) transitions(ctx context.Context, tx bun.Tx, sub *models.Billin
 	if !isNew && before.Status == sub.Status {
 		return out, nil
 	}
+	more, err := s.statusNotices(ctx, tx, sub, before.Status, n)
+	return append(out, more...), err
+}
+
+// statusNotices turns the new status into notices and its side effects.
+func (s *Service) statusNotices(ctx context.Context, tx bun.Tx, sub *models.BillingSubscription, beforeStatus string, n func(typ string, level models.NotificationLevel, title, body string) notice) ([]notice, error) {
+	var out []notice
 	switch sub.Status {
 	case models.SubscriptionStatusPastDue:
 		out = append(out, n("payment_failed", models.NotificationLevelWarning, "Your payment didn't go through", "We'll retry the charge. Update your card to avoid an interruption."))
-		owners, err := s.d.Users.ListOwnersByTenant(ctx, sub.TenantID)
-		if err != nil {
+		if err := s.emailPaymentFailed(ctx, tx, sub); err != nil {
 			return nil, err
-		}
-		key := fmt.Sprintf("%s:%s:%d", templates.KeyBillingPaymentFailed, sub.ID, sub.ProviderUpdatedAt.Unix())
-		for _, o := range owners {
-			if err := s.d.Jobs.EnqueueBillingEmailTx(ctx, tx.Tx, o.ID, sub.TenantID, templates.KeyBillingPaymentFailed, key+":"+o.ID); err != nil {
-				return nil, err
-			}
 		}
 	case models.SubscriptionStatusUnpaid:
 		out = append(out, n("payment_failed", models.NotificationLevelError, "Your subscription is unpaid", "Payment retries have run out. Update your card in the billing portal."))
@@ -362,24 +390,49 @@ func (s *Service) transitions(ctx context.Context, tx bun.Tx, sub *models.Billin
 			return nil, err
 		}
 	case models.SubscriptionStatusExpired:
-		if err := s.cancelOpenChange(ctx, tx, sub.ID, "subscription expired"); err != nil {
+		ns, err := s.expiredNotice(ctx, tx, sub, n)
+		if err != nil {
 			return nil, err
 		}
-		if sub.FirstPaidAt == nil {
-			out = append(out, n("trial_ended_unpaid", models.NotificationLevelError, "Your trial has ended", "Choose a plan to keep using this workspace and reconnect your social accounts."))
-			if err := s.teardownUnpaid(ctx, tx, sub); err != nil {
-				return nil, err
-			}
-		} else {
-			out = append(out, n("expired", models.NotificationLevelError, "Your subscription has ended", "Choose a plan to keep using this workspace."))
-		}
+		out = append(out, ns)
 	case models.SubscriptionStatusActive, models.SubscriptionStatusOnTrial:
-		switch before.Status {
+		switch beforeStatus {
 		case models.SubscriptionStatusPastDue, models.SubscriptionStatusUnpaid, models.SubscriptionStatusPaused, models.SubscriptionStatusCancelled:
 			out = append(out, n("payment_recovered", models.NotificationLevelSuccess, "Your subscription is back to normal", "Thanks, everything is up to date."))
 		}
 	}
 	return out, nil
+}
+
+// emailPaymentFailed queues the payment-failed email to every owner, once per
+// provider update.
+func (s *Service) emailPaymentFailed(ctx context.Context, tx bun.Tx, sub *models.BillingSubscription) error {
+	owners, err := s.d.Users.ListOwnersByTenant(ctx, sub.TenantID)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("%s:%s:%d", templates.KeyBillingPaymentFailed, sub.ID, sub.ProviderUpdatedAt.Unix())
+	for _, o := range owners {
+		if err := s.d.Jobs.EnqueueBillingEmailTx(ctx, tx.Tx, o.ID, sub.TenantID, templates.KeyBillingPaymentFailed, key+":"+o.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// expiredNotice ends a subscription: any pending downgrade is cancelled, and a
+// trial that never paid also releases its Zernio profile.
+func (s *Service) expiredNotice(ctx context.Context, tx bun.Tx, sub *models.BillingSubscription, n func(typ string, level models.NotificationLevel, title, body string) notice) (notice, error) {
+	if err := s.cancelOpenChange(ctx, tx, sub.ID, "subscription expired"); err != nil {
+		return notice{}, err
+	}
+	if sub.FirstPaidAt != nil {
+		return n("expired", models.NotificationLevelError, "Your subscription has ended", "Choose a plan to keep using this workspace."), nil
+	}
+	if err := s.teardownUnpaid(ctx, tx, sub); err != nil {
+		return notice{}, err
+	}
+	return n("trial_ended_unpaid", models.NotificationLevelError, "Your trial has ended", "Choose a plan to keep using this workspace and reconnect your social accounts."), nil
 }
 
 func (s *Service) cancelOpenChange(ctx context.Context, tx bun.IDB, subID, why string) error {

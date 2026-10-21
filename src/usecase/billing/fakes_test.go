@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -143,12 +144,7 @@ func (n *fakeNotifier) EmitToUsers(_ context.Context, _ []string, spec notify.Sp
 func (n *fakeNotifier) has(typ string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for _, t := range n.types {
-		if t == "billing."+typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(n.types, "billing."+typ)
 }
 
 // harness is a billing service over a fresh database with Pro and Max

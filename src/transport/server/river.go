@@ -36,8 +36,17 @@ func newRiverClient(ctx context.Context, d *deps) (*river.Client[*sql.Tx], error
 		// default queue.
 		Queues:       queues.QueueConfigs(d.cfg.JobWorkers, d.cfg.AudioJobWorkers, d.cfg.ImageJobWorkers, d.cfg.IngestJobWorkers, d.cfg.AnalysisJobWorkers),
 		Workers:      workers,
-		PeriodicJobs: periodicConfig(d.cfg).PeriodicJobs(),
+		PeriodicJobs: billingPeriodic(periodicConfig(d.cfg), d).PeriodicJobs(),
 	})
+}
+
+// billingPeriodic adds the billing sweeps while billing is on.
+func billingPeriodic(pc queues.PeriodicConfig, d *deps) queues.PeriodicConfig {
+	if d.billing.Enabled() {
+		pc.BillingReconcileEvery = d.cfg.BillingReconcileInterval
+		pc.BillingWebhookSweepEvery = 24 * time.Hour
+	}
+	return pc
 }
 
 // periodicConfig schedules the sweeps. The analytics, follower and
@@ -129,6 +138,8 @@ func queueDeps(d *deps) queues.Deps {
 		Integration:         d.zernio.Integration,
 		// Fences the profile teardown against a concurrent tenant restore.
 		TenantFence:           r.tenantFence,
+		Billing:               d.billing,
+		BillingLive:           d.billing,
 		PDF:                   d.ingest.pdf,
 		Document:              d.ingest.document,
 		Audio:                 d.ingest.audio,

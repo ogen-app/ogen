@@ -19,15 +19,14 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
-// ProfileLifecycleEnqueuer enqueues the Zernio profile lifecycle jobs in the
-// caller's transaction, so each commits atomically with the workspace it tracks:
-// provisioning at create and teardown at delete. Both
-// are local DB inserts — the Zernio calls happen later in the workers — so the
-// request never blocks on Zernio reachability. Implemented by *queues.Enqueuer;
-// kept as a narrow interface here so the handler doesn't import the jobs package
-// and stays unit-testable.
+// ProfileLifecycleEnqueuer enqueues the Zernio profile teardown in the delete
+// transaction, so it commits atomically with the deletion. It is a local DB
+// insert — the Zernio calls happen later in the worker — so the request never
+// blocks on Zernio reachability. Provisioning is not here: the first connect
+// link bootstraps the profile. Implemented by *queues.Enqueuer; kept as a
+// narrow interface here so the handler doesn't import the jobs package and
+// stays unit-testable.
 type ProfileLifecycleEnqueuer interface {
-	EnqueueBootstrapProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error
 	EnqueueTeardownProfileTx(ctx context.Context, tx *sql.Tx, tenantID string) error
 }
 
@@ -71,6 +70,22 @@ type TenantsHandler struct {
 	activity *activity.Recorder
 	// devices enrols the signup browser as the account's first known device.
 	devices deviceTracker
+	// billingGate adds billing_required to GET /api/tenants/current; nil
+	// while billing is off.
+	billingGate BillingGate
+}
+
+// SetBillingGate reports the billing gate on the current-tenant read.
+func (h *TenantsHandler) SetBillingGate(gate BillingGate) {
+	h.billingGate = gate
+}
+
+// currentTenantResponse is the tenant plus the billing gate, as data, so the
+// app can send a gated workspace to plan selection once instead of reacting
+// to many 402s.
+type currentTenantResponse struct {
+	*models.Tenant
+	BillingRequired bool `json:"billing_required"`
 }
 
 func NewTenantsHandler(signupSvc *signup.Service, tenantRepo repository.TenantRepository, cookieName string, secureCookie bool, auth fiber.Handler, rec *activity.Recorder) *TenantsHandler {
@@ -184,7 +199,18 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/tenants/current [get]
 func (h *TenantsHandler) Current(c *fiber.Ctx) error {
-	return h.respondTenant(c, h.callerTenantID(c))
+	id := h.callerTenantID(c)
+	tenant, err := h.tenantRepo.GetByID(reqCtx(c), id)
+	if err != nil {
+		return notFound(err, "tenant not found")
+	}
+	out := currentTenantResponse{Tenant: tenant}
+	if h.billingGate != nil {
+		if out.BillingRequired, err = h.billingGate(reqCtx(c), id); err != nil {
+			return err
+		}
+	}
+	return c.JSON(out)
 }
 
 // Get godoc
