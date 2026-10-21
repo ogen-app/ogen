@@ -38,3 +38,28 @@ Accept: application/json
 ### Live status changes (asset.analysis.updated) for an asset and a campaign  [protected]
 GET {{baseUrl}}/api/events?topics=entity:asset:{{assetId}},entity:campaign:{{campaignId}}
 Accept: text/event-stream
+
+### More ideas from the workspace lens (expects 202 {run}; 409 analysis_not_ready / distill_in_progress)  [protected]
+# Both fields are optional: focus steers the batch (at most 300 characters),
+# count is 3 to 10 (default 5). Over the idea_distills_per_month cap: 402.
+POST {{baseUrl}}/api/content-bank/assets/{{assetId}}/ideas/distill
+Content-Type: application/json
+
+{
+  "focus": "objections from CFOs",
+  "count": 5
+}
+
+### More ideas from one campaign's lens, no focus  [protected]
+POST {{baseUrl}}/api/content-bank/assets/{{assetId}}/ideas/distill?campaign_id={{campaignId}}
+Content-Type: application/json
+
+{}
+
+### The workspace lens's distill runs, newest first (a pending/running one is in flight)  [protected]
+GET {{baseUrl}}/api/content-bank/assets/{{assetId}}/ideas/distills
+Accept: application/json
+
+### Live distill progress (asset.ideas.distill.updated)  [protected]
+GET {{baseUrl}}/api/events?topics=entity:asset:{{assetId}}
+Accept: text/event-stream

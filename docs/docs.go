@@ -5218,6 +5218,192 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/content-bank/assets/{id}/ideas/distill": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Queues a run that adds new ideas to one lens of an analysed asset: the workspace lens, or the campaign_id lens. The model is shown every idea already in scope with its verdict and steers clear of them. Progress arrives as asset.ideas.distill.updated events; the ideas then read back from the lens and /api/ideas.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assets"
+                ],
+                "summary": "Distill more ideas from an asset",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid of the lens; absent for the workspace lens",
+                        "name": "campaign_id",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Focus and count",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.distillRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.distillRunResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "entitlement_exceeded: idea_distills_per_month is used up",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "feature_not_available: asset_analysis is off for the plan",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "analysis_not_ready, or distill_in_progress with the active run",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "the asset type is never analysed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/content-bank/assets/{id}/ideas/distills": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The latest runs of the workspace lens, or of the campaign_id lens, newest first (at most 20). A run still pending or running is the one in flight.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assets"
+                ],
+                "summary": "List an asset lens's distill runs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Asset Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid of the lens; absent for the workspace lens",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.distillRunsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "the asset type is never analysed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/content-bank/assets/{id}/image": {
             "get": {
                 "security": [
@@ -14267,6 +14453,38 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.distillRequest": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "description": "Count is how many ideas to ask for, 3 to 10; 0 or absent is 5.",
+                    "type": "integer"
+                },
+                "focus": {
+                    "description": "Focus steers the batch, e.g. \"objections from CFOs\"; at most 300\ncharacters.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.distillRunResponse": {
+            "type": "object",
+            "properties": {
+                "run": {
+                    "$ref": "#/definitions/models.IdeaDistillRun"
+                }
+            }
+        },
+        "handlers.distillRunsResponse": {
+            "type": "object",
+            "properties": {
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.IdeaDistillRun"
+                    }
+                }
+            }
+        },
         "handlers.extractionEnqueuedResponse": {
             "type": "object",
             "properties": {
@@ -17383,6 +17601,11 @@ const docTemplate = `{
                 "decided_by": {
                     "type": "string"
                 },
+                "distill_run_id": {
+                    "description": "DistillRunID names the distill run an idea came from; nil for the\nanalysis's own batch. Re-running the analysis keeps these ideas.",
+                    "type": "string",
+                    "x-nullable": true
+                },
                 "fit_breakdown": {
                     "allOf": [
                         {
@@ -17465,6 +17688,63 @@ const docTemplate = `{
                     "x-nullable": true
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.IdeaDistillRun": {
+            "type": "object",
+            "properties": {
+                "analysis_id": {
+                    "type": "string"
+                },
+                "asset_id": {
+                    "type": "string"
+                },
+                "campaign_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "failure_code": {
+                    "type": "string"
+                },
+                "failure_reason": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "focus": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "ideas_count": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "running",
+                        "ready",
+                        "failed",
+                        "skipped"
+                    ]
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
