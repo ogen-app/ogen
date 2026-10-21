@@ -118,10 +118,10 @@ func (s *Service) trialApplies(ctx context.Context, accountID, tierID, variantID
 // vocabulary.
 type SubscriptionView struct {
 	Status   string     `json:"status"`
-	RenewsAt *time.Time `json:"renews_at"`
-	EndsAt   *time.Time `json:"ends_at"`
-	Card     *CardView  `json:"card"`
-	Price    *PriceView `json:"price"`
+	RenewsAt *time.Time `json:"renews_at" extensions:"x-nullable"`
+	EndsAt   *time.Time `json:"ends_at" extensions:"x-nullable"`
+	Card     *CardView  `json:"card" extensions:"x-nullable"`
+	Price    *PriceView `json:"price" extensions:"x-nullable"`
 }
 
 // CardView is the card brand and last four digits.
@@ -140,7 +140,7 @@ type PriceView struct {
 // BillingView is GET /api/billing.
 type BillingView struct {
 	// Subscription is nil when the workspace never bought.
-	Subscription *SubscriptionView `json:"subscription"`
+	Subscription *SubscriptionView `json:"subscription" extensions:"x-nullable"`
 	// Portal reports whether there is a customer portal to send the owner to.
 	Portal   bool `json:"portal"`
 	TestMode bool `json:"test_mode"`

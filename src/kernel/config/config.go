@@ -425,8 +425,9 @@ type Config struct {
 	LemonSqueezyTestMode bool   `envconfig:"LEMONSQUEEZY_TEST_MODE" default:"true"`
 	LemonSqueezyStoreID  string `envconfig:"LEMONSQUEEZY_STORE_ID"  default:""`
 	// LemonSqueezyVariants maps tier version price ids to Lemon Squeezy
-	// variants, as JSON: {"<price_id>":"<variant_id>"} or, for a price that can
-	// carry the free month, {"<price_id>":{"variant":"<id>","trial_variant":"<id>"}}.
+	// variants, as JSON: {"<price_id>":"<variant_id>"}. A variant that can carry
+	// the free month has its one-month trial configured in Lemon Squeezy;
+	// checkouts skip it unless the free month applies.
 	// Test and live variant ids differ, so this changes at cutover.
 	LemonSqueezyVariants      string        `envconfig:"LEMONSQUEEZY_VARIANTS"     default:""`
 	LemonSqueezyBaseURL       string        `envconfig:"LEMONSQUEEZY_BASE_URL"     default:"https://api.lemonsqueezy.com/v1"`

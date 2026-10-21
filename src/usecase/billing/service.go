@@ -201,9 +201,13 @@ type notice struct {
 	tenantID string
 	subID    string
 	typ      string
-	level    models.NotificationLevel
-	title    string
-	body     string
+	// episode tells one occurrence of a notice type from the next (the
+	// provider update, or the scheduled change), so an unread earlier notice
+	// does not swallow a later event. Retries of one event keep the same one.
+	episode string
+	level   models.NotificationLevel
+	title   string
+	body    string
 }
 
 func (s *Service) emit(ctx context.Context, notices []notice) {
@@ -222,7 +226,7 @@ func (s *Service) emit(ctx context.Context, notices []notice) {
 			EntityType: "billing",
 			EntityID:   n.subID,
 			ActionURL:  "/plans",
-			DedupeKey:  "billing:" + n.subID + ":" + n.typ,
+			DedupeKey:  "billing:" + n.subID + ":" + n.typ + ":" + n.episode,
 		}); err != nil {
 			slog.WarnContext(ctx, "billing notice emit failed", logging.AttrComponent, "billing", "tenant_id", n.tenantID, "type", n.typ, logging.AttrError, err)
 		}

@@ -31,11 +31,11 @@ type ScheduledChangeView struct {
 // no money, readable by every member.
 type PlanState struct {
 	BillingRequired bool                 `json:"billing_required"`
-	TrialEligible   *bool                `json:"trial_eligible"`
-	BillingPeriod   *string              `json:"billing_period"`
-	RenewsAt        *time.Time           `json:"renews_at"`
-	TrialEndsAt     *time.Time           `json:"trial_ends_at"`
-	ScheduledChange *ScheduledChangeView `json:"scheduled_change"`
+	TrialEligible   *bool                `json:"trial_eligible" extensions:"x-nullable"`
+	BillingPeriod   *string              `json:"billing_period" extensions:"x-nullable"`
+	RenewsAt        *time.Time           `json:"renews_at" extensions:"x-nullable"`
+	TrialEndsAt     *time.Time           `json:"trial_ends_at" extensions:"x-nullable"`
+	ScheduledChange *ScheduledChangeView `json:"scheduled_change" extensions:"x-nullable"`
 }
 
 // PlanState reads the workspace's billing facts. accountID is the caller's
@@ -462,7 +462,7 @@ func (s *Service) landScheduledChange(ctx context.Context, change *models.Billin
 		return err
 	}
 	s.publish(ctx, change.TenantID, true)
-	s.emit(ctx, []notice{{tenantID: change.TenantID, subID: change.BillingSubscriptionID, typ: "plan_changed", level: models.NotificationLevelInfo,
+	s.emit(ctx, []notice{{tenantID: change.TenantID, subID: change.BillingSubscriptionID, typ: "plan_changed", episode: change.ID, level: models.NotificationLevelInfo,
 		title: "Your plan changed", body: "Your downgrade took effect with this billing period."}})
 	return nil
 }
@@ -472,7 +472,7 @@ func (s *Service) failChange(ctx context.Context, change *models.BillingSchedule
 		return err
 	}
 	slog.ErrorContext(ctx, "billing: scheduled plan change failed", logging.AttrComponent, "billing", "change_id", change.ID, "tenant_id", change.TenantID, "error", why)
-	s.emit(ctx, []notice{{tenantID: change.TenantID, subID: change.BillingSubscriptionID, typ: "plan_change_failed", level: models.NotificationLevelError,
+	s.emit(ctx, []notice{{tenantID: change.TenantID, subID: change.BillingSubscriptionID, typ: "plan_change_failed", episode: change.ID, level: models.NotificationLevelError,
 		title: "Your plan change didn't go through", body: "We couldn't apply your scheduled downgrade. Your current plan stays in place; please try again."}})
 	return nil
 }

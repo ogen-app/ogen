@@ -13031,6 +13031,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "500": {
+                        "description": "processing failed; the provider retries",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
@@ -13408,7 +13417,8 @@ const docTemplate = `{
                         {
                             "$ref": "#/definitions/billing.SubscriptionView"
                         }
-                    ]
+                    ],
+                    "x-nullable": true
                 },
                 "test_mode": {
                     "type": "boolean"
@@ -13476,16 +13486,28 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "card": {
-                    "$ref": "#/definitions/billing.CardView"
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/billing.CardView"
+                        }
+                    ],
+                    "x-nullable": true
                 },
                 "ends_at": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "price": {
-                    "$ref": "#/definitions/billing.PriceView"
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/billing.PriceView"
+                        }
+                    ],
+                    "x-nullable": true
                 },
                 "renews_at": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "status": {
                     "type": "string"
@@ -15088,7 +15110,8 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "billing_period": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "billing_required": {
                     "type": "boolean"
@@ -15112,10 +15135,16 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "renews_at": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "scheduled_change": {
-                    "$ref": "#/definitions/billing.ScheduledChangeView"
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/billing.ScheduledChangeView"
+                        }
+                    ],
+                    "x-nullable": true
                 },
                 "status": {
                     "type": "string"
@@ -15124,10 +15153,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "trial_eligible": {
-                    "type": "boolean"
+                    "type": "boolean",
+                    "x-nullable": true
                 },
                 "trial_ends_at": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "version": {
                     "type": "integer"
@@ -16220,7 +16251,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "trial_days": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "version": {
                     "type": "integer"
