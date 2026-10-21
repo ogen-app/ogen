@@ -27,6 +27,9 @@ const (
 	// AssignmentReasonOperatorSet marks an assignment stamped by an operator
 	// setting a tenant's tier directly via Harbor (CON-294 SetTenantTier).
 	AssignmentReasonOperatorSet = "operator_set"
+	// AssignmentReasonSubscriptionStarted marks the move onto the purchased
+	// version when a workspace's first subscription starts.
+	AssignmentReasonSubscriptionStarted = "subscription_started"
 )
 
 // TenantTierVersion is an immutable, versioned snapshot of one tier's pricing +
