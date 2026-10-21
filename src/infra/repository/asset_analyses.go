@@ -36,9 +36,9 @@ type AssetAnalysisRepository interface {
 	// SetStatus writes status with its failure code and reason (both empty
 	// unless failed or skipped).
 	SetStatus(ctx context.Context, db bun.IDB, id string, status models.AssetAnalysisStatus, code, reason string) error
-	// SaveResult writes a finished analysis and replaces its untriaged ideas
-	// with ideas. Triaged ideas are never touched. It must run inside the tx
-	// that locked the lens.
+	// SaveResult writes a finished analysis and replaces its own untriaged
+	// ideas with ideas. Triaged ideas and ideas a distill run added are never
+	// touched. It must run inside the tx that locked the lens.
 	SaveResult(ctx context.Context, tx bun.Tx, a *models.AssetAnalysis, ideas []models.Idea) error
 	// DeleteLens removes a campaign lens and its untriaged ideas.
 	DeleteLens(ctx context.Context, db bun.IDB, assetID, campaignID string) error
@@ -227,7 +227,8 @@ func (r *assetAnalysisRepository) SaveResult(ctx context.Context, tx bun.Tx, a *
 		Exec(ctx); err != nil {
 		return err
 	}
-	if err := deleteUntriagedIdeas(ctx, tx, "asset_analysis_id = ?", a.ID); err != nil {
+	// Ideas a distill run added were asked for, so a re-run leaves them.
+	if err := deleteUntriagedIdeas(ctx, tx, "asset_analysis_id = ? AND distill_run_id IS NULL", a.ID); err != nil {
 		return err
 	}
 	if len(ideas) == 0 {

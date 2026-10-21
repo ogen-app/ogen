@@ -34,6 +34,7 @@ const (
 // buildLens gathers the context an analysis is read in. campaign is nil for
 // the workspace lens. lensID is the analysis being produced; its own inbox
 // ideas are about to be replaced, so they are not listed as already captured.
+// Ideas a distill run added are kept by the re-run, so they are listed.
 func (s *Service) buildLens(ctx context.Context, tenantID string, asset *models.Asset, campaign *models.Campaign, lensID string) (asset_analysis.Lens, error) {
 	today := s.now().UTC()
 	lens := asset_analysis.Lens{BrandBlock: s.brandBlock(ctx, campaign), Today: today.Format(time.DateOnly)}
@@ -62,7 +63,7 @@ func (s *Service) buildLens(ctx context.Context, tenantID string, asset *models.
 		return lens, fmt.Errorf("list ideas: %w", err)
 	}
 	for _, idea := range ideas {
-		if idea.Verdict == nil && idea.AssetAnalysisID != nil && *idea.AssetAnalysisID == lensID {
+		if idea.Verdict == nil && idea.DistillRunID == nil && idea.AssetAnalysisID != nil && *idea.AssetAnalysisID == lensID {
 			continue
 		}
 		lens.ExistingIdeas = append(lens.ExistingIdeas, idea.Title)

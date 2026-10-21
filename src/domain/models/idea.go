@@ -96,6 +96,9 @@ type Idea struct {
 	// outlives it.
 	Origin          IdeaOrigin `bun:"origin,notnull,default:''"                    json:"origin"            swaggertype:"string" enums:",asset_analysis"`
 	AssetAnalysisID *string    `bun:"asset_analysis_id"                            json:"asset_analysis_id" extensions:"x-nullable"`
+	// DistillRunID names the distill run an idea came from; nil for the
+	// analysis's own batch. Re-running the analysis keeps these ideas.
+	DistillRunID *string `bun:"distill_run_id" json:"distill_run_id" extensions:"x-nullable"`
 	// FitScore is how well an analysis idea fits the lens it was made in,
 	// 10–100, computed from FitBreakdown with the weights of FitRubricVersion.
 	// It is set once, at generation: moving or editing the idea keeps it, and

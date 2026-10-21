@@ -75,7 +75,7 @@ func (r *ideaRepository) selectIdeas(model any) *bun.SelectQuery {
 	return r.db.NewSelect().
 		Model(model).
 		ColumnExpr("i.id, i.title, i.note, i.verdict, i.remind_at, i.decided_at, i.decided_by").
-		ColumnExpr("i.origin, i.asset_analysis_id, i.source_asset_id, i.angle, i.rationale, i.sources").
+		ColumnExpr("i.origin, i.asset_analysis_id, i.distill_run_id, i.source_asset_id, i.angle, i.rationale, i.sources").
 		ColumnExpr("i.fit_score, i.fit_breakdown, i.fit_rubric_version").
 		ColumnExpr("i.created_by, i.created_by_name, i.created_at, i.updated_at").
 		ColumnExpr("c.id AS campaign_id").
