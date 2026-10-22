@@ -28,6 +28,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
+	"github.com/ogen-app/ogen/src/usecase/branddistill"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
 	"github.com/ogen-app/ogen/src/usecase/loginsecurity"
@@ -68,6 +69,7 @@ type deps struct {
 	email        emailRuntime
 	enqueuer     *queues.Enqueuer
 	analysis     *assetanalysis.Service
+	brandDistill *branddistill.Service
 	svc          services
 	genkit       *genkitRuntime
 }
@@ -206,6 +208,7 @@ func (d *deps) initRiver(ctx context.Context) error {
 	// over the enqueuer before the client exists; the client is attached below.
 	d.enqueuer = &queues.Enqueuer{}
 	d.analysis = newAssetAnalysis(d)
+	d.brandDistill = newBrandDistill(d)
 	client, err := newRiverClient(ctx, d)
 	if err != nil {
 		return err
@@ -295,6 +298,7 @@ func (d *deps) initGenkit(ctx context.Context) error {
 	}
 	d.analysis.SetAnalyzer(d.genkit.AnalyzeAsset)
 	d.analysis.SetDistiller(d.genkit.DistillIdeas)
+	d.brandDistill.SetFlows(d.genkit.brandDistillFlows())
 	slog.Info("genkit flows registered", logging.AttrComponent, "genkit")
 	return nil
 }

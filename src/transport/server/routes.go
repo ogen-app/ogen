@@ -15,7 +15,6 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/assets"
-	"github.com/ogen-app/ogen/src/usecase/brandsource"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/linkpreview"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
@@ -160,6 +159,7 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 		Register(app)
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
+	handlers.NewBrandDistillHandler(d.brandDistill, r.brandRepo, d.auth, d.activity.recorder).Register(app)
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).WithEventHub(d.hub).Register(app)
 	handlers.NewSavedViewsHandler(savedviews.New(r.savedViewRepo, d.hub, ideas.NewSurface(r.ideaRepo), assets.NewSurface(r.pieceRepo)), r.userRepo, d.auth).Register(app)
 	handlers.NewAssetAnalysesHandler(r.assetAnalysisRepo, r.ideaRepo, r.pieceRepo, r.campaignRepo, d.analysis, d.auth).Register(app)
@@ -258,11 +258,6 @@ func (d *deps) newAssetsHandler() *handlers.AssetsHandler {
 		PublicRead:   d.cfg.StoragePublicRead,
 		BrandSources: d.brandSources(),
 	})
-}
-
-// brandSources tags the assets brought in to read a brand from.
-func (d *deps) brandSources() *brandsource.Marker {
-	return &brandsource.Marker{Tags: d.r.tagRepo}
 }
 
 // newPostAttachmentsHandler builds the post attachments handler with
