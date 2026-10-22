@@ -80,6 +80,8 @@ type Deps struct {
 	// The analyze_asset / reanalyze_campaign workers' dependencies. A nil
 	// Runner makes both jobs no-ops. Runs on the dedicated `analysis` queue.
 	Analysis AnalysisDeps
+	// BrandDistill runs brand distillations and expires their proposals.
+	BrandDistill BrandDistillDeps
 
 	// The process_image worker's dependencies (image-service client,
 	// embedder, storage, extraction/block/asset/file repos, cost gate). A nil
@@ -222,6 +224,8 @@ type PeriodicConfig struct {
 	// Missing asset-analysis lens backfill. Positive-interval gated like the
 	// others.
 	AnalysisBackfillEvery time.Duration
+	// Brand-proposal expiry sweep. Positive-interval gated like the others.
+	BrandDistillExpireEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -311,6 +315,11 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.AnalysisBackfillEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.AnalysisBackfillEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return BackfillAssetAnalysesTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.BrandDistillExpireEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.BrandDistillExpireEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return ExpireBrandDistillsTask{}, nil
 		}, runOnStart))
 	}
 	return jobs

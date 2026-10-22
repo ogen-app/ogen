@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -85,6 +87,9 @@ func (f *fakeBrandRepo) DeleteLook(context.Context) (bool, error)               
 func (f *fakeBrandRepo) CreateTemplate(context.Context, *models.BrandTemplate) error { return nil }
 func (f *fakeBrandRepo) UpdateTemplate(context.Context, *models.BrandTemplate) error { return nil }
 func (f *fakeBrandRepo) DeleteTemplate(context.Context, string) (bool, error)        { return false, nil }
+func (f *fakeBrandRepo) ApplyDistilled(context.Context, repository.DistilledBrand, func(context.Context, bun.Tx, *repository.DistilledResult) error) (*repository.DistilledResult, error) {
+	return nil, nil
+}
 
 //go:fix inline
 

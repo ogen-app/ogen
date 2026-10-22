@@ -132,6 +132,28 @@
     "description": "Requests per month for more ideas from an analysed asset; each request counts one, whether or not it finds new ideas."
   },
   {
+    "key": "brand_distill",
+    "name": "Brand from what you have",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-399",
+    "status": "live",
+    "value_type": "boolean",
+    "is_material": true,
+    "reset": "",
+    "description": "Voices, audiences, guardrails and facts proposed from the workspace's website, its documents or a handful of answers, reviewed before anything is saved."
+  },
+  {
+    "key": "brand_distills_per_month",
+    "name": "Brand reads",
+    "category": "ai_superpowers",
+    "linear_issue": "CON-399",
+    "status": "live",
+    "value_type": "numeric",
+    "is_material": true,
+    "reset": "monthly",
+    "description": "Brand reads per month; a website, documents or questions pass counts one once it reaches the model, and follow-up answers don't."
+  },
+  {
     "key": "posts_total",
     "name": "Posts",
     "category": "posts_publishing",
