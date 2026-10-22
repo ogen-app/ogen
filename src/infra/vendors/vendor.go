@@ -48,6 +48,7 @@ const (
 
 	// Ingest action kinds.
 	KindURLScrape Kind = "url_scrape" // one Firecrawl URL scrape
+	KindURLMap    Kind = "url_map"    // one Firecrawl site map
 )
 
 // Usage is the vendor-neutral unit breakdown for a single call. A model

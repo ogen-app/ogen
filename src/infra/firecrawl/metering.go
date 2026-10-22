@@ -10,6 +10,9 @@ const VendorFirecrawl = "firecrawl"
 // OpScrape is the operation recorded for a URL scrape.
 const OpScrape = "scrape"
 
+// OpMap is the operation recorded for a site map.
+const OpMap = "map"
+
 // init registers the Firecrawl ingest vendor. It is count-only for now (empty
 // price table → every event costs 0, treated as intentional rather than an
 // unknown-model gap); a per-scrape Firecrawl price can be supplied later via
