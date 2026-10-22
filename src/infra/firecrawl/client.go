@@ -9,6 +9,7 @@ package firecrawl
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -143,54 +144,16 @@ func (c *Client) Scrape(ctx context.Context, in ScrapeRequest) (*ScrapeResult, e
 	if c == nil {
 		return nil, &APIError{Message: "firecrawl: client disabled"}
 	}
-	key, err := c.keyResolver(ctx)
-	if err != nil {
-		return nil, &APIError{Transient: true, Message: fmt.Sprintf("firecrawl: resolve api key: %v", err)}
-	}
-	if key == "" {
-		return nil, &APIError{Transient: true, Message: "firecrawl: api key not configured"}
-	}
-
-	buf, err := json.Marshal(scrapeBody{
+	var out scrapeResponse
+	err := c.post(ctx, "/v2/scrape", scrapeBody{
 		URL:             in.URL,
 		Formats:         []string{"markdown"},
 		OnlyMainContent: true,
 		BlockAds:        true,
 		MaxAge:          in.MaxAge,
-	})
+	}, &out)
 	if err != nil {
-		return nil, &APIError{Message: fmt.Sprintf("firecrawl: marshal request: %v", err)}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v2/scrape", bytes.NewReader(buf))
-	if err != nil {
-		return nil, &APIError{Message: err.Error()}
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		// Network / timeout: retryable.
-		return nil, &APIError{Transient: true, Message: err.Error()}
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode >= 400 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
-		return nil, &APIError{
-			// 5xx and 429 are worth retrying; other 4xx (bad url, blocked page,
-			// bad key) are terminal.
-			Transient: resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests,
-			Status:    resp.StatusCode,
-			Message:   shortErrorMessage(raw),
-		}
-	}
-
-	var out scrapeResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&out); err != nil {
-		return nil, &APIError{Transient: true, Message: fmt.Sprintf("firecrawl: decode response: %v", err)}
+		return nil, err
 	}
 	if !out.Success {
 		msg := out.Error
@@ -198,7 +161,7 @@ func (c *Client) Scrape(ctx context.Context, in ScrapeRequest) (*ScrapeResult, e
 			msg = "firecrawl: scrape unsuccessful"
 		}
 		// The request was well-formed but the page couldn't be scraped — terminal.
-		return nil, &APIError{Status: resp.StatusCode, Message: msg}
+		return nil, &APIError{Message: msg}
 	}
 
 	return &ScrapeResult{
@@ -214,6 +177,119 @@ func (c *Client) Scrape(ctx context.Context, in ScrapeRequest) (*ScrapeResult, e
 			out.Data.Metadata.PublishedTime,
 		),
 	}, nil
+}
+
+// MapRequest asks for the links of a site.
+type MapRequest struct {
+	URL string
+	// Limit caps the links returned; 0 is Firecrawl's default.
+	Limit int
+}
+
+// Link is one page a site map found. Title and Description are empty when
+// the map did not read the page.
+type Link struct {
+	URL         string
+	Title       string
+	Description string
+}
+
+// mapBody is the POST /v2/map request body. Subdomains are left out: a
+// brand's site is its own host.
+type mapBody struct {
+	URL               string `json:"url"`
+	Limit             int    `json:"limit,omitempty"`
+	IncludeSubdomains bool   `json:"includeSubdomains"`
+}
+
+// mapResponse is the /v2/map envelope. links holds objects in v2 and bare
+// strings in older answers; mapLink reads both.
+type mapResponse struct {
+	Success bool      `json:"success"`
+	Error   string    `json:"error"`
+	Links   []mapLink `json:"links"`
+}
+
+type mapLink Link
+
+func (l *mapLink) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) > 0 && b[0] == '"' {
+		return json.Unmarshal(b, &l.URL)
+	}
+	var obj struct {
+		URL         string     `json:"url"`
+		Title       flexString `json:"title"`
+		Description flexString `json:"description"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	*l = mapLink{URL: obj.URL, Title: obj.Title.String(), Description: obj.Description.String()}
+	return nil
+}
+
+// Map lists the pages of the site at in.URL. Errors are classified like
+// Scrape's: transient for a missing key, network trouble, 429 or 5xx;
+// terminal otherwise.
+func (c *Client) Map(ctx context.Context, in MapRequest) ([]Link, error) {
+	if c == nil {
+		return nil, &APIError{Message: "firecrawl: client disabled"}
+	}
+	var out mapResponse
+	if err := c.post(ctx, "/v2/map", mapBody{URL: in.URL, Limit: in.Limit}, &out); err != nil {
+		return nil, err
+	}
+	if !out.Success {
+		return nil, &APIError{Message: cmp.Or(out.Error, "firecrawl: map unsuccessful")}
+	}
+	links := make([]Link, 0, len(out.Links))
+	for _, l := range out.Links {
+		if l.URL != "" {
+			links = append(links, Link(l))
+		}
+	}
+	return links, nil
+}
+
+// post sends one authenticated JSON request and decodes a 2xx answer into
+// out.
+func (c *Client) post(ctx context.Context, path string, body, out any) error {
+	key, err := c.keyResolver(ctx)
+	if err != nil {
+		return &APIError{Transient: true, Message: fmt.Sprintf("firecrawl: resolve api key: %v", err)}
+	}
+	if key == "" {
+		return &APIError{Transient: true, Message: "firecrawl: api key not configured"}
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return &APIError{Message: fmt.Sprintf("firecrawl: marshal request: %v", err)}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(buf))
+	if err != nil {
+		return &APIError{Message: err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &APIError{Transient: true, Message: err.Error()}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
+		return &APIError{
+			Transient: resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests,
+			Status:    resp.StatusCode,
+			Message:   shortErrorMessage(raw),
+		}
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(out); err != nil {
+		return &APIError{Transient: true, Message: fmt.Sprintf("firecrawl: decode response: %v", err)}
+	}
+	return nil
 }
 
 // maxResponseBytes bounds a successful scrape body. A page's Markdown is
