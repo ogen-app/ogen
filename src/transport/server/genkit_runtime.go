@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
+	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -67,6 +68,7 @@ type genkitRuntime struct {
 	checkPostsFn        func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 	analyzeAssetFn      func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error)
 	distillIdeasFn      func(ctx context.Context, req asset_analysis.DistillRequest) (*asset_analysis.DistillResponse, error)
+	brandDistill        brand_distill.Callbacks
 
 	cfg                 *config.Config
 	hub                 eventhub.Hub
@@ -317,6 +319,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		r.checkPostsFn = nil
 		r.analyzeAssetFn = nil
 		r.distillIdeasFn = nil
+		r.brandDistill = brand_distill.Callbacks{}
 		r.g = nil
 		r.plugin = nil
 		return nil
@@ -375,11 +378,16 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	if err != nil {
 		return fmt.Errorf("init asset analysis: %w", err)
 	}
+	brandDistill, err := initBrandDistill(g, provider, r.recorder, r.checker)
+	if err != nil {
+		return err
+	}
 
 	r.g = g
 	r.plugin = plugin
 	r.analyzeAssetFn = analysisFlows.analyze
 	r.distillIdeasFn = analysisFlows.distill
+	r.brandDistill = brandDistill
 	r.contentPlanFn = contentPlanFn
 	r.postAssistantFn = postAssistantFn
 	r.postQualityFn = postQualityFn

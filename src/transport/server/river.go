@@ -60,6 +60,7 @@ func periodicConfig(cfg *config.Config) queues.PeriodicConfig {
 		OrphanSweepEvery:           cfg.ZernioOrphanSweepInterval,
 		PendingUploadSweepEvery:    cfg.PendingUploadSweepInterval,
 		AnalysisBackfillEvery:      cfg.AnalysisBackfillInterval,
+		BrandDistillExpireEvery:    brandDistillExpireEvery,
 	}
 }
 
@@ -101,6 +102,7 @@ func queueDeps(d *deps) queues.Deps {
 		Image:                 d.ingest.image,
 		URL:                   d.ingest.url,
 		Analysis:              queues.AnalysisDeps{Runner: d.analysis, Distiller: d.analysis, Tenants: r.tenantRepo, BackfillBatch: cfg.AnalysisBackfillBatch},
+		BrandDistill:          queues.BrandDistillDeps{Runner: d.brandDistill, Tenants: r.tenantRepo},
 		Email:                 d.email.Deps,
 		ConnectSessionRepo:    r.zernioConnectSessionRepo,
 		PluginPairingRepo:     r.pluginPairingRepo,

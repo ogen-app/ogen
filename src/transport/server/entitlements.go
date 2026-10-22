@@ -8,6 +8,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
+	"github.com/ogen-app/ogen/src/usecase/branddistill"
 )
 
 // entitlementDeps is the versioned tier-entitlement layer: the embedded
@@ -48,6 +49,9 @@ func newEntitlementLimiter(cfg *config.Config, r *repos, resolver *entitlements.
 		Register("media_storage_bytes", tenantScoped(r.mediaStorageBytes)).
 		Register(assetanalysis.FeatureMonthlyRuns, tenantScoped(func(ctx context.Context) (int64, error) {
 			return r.assetAnalysisRepo.CountRunsSince(ctx, monthStart(time.Now()))
+		})).
+		Register(branddistill.FeatureMonthly, tenantScoped(func(ctx context.Context) (int64, error) {
+			return r.brandDistillRepo.CountChargesSince(ctx, monthStart(time.Now()))
 		})).
 		Register(assetanalysis.FeatureMonthlyDistills, tenantScoped(func(ctx context.Context) (int64, error) {
 			return r.ideaDistillRepo.CountChargesSince(ctx, monthStart(time.Now()))

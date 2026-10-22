@@ -1383,6 +1383,416 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/brand/distills": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The workspace's latest runs, newest first (at most 10), without their proposals. An open or ready run is the one to resume.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "List brand distillation runs",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillRunsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Queues a run that proposes voices, audiences, guardrail lines and facts from a website (its homepage and up to nine pages chosen from its site map, imported as URL assets tagged \"Brand source\"), any ready or still-ingesting assets, and/or answers to starter questions. Nothing is saved to the Brand until the proposal is committed. Progress arrives as brand.distill.updated events on topic entity:brand_distill:\u003cid\u003e.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Read a brand off a website, documents or answers",
+                "parameters": [
+                    {
+                        "description": "What to read",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillRun"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "402": {
+                        "description": "entitlement_exceeded: brand_distills_per_month is used up",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "feature_not_available: brand_distill is off for the plan",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "distill_in_progress with the open run, or scraping_unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "empty_request, invalid_url, unknown_asset, asset_failed, too_many or invalid_answer",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "503": {
+                        "description": "distill_unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/distills/starter-questions": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Seven fixed questions with stable ids; answer any of them in POST /api/brand/distills.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Questions for a brand with nothing written down",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillQuestionsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/distills/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The run with its sources and, once ready, its proposal: every item with the passages or answers it rests on.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Get a brand distillation run",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillRun"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Closes a run that is not committed; an open run stops. A charged run that never finished goes back to the allowance.",
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Discard a brand distillation run",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "run_committed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/distills/{id}/answers": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Queues a new run that composes the proposal again from the same passages and every answer so far, and supersedes this one (childRunId). Not charged; at most 3 rounds per run.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Answer a run's questions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Answers",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillAnswersRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillRun"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "run_not_ready, run_committed or distill_in_progress",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "empty_request, invalid_answer or refine_limit",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/brand/distills/{id}/commit": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Adds the kept items, edits included, to the Brand in one transaction: voices (the workspace default only when it has none), audiences, guardrail lines merged into the existing lists, ledger facts, and the disclaimer only when sent. Nothing existing is changed or removed. Repeats and items over a cap come back in skipped. The run becomes committed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "brand"
+                ],
+                "summary": "Save what you keep of a proposal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Run id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Kept items",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillCommitRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.brandDistillCommitResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "run_not_ready or run_committed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "422": {
+                        "description": "nothing_to_save, unknown_proposal_item or invalid_item, with proposalId",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/brand/facts": {
             "post": {
                 "security": [
@@ -4348,6 +4758,12 @@ const docTemplate = `{
                         "name": "files",
                         "in": "formData",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "brand_source tags every file \\",
+                        "name": "purpose",
+                        "in": "formData"
                     }
                 ],
                 "responses": {
@@ -13148,6 +13564,17 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "branddistill.Failure": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
         "campaignphase.Source": {
             "type": "string",
             "enum": [
@@ -13464,6 +13891,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.appliedItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "proposalId": {
                     "type": "string"
                 }
             }
@@ -13828,6 +14266,204 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.brandDistillAnswersRequest": {
+            "type": "object",
+            "properties": {
+                "answers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.distillAnswerBody"
+                    }
+                }
+            }
+        },
+        "handlers.brandDistillApplied": {
+            "type": "object",
+            "properties": {
+                "audiences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.appliedItem"
+                    }
+                },
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.appliedItem"
+                    }
+                },
+                "guardrails": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "voices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.appliedItem"
+                    }
+                }
+            }
+        },
+        "handlers.brandDistillCommitRequest": {
+            "type": "object",
+            "properties": {
+                "audiences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.commitAudienceBody"
+                    }
+                },
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.commitFactBody"
+                    }
+                },
+                "guardrails": {
+                    "$ref": "#/definitions/handlers.commitGuardrailsBody"
+                },
+                "voices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.commitVoiceBody"
+                    }
+                }
+            }
+        },
+        "handlers.brandDistillCommitResponse": {
+            "type": "object",
+            "properties": {
+                "applied": {
+                    "$ref": "#/definitions/handlers.brandDistillApplied"
+                },
+                "brand": {
+                    "$ref": "#/definitions/models.BrandData"
+                },
+                "skipped": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/repository.SkippedItem"
+                    }
+                }
+            }
+        },
+        "handlers.brandDistillQuestionsResponse": {
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillQuestion"
+                    }
+                }
+            }
+        },
+        "handlers.brandDistillRequest": {
+            "type": "object",
+            "properties": {
+                "answers": {
+                    "description": "Answers to starter or gap questions; blank answers are ignored. At most\n12.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.distillAnswerBody"
+                    }
+                },
+                "assetIds": {
+                    "description": "AssetIDs are read as they are; uploads still being processed are waited\nfor. At most 20.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "websiteUrl": {
+                    "description": "WebsiteURL is read: its homepage and up to nine more of its pages,\nimported as URL assets tagged \"Brand source\".",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.brandDistillRun": {
+            "type": "object",
+            "properties": {
+                "answers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillAnswer"
+                    }
+                },
+                "childRunId": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "committedAt": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "createdBy": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "failure": {
+                    "$ref": "#/definitions/branddistill.Failure"
+                },
+                "finishedAt": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "id": {
+                    "type": "string"
+                },
+                "parentRunId": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "proposal": {
+                    "$ref": "#/definitions/models.BrandProposal"
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillSource"
+                    }
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "collecting",
+                        "reading",
+                        "composing",
+                        "ready",
+                        "committed",
+                        "superseded",
+                        "discarded",
+                        "expired",
+                        "failed"
+                    ]
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "website": {
+                    "$ref": "#/definitions/models.DistillWebsite"
+                }
+            }
+        },
+        "handlers.brandDistillRunsResponse": {
+            "type": "object",
+            "properties": {
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.brandDistillRun"
                     }
                 }
             }
@@ -14219,6 +14855,126 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.commitAudienceBody": {
+            "type": "object",
+            "properties": {
+                "believesWhen": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "readsOn": {
+                    "type": "string"
+                },
+                "scrollsPastWhen": {
+                    "type": "string"
+                },
+                "who": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.commitFactBody": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "statement": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.commitGuardrailsBody": {
+            "type": "object",
+            "properties": {
+                "bannedWords": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.commitLineBody"
+                    }
+                },
+                "disclaimer": {
+                    "description": "Disclaimer replaces the workspace's own; leave it out to keep yours.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.commitLineBody"
+                        }
+                    ]
+                },
+                "mayClaim": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.commitLineBody"
+                    }
+                },
+                "neverClaim": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.commitLineBody"
+                    }
+                }
+            }
+        },
+        "handlers.commitLineBody": {
+            "type": "object",
+            "properties": {
+                "proposalId": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.commitVoiceBody": {
+            "type": "object",
+            "properties": {
+                "channelNotes": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "isDefault": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "rules": {
+                    "$ref": "#/definitions/models.VoiceRules"
+                },
+                "samples": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "whenToUse": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.completeGoogleSignupRequest": {
             "type": "object",
             "required": [
@@ -14450,6 +15206,20 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 100,
                     "minLength": 1
+                }
+            }
+        },
+        "handlers.distillAnswerBody": {
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "string"
+                },
+                "question": {
+                    "type": "string"
+                },
+                "questionId": {
+                    "type": "string"
                 }
             }
         },
@@ -15654,6 +16424,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "filename": {
+                    "type": "string"
+                },
+                "purpose": {
+                    "description": "Purpose brand_source tags the asset \"Brand source\" and keeps it out of\nautomatic analysis (CON-399).",
                     "type": "string"
                 }
             }
@@ -16911,6 +17685,12 @@ const docTemplate = `{
                 },
                 "node_name": {
                     "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
                 }
             }
         },
@@ -17059,6 +17839,99 @@ const docTemplate = `{
                 }
             }
         },
+        "models.BrandAudience": {
+            "type": "object",
+            "properties": {
+                "believesWhen": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "origin": {
+                    "$ref": "#/definitions/models.BrandOrigin"
+                },
+                "readsOn": {
+                    "type": "string"
+                },
+                "scrollsPastWhen": {
+                    "type": "string"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "usage": {
+                    "$ref": "#/definitions/models.BrandUsage"
+                },
+                "who": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandColor": {
+            "type": "object",
+            "properties": {
+                "hex": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandData": {
+            "type": "object",
+            "properties": {
+                "audiences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.BrandAudience"
+                    }
+                },
+                "facts": {
+                    "description": "Facts is the ledger, all facts including expired ones, ordered\nby created_at then id. Always an array.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.BrandFact"
+                    }
+                },
+                "guardrails": {
+                    "$ref": "#/definitions/models.BrandGuardrails"
+                },
+                "guardrailsStance": {
+                    "description": "GuardrailsStance is always present; None=false means undecided.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.GuardrailsStance"
+                        }
+                    ]
+                },
+                "look": {
+                    "$ref": "#/definitions/models.BrandLook"
+                },
+                "templates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.BrandTemplate"
+                    }
+                },
+                "voices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.BrandVoice"
+                    }
+                }
+            }
+        },
         "models.BrandFact": {
             "type": "object",
             "properties": {
@@ -17115,6 +17988,254 @@ const docTemplate = `{
                     ]
                 },
                 "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandGuardrails": {
+            "type": "object",
+            "properties": {
+                "bannedWords": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "disclaimer": {
+                    "type": "string"
+                },
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "mayClaim": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "neverClaim": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandLogo": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "job": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandLook": {
+            "type": "object",
+            "properties": {
+                "logos": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.BrandLogo"
+                    }
+                },
+                "palette": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.BrandColor"
+                    }
+                },
+                "referenceImages": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "typefaces": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandOrigin": {
+            "type": "object",
+            "properties": {
+                "assetId": {
+                    "description": "AssetID and Title name the asset a document-read entry came from; RunID\nis the brand distillation that proposed it.",
+                    "type": "string"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "fromPost": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "runId": {
+                    "type": "string"
+                },
+                "templateName": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandProposal": {
+            "type": "object",
+            "properties": {
+                "audiences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedAudience"
+                    }
+                },
+                "coverage": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/models.DistillCoverage"
+                    }
+                },
+                "dropped": {
+                    "$ref": "#/definitions/models.DistillDropped"
+                },
+                "facts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedFact"
+                    }
+                },
+                "guardrails": {
+                    "$ref": "#/definitions/models.ProposedGuardrails"
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillQuestion"
+                    }
+                },
+                "voices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedVoice"
+                    }
+                }
+            }
+        },
+        "models.BrandTemplate": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "isDefault": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "origin": {
+                    "$ref": "#/definitions/models.BrandOrigin"
+                },
+                "platforms": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "ratios": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.TemplateRatio"
+                    }
+                },
+                "role": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.BrandUsage": {
+            "type": "object",
+            "properties": {
+                "drafts": {
+                    "type": "integer"
+                },
+                "published": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.BrandVoice": {
+            "type": "object",
+            "properties": {
+                "channelNotes": {
+                    "$ref": "#/definitions/models.StringMap"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "isDefault": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "origin": {
+                    "$ref": "#/definitions/models.BrandOrigin"
+                },
+                "postsBehind": {
+                    "type": "integer"
+                },
+                "rules": {
+                    "$ref": "#/definitions/models.VoiceRules"
+                },
+                "samples": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "summary": {
+                    "description": "Summary is our reading of the samples, generated not authored (FR5);\nwrite-ignored. \"\" is the honest rendering of a voice with nothing behind it.",
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "usage": {
+                    "description": "Derived, never stored (FR7). Zero until CON-245.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.BrandUsage"
+                        }
+                    ]
+                },
+                "whenToUse": {
                     "type": "string"
                 }
             }
@@ -17420,6 +18541,128 @@ const docTemplate = `{
                 "ContentFormatQuestion",
                 "ContentFormatAnnouncement"
             ]
+        },
+        "models.DistillAnswer": {
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "string"
+                },
+                "question": {
+                    "type": "string"
+                },
+                "questionId": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.DistillCoverage": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "description": "Level is found, thin or none.",
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.DistillDropped": {
+            "type": "object",
+            "properties": {
+                "duplicate": {
+                    "type": "integer"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "ungrounded": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.DistillEvidence": {
+            "type": "object",
+            "properties": {
+                "assetId": {
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "Kind is \"answer\" for an answer, empty for a quote.",
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "questionId": {
+                    "type": "string"
+                },
+                "quote": {
+                    "type": "string"
+                },
+                "ref": {
+                    "description": "Ref is \"\u003cassetId\u003e#\u003csegment\u003e\".",
+                    "type": "string"
+                }
+            }
+        },
+        "models.DistillQuestion": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "section": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "why": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.DistillSource": {
+            "type": "object",
+            "properties": {
+                "assetId": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.DistillWebsite": {
+            "type": "object",
+            "properties": {
+                "mapped": {
+                    "type": "boolean"
+                },
+                "pagesFound": {
+                    "type": "integer"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
         },
         "models.EvaluationDimension": {
             "type": "object",
@@ -18664,6 +19907,179 @@ const docTemplate = `{
                 }
             }
         },
+        "models.ProposedAudience": {
+            "type": "object",
+            "properties": {
+                "believesWhen": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillEvidence"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "readsOn": {
+                    "type": "string"
+                },
+                "scrollsPastWhen": {
+                    "type": "string"
+                },
+                "who": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ProposedDisclaimer": {
+            "type": "object",
+            "properties": {
+                "current": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillEvidence"
+                    }
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ProposedFact": {
+            "type": "object",
+            "properties": {
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillEvidence"
+                    }
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/models.FactKind"
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "statement": {
+                    "type": "string"
+                },
+                "subject": {
+                    "$ref": "#/definitions/models.FactSubject"
+                }
+            }
+        },
+        "models.ProposedGuardrails": {
+            "type": "object",
+            "properties": {
+                "bannedWords": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedLine"
+                    }
+                },
+                "disclaimer": {
+                    "$ref": "#/definitions/models.ProposedDisclaimer"
+                },
+                "mayClaim": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedLine"
+                    }
+                },
+                "neverClaim": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedLine"
+                    }
+                }
+            }
+        },
+        "models.ProposedLine": {
+            "type": "object",
+            "properties": {
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillEvidence"
+                    }
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ProposedSample": {
+            "type": "object",
+            "properties": {
+                "evidence": {
+                    "$ref": "#/definitions/models.DistillEvidence"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ProposedVoice": {
+            "type": "object",
+            "properties": {
+                "channelNotes": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.DistillEvidence"
+                    }
+                },
+                "isDefault": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "proposalId": {
+                    "type": "string"
+                },
+                "rules": {
+                    "$ref": "#/definitions/models.VoiceRules"
+                },
+                "samples": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ProposedSample"
+                    }
+                },
+                "thin": {
+                    "type": "boolean"
+                },
+                "whenToUse": {
+                    "type": "string"
+                }
+            }
+        },
         "models.SavedView": {
             "type": "object",
             "properties": {
@@ -18934,6 +20350,12 @@ const docTemplate = `{
                 }
             }
         },
+        "models.StringMap": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "string"
+            }
+        },
         "models.SuggestionSeverity": {
             "type": "string",
             "enum": [
@@ -18957,6 +20379,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.TemplateRatio": {
+            "type": "object",
+            "properties": {
+                "ratio": {
+                    "type": "string"
+                },
+                "url": {
                     "type": "string"
                 }
             }
@@ -19120,6 +20553,32 @@ const docTemplate = `{
                 "requires_video_title": {
                     "description": "RequiresVideoTitle blocks publishing a video post whose title is empty.\nA product rule for YouTube, where an untitled upload would be titled from\nthe description's first line or \"Untitled Video\"; feed/Reel platforms\nhave no separate title, so this stays false for them.",
                     "type": "boolean"
+                }
+            }
+        },
+        "models.VoiceRules": {
+            "type": "object",
+            "properties": {
+                "closing": {
+                    "type": "string"
+                },
+                "emoji": {
+                    "type": "string"
+                },
+                "formality": {
+                    "type": "string"
+                },
+                "hashtags": {
+                    "type": "string"
+                },
+                "length": {
+                    "type": "string"
+                },
+                "opening": {
+                    "type": "string"
+                },
+                "person": {
+                    "type": "string"
                 }
             }
         },
@@ -19682,6 +21141,17 @@ const docTemplate = `{
                 },
                 "views": {
                     "type": "integer"
+                }
+            }
+        },
+        "repository.SkippedItem": {
+            "type": "object",
+            "properties": {
+                "proposalId": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
                 }
             }
         },

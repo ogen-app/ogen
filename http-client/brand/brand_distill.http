@@ -1,0 +1,98 @@
+@baseUrl = http://localhost:9001
+
+# CON-399 — Brand from what you have (/api/brand/distills).
+# All endpoints require authentication: run "Login" from sessions/sessions.http
+# first. A run reads a website, assets and/or answers and proposes voices,
+# audiences, guardrails and facts; nothing is saved until you commit.
+# Progress: GET /api/events?topics=entity:brand_distill:<id>
+
+### Starter questions — for a brand with nothing written down  [protected]
+GET {{baseUrl}}/api/brand/distills/starter-questions
+Accept: application/json
+
+### Read a website  [protected]
+# @name readWebsite
+POST {{baseUrl}}/api/brand/distills
+Content-Type: application/json
+
+{
+  "websiteUrl": "https://example.com"
+}
+
+> {% client.global.set("runId", response.body.id) %}
+
+### Read documents — upload with purpose=brand_source first, then pass the ids  [protected]
+POST {{baseUrl}}/api/brand/distills
+Content-Type: application/json
+
+{
+  "assetIds": ["{{assetId}}"]
+}
+
+### Answer a handful of questions  [protected]
+POST {{baseUrl}}/api/brand/distills
+Content-Type: application/json
+
+{
+  "answers": [
+    {"questionId": "q_offer", "question": "What do you sell, and who buys it?", "answer": "Speciality coffee, roasted light, to people who brew at home."},
+    {"questionId": "q_never_post", "question": "A sentence you would never post.", "answer": "Elevate your morning ritual."}
+  ]
+}
+
+### Upload a document as a brand source (tagged "Brand source", not auto-analysed)  [protected]
+POST {{baseUrl}}/api/content-bank/assets/upload
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="purpose"
+
+brand_source
+--boundary
+Content-Disposition: form-data; name="files"; filename="tone-of-voice.md"
+Content-Type: text/markdown
+
+# Tone of voice
+
+We write plainly. Nobody needs another adjective.
+--boundary--
+
+### The run, with its proposal once ready  [protected]
+GET {{baseUrl}}/api/brand/distills/{{runId}}
+Accept: application/json
+
+### Latest runs  [protected]
+GET {{baseUrl}}/api/brand/distills
+Accept: application/json
+
+### Answer the gap questions — a new run supersedes this one  [protected]
+POST {{baseUrl}}/api/brand/distills/{{runId}}/answers
+Content-Type: application/json
+
+{
+  "answers": [
+    {"questionId": "r0_q1", "question": "Who are you not for?", "answer": "Anyone who wants dark, oily coffee."}
+  ]
+}
+
+### Save what you keep  [protected]
+POST {{baseUrl}}/api/brand/distills/{{runId}}/commit
+Content-Type: application/json
+
+{
+  "voices": [
+    {"proposalId": "v1", "name": "Warm, exacting", "whenToUse": "The coffee and the subscription.", "isDefault": true,
+     "samples": ["We roast light because it is the only way to taste where a coffee is from."],
+     "rules": {"emoji": "never", "formality": "neutral", "person": "we", "length": "medium"}}
+  ],
+  "guardrails": {
+    "mayClaim": [{"proposalId": "g:mayClaim:1", "text": "Every coffee ships within 48 hours of roasting."}]
+  },
+  "facts": [
+    {"proposalId": "f1", "statement": "Subscriptions start at £9 for 250 g.", "subject": "us", "kind": "documented",
+     "expiresAt": "2026-12-31", "source": "example.com/pricing"}
+  ]
+}
+
+### Discard a run  [protected]
+DELETE {{baseUrl}}/api/brand/distills/{{runId}}

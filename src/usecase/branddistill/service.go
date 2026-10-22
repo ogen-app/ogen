@@ -139,10 +139,12 @@ type Notifier interface {
 	Emit(ctx context.Context, userID string, spec notify.Spec) error
 }
 
-// Flows are the two stages of the brand_distill flow.
+// Flows are the two stages of the brand_distill flow. Ready reports whether
+// they can run now (an Anthropic key is set); nil means always.
 type Flows struct {
 	Extract func(ctx context.Context, req brand_distill.ExtractRequest) (*brand_distill.ExtractResponse, error)
 	Compose func(ctx context.Context, req brand_distill.ComposeRequest) (*brand_distill.ComposeResponse, error)
+	Ready   func() bool
 }
 
 // Repos are the stores a run reads and writes.
@@ -188,7 +190,10 @@ func (s *Service) SetFlows(f *Flows) { s.flows.Store(f) }
 func (s *Service) SetClock(now func() time.Time) { s.now = now }
 
 // Available reports whether a run could be started and finished here.
-func (s *Service) Available() bool { return s.jobs != nil && s.flows.Load() != nil }
+func (s *Service) Available() bool {
+	f := s.flows.Load()
+	return s.jobs != nil && f != nil && (f.Ready == nil || f.Ready())
+}
 
 // EventPayload is the SSE body of a brand.distill.updated frame. The proposal
 // is never in it; the client reads it once the run is ready.
