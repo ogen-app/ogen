@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -109,9 +110,11 @@ func TestIdeaDistillIdeasSurviveRerun(t *testing.T) {
 
 	f.save(t, lens, 0, "auto again")
 
+	// The two distilled ideas share one insert and one created_at, so their
+	// order between themselves is not defined.
 	titles := f.ideaTitles(t, repository.IdeaListFilter{AssetID: "asset-1"})
-	if len(titles) != 3 || titles[0] != "more one" || titles[1] != "more two" || titles[2] != "auto again" {
-		t.Fatalf("ideas after re-run = %v, want [more one more two auto again]", titles)
+	if len(titles) != 3 || !slices.Contains(titles[:2], "more one") || !slices.Contains(titles[:2], "more two") || titles[2] != "auto again" {
+		t.Fatalf("ideas after re-run = %v, want the two distilled ideas, then auto again", titles)
 	}
 }
 
