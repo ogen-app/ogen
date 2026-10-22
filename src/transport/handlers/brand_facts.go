@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/brandcheck"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
@@ -17,8 +17,6 @@ import (
 // Facts ledger: per-row CRUD under /api/brand/facts, and the
 // guardrails stance under /api/brand/guardrails/stance. Facts also reach the
 // aggregate GET /api/brand as `facts`, and guardrails.facts is their projection.
-
-const maxFactSourceChars = 500
 
 // brandFactRequest is the POST/PUT body. Dates are "YYYY-MM-DD", null or "".
 // POST defaults an omitted subject to us, kind to documented and addedAt to
@@ -80,20 +78,8 @@ func factFromRequest(req *brandFactRequest) (*models.BrandFact, error) {
 		Kind:      models.FactKind(req.Kind),
 		Source:    strings.TrimSpace(req.Source),
 	}
-	if f.Statement == "" {
-		return nil, unprocessable("statement is required")
-	}
-	if len(f.Statement) > maxGuardrailStmtBytes {
-		return nil, unprocessable("statement exceeds %d KB", maxGuardrailStmtBytes>>10)
-	}
-	if !f.Subject.Valid() {
-		return nil, unprocessable("invalid subject: %q", req.Subject)
-	}
-	if !f.Kind.Valid() {
-		return nil, unprocessable("invalid kind: %q", req.Kind)
-	}
-	if utf8.RuneCountInString(f.Source) > maxFactSourceChars {
-		return nil, unprocessable("source exceeds %d characters", maxFactSourceChars)
+	if err := ruleError(brandcheck.Fact(f)); err != nil {
+		return nil, err
 	}
 	var err error
 	if f.AddedAt, err = parseFactDate("addedAt", req.AddedAt); err != nil {
