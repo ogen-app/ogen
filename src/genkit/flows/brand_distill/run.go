@@ -131,6 +131,8 @@ func keepVerbatim(in []models.DistillCandidate, segs []Segment) ([]models.Distil
 	out := make([]models.DistillCandidate, 0, len(in))
 	for _, c := range in {
 		c.Kind, c.Ref = strings.TrimSpace(c.Kind), strings.TrimSpace(c.Ref)
+		// The asset and label come from the segment, never from the model.
+		c.AssetID, c.Label = "", ""
 		c.Quote = clampRunes(strings.TrimSpace(c.Quote), maxQuoteRunes)
 		c.Note = clampRunes(strings.TrimSpace(c.Note), maxNoteRunes)
 		body, ok := text[c.Ref]

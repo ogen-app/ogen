@@ -269,21 +269,30 @@ func (s *Service) publish(ctx context.Context, run *models.BrandDistillRun) {
 
 // save writes the named columns and publishes the run. A failed write is
 // returned: the job retries it.
+//
+// It writes only while the stored run is open: a run discarded while the job
+// worked returns repository.ErrBrandDistillClosed, and the job stops.
 func (s *Service) save(ctx context.Context, run *models.BrandDistillRun, columns ...string) error {
-	if err := s.repos.Runs.Save(ctx, s.db, run, columns...); err != nil {
+	if err := s.repos.Runs.SaveOpen(ctx, run, columns...); err != nil {
 		return err
 	}
 	s.publish(ctx, run)
 	return nil
 }
 
-// fail settles a run as failed, releases its charge and tells its author.
+// fail settles a run as failed, releases its charge, hands a refine's parent
+// back its proposal and tells the author. A run closed meanwhile is left as
+// it is.
 func (s *Service) fail(ctx context.Context, run *models.BrandDistillRun, code, reason string) {
 	run.Status, run.FailureCode, run.FailureReason = models.BrandDistillStatusFailed, code, reason
 	if err := s.save(ctx, run, "status", "failure_code", "failure_reason", "sources"); err != nil {
-		slog.WarnContext(ctx, "could not fail the brand distillation", logging.AttrComponent, logComponent,
-			"run_id", run.ID, logging.AttrError, err)
+		if !errors.Is(err, repository.ErrBrandDistillClosed) {
+			slog.WarnContext(ctx, "could not fail the brand distillation", logging.AttrComponent, logComponent,
+				"run_id", run.ID, logging.AttrError, err)
+		}
+		return
 	}
+	s.unlinkParent(ctx, run)
 	if run.Charged {
 		if err := s.repos.Runs.ReleaseCharge(ctx, run.ID); err != nil {
 			slog.WarnContext(ctx, "could not release the charge", logging.AttrComponent, logComponent, "run_id", run.ID, logging.AttrError, err)
@@ -291,6 +300,42 @@ func (s *Service) fail(ctx context.Context, run *models.BrandDistillRun, code, r
 	}
 	runsTotal.Add("failed/"+code, 1)
 	s.announce(ctx, run)
+}
+
+// unlinkParent hands a refine's parent its proposal back once the refine
+// fails or is discarded: the parent stays ready and can be committed or
+// refined again. Best effort.
+func (s *Service) unlinkParent(ctx context.Context, child *models.BrandDistillRun) {
+	if child.ParentRunID == nil {
+		return
+	}
+	parent, err := s.repos.Runs.Get(ctx, *child.ParentRunID)
+	if err != nil || parent.ChildRunID == nil || *parent.ChildRunID != child.ID {
+		return
+	}
+	parent.ChildRunID = nil
+	if err := s.repos.Runs.Save(ctx, s.db, parent, "child_run_id"); err != nil {
+		s.warn(ctx, "unlink a failed refine from its run", parent.ID, err)
+		return
+	}
+	s.publish(ctx, parent)
+}
+
+// supersedeParent closes a refine's parent once the refine is ready.
+func (s *Service) supersedeParent(ctx context.Context, child *models.BrandDistillRun) {
+	if child.ParentRunID == nil {
+		return
+	}
+	parent, err := s.repos.Runs.Get(ctx, *child.ParentRunID)
+	if err != nil || parent.Status != models.BrandDistillStatusReady || parent.ChildRunID == nil || *parent.ChildRunID != child.ID {
+		return
+	}
+	parent.Status = models.BrandDistillStatusSuperseded
+	if err := s.repos.Runs.Save(ctx, s.db, parent, "status"); err != nil {
+		s.warn(ctx, "supersede a refined run", parent.ID, err)
+		return
+	}
+	s.publish(ctx, parent)
 }
 
 // announce tells the run's author it is ready or failed. Best effort.

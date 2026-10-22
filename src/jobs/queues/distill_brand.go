@@ -101,6 +101,10 @@ func (p *DistillBrandProcessor) Process(ctx context.Context, task DistillBrandTa
 	ctx = tenantctx.With(ctx, task.TenantID)
 	active, err := tenantIsActive(ctx, p.Deps.Tenants, task.TenantID)
 	if err != nil {
+		if lastAttempt {
+			p.Deps.Runner.Fail(ctx, task.TenantID, task.RunID, err)
+			return nil
+		}
 		return err
 	}
 	if !active {

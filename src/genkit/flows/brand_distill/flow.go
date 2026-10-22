@@ -47,7 +47,7 @@ func Init(g *genkit.Genkit, cfg FlowConfig) (Callbacks, error) {
 	return Callbacks{Extract: r.extract, Compose: r.compose}, nil
 }
 
-var templateFuncs = template.FuncMap{"join": strings.Join}
+var templateFuncs = template.FuncMap{"join": strings.Join, "untag": untag}
 
 func loadPrompts() (prompts, error) {
 	tpl := template.New("brand_distill").Funcs(templateFuncs)

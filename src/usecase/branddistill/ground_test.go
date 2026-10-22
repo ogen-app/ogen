@@ -1,8 +1,10 @@
 package branddistill
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
@@ -140,6 +142,14 @@ func TestGroundSkipsADisclaimerTheWorkspaceRuns(t *testing.T) {
 	other := ground(d, groundInput{candidates: candidates, today: today, brand: &models.BrandData{Guardrails: &models.BrandGuardrails{Disclaimer: "Ours."}}})
 	if other.Guardrails.Disclaimer == nil || other.Guardrails.Disclaimer.Current == nil || *other.Guardrails.Disclaimer.Current != "Ours." {
 		t.Fatalf("disclaimer = %+v", other.Guardrails.Disclaimer)
+	}
+}
+
+func TestGroundQuestionsFitTheAnswerLimit(t *testing.T) {
+	long := strings.Repeat("é", 400) // 800 bytes
+	p := ground(brand_distill.Draft{Questions: []brand_distill.DraftQuestion{{Text: long}}}, groundInput{today: today})
+	if len(p.Questions) != 1 || len(p.Questions[0].Text) > MaxQuestionBytes || !utf8.ValidString(p.Questions[0].Text) {
+		t.Fatalf("questions = %+v", p.Questions)
 	}
 }
 

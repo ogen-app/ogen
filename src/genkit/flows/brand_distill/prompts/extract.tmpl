@@ -29,7 +29,7 @@ Respond ONLY with the JSON object. No markdown fences, no text before or after i
 
 <source>
 {{- range .Segments}}
-[{{.Ref}}] ({{.Label}}{{if .Recording}}, transcript{{end}})
-{{.Text}}
+[{{.Ref}}] ({{untag .Label}}{{if .Recording}}, transcript{{end}})
+{{untag .Text}}
 {{end -}}
 </source>{{end}}

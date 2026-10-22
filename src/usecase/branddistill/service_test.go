@@ -96,6 +96,9 @@ type stubFlows struct {
 	mu       sync.Mutex
 	extracts int
 	composes []brand_distill.ComposeRequest
+	// composeErr fails the compose call; during runs before it answers.
+	composeErr error
+	during     func()
 }
 
 func (s *stubFlows) extract(_ context.Context, req brand_distill.ExtractRequest) (*brand_distill.ExtractResponse, error) {
@@ -114,6 +117,12 @@ func (s *stubFlows) compose(_ context.Context, req brand_distill.ComposeRequest)
 	s.mu.Lock()
 	s.composes = append(s.composes, req)
 	s.mu.Unlock()
+	if s.during != nil {
+		s.during()
+	}
+	if s.composeErr != nil {
+		return nil, s.composeErr
+	}
 	d := brand_distill.Draft{Coverage: map[string]models.DistillCoverage{"voices": {Level: "found"}}}
 	if len(req.Candidates) > 0 {
 		c := req.Candidates[0]
