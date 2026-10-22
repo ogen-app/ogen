@@ -70,7 +70,19 @@ type BrandOrigin struct {
 	URL          string `json:"url,omitempty"`
 	Count        int    `json:"count,omitzero"`
 	FromPost     string `json:"fromPost,omitempty"`
+	// AssetID and Title name the asset a document-read entry came from; RunID
+	// is the brand distillation that proposed it.
+	AssetID string `json:"assetId,omitempty"`
+	Title   string `json:"title,omitempty"`
+	RunID   string `json:"runId,omitempty"`
 }
+
+// Origin kinds a brand distillation writes.
+const (
+	BrandOriginWebsite   = "website"
+	BrandOriginDocument  = "document"
+	BrandOriginQuestions = "questions"
+)
 
 func (o BrandOrigin) Value() (driver.Value, error) {
 	b, err := json.Marshal(o)
