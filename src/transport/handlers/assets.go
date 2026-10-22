@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
-	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,11 +22,11 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/kernel/logging"
-	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/textgist"
 	"github.com/ogen-app/ogen/src/usecase/brandsource"
 	"github.com/ogen-app/ogen/src/usecase/ingest"
+	"github.com/ogen-app/ogen/src/usecase/urlimport"
 )
 
 const (
@@ -1004,146 +1003,50 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 	if err := bindAndValidate(c, &req); err != nil {
 		return err
 	}
-	normalized, err := allowedSourceURL(reqCtx(c), req.URL)
+	ctx := reqCtx(c)
+	normalized, err := urlimport.Normalize(ctx, req.URL)
+	if invalid, ok := errors.AsType[*urlimport.InvalidURLError](err); ok {
+		return fiber.NewError(fiber.StatusBadRequest, invalid.Msg)
+	}
 	if err != nil {
 		return err
 	}
-
-	// URL ingestion needs the enqueuer, the DB (transactional outbox), and a
-	// configured Firecrawl key; otherwise fail fast so the caller isn't left
-	// polling a pending asset that will never process.
-	if !h.urlScrapeConfigured(reqCtx(c)) {
+	// Fail fast without a scraping key, so the caller isn't left polling a
+	// pending asset that will never process.
+	importer := h.urlImporter()
+	if !importer.Configured(ctx) {
 		return fiber.NewError(fiber.StatusConflict, "url scraping is not configured")
 	}
-
 	session, err := sessionFrom(c)
 	if err != nil {
 		return err
 	}
-	ctx := reqCtx(c)
-
-	// Dedupe: an existing URL asset with this source_url refreshes in place.
-	existing, err := h.repo.GetBySourceURL(ctx, normalized)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	res, err := importer.Import(ctx, urlimport.Input{TenantID: session.TenantID, UserID: session.UserID, URL: normalized})
+	if errors.Is(err, urlimport.ErrUnavailable) {
+		return fiber.NewError(fiber.StatusConflict, "url scraping is not configured")
 	}
-	if existing != nil {
-		return h.refreshURLAsset(c, existing, normalized, session.TenantID)
-	}
-
-	// A genuinely new URL asset counts against BOTH the total bank
-	// (content_bank_assets) and the stricter URL-only sub-cap (web_page_imports);
-	// a refresh of an existing one (handled above) does not. The URL sub-cap is
-	// checked first, so a workspace with bank room left but out of URL imports is
-	// refused on the allowance that actually ran out.
-	importQuota, err := requireQuota(c, h.limiter, "web_page_imports")
 	if err != nil {
 		return err
 	}
-	urlQuota, err := requireQuota(c, h.limiter, "content_bank_assets")
-	if err != nil {
-		return err
+	if res.Created {
+		return c.Status(fiber.StatusCreated).JSON(res.Asset)
 	}
-
-	asset, err := newUploadAsset("", models.AssetTypeURL, "", session.UserID, nil)
-	if err != nil {
-		return err
-	}
-	asset.Title = normalized // provisional; the worker sets the page title
-	asset.SourceURL = new(normalized)
-	if _, err := h.ingester().Create(ctx, ingest.NewAsset{
-		Asset: asset,
-		Enqueue: func(ctx context.Context, tx *sql.Tx) error {
-			return h.urlJobs.EnqueueProcessURLTx(ctx, tx, asset.ID, session.TenantID, normalized, false)
-		},
-	}); err != nil {
-		// Concurrent submit of the same new URL: the partial unique index rejects
-		// the second insert. Treat it as "already exists" and refresh in place so
-		// the call is idempotent.
-		if again, gErr := h.repo.GetBySourceURL(ctx, normalized); gErr == nil && again != nil {
-			return h.refreshURLAsset(c, again, normalized, session.TenantID)
-		}
-		return err
-	}
-	// The URL asset now exists — fire any near-limit crossing on both
-	// the URL sub-cap and the total bank.
-	importQuota.dispatch(ctx)
-	urlQuota.dispatch(ctx)
-
-	return c.Status(fiber.StatusCreated).JSON(asset)
+	h.decorateFile(ctx, res.Asset)
+	h.decorateImages(ctx, res.Asset)
+	return c.Status(fiber.StatusOK).JSON(res.Asset)
 }
 
-// urlScrapeConfigured reports whether URL ingestion can run: it needs the
-// enqueuer, the DB (transactional outbox), and a configured Firecrawl key.
-func (h *AssetsHandler) urlScrapeConfigured(ctx context.Context) bool {
-	return h.urlJobs != nil && h.db != nil && h.scrapeGate != nil && h.scrapeGate.HasKey(ctx)
-}
-
-// allowedSourceURL normalizes a submitted URL and runs the SSRF pre-flight
-// (defense in depth; the worker's image fetcher is the authoritative
-// connect-time guard): a host resolving to a private/loopback/link-local/
-// metadata address is rejected. The lookup is bounded so a slow resolver
-// can't stall the request.
-func allowedSourceURL(ctx context.Context, raw string) (string, error) {
-	normalized, host, err := normalizeSourceURL(raw)
-	if err != nil {
-		return "", fiber.NewError(fiber.StatusBadRequest, err.Error())
+// urlImporter builds the URL import use case over the handler's
+// collaborators.
+func (h *AssetsHandler) urlImporter() *urlimport.Service {
+	return &urlimport.Service{
+		DB:      h.db,
+		Assets:  h.repo,
+		Ingest:  h.ingester(),
+		Jobs:    h.urlJobs,
+		Gate:    h.scrapeGate,
+		Limiter: h.limiter,
 	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if err := netguard.ResolveAllowed(lookupCtx, host); err != nil {
-		return "", fiber.NewError(fiber.StatusBadRequest, "url host is not allowed")
-	}
-	return normalized, nil
-}
-
-// refreshURLAsset resets an existing URL asset to pending and re-enqueues a
-// scrape (refresh=true), returning it with 200. Content/images/chunks are
-// replaced by the worker; id/created_at/tags are preserved.
-func (h *AssetsHandler) refreshURLAsset(c *fiber.Ctx, asset *models.Asset, sourceURL, tenantID string) error {
-	ctx := reqCtx(c)
-	if err := h.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewUpdate().
-			Model((*models.Asset)(nil)).
-			Set("status = ?", models.AssetStatusPending).
-			Set("updated_at = ?", time.Now().UTC()).
-			Where("id = ?", asset.ID).
-			Exec(ctx); err != nil {
-			return err
-		}
-		return h.urlJobs.EnqueueProcessURLTx(ctx, tx.Tx, asset.ID, tenantID, sourceURL, true)
-	}); err != nil {
-		return err
-	}
-	asset.Status = models.AssetStatusPending
-	h.decorateFile(reqCtx(c), asset)
-	h.decorateImages(reqCtx(c), asset)
-	return c.Status(fiber.StatusOK).JSON(asset)
-}
-
-// normalizeSourceURL validates and canonicalises a submitted URL for dedupe:
-// http(s) only, lower-cased scheme+host, fragment stripped, trailing slash
-// trimmed (query preserved). It returns the normalised URL and its host (for
-// the caller's SSRF resolution check). Host-level SSRF filtering is applied by
-// the caller via netguard.
-func normalizeSourceURL(raw string) (normalized, host string, err error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "", "", fmt.Errorf("invalid url")
-	}
-	u.Scheme = strings.ToLower(u.Scheme)
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", "", fmt.Errorf("only http(s) urls are supported")
-	}
-	if u.Host == "" {
-		return "", "", fmt.Errorf("url is missing a host")
-	}
-	u.Host = strings.ToLower(u.Host)
-	u.Fragment = ""
-	if u.Path != "/" {
-		u.Path = strings.TrimRight(u.Path, "/")
-	}
-	return u.String(), netguard.NormalizeHost(u.Hostname()), nil
 }
 
 // Get godoc
