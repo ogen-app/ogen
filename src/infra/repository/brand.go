@@ -56,6 +56,12 @@ type BrandRepository interface {
 	UpsertLook(ctx context.Context, l *models.BrandLook) error
 	DeleteLook(ctx context.Context) (bool, error)
 
+	// ApplyDistilled adds a committed brand distillation in one transaction:
+	// voices, audiences, guardrail lines merged into the singleton, ledger
+	// facts. Nothing existing is changed or removed except the disclaimer
+	// when one is given. done runs last inside the transaction.
+	ApplyDistilled(ctx context.Context, in DistilledBrand, done func(ctx context.Context, tx bun.Tx, res *DistilledResult) error) (*DistilledResult, error)
+
 	CreateTemplate(ctx context.Context, t *models.BrandTemplate) error
 	UpdateTemplate(ctx context.Context, t *models.BrandTemplate) error // sql.ErrNoRows when unknown
 	DeleteTemplate(ctx context.Context, id string) (bool, error)

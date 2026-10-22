@@ -71,14 +71,13 @@ func TestBrandDistillOneOpenRunAndItsLifecycle(t *testing.T) {
 func TestBrandDistillCharges(t *testing.T) {
 	f := newAnalysisFixture(t)
 	runs := repository.NewBrandDistillRepository(f.db)
-	id, err := runs.RecordCharge(f.ctx, "run-1")
-	if err != nil {
+	if err := runs.RecordCharge(f.ctx, "run-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runs.RecordCharge(f.ctx, "run-2"); err != nil {
+	if err := runs.RecordCharge(f.ctx, "run-2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := runs.DeleteCharge(f.ctx, id); err != nil {
+	if err := runs.ReleaseCharge(f.ctx, "run-1"); err != nil {
 		t.Fatal(err)
 	}
 	n, err := runs.CountChargesSince(f.ctx, time.Now().Add(-time.Hour))

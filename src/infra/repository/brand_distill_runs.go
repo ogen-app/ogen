@@ -42,10 +42,10 @@ type BrandDistillRepository interface {
 	// StampSourceRun records runID on the brand-source assets among ids that
 	// have none yet.
 	StampSourceRun(ctx context.Context, runID string, assetIDs []string) error
-	// RecordCharge logs one run against the monthly cap and returns the
-	// charge's id; DeleteCharge releases a charge whose run never finished.
-	RecordCharge(ctx context.Context, runID string) (string, error)
-	DeleteCharge(ctx context.Context, id string) error
+	// RecordCharge logs one run against the monthly cap; ReleaseCharge hands
+	// a run that never finished back to the allowance.
+	RecordCharge(ctx context.Context, runID string) error
+	ReleaseCharge(ctx context.Context, runID string) error
 	// CountChargesSince counts the tenant's charges at or after since.
 	CountChargesSince(ctx context.Context, since time.Time) (int64, error)
 }
@@ -168,19 +168,17 @@ func (r *brandDistillRepository) StampSourceRun(ctx context.Context, runID strin
 	return err
 }
 
-func (r *brandDistillRepository) RecordCharge(ctx context.Context, runID string) (string, error) {
+func (r *brandDistillRepository) RecordCharge(ctx context.Context, runID string) error {
 	id, err := models.NewID()
 	if err != nil {
-		return "", err
+		return err
 	}
-	if _, err := r.db.NewInsert().Model(&models.BrandDistillCharge{ID: id, RunID: runID}).Exec(ctx); err != nil {
-		return "", err
-	}
-	return id, nil
+	_, err = r.db.NewInsert().Model(&models.BrandDistillCharge{ID: id, RunID: runID}).Exec(ctx)
+	return err
 }
 
-func (r *brandDistillRepository) DeleteCharge(ctx context.Context, id string) error {
-	_, err := r.db.NewDelete().Model((*models.BrandDistillCharge)(nil)).Where("id = ?", id).Exec(ctx)
+func (r *brandDistillRepository) ReleaseCharge(ctx context.Context, runID string) error {
+	_, err := r.db.NewDelete().Model((*models.BrandDistillCharge)(nil)).Where("run_id = ?", runID).Exec(ctx)
 	return err
 }
 

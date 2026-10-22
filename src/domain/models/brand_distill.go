@@ -117,12 +117,15 @@ type DistillEvidence struct {
 // EvidenceKindAnswer marks evidence that is an answer.
 const EvidenceKindAnswer = "answer"
 
-// DistillCandidate is one passage the reading stage kept as evidence.
+// DistillCandidate is one passage the reading stage kept as evidence. AssetID
+// and Label are filled from the segment it was quoted from.
 type DistillCandidate struct {
-	Kind  string `json:"kind"`
-	Ref   string `json:"ref"`
-	Quote string `json:"quote"`
-	Note  string `json:"note,omitempty"`
+	Kind    string `json:"kind"`
+	Ref     string `json:"ref"`
+	Quote   string `json:"quote"`
+	Note    string `json:"note,omitempty"`
+	AssetID string `json:"assetId,omitempty"`
+	Label   string `json:"label,omitempty"`
 }
 
 // ProposedSample is a voice sample: a passage quoted word for word.
