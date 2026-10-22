@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/domain/brandcheck"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
@@ -19,7 +20,7 @@ import (
 
 // MaxBrandFacts caps the ledger per workspace. Every current fact is read on
 // each generation turn.
-const MaxBrandFacts = 200
+const MaxBrandFacts = brandcheck.MaxFacts
 
 var (
 	// ErrFactDuplicate: another fact in the workspace has the same statement.
@@ -86,6 +87,14 @@ func authorName(ctx context.Context, db bun.IDB, userID *string) (string, error)
 	return strings.TrimSpace(row.Email), nil
 }
 
+// countFacts counts the tenant's facts with a count(*) select: bun's Count
+// skips the BeforeSelect hook, so it would count every tenant's facts.
+func countFacts(ctx context.Context, db bun.IDB) (int, error) {
+	var n int
+	err := db.NewSelect().Model((*models.BrandFact)(nil)).ColumnExpr("count(*)").Scan(ctx, &n)
+	return n, err
+}
+
 func listFacts(ctx context.Context, db bun.IDB) ([]models.BrandFact, error) {
 	facts := []models.BrandFact{}
 	if err := db.NewSelect().Model(&facts).OrderExpr("bf.created_at ASC, bf.id ASC").Scan(ctx); err != nil {
@@ -130,7 +139,7 @@ func (r *brandRepository) CreateFact(ctx context.Context, f *models.BrandFact) e
 		if err := lockFacts(ctx, tx); err != nil {
 			return err
 		}
-		n, err := tx.NewSelect().Model((*models.BrandFact)(nil)).Count(ctx)
+		n, err := countFacts(ctx, tx)
 		if err != nil {
 			return err
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"github.com/ogen-app/ogen/src/domain/brandcheck"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
@@ -451,41 +452,15 @@ func (h *BrandHandler) Upload(c *fiber.Ctx) error {
 
 // ── validation + normalization ──────────────────────────────────────────────
 
-// Size caps (§9): prose slots invite a pasted brand book, and every one is read
-// on each generation turn once CON-245 lands. Tune there.
-const (
-	maxBrandSampleBytes     = 2 << 10 // 2 KB
-	maxBrandSamples         = 20
-	maxGuardrailStmtBytes   = 1 << 10 // 1 KB
-	maxGuardrailStmts       = 50
-	maxBrandBannedWords     = 100
-	maxBrandDisclaimerBytes = 2 << 10 // 2 KB
-	maxBrandLineBytes       = 1 << 10 // 1 KB
-	maxBrandChannelNotes    = 50
-)
-
 var (
-	voiceEmoji     = map[string]bool{"never": true, "sparingly": true, "freely": true}
-	voiceHashtags  = map[string]bool{"never": true, "few": true, "many": true}
-	voiceFormality = map[string]bool{"casual": true, "neutral": true, "formal": true}
-	voicePerson    = map[string]bool{"i": true, "we": true, "third": true}
-	voiceLength    = map[string]bool{"short": true, "medium": true, "long": true}
-	templateRoles  = map[string]bool{"foreground": true, "background": true}
-	logoJobs       = map[string]bool{"profile": true, "watermark": true, "mark": true}
+	templateRoles = map[string]bool{"foreground": true, "background": true}
+	logoJobs      = map[string]bool{"profile": true, "watermark": true, "mark": true}
 
 	hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 )
 
 func unprocessable(format string, args ...any) error {
 	return fiber.NewError(fiber.StatusUnprocessableEntity, fmt.Sprintf(format, args...))
-}
-
-// checkEnum accepts an empty value (unset) or a member of the set.
-func checkEnum(field, val string, set map[string]bool) error {
-	if val == "" || set[val] {
-		return nil
-	}
-	return unprocessable("invalid %s: %q", field, val)
 }
 
 func normalizeVoice(v *models.BrandVoice) {
@@ -501,44 +476,7 @@ func normalizeVoice(v *models.BrandVoice) {
 }
 
 func validateVoice(v *models.BrandVoice) error {
-	if strings.TrimSpace(v.Name) == "" {
-		return unprocessable("name is required")
-	}
-	if len(v.WhenToUse) > maxBrandLineBytes {
-		return unprocessable("whenToUse exceeds %d KB", maxBrandLineBytes>>10)
-	}
-	if len(v.Samples) > maxBrandSamples {
-		return unprocessable("at most %d samples", maxBrandSamples)
-	}
-	for _, s := range v.Samples {
-		if len(s) > maxBrandSampleBytes {
-			return unprocessable("a sample exceeds %d KB", maxBrandSampleBytes>>10)
-		}
-	}
-	if len(v.ChannelNotes) > maxBrandChannelNotes {
-		return unprocessable("at most %d channel notes", maxBrandChannelNotes)
-	}
-	for platform, note := range v.ChannelNotes {
-		if len(note) > maxBrandLineBytes {
-			return unprocessable("channel note for %q exceeds %d KB", platform, maxBrandLineBytes>>10)
-		}
-	}
-	if err := checkEnum("rules.emoji", v.Rules.Emoji, voiceEmoji); err != nil {
-		return err
-	}
-	if err := checkEnum("rules.hashtags", v.Rules.Hashtags, voiceHashtags); err != nil {
-		return err
-	}
-	if err := checkEnum("rules.formality", v.Rules.Formality, voiceFormality); err != nil {
-		return err
-	}
-	if err := checkEnum("rules.person", v.Rules.Person, voicePerson); err != nil {
-		return err
-	}
-	if err := checkEnum("rules.length", v.Rules.Length, voiceLength); err != nil {
-		return err
-	}
-	return nil
+	return ruleError(brandcheck.Voice(v))
 }
 
 func normalizeAudience(a *models.BrandAudience) {
@@ -548,15 +486,7 @@ func normalizeAudience(a *models.BrandAudience) {
 }
 
 func validateAudience(a *models.BrandAudience) error {
-	if strings.TrimSpace(a.Name) == "" {
-		return unprocessable("name is required")
-	}
-	for _, line := range []string{a.Who, a.ReadsOn, a.ScrollsPastWhen, a.BelievesWhen} {
-		if len(line) > maxBrandLineBytes {
-			return unprocessable("a field exceeds %d KB", maxBrandLineBytes>>10)
-		}
-	}
-	return nil
+	return ruleError(brandcheck.Audience(a))
 }
 
 func normalizeGuardrails(g *models.BrandGuardrails) {
@@ -575,35 +505,15 @@ func normalizeGuardrails(g *models.BrandGuardrails) {
 // (non-nil). Rules and facts all empty is a 422: DELETE is the way to clear
 // the rules.
 func validateGuardrails(g *models.BrandGuardrails, facts []string) error {
-	if len(facts) == 0 && len(g.MayClaim) == 0 && len(g.NeverClaim) == 0 &&
-		len(g.BannedWords) == 0 && strings.TrimSpace(g.Disclaimer) == "" {
-		return unprocessable("guardrails are empty — use DELETE to clear the section")
+	return ruleError(brandcheck.Guardrails(g, facts))
+}
+
+// ruleError turns a broken brand rule into a 422.
+func ruleError(err error) error {
+	if err == nil {
+		return nil
 	}
-	if len(facts) > repository.MaxBrandFacts {
-		return unprocessable("at most %d facts per workspace", repository.MaxBrandFacts)
-	}
-	for _, s := range facts {
-		if len(s) > maxGuardrailStmtBytes {
-			return unprocessable("a statement exceeds %d KB", maxGuardrailStmtBytes>>10)
-		}
-	}
-	for _, list := range []models.StringSlice{g.MayClaim, g.NeverClaim} {
-		if len(list) > maxGuardrailStmts {
-			return unprocessable("at most %d statements per list", maxGuardrailStmts)
-		}
-		for _, s := range list {
-			if len(s) > maxGuardrailStmtBytes {
-				return unprocessable("a statement exceeds %d KB", maxGuardrailStmtBytes>>10)
-			}
-		}
-	}
-	if len(g.BannedWords) > maxBrandBannedWords {
-		return unprocessable("at most %d banned words", maxBrandBannedWords)
-	}
-	if len(g.Disclaimer) > maxBrandDisclaimerBytes {
-		return unprocessable("disclaimer exceeds %d KB", maxBrandDisclaimerBytes>>10)
-	}
-	return nil
+	return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 }
 
 // normalizeFactStatements trims, drops blanks and de-duplicates, keeping the
