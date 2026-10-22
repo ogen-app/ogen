@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/usecase/brandsource"
 	"github.com/ogen-app/ogen/src/usecase/ingest"
 )
 
@@ -76,6 +77,15 @@ type AudioAssetsHandler struct {
 	// limiter gates content_bank_assets at presign and media_storage_bytes at
 	// finalize on the real uploaded size. Nil-safe.
 	limiter *entitlements.Limiter
+	// brandSources tags presigns sent with purpose=brand_source. Nil marks
+	// them without the tag.
+	brandSources *brandsource.Marker
+}
+
+// SetBrandSources binds the brand-source tagger.
+func (h *AudioAssetsHandler) SetBrandSources(m *brandsource.Marker) *AudioAssetsHandler {
+	h.brandSources = m
+	return h
 }
 
 func NewAudioAssetsHandler(
@@ -123,6 +133,9 @@ func (h *AudioAssetsHandler) configured() bool {
 type presignAudioRequest struct {
 	Filename    string `json:"filename"     validate:"required"`
 	ContentType string `json:"content_type"`
+	// Purpose brand_source tags the asset "Brand source" and keeps it out of
+	// automatic analysis (CON-399).
+	Purpose string `json:"purpose"`
 }
 
 type presignAudioResponse struct {
@@ -173,6 +186,10 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	mark, err := brandSourceMark(c, h.brandSources, strings.TrimSpace(req.Purpose), session.UserID)
+	if err != nil {
+		return err
+	}
 	id, err := models.NewID()
 	if err != nil {
 		return err
@@ -200,6 +217,9 @@ func (h *AudioAssetsHandler) Presign(c *fiber.Ctx) error {
 		TagIDs:    models.StringSlice{},
 		Tags:      []models.Tag{},
 		CreatedBy: session.UserID,
+	}
+	if mark != nil {
+		mark.Apply(asset)
 	}
 	// A size-0 file row records the pending original so the object key is known
 	// at finalize (real size is stamped there via Head). Written with the asset

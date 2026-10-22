@@ -314,18 +314,19 @@ func (r *assetAnalysisRepository) CountRunsSince(ctx context.Context, since time
 
 // missingLensesSQL finds the absent and stranded lenses of active tenants. A
 // NULL type is legacy markdown, analysable like models.IsAnalyzableAssetType
-// says. A stranded lens is looked up against River's own job table (same
-// database), matching the analyze_asset job args.
+// says. A brand source never gets a workspace lens on its own (its ingest
+// writes a skipped one). A stranded lens is looked up against River's own job
+// table (same database), matching the analyze_asset job args.
 const missingLensesSQL = `
 WITH live AS (
-	SELECT a.tenant_id, a.id, a.created_at
+	SELECT a.tenant_id, a.id, a.created_at, a.origin
 	FROM assets AS a
 	JOIN tenants AS t ON t.id = a.tenant_id AND t.status = ? AND t.deleted_at IS NULL
 	WHERE (a.type IS NULL OR a.type IN (?)) AND a.status IN (?)
 ), missing AS (
 	SELECT l.tenant_id, l.id AS asset_id, NULL::text AS campaign_id, l.created_at
 	FROM live AS l
-	WHERE NOT EXISTS (
+	WHERE l.origin <> ? AND NOT EXISTS (
 		SELECT 1 FROM asset_analyses AS aa WHERE aa.asset_id = l.id AND aa.campaign_id IS NULL)
 	UNION ALL
 	SELECT l.tenant_id, l.id, c.id, l.created_at
@@ -366,6 +367,7 @@ func (r *assetAnalysisRepository) ListMissingLenses(ctx context.Context, perTena
 		models.TenantStatusActive,
 		bun.List(models.AnalyzableAssetTypes),
 		bun.List(models.AnalyzableAssetStatuses),
+		models.AssetOriginBrandDistill,
 		models.AssetAnalysisStatusPending,
 		time.Now().Add(-pendingGrace),
 		analyzeAssetJobKind,

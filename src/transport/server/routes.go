@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/assets"
+	"github.com/ogen-app/ogen/src/usecase/brandsource"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/linkpreview"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
@@ -154,7 +155,9 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 	}
 
 	d.newAssetsHandler().Register(app)
-	handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, d.store, d.db, audioJobs, d.auth, lim).Register(app)
+	handlers.NewAudioAssetsHandler(r.pieceRepo, r.assetFileRepo, r.audioExtractionRepo, r.audioSegmentRepo, r.utteranceRepo, d.store, d.db, audioJobs, d.auth, lim).
+		SetBrandSources(d.brandSources()).
+		Register(app)
 	handlers.NewAssetsImageHandler(r.pieceRepo, r.assetFileRepo, r.imageExtractionRepo, r.imageBlockRepo, d.store, d.db, imgJobs, d.clients.imagePreparer(), d.usage.recorder, d.cfg.AltTextGenMaxChars, d.auth).Register(app)
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).WithEventHub(d.hub).Register(app)
@@ -253,7 +256,13 @@ func (d *deps) newAssetsHandler() *handlers.AssetsHandler {
 		ImageReembed: reembed,
 		Analyses:     r.assetAnalysisRepo,
 		PublicRead:   d.cfg.StoragePublicRead,
+		BrandSources: d.brandSources(),
 	})
+}
+
+// brandSources tags the assets brought in to read a brand from.
+func (d *deps) brandSources() *brandsource.Marker {
+	return &brandsource.Marker{Tags: d.r.tagRepo}
 }
 
 // newPostAttachmentsHandler builds the post attachments handler with
