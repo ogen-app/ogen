@@ -60,14 +60,28 @@ func IsServiceIngestedAssetType(t *string) bool {
 // AssetOriginFigma marks an asset a Figma plugin sent.
 const AssetOriginFigma = "figma"
 
+// AssetOriginBrandDistill marks an asset brought in to read a brand from: a
+// file uploaded from the Brand offer, or a page its website read imported.
+// Automatic analysis skips these.
+const AssetOriginBrandDistill = "brand_distill"
+
+// Roles of a brand-distill asset (AssetOriginRef.Role).
+const (
+	AssetRoleWebsite  = "website"
+	AssetRoleDocument = "document"
+)
+
 // AssetOriginRef points an asset back at its source. For Figma: the node
 // (frame) id and name, the document name and, only from private org builds
-// that can read it, the file key.
+// that can read it, the file key. For a brand-distill asset: the run that
+// read it (empty until the run is created) and its role.
 type AssetOriginRef struct {
-	NodeID   string `json:"node_id"`
-	NodeName string `json:"node_name"`
+	NodeID   string `json:"node_id,omitempty"`
+	NodeName string `json:"node_name,omitempty"`
 	FileName string `json:"file_name,omitempty"`
 	FileKey  string `json:"file_key,omitempty"`
+	RunID    string `json:"run_id,omitempty"`
+	Role     string `json:"role,omitempty"`
 }
 
 type Asset struct {

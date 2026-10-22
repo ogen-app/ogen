@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/brandsource"
 )
 
 // Reasons a lens is (re)analysed; they label jobs and logs.
@@ -36,6 +37,9 @@ var (
 	debouncedTotal        = expvar.NewInt("ogen_asset_analysis_debounced_total")
 	backfillEnqueuedTotal = expvar.NewInt("ogen_asset_analysis_backfill_enqueued_total")
 	retryCreatedTotal     = expvar.NewInt("ogen_asset_analysis_retry_created_total")
+	// brandSourceSkippedTotal counts brand sources whose automatic workspace
+	// analysis was skipped.
+	brandSourceSkippedTotal = expvar.NewInt("ogen_asset_analysis_brand_source_skipped_total")
 )
 
 // Jobs enqueues the analysis jobs. *queues.Enqueuer implements it.
@@ -68,7 +72,9 @@ func (s *Service) SetJobs(jobs Jobs, rebriefDebounce, editDebounce time.Duration
 }
 
 // ScheduleAsset queues every lens of an asset whose text has just been
-// (re)ingested: the workspace lens and one per campaign holding it.
+// (re)ingested: the workspace lens and one per campaign holding it. A brand
+// source's workspace lens is skipped instead; its campaign lenses run, since
+// attaching it to a campaign was asked for.
 func (s *Service) ScheduleAsset(ctx context.Context, tenantID, assetID string) {
 	ctx = tenantctx.With(ctx, tenantID)
 	asset, err := s.repos.Assets.GetByID(ctx, assetID)
@@ -79,7 +85,11 @@ func (s *Service) ScheduleAsset(ctx context.Context, tenantID, assetID string) {
 	if err != nil {
 		s.warn(ctx, "list the asset's campaigns", assetID, err)
 	}
-	s.enqueue(ctx, Lens{TenantID: tenantID, AssetID: assetID}, ReasonIngested)
+	if brandsource.IsSource(asset) {
+		s.skipBrandSource(ctx, Lens{TenantID: tenantID, AssetID: assetID})
+	} else {
+		s.enqueue(ctx, Lens{TenantID: tenantID, AssetID: assetID}, ReasonIngested)
+	}
 	for _, id := range campaignIDs {
 		s.enqueue(ctx, Lens{TenantID: tenantID, AssetID: assetID, CampaignID: new(id)}, ReasonIngested)
 	}
@@ -105,6 +115,10 @@ func (s *Service) ScheduleEdited(ctx context.Context, tenantID, assetID string) 
 	}
 	at := s.now().Add(s.editDebounce)
 	lenses := []*string{nil}
+	if brandsource.IsSource(asset) {
+		s.skipBrandSource(ctx, Lens{TenantID: tenantID, AssetID: assetID})
+		lenses = nil
+	}
 	for _, id := range campaignIDs {
 		lenses = append(lenses, new(id))
 	}
@@ -272,6 +286,29 @@ func (s *Service) Backfill(ctx context.Context, perTenant int) (int, error) {
 	}
 	backfillEnqueuedTotal.Add(int64(queued))
 	return queued, nil
+}
+
+// brandSourceReason is what a skipped brand source's lens says.
+const brandSourceReason = "Brought in to read the brand from; analyse it when you want ideas from it"
+
+// skipBrandSource records a brand source's workspace lens as skipped, so the
+// asset page can say why and offer to analyse it. A lens that already holds
+// a reading (or a run) is left alone.
+func (s *Service) skipBrandSource(ctx context.Context, l Lens) {
+	row, err := s.repos.Analyses.Ensure(ctx, s.db, l.AssetID, nil)
+	if err != nil {
+		s.warn(ctx, "create the skipped lens", l.AssetID, err)
+		return
+	}
+	if row.Status != models.AssetAnalysisStatusPending {
+		return
+	}
+	if err := s.repos.Analyses.SetStatus(ctx, s.db, row.ID, models.AssetAnalysisStatusSkipped, models.AnalysisCodeBrandSource, brandSourceReason); err != nil {
+		s.warn(ctx, "skip the brand source's lens", l.AssetID, err)
+		return
+	}
+	brandSourceSkippedTotal.Add(1)
+	s.publish(ctx, l, row.ID, models.AssetAnalysisStatusSkipped, 0)
 }
 
 // enqueue makes sure the lens row exists, so readers see it pending, and

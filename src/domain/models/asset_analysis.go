@@ -46,6 +46,9 @@ const (
 	AnalysisCodeSourceUnavailable   = "source_unavailable"
 	AnalysisCodeModelUnavailable    = "model_unavailable"
 	AnalysisCodeModelRefused        = "model_refused"
+	// AnalysisCodeBrandSource skips the automatic workspace analysis of an
+	// asset brought in to read a brand from; it runs when asked for.
+	AnalysisCodeBrandSource = "brand_source"
 )
 
 // AnalyzableAssetTypes are the asset types that carry text worth analysing.

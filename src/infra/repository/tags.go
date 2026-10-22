@@ -20,6 +20,10 @@ type TagRepository interface {
 	GetByIDs(ctx context.Context, ids []string) (map[string]models.Tag, error)
 	Update(ctx context.Context, tag *models.Tag) error
 	Delete(ctx context.Context, id string) (bool, error)
+	// FindOrCreateByName returns the tenant's oldest tag named name, ignoring
+	// case, or creates one by createdBy. Tag names are not unique, so a race
+	// may create two; both work.
+	FindOrCreateByName(ctx context.Context, name, color, createdBy string) (*models.Tag, error)
 }
 
 type tagRepository struct {
@@ -74,6 +78,31 @@ func (r *tagRepository) GetByID(ctx context.Context, id string) (*models.Tag, er
 func (r *tagRepository) Update(ctx context.Context, tag *models.Tag) error {
 	_, err := r.db.NewUpdate().Model(tag).WherePK().Exec(ctx)
 	return err
+}
+
+func (r *tagRepository) FindOrCreateByName(ctx context.Context, name, color, createdBy string) (*models.Tag, error) {
+	tag := new(models.Tag)
+	err := r.db.NewSelect().
+		Model(tag).
+		Where("lower(t.name) = lower(?)", name).
+		OrderExpr("t.created_at ASC, t.id ASC").
+		Limit(1).
+		Scan(ctx)
+	if err == nil {
+		return tag, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return nil, err
+	}
+	tag = &models.Tag{ID: id, Name: name, Color: color, CreatedBy: createdBy}
+	if err := r.Create(ctx, tag); err != nil {
+		return nil, err
+	}
+	return tag, nil
 }
 
 func (r *tagRepository) Delete(ctx context.Context, id string) (bool, error) {

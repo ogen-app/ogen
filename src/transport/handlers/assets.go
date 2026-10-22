@@ -26,6 +26,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/textgist"
+	"github.com/ogen-app/ogen/src/usecase/brandsource"
 	"github.com/ogen-app/ogen/src/usecase/ingest"
 )
 
@@ -165,6 +166,9 @@ type AssetsHandler struct {
 	imgReembed ImageReembedEnqueuer
 	// chunks backs GET /:id/chunks. Nil answers 409.
 	chunks AssetChunkLister
+	// brandSources tags uploads sent with purpose=brand_source. Nil marks
+	// them without the tag.
+	brandSources *brandsource.Marker
 }
 
 // AssetsOptions carries the handler's nil-safe collaborators.
@@ -180,6 +184,9 @@ type AssetsOptions struct {
 	// PublicRead serves public object URLs instead of presigned ones; set it
 	// only when the bucket allows anonymous reads (STORAGE_PUBLIC_READ).
 	PublicRead bool
+	// BrandSources tags uploads sent with purpose=brand_source; nil marks
+	// them without the tag.
+	BrandSources *brandsource.Marker
 }
 
 func NewAssetsHandler(
@@ -198,23 +205,24 @@ func NewAssetsHandler(
 	opts AssetsOptions,
 ) *AssetsHandler {
 	return &AssetsHandler{
-		limiter:    opts.Limiter,
-		chunks:     opts.Chunks,
-		imgReembed: opts.ImageReembed,
-		analyses:   opts.Analyses,
-		publicRead: opts.PublicRead,
-		repo:       repo,
-		fileRepo:   fileRepo,
-		imageRepo:  imageRepo,
-		storage:    store,
-		db:         db,
-		auth:       auth,
-		onSave:     onSave,
-		pdfJobs:    pdfJobs,
-		urlJobs:    urlJobs,
-		scrapeGate: scrapeGate,
-		docJobs:    docJobs,
-		imgJobs:    imgJobs,
+		limiter:      opts.Limiter,
+		chunks:       opts.Chunks,
+		imgReembed:   opts.ImageReembed,
+		analyses:     opts.Analyses,
+		publicRead:   opts.PublicRead,
+		brandSources: opts.BrandSources,
+		repo:         repo,
+		fileRepo:     fileRepo,
+		imageRepo:    imageRepo,
+		storage:      store,
+		db:           db,
+		auth:         auth,
+		onSave:       onSave,
+		pdfJobs:      pdfJobs,
+		urlJobs:      urlJobs,
+		scrapeGate:   scrapeGate,
+		docJobs:      docJobs,
+		imgJobs:      imgJobs,
 	}
 }
 
@@ -474,7 +482,8 @@ type uploadResponse struct {
 // @Accept       multipart/form-data
 // @Produce      json
 // @Security     CookieAuth
-// @Param        files  formData  file  true  "Markdown, PDF, image, or document file(s)"
+// @Param        files    formData  file    true   "Markdown, PDF, image, or document file(s)"
+// @Param        purpose  formData  string  false  "brand_source tags every file \"Brand source\" and keeps it out of automatic analysis (CON-399)"
 // @Success      201    {object}  uploadResponse
 // @Failure      400    {object}  map[string]string
 // @Failure      401    {object}  map[string]string
@@ -493,6 +502,10 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	mark, err := h.uploadMark(c, form.Value["purpose"], session.UserID)
+	if err != nil {
+		return err
+	}
 	results := make([]uploadResult, 0, len(files))
 	for _, fh := range files {
 		res := uploadResult{Filename: fh.Filename}
@@ -507,13 +520,13 @@ func (h *AssetsHandler) Upload(c *fiber.Ctx) error {
 
 		switch detectUploadKind(fh.Filename) {
 		case uploadKindMarkdown:
-			res = h.processMarkdownUpload(c, fh, session)
+			res = h.processMarkdownUpload(c, fh, session, mark)
 		case uploadKindPDF:
-			res = h.processPDFUpload(c, fh, session)
+			res = h.processPDFUpload(c, fh, session, mark)
 		case uploadKindImage:
-			res = h.processImageUpload(c, fh, session)
+			res = h.processImageUpload(c, fh, session, mark)
 		case uploadKindDocument:
-			res = h.processDocumentUpload(c, fh, session)
+			res = h.processDocumentUpload(c, fh, session, mark)
 		default:
 			res = res.fail(models.UploadCodeExtensionNotAllowed, "only .md, .pdf, image, and office/text document files are accepted")
 		}
@@ -614,13 +627,13 @@ func (h *AssetsHandler) ingester() *ingest.Service {
 }
 
 // newUploadAsset builds a pending asset of typ titled after the uploaded
-// file's base name.
-func newUploadAsset(filename, typ, content, createdBy string) (*models.Asset, error) {
+// file's base name, stamped with mark when one is given.
+func newUploadAsset(filename, typ, content, createdBy string, mark *brandsource.Mark) (*models.Asset, error) {
 	id, err := models.NewID()
 	if err != nil {
 		return nil, err
 	}
-	return &models.Asset{
+	a := &models.Asset{
 		ID:        id,
 		Title:     strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename)),
 		Content:   content,
@@ -629,10 +642,42 @@ func newUploadAsset(filename, typ, content, createdBy string) (*models.Asset, er
 		TagIDs:    models.StringSlice{},
 		Tags:      []models.Tag{},
 		CreatedBy: createdBy,
-	}, nil
+	}
+	if mark != nil {
+		mark.Apply(a)
+	}
+	return a, nil
 }
 
-func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
+// uploadMark reads an upload's purpose. purpose=brand_source marks every file
+// of the request as a brand source; no purpose marks nothing. Anything else
+// is a 422.
+func (h *AssetsHandler) uploadMark(c *fiber.Ctx, values []string, userID string) (*brandsource.Mark, error) {
+	var purpose string
+	if len(values) > 0 {
+		purpose = strings.TrimSpace(values[0])
+	}
+	return brandSourceMark(c, h.brandSources, purpose, userID)
+}
+
+// brandSourceMark resolves the mark an upload's purpose asks for, nil when
+// it asks for none.
+func brandSourceMark(c *fiber.Ctx, marker *brandsource.Marker, purpose, userID string) (*brandsource.Mark, error) {
+	marked, err := brandsource.ParsePurpose(purpose)
+	if err != nil {
+		return nil, fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+	}
+	if !marked {
+		return nil, nil
+	}
+	mark, err := marker.Prepare(reqCtx(c), models.AssetRoleDocument, "", userID)
+	if err != nil {
+		return nil, err
+	}
+	return &mark, nil
+}
+
+func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session, mark *brandsource.Mark) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
 	if fh.Size > maxMarkdownUploadSize {
@@ -644,7 +689,7 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 		return res.fail(models.UploadCodeInternalError, "could not read file")
 	}
 
-	asset, err := newUploadAsset(fh.Filename, models.AssetTypeMarkdown, string(raw), session.UserID)
+	asset, err := newUploadAsset(fh.Filename, models.AssetTypeMarkdown, string(raw), session.UserID, mark)
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
@@ -659,7 +704,7 @@ func (h *AssetsHandler) processMarkdownUpload(c *fiber.Ctx, fh *multipart.FileHe
 	return res.created(asset)
 }
 
-func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
+func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session, mark *brandsource.Mark) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
 	if fh.Size > maxPDFUploadSize {
@@ -674,7 +719,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 		return res.fail(models.UploadCodeInvalidFile, "file is not a valid PDF")
 	}
 
-	asset, err := newUploadAsset(fh.Filename, models.AssetTypePDF, "[]", session.UserID)
+	asset, err := newUploadAsset(fh.Filename, models.AssetTypePDF, "[]", session.UserID, mark)
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
@@ -716,7 +761,7 @@ func (h *AssetsHandler) processPDFUpload(c *fiber.Ctx, fh *multipart.FileHeader,
 // so the handler only does a light OLE2 reject (the common legacy-.doc /
 // encrypted-container case) for fast, clear feedback. Bytes land at
 // assets/{id}/original.<ext>.
-func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
+func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session, mark *brandsource.Mark) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
 	ext := strings.ToLower(filepath.Ext(fh.Filename))
@@ -751,7 +796,7 @@ func (h *AssetsHandler) processDocumentUpload(c *fiber.Ctx, fh *multipart.FileHe
 		return res.fail(models.UploadCodeUnsupportedMediaType, "legacy binary or password-protected Office files are not supported — save as unprotected .docx/.xlsx/.pptx and re-upload")
 	}
 
-	asset, err := newUploadAsset(fh.Filename, models.AssetTypeDocument, "[]", session.UserID)
+	asset, err := newUploadAsset(fh.Filename, models.AssetTypeDocument, "[]", session.UserID, mark)
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
@@ -792,14 +837,14 @@ func isOLE2(b []byte) bool {
 // service (imgJobs nil) fails the upload. The SHA-256 of the original bytes is
 // computed here so upload-time dedupe works despite the async processing.
 // Bytes land at assets/{id}/original.<ext>.
-func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session) uploadResult {
+func (h *AssetsHandler) processImageUpload(c *fiber.Ctx, fh *multipart.FileHeader, session *models.Session, mark *brandsource.Mark) uploadResult {
 	res := uploadResult{Filename: fh.Filename}
 
 	mimeType, raw, fail := h.readImageUpload(fh)
 	if fail != nil {
 		return res.fail(fail.code, fail.msg)
 	}
-	return h.ingestImage(c, session, imageIngest{Filename: fh.Filename, MimeType: mimeType, Raw: raw})
+	return h.ingestImage(c, session, imageIngest{Filename: fh.Filename, MimeType: mimeType, Raw: raw, Mark: mark})
 }
 
 // imageIngest is a validated image ready to become an IMG asset: the name it
@@ -813,6 +858,8 @@ type imageIngest struct {
 	Origin    string
 	OriginRef *models.AssetOriginRef
 	AltText   string
+	// Mark stamps the new asset as a brand source; it overrides Origin.
+	Mark *brandsource.Mark
 }
 
 // ingestImage stores a validated image as a pending IMG asset and enqueues its
@@ -831,11 +878,14 @@ func (h *AssetsHandler) ingestImage(c *fiber.Ctx, session *models.Session, in im
 		return res.created(a)
 	}
 
-	asset, err := newUploadAsset(in.Filename, models.AssetTypeImage, "", session.UserID) // description filled by the job
+	asset, err := newUploadAsset(in.Filename, models.AssetTypeImage, "", session.UserID, nil) // description filled by the job
 	if err != nil {
 		return res.fail(models.UploadCodeInternalError, "could not generate id")
 	}
 	asset.Origin, asset.OriginRef = in.Origin, in.OriginRef
+	if in.Mark != nil {
+		in.Mark.Apply(asset)
+	}
 	if in.AltText != "" {
 		// A user-written alt text: process_image leaves it in place.
 		asset.AltText, asset.AltTextEditedByUser = in.AltText, true
@@ -995,7 +1045,7 @@ func (h *AssetsHandler) CreateURL(c *fiber.Ctx) error {
 		return err
 	}
 
-	asset, err := newUploadAsset("", models.AssetTypeURL, "", session.UserID)
+	asset, err := newUploadAsset("", models.AssetTypeURL, "", session.UserID, nil)
 	if err != nil {
 		return err
 	}

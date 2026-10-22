@@ -19,7 +19,9 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/handlers"
+	"github.com/ogen-app/ogen/src/usecase/brandsource"
 )
 
 // pdfEnqueueCall captures one EnqueueProcessPDFTx invocation.
@@ -82,7 +84,9 @@ var _ = Describe("AssetsHandler upload", Ordered, Serial, func() {
 		enq = &fakePDFEnqueuer{}
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), store, db, enq, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
+		handlers.NewAssetsHandler(assetRepo, repository.NewAssetFileRepository(db), repository.NewAssetImageRepository(db), store, db, enq, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{
+			BrandSources: &brandsource.Marker{Tags: tagRepo},
+		}).Register(app)
 
 		seedTenantUser(db, "Admin", "up@example.com", "pw-password")
 
@@ -157,6 +161,67 @@ var _ = Describe("AssetsHandler upload", Ordered, Serial, func() {
 		Expect(results[0]["filename"]).To(Equal("first.md"))
 		Expect(results[0]["asset"].(map[string]any)["title"]).To(Equal("first"))
 		Expect(results[1]["asset"].(map[string]any)["title"]).To(Equal("second"))
+	})
+
+	Describe("purpose=brand_source", func() {
+		postWithPurpose := func(purpose string, files ...struct{ Name, Body string }) *http.Response {
+			buf := &bytes.Buffer{}
+			w := multipart.NewWriter(buf)
+			Expect(w.WriteField("purpose", purpose)).To(Succeed())
+			for _, f := range files {
+				fw, err := w.CreateFormFile("files", f.Name)
+				Expect(err).NotTo(HaveOccurred())
+				_, err = io.Copy(fw, strings.NewReader(f.Body))
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(w.Close()).To(Succeed())
+			return post(buf, w.FormDataContentType())
+		}
+
+		AfterEach(func() {
+			_, err := db.NewDelete().TableExpr("tags").Where("1 = 1").Exec(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("marks every file as a brand source and tags it once per workspace", func() {
+			resp := postWithPurpose("brand_source",
+				struct{ Name, Body string }{"voice.md", "# Our voice\n\nPlain words.\n"},
+				struct{ Name, Body string }{"rules.md", "Never promise results.\n"},
+			)
+			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+			results := decode(resp)
+			Expect(results).To(HaveLen(2))
+
+			var tags []models.Tag
+			Expect(db.NewSelect().Model(&tags).Scan(tenantctx.With(context.Background(), models.DefaultTenantID))).To(Succeed())
+			Expect(tags).To(HaveLen(1))
+			Expect(tags[0].Name).To(Equal(brandsource.TagName))
+
+			for _, r := range results {
+				var a models.Asset
+				Expect(db.NewSelect().Model(&a).Where("id = ?", r["asset_id"]).
+					Scan(tenantctx.With(context.Background(), models.DefaultTenantID))).To(Succeed())
+				Expect(a.Origin).To(Equal(models.AssetOriginBrandDistill))
+				Expect(a.OriginRef).NotTo(BeNil())
+				Expect(a.OriginRef.Role).To(Equal(models.AssetRoleDocument))
+				Expect([]string(a.TagIDs)).To(ConsistOf(tags[0].ID))
+			}
+		})
+
+		It("leaves a plain upload unmarked", func() {
+			resp := postWithPurpose("", struct{ Name, Body string }{"plain.md", "text\n"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
+			r := decode(resp)[0]
+			Expect(r["asset"].(map[string]any)["origin"]).To(Equal(""))
+		})
+
+		It("rejects an unknown purpose before storing anything", func() {
+			resp := postWithPurpose("ideas", struct{ Name, Body string }{"x.md", "text\n"})
+			Expect(resp.StatusCode).To(Equal(fiber.StatusUnprocessableEntity))
+			n, err := db.NewSelect().TableExpr("assets").Count(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(n).To(BeZero())
+		})
 	})
 
 	It("rejects unsupported files per file but still processes good ones", func() {
