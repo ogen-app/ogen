@@ -57,7 +57,7 @@ func (f *fakeBrandDistiller) Discard(context.Context, string, string) (*models.B
 	return f.run, f.err
 }
 
-var _ = Describe("Brand distillation (CON-399)", Ordered, Serial, func() {
+var _ = Describe("Brand distillation", Ordered, Serial, func() {
 	var (
 		app    *fiber.App
 		db     *bun.DB

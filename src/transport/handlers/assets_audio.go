@@ -134,7 +134,7 @@ type presignAudioRequest struct {
 	Filename    string `json:"filename"     validate:"required"`
 	ContentType string `json:"content_type"`
 	// Purpose brand_source tags the asset "Brand source" and keeps it out of
-	// automatic analysis (CON-399).
+	// automatic analysis.
 	Purpose string `json:"purpose"`
 }
 

@@ -16427,7 +16427,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "purpose": {
-                    "description": "Purpose brand_source tags the asset \"Brand source\" and keeps it out of\nautomatic analysis (CON-399).",
+                    "description": "Purpose brand_source tags the asset \"Brand source\" and keeps it out of\nautomatic analysis.",
                     "type": "string"
                 }
             }

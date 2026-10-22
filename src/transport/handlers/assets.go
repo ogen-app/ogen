@@ -482,7 +482,7 @@ type uploadResponse struct {
 // @Produce      json
 // @Security     CookieAuth
 // @Param        files    formData  file    true   "Markdown, PDF, image, or document file(s)"
-// @Param        purpose  formData  string  false  "brand_source tags every file \"Brand source\" and keeps it out of automatic analysis (CON-399)"
+// @Param        purpose  formData  string  false  "brand_source tags every file \"Brand source\" and keeps it out of automatic analysis"
 // @Success      201    {object}  uploadResponse
 // @Failure      400    {object}  map[string]string
 // @Failure      401    {object}  map[string]string
