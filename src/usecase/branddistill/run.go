@@ -13,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
 	"github.com/ogen-app/ogen/src/infra/firecrawl"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -37,10 +38,18 @@ const (
 	limitReasonText = "This month's brand reads are used up."
 )
 
-// Run moves a run on. It returns nil once the run is settled or waiting is
-// done for this call, ErrWaiting while its sources ingest, and other errors
-// when the job should retry.
+// Run moves a run on. It returns nil once the run is settled or closed under
+// it, ErrWaiting while its sources ingest, and other errors when the job
+// should retry.
 func (s *Service) Run(ctx context.Context, tenantID, runID string) error {
+	err := s.run(ctx, tenantID, runID)
+	if errors.Is(err, repository.ErrBrandDistillClosed) {
+		return nil
+	}
+	return err
+}
+
+func (s *Service) run(ctx context.Context, tenantID, runID string) error {
 	ctx = tenantctx.With(ctx, tenantID)
 	run, err := s.repos.Runs.Get(ctx, runID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -413,6 +422,7 @@ func (s *Service) compose(ctx context.Context, run *models.BrandDistillRun) erro
 	if err := s.save(ctx, run, "status", "proposal", "model_ids", "failure_code", "failure_reason"); err != nil {
 		return err
 	}
+	s.supersedeParent(ctx, run)
 	droppedTotal.Add("ungrounded", int64(proposal.Dropped.Ungrounded))
 	droppedTotal.Add("duplicate", int64(proposal.Dropped.Duplicate))
 	droppedTotal.Add("limit", int64(proposal.Dropped.Limit))

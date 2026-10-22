@@ -15,6 +15,10 @@ import (
 // being worked on.
 var ErrBrandDistillOpen = errors.New("a brand distillation run is already open")
 
+// ErrBrandDistillClosed means a run being worked on was closed meanwhile, e.g.
+// discarded, so the job's write did not land.
+var ErrBrandDistillClosed = errors.New("the brand distillation run is no longer open")
+
 const brandDistillOpenIndex = "brand_distill_runs_open_uq"
 
 // BrandDistillRepository persists brand distillation runs and the ledger
@@ -36,6 +40,9 @@ type BrandDistillRepository interface {
 	// Save writes the named columns of run and stamps updated_at; a closed
 	// status also stamps finished_at once.
 	Save(ctx context.Context, db bun.IDB, run *models.BrandDistillRun, columns ...string) error
+	// SaveOpen is Save for the job: it writes only while the stored run is
+	// still open, and returns ErrBrandDistillClosed when it is not.
+	SaveOpen(ctx context.Context, run *models.BrandDistillRun, columns ...string) error
 	// ExpireReadyBefore marks every tenant's ready runs finished before cutoff
 	// expired and drops their working state. It returns how many it expired.
 	ExpireReadyBefore(ctx context.Context, cutoff time.Time) (int64, error)
@@ -128,6 +135,26 @@ func (r *brandDistillRepository) Lock(ctx context.Context, tx bun.Tx, id string)
 }
 
 func (r *brandDistillRepository) Save(ctx context.Context, db bun.IDB, run *models.BrandDistillRun, columns ...string) error {
+	_, err := update(db, run, columns).Exec(ctx)
+	return err
+}
+
+func (r *brandDistillRepository) SaveOpen(ctx context.Context, run *models.BrandDistillRun, columns ...string) error {
+	res, err := update(r.db, run, columns).
+		Where("bdr.status IN (?)", bun.List(models.BrandDistillOpenStatuses)).
+		Exec(ctx)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrBrandDistillClosed
+	}
+	return nil
+}
+
+// update writes the named columns and stamps updated_at; a closed status also
+// stamps finished_at once.
+func update(db bun.IDB, run *models.BrandDistillRun, columns []string) *bun.UpdateQuery {
 	now := time.Now().UTC()
 	run.UpdatedAt = now
 	columns = append(columns, "updated_at")
@@ -135,8 +162,7 @@ func (r *brandDistillRepository) Save(ctx context.Context, db bun.IDB, run *mode
 		run.FinishedAt = &now
 		columns = append(columns, "finished_at")
 	}
-	_, err := db.NewUpdate().Model(run).Column(columns...).WherePK().Exec(ctx)
-	return err
+	return db.NewUpdate().Model(run).Column(columns...).WherePK()
 }
 
 // ExpireReadyBefore runs raw SQL: it crosses tenants on purpose and must not

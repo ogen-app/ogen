@@ -174,7 +174,7 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]models.BrandDist
 
 // Refine answers a ready run's questions: it queues a new run that composes
 // again from the same passages and every answer so far, and supersedes the
-// old one. Refines are not charged.
+// old one once it is ready. Refines are not charged.
 func (s *Service) Refine(ctx context.Context, tenantID, runID string, userID *string, in []Answer) (*models.BrandDistillRun, error) {
 	ctx = tenantctx.With(ctx, tenantID)
 	answers, err := cleanAnswers(in)
@@ -198,6 +198,8 @@ func (s *Service) Refine(ctx context.Context, tenantID, runID string, userID *st
 			return ErrCommitted
 		case parent.Status != models.BrandDistillStatusReady:
 			return ErrNotReady
+		case parent.ChildRunID != nil:
+			return ErrInProgress
 		case parent.Depth >= MaxRefines:
 			return ErrRefineLimit
 		}
@@ -212,8 +214,10 @@ func (s *Service) Refine(ctx context.Context, tenantID, runID string, userID *st
 		if err := s.repos.Runs.Create(ctx, tx, child); err != nil {
 			return err
 		}
-		parent.Status, parent.ChildRunID = models.BrandDistillStatusSuperseded, &child.ID
-		return s.repos.Runs.Save(ctx, tx, parent, "status", "child_run_id")
+		// The parent stays ready until the refine is: a refine that fails or is
+		// discarded hands it back.
+		parent.ChildRunID = &child.ID
+		return s.repos.Runs.Save(ctx, tx, parent, "child_run_id")
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrBrandDistillOpen) {
@@ -238,10 +242,14 @@ func mergeAnswers(prev, next []models.DistillAnswer) []models.DistillAnswer {
 }
 
 // Discard closes a run that is not committed. An open run's job finds it
-// discarded and stops.
+// discarded and stops; its charge is released, and a refine's parent gets its
+// proposal back.
 func (s *Service) Discard(ctx context.Context, tenantID, runID string) (*models.BrandDistillRun, error) {
 	ctx = tenantctx.With(ctx, tenantID)
-	var run *models.BrandDistillRun
+	var (
+		run     *models.BrandDistillRun
+		wasOpen bool
+	)
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var err error
 		if run, err = s.repos.Runs.Lock(ctx, tx, runID); err != nil {
@@ -253,13 +261,19 @@ func (s *Service) Discard(ctx context.Context, tenantID, runID string) (*models.
 		case models.BrandDistillStatusDiscarded:
 			return nil
 		}
+		wasOpen = run.Status.Open()
 		run.Status = models.BrandDistillStatusDiscarded
 		return s.repos.Runs.Save(ctx, tx, run, "status")
 	})
 	if err != nil {
 		return nil, err
 	}
-	if run.Charged {
+	if wasOpen {
+		s.unlinkParent(ctx, run)
+	}
+	// Only a run that never finished goes back to the allowance; a proposal
+	// that was read is spent.
+	if run.Charged && wasOpen {
 		if err := s.repos.Runs.ReleaseCharge(ctx, run.ID); err != nil {
 			s.warn(ctx, "release a discarded run's charge", run.ID, err)
 		}

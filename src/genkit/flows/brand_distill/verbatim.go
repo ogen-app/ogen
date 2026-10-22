@@ -19,6 +19,9 @@ var typography = strings.NewReplacer(
 	"–", "-", "—", "-", "−", "-",
 	" ", " ", " ", " ", " ", " ",
 	"…", "...",
+	// untag writes < and > as ‹ and › into the prompt; a quote copied from
+	// there still matches its source.
+	"‹", "<", "›", ">",
 	"**", "", "__", "", "*", "", "`", "",
 )
 

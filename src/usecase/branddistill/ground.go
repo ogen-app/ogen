@@ -319,7 +319,7 @@ func sourceOf(e models.DistillEvidence) string {
 func (g *grounder) questions(in []brand_distill.DraftQuestion) []models.DistillQuestion {
 	out := []models.DistillQuestion{}
 	for _, q := range in {
-		text := clampRunes(strings.TrimSpace(q.Text), MaxQuestionBytes)
+		text := clampBytes(strings.TrimSpace(q.Text), MaxQuestionBytes)
 		if text == "" || len(out) == maxQuestions {
 			continue
 		}

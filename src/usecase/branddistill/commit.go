@@ -124,8 +124,12 @@ func (s *Service) Commit(ctx context.Context, in CommitInput) (*CommitResult, er
 func commitable(run *models.BrandDistillRun) error {
 	switch run.Status {
 	case models.BrandDistillStatusReady:
-		if run.Proposal == nil {
+		switch {
+		case run.Proposal == nil:
 			return ErrNotReady
+		case run.ChildRunID != nil:
+			// A refine is composing a newer proposal from this one.
+			return ErrInProgress
 		}
 		return nil
 	case models.BrandDistillStatusCommitted:
