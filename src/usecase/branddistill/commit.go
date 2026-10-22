@@ -169,98 +169,142 @@ func indexProposal(p *models.BrandProposal) proposalIndex {
 // buildBatch checks the kept items against the proposal and the brand rules
 // and turns them into the brand entries to create, each with its origin.
 func buildBatch(run *models.BrandDistillRun, in CommitInput) (repository.DistilledBrand, error) {
-	ix := indexProposal(run.Proposal)
-	batch := repository.DistilledBrand{Author: in.UserID}
-	invalid := func(id string, err error) error {
-		return &InputError{Code: CodeInvalidItem, Msg: err.Error(), ProposalID: id}
+	b := batchBuilder{run: run, ix: indexProposal(run.Proposal), batch: repository.DistilledBrand{Author: in.UserID}}
+	steps := []func() error{
+		func() error { return b.voices(in.Voices) },
+		func() error { return b.audiences(in.Audiences) },
+		func() (err error) {
+			b.batch.MayClaim, err = b.lines(in.MayClaim, "g:mayClaim:")
+			return err
+		},
+		func() (err error) {
+			b.batch.NeverClaim, err = b.lines(in.NeverClaim, "g:neverClaim:")
+			return err
+		},
+		func() (err error) {
+			b.batch.BannedWords, err = b.lines(in.BannedWords, "g:bannedWords:")
+			return err
+		},
+		func() error { return b.disclaimer(in.Disclaimer) },
+		func() error { return b.facts(in.Facts) },
 	}
-	unknown := func(id string) error {
-		return &InputError{Code: CodeUnknownItem, Msg: "the proposal has no item " + id, ProposalID: id}
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return b.batch, err
+		}
 	}
-	for _, v := range in.Voices {
-		p, ok := ix.voices[v.ProposalID]
+	if b.empty() {
+		return b.batch, &InputError{Code: CodeNothingToSave, Msg: "keep at least one item to save"}
+	}
+	return b.batch, nil
+}
+
+// batchBuilder collects the entries of one commit.
+type batchBuilder struct {
+	run   *models.BrandDistillRun
+	ix    proposalIndex
+	batch repository.DistilledBrand
+}
+
+func invalidItem(id string, err error) error {
+	return &InputError{Code: CodeInvalidItem, Msg: err.Error(), ProposalID: id}
+}
+
+func unknownItem(id string) error {
+	return &InputError{Code: CodeUnknownItem, Msg: "the proposal has no item " + id, ProposalID: id}
+}
+
+func (b *batchBuilder) voices(in []CommitVoice) error {
+	for _, v := range in {
+		p, ok := b.ix.voices[v.ProposalID]
 		if !ok {
-			return batch, unknown(v.ProposalID)
+			return unknownItem(v.ProposalID)
 		}
 		voice := models.BrandVoice{
 			Name: strings.TrimSpace(v.Name), WhenToUse: strings.TrimSpace(v.WhenToUse), Samples: trimmed(v.Samples),
-			Rules: v.Rules, ChannelNotes: models.StringMap(v.ChannelNotes), Origin: originOf(run, append(sampleEvidence(p), p.Evidence...)),
+			Rules: v.Rules, ChannelNotes: models.StringMap{}, Origin: originOf(b.run, append(sampleEvidence(p), p.Evidence...)),
 		}
-		if voice.ChannelNotes == nil {
-			voice.ChannelNotes = models.StringMap{}
-		}
+		maps.Copy(voice.ChannelNotes, v.ChannelNotes)
 		if err := brandcheck.Voice(&voice); err != nil {
-			return batch, invalid(v.ProposalID, err)
+			return invalidItem(v.ProposalID, err)
 		}
-		batch.Voices = append(batch.Voices, repository.DistilledVoice{ProposalID: v.ProposalID, Voice: voice, WantDefault: v.IsDefault})
+		b.batch.Voices = append(b.batch.Voices, repository.DistilledVoice{ProposalID: v.ProposalID, Voice: voice, WantDefault: v.IsDefault})
 	}
-	for _, a := range in.Audiences {
-		p, ok := ix.audiences[a.ProposalID]
+	return nil
+}
+
+func (b *batchBuilder) audiences(in []CommitAudience) error {
+	for _, a := range in {
+		p, ok := b.ix.audiences[a.ProposalID]
 		if !ok {
-			return batch, unknown(a.ProposalID)
+			return unknownItem(a.ProposalID)
 		}
 		aud := models.BrandAudience{
 			Name: strings.TrimSpace(a.Name), Who: strings.TrimSpace(a.Who), ReadsOn: strings.TrimSpace(a.ReadsOn),
 			ScrollsPastWhen: strings.TrimSpace(a.ScrollsPastWhen), BelievesWhen: strings.TrimSpace(a.BelievesWhen),
-			Origin: originOf(run, p.Evidence),
+			Origin: originOf(b.run, p.Evidence),
 		}
 		if err := brandcheck.Audience(&aud); err != nil {
-			return batch, invalid(a.ProposalID, err)
+			return invalidItem(a.ProposalID, err)
 		}
-		batch.Audiences = append(batch.Audiences, repository.DistilledAudience{ProposalID: a.ProposalID, Audience: aud})
+		b.batch.Audiences = append(b.batch.Audiences, repository.DistilledAudience{ProposalID: a.ProposalID, Audience: aud})
 	}
-	lines := func(in []CommitLine, prefix string, limit int) ([]repository.DistilledLine, error) {
-		out := make([]repository.DistilledLine, 0, len(in))
-		for _, l := range in {
-			if _, ok := ix.lines[l.ProposalID]; !ok || !strings.HasPrefix(l.ProposalID, prefix) {
-				return nil, unknown(l.ProposalID)
-			}
-			text := strings.TrimSpace(l.Text)
-			if text == "" || len(text) > limit {
-				return nil, invalid(l.ProposalID, fmt.Errorf("a line is required and at most %d KB", brandcheck.MaxStatementBytes>>10))
-			}
-			out = append(out, repository.DistilledLine{ProposalID: l.ProposalID, Text: text})
+	return nil
+}
+
+// lines checks guardrail lines of one list, named by its id prefix.
+func (b *batchBuilder) lines(in []CommitLine, prefix string) ([]repository.DistilledLine, error) {
+	out := make([]repository.DistilledLine, 0, len(in))
+	for _, l := range in {
+		if _, ok := b.ix.lines[l.ProposalID]; !ok || !strings.HasPrefix(l.ProposalID, prefix) {
+			return nil, unknownItem(l.ProposalID)
 		}
-		return out, nil
-	}
-	var err error
-	if batch.MayClaim, err = lines(in.MayClaim, "g:mayClaim:", brandcheck.MaxStatementBytes); err != nil {
-		return batch, err
-	}
-	if batch.NeverClaim, err = lines(in.NeverClaim, "g:neverClaim:", brandcheck.MaxStatementBytes); err != nil {
-		return batch, err
-	}
-	if batch.BannedWords, err = lines(in.BannedWords, "g:bannedWords:", brandcheck.MaxStatementBytes); err != nil {
-		return batch, err
-	}
-	if d := in.Disclaimer; d != nil {
-		if ix.disclaimer == nil || d.ProposalID != ix.disclaimer.ProposalID {
-			return batch, unknown(d.ProposalID)
+		text := strings.TrimSpace(l.Text)
+		if text == "" || len(text) > brandcheck.MaxStatementBytes {
+			return nil, invalidItem(l.ProposalID, fmt.Errorf("a line is required and at most %d KB", brandcheck.MaxStatementBytes>>10))
 		}
-		text := strings.TrimSpace(d.Text)
-		if text == "" || len(text) > brandcheck.MaxDisclaimerBytes {
-			return batch, invalid(d.ProposalID, fmt.Errorf("the disclaimer is required and at most %d KB", brandcheck.MaxDisclaimerBytes>>10))
-		}
-		batch.Disclaimer = &repository.DistilledLine{ProposalID: d.ProposalID, Text: text}
+		out = append(out, repository.DistilledLine{ProposalID: l.ProposalID, Text: text})
 	}
+	return out, nil
+}
+
+func (b *batchBuilder) disclaimer(d *CommitLine) error {
+	if d == nil {
+		return nil
+	}
+	if b.ix.disclaimer == nil || d.ProposalID != b.ix.disclaimer.ProposalID {
+		return unknownItem(d.ProposalID)
+	}
+	text := strings.TrimSpace(d.Text)
+	if text == "" || len(text) > brandcheck.MaxDisclaimerBytes {
+		return invalidItem(d.ProposalID, fmt.Errorf("the disclaimer is required and at most %d KB", brandcheck.MaxDisclaimerBytes>>10))
+	}
+	b.batch.Disclaimer = &repository.DistilledLine{ProposalID: d.ProposalID, Text: text}
+	return nil
+}
+
+// facts checks the kept facts; each is added and checked today.
+func (b *batchBuilder) facts(in []CommitFact) error {
 	today := models.CalendarDate{Time: time.Now().UTC().Truncate(24 * time.Hour)}
-	for _, f := range in.Facts {
-		if _, ok := ix.facts[f.ProposalID]; !ok {
-			return batch, unknown(f.ProposalID)
+	for _, f := range in {
+		if _, ok := b.ix.facts[f.ProposalID]; !ok {
+			return unknownItem(f.ProposalID)
 		}
 		fact := models.BrandFact{
 			Statement: strings.TrimSpace(f.Statement), Subject: f.Subject, Kind: f.Kind,
 			Source: strings.TrimSpace(f.Source), ExpiresAt: f.ExpiresAt, AddedAt: &today, CheckedAt: &today,
 		}
 		if err := brandcheck.Fact(&fact); err != nil {
-			return batch, invalid(f.ProposalID, err)
+			return invalidItem(f.ProposalID, err)
 		}
-		batch.Facts = append(batch.Facts, repository.DistilledFact{ProposalID: f.ProposalID, Fact: fact})
+		b.batch.Facts = append(b.batch.Facts, repository.DistilledFact{ProposalID: f.ProposalID, Fact: fact})
 	}
-	if len(batch.Voices)+len(batch.Audiences)+len(batch.MayClaim)+len(batch.NeverClaim)+len(batch.BannedWords)+len(batch.Facts) == 0 && batch.Disclaimer == nil {
-		return batch, &InputError{Code: CodeNothingToSave, Msg: "keep at least one item to save"}
-	}
-	return batch, nil
+	return nil
+}
+
+func (b *batchBuilder) empty() bool {
+	x := b.batch
+	return len(x.Voices)+len(x.Audiences)+len(x.MayClaim)+len(x.NeverClaim)+len(x.BannedWords)+len(x.Facts) == 0 && x.Disclaimer == nil
 }
 
 func sampleEvidence(v models.ProposedVoice) []models.DistillEvidence {

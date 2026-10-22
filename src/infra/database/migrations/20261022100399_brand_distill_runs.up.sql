@@ -1,8 +1,8 @@
 -- A brand distillation run reads a website, assets and/or answers and
--- proposes voices, audiences, guardrail lines and facts (CON-399). Nothing it
+-- proposes voices, audiences, guardrail lines and facts. Nothing it
 -- proposes is brand material until the user commits it.
 --
--- sources/answers/candidates/proposal are the run's working state; a daily
+-- sources/answers/candidates/proposal are the run's working state; a periodic
 -- sweep nulls candidates and proposal once an uncommitted run expires.
 -- parent_run_id/child_run_id chain a refine (answers to gap questions) to the
 -- run it superseded; depth counts the refines from the first run.

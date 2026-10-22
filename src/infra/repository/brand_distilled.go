@@ -91,15 +91,8 @@ func (r *brandRepository) ApplyDistilled(ctx context.Context, in DistilledBrand,
 		if err := addVoices(ctx, tx, in.Voices, now, res); err != nil {
 			return err
 		}
-		for _, a := range in.Audiences {
-			row := a.Audience
-			if err := stamp(&row.ID, &row.CreatedAt, &row.UpdatedAt, now); err != nil {
-				return err
-			}
-			if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
-				return err
-			}
-			res.Audiences[a.ProposalID] = row.ID
+		if err := addAudiences(ctx, tx, in.Audiences, now, res); err != nil {
+			return err
 		}
 		changed, err := mergeGuardrails(ctx, tx, in, now, res)
 		if err != nil {
@@ -110,15 +103,8 @@ func (r *brandRepository) ApplyDistilled(ctx context.Context, in DistilledBrand,
 			return err
 		}
 		if changed || added > 0 {
-			stance, err := getStance(ctx, tx)
-			if err != nil {
+			if res.StanceCleared, err = clearStance(ctx, tx); err != nil {
 				return err
-			}
-			if stance != nil {
-				if err := deleteStance(ctx, tx); err != nil {
-					return err
-				}
-				res.StanceCleared = true
 			}
 		}
 		if done != nil {
@@ -130,6 +116,30 @@ func (r *brandRepository) ApplyDistilled(ctx context.Context, in DistilledBrand,
 		return nil, err
 	}
 	return res, nil
+}
+
+func addAudiences(ctx context.Context, tx bun.Tx, audiences []DistilledAudience, now time.Time, res *DistilledResult) error {
+	for _, a := range audiences {
+		row := a.Audience
+		if err := stamp(&row.ID, &row.CreatedAt, &row.UpdatedAt, now); err != nil {
+			return err
+		}
+		if _, err := tx.NewInsert().Model(&row).Exec(ctx); err != nil {
+			return err
+		}
+		res.Audiences[a.ProposalID] = row.ID
+	}
+	return nil
+}
+
+// clearStance withdraws the "no guardrails" stance, reporting whether there
+// was one: a workspace that just gained rules or facts has guardrails.
+func clearStance(ctx context.Context, tx bun.Tx) (bool, error) {
+	stance, err := getStance(ctx, tx)
+	if err != nil || stance == nil {
+		return false, err
+	}
+	return true, deleteStance(ctx, tx)
 }
 
 func stamp(id *string, created, updated *time.Time, now time.Time) error {
