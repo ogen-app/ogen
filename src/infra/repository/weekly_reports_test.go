@@ -41,6 +41,11 @@ func TestWeeklyReportFacts(t *testing.T) {
 	seedPostLog(t, db, "l1", "p-failed", models.PostLogEventStateTransition, "system", &sched, &failed, w.Start.Add(10*time.Hour), "")
 	seedPostLog(t, db, "l2", "p-failed", models.PostLogEventStateTransition, "system", &sched, &notPub, w.Start.Add(20*time.Hour), "")
 	seedPostLog(t, db, "l3", "p-prev", models.PostLogEventStateTransition, "system", &sched, &failed, w.PrevStart.Add(2*time.Hour), "")
+	// Failed, then retried within the week: no longer a post that didn't go out.
+	draft := models.PostStatusDraft
+	seedPost(t, db, "p-retried", "zernio", "", w.PrevStart.AddDate(0, 0, -1))
+	seedPostLog(t, db, "l4", "p-retried", models.PostLogEventStateTransition, "system", &sched, &failed, w.Start.Add(5*time.Hour), "")
+	seedPostLog(t, db, "l5", "p-retried", models.PostLogEventUserRetry, "user-1", &failed, &draft, w.Start.Add(6*time.Hour), "")
 
 	c, err := repo.Counts(ctx, tid, w)
 	if err != nil {

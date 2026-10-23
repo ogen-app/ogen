@@ -204,6 +204,7 @@ func (d *deps) initRiver(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.email.Deps.ReportPrefs = r.weeklyReportRepo
 	// The analysis service enqueues from inside River workers, so it is built
 	// over the enqueuer before the client exists; the client is attached below.
 	d.enqueuer = &queues.Enqueuer{}

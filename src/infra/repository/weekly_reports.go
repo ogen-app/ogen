@@ -179,6 +179,13 @@ func (r *weeklyReportRepository) SetOptOut(ctx context.Context, userID string, o
 	return nil
 }
 
+// laterTransition finds a status change on the same post after pl's; the
+// caller closes it with the window end. A failure followed by a retry or a
+// publish before the window ends no longer counts as a post that didn't go out.
+const laterTransition = `SELECT 1 FROM post_logs nx
+       WHERE nx.post_id = pl.post_id AND nx.event_type IN ('state_transition', 'user_retry')
+         AND nx.event_timestamp > pl.event_timestamp AND nx.event_timestamp`
+
 // weeklyCountsSQL tallies one week in a single round trip. Placeholders:
 // ?0 tenant, ?1 prev start, ?2 start, ?3 end, ?4 end + 7 days, ?5 end + 1 day,
 // ?6 now.
@@ -189,11 +196,13 @@ SELECT
   (SELECT count(DISTINCT pl.post_id) FROM post_logs pl JOIN posts po ON po.id = pl.post_id
      WHERE pl.tenant_id = ?0 AND pl.event_type = 'state_transition'
        AND pl.to_status IN ('failed', 'not_published')
-       AND pl.event_timestamp >= ?2 AND pl.event_timestamp < ?3) AS failed,
+       AND pl.event_timestamp >= ?2 AND pl.event_timestamp < ?3
+       AND NOT EXISTS (` + laterTransition + ` < ?3)) AS failed,
   (SELECT count(DISTINCT pl.post_id) FROM post_logs pl JOIN posts po ON po.id = pl.post_id
      WHERE pl.tenant_id = ?0 AND pl.event_type = 'state_transition'
        AND pl.to_status IN ('failed', 'not_published')
-       AND pl.event_timestamp >= ?1 AND pl.event_timestamp < ?2) AS prev_failed,
+       AND pl.event_timestamp >= ?1 AND pl.event_timestamp < ?2
+       AND NOT EXISTS (` + laterTransition + ` < ?2)) AS prev_failed,
   (SELECT count(*) FROM posts WHERE tenant_id = ?0 AND status = 'scheduled'
      AND scheduled_at >= ?3 AND scheduled_at < ?4) AS scheduled_next,
   (SELECT count(*) FROM posts WHERE tenant_id = ?0 AND status = 'scheduled_for_manual_publishing'
@@ -257,10 +266,11 @@ SELECT * FROM (
   WHERE pl.tenant_id = ? AND pl.event_type = 'state_transition'
     AND pl.to_status IN ('failed', 'not_published')
     AND pl.event_timestamp >= ? AND pl.event_timestamp < ?
+    AND NOT EXISTS (`+laterTransition+` < ?)
   ORDER BY pl.post_id, pl.event_timestamp DESC
 ) f
 ORDER BY f.event_timestamp DESC
-LIMIT ?`, tenantID, from, to, limit).Scan(ctx, &out)
+LIMIT ?`, tenantID, from, to, to, limit).Scan(ctx, &out)
 	return out, err
 }
 

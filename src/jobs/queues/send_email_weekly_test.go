@@ -1,6 +1,8 @@
 package queues
 
 import (
+	"context"
+	"database/sql"
 	"net/url"
 	"strings"
 	"testing"
@@ -52,6 +54,35 @@ func TestSendEmailWeeklyReport(t *testing.T) {
 	userID, err := email.VerifyScoped("link-secret", email.ScopeWeeklyReport, u.Query().Get("token"), time.Now())
 	if err != nil || userID != "u1" {
 		t.Fatalf("token subject = %q, %v", userID, err)
+	}
+}
+
+type fakeReportPrefs map[string]bool
+
+func (f fakeReportPrefs) OptedOut(_ context.Context, userID string) (bool, error) {
+	out, ok := f[userID]
+	if !ok {
+		return false, sql.ErrNoRows
+	}
+	return out, nil
+}
+
+// An owner who opts out after the report was queued, or whose membership is
+// gone, doesn't get it.
+func TestSendEmailWeeklyReportRechecksOptOut(t *testing.T) {
+	for name, prefs := range map[string]fakeReportPrefs{"opted out": {"u1": true}, "membership gone": {}} {
+		t.Run(name, func(t *testing.T) {
+			sender := &fakeSender{id: "msg_1"}
+			logs := &fakeEmailLogRepo{}
+			p := weeklyProcessor(sender, logs)
+			p.Deps.ReportPrefs = prefs
+			if err := p.Process(t.Context(), weeklyTask(&models.WeeklyReportView{Workspace: "Acme"})); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.sent) != 0 || len(logs.rows) != 1 || logs.rows[0].Status != models.EmailLogSkippedSuppressed {
+				t.Fatalf("sent=%d logs=%+v", len(sender.sent), logs.rows)
+			}
+		})
 	}
 }
 

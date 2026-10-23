@@ -134,7 +134,13 @@ func (p *WeeklyReportDispatchProcessor) Process(ctx context.Context) error {
 	}
 	var builds []river.JobArgs
 	for _, t := range tenants {
-		loc, zone := settings.WorkspaceTimezone(tenantctx.With(ctx, t.ID), p.Deps.Settings)
+		loc, zone, err := settings.LookupWorkspaceTimezone(tenantctx.With(ctx, t.ID), p.Deps.Settings)
+		if err != nil {
+			// Never decide "due" on a guessed zone; the next tick tries again.
+			slog.WarnContext(ctx, "weekly report: timezone read failed", logging.AttrComponent, weeklyReportComp,
+				"tenant_id", t.ID, logging.AttrError, err)
+			continue
+		}
 		if w, due := weeklyreport.Due(now, loc, zone); due {
 			builds = append(builds, BuildWeeklyReportTask{TenantID: t.ID, WeekStart: w.StartDate()})
 		}
@@ -184,7 +190,10 @@ func (p *BuildWeeklyReportProcessor) Process(ctx context.Context, t BuildWeeklyR
 	if err != nil {
 		return err
 	}
-	loc, zone := settings.WorkspaceTimezone(ctx, d.Settings)
+	loc, zone, err := settings.LookupWorkspaceTimezone(ctx, d.Settings)
+	if err != nil {
+		return err
+	}
 	facts, err := d.Collector.Collect(ctx, t.TenantID, name, weeklyreport.WeekOf(start, loc, zone, clock(p.Now)))
 	if err != nil {
 		jobs.WeeklyReportBuildErrors.Add(1)
