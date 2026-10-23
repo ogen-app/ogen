@@ -37,6 +37,29 @@ func SignUnsubscribe(secret, email string, issued time.Time) string {
 // authorises. Fails closed on a bad signature, malformed payload, or a token
 // older than UnsubscribeTokenMaxAge.
 func VerifyUnsubscribe(secret, token string, now time.Time) (string, error) {
+	return verify(token, now, func(msg string) []byte { return signHMAC(secret, msg) })
+}
+
+// ScopeWeeklyReport authorises turning off one membership's weekly report.
+const ScopeWeeklyReport = "weekly_report"
+
+// SignScoped is SignUnsubscribe for a capability other than the marketing
+// unsubscribe. The signature also covers scope, so a scoped token never
+// verifies as a marketing token or as another scope's, and vice versa.
+func SignScoped(secret, scope, subject string, issued time.Time) string {
+	msg := subject + ":" + strconv.FormatInt(issued.Unix(), 10)
+	return b64([]byte(msg)) + "." + b64(signHMAC(secret, scope+"\x00"+msg))
+}
+
+// VerifyScoped validates a SignScoped token for scope and returns its subject.
+func VerifyScoped(secret, scope, token string, now time.Time) (string, error) {
+	return verify(token, now, func(msg string) []byte { return signHMAC(secret, scope+"\x00"+msg) })
+}
+
+// verify checks token's signature with sign and returns the subject it
+// carries. Fails closed on a bad signature, malformed payload, or a token
+// older than UnsubscribeTokenMaxAge.
+func verify(token string, now time.Time, sign func(msg string) []byte) (string, error) {
 	dot := strings.IndexByte(token, '.')
 	if dot <= 0 {
 		return "", ErrInvalidToken
@@ -49,7 +72,7 @@ func VerifyUnsubscribe(secret, token string, now time.Time) (string, error) {
 	if err != nil {
 		return "", ErrInvalidToken
 	}
-	if !hmac.Equal(sigRaw, signHMAC(secret, string(msgRaw))) {
+	if !hmac.Equal(sigRaw, sign(string(msgRaw))) {
 		return "", ErrInvalidToken
 	}
 

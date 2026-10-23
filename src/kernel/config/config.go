@@ -365,6 +365,14 @@ type Config struct {
 	// one notification while unread.
 	ManualPublishDueSweepEvery time.Duration `envconfig:"MANUAL_PUBLISH_DUE_SWEEP_EVERY" default:"1h"`
 
+	// Weekly report email. Every WEEKLY_REPORT_CHECK_EVERY the dispatcher
+	// mails each workspace whose Monday 09:00 has arrived in its own time zone.
+	// WEEKLY_REPORT_LIMIT_PCT is the plan-usage share from which a limit shows
+	// under "Needs your attention".
+	WeeklyReportEnabled    bool          `envconfig:"WEEKLY_REPORT_ENABLED"     default:"true"`
+	WeeklyReportCheckEvery time.Duration `envconfig:"WEEKLY_REPORT_CHECK_EVERY" default:"1h"`
+	WeeklyReportLimitPct   int           `envconfig:"WEEKLY_REPORT_LIMIT_PCT"   default:"80"`
+
 	// Optional post-OAuth redirect target. When set, every connect
 	// link Zernio issues will send the user here after authorization
 	// succeeds, with ?connected=<platform>&profileId=<id>&accountId=<id>&username=<name>

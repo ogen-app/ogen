@@ -27,6 +27,9 @@ const (
 	// admins when a new tenant registers. Unlike the templates above it
 	// is not customer-facing, so it is hand-authored rather than Maizzle-compiled.
 	KeyAdminTenantRegistered = "admin_tenant_registered"
+	// KeyWeeklyReport is the Monday report to workspace owners. Its body
+	// ranges over Data.Report, the stored report snapshot.
+	KeyWeeklyReport = "weekly_report"
 )
 
 // Connection-expiry notification stages. The connection_expiring
@@ -101,6 +104,10 @@ type Data struct {
 	// account's password. Empty and ignored for every other template.
 	GoogleEmail     string
 	PasswordCleared bool
+	// Report is the weekly_report template's whole content: every section,
+	// already formatted. UnsubscribeURL carries its weekly-report opt-out link.
+	// Nil for every other template.
+	Report *models.WeeklyReportView
 }
 
 //go:embed defaults/*.tmpl
@@ -141,6 +148,8 @@ const (
 	varLoginMethod    = "The provider the sign-in went through, e.g. \"Google\" (empty for a password sign-in)."
 	varGoogleEmail    = "The Google account's address that can now sign in to this Ogen account."
 	varPwdCleared     = "True when linking Google removed the account's previous password."
+	varReport         = "The week's report: headline, lede and each section (nil sections are left out). See models.WeeklyReportView."
+	varReportUnsub    = "Signed link that turns off the weekly report for this workspace only."
 )
 
 // transactionalVars / marketingVars build the per-template variable doc sets.
@@ -236,6 +245,16 @@ func adminTenantRegisteredVars() models.StringMap {
 	}
 }
 
+// weeklyReportVars documents the weekly_report template's placeholders.
+func weeklyReportVars() models.StringMap {
+	m := transactionalVars()
+	m["Report"] = varReport
+	m["UnsubscribeURL"] = varReportUnsub
+	return m
+}
+
+const weeklyReportSubject = `[[ .Report.Workspace ]] · week of [[ .Report.WeekOf ]]: [[ .Report.Headline ]]`
+
 // connectionExpiringSubject branches on Stage (text/template, so a conditional
 // is fine) so the same template key carries both the heads-up and the
 // action-required subject.
@@ -261,6 +280,7 @@ var defaultSpecs = []defaultSpec{
 	{KeyNewDeviceLogin, models.EmailKindTransactional, "New sign-in to your Ogen account", newDeviceLoginVars()},
 	{KeyGoogleLinked, models.EmailKindTransactional, "Google sign-in is now connected to your Ogen account", googleLinkedVars()},
 	{KeyAdminTenantRegistered, models.EmailKindTransactional, "New tenant registered: [[ .WorkspaceName ]]", adminTenantRegisteredVars()},
+	{KeyWeeklyReport, models.EmailKindTransactional, weeklyReportSubject, weeklyReportVars()},
 }
 
 // Defaults returns the built-in default templates, reading each body from the

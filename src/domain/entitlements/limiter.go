@@ -335,6 +335,41 @@ func (l *Limiter) CurrentUsage(ctx context.Context, tenantID, featureKey string)
 	return n, true
 }
 
+// FeatureUsage is a counted numeric feature's live usage against its cap.
+type FeatureUsage struct {
+	Key     string
+	Name    string
+	Current int64
+	Limit   int64
+}
+
+// Usage returns live usage for every numeric feature in the tenant's tier that
+// has a registered counter and a finite cap, in catalog order. Unlimited and
+// uncounted features are left out; a counter error drops that feature. Nil-safe.
+func (l *Limiter) Usage(ctx context.Context, tenantID string) ([]FeatureUsage, error) {
+	if l == nil {
+		return nil, nil
+	}
+	res, err := l.resolver.ResolveCurrent(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	var out []FeatureUsage
+	for i := range res.Entitlements {
+		e := res.Entitlements[i]
+		limit, ok := e.Value.(float64)
+		if !ok || limit <= 0 {
+			continue
+		}
+		n, counted := l.CurrentUsage(ctx, tenantID, e.Key)
+		if !counted {
+			continue
+		}
+		out = append(out, FeatureUsage{Key: e.Key, Name: e.Name, Current: n, Limit: int64(limit)})
+	}
+	return out, nil
+}
+
 // numericValue returns (limit, present, err): limit is nil for an unlimited
 // numeric entitlement. A non-numeric or absent value reports present=false.
 func (l *Limiter) numericValue(ctx context.Context, tenantID, key string) (*int64, bool, error) {

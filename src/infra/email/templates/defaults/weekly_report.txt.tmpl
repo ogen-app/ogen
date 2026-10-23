@@ -1,0 +1,56 @@
+[[ with .Report ]][[ .Workspace ]] · [[ .RangeLabel ]]
+
+[[ .Headline ]]
+[[ if .Lede ]]
+[[ .Lede ]]
+[[ end ]][[ if .Attention ]]
+NEEDS YOUR ATTENTION
+[[ range .Attention ]]- [[ .Text ]][[ if .Detail ]] [[ .Detail ]][[ end ]]
+  [[ .LinkLabel ]]: [[ .URL ]]
+[[ end ]][[ end ]][[ with .Publishing ]]
+PUBLISHING
+Published: [[ .Published.Value ]][[ if .Published.Delta ]] ([[ .Published.Delta ]])[[ end ]]
+[[ if .Failed ]]Didn't go out: [[ .Failed ]][[ if .FailedNote ]] ([[ .FailedNote ]])[[ end ]]
+[[ end ]][[ if .Channels ]]
+By channel (published / didn't go out / reach):
+[[ range .Channels ]]- [[ .Platform ]][[ if .Account ]] [[ .Account ]][[ end ]]: [[ .Published ]] / [[ .Failed ]] / [[ .Reach ]]
+[[ end ]][[ if .MoreChannels ]]  [[ .MoreChannels ]]
+[[ end ]][[ end ]][[ if .Failures ]]
+What didn't go out:
+[[ range .Failures ]]- [[ .Title ]] ([[ .Meta ]]): [[ .Reason ]]
+  [[ .URL ]]
+[[ end ]][[ if .MoreFailures ]]  [[ .MoreFailures ]]: [[ .FailuresURL ]]
+[[ end ]][[ end ]][[ if .NextWeek ]]
+Next week: [[ .NextWeek ]]
+[[ end ]][[ end ]][[ with .Performance ]]
+PERFORMANCE (posts published this week, compared with last week)
+Reach: [[ .Reach.Value ]][[ if .Reach.Delta ]] ([[ .Reach.Delta ]])[[ end ]]
+Interactions: [[ .Interactions.Value ]][[ if .Interactions.Delta ]] ([[ .Interactions.Delta ]])[[ end ]]
+Engagement: [[ .Engagement.Value ]][[ if .Engagement.Delta ]] ([[ .Engagement.Delta ]])[[ end ]]
+[[ if .Followers.Value ]]Followers: [[ .Followers.Value ]][[ if .Followers.Delta ]] ([[ .Followers.Delta ]])[[ end ]]
+[[ end ]][[ if .Top ]]
+Top posts:
+[[ range .Top ]][[ .Rank ]]. [[ .Title ]] ([[ .Meta ]]): [[ .Reach ]][[ if .Multiple ]], [[ .Multiple ]][[ end ]]
+[[ end ]][[ end ]][[ if .Below ]]
+Below typical:
+[[ range .Below ]]- [[ .Title ]] ([[ .Meta ]]): [[ .Reach ]][[ if .Multiple ]], [[ .Multiple ]][[ end ]]
+[[ end ]][[ end ]]
+Open analytics: [[ .URL ]]
+[[ end ]][[ with .Campaigns ]]
+CAMPAIGNS
+[[ range .Rows ]]- [[ .Name ]]: [[ .Status ]] ([[ .Goal ]])
+[[ end ]][[ if .Summary ]][[ .Summary ]]
+[[ end ]][[ end ]][[ with .Ideas ]]
+IDEAS AND CONTENT BANK
+[[ if .Waiting ]][[ .Waiting ]]: [[ .URL ]]
+[[ end ]][[ if .Summary ]][[ .Summary ]]
+[[ end ]][[ end ]][[ with .Team ]]
+TEAM
+[[ .Summary ]]
+[[ end ]]
+Open [[ .Workspace ]]: [[ .AppURL ]]
+
+--
+You're getting this because you own [[ .Workspace ]]. It arrives every Monday at 9:00 your workspace time ([[ .Timezone ]]).
+Unsubscribe from weekly reports: [[ $.UnsubscribeURL ]]
+[[ end ]]

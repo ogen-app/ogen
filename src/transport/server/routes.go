@@ -134,6 +134,7 @@ func registerIntegrationRoutes(app *fiber.App, d *deps) {
 	handlers.NewFigmaConnectionsHandler(d.svc.plugins, r.userRepo, d.auth, d.activity.recorder).Register(app)
 	d.email.Handler.Register(app)
 	d.email.Webhook.Register(app)
+	handlers.NewWeeklyReportEmailHandler(d.r.weeklyReportRepo, d.email.LinkSecret, d.auth).Register(app)
 }
 
 // registerContentBankRoutes serves assets (the three asset handlers share

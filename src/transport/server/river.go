@@ -12,6 +12,8 @@ import (
 	"github.com/ogen-app/ogen/src/jobs"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/config"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
+	"github.com/ogen-app/ogen/src/usecase/weeklyreport"
 )
 
 // newRiverClient migrates River's schema and builds the job client over the
@@ -61,6 +63,43 @@ func periodicConfig(cfg *config.Config) queues.PeriodicConfig {
 		PendingUploadSweepEvery:    cfg.PendingUploadSweepInterval,
 		AnalysisBackfillEvery:      cfg.AnalysisBackfillInterval,
 		BrandDistillExpireEvery:    brandDistillExpireEvery,
+		WeeklyReportEvery:          weeklyReportEvery(cfg),
+	}
+}
+
+func weeklyReportEvery(cfg *config.Config) time.Duration {
+	if !cfg.WeeklyReportEnabled {
+		return 0
+	}
+	return cfg.WeeklyReportCheckEvery
+}
+
+// weeklyReportDeps wires the weekly report dispatcher. The analytics, activity
+// and limit readers are optional: a missing one only drops its section.
+func weeklyReportDeps(d *deps) queues.WeeklyReportDeps {
+	cfg, r := d.cfg, d.r
+	collector := &weeklyreport.Collector{
+		Store:      r.weeklyReportRepo,
+		Goals:      overview.New(r.campaignRepo, r.postRepo, r.platformRepo),
+		Limits:     d.entitlements.limiter,
+		LimitPct:   cfg.WeeklyReportLimitPct,
+		ExpiryLead: time.Duration(cfg.ConnectionExpiryLeadDays) * 24 * time.Hour,
+	}
+	if r.postAnalyticsRepo != nil {
+		collector.Analytics = r.postAnalyticsRepo
+	}
+	if r.followerStatsRepo != nil {
+		collector.Followers = r.followerStatsRepo
+	}
+	if d.activity.events != nil {
+		collector.Activity = d.activity.events
+	}
+	return queues.WeeklyReportDeps{
+		Store:      r.weeklyReportRepo,
+		Settings:   r.settingRepo,
+		Collector:  collector,
+		EmailLogs:  r.emailLogRepo,
+		AppBaseURL: cfg.AppBaseURL,
 	}
 }
 
@@ -104,6 +143,7 @@ func queueDeps(d *deps) queues.Deps {
 		Analysis:              queues.AnalysisDeps{Runner: d.analysis, Distiller: d.analysis, Tenants: r.tenantRepo, BackfillBatch: cfg.AnalysisBackfillBatch},
 		BrandDistill:          queues.BrandDistillDeps{Runner: d.brandDistill, Tenants: r.tenantRepo},
 		Email:                 d.email.Deps,
+		WeeklyReport:          weeklyReportDeps(d),
 		ConnectSessionRepo:    r.zernioConnectSessionRepo,
 		PluginPairingRepo:     r.pluginPairingRepo,
 		KnownDeviceRepo:       r.knownDeviceRepo,
