@@ -11,6 +11,8 @@ package settings
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -38,16 +40,30 @@ func ResolveTimezone(name string) (*time.Location, error) {
 // or broken timezone setting must not block scheduling; it just means
 // "treat times as UTC".
 func WorkspaceTimezone(ctx context.Context, repo repository.SettingRepository) (*time.Location, string) {
-	if repo == nil {
-		return time.UTC, "UTC"
-	}
-	s, err := repo.GetByKey(ctx, TimezoneKey)
-	if err != nil || s == nil || s.Value == "" {
-		return time.UTC, "UTC"
-	}
-	loc, err := time.LoadLocation(s.Value)
+	loc, name, err := LookupWorkspaceTimezone(ctx, repo)
 	if err != nil {
 		return time.UTC, "UTC"
 	}
-	return loc, s.Value
+	return loc, name
+}
+
+// LookupWorkspaceTimezone is WorkspaceTimezone for callers that must not act
+// on a guess: an unset, empty or invalid setting still resolves to UTC, but a
+// failed read is returned so the caller can try again later.
+func LookupWorkspaceTimezone(ctx context.Context, repo repository.SettingRepository) (*time.Location, string, error) {
+	if repo == nil {
+		return time.UTC, "UTC", nil
+	}
+	s, err := repo.GetByKey(ctx, TimezoneKey)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (s == nil || s.Value == "")) {
+		return time.UTC, "UTC", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	loc, err := time.LoadLocation(s.Value)
+	if err != nil {
+		return time.UTC, "UTC", nil
+	}
+	return loc, s.Value, nil
 }

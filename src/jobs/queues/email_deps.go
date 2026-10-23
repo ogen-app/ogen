@@ -21,6 +21,10 @@ type EmailDeps struct {
 	Suppressions repository.EmailSuppressionRepository
 	Logs         repository.EmailLogRepository
 	Users        repository.UserRepository
+	// ReportPrefs is rechecked just before a weekly report goes out, so an
+	// owner who opts out while the email is queued doesn't get it. nil skips
+	// the check.
+	ReportPrefs WeeklyReportPrefs
 
 	// Bodies persists the rendered body at send so the operator Emails tab
 	// renders it even after the Resend message ages out of retention.
@@ -48,6 +52,11 @@ type EmailDeps struct {
 	// tenant_activity_events — one per terminal send outcome (sent / failed /
 	// skipped), mirroring the email_logs row. nil = no-op (analytics disabled).
 	ActivityRecorder *activity.Recorder
+}
+
+// WeeklyReportPrefs reads a membership's weekly-report opt-out.
+type WeeklyReportPrefs interface {
+	OptedOut(ctx context.Context, userID string) (bool, error)
 }
 
 // weeklyReportUnsubscribeURL builds the link that turns off the weekly report

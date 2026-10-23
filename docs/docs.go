@@ -6359,7 +6359,10 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "The POST target advertised in the report's List-Unsubscribe-Post header.",
+                "description": "The POST target advertised in the report's List-Unsubscribe-Post header. Mail clients send the RFC 8058 body List-Unsubscribe=One-Click.",
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -6374,6 +6377,15 @@ const docTemplate = `{
                         "name": "token",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "enum": [
+                            "One-Click"
+                        ],
+                        "type": "string",
+                        "description": "RFC 8058 one-click marker",
+                        "name": "List-Unsubscribe",
+                        "in": "formData"
                     }
                 ],
                 "responses": {

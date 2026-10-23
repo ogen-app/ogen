@@ -93,10 +93,12 @@ func (h *WeeklyReportEmailHandler) UnsubscribeConfirm(c *fiber.Ctx) error {
 
 // UnsubscribeOneClick godoc
 // @Summary      Weekly report one-click unsubscribe (RFC 8058)
-// @Description  The POST target advertised in the report's List-Unsubscribe-Post header.
+// @Description  The POST target advertised in the report's List-Unsubscribe-Post header. Mail clients send the RFC 8058 body List-Unsubscribe=One-Click.
 // @Tags         email
+// @Accept       x-www-form-urlencoded
 // @Produce      json
-// @Param        token  query  string  true  "Signed weekly-report token"
+// @Param        token              query     string  true   "Signed weekly-report token"
+// @Param        List-Unsubscribe   formData  string  false  "RFC 8058 one-click marker"  Enums(One-Click)
 // @Success      200  {object}  emailPreferences
 // @Failure      400  {object}  map[string]string
 // @Router       /api/email/weekly-report/unsubscribe [post]

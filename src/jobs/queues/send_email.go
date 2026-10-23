@@ -140,16 +140,14 @@ func (p *SendEmailProcessor) deliver(ctx context.Context, t SendEmailTask, rcpt 
 		slog.InfoContext(ctx, "send_email skipped: sending disabled", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey)
 		return nil
 	}
-	if dep.Suppressions != nil {
-		suppressed, err := dep.Suppressions.IsSuppressed(ctx, rcpt.email, t.EmailKind)
-		if err != nil {
-			return err // transient (DB)
-		}
-		if suppressed {
-			p.writeLog(ctx, logBase, models.EmailLogSkippedSuppressed, "", "")
-			slog.InfoContext(ctx, "send_email skipped: suppressed", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, "kind", string(t.EmailKind))
-			return nil
-		}
+	suppressed, err := p.suppressed(ctx, t, rcpt.email)
+	if err != nil {
+		return err // transient (DB)
+	}
+	if suppressed {
+		p.writeLog(ctx, logBase, models.EmailLogSkippedSuppressed, "", "")
+		slog.InfoContext(ctx, "send_email skipped: suppressed", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, "kind", string(t.EmailKind))
+		return nil
 	}
 
 	tmpl, err := dep.Templates.GetByKey(ctx, t.TemplateKey)
@@ -205,6 +203,25 @@ func (p *SendEmailProcessor) deliver(ctx context.Context, t SendEmailTask, rcpt 
 }
 
 const sendEmailComponent = "jobs.send_email"
+
+// suppressed reports whether the recipient must not get this email: the
+// address is suppressed for its kind, or, for a weekly report, the membership
+// opted out after the report was queued. err is a transient read failure.
+func (p *SendEmailProcessor) suppressed(ctx context.Context, t SendEmailTask, toEmail string) (bool, error) {
+	if s := p.Deps.Suppressions; s != nil {
+		if out, err := s.IsSuppressed(ctx, toEmail, t.EmailKind); err != nil || out {
+			return out, err
+		}
+	}
+	if t.TemplateKey != templates.KeyWeeklyReport || t.UserID == "" || p.Deps.ReportPrefs == nil {
+		return false, nil
+	}
+	out, err := p.Deps.ReportPrefs.OptedOut(ctx, t.UserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil // membership gone since the report was queued
+	}
+	return out, err
+}
 
 // emailRecipient is the resolved addressee plus the workspace name the
 // templates greet them with.

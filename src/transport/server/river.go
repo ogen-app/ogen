@@ -80,19 +80,13 @@ func weeklyReportDeps(d *deps) queues.WeeklyReportDeps {
 	cfg, r := d.cfg, d.r
 	collector := &weeklyreport.Collector{
 		Store:      r.weeklyReportRepo,
+		Analytics:  r.postAnalyticsRepo,
+		Followers:  r.followerStatsRepo,
+		Activity:   d.activity.events,
 		Goals:      overview.New(r.campaignRepo, r.postRepo, r.platformRepo),
 		Limits:     d.entitlements.limiter,
 		LimitPct:   cfg.WeeklyReportLimitPct,
 		ExpiryLead: time.Duration(cfg.ConnectionExpiryLeadDays) * 24 * time.Hour,
-	}
-	if r.postAnalyticsRepo != nil {
-		collector.Analytics = r.postAnalyticsRepo
-	}
-	if r.followerStatsRepo != nil {
-		collector.Followers = r.followerStatsRepo
-	}
-	if d.activity.events != nil {
-		collector.Activity = d.activity.events
 	}
 	return queues.WeeklyReportDeps{
 		Store:      r.weeklyReportRepo,

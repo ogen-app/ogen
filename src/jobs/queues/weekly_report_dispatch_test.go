@@ -13,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email/templates"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/weeklyreport"
 )
 
@@ -95,6 +96,49 @@ func TestWeeklyReportDispatchEnqueuesDueBuilds(t *testing.T) {
 	}
 	if !slices.Equal(got.args, want) {
 		t.Fatalf("builds = %+v", got.args)
+	}
+}
+
+// zoneSettings serves the timezone setting per tenant; failing tenants return a
+// read error.
+type zoneSettings struct {
+	zones   map[string]string
+	failing map[string]bool
+}
+
+func (z zoneSettings) GetByKey(ctx context.Context, _ string) (*models.Setting, error) {
+	tid, _ := tenantctx.From(ctx)
+	if z.failing[tid] {
+		return nil, errors.New("connection reset")
+	}
+	if zone, ok := z.zones[tid]; ok {
+		return &models.Setting{Value: zone}, nil
+	}
+	return nil, sql.ErrNoRows
+}
+func (zoneSettings) List(context.Context) ([]models.Setting, error)               { return nil, nil }
+func (zoneSettings) ListTenantIDsByKey(context.Context, string) ([]string, error) { return nil, nil }
+func (zoneSettings) Upsert(context.Context, *models.Setting) error                { return nil }
+func (zoneSettings) Delete(context.Context, string) (bool, error)                 { return false, nil }
+
+// A workspace whose zone can't be read is skipped rather than judged on UTC;
+// one whose zone is still before Monday 09:00 is not due yet.
+func TestWeeklyReportDispatchUsesWorkspaceZone(t *testing.T) {
+	var got capture
+	p := &WeeklyReportDispatchProcessor{
+		Deps: WeeklyReportDeps{
+			Store:     fakeReportStore{},
+			Collector: &fakeCollector{},
+			Settings: zoneSettings{
+				zones:   map[string]string{"tn-idle": "America/New_York"},
+				failing: map[string]bool{"tn-busy": true},
+			},
+		},
+		Insert: got.insert,
+		Now:    func() time.Time { return time.Date(2026, 10, 19, 9, 5, 0, 0, time.UTC) },
+	}
+	if err := p.Process(t.Context()); err != nil || len(got.args) != 0 {
+		t.Fatalf("err=%v builds=%v", err, got.args)
 	}
 }
 
