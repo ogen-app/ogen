@@ -83,6 +83,7 @@ type repos struct {
 	invitationRepo           repository.InvitationRepository
 	tierVersionRepo          repository.TenantTierVersionRepository
 	tierAssignmentRepo       repository.TenantTierAssignmentRepository
+	weeklyReportRepo         repository.WeeklyReportRepository
 	// tenantFence serialises the CON-203 Zernio profile teardown against a
 	// concurrent CON-190 restore via the tenant row lock.
 	tenantFence *repository.TenantTeardownFence
@@ -158,6 +159,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		oauthRepo:                repository.NewOAuthRepository(db),
 		tierVersionRepo:          repository.NewTenantTierVersionRepository(db),
 		tierAssignmentRepo:       repository.NewTenantTierAssignmentRepository(db),
+		weeklyReportRepo:         repository.NewWeeklyReportRepository(db),
 	}
 
 	// Analytics snapshots + follower stats live on the isolated

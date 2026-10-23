@@ -46,6 +46,10 @@ type SendEmailTask struct {
 	// or the invitation accept link + inviter + role. Empty for
 	// templates that render purely from the resolved Data.
 	Vars map[string]string `json:"vars,omitempty"`
+	// Report is the formatted weekly report a weekly_report email renders. It
+	// rides the job so every owner's email carries the numbers built once by
+	// build_weekly_report. Nil for every other template.
+	Report *models.WeeklyReportView `json:"report,omitempty"`
 }
 
 // Kind implements river.JobArgs.
@@ -168,7 +172,10 @@ func (p *SendEmailProcessor) deliver(ctx context.Context, t SendEmailTask, rcpt 
 		return nil // terminal
 	}
 
-	rendered, err := templates.Render(tmpl, templateData(rcpt, dep.AppBaseURL, unsubURL, t.Vars))
+	data := templateData(rcpt, dep.AppBaseURL, unsubURL, t.Vars)
+	data.Report = t.Report
+
+	rendered, err := templates.Render(tmpl, data)
 	if err != nil {
 		p.writeLog(ctx, logBase, models.EmailLogFailed, "", "render: "+err.Error())
 		slog.WarnContext(ctx, "send_email failed: render", logging.AttrComponent, sendEmailComponent, "template", t.TemplateKey, logging.AttrError, err)
@@ -236,12 +243,13 @@ func (p *SendEmailProcessor) resolveRecipient(ctx context.Context, t SendEmailTa
 }
 
 // unsubscribeHeaders builds the one-click unsubscribe headers marketing mail
-// must carry, returning the unsubscribe URL for the template. Other kinds get
-// no headers. ok is false when marketing mail has no link secret to sign the
-// URL with; err is a transient secret-read failure.
+// and the weekly report must carry, returning the unsubscribe URL for the
+// template. Other mail gets no headers. ok is false when there is no link
+// secret to sign the URL with; err is a transient secret-read failure.
 func (p *SendEmailProcessor) unsubscribeHeaders(ctx context.Context, t SendEmailTask, toEmail string) (headers map[string]string, unsubURL string, ok bool, err error) {
 	headers = map[string]string{}
-	if t.EmailKind != models.EmailKindMarketing {
+	weekly := t.TemplateKey == templates.KeyWeeklyReport && t.UserID != ""
+	if t.EmailKind != models.EmailKindMarketing && !weekly {
 		return headers, "", true, nil
 	}
 	secret := ""
@@ -253,7 +261,11 @@ func (p *SendEmailProcessor) unsubscribeHeaders(ctx context.Context, t SendEmail
 	if secret == "" {
 		return nil, "", false, nil
 	}
-	unsubURL = p.Deps.unsubscribeURL(secret, toEmail)
+	if weekly {
+		unsubURL = p.Deps.weeklyReportUnsubscribeURL(secret, t.UserID)
+	} else {
+		unsubURL = p.Deps.unsubscribeURL(secret, toEmail)
+	}
 	headers["List-Unsubscribe"] = "<" + unsubURL + ">"
 	headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 	return headers, unsubURL, true, nil

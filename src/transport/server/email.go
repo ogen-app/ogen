@@ -24,6 +24,8 @@ type emailRuntime struct {
 	Deps    queues.EmailDeps
 	Handler *handlers.EmailHandler
 	Webhook *handlers.ResendWebhookHandler
+	// LinkSecret resolves the key that signs the email's public links.
+	LinkSecret handlers.SecretResolver
 }
 
 // initEmail wires the transactional + marketing email subsystem. The
@@ -76,8 +78,9 @@ func initEmail(
 	}
 
 	return emailRuntime{
-		Deps:    deps,
-		Handler: handlers.NewEmailHandler(suppressionRepo, linkSecret),
-		Webhook: handlers.NewResendWebhookHandler(suppressionRepo, logRepo, eventRepo, webhookSecret),
+		Deps:       deps,
+		Handler:    handlers.NewEmailHandler(suppressionRepo, linkSecret),
+		Webhook:    handlers.NewResendWebhookHandler(suppressionRepo, logRepo, eventRepo, webhookSecret),
+		LinkSecret: linkSecret,
 	}, nil
 }

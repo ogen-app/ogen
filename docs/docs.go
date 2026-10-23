@@ -6287,6 +6287,151 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/email/weekly-report/resubscribe": {
+            "post": {
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Turn the weekly report back on",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed weekly-report token",
+                        "name": "token",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Resubscribed page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/email/weekly-report/unsubscribe": {
+            "get": {
+                "description": "Verifies the signed token and renders a confirmation page. GET never changes anything.",
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Weekly report unsubscribe landing (link)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed weekly-report token",
+                        "name": "token",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Confirmation page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "The POST target advertised in the report's List-Unsubscribe-Post header.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Weekly report one-click unsubscribe (RFC 8058)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed weekly-report token",
+                        "name": "token",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.emailPreferences"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/email/weekly-report/unsubscribe/confirm": {
+            "post": {
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "text/html"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Confirm weekly report unsubscribe (form POST)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Signed weekly-report token",
+                        "name": "token",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Unsubscribed page",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid or expired token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/events": {
             "get": {
                 "security": [
@@ -8085,6 +8230,95 @@ const docTemplate = `{
                     },
                     "429": {
                         "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/me/email-preferences": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "The signed-in member's email preferences for the active workspace.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Email preferences",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.emailPreferences"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Turns the weekly report on or off for the signed-in member in the active workspace.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "email"
+                ],
+                "summary": "Update email preferences",
+                "parameters": [
+                    {
+                        "description": "Preferences to change",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.emailPreferencesPatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.emailPreferences"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -15252,6 +15486,22 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/models.IdeaDistillRun"
                     }
+                }
+            }
+        },
+        "handlers.emailPreferences": {
+            "type": "object",
+            "properties": {
+                "weekly_report": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.emailPreferencesPatch": {
+            "type": "object",
+            "properties": {
+                "weekly_report": {
+                    "type": "boolean"
                 }
             }
         },

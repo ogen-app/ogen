@@ -6,6 +6,7 @@ package templates
 
 import (
 	"crypto/sha256"
+	"errors"
 	htmltemplate "html/template"
 	"strings"
 	"sync"
@@ -51,9 +52,28 @@ func Render(t *models.EmailTemplate, data any) (Rendered, error) {
 	return Rendered{Subject: subject, HTML: html, Text: text}, nil
 }
 
+// funcs are the helpers every template may call. dict builds a map from
+// key/value pairs so a body can pass several values to a sub-template.
+var funcs = map[string]any{
+	"dict": func(kv ...any) (map[string]any, error) {
+		if len(kv)%2 != 0 {
+			return nil, errors.New("dict: odd number of arguments")
+		}
+		m := make(map[string]any, len(kv)/2)
+		for i := 0; i < len(kv); i += 2 {
+			k, ok := kv[i].(string)
+			if !ok {
+				return nil, errors.New("dict: keys must be strings")
+			}
+			m[k] = kv[i+1]
+		}
+		return m, nil
+	},
+}
+
 func renderHTML(name, src string, data any) (string, error) {
 	tmpl, err := parsed(htmlTemplates, name, src, func() (*htmltemplate.Template, error) {
-		return htmltemplate.New(name).Delims(LeftDelim, RightDelim).Parse(src)
+		return htmltemplate.New(name).Delims(LeftDelim, RightDelim).Funcs(funcs).Parse(src)
 	})
 	if err != nil {
 		return "", err
@@ -67,7 +87,7 @@ func renderHTML(name, src string, data any) (string, error) {
 
 func renderText(name, src string, data any) (string, error) {
 	tmpl, err := parsed(textTemplates, name, src, func() (*texttemplate.Template, error) {
-		return texttemplate.New(name).Delims(LeftDelim, RightDelim).Parse(src)
+		return texttemplate.New(name).Delims(LeftDelim, RightDelim).Funcs(funcs).Parse(src)
 	})
 	if err != nil {
 		return "", err

@@ -62,6 +62,15 @@ var (
 	// that triggered a post.manual_publish_due notification this tick.
 	ManualPublishDueSwept = expvar.NewInt("ogen_jobs_manual_publish_due_swept")
 
+	// Weekly report dispatch: reports built and mailed, empty weeks stored
+	// without mail, send jobs enqueued, tenants whose build failed, and
+	// optional sections dropped because their read failed.
+	WeeklyReportBuilt         = expvar.NewInt("ogen_weekly_report_built")
+	WeeklyReportSkippedEmpty  = expvar.NewInt("ogen_weekly_report_skipped_empty")
+	WeeklyReportEnqueued      = expvar.NewInt("ogen_weekly_report_enqueued")
+	WeeklyReportBuildErrors   = expvar.NewInt("ogen_weekly_report_build_errors")
+	WeeklyReportSectionErrors = expvar.NewMap("ogen_weekly_report_section_errors")
+
 	// Analytics refresh lifecycle.
 	ZernioAnalyticsRefreshSucceeded = expvar.NewInt("ogen_jobs_zernio_analytics_refresh_succeeded")
 	ZernioAnalyticsRefreshFailed    = expvar.NewInt("ogen_jobs_zernio_analytics_refresh_failed")

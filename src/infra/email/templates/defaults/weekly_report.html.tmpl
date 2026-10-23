@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+body,table,td,div,p,a{font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}
+.mono{font-family:'IBM Plex Mono',SFMono-Regular,Menlo,Consolas,monospace!important;}
+@media (max-width:600px){
+  .card{padding:36px 20px 32px!important;}
+  .h1{font-size:26px!important;line-height:32px!important;}
+  .kpi{display:inline-block!important;box-sizing:border-box;width:49%!important;padding-bottom:20px!important;vertical-align:top;}
+  .hide-sm{display:none!important;}
+}
+@media (prefers-color-scheme:dark){
+  .bg{background:#161514!important;}
+  .card{background:#1f1e1c!important;border-color:#33312e!important;}
+  .ink{color:#efedea!important;}
+  .body{color:#bdb8b0!important;}
+  .muted{color:#9a948b!important;}
+  .teal{color:#6cc9c3!important;}
+  .rust{color:#e08a76!important;}
+  .bar{background:#4fb8b2!important;}
+  .track{background:#2c2a27!important;}
+  .hair{border-color:#2c2a27!important;}
+  .attn{background:#2c201c!important;}
+  .attn-hair{border-color:#3d2c26!important;}
+  .tint{background:#262422!important;}
+  .btn{background:#efedea!important;}
+  .btn-text{color:#161514!important;}
+}
+</style>
+</head>
+<body class="bg" style="margin:0;width:100%;padding:0;background:#f0f2f4;word-break:break-word;">
+[[ with .Report ]]
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">[[ .Lede ]]</div>
+<table role="presentation" class="bg" width="100%" cellpadding="0" cellspacing="0" bgcolor="#f0f2f4" style="background:#f0f2f4;">
+<tr><td align="center" style="padding:24px 12px;">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;">
+
+<tr><td style="padding:12px 8px 20px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td class="ink" style="font-size:18px;line-height:24px;font-weight:500;color:#151515;">Ogen</td>
+    <td class="muted" align="right" style="font-size:14px;line-height:24px;color:#736e66;">Weekly report</td>
+  </tr></table>
+</td></tr>
+
+<tr><td class="card" bgcolor="#fffffe" style="background:#fffffe;border:1px solid #e0deda;border-radius:4px;padding:44px 32px 40px;">
+
+  <div class="muted" style="font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">[[ .Workspace ]] · [[ .RangeLabel ]]</div>
+  <h1 class="h1 ink" style="margin:20px 0 0;font-size:30px;line-height:38px;font-weight:300;color:#151515;">[[ .Headline ]]</h1>
+  [[ if .Lede ]]<p class="body" style="margin:16px 0 0;font-size:15px;line-height:24px;color:#57534d;">[[ .Lede ]]</p>[[ end ]]
+
+  [[ if .Attention ]]
+  <table role="presentation" class="attn" width="100%" cellpadding="0" cellspacing="0" bgcolor="#f8efec" style="margin-top:32px;background:#f8efec;border-radius:4px;">
+  <tr><td style="padding:20px 20px 4px;">
+    <div class="rust" style="font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#a8432f;">Needs your attention</div>
+  </td></tr>
+  [[ range $i, $a := .Attention ]]
+  <tr><td style="padding:0 20px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="attn-hair" style="[[ if $i ]]border-top:1px solid #ecdcd6;[[ end ]]"><tr>
+      <td style="padding:14px 0;">
+        <div class="ink" style="font-size:14px;line-height:20px;color:#151515;">[[ $a.Text ]]</div>
+        [[ if $a.Detail ]]<div class="body" style="font-size:14px;line-height:20px;color:#57534d;">[[ $a.Detail ]]</div>[[ end ]]
+      </td>
+      <td align="right" valign="top" style="padding:14px 0 14px 16px;white-space:nowrap;"><a class="ink" href="[[ $a.URL ]]" style="font-size:14px;line-height:20px;font-weight:500;color:#151515;text-decoration:underline;">[[ $a.LinkLabel ]]</a></td>
+    </tr></table>
+  </td></tr>
+  [[ end ]]
+  <tr><td style="height:6px;font-size:0;line-height:0;">&nbsp;</td></tr>
+  </table>
+  [[ end ]]
+
+  [[ with .Publishing ]]
+  <div style="height:48px;font-size:0;line-height:0;">&nbsp;</div>
+  <div class="ink" style="font-size:20px;line-height:28px;font-weight:500;color:#151515;">Publishing</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:16px;"><tr>
+    <td valign="top">
+      <div class="body" style="font-size:14px;line-height:20px;color:#57534d;">Published</div>
+      <div style="margin-top:6px;"><span class="ink" style="font-size:30px;line-height:38px;font-weight:300;color:#151515;font-variant-numeric:tabular-nums;">[[ .Published.Value ]]</span>[[ if .Published.Delta ]]<span class="[[ if .Published.Good ]]teal[[ else ]]body[[ end ]]" style="padding-left:12px;font-size:14px;line-height:20px;color:[[ if .Published.Good ]]#2b7a76[[ else ]]#57534d[[ end ]];">[[ .Published.Delta ]]</span>[[ end ]]</div>
+    </td>
+    [[ if .Failed ]]
+    <td valign="top" align="right">
+      <div class="body" style="font-size:14px;line-height:20px;color:#57534d;">Didn't go out</div>
+      <div style="margin-top:6px;">[[ if .FailedNote ]]<span class="body" style="padding-right:12px;font-size:14px;line-height:20px;color:#57534d;">[[ .FailedNote ]]</span>[[ end ]]<span class="rust" style="font-size:30px;line-height:38px;font-weight:300;color:#a8432f;">[[ .Failed ]]</span></div>
+    </td>
+    [[ end ]]
+  </tr></table>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">
+  <tr>[[ range .Bars ]]<td align="center" valign="bottom" width="14%" style="height:96px;vertical-align:bottom;">[[ if .Height ]]<div class="body mono" style="padding-bottom:6px;font-size:12px;line-height:16px;color:#57534d;">[[ .Value ]]</div><table role="presentation" cellpadding="0" cellspacing="0" align="center"><tr><td class="bar" width="28" height="[[ .Height ]]" bgcolor="#40A9A4" style="width:28px;height:[[ .Height ]]px;background:#40A9A4;font-size:0;line-height:0;">&nbsp;</td></tr></table>[[ end ]]</td>[[ end ]]</tr>
+  <tr><td colspan="7" class="hair" style="border-top:1px solid #e0deda;height:1px;font-size:0;line-height:0;">&nbsp;</td></tr>
+  <tr>[[ range .Bars ]]<td align="center" class="muted" style="padding-top:6px;font-size:12px;line-height:16px;color:#736e66;">[[ .Day ]]</td>[[ end ]]</tr>
+  </table>
+
+  [[ if .Channels ]]
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:44px;">
+  <tr>
+    <td class="muted" style="padding-bottom:12px;font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">By channel</td>
+    <td class="muted" align="right" style="padding-bottom:12px;font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">Published</td>
+    <td class="muted hide-sm" align="right" style="padding:0 0 12px 16px;font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;white-space:nowrap;">Didn't go out</td>
+    <td class="muted" align="right" style="padding:0 0 12px 16px;font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">Reach</td>
+  </tr>
+  [[ range .Channels ]]
+  <tr>
+    <td class="hair" style="border-top:1px solid #ebe9e5;padding:12px 0;font-size:14px;line-height:20px;"><span class="ink" style="color:#151515;">[[ .Platform ]]</span>[[ if .Account ]]<span class="muted" style="padding-left:8px;color:#736e66;">[[ .Account ]]</span>[[ end ]]</td>
+    <td class="hair ink mono" align="right" style="border-top:1px solid #ebe9e5;padding:12px 0;font-size:14px;line-height:20px;color:#151515;">[[ .Published ]]</td>
+    <td class="hair mono hide-sm [[ if .HasFailed ]]rust[[ else ]]muted[[ end ]]" align="right" style="border-top:1px solid #ebe9e5;padding:12px 0 12px 16px;font-size:14px;line-height:20px;color:[[ if .HasFailed ]]#a8432f[[ else ]]#736e66[[ end ]];">[[ .Failed ]]</td>
+    <td class="hair ink mono" align="right" style="border-top:1px solid #ebe9e5;padding:12px 0 12px 16px;font-size:14px;line-height:20px;color:#151515;">[[ .Reach ]]</td>
+  </tr>
+  [[ end ]]
+  <tr><td colspan="4" class="hair muted" style="border-top:1px solid #ebe9e5;padding-top:8px;font-size:12px;line-height:16px;color:#736e66;">[[ .MoreChannels ]]</td></tr>
+  </table>
+  [[ end ]]
+
+  [[ if .Failures ]]
+  <div class="muted" style="margin-top:36px;font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">What didn't go out</div>
+  [[ range .Failures ]]
+  <div style="margin-top:18px;">
+    <a class="ink" href="[[ .URL ]]" style="font-size:14px;line-height:20px;color:#151515;text-decoration:none;">[[ .Title ]]</a><span class="muted" style="padding-left:10px;font-size:14px;line-height:20px;color:#736e66;">[[ .Meta ]]</span>
+    <div class="body" style="margin-top:4px;font-size:14px;line-height:21px;color:#57534d;">[[ .Reason ]]</div>
+  </div>
+  [[ end ]]
+  <div style="margin-top:18px;"><a class="teal" href="[[ .FailuresURL ]]" style="font-size:14px;line-height:20px;font-weight:500;color:#2b7a76;text-decoration:none;">[[ if .MoreFailures ]][[ .MoreFailures ]][[ else ]]Review and retry[[ end ]]</a></div>
+  [[ end ]]
+
+  [[ if .NextWeek ]]
+  <table role="presentation" class="tint" width="100%" cellpadding="0" cellspacing="0" bgcolor="#f6f5f3" style="margin-top:32px;background:#f6f5f3;border-radius:4px;"><tr>
+    <td style="padding:18px 20px;font-size:14px;line-height:20px;"><span class="muted" style="padding-right:12px;font-size:12px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">Next week</span><span class="body" style="color:#57534d;">[[ .NextWeek ]]</span></td>
+    <td align="right" style="padding:18px 20px 18px 0;white-space:nowrap;"><a class="teal" href="[[ .CalendarURL ]]" style="font-size:14px;line-height:20px;font-weight:500;color:#2b7a76;text-decoration:none;">Calendar</a></td>
+  </tr></table>
+  [[ end ]]
+  [[ end ]]
+
+  [[ with .Performance ]]
+  <div class="hair" style="margin-top:24px;border-top:1px solid #ebe9e5;height:24px;font-size:0;line-height:0;">&nbsp;</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td class="ink" style="font-size:20px;line-height:28px;font-weight:500;color:#151515;">Performance</td>
+    <td align="right"><a class="teal" href="[[ .URL ]]" style="font-size:14px;line-height:20px;font-weight:500;color:#2b7a76;text-decoration:none;">Open analytics →</a></td>
+  </tr></table>
+  <div class="muted" style="margin-top:4px;font-size:14px;line-height:20px;color:#736e66;">Posts published this week, compared with last week</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;"><tr>
+    [[ template "wrFigure" (dict "Label" "Reach" "Fig" .Reach) ]]
+    [[ template "wrFigure" (dict "Label" "Interactions" "Fig" .Interactions) ]]
+    [[ template "wrFigure" (dict "Label" "Engagement" "Fig" .Engagement) ]]
+    [[ if .Followers.Value ]][[ template "wrFigure" (dict "Label" "Followers" "Fig" .Followers) ]][[ end ]]
+  </tr></table>
+
+  [[ if .FollowerBars ]]
+  <div class="body" style="margin-top:28px;font-size:14px;line-height:20px;color:#57534d;">New followers per day</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:16px;">
+  <tr>[[ range .FollowerBars ]]<td align="center" valign="bottom" width="14%" style="height:86px;vertical-align:bottom;">[[ if .Height ]]<div class="body mono" style="padding-bottom:6px;font-size:12px;line-height:16px;color:#57534d;">[[ .Value ]]</div><table role="presentation" cellpadding="0" cellspacing="0" align="center"><tr><td class="bar" width="28" height="[[ .Height ]]" bgcolor="#40A9A4" style="width:28px;height:[[ .Height ]]px;background:#40A9A4;font-size:0;line-height:0;">&nbsp;</td></tr></table>[[ end ]]</td>[[ end ]]</tr>
+  <tr><td colspan="7" class="hair" style="border-top:1px solid #e0deda;height:1px;font-size:0;line-height:0;">&nbsp;</td></tr>
+  <tr>[[ range .FollowerBars ]]<td align="center" class="muted" style="padding-top:6px;font-size:12px;line-height:16px;color:#736e66;">[[ .Day ]]</td>[[ end ]]</tr>
+  </table>
+  [[ end ]]
+
+  [[ if .Top ]]
+  <div class="muted" style="margin-top:36px;padding-bottom:12px;font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">Top posts</div>
+  [[ template "wrPosts" (dict "Posts" .Top "Ranked" true) ]]
+  [[ end ]]
+  [[ if .Below ]]
+  <div class="muted" style="margin-top:32px;padding-bottom:12px;font-size:12px;line-height:16px;font-weight:500;letter-spacing:.6px;text-transform:uppercase;color:#736e66;">Below typical</div>
+  [[ template "wrPosts" (dict "Posts" .Below "Ranked" false) ]]
+  [[ end ]]
+  [[ if or .Top .Below ]]<div class="muted" style="margin-top:12px;font-size:12px;line-height:16px;color:#736e66;">Typical is your usual reach on that platform for a post of the same age.</div>[[ end ]]
+  [[ end ]]
+
+  [[ with .Campaigns ]]
+  <div class="hair" style="margin-top:24px;border-top:1px solid #ebe9e5;height:24px;font-size:0;line-height:0;">&nbsp;</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td class="ink" style="font-size:20px;line-height:28px;font-weight:500;color:#151515;">Campaigns</td>
+    <td align="right"><a class="teal" href="[[ .URL ]]" style="font-size:14px;line-height:20px;font-weight:500;color:#2b7a76;text-decoration:none;">Open campaigns →</a></td>
+  </tr></table>
+  [[ range $i, $c := .Rows ]]
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="hair" style="[[ if $i ]]border-top:1px solid #ebe9e5;[[ end ]]margin-top:[[ if $i ]]0[[ else ]]8px[[ end ]];"><tr>
+    <td style="padding:14px 0;">
+      <a class="ink" href="[[ $c.URL ]]" style="font-size:14px;line-height:20px;color:#151515;text-decoration:none;">[[ $c.Name ]]</a>
+      <div class="muted" style="font-size:12px;line-height:18px;color:#736e66;">[[ $c.Goal ]]</div>
+    </td>
+    <td align="right" valign="top" width="140" style="padding:14px 0 14px 16px;">
+      <div class="[[ if $c.Met ]]teal[[ else ]]ink[[ end ]]" style="font-size:14px;line-height:20px;color:[[ if $c.Met ]]#2b7a76[[ else ]]#151515[[ end ]];white-space:nowrap;">[[ $c.Status ]]</div>
+      <table role="presentation" width="140" cellpadding="0" cellspacing="0" style="margin-top:6px;"><tr>
+        [[ if $c.Fill ]]<td class="bar" width="[[ $c.Fill ]]" height="6" bgcolor="#40A9A4" style="width:[[ $c.Fill ]]px;height:6px;background:#40A9A4;font-size:0;line-height:0;">&nbsp;</td>[[ end ]]
+        [[ if $c.Rest ]]<td class="track" width="[[ $c.Rest ]]" height="6" bgcolor="#efede9" style="width:[[ $c.Rest ]]px;height:6px;background:#efede9;font-size:0;line-height:0;">&nbsp;</td>[[ end ]]
+      </tr></table>
+    </td>
+  </tr></table>
+  [[ end ]]
+  [[ if .Summary ]]<div class="body" style="margin-top:12px;font-size:14px;line-height:20px;color:#57534d;">[[ .Summary ]]</div>[[ end ]]
+  [[ end ]]
+
+  [[ with .Ideas ]]
+  <div class="hair" style="margin-top:24px;border-top:1px solid #ebe9e5;height:24px;font-size:0;line-height:0;">&nbsp;</div>
+  <div class="ink" style="font-size:20px;line-height:28px;font-weight:500;color:#151515;">Ideas and content bank</div>
+  [[ if .Waiting ]]
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;"><tr>
+    <td class="ink" style="font-size:15px;line-height:22px;color:#151515;">[[ .Waiting ]]</td>
+    <td align="right" style="white-space:nowrap;"><a class="teal" href="[[ .URL ]]" style="font-size:14px;line-height:20px;font-weight:500;color:#2b7a76;text-decoration:none;">Review ideas</a></td>
+  </tr></table>
+  [[ end ]]
+  [[ if .Summary ]]<div class="body" style="margin-top:6px;font-size:14px;line-height:20px;color:#57534d;">[[ .Summary ]]</div>[[ end ]]
+  [[ end ]]
+
+  [[ with .Team ]]
+  <div class="hair" style="margin-top:24px;border-top:1px solid #ebe9e5;height:24px;font-size:0;line-height:0;">&nbsp;</div>
+  <div class="ink" style="font-size:20px;line-height:28px;font-weight:500;color:#151515;">Team</div>
+  <div class="body" style="margin-top:12px;font-size:14px;line-height:20px;color:#57534d;">[[ .Summary ]]</div>
+  [[ end ]]
+
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:40px;"><tr>
+    <td class="btn" bgcolor="#151515" style="background:#151515;border-radius:4px;"><a class="btn-text" href="[[ .AppURL ]]" style="display:inline-block;padding:13px 24px;font-size:15px;line-height:20px;font-weight:500;color:#fffffe;text-decoration:none;">Open [[ .Workspace ]]</a></td>
+  </tr></table>
+
+</td></tr>
+
+<tr><td style="padding:28px 8px 8px;">
+  <p class="muted" style="margin:0;font-size:12px;line-height:18px;color:#736e66;">You're getting this because you own [[ .Workspace ]]. It arrives every Monday at 9:00 your workspace time ([[ .Timezone ]]).</p>
+  <p style="margin:10px 0 0;"><a class="body" href="[[ $.UnsubscribeURL ]]" style="font-size:12px;line-height:18px;color:#57534d;text-decoration:underline;">Unsubscribe from weekly reports</a></p>
+</td></tr>
+
+</table>
+</td></tr>
+</table>
+[[ end ]]
+</body>
+</html>
+[[ define "wrFigure" ]]<td class="kpi" valign="top" width="25%" style="padding-right:12px;">
+  <div class="body" style="font-size:14px;line-height:20px;color:#57534d;">[[ .Label ]]</div>
+  <div class="ink" style="margin-top:6px;font-size:24px;line-height:30px;font-weight:300;color:#151515;font-variant-numeric:tabular-nums;">[[ .Fig.Value ]]</div>
+  [[ if .Fig.Delta ]]<div class="[[ if .Fig.Good ]]teal[[ else ]]body[[ end ]]" style="margin-top:4px;font-size:14px;line-height:20px;color:[[ if .Fig.Good ]]#2b7a76[[ else ]]#57534d[[ end ]];">[[ .Fig.Delta ]]</div>[[ end ]]
+</td>[[ end ]]
+[[ define "wrPosts" ]][[ range .Posts ]]
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="hair" style="border-top:1px solid #ebe9e5;"><tr>
+  [[ if $.Ranked ]]<td class="mono" valign="top" width="28" style="padding:14px 0;font-size:14px;line-height:20px;color:#a39e96;">[[ .Rank ]]</td>[[ end ]]
+  <td valign="top" style="padding:14px 0;">
+    <a class="ink" href="[[ .URL ]]" style="font-size:14px;line-height:20px;color:#151515;text-decoration:none;">[[ .Title ]]</a>
+    <div class="muted" style="font-size:12px;line-height:18px;color:#736e66;">[[ .Meta ]]</div>
+  </td>
+  <td valign="top" align="right" style="padding:14px 0 14px 16px;white-space:nowrap;">
+    <div class="ink" style="font-size:14px;line-height:20px;color:#151515;">[[ .Reach ]]</div>
+    [[ if .Multiple ]]<div class="[[ if $.Ranked ]]teal[[ else ]]body[[ end ]]" style="font-size:12px;line-height:18px;font-weight:500;color:[[ if $.Ranked ]]#2b7a76[[ else ]]#57534d[[ end ]];">[[ .Multiple ]]</div>[[ end ]]
+  </td>
+</tr></table>[[ end ]][[ end ]]

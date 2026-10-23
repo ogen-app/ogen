@@ -136,6 +136,10 @@ type Deps struct {
 	NotificationRepo      repository.NotificationRepository
 	NotificationRetention time.Duration
 
+	// The weekly_report_dispatch sweep. A nil DB, Store or Collector makes it
+	// a no-op.
+	WeeklyReport WeeklyReportDeps
+
 	// The notify_harbor_tenant_registered worker's config — the outbound
 	// webhook URL Harbor exposes + the HMAC signing secret. An empty URL makes the
 	// worker a no-op (feature off); an empty secret sends the body unsigned.
@@ -226,6 +230,8 @@ type PeriodicConfig struct {
 	AnalysisBackfillEvery time.Duration
 	// Brand-proposal expiry sweep. Positive-interval gated like the others.
 	BrandDistillExpireEvery time.Duration
+	// Weekly report dispatch. Positive-interval gated like the others.
+	WeeklyReportEvery time.Duration
 }
 
 // PeriodicJobs builds the River periodic-job set. Every job runs once on
@@ -320,6 +326,11 @@ func (cfg PeriodicConfig) PeriodicJobs() []*river.PeriodicJob {
 	if cfg.BrandDistillExpireEvery > 0 {
 		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.BrandDistillExpireEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return ExpireBrandDistillsTask{}, nil
+		}, runOnStart))
+	}
+	if cfg.WeeklyReportEvery > 0 {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(cfg.WeeklyReportEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return WeeklyReportDispatchTask{}, nil
 		}, runOnStart))
 	}
 	return jobs

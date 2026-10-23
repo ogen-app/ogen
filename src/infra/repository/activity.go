@@ -14,11 +14,13 @@ import (
 // ActivityRepository persists tenant_activity_events in the isolated analytics
 // database. It is constructed with the analytics *bun.DB, not the
 // main pool. Writes come from the async activity.Recorder in a system context
-// (tenant pre-set per row). A read/query surface is deferred to the consumers;
-// v1 is collection-only.
+// (tenant pre-set per row).
 type ActivityRepository interface {
 	// Insert writes a batch of events. A nil/empty batch is a no-op.
 	Insert(ctx context.Context, events []*models.ActivityEvent) error
+	// CountDistinctUsers counts the members of tenantID who did anything in
+	// [from, to). System and background events carry no user and don't count.
+	CountDistinctUsers(ctx context.Context, tenantID string, from, to time.Time) (int, error)
 }
 
 type activityRepository struct {
@@ -36,6 +38,18 @@ func (r *activityRepository) Insert(ctx context.Context, events []*models.Activi
 	}
 	_, err := r.db.NewInsert().Model(&events).Exec(ctx)
 	return err
+}
+
+func (r *activityRepository) CountDistinctUsers(ctx context.Context, tenantID string, from, to time.Time) (int, error) {
+	var n int
+	err := r.db.NewSelect().Table("tenant_activity_events").
+		ColumnExpr("count(DISTINCT user_id)").
+		Where("tenant_id = ?", tenantID).
+		Where("occurred_at >= ?", from).
+		Where("occurred_at < ?", to).
+		Where("user_id IS NOT NULL AND user_id <> ''").
+		Scan(ctx, &n)
+	return n, err
 }
 
 // postLogBackfillPrefix marks tenant_activity_events rows that were migrated from

@@ -11,7 +11,7 @@ import (
 // River registry without panicking (river.AddWorker panics on duplicate kinds,
 // so this also proves the kinds are distinct).
 func TestAllWorkersSelfRegister(t *testing.T) {
-	const wantWorkers = 30 // analyze-asset + reanalyze-campaign + backfill + distill-asset-ideas (one registrar), distill-brand + expire-brand-distills (one registrar), submit, poll, post-first-comment, cancel, withdraw, sweep-orphans, sweep-pending-uploads, cleanup, reconcile, analytics, followers, bootstrap-profile, teardown-profile, process-pdf, process-document, process-audio, process-image, reembed-image, process-url, send-email, cleanup-email-logs, cleanup-connect-sessions, cleanup-plugin-pairings, detect-expiring-connections, cleanup-notifications, detect-manual-publish-due, notify-harbor-tenant-registered, cleanup-login-security
+	const wantWorkers = 31 // analyze-asset + reanalyze-campaign + backfill + distill-asset-ideas (one registrar), distill-brand + expire-brand-distills (one registrar), submit, poll, post-first-comment, cancel, withdraw, sweep-orphans, sweep-pending-uploads, cleanup, reconcile, analytics, followers, bootstrap-profile, teardown-profile, process-pdf, process-document, process-audio, process-image, reembed-image, process-url, send-email, cleanup-email-logs, cleanup-connect-sessions, cleanup-plugin-pairings, detect-expiring-connections, cleanup-notifications, detect-manual-publish-due, notify-harbor-tenant-registered, cleanup-login-security, weekly-report-dispatch + build-weekly-report (one registrar)
 	if len(registrars) != wantWorkers {
 		t.Fatalf("self-registered workers: got %d, want %d", len(registrars), wantWorkers)
 	}

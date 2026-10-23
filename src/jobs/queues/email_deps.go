@@ -50,6 +50,14 @@ type EmailDeps struct {
 	ActivityRecorder *activity.Recorder
 }
 
+// weeklyReportUnsubscribeURL builds the link that turns off the weekly report
+// for one membership, signed with secret.
+func (d EmailDeps) weeklyReportUnsubscribeURL(secret, userID string) string {
+	token := email.SignScoped(secret, email.ScopeWeeklyReport, userID, time.Now().UTC())
+	base := strings.TrimRight(d.LinkBaseURL, "/")
+	return base + "/api/email/weekly-report/unsubscribe?token=" + url.QueryEscape(token)
+}
+
 // unsubscribeURL builds the absolute one-click unsubscribe link for toEmail,
 // signed with secret. The address is normalised so the token round-trips
 // exactly what the suppression list keys on.
