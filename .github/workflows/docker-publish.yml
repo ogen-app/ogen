@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+# Go jobs restore one shared cache (modules + build cache) and only Test saves
+# it, once per main run. setup-go's built-in cache can't do this: it saves once
+# per key and never again on an exact hit, so whichever job finished first froze
+# a near-empty cache for every later run.
 jobs:
   test:
     name: Test
@@ -24,10 +28,32 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore Go cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-${{ runner.os }}-
 
       - name: Run tests with coverage
         run: make test
+
+      # main pushes only: PRs read main's cache, and saving from every PR would
+      # crowd the 10 GB repo cache.
+      - name: Save Go cache
+        if: always() && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -50,7 +76,18 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore Go cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-${{ runner.os }}-
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
@@ -59,7 +96,6 @@ jobs:
 
   test-integration:
     name: Integration Test
-    needs: test
     runs-on: ubuntu-latest
     environment: testing
     permissions:
@@ -73,14 +109,24 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore Go cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-${{ runner.os }}-
 
       - name: Run integration tests
         run: make test-integration
 
   semgrep:
     name: Semgrep security scan
-    needs: test-integration
     runs-on: ubuntu-latest
     environment: testing
     permissions:
@@ -96,9 +142,33 @@ jobs:
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
+  # Builds the image on PRs without pushing, so a broken Dockerfile or GeoIP
+  # download fails before merge instead of on Railway.
+  docker-build:
+    name: Docker build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Reads main's layer cache but doesn't write PR layers into it.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+
   build-and-push:
     name: Build and push Docker image
-    needs: test-integration
+    needs: [test, lint, test-integration]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: testing
@@ -139,7 +209,6 @@ jobs:
 
   publish-openapi:
     name: Publish OpenAPI spec
-    needs: test-integration
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: testing
@@ -154,7 +223,18 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Restore Go cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-${{ runner.os }}-
 
       - name: Generate OpenAPI spec
         run: |

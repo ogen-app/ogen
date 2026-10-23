@@ -1,6 +1,6 @@
 .PHONY: build run lint test test-integration coverage _ginkgo _air _pg-test-up tidy docker docker-genkit clean openapi genkit proto
 
-GINKGO_FLAGS = --github-output -r -randomize-all -randomize-suites -race -trace -procs=2 -poll-progress-after=10s -poll-progress-interval=10s
+GINKGO_FLAGS = --github-output -r -randomize-all -randomize-suites -race -trace -procs=4-poll-progress-after=10s -poll-progress-interval=10s
 
 # Postgres for the unit suite (CON-87 WS5). A throwaway pgvector container on
 # host port 5433 — avoids clashing with a dev `docker compose` on 5432 — with
