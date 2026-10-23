@@ -26,10 +26,12 @@ jobs:
           # failures otherwise). Mirrors the ogen-app/proto workflow.
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # No cache: this job only runs two `go install`s, and sharing setup-go's
+      # cache key with CI let it save a near-empty cache that CI then reused.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
 
       # Pin to the versions in the generated headers so regeneration is
       # byte-identical.
