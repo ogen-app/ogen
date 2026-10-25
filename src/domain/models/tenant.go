@@ -46,6 +46,12 @@ type Tenant struct {
 	// a subscription. Stamped on new workspaces while billing is on; existing
 	// ones stay false (grandfathered). Operator field, off the REST contract.
 	BillingRequired bool `bun:"billing_required,notnull,default:false" json:"-"`
+	// Complimentary marks a tester's workspace: never billed (billing_required
+	// is always false with it, CHECK-enforced), and the owner may switch tiers
+	// without a checkout. Operator field, off the REST contract.
+	Complimentary bool `bun:"complimentary,notnull,default:false" json:"-"`
+	// InviteID is the tester invite the workspace was created from, if any.
+	InviteID *string `bun:"invite_id" json:"-"`
 
 	// Tier and Groups are hydrated on the operator/admin read path only (CON-208
 	// TenantAdminService), never scanned from the tenants table (bun:"-"), and —

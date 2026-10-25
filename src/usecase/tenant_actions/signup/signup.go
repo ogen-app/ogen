@@ -14,7 +14,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"expvar"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 // sessionTTL mirrors handlers.sessionTTL: a fresh signup opens a
@@ -53,6 +56,37 @@ type HarborEnqueuer interface {
 // already linked to an account.
 var ErrIdentityLinked = errors.New("identity already linked")
 
+// Signup access errors.
+var (
+	// ErrInviteRequired: self-registration is closed (invite-only mode) and
+	// the signup carries no tester invite.
+	ErrInviteRequired = errors.New("invite_required")
+	// ErrInviteInvalid: the tester invite is unknown, expired, revoked or
+	// already redeemed. One error for all of them.
+	ErrInviteInvalid = errors.New("invite invalid")
+	// ErrInviteEmailMismatch: the signup's address is not the invited one.
+	// The invite is left unspent.
+	ErrInviteEmailMismatch = errors.New("invite_email_mismatch")
+)
+
+var (
+	inviteRequiredTotal = expvar.NewInt("signup_invite_required_total")
+	invitesRedeemed     = expvar.NewInt("tenant_invites_redeemed_total")
+)
+
+// AccessPolicy reports the platform signup settings. *signupaccess.Service
+// satisfies it.
+type AccessPolicy interface {
+	Settings(ctx context.Context) (models.SignupSettings, error)
+}
+
+// InviteDeps are what redeeming a tester invite writes through.
+type InviteDeps struct {
+	Invites      repository.TenantInviteRepository
+	TierVersions repository.TenantTierVersionRepository
+	Assignments  repository.TenantTierAssignmentRepository
+}
+
 // Input is the data a signup needs. A password signup sets Password; a
 // provider signup sets Identity instead, and the account starts with no
 // password.
@@ -62,6 +96,9 @@ type Input struct {
 	Email      string
 	Password   string
 	Identity   *Identity
+	// InviteToken redeems a tester invite: the workspace is created
+	// complimentary, on the invite's tier and in its groups.
+	InviteToken string
 }
 
 // Identity is a verified provider identity the new account signs in through.
@@ -77,6 +114,8 @@ type Result struct {
 	Tenant  *models.Tenant
 	User    *models.User
 	Session *models.Session
+	// Invite is the tester invite the signup redeemed, if any.
+	Invite *models.TenantInvite
 }
 
 // Service performs the signup use case. Construct with New; wire the optional
@@ -89,6 +128,10 @@ type Service struct {
 	harbor   HarborEnqueuer
 	// billingRequired gates new workspaces until they check out.
 	billingRequired bool
+	// access decides whether a signup without an invite is allowed; nil
+	// leaves self-registration open.
+	access  AccessPolicy
+	invites InviteDeps
 
 	// now is injectable so tests can pin "current time". nil → time.Now().UTC().
 	now func() time.Time
@@ -104,6 +147,29 @@ func New(db *bun.DB, accounts repository.AccountRepository, tenants repository.T
 // SetBillingRequired makes every new workspace check out before use (on
 // while billing is enabled).
 func (s *Service) SetBillingRequired(required bool) { s.billingRequired = required }
+
+// SetAccess wires the signup mode and tester-invite redemption.
+func (s *Service) SetAccess(policy AccessPolicy, invites InviteDeps) {
+	s.access, s.invites = policy, invites
+}
+
+// CheckAccess refuses a signup without a tester invite while self-registration
+// is closed. A signup carrying a token always passes here; the token itself
+// is checked when it is spent.
+func (s *Service) CheckAccess(ctx context.Context, inviteToken string) error {
+	if s.access == nil || strings.TrimSpace(inviteToken) != "" {
+		return nil
+	}
+	st, err := s.access.Settings(ctx)
+	if err != nil {
+		return fmt.Errorf("signup: read signup settings: %w", err)
+	}
+	if st.InviteOnly() {
+		inviteRequiredTotal.Add(1)
+		return ErrInviteRequired
+	}
+	return nil
+}
 
 // SetEmailEnqueuer wires the lifecycle-email enqueuer (nil-safe: no mail sent).
 func (s *Service) SetEmailEnqueuer(e EmailEnqueuer) { s.emails = e }
@@ -124,6 +190,14 @@ func (s *Service) clock() time.Time {
 // and, under a race, from the accounts.email unique-constraint backstop. A
 // provider signup returns ErrIdentityLinked when its identity is already linked.
 func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
+	// The gate runs first, so a closed path reveals nothing about addresses.
+	if err := s.CheckAccess(ctx, in.InviteToken); err != nil {
+		return nil, err
+	}
+	in.InviteToken = strings.TrimSpace(in.InviteToken)
+	if in.InviteToken != "" && s.invites.Invites == nil {
+		return nil, ErrInviteInvalid
+	}
 	// The unique constraint on accounts.email is the TOCTOU backstop. A provider
 	// address is matched ignoring case, the way sign-in links it, so a Google
 	// signup can't create a near-duplicate of a typed-in address.
@@ -147,26 +221,122 @@ func (s *Service) Create(ctx context.Context, in Input) (*Result, error) {
 	}
 	e.tenant.BillingRequired = s.billingRequired
 
+	var invite *models.TenantInvite
 	if err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		for _, m := range e.rows() {
-			if _, err := tx.NewInsert().Model(m).Exec(ctx); err != nil {
-				return err
-			}
-		}
-		return s.enqueueSideEffectsTx(ctx, tx.Tx, e.user.ID, e.tenant.ID)
+		var err error
+		invite, err = s.createTx(ctx, tx, in, e)
+		return err
 	}); err != nil {
-		if isUniqueViolationOn(err, identitySubjectConstraint) {
-			return nil, ErrIdentityLinked
-		}
-		// A concurrent signup with the same email passes the pre-check but
-		// loses the race to the accounts.email unique constraint.
-		if isUniqueViolation(err) {
-			return nil, ErrEmailInUse
-		}
-		return nil, fmt.Errorf("signup: create tenant: %w", err)
+		return nil, createErr(err)
 	}
 
-	return &Result{Tenant: e.tenant, User: e.user, Session: e.session}, nil
+	if invite != nil {
+		invitesRedeemed.Add(1)
+	}
+	return &Result{Tenant: e.tenant, User: e.user, Session: e.session, Invite: invite}, nil
+}
+
+// createTx inserts the signup's rows and enqueues its side effects, redeeming
+// the tester invite first when the signup carries one.
+func (s *Service) createTx(ctx context.Context, tx bun.Tx, in Input, e *signupEntities) (*models.TenantInvite, error) {
+	var invite *models.TenantInvite
+	if in.InviteToken != "" {
+		var err error
+		if invite, err = s.spendInviteTx(ctx, tx, in, e); err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range e.rows() {
+		if _, err := tx.NewInsert().Model(m).Exec(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if invite != nil {
+		if err := s.applyInviteTx(ctx, tx, invite, e); err != nil {
+			return nil, err
+		}
+	}
+	return invite, s.enqueueSideEffectsTx(ctx, tx.Tx, e.user.ID, e.tenant.ID)
+}
+
+// createErr maps a failed signup transaction to the caller's errors.
+func createErr(err error) error {
+	switch {
+	case errors.Is(err, ErrInviteInvalid), errors.Is(err, ErrInviteEmailMismatch):
+		return err
+	case isUniqueViolationOn(err, identitySubjectConstraint):
+		return ErrIdentityLinked
+	case isUniqueViolation(err):
+		// A concurrent signup with the same email passes the pre-check but
+		// loses the race to the accounts.email unique constraint.
+		return ErrEmailInUse
+	default:
+		return fmt.Errorf("signup: create tenant: %w", err)
+	}
+}
+
+// spendInviteTx consumes the tester invite inside the signup transaction and
+// makes the workspace complimentary. The invite is spent if and only if the
+// workspace commits: a mismatch rolls the consume back.
+func (s *Service) spendInviteTx(ctx context.Context, tx bun.Tx, in Input, e *signupEntities) (*models.TenantInvite, error) {
+	now := e.tenant.CreatedAt
+	inv, err := s.invites.Invites.ConsumeTx(ctx, tx, models.HashInvitationToken(in.InviteToken), now)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInviteInvalid
+	}
+	if err != nil {
+		return nil, err
+	}
+	if repository.NormalizeEmail(in.Email) != inv.Email {
+		return nil, ErrInviteEmailMismatch
+	}
+	// The account carries the invited address, normalised.
+	e.account.Email, e.user.Email = inv.Email, inv.Email
+	if e.identity != nil {
+		e.identity.Email = inv.Email
+	}
+	e.tenant.Complimentary, e.tenant.BillingRequired = true, false
+	e.tenant.InviteID = &inv.ID
+	e.tenant.TierID, e.inviteVersion = s.inviteTier(ctx, inv)
+	return inv, nil
+}
+
+// inviteTier is the tier the invite starts the workspace on, with its latest
+// published version. A tier deleted or unpublished since the invite was sent
+// falls back to the default tier rather than failing the signup.
+func (s *Service) inviteTier(ctx context.Context, inv *models.TenantInvite) (string, *string) {
+	if inv.TierID != nil {
+		v, err := s.invites.TierVersions.LatestActiveByTier(ctx, *inv.TierID)
+		if err == nil {
+			return *inv.TierID, &v.ID
+		}
+		slog.WarnContext(ctx, "tester invite tier has no published version; using the default tier",
+			logging.AttrComponent, "signup", "invite_id", inv.ID, "tier_id", *inv.TierID, logging.AttrError, err)
+	}
+	if v, err := s.invites.TierVersions.LatestActiveByTier(ctx, models.DefaultTierID); err == nil {
+		return models.DefaultTierID, &v.ID
+	}
+	return models.DefaultTierID, nil
+}
+
+// applyInviteTx records the complimentary tier assignment, copies the invite's
+// groups onto the workspace and stores what the invite became.
+func (s *Service) applyInviteTx(ctx context.Context, tx bun.Tx, inv *models.TenantInvite, e *signupEntities) error {
+	now := e.tenant.CreatedAt
+	if _, err := s.invites.Assignments.ReassignTx(ctx, tx, e.tenant.ID, e.tenant.TierID, e.inviteVersion, models.AssignmentReasonComp, now); err != nil {
+		return err
+	}
+	groupIDs, err := s.invites.Invites.GroupIDs(ctx, tx, inv.ID)
+	if err != nil {
+		return err
+	}
+	for _, g := range groupIDs {
+		if _, err := tx.NewInsert().Model(&models.TenantGroupAssignment{TenantID: e.tenant.ID, GroupID: g, CreatedAt: now}).
+			On("CONFLICT (tenant_id, group_id) DO NOTHING").Exec(ctx); err != nil {
+			return err
+		}
+	}
+	return s.invites.Invites.RecordRedemptionTx(ctx, tx, inv.ID, e.tenant.ID, e.account.ID, now)
 }
 
 // signupEntities are the rows a signup inserts.
@@ -176,6 +346,8 @@ type signupEntities struct {
 	identity *models.AccountIdentity // nil for a password signup
 	user     *models.User
 	session  *models.Session
+	// inviteVersion is the tier version a redeemed invite starts on.
+	inviteVersion *string
 }
 
 // rows lists the entities in insert (foreign-key) order.

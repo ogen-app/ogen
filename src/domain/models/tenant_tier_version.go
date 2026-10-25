@@ -30,6 +30,9 @@ const (
 	// AssignmentReasonSubscriptionStarted marks the move onto the purchased
 	// version when a workspace's first subscription starts.
 	AssignmentReasonSubscriptionStarted = "subscription_started"
+	// AssignmentReasonComp marks a complimentary workspace's tier: the one its
+	// tester invite set, or one its owner switched to without paying.
+	AssignmentReasonComp = "comp"
 )
 
 // TenantTierVersion is an immutable, versioned snapshot of one tier's pricing +

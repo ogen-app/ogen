@@ -672,6 +672,29 @@ func (e *Enqueuer) EnqueueInvitationEmailTx(ctx context.Context, tx *sql.Tx, ten
 	return err
 }
 
+// EnqueueTenantInviteEmailTx enqueues a tester invite email inside the
+// transaction that mints or rotates the invite's token, so the mail exists iff
+// the token does. The recipient has no account yet and the mail has no tenant.
+// The idempotency key names the send (tenant_invite:<id>:<send>), so a resend
+// is a new email and the operator view finds the latest one by prefix.
+func (e *Enqueuer) EnqueueTenantInviteEmailTx(ctx context.Context, tx *sql.Tx, inviteID string, send int, toEmail, inviteURL, expiresAt, message string) error {
+	if e == nil || e.Client == nil {
+		return nil
+	}
+	_, err := e.Client.InsertTx(ctx, tx, SendEmailTask{
+		ToEmail:        toEmail,
+		TemplateKey:    templates.KeyTenantInvite,
+		EmailKind:      models.EmailKindTransactional,
+		IdempotencyKey: "tenant_invite:" + inviteID + ":" + strconv.Itoa(send),
+		Vars: map[string]string{
+			"invite_url": inviteURL,
+			"expires_at": expiresAt,
+			"message":    message,
+		},
+	}, insertOptsWithRequestID(ctx, nil))
+	return err
+}
+
 // EnqueueDripTx enqueues the marketing onboarding drip (day 2/5/7) as delayed
 // jobs inside the signup transaction. Each step fires at its
 // ScheduledAt; unsubscribes are honoured at send time, so no scheduled job ever
