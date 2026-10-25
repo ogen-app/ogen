@@ -130,6 +130,10 @@ type signupRequest struct {
 		Email    string `json:"email"    validate:"required,email"`
 		Password string `json:"password" validate:"required,min=8"`
 	} `json:"user"`
+	// InviteToken redeems a tester invite: the new workspace is
+	// complimentary, on the invite's tier and in its groups. The address must
+	// be the invited one.
+	InviteToken string `json:"invite_token"`
 }
 
 type signupResponse struct {
@@ -140,14 +144,16 @@ type signupResponse struct {
 
 // Signup godoc
 // @Summary      Sign up (create tenant)
-// @Description  Public self-service signup: atomically creates a tenant and its first user, opens a session, and returns the session cookie (CON-97 §7.1).
+// @Description  Public self-service signup: atomically creates a tenant and its first user, opens a session, and returns the session cookie. invite_token redeems a tester invite (complimentary workspace on the invite's tier). While signup is invite-only, a signup without one answers 403 {code: invite_required}; an address other than the invited one answers 403 {code: invite_email_mismatch}; an unusable invite answers 410.
 // @Tags         tenants
 // @Accept       json
 // @Produce      json
 // @Param        body  body      signupRequest  true  "Signup payload"
 // @Success      201   {object}  signupResponse
 // @Failure      400   {object}  map[string]string
+// @Failure      403   {object}  map[string]string
 // @Failure      409   {object}  map[string]string
+// @Failure      410   {object}  map[string]string
 // @Router       /api/tenants [post]
 func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 	var req signupRequest
@@ -165,12 +171,16 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 	// The transactional create + job enqueues live in the signup use case; the
 	// handler keeps only transport: throttle, cookie, activity, response.
 	res, err := h.signup.Create(reqCtx(c), signup.Input{
-		TenantName: req.Tenant.Name,
-		UserName:   req.User.Name,
-		Email:      req.User.Email,
-		Password:   req.User.Password,
+		TenantName:  req.Tenant.Name,
+		UserName:    req.User.Name,
+		Email:       req.User.Email,
+		Password:    req.User.Password,
+		InviteToken: req.InviteToken,
 	})
 	if err != nil {
+		if handled, rerr := signupAccessError(c, err); handled {
+			return rerr
+		}
 		if errors.Is(err, signup.ErrEmailInUse) {
 			return fiber.NewError(fiber.StatusConflict, "email already in use")
 		}
@@ -184,6 +194,7 @@ func (h *TenantsHandler) Signup(c *fiber.Ctx) error {
 		logging.WithUserID(tenantctx.With(reqCtx(c), res.Tenant.ID), res.User.ID),
 		activity.CategoryAuthentication, "signup",
 		activity.WithEntity("tenant", res.Tenant.ID), activity.WithSource(activity.SourceAPI),
+		activity.WithPayload(signupPayload(res, nil)),
 	)
 
 	return c.Status(fiber.StatusCreated).JSON(signupResponse{Tenant: res.Tenant, User: res.User, Session: res.Session})

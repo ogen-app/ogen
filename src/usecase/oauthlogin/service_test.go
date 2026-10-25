@@ -37,13 +37,19 @@ type fixture struct {
 	emails *fakeLinkEmails
 }
 
-func newFixture(t *testing.T) *fixture {
+// newFixture builds the service over a fresh database. setup configures the
+// signup service before it is wired in (e.g. the signup gate).
+func newFixture(t *testing.T, setup ...func(db *bun.DB, s *signup.Service)) *fixture {
 	t.Helper()
 	db := pgtest.MustDB()
 	t.Cleanup(func() { _ = db.Close() })
 	issuer := oauthtest.New(t)
 	accounts := repository.NewAccountRepository(db)
 	emails := &fakeLinkEmails{}
+	signupSvc := signup.New(db, accounts, repository.NewTenantRepository(db))
+	for _, fn := range setup {
+		fn(db, signupSvc)
+	}
 	svc := oauthlogin.New(oauthlogin.Deps{
 		DB:         db,
 		Provider:   issuer.Provider(t),
@@ -52,7 +58,7 @@ func newFixture(t *testing.T) *fixture {
 		Accounts:   accounts,
 		Users:      repository.NewUserRepository(db),
 		Sessions:   repository.NewSessionRepository(db),
-		Signup:     signup.New(db, accounts, repository.NewTenantRepository(db)),
+		Signup:     signupSvc,
 		Emails:     emails,
 		Invites: inviteaccept.New(db, repository.NewUserRepository(db), accounts,
 			repository.NewInvitationRepository(db), repository.NewSessionRepository(db), nil),

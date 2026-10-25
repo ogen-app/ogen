@@ -78,6 +78,8 @@ type Deps struct {
 	// Billing backs BillingAdminService and the tenant list's billing_status;
 	// nil leaves both off.
 	Billing BillingAdmin
+	// TenantInvites backs TenantInviteAdminService; nil leaves it off.
+	TenantInvites TenantInvites
 	// Hub carries the entitlement-invalidation event an operator tier change
 	// publishes onto the tenant's /api/events stream.
 	Hub eventhub.Hub
@@ -118,6 +120,7 @@ func New(d Deps) (*grpc.Server, error) {
 	registerEmailAdmin(srv, d.EmailLogs, d.EmailEvents, d.EmailBodies, d.LiveEmailBodies, d.Tenants, d.Users, d.AdminEmailEnqueuer, d.HarborBaseURL)
 	registerAnnouncementAdmin(srv, d.Announcements)
 	registerBillingAdmin(srv, d.Billing)
+	registerTenantInviteAdmin(srv, d.TenantInvites)
 	return srv, nil
 }
 

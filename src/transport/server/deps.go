@@ -19,6 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/geoip"
 	pubzernio "github.com/ogen-app/ogen/src/infra/publishers/zernio"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/secrets"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/jobs/queues"
@@ -42,6 +43,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 	"github.com/ogen-app/ogen/src/usecase/series"
+	"github.com/ogen-app/ogen/src/usecase/signupaccess"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
 )
 
@@ -88,6 +90,7 @@ type services struct {
 	notes             *notes.Service
 	series            *series.Service
 	signup            *signup.Service
+	signupAccess      *signupaccess.Service
 	loginSecurity     *loginsecurity.Service
 	googleLogin       *oauthlogin.Service // nil while Google sign-in is not configured
 	plugins           *plugins.Service
@@ -256,7 +259,13 @@ func (d *deps) initServices(context.Context) error {
 	// transaction.
 	d.svc.withdraw = withdraw.New(d.db, r.postRepo, r.campaignRepo, r.postLogRepo, d.enqueuer)
 
+	d.svc.signupAccess = NewSignupAccessService(d.db, d.cfg, d.enqueuer)
 	d.svc.signup = signup.New(d.db, r.accountRepo, r.tenantRepo)
+	d.svc.signup.SetAccess(d.svc.signupAccess, signup.InviteDeps{
+		Invites:      repository.NewTenantInviteRepository(d.db),
+		TierVersions: r.tierVersionRepo,
+		Assignments:  r.tierAssignmentRepo,
+	})
 	d.svc.signup.SetEmailEnqueuer(d.enqueuer)
 	d.svc.signup.SetBillingRequired(d.billing.Enabled())
 	// Without a Harbor webhook URL no registration webhook jobs are queued.

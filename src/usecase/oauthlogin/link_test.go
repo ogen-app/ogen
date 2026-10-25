@@ -150,7 +150,7 @@ func TestGoogleSignup(t *testing.T) {
 		t.Fatalf("preview: %+v err=%v", preview, err)
 	}
 
-	done, err := f.svc.CompleteSignup(ctx, res.PendingToken, "Acme")
+	done, err := f.svc.CompleteSignup(ctx, res.PendingToken, "Acme", "")
 	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestGoogleSignup(t *testing.T) {
 		t.Fatal("the identity is linked in the signup transaction")
 	}
 
-	if _, err := f.svc.CompleteSignup(ctx, res.PendingToken, "Acme again"); !errors.Is(err, oauthlogin.ErrPendingNotFound) {
+	if _, err := f.svc.CompleteSignup(ctx, res.PendingToken, "Acme again", ""); !errors.Is(err, oauthlogin.ErrPendingNotFound) {
 		t.Fatalf("double submit: %v", err)
 	}
 	if _, err := f.svc.PendingSignup(ctx, res.PendingToken); !errors.Is(err, oauthlogin.ErrPendingNotFound) {
@@ -185,7 +185,7 @@ func TestGoogleSignupLosesRaceToPasswordSignup(t *testing.T) {
 	}
 	// Someone registers the address with a password while the form is open.
 	f.seedAccount(t, "acc-1", "JANE@gmail.com", "")
-	if _, err := f.svc.CompleteSignup(t.Context(), res.PendingToken, "Acme"); !errors.Is(err, signup.ErrEmailInUse) {
+	if _, err := f.svc.CompleteSignup(t.Context(), res.PendingToken, "Acme", ""); !errors.Is(err, signup.ErrEmailInUse) {
 		t.Fatalf("complete: %v, want ErrEmailInUse", err)
 	}
 }
@@ -196,7 +196,7 @@ func TestPendingSignupRejectsGarbage(t *testing.T) {
 		if _, err := f.svc.PendingSignup(t.Context(), tok); !errors.Is(err, oauthlogin.ErrPendingNotFound) {
 			t.Errorf("preview %q: %v", tok, err)
 		}
-		if _, err := f.svc.CompleteSignup(t.Context(), tok, "Acme"); !errors.Is(err, oauthlogin.ErrPendingNotFound) {
+		if _, err := f.svc.CompleteSignup(t.Context(), tok, "Acme", ""); !errors.Is(err, oauthlogin.ErrPendingNotFound) {
 			t.Errorf("complete %q: %v", tok, err)
 		}
 	}

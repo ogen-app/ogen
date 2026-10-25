@@ -71,11 +71,18 @@ type Completed struct {
 // passwordless account and its identity. The token is spent first, so a
 // double-submitted form creates one workspace; a signup that then fails (the
 // address or identity was taken meanwhile) sends the user back through the
-// provider, where sign-in now finds the account. Returns ErrPendingNotFound,
-// signup.ErrEmailInUse or signup.ErrIdentityLinked.
-func (s *Service) CompleteSignup(ctx context.Context, token, tenantName string) (*Completed, error) {
+// provider, where sign-in now finds the account. inviteToken redeems a tester
+// invite; the signup gate is checked before the pending signup is spent, so a
+// closed signup keeps it for a retry with an invite. Returns ErrPendingNotFound,
+// signup.ErrInviteRequired, signup.ErrInviteInvalid,
+// signup.ErrInviteEmailMismatch, signup.ErrEmailInUse or
+// signup.ErrIdentityLinked.
+func (s *Service) CompleteSignup(ctx context.Context, token, tenantName, inviteToken string) (*Completed, error) {
 	if !models.ValidOAuthToken(token) {
 		return nil, ErrPendingNotFound
+	}
+	if err := s.d.Signup.CheckAccess(ctx, inviteToken); err != nil {
+		return nil, err
 	}
 	p, err := s.d.OAuth.ConsumePendingSignup(ctx, nil, models.HashOAuthToken(token), s.clock())
 	if errors.Is(err, sql.ErrNoRows) {
@@ -89,6 +96,8 @@ func (s *Service) CompleteSignup(ctx context.Context, token, tenantName string) 
 		UserName:   displayName(p.Name, p.Email),
 		Email:      p.Email,
 		Identity:   &signup.Identity{Provider: p.Provider, Subject: p.Subject, Email: p.Email},
+		// The provider address must be the invited one.
+		InviteToken: inviteToken,
 	})
 	if err != nil {
 		return nil, err

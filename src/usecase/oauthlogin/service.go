@@ -77,6 +77,9 @@ var ErrInvalidIntent = errors.New("oauthlogin: unsupported intent")
 // *signup.Service.
 type SignupCreator interface {
 	Create(ctx context.Context, in signup.Input) (*signup.Result, error)
+	// CheckAccess refuses a signup without a tester invite while
+	// self-registration is closed.
+	CheckAccess(ctx context.Context, inviteToken string) error
 }
 
 // LinkEnqueuer queues the "Google sign-in is now connected" notice inside the
