@@ -83,8 +83,8 @@ type TenantInviteView struct {
 	Groups          []TenantGroup
 	// EmailStatus is the latest send of the invite email: its last delivery
 	// event (delivered, opened, bounced, ...) or, without one, the send
-	// outcome (sent, skipped_suppressed, failed, ...). Empty before the
-	// worker ran.
+	// outcome (sent, skipped_suppressed, failed, ...). Empty until the worker
+	// has handled the latest send, including right after a resend.
 	EmailStatus      string
 	EmailLastEventAt *time.Time
 	// RedeemedTenantName and RedeemedTenantComplimentary describe the
