@@ -1,0 +1,45 @@
+@baseUrl = http://localhost:9001
+
+# Tester invites. Operators create invites in Harbor
+# (tenantinvites.v1.TenantInviteAdminService); the invitee gets an email with
+# APP_BASE_URL/signup?invite=<token>. Redeeming it creates a complimentary
+# workspace: never billed, on the invite's tier and in its groups. Set
+# inviteToken to the token from that link.
+@inviteToken = paste-the-token-from-the-invite-link
+
+### Signup mode — open | invite_only  [public, cacheable 30 s]
+GET {{baseUrl}}/api/signup-config
+
+### Preview an invite — {email, expires_at}; every unusable token answers 410  [public, throttled]
+GET {{baseUrl}}/api/tenant-invites/{{inviteToken}}
+
+### Signup with a tester invite (expects 201; the email must be the invited one)  [public]
+# Without invite_token while signup is invite-only: 403 {code: invite_required}.
+# Another address: 403 {code: invite_email_mismatch}. Spent/expired/revoked: 410.
+POST {{baseUrl}}/api/tenants
+Content-Type: application/json
+
+{
+  "tenant": { "name": "Acme Beta" },
+  "user": {
+    "name": "Jane Okafor",
+    "email": "jane@acme.com",
+    "password": "s3cur3P@ssw0rd"
+  },
+  "invite_token": "{{inviteToken}}"
+}
+
+### Complimentary workspace — the entitlements read reports complimentary: true
+GET {{baseUrl}}/api/me/entitlements
+
+### Switch tier for free (complimentary, no live subscription): 200 with the entitlements body, never a checkout
+POST {{baseUrl}}/api/workspace/plan
+Content-Type: application/json
+
+{ "tier_id": "pro" }
+
+### Another workspace while invite-only — past the cap: 403 {code: workspace_limit}
+POST {{baseUrl}}/api/workspaces
+Content-Type: application/json
+
+{ "name": "Second workspace" }

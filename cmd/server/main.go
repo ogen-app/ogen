@@ -248,6 +248,9 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		}
 	}
 
+	// A nil enqueuer stores tester invites without queueing their email.
+	inviteEmails, _ := adminEmailEnqueuer.(*queues.Enqueuer)
+
 	gs, err := grpcserver.New(grpcserver.Deps{
 		Token:            cfg.GRPCAuthToken,
 		Secrets:          store,
@@ -269,6 +272,7 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		HarborBaseURL:      cfg.HarborBaseURL,
 		Announcements:      repository.NewAnnouncementRepository(db),
 		Billing:            billingAdmin,
+		TenantInvites:      server.NewSignupAccessService(db, cfg, inviteEmails),
 		Hub:                hub,
 	})
 	if err != nil {
