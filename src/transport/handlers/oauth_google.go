@@ -288,6 +288,9 @@ const pendingNotFoundMsg = "this sign-up link has expired; continue with Google 
 type completeGoogleSignupRequest struct {
 	Token      string `json:"token"       validate:"required"`
 	TenantName string `json:"tenant_name" validate:"required,max=200"`
+	// InviteToken redeems a tester invite; the Google address must be the
+	// invited one.
+	InviteToken string `json:"invite_token"`
 }
 
 type completeGoogleSignupResponse struct {
@@ -299,15 +302,17 @@ type completeGoogleSignupResponse struct {
 
 // Complete godoc
 // @Summary      Complete a Google sign-up
-// @Description  Creates the workspace, a passwordless account linked to the Google identity, and a session (cookie set). Shares the per-IP throttle of POST /api/tenants. 409 bodies carry a code: email_in_use or google_already_linked.
+// @Description  Creates the workspace, a passwordless account linked to the Google identity, and a session (cookie set). Shares the per-IP throttle of POST /api/tenants. invite_token redeems a tester invite. 409 bodies carry a code: email_in_use or google_already_linked; 403 bodies carry invite_required (signup is invite-only; the pending sign-up is kept for a retry with an invite) or invite_email_mismatch; an unusable invite answers 410.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
 // @Param        body  body      completeGoogleSignupRequest  true  "Pending token and workspace name"
 // @Success      201   {object}  completeGoogleSignupResponse
 // @Failure      400   {object}  map[string]string
+// @Failure      403   {object}  map[string]string
 // @Failure      404   {object}  map[string]string
 // @Failure      409   {object}  map[string]string
+// @Failure      410   {object}  map[string]string
 // @Failure      429   {object}  map[string]string
 // @Router       /api/auth/google/complete [post]
 func (h *GoogleAuthHandler) Complete(c *fiber.Ctx) error {
@@ -318,7 +323,10 @@ func (h *GoogleAuthHandler) Complete(c *fiber.Ctx) error {
 	if ok, retry := h.signupLimiter.allow(c.IP()); !ok {
 		return tooManyRequests(c, retry, signupThrottledMsg)
 	}
-	res, err := h.svc.CompleteSignup(reqCtx(c), req.Token, req.TenantName)
+	res, err := h.svc.CompleteSignup(reqCtx(c), req.Token, req.TenantName, req.InviteToken)
+	if handled, rerr := signupAccessError(c, err); handled {
+		return rerr
+	}
 	switch {
 	case errors.Is(err, oauthlogin.ErrPendingNotFound):
 		return fiber.NewError(fiber.StatusNotFound, pendingNotFoundMsg)
@@ -335,7 +343,7 @@ func (h *GoogleAuthHandler) Complete(c *fiber.Ctx) error {
 	googleOutcomes.Add("signup_completed", 1)
 	h.activity.Record(withActor(reqCtx(c), res.Tenant.ID, res.User.ID), activity.CategoryAuthentication, "signup",
 		activity.WithEntity("tenant", res.Tenant.ID), activity.WithSource(activity.SourceAPI),
-		activity.WithPayload(map[string]any{"method": h.svc.ProviderName()}))
+		activity.WithPayload(signupPayload(res.Result, map[string]any{"method": h.svc.ProviderName()})))
 	return c.Status(fiber.StatusCreated).JSON(completeGoogleSignupResponse{
 		Tenant: res.Tenant, User: res.User, Session: res.Session, ReturnTo: res.ReturnTo,
 	})

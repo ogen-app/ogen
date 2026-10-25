@@ -49,7 +49,9 @@ func registerRoutes(app *fiber.App, d *deps) {
 func registerBillingRoutes(app *fiber.App, d *deps) {
 	e := d.entitlements
 	pricing := handlers.NewPricingHandler(e.resolver, d.r.tierVersionRepo, e.catalog, d.auth, e.limiter)
-	if d.billing.Enabled() {
+	// Always wired: with billing off the reads add nothing but the
+	// complimentary flag of a tester's workspace.
+	if d.billing != nil {
 		pricing.WithBilling(d.billing)
 	}
 	pricing.Register(app)
@@ -103,6 +105,7 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 	tenants.SetLoginSecurity(d.svc.loginSecurity, cfg.DeviceCookieName)
 	tenants.SetBillingGate(d.billingGate())
 	tenants.Register(app)
+	handlers.NewSignupAccessHandler(d.svc.signupAccess).Register(app)
 	handlers.NewLoginAlertsHandler(d.svc.loginSecurity).Register(app)
 	google := handlers.NewGoogleAuthHandler(d.svc.googleLogin, r.sessionRepo, cfg.SessionCookieName, secure, rec)
 	google.SetLoginSecurity(d.svc.loginSecurity, cfg.DeviceCookieName)
@@ -113,6 +116,7 @@ func registerAuthRoutes(app *fiber.App, d *deps) {
 
 	workspaces := handlers.NewWorkspacesHandler(d.db, r.workspaceRepo, r.userRepo, r.accountRepo, r.tenantRepo, r.sessionRepo, d.enqueuer, d.auth, rec)
 	workspaces.SetBillingRequired(d.billing.Enabled())
+	workspaces.SetWorkspaceCap(d.svc.signupAccess)
 	workspaces.Register(app)
 	handlers.NewPasswordResetHandler(d.db, r.userRepo, r.accountRepo, cfg.AppBaseURL, d.enqueuer, rec).Register(app)
 	handlers.NewInvitationsHandler(d.db, r.userRepo, r.accountRepo, r.tenantRepo, r.invitationRepo, r.sessionRepo, cfg.AppBaseURL, cfg.SessionCookieName, secure, d.auth, handlers.InvitationsOptions{

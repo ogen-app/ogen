@@ -19,9 +19,10 @@ import (
 )
 
 type fakeBillingAdmin struct {
-	setRequired []any
-	invalidErr  error
-	offerErr    error
+	setRequired      []any
+	setComplimentary []any
+	invalidErr       error
+	offerErr         error
 }
 
 func (f *fakeBillingAdmin) Enabled() bool { return true }
@@ -54,6 +55,13 @@ func (f *fakeBillingAdmin) SetBillingRequired(_ context.Context, tenantID string
 		return billing.ErrReasonRequired
 	}
 	f.setRequired = []any{tenantID, required, reason}
+	return nil
+}
+func (f *fakeBillingAdmin) SetComplimentary(_ context.Context, tenantID string, complimentary bool, reason string) error {
+	if reason == "" {
+		return billing.ErrReasonRequired
+	}
+	f.setComplimentary = []any{tenantID, complimentary, reason}
 	return nil
 }
 func (f *fakeBillingAdmin) ResyncTenant(context.Context, string) (int, error) { return 2, nil }
@@ -128,6 +136,15 @@ func TestBillingAdminRoundTrip(t *testing.T) {
 	}
 	if _, err := cli.SetBillingRequired(ctx, &billingv1.SetBillingRequiredRequest{TenantId: "t1", Required: false, Reason: "partner"}); err != nil || fake.setRequired[2] != "partner" {
 		t.Fatalf("set required: %v %v", err, fake.setRequired)
+	}
+	if _, err := cli.SetComplimentary(ctx, &billingv1.SetComplimentaryRequest{TenantId: "t1", Complimentary: true}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("complimentary without reason: %v", err)
+	}
+	if _, err := cli.SetComplimentary(ctx, &billingv1.SetComplimentaryRequest{Complimentary: true, Reason: "tester"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("complimentary without tenant: %v", err)
+	}
+	if _, err := cli.SetComplimentary(ctx, &billingv1.SetComplimentaryRequest{TenantId: "t1", Complimentary: true, Reason: "tester"}); err != nil || fake.setComplimentary[1] != true || fake.setComplimentary[2] != "tester" {
+		t.Fatalf("set complimentary: %v %v", err, fake.setComplimentary)
 	}
 	rs, err := cli.ResyncSubscription(ctx, &billingv1.ResyncSubscriptionRequest{TenantId: "t1"})
 	if err != nil || rs.GetCorrected() != 2 {

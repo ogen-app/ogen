@@ -24,6 +24,7 @@ type BillingAdmin interface {
 	TenantBilling(ctx context.Context, tenantID string) (billing.TenantBilling, error)
 	Attention(ctx context.Context, pageSize int, pageToken string) ([]billing.AttentionItem, string, error)
 	SetBillingRequired(ctx context.Context, tenantID string, required bool, reason string) error
+	SetComplimentary(ctx context.Context, tenantID string, complimentary bool, reason string) error
 	ResyncTenant(ctx context.Context, tenantID string) (int, error)
 	FreeTrialOffer(ctx context.Context) (billing.FreeTrialOffer, error)
 	SetFreeTrialTier(ctx context.Context, tierID, reason string) (billing.FreeTrialOffer, error)
@@ -56,6 +57,8 @@ func billingStatusErr(err error) error {
 		return status.Error(codes.InvalidArgument, "reason is required")
 	case errors.Is(err, billing.ErrStillTestMode):
 		return status.Error(codes.FailedPrecondition, "billing still runs in test mode; switch LEMONSQUEEZY_TEST_MODE off first")
+	case errors.Is(err, billing.ErrComplimentary):
+		return status.Error(codes.FailedPrecondition, "the workspace is complimentary; end that with SetComplimentary")
 	case errors.Is(err, billing.ErrTrialVariantMissing):
 		return status.Error(codes.FailedPrecondition, "the tier's Lemon Squeezy variants do not all carry a one-month free trial")
 	case errors.Is(err, billing.ErrProvider):
@@ -93,7 +96,7 @@ func (s *billingAdminService) tenantBilling(ctx context.Context, tenantID string
 	if err != nil {
 		return nil, billingStatusErr(err)
 	}
-	out := &billingv1.TenantBilling{TenantId: tb.TenantID, BillingRequired: tb.BillingRequired, Gated: tb.Gated}
+	out := &billingv1.TenantBilling{TenantId: tb.TenantID, BillingRequired: tb.BillingRequired, Gated: tb.Gated, Complimentary: tb.Complimentary}
 	for i := range tb.Subscriptions {
 		out.Subscriptions = append(out.Subscriptions, toSubscriptionProto(&tb.Subscriptions[i], tb.Prices, tb.Duplicates[tb.Subscriptions[i].ID]))
 	}
@@ -145,6 +148,21 @@ func (s *billingAdminService) SetBillingRequired(ctx context.Context, req *billi
 		return nil, err
 	}
 	return &billingv1.SetBillingRequiredResponse{Billing: tb}, nil
+}
+
+func (s *billingAdminService) SetComplimentary(ctx context.Context, req *billingv1.SetComplimentaryRequest) (*billingv1.SetComplimentaryResponse, error) {
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if err := s.svc.SetComplimentary(ctx, tenantID, req.GetComplimentary(), strings.TrimSpace(req.GetReason())); err != nil {
+		return nil, billingStatusErr(err)
+	}
+	tb, err := s.tenantBilling(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return &billingv1.SetComplimentaryResponse{Billing: tb}, nil
 }
 
 func (s *billingAdminService) ResyncSubscription(ctx context.Context, req *billingv1.ResyncSubscriptionRequest) (*billingv1.ResyncSubscriptionResponse, error) {

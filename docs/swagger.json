@@ -1110,7 +1110,7 @@
         },
         "/api/auth/google/complete": {
             "post": {
-                "description": "Creates the workspace, a passwordless account linked to the Google identity, and a session (cookie set). Shares the per-IP throttle of POST /api/tenants. 409 bodies carry a code: email_in_use or google_already_linked.",
+                "description": "Creates the workspace, a passwordless account linked to the Google identity, and a session (cookie set). Shares the per-IP throttle of POST /api/tenants. invite_token redeems a tester invite. 409 bodies carry a code: email_in_use or google_already_linked; 403 bodies carry invite_required (signup is invite-only; the pending sign-up is kept for a retry with an invite) or invite_email_mismatch; an unusable invite answers 410.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1148,6 +1148,15 @@
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -1159,6 +1168,15 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -12148,6 +12166,26 @@
                 }
             }
         },
+        "/api/signup-config": {
+            "get": {
+                "description": "Public. open: anyone may sign up. invite_only: only tester invites create workspaces, and the signup page shows a private-beta screen instead of the form. Tester invite links work in both modes. Cacheable for 30 seconds.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Signup mode",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.signupConfigResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/tags": {
             "get": {
                 "security": [
@@ -12407,9 +12445,56 @@
                 }
             }
         },
+        "/api/tenant-invites/{token}": {
+            "get": {
+                "description": "Public. For a usable tester invite: the invited address (the signup form locks it) and when the link expires. Every unusable token (unknown, expired, revoked, redeemed) answers the same 410. Throttled per IP. Never reveals the tier, groups, note or inviter.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Preview a tester invite",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invite token",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/signupaccess.Preview"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/tenants": {
             "post": {
-                "description": "Public self-service signup: atomically creates a tenant and its first user, opens a session, and returns the session cookie (CON-97 §7.1).",
+                "description": "Public self-service signup: atomically creates a tenant and its first user, opens a session, and returns the session cookie. invite_token redeems a tester invite (complimentary workspace on the invite's tier). While signup is invite-only, a signup without one answers 403 {code: invite_required}; an address other than the invited one answers 403 {code: invite_email_mismatch}; an unusable invite answers 410.",
                 "consumes": [
                     "application/json"
                 ],
@@ -12447,8 +12532,26 @@
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -13236,7 +13339,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Creates a new, independent workspace owned by the authenticated account and returns it. Its Zernio profile is created by its first connect link. Does not switch — the caller chooses when to move into it (CON-147).",
+                "description": "Creates a new, independent workspace owned by the authenticated account and returns it. Its Zernio profile is created by its first connect link. Does not switch — the caller chooses when to move into it (CON-147). While signup is invite-only an account may own a limited number of workspaces; past it the answer is 403 {code: workspace_limit}. A new workspace is never complimentary.",
                 "consumes": [
                     "application/json"
                 ],
@@ -13276,6 +13379,15 @@
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -14570,6 +14682,10 @@
                 "token"
             ],
             "properties": {
+                "invite_token": {
+                    "description": "InviteToken redeems a tester invite; the Google address must be the\ninvited one.",
+                    "type": "string"
+                },
                 "tenant_name": {
                     "type": "string",
                     "maxLength": 200
@@ -15112,6 +15228,10 @@
                 },
                 "change_reason": {
                     "type": "string"
+                },
+                "complimentary": {
+                    "description": "Complimentary marks a tester's workspace: never billed, and choosing a\nplan switches it at once with no checkout. Reported whether or not\nbilling is on.",
+                    "type": "boolean"
                 },
                 "entitlements": {
                     "type": "array",
@@ -16437,9 +16557,25 @@
                 }
             }
         },
+        "handlers.signupConfigResponse": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "open",
+                        "invite_only"
+                    ]
+                }
+            }
+        },
         "handlers.signupRequest": {
             "type": "object",
             "properties": {
+                "invite_token": {
+                    "description": "InviteToken redeems a tester invite: the new workspace is\ncomplimentary, on the invite's tier and in its groups. The address must\nbe the invited one.",
+                    "type": "string"
+                },
                 "tenant": {
                     "type": "object",
                     "required": [
@@ -20194,6 +20330,17 @@
                     "type": "string"
                 },
                 "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "signupaccess.Preview": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "expires_at": {
                     "type": "string"
                 }
             }

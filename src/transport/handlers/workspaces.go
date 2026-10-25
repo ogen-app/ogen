@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/signupaccess"
 )
 
 // WorkspacesHandler serves the account-level workspace surface: list
@@ -37,10 +38,22 @@ type WorkspacesHandler struct {
 	activity    *activity.Recorder
 	// billingRequired gates new workspaces until they check out.
 	billingRequired bool
+	// workspaceCap limits how many workspaces an account may own while
+	// signup is invite-only; nil means no cap.
+	workspaceCap WorkspaceCap
+}
+
+// WorkspaceCap refuses a new workspace for an account at its cap, inside the
+// create transaction. *signupaccess.Service satisfies it.
+type WorkspaceCap interface {
+	CheckWorkspaceCapTx(ctx context.Context, tx bun.IDB, accountID string) error
 }
 
 // SetBillingRequired makes every new workspace check out before use.
 func (h *WorkspacesHandler) SetBillingRequired(required bool) { h.billingRequired = required }
+
+// SetWorkspaceCap enforces the invite-only per-account workspace cap.
+func (h *WorkspacesHandler) SetWorkspaceCap(c WorkspaceCap) { h.workspaceCap = c }
 
 // NewWorkspacesHandler builds the handler.
 func NewWorkspacesHandler(
@@ -108,7 +121,7 @@ func (h *WorkspacesHandler) List(c *fiber.Ctx) error {
 
 // Create godoc
 // @Summary      Create a workspace
-// @Description  Creates a new, independent workspace owned by the authenticated account and returns it. Its Zernio profile is created by its first connect link. Does not switch — the caller chooses when to move into it (CON-147).
+// @Description  Creates a new, independent workspace owned by the authenticated account and returns it. Its Zernio profile is created by its first connect link. Does not switch — the caller chooses when to move into it (CON-147). While signup is invite-only an account may own a limited number of workspaces; past it the answer is 403 {code: workspace_limit}. A new workspace is never complimentary.
 // @Tags         workspaces
 // @Accept       json
 // @Produce      json
@@ -117,6 +130,7 @@ func (h *WorkspacesHandler) List(c *fiber.Ctx) error {
 // @Success      201   {object}  models.Tenant
 // @Failure      400   {object}  map[string]string
 // @Failure      401   {object}  map[string]string
+// @Failure      403   {object}  map[string]string
 // @Router       /api/workspaces [post]
 func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	session, err := sessionFrom(c)
@@ -158,6 +172,11 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 	membership := &models.User{ID: userID, AccountID: account.ID, TenantID: tenantID, Name: account.Name, Email: account.Email, Role: models.RoleOwner, CreatedAt: now, UpdatedAt: now}
 
 	if err := h.db.RunInTx(reqCtx(c), nil, func(ctx context.Context, tx bun.Tx) error {
+		if h.workspaceCap != nil {
+			if err := h.workspaceCap.CheckWorkspaceCapTx(ctx, tx, account.ID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.NewInsert().Model(tenant).Exec(ctx); err != nil {
 			return err
 		}
@@ -165,6 +184,9 @@ func (h *WorkspacesHandler) Create(c *fiber.Ctx) error {
 		// so a workspace that never connects an account costs nothing upstream.
 		return h.userRepo.CreateTx(ctx, tx, membership)
 	}); err != nil {
+		if errors.Is(err, signupaccess.ErrWorkspaceLimit) {
+			return rejectCode(c, fiber.StatusForbidden, "workspace_limit", "You've reached the number of workspaces available during the beta.")
+		}
 		if isUniqueViolation(err) {
 			// Lost a slug race; the caller can retry.
 			return fiber.NewError(fiber.StatusConflict, "could not allocate a unique workspace slug")
