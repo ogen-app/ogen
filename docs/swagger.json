@@ -13876,7 +13876,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Without a live subscription: 202 with a hosted checkout to redirect to (checkout.trial says whether the free month applies). With one: 200 with the entitlements read after the change. An upgrade lands now with proration; a downgrade is scheduled for the renewal (scheduled_change); choosing the current plan cancels a pending downgrade; a tier change during the free month ends it and charges now. tier_id is a tier or tier version id; price_id defaults to the monthly price.",
+                "description": "A complimentary workspace (a tester's, complimentary=true on /api/me/entitlements) without a live subscription switches at once: 200 with the entitlements read, no checkout, no charge; it may pick any purchasable tier, and this works while billing is off. Otherwise, without a live subscription: 202 with a hosted checkout to redirect to (checkout.trial says whether the free month applies). With one: 200 with the entitlements read after the change. An upgrade lands now with proration; a downgrade is scheduled for the renewal (scheduled_change); choosing the current plan cancels a pending downgrade; a tier change during the free month ends it and charges now. tier_id is a tier or tier version id; price_id defaults to the monthly price.",
                 "consumes": [
                     "application/json"
                 ],

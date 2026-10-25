@@ -204,6 +204,46 @@ func TestResendRotatesTokenAndRevokeKillsIt(t *testing.T) {
 	}
 }
 
+func TestInviteViewReportsTheLatestSend(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	v := f.invite(t, "mail@x.co")
+	logSend := func(send string, status models.EmailLogStatus, lastEvent string) {
+		t.Helper()
+		id, err := models.NewID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := &models.EmailLog{ID: id, TemplateID: "tenant_invite", Kind: models.EmailKindTransactional, ToEmail: "mail@x.co",
+			Status: status, IdempotencyKey: "tenant_invite:" + v.ID + ":" + send, LastEvent: lastEvent}
+		if lastEvent != "" {
+			l.LastEventAt = f.now
+		}
+		if _, err := f.db.NewInsert().Model(l).Exec(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := f.svc.GetInvite(ctx, v.ID); got.EmailStatus != "" {
+		t.Fatalf("status before the worker ran = %q", got.EmailStatus)
+	}
+	logSend("1", models.EmailLogSent, "opened")
+	if got, _ := f.svc.GetInvite(ctx, v.ID); got.EmailStatus != "opened" || got.EmailLastEventAt == nil {
+		t.Fatalf("first send = %q %v", got.EmailStatus, got.EmailLastEventAt)
+	}
+	// A resend is a new email: its state replaces the first one's.
+	if _, err := f.svc.ResendInvite(ctx, v.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.svc.GetInvite(ctx, v.ID); got.EmailStatus != "" {
+		t.Fatalf("resent, not yet sent = %q", got.EmailStatus)
+	}
+	logSend("2", models.EmailLogSkippedSuppressed, "")
+	page, _, err := f.svc.ListInvites(ctx, signupaccess.ListInvitesInput{})
+	if err != nil || len(page) != 1 || page[0].EmailStatus != "skipped_suppressed" {
+		t.Fatalf("list after resend = %+v %v", page, err)
+	}
+}
+
 func TestListInvitesFiltersAndPages(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()

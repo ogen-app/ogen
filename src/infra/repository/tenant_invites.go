@@ -131,7 +131,9 @@ type tenantInviteRow struct {
 }
 
 // viewQuery selects invites with their tier, the latest send of the invite
-// email (keyed tenant_invite:<id>:<send>) and the workspace they became.
+// email and the workspace they became. Each send is keyed
+// tenant_invite:<id>:<send> and sent_count numbers the latest, so its log row
+// is one equality lookup on the unique idempotency-key index.
 func (r *tenantInviteRepository) viewQuery(rows *[]tenantInviteRow) *bun.SelectQuery {
 	return r.db.NewSelect().Model(rows).
 		ColumnExpr("ti.*").
@@ -147,8 +149,7 @@ func (r *tenantInviteRepository) viewQuery(rows *[]tenantInviteRow) *bun.SelectQ
 		Join(`LEFT JOIN LATERAL (
 			SELECT COALESCE(el.last_event, el.status) AS status, COALESCE(el.last_event_at, el.created_at) AS at
 			FROM email_logs AS el
-			WHERE el.idempotency_key LIKE 'tenant_invite:' || ti.id || ':%'
-			ORDER BY el.created_at DESC
+			WHERE el.idempotency_key = 'tenant_invite:' || ti.id || ':' || ti.sent_count
 			LIMIT 1) AS em ON true`)
 }
 
