@@ -59,6 +59,7 @@ type OwnerTrial struct {
 type TenantBilling struct {
 	TenantID         string
 	BillingRequired  bool
+	Complimentary    bool
 	Gated            bool
 	Subscriptions    []models.BillingSubscription
 	Duplicates       map[string]bool
@@ -77,7 +78,7 @@ func (s *Service) TenantBilling(ctx context.Context, tenantID string) (TenantBil
 	if err != nil {
 		return TenantBilling{}, err
 	}
-	out := TenantBilling{TenantID: tenantID, BillingRequired: tenant.BillingRequired, Duplicates: map[string]bool{}}
+	out := TenantBilling{TenantID: tenantID, BillingRequired: tenant.BillingRequired, Complimentary: tenant.Complimentary, Duplicates: map[string]bool{}}
 	if out.Gated, err = s.d.Repo.Gated(ctx, tenantID); err != nil {
 		return out, err
 	}
@@ -254,10 +255,20 @@ func (s *Service) failedChangeItems(ctx context.Context, since time.Time) ([]Att
 }
 
 // SetBillingRequired comps or exempts a workspace, or puts it back behind the
-// gate.
+// gate. A complimentary workspace is refused (ErrComplimentary): ending
+// complimentary access is SetComplimentary.
 func (s *Service) SetBillingRequired(ctx context.Context, tenantID string, required bool, reason string) error {
 	if reason == "" {
 		return ErrReasonRequired
+	}
+	if required {
+		comp, err := s.complimentaryTenant(ctx, tenantID)
+		if err != nil {
+			return err
+		}
+		if comp {
+			return ErrComplimentary
+		}
 	}
 	ok, err := s.d.Repo.SetBillingRequired(ctx, tenantID, required, s.now())
 	if err != nil {
@@ -434,10 +445,14 @@ func (s *Service) InvalidateTestSubscriptions(ctx context.Context, dryRun bool) 
 	return tenants, nil
 }
 
-// BillingStatus summarises a workspace for the operator tenant list: empty when
-// billing is off; not_required; awaiting_checkout; or the provider status of
-// its current subscription.
+// BillingStatus summarises a workspace for the operator tenant list:
+// complimentary for a tester's workspace (billing on or off); otherwise empty
+// when billing is off; not_required; awaiting_checkout; or the provider status
+// of its current subscription.
 func (s *Service) BillingStatus(ctx context.Context, t *models.Tenant) (string, error) {
+	if t.Complimentary {
+		return BillingStatusComplimentary, nil
+	}
 	if !s.Enabled() {
 		return "", nil
 	}
@@ -453,6 +468,9 @@ func (s *Service) BillingStatus(ctx context.Context, t *models.Tenant) (string, 
 	}
 	return "not_required", nil
 }
+
+// BillingStatusComplimentary is a tester's workspace in the tenant list.
+const BillingStatusComplimentary = "complimentary"
 
 // PricingFlags is what the public pricing read adds per tier and price.
 type PricingFlags struct {

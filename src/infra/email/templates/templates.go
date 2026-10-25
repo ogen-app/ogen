@@ -23,6 +23,9 @@ const (
 	KeyConnectionExpiring = "connection_expiring"
 	KeyNewDeviceLogin     = "new_device_login"
 	KeyGoogleLinked       = "google_linked"
+	// KeyTenantInvite is the tester invite: a link that signs the recipient up
+	// with a new complimentary workspace.
+	KeyTenantInvite = "tenant_invite"
 	// Billing notices to workspace owners: a failed renewal payment, and the
 	// sandbox-to-live cutover asking them to check out again.
 	KeyBillingPaymentFailed   = "billing_payment_failed"
@@ -112,6 +115,10 @@ type Data struct {
 	// already formatted. UnsubscribeURL carries its weekly-report opt-out link.
 	// Nil for every other template.
 	Report *models.WeeklyReportView
+	// Message is the operator's optional personal note on a tester invite;
+	// the tenant_invite template drops its block when empty. InviteURL and
+	// ExpiresAt carry the signup link and its expiry date.
+	Message string
 }
 
 //go:embed defaults/*.tmpl
@@ -121,39 +128,42 @@ var defaultFS embed.FS
 // they're stored on EmailTemplate.Variables and kept in sync by SeedDefaults.
 // Keep them aligned with the Data struct fields.
 const (
-	varName           = "The recipient's display name (from their user record)."
-	varWorkspaceName  = "The recipient's workspace (tenant) name."
-	varAppURL         = "Absolute app URL (APP_BASE_URL) for the primary call-to-action link."
-	varUnsubscribeURL = "Signed one-click unsubscribe URL; required in every marketing footer."
-	varResetURL       = "The one-time password-reset link; single-use, expires in an hour."
-	varInviteURL      = "The one-time invitation-accept link; single-use, expires in 7 days."
-	varInviterName    = "Display name of the person who sent the invitation."
-	varRole           = "The role the invitee will hold in the workspace (owner or member)."
-	varPlatform       = "The social platform's display name (e.g. LinkedIn, Instagram)."
-	varAccountName    = "The connected account's display name or handle."
-	varStage          = "Notification stage: expiring_soon (heads-up) or action_required (expired or needs reconnecting)."
-	varExpiresAt      = "The token's expiry date, formatted (empty when Zernio can't date it)."
-	varExpiresIn      = "Human-readable time until expiry, e.g. \"in 6 days\" (empty when undated)."
-	varReconnectURL   = "Deep link into the app's accounts screen to reconnect the account."
-	varTenantID       = "The newly-registered tenant's unique ID (UUID)."
-	varTenantSlug     = "The tenant's auto-generated, URL-safe slug."
-	varOwnerName      = "The name the signing-up owner provided at registration."
-	varOwnerEmail     = "The email the signing-up owner provided at registration."
-	varTier           = "The tenant's assigned tier at registration (default)."
-	varStatus         = "The tenant's lifecycle status at registration (active)."
-	varRegisteredAt   = "When the tenant registered, formatted (UTC)."
-	varTenantURL      = "Deep link to the tenant's detail page in Harbor (empty if HARBOR_BASE_URL is unset)."
-	varLoginTime      = "When the sign-in happened, formatted in UTC (e.g. 28 Sep 2026, 14:03 UTC)."
-	varDeviceLabel    = "Browser and operating system of the sign-in, e.g. \"Chrome on macOS\"."
-	varIPAddress      = "The IP address the sign-in came from."
-	varLocation       = "Approximate location of the IP, e.g. \"Kyiv, Ukraine\" (empty when unknown)."
-	varSecureURL      = "The single-use \"This wasn't me\" link; expires in 24 hours."
-	varMaskedEmail    = "The account's email address with the local part masked, e.g. j***@acme.com."
-	varLoginMethod    = "The provider the sign-in went through, e.g. \"Google\" (empty for a password sign-in)."
-	varGoogleEmail    = "The Google account's address that can now sign in to this Ogen account."
-	varPwdCleared     = "True when linking Google removed the account's previous password."
-	varReport         = "The week's report: headline, lede and each section (nil sections are left out). See models.WeeklyReportView."
-	varReportUnsub    = "Signed link that turns off the weekly report for this workspace only."
+	varName            = "The recipient's display name (from their user record)."
+	varWorkspaceName   = "The recipient's workspace (tenant) name."
+	varAppURL          = "Absolute app URL (APP_BASE_URL) for the primary call-to-action link."
+	varUnsubscribeURL  = "Signed one-click unsubscribe URL; required in every marketing footer."
+	varResetURL        = "The one-time password-reset link; single-use, expires in an hour."
+	varInviteURL       = "The one-time invitation-accept link; single-use, expires in 7 days."
+	varInviterName     = "Display name of the person who sent the invitation."
+	varRole            = "The role the invitee will hold in the workspace (owner or member)."
+	varPlatform        = "The social platform's display name (e.g. LinkedIn, Instagram)."
+	varAccountName     = "The connected account's display name or handle."
+	varStage           = "Notification stage: expiring_soon (heads-up) or action_required (expired or needs reconnecting)."
+	varExpiresAt       = "The token's expiry date, formatted (empty when Zernio can't date it)."
+	varExpiresIn       = "Human-readable time until expiry, e.g. \"in 6 days\" (empty when undated)."
+	varReconnectURL    = "Deep link into the app's accounts screen to reconnect the account."
+	varTenantID        = "The newly-registered tenant's unique ID (UUID)."
+	varTenantSlug      = "The tenant's auto-generated, URL-safe slug."
+	varOwnerName       = "The name the signing-up owner provided at registration."
+	varOwnerEmail      = "The email the signing-up owner provided at registration."
+	varTier            = "The tenant's assigned tier at registration (default)."
+	varStatus          = "The tenant's lifecycle status at registration (active)."
+	varRegisteredAt    = "When the tenant registered, formatted (UTC)."
+	varTenantURL       = "Deep link to the tenant's detail page in Harbor (empty if HARBOR_BASE_URL is unset)."
+	varLoginTime       = "When the sign-in happened, formatted in UTC (e.g. 28 Sep 2026, 14:03 UTC)."
+	varDeviceLabel     = "Browser and operating system of the sign-in, e.g. \"Chrome on macOS\"."
+	varIPAddress       = "The IP address the sign-in came from."
+	varLocation        = "Approximate location of the IP, e.g. \"Kyiv, Ukraine\" (empty when unknown)."
+	varSecureURL       = "The single-use \"This wasn't me\" link; expires in 24 hours."
+	varMaskedEmail     = "The account's email address with the local part masked, e.g. j***@acme.com."
+	varLoginMethod     = "The provider the sign-in went through, e.g. \"Google\" (empty for a password sign-in)."
+	varGoogleEmail     = "The Google account's address that can now sign in to this Ogen account."
+	varPwdCleared      = "True when linking Google removed the account's previous password."
+	varReport          = "The week's report: headline, lede and each section (nil sections are left out). See models.WeeklyReportView."
+	varReportUnsub     = "Signed link that turns off the weekly report for this workspace only."
+	varTenantInviteURL = "The tester invite's signup link; single-use, bound to the invited address."
+	varInviteExpiresAt = "The date the invite link stops working, e.g. 8 November 2026."
+	varInviteMessage   = "The Ogen team's optional personal message (empty when none)."
 )
 
 // transactionalVars / marketingVars build the per-template variable doc sets.
@@ -190,6 +200,18 @@ func invitationVars() models.StringMap {
 	m["InviterName"] = varInviterName
 	m["Role"] = varRole
 	return m
+}
+
+// tenantInviteVars documents the tenant_invite template's placeholders. The
+// recipient has no account or workspace yet, so Name and WorkspaceName are
+// unset.
+func tenantInviteVars() models.StringMap {
+	return models.StringMap{
+		"AppURL":    varAppURL,
+		"InviteURL": varTenantInviteURL,
+		"ExpiresAt": varInviteExpiresAt,
+		"Message":   varInviteMessage,
+	}
 }
 
 // connectionExpiringVars documents the connection_expiring template's
@@ -283,6 +305,7 @@ var defaultSpecs = []defaultSpec{
 	{KeyConnectionExpiring, models.EmailKindTransactional, connectionExpiringSubject, connectionExpiringVars()},
 	{KeyNewDeviceLogin, models.EmailKindTransactional, "New sign-in to your Ogen account", newDeviceLoginVars()},
 	{KeyGoogleLinked, models.EmailKindTransactional, "Google sign-in is now connected to your Ogen account", googleLinkedVars()},
+	{KeyTenantInvite, models.EmailKindTransactional, "You're invited to the Ogen beta", tenantInviteVars()},
 	{KeyBillingPaymentFailed, models.EmailKindTransactional, "Your Ogen payment didn't go through", transactionalVars()},
 	{KeyBillingReentryRequired, models.EmailKindTransactional, "Please re-enter your payment details for Ogen", transactionalVars()},
 	{KeyAdminTenantRegistered, models.EmailKindTransactional, "New tenant registered: [[ .WorkspaceName ]]", adminTenantRegisteredVars()},

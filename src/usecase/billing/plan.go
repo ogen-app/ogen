@@ -30,7 +30,11 @@ type ScheduledChangeView struct {
 // PlanState is the billing half of GET /api/me/entitlements: workspace facts,
 // no money, readable by every member.
 type PlanState struct {
-	BillingRequired bool                 `json:"billing_required"`
+	BillingRequired bool `json:"billing_required"`
+	// Complimentary marks a tester's workspace: never billed, and choosing a
+	// plan switches it at once with no checkout. Reported whether or not
+	// billing is on.
+	Complimentary   bool                 `json:"complimentary"`
 	TrialEligible   *bool                `json:"trial_eligible" extensions:"x-nullable"`
 	BillingPeriod   *string              `json:"billing_period" extensions:"x-nullable"`
 	RenewsAt        *time.Time           `json:"renews_at" extensions:"x-nullable"`
@@ -42,6 +46,11 @@ type PlanState struct {
 // account, for the free-month eligibility.
 func (s *Service) PlanState(ctx context.Context, tenantID, accountID string) (PlanState, error) {
 	var st PlanState
+	comp, err := s.complimentaryTenant(ctx, tenantID)
+	if err != nil && !errors.Is(err, ErrTenantNotFound) {
+		return st, err
+	}
+	st.Complimentary = comp
 	if !s.Enabled() {
 		return st, nil
 	}
@@ -110,12 +119,20 @@ type PlanResult struct {
 	Checkout *Checkout
 }
 
-// ChangePlan applies the owner's plan choice. Without a live subscription it
+// ChangePlan applies the owner's plan choice. A complimentary workspace with
+// no live subscription switches at once, with no checkout and no provider
+// call. Otherwise, without a live subscription it
 // opens a checkout. With one: an upgrade lands now with proration; a
 // downgrade is scheduled for the renewal; choosing the current plan cancels a
 // pending downgrade; and any tier change during the free month ends it and
 // charges the new tier now. Nothing local changes before the provider agrees.
 func (s *Service) ChangePlan(ctx context.Context, req PlanRequest) (PlanResult, error) {
+	// A complimentary workspace switches for free, billing on or off.
+	if comp, err := s.compChangeApplies(ctx, req.TenantID); err != nil {
+		return PlanResult{}, err
+	} else if comp {
+		return PlanResult{}, s.compChangePlan(ctx, req)
+	}
 	if !s.Enabled() {
 		return PlanResult{}, ErrUnavailable
 	}
