@@ -84,6 +84,10 @@ type BillingRepository interface {
 	// Tenants and tiers.
 
 	SetBillingRequired(ctx context.Context, tenantID string, required bool, at time.Time) (bool, error)
+	// SetComplimentary makes a workspace complimentary (billing_required
+	// off) or ends that (billing_required on). false when the tenant is
+	// unknown or deleted.
+	SetComplimentary(ctx context.Context, tenantID string, complimentary bool, at time.Time) (bool, error)
 	// Gated evaluates BillingGateSQL for one tenant.
 	Gated(ctx context.Context, tenantID string) (bool, error)
 	TenantNames(ctx context.Context, ids []string) (map[string]string, error)
@@ -400,6 +404,21 @@ func (r *billingRepository) ListScheduledChangesByStatus(ctx context.Context, st
 func (r *billingRepository) SetBillingRequired(ctx context.Context, tenantID string, required bool, at time.Time) (bool, error) {
 	res, err := r.db.NewUpdate().Model((*models.Tenant)(nil)).
 		Set("billing_required = ?", required).
+		Set("updated_at = ?", at).
+		Where("id = ?", tenantID).
+		Where("deleted_at IS NULL").
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+func (r *billingRepository) SetComplimentary(ctx context.Context, tenantID string, complimentary bool, at time.Time) (bool, error) {
+	res, err := r.db.NewUpdate().Model((*models.Tenant)(nil)).
+		Set("complimentary = ?", complimentary).
+		Set("billing_required = ?", !complimentary).
 		Set("updated_at = ?", at).
 		Where("id = ?", tenantID).
 		Where("deleted_at IS NULL").
