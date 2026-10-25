@@ -23,6 +23,7 @@ const (
 	BillingAdminService_GetTenantBilling_FullMethodName            = "/billing.v1.BillingAdminService/GetTenantBilling"
 	BillingAdminService_ListBillingAttention_FullMethodName        = "/billing.v1.BillingAdminService/ListBillingAttention"
 	BillingAdminService_SetBillingRequired_FullMethodName          = "/billing.v1.BillingAdminService/SetBillingRequired"
+	BillingAdminService_SetComplimentary_FullMethodName            = "/billing.v1.BillingAdminService/SetComplimentary"
 	BillingAdminService_ResyncSubscription_FullMethodName          = "/billing.v1.BillingAdminService/ResyncSubscription"
 	BillingAdminService_GetFreeTrialTier_FullMethodName            = "/billing.v1.BillingAdminService/GetFreeTrialTier"
 	BillingAdminService_SetFreeTrialTier_FullMethodName            = "/billing.v1.BillingAdminService/SetFreeTrialTier"
@@ -59,7 +60,15 @@ type BillingAdminServiceClient interface {
 	// SetBillingRequired comps or exempts a workspace (required=false lets it use
 	// the app without checking out) or puts it back behind the gate. Recorded in
 	// the tenant's activity with the reason.
+	// FailedPrecondition for a complimentary workspace: end that with
+	// SetComplimentary instead.
 	SetBillingRequired(ctx context.Context, in *SetBillingRequiredRequest, opts ...grpc.CallOption) (*SetBillingRequiredResponse, error)
+	// SetComplimentary makes a workspace a tester's complimentary one (never
+	// billed; the owner may switch tiers without checking out) or ends that
+	// (CON-333): the workspace then goes behind the billing gate until it checks
+	// out, keeping its tier and data. Recorded in the tenant's activity with the
+	// reason.
+	SetComplimentary(ctx context.Context, in *SetComplimentaryRequest, opts ...grpc.CallOption) (*SetComplimentaryResponse, error)
 	// ResyncSubscription re-reads the workspace's subscriptions from the provider
 	// and applies them through the same path as a webhook.
 	ResyncSubscription(ctx context.Context, in *ResyncSubscriptionRequest, opts ...grpc.CallOption) (*ResyncSubscriptionResponse, error)
@@ -121,6 +130,16 @@ func (c *billingAdminServiceClient) SetBillingRequired(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetBillingRequiredResponse)
 	err := c.cc.Invoke(ctx, BillingAdminService_SetBillingRequired_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingAdminServiceClient) SetComplimentary(ctx context.Context, in *SetComplimentaryRequest, opts ...grpc.CallOption) (*SetComplimentaryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetComplimentaryResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_SetComplimentary_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +216,15 @@ type BillingAdminServiceServer interface {
 	// SetBillingRequired comps or exempts a workspace (required=false lets it use
 	// the app without checking out) or puts it back behind the gate. Recorded in
 	// the tenant's activity with the reason.
+	// FailedPrecondition for a complimentary workspace: end that with
+	// SetComplimentary instead.
 	SetBillingRequired(context.Context, *SetBillingRequiredRequest) (*SetBillingRequiredResponse, error)
+	// SetComplimentary makes a workspace a tester's complimentary one (never
+	// billed; the owner may switch tiers without checking out) or ends that
+	// (CON-333): the workspace then goes behind the billing gate until it checks
+	// out, keeping its tier and data. Recorded in the tenant's activity with the
+	// reason.
+	SetComplimentary(context.Context, *SetComplimentaryRequest) (*SetComplimentaryResponse, error)
 	// ResyncSubscription re-reads the workspace's subscriptions from the provider
 	// and applies them through the same path as a webhook.
 	ResyncSubscription(context.Context, *ResyncSubscriptionRequest) (*ResyncSubscriptionResponse, error)
@@ -236,6 +263,9 @@ func (UnimplementedBillingAdminServiceServer) ListBillingAttention(context.Conte
 }
 func (UnimplementedBillingAdminServiceServer) SetBillingRequired(context.Context, *SetBillingRequiredRequest) (*SetBillingRequiredResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetBillingRequired not implemented")
+}
+func (UnimplementedBillingAdminServiceServer) SetComplimentary(context.Context, *SetComplimentaryRequest) (*SetComplimentaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetComplimentary not implemented")
 }
 func (UnimplementedBillingAdminServiceServer) ResyncSubscription(context.Context, *ResyncSubscriptionRequest) (*ResyncSubscriptionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResyncSubscription not implemented")
@@ -342,6 +372,24 @@ func _BillingAdminService_SetBillingRequired_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingAdminService_SetComplimentary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetComplimentaryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAdminServiceServer).SetComplimentary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAdminService_SetComplimentary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAdminServiceServer).SetComplimentary(ctx, req.(*SetComplimentaryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BillingAdminService_ResyncSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ResyncSubscriptionRequest)
 	if err := dec(in); err != nil {
@@ -436,6 +484,10 @@ var BillingAdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetBillingRequired",
 			Handler:    _BillingAdminService_SetBillingRequired_Handler,
+		},
+		{
+			MethodName: "SetComplimentary",
+			Handler:    _BillingAdminService_SetComplimentary_Handler,
 		},
 		{
 			MethodName: "ResyncSubscription",
