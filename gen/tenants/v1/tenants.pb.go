@@ -201,8 +201,10 @@ type Tenant struct {
 	UpdatedAt    *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	Status       string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`                                 // CON-190: active | suspended | deleted
 	StatusReason string                 `protobuf:"bytes,9,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"` // operator note; '' when active
-	// CON-322 billing summary: ” when billing is off (BILLING_PROVIDER=none);
-	// not_required (grandfathered or comped); awaiting_checkout (gated, never
+	// CON-322 billing summary: complimentary (a tester's workspace, CON-333,
+	// reported whether or not billing is on); ” when billing is off
+	// (BILLING_PROVIDER=none); not_required (grandfathered or exempted);
+	// awaiting_checkout (gated, never
 	// subscribed); otherwise the Lemon Squeezy status of the workspace's current
 	// subscription (on_trial | active | past_due | unpaid | paused | cancelled |
 	// expired).

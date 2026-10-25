@@ -637,8 +637,11 @@ type TenantBilling struct {
 	ScheduledChanges    []*ScheduledChange     `protobuf:"bytes,5,rep,name=scheduled_changes,json=scheduledChanges,proto3" json:"scheduled_changes,omitempty"`
 	RecentWebhookEvents []*WebhookEvent        `protobuf:"bytes,6,rep,name=recent_webhook_events,json=recentWebhookEvents,proto3" json:"recent_webhook_events,omitempty"` // newest first, at most 20
 	Owners              []*OwnerTrial          `protobuf:"bytes,7,rep,name=owners,proto3" json:"owners,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// complimentary: a tester's workspace, never billed (billing_required is
+	// always false with it).
+	Complimentary bool `protobuf:"varint,8,opt,name=complimentary,proto3" json:"complimentary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TenantBilling) Reset() {
@@ -718,6 +721,13 @@ func (x *TenantBilling) GetOwners() []*OwnerTrial {
 		return x.Owners
 	}
 	return nil
+}
+
+func (x *TenantBilling) GetComplimentary() bool {
+	if x != nil {
+		return x.Complimentary
+	}
+	return false
 }
 
 type GetTenantBillingRequest struct {
@@ -1112,6 +1122,110 @@ func (x *SetBillingRequiredResponse) GetBilling() *TenantBilling {
 	return nil
 }
 
+type SetComplimentaryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Complimentary bool                   `protobuf:"varint,2,opt,name=complimentary,proto3" json:"complimentary,omitempty"`
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"` // required
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetComplimentaryRequest) Reset() {
+	*x = SetComplimentaryRequest{}
+	mi := &file_billing_v1_billing_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetComplimentaryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetComplimentaryRequest) ProtoMessage() {}
+
+func (x *SetComplimentaryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetComplimentaryRequest.ProtoReflect.Descriptor instead.
+func (*SetComplimentaryRequest) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *SetComplimentaryRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *SetComplimentaryRequest) GetComplimentary() bool {
+	if x != nil {
+		return x.Complimentary
+	}
+	return false
+}
+
+func (x *SetComplimentaryRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type SetComplimentaryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Billing       *TenantBilling         `protobuf:"bytes,1,opt,name=billing,proto3" json:"billing,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetComplimentaryResponse) Reset() {
+	*x = SetComplimentaryResponse{}
+	mi := &file_billing_v1_billing_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetComplimentaryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetComplimentaryResponse) ProtoMessage() {}
+
+func (x *SetComplimentaryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetComplimentaryResponse.ProtoReflect.Descriptor instead.
+func (*SetComplimentaryResponse) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SetComplimentaryResponse) GetBilling() *TenantBilling {
+	if x != nil {
+		return x.Billing
+	}
+	return nil
+}
+
 type ResyncSubscriptionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -1121,7 +1235,7 @@ type ResyncSubscriptionRequest struct {
 
 func (x *ResyncSubscriptionRequest) Reset() {
 	*x = ResyncSubscriptionRequest{}
-	mi := &file_billing_v1_billing_proto_msgTypes[14]
+	mi := &file_billing_v1_billing_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1133,7 +1247,7 @@ func (x *ResyncSubscriptionRequest) String() string {
 func (*ResyncSubscriptionRequest) ProtoMessage() {}
 
 func (x *ResyncSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[14]
+	mi := &file_billing_v1_billing_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1146,7 +1260,7 @@ func (x *ResyncSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*ResyncSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{14}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ResyncSubscriptionRequest) GetTenantId() string {
@@ -1166,7 +1280,7 @@ type ResyncSubscriptionResponse struct {
 
 func (x *ResyncSubscriptionResponse) Reset() {
 	*x = ResyncSubscriptionResponse{}
-	mi := &file_billing_v1_billing_proto_msgTypes[15]
+	mi := &file_billing_v1_billing_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1178,7 +1292,7 @@ func (x *ResyncSubscriptionResponse) String() string {
 func (*ResyncSubscriptionResponse) ProtoMessage() {}
 
 func (x *ResyncSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[15]
+	mi := &file_billing_v1_billing_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1191,7 +1305,7 @@ func (x *ResyncSubscriptionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncSubscriptionResponse.ProtoReflect.Descriptor instead.
 func (*ResyncSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{15}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ResyncSubscriptionResponse) GetBilling() *TenantBilling {
@@ -1223,7 +1337,7 @@ type FreeTrialTier struct {
 
 func (x *FreeTrialTier) Reset() {
 	*x = FreeTrialTier{}
-	mi := &file_billing_v1_billing_proto_msgTypes[16]
+	mi := &file_billing_v1_billing_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1235,7 +1349,7 @@ func (x *FreeTrialTier) String() string {
 func (*FreeTrialTier) ProtoMessage() {}
 
 func (x *FreeTrialTier) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[16]
+	mi := &file_billing_v1_billing_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1248,7 +1362,7 @@ func (x *FreeTrialTier) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FreeTrialTier.ProtoReflect.Descriptor instead.
 func (*FreeTrialTier) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{16}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *FreeTrialTier) GetTierId() string {
@@ -1287,7 +1401,7 @@ type GetFreeTrialTierRequest struct {
 
 func (x *GetFreeTrialTierRequest) Reset() {
 	*x = GetFreeTrialTierRequest{}
-	mi := &file_billing_v1_billing_proto_msgTypes[17]
+	mi := &file_billing_v1_billing_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1299,7 +1413,7 @@ func (x *GetFreeTrialTierRequest) String() string {
 func (*GetFreeTrialTierRequest) ProtoMessage() {}
 
 func (x *GetFreeTrialTierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[17]
+	mi := &file_billing_v1_billing_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1312,7 +1426,7 @@ func (x *GetFreeTrialTierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFreeTrialTierRequest.ProtoReflect.Descriptor instead.
 func (*GetFreeTrialTierRequest) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{17}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{19}
 }
 
 type GetFreeTrialTierResponse struct {
@@ -1324,7 +1438,7 @@ type GetFreeTrialTierResponse struct {
 
 func (x *GetFreeTrialTierResponse) Reset() {
 	*x = GetFreeTrialTierResponse{}
-	mi := &file_billing_v1_billing_proto_msgTypes[18]
+	mi := &file_billing_v1_billing_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1336,7 +1450,7 @@ func (x *GetFreeTrialTierResponse) String() string {
 func (*GetFreeTrialTierResponse) ProtoMessage() {}
 
 func (x *GetFreeTrialTierResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[18]
+	mi := &file_billing_v1_billing_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1349,7 +1463,7 @@ func (x *GetFreeTrialTierResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFreeTrialTierResponse.ProtoReflect.Descriptor instead.
 func (*GetFreeTrialTierResponse) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{18}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetFreeTrialTierResponse) GetOffer() *FreeTrialTier {
@@ -1369,7 +1483,7 @@ type SetFreeTrialTierRequest struct {
 
 func (x *SetFreeTrialTierRequest) Reset() {
 	*x = SetFreeTrialTierRequest{}
-	mi := &file_billing_v1_billing_proto_msgTypes[19]
+	mi := &file_billing_v1_billing_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1381,7 +1495,7 @@ func (x *SetFreeTrialTierRequest) String() string {
 func (*SetFreeTrialTierRequest) ProtoMessage() {}
 
 func (x *SetFreeTrialTierRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[19]
+	mi := &file_billing_v1_billing_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1394,7 +1508,7 @@ func (x *SetFreeTrialTierRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetFreeTrialTierRequest.ProtoReflect.Descriptor instead.
 func (*SetFreeTrialTierRequest) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{19}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SetFreeTrialTierRequest) GetTierId() string {
@@ -1420,7 +1534,7 @@ type SetFreeTrialTierResponse struct {
 
 func (x *SetFreeTrialTierResponse) Reset() {
 	*x = SetFreeTrialTierResponse{}
-	mi := &file_billing_v1_billing_proto_msgTypes[20]
+	mi := &file_billing_v1_billing_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1432,7 +1546,7 @@ func (x *SetFreeTrialTierResponse) String() string {
 func (*SetFreeTrialTierResponse) ProtoMessage() {}
 
 func (x *SetFreeTrialTierResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[20]
+	mi := &file_billing_v1_billing_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1445,7 +1559,7 @@ func (x *SetFreeTrialTierResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetFreeTrialTierResponse.ProtoReflect.Descriptor instead.
 func (*SetFreeTrialTierResponse) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{20}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SetFreeTrialTierResponse) GetOffer() *FreeTrialTier {
@@ -1464,7 +1578,7 @@ type InvalidateTestSubscriptionsRequest struct {
 
 func (x *InvalidateTestSubscriptionsRequest) Reset() {
 	*x = InvalidateTestSubscriptionsRequest{}
-	mi := &file_billing_v1_billing_proto_msgTypes[21]
+	mi := &file_billing_v1_billing_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1476,7 +1590,7 @@ func (x *InvalidateTestSubscriptionsRequest) String() string {
 func (*InvalidateTestSubscriptionsRequest) ProtoMessage() {}
 
 func (x *InvalidateTestSubscriptionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[21]
+	mi := &file_billing_v1_billing_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1489,7 +1603,7 @@ func (x *InvalidateTestSubscriptionsRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use InvalidateTestSubscriptionsRequest.ProtoReflect.Descriptor instead.
 func (*InvalidateTestSubscriptionsRequest) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{21}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *InvalidateTestSubscriptionsRequest) GetDryRun() bool {
@@ -1510,7 +1624,7 @@ type InvalidateTestSubscriptionsResponse struct {
 
 func (x *InvalidateTestSubscriptionsResponse) Reset() {
 	*x = InvalidateTestSubscriptionsResponse{}
-	mi := &file_billing_v1_billing_proto_msgTypes[22]
+	mi := &file_billing_v1_billing_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1522,7 +1636,7 @@ func (x *InvalidateTestSubscriptionsResponse) String() string {
 func (*InvalidateTestSubscriptionsResponse) ProtoMessage() {}
 
 func (x *InvalidateTestSubscriptionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_billing_v1_billing_proto_msgTypes[22]
+	mi := &file_billing_v1_billing_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1535,7 +1649,7 @@ func (x *InvalidateTestSubscriptionsResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use InvalidateTestSubscriptionsResponse.ProtoReflect.Descriptor instead.
 func (*InvalidateTestSubscriptionsResponse) Descriptor() ([]byte, []int) {
-	return file_billing_v1_billing_proto_rawDescGZIP(), []int{22}
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *InvalidateTestSubscriptionsResponse) GetDryRun() bool {
@@ -1632,7 +1746,7 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\n" +
 	"account_id\x18\x02 \x01(\tR\taccountId\x12\x14\n" +
 	"\x05email\x18\x03 \x01(\tR\x05email\x12%\n" +
-	"\x0etrial_eligible\x18\x04 \x01(\bR\rtrialEligible\"\xf5\x02\n" +
+	"\x0etrial_eligible\x18\x04 \x01(\bR\rtrialEligible\"\x9b\x03\n" +
 	"\rTenantBilling\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12)\n" +
 	"\x10billing_required\x18\x02 \x01(\bR\x0fbillingRequired\x12\x14\n" +
@@ -1640,7 +1754,8 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\rsubscriptions\x18\x04 \x03(\v2\x18.billing.v1.SubscriptionR\rsubscriptions\x12H\n" +
 	"\x11scheduled_changes\x18\x05 \x03(\v2\x1b.billing.v1.ScheduledChangeR\x10scheduledChanges\x12L\n" +
 	"\x15recent_webhook_events\x18\x06 \x03(\v2\x18.billing.v1.WebhookEventR\x13recentWebhookEvents\x12.\n" +
-	"\x06owners\x18\a \x03(\v2\x16.billing.v1.OwnerTrialR\x06owners\"6\n" +
+	"\x06owners\x18\a \x03(\v2\x16.billing.v1.OwnerTrialR\x06owners\x12$\n" +
+	"\rcomplimentary\x18\b \x01(\bR\rcomplimentary\"6\n" +
 	"\x17GetTenantBillingRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"O\n" +
 	"\x18GetTenantBillingResponse\x123\n" +
@@ -1666,6 +1781,12 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\brequired\x18\x02 \x01(\bR\brequired\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\"Q\n" +
 	"\x1aSetBillingRequiredResponse\x123\n" +
+	"\abilling\x18\x01 \x01(\v2\x19.billing.v1.TenantBillingR\abilling\"t\n" +
+	"\x17SetComplimentaryRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12$\n" +
+	"\rcomplimentary\x18\x02 \x01(\bR\rcomplimentary\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"O\n" +
+	"\x18SetComplimentaryResponse\x123\n" +
 	"\abilling\x18\x01 \x01(\v2\x19.billing.v1.TenantBillingR\abilling\"8\n" +
 	"\x19ResyncSubscriptionRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"o\n" +
@@ -1692,12 +1813,13 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\adry_run\x18\x01 \x01(\bR\x06dryRun\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\x12\x1d\n" +
 	"\n" +
-	"tenant_ids\x18\x03 \x03(\tR\ttenantIds2\xcc\x06\n" +
+	"tenant_ids\x18\x03 \x03(\tR\ttenantIds2\xab\a\n" +
 	"\x13BillingAdminService\x12c\n" +
 	"\x12GetBillingSettings\x12%.billing.v1.GetBillingSettingsRequest\x1a&.billing.v1.GetBillingSettingsResponse\x12]\n" +
 	"\x10GetTenantBilling\x12#.billing.v1.GetTenantBillingRequest\x1a$.billing.v1.GetTenantBillingResponse\x12i\n" +
 	"\x14ListBillingAttention\x12'.billing.v1.ListBillingAttentionRequest\x1a(.billing.v1.ListBillingAttentionResponse\x12c\n" +
-	"\x12SetBillingRequired\x12%.billing.v1.SetBillingRequiredRequest\x1a&.billing.v1.SetBillingRequiredResponse\x12c\n" +
+	"\x12SetBillingRequired\x12%.billing.v1.SetBillingRequiredRequest\x1a&.billing.v1.SetBillingRequiredResponse\x12]\n" +
+	"\x10SetComplimentary\x12#.billing.v1.SetComplimentaryRequest\x1a$.billing.v1.SetComplimentaryResponse\x12c\n" +
 	"\x12ResyncSubscription\x12%.billing.v1.ResyncSubscriptionRequest\x1a&.billing.v1.ResyncSubscriptionResponse\x12]\n" +
 	"\x10GetFreeTrialTier\x12#.billing.v1.GetFreeTrialTierRequest\x1a$.billing.v1.GetFreeTrialTierResponse\x12]\n" +
 	"\x10SetFreeTrialTier\x12#.billing.v1.SetFreeTrialTierRequest\x1a$.billing.v1.SetFreeTrialTierResponse\x12~\n" +
@@ -1718,7 +1840,7 @@ func file_billing_v1_billing_proto_rawDescGZIP() []byte {
 	return file_billing_v1_billing_proto_rawDescData
 }
 
-var file_billing_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_billing_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_billing_v1_billing_proto_goTypes = []any{
 	(*GetBillingSettingsRequest)(nil),           // 0: billing.v1.GetBillingSettingsRequest
 	(*GetBillingSettingsResponse)(nil),          // 1: billing.v1.GetBillingSettingsResponse
@@ -1734,30 +1856,32 @@ var file_billing_v1_billing_proto_goTypes = []any{
 	(*ListBillingAttentionResponse)(nil),        // 11: billing.v1.ListBillingAttentionResponse
 	(*SetBillingRequiredRequest)(nil),           // 12: billing.v1.SetBillingRequiredRequest
 	(*SetBillingRequiredResponse)(nil),          // 13: billing.v1.SetBillingRequiredResponse
-	(*ResyncSubscriptionRequest)(nil),           // 14: billing.v1.ResyncSubscriptionRequest
-	(*ResyncSubscriptionResponse)(nil),          // 15: billing.v1.ResyncSubscriptionResponse
-	(*FreeTrialTier)(nil),                       // 16: billing.v1.FreeTrialTier
-	(*GetFreeTrialTierRequest)(nil),             // 17: billing.v1.GetFreeTrialTierRequest
-	(*GetFreeTrialTierResponse)(nil),            // 18: billing.v1.GetFreeTrialTierResponse
-	(*SetFreeTrialTierRequest)(nil),             // 19: billing.v1.SetFreeTrialTierRequest
-	(*SetFreeTrialTierResponse)(nil),            // 20: billing.v1.SetFreeTrialTierResponse
-	(*InvalidateTestSubscriptionsRequest)(nil),  // 21: billing.v1.InvalidateTestSubscriptionsRequest
-	(*InvalidateTestSubscriptionsResponse)(nil), // 22: billing.v1.InvalidateTestSubscriptionsResponse
-	(*timestamppb.Timestamp)(nil),               // 23: google.protobuf.Timestamp
+	(*SetComplimentaryRequest)(nil),             // 14: billing.v1.SetComplimentaryRequest
+	(*SetComplimentaryResponse)(nil),            // 15: billing.v1.SetComplimentaryResponse
+	(*ResyncSubscriptionRequest)(nil),           // 16: billing.v1.ResyncSubscriptionRequest
+	(*ResyncSubscriptionResponse)(nil),          // 17: billing.v1.ResyncSubscriptionResponse
+	(*FreeTrialTier)(nil),                       // 18: billing.v1.FreeTrialTier
+	(*GetFreeTrialTierRequest)(nil),             // 19: billing.v1.GetFreeTrialTierRequest
+	(*GetFreeTrialTierResponse)(nil),            // 20: billing.v1.GetFreeTrialTierResponse
+	(*SetFreeTrialTierRequest)(nil),             // 21: billing.v1.SetFreeTrialTierRequest
+	(*SetFreeTrialTierResponse)(nil),            // 22: billing.v1.SetFreeTrialTierResponse
+	(*InvalidateTestSubscriptionsRequest)(nil),  // 23: billing.v1.InvalidateTestSubscriptionsRequest
+	(*InvalidateTestSubscriptionsResponse)(nil), // 24: billing.v1.InvalidateTestSubscriptionsResponse
+	(*timestamppb.Timestamp)(nil),               // 25: google.protobuf.Timestamp
 }
 var file_billing_v1_billing_proto_depIdxs = []int32{
-	23, // 0: billing.v1.Subscription.renews_at:type_name -> google.protobuf.Timestamp
-	23, // 1: billing.v1.Subscription.ends_at:type_name -> google.protobuf.Timestamp
-	23, // 2: billing.v1.Subscription.trial_ends_at:type_name -> google.protobuf.Timestamp
-	23, // 3: billing.v1.Subscription.first_paid_at:type_name -> google.protobuf.Timestamp
-	23, // 4: billing.v1.Subscription.invalidated_at:type_name -> google.protobuf.Timestamp
-	23, // 5: billing.v1.Subscription.teardown_at:type_name -> google.protobuf.Timestamp
-	23, // 6: billing.v1.Subscription.created_at:type_name -> google.protobuf.Timestamp
-	23, // 7: billing.v1.Subscription.updated_at:type_name -> google.protobuf.Timestamp
-	23, // 8: billing.v1.ScheduledChange.effective_at:type_name -> google.protobuf.Timestamp
-	23, // 9: billing.v1.ScheduledChange.created_at:type_name -> google.protobuf.Timestamp
-	23, // 10: billing.v1.WebhookEvent.received_at:type_name -> google.protobuf.Timestamp
-	23, // 11: billing.v1.WebhookEvent.processed_at:type_name -> google.protobuf.Timestamp
+	25, // 0: billing.v1.Subscription.renews_at:type_name -> google.protobuf.Timestamp
+	25, // 1: billing.v1.Subscription.ends_at:type_name -> google.protobuf.Timestamp
+	25, // 2: billing.v1.Subscription.trial_ends_at:type_name -> google.protobuf.Timestamp
+	25, // 3: billing.v1.Subscription.first_paid_at:type_name -> google.protobuf.Timestamp
+	25, // 4: billing.v1.Subscription.invalidated_at:type_name -> google.protobuf.Timestamp
+	25, // 5: billing.v1.Subscription.teardown_at:type_name -> google.protobuf.Timestamp
+	25, // 6: billing.v1.Subscription.created_at:type_name -> google.protobuf.Timestamp
+	25, // 7: billing.v1.Subscription.updated_at:type_name -> google.protobuf.Timestamp
+	25, // 8: billing.v1.ScheduledChange.effective_at:type_name -> google.protobuf.Timestamp
+	25, // 9: billing.v1.ScheduledChange.created_at:type_name -> google.protobuf.Timestamp
+	25, // 10: billing.v1.WebhookEvent.received_at:type_name -> google.protobuf.Timestamp
+	25, // 11: billing.v1.WebhookEvent.processed_at:type_name -> google.protobuf.Timestamp
 	2,  // 12: billing.v1.TenantBilling.subscriptions:type_name -> billing.v1.Subscription
 	3,  // 13: billing.v1.TenantBilling.scheduled_changes:type_name -> billing.v1.ScheduledChange
 	4,  // 14: billing.v1.TenantBilling.recent_webhook_events:type_name -> billing.v1.WebhookEvent
@@ -1765,33 +1889,36 @@ var file_billing_v1_billing_proto_depIdxs = []int32{
 	6,  // 16: billing.v1.GetTenantBillingResponse.billing:type_name -> billing.v1.TenantBilling
 	2,  // 17: billing.v1.AttentionItem.subscription:type_name -> billing.v1.Subscription
 	4,  // 18: billing.v1.AttentionItem.webhook_event:type_name -> billing.v1.WebhookEvent
-	23, // 19: billing.v1.AttentionItem.since:type_name -> google.protobuf.Timestamp
+	25, // 19: billing.v1.AttentionItem.since:type_name -> google.protobuf.Timestamp
 	9,  // 20: billing.v1.ListBillingAttentionResponse.items:type_name -> billing.v1.AttentionItem
 	6,  // 21: billing.v1.SetBillingRequiredResponse.billing:type_name -> billing.v1.TenantBilling
-	6,  // 22: billing.v1.ResyncSubscriptionResponse.billing:type_name -> billing.v1.TenantBilling
-	16, // 23: billing.v1.GetFreeTrialTierResponse.offer:type_name -> billing.v1.FreeTrialTier
-	16, // 24: billing.v1.SetFreeTrialTierResponse.offer:type_name -> billing.v1.FreeTrialTier
-	0,  // 25: billing.v1.BillingAdminService.GetBillingSettings:input_type -> billing.v1.GetBillingSettingsRequest
-	7,  // 26: billing.v1.BillingAdminService.GetTenantBilling:input_type -> billing.v1.GetTenantBillingRequest
-	10, // 27: billing.v1.BillingAdminService.ListBillingAttention:input_type -> billing.v1.ListBillingAttentionRequest
-	12, // 28: billing.v1.BillingAdminService.SetBillingRequired:input_type -> billing.v1.SetBillingRequiredRequest
-	14, // 29: billing.v1.BillingAdminService.ResyncSubscription:input_type -> billing.v1.ResyncSubscriptionRequest
-	17, // 30: billing.v1.BillingAdminService.GetFreeTrialTier:input_type -> billing.v1.GetFreeTrialTierRequest
-	19, // 31: billing.v1.BillingAdminService.SetFreeTrialTier:input_type -> billing.v1.SetFreeTrialTierRequest
-	21, // 32: billing.v1.BillingAdminService.InvalidateTestSubscriptions:input_type -> billing.v1.InvalidateTestSubscriptionsRequest
-	1,  // 33: billing.v1.BillingAdminService.GetBillingSettings:output_type -> billing.v1.GetBillingSettingsResponse
-	8,  // 34: billing.v1.BillingAdminService.GetTenantBilling:output_type -> billing.v1.GetTenantBillingResponse
-	11, // 35: billing.v1.BillingAdminService.ListBillingAttention:output_type -> billing.v1.ListBillingAttentionResponse
-	13, // 36: billing.v1.BillingAdminService.SetBillingRequired:output_type -> billing.v1.SetBillingRequiredResponse
-	15, // 37: billing.v1.BillingAdminService.ResyncSubscription:output_type -> billing.v1.ResyncSubscriptionResponse
-	18, // 38: billing.v1.BillingAdminService.GetFreeTrialTier:output_type -> billing.v1.GetFreeTrialTierResponse
-	20, // 39: billing.v1.BillingAdminService.SetFreeTrialTier:output_type -> billing.v1.SetFreeTrialTierResponse
-	22, // 40: billing.v1.BillingAdminService.InvalidateTestSubscriptions:output_type -> billing.v1.InvalidateTestSubscriptionsResponse
-	33, // [33:41] is the sub-list for method output_type
-	25, // [25:33] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	6,  // 22: billing.v1.SetComplimentaryResponse.billing:type_name -> billing.v1.TenantBilling
+	6,  // 23: billing.v1.ResyncSubscriptionResponse.billing:type_name -> billing.v1.TenantBilling
+	18, // 24: billing.v1.GetFreeTrialTierResponse.offer:type_name -> billing.v1.FreeTrialTier
+	18, // 25: billing.v1.SetFreeTrialTierResponse.offer:type_name -> billing.v1.FreeTrialTier
+	0,  // 26: billing.v1.BillingAdminService.GetBillingSettings:input_type -> billing.v1.GetBillingSettingsRequest
+	7,  // 27: billing.v1.BillingAdminService.GetTenantBilling:input_type -> billing.v1.GetTenantBillingRequest
+	10, // 28: billing.v1.BillingAdminService.ListBillingAttention:input_type -> billing.v1.ListBillingAttentionRequest
+	12, // 29: billing.v1.BillingAdminService.SetBillingRequired:input_type -> billing.v1.SetBillingRequiredRequest
+	14, // 30: billing.v1.BillingAdminService.SetComplimentary:input_type -> billing.v1.SetComplimentaryRequest
+	16, // 31: billing.v1.BillingAdminService.ResyncSubscription:input_type -> billing.v1.ResyncSubscriptionRequest
+	19, // 32: billing.v1.BillingAdminService.GetFreeTrialTier:input_type -> billing.v1.GetFreeTrialTierRequest
+	21, // 33: billing.v1.BillingAdminService.SetFreeTrialTier:input_type -> billing.v1.SetFreeTrialTierRequest
+	23, // 34: billing.v1.BillingAdminService.InvalidateTestSubscriptions:input_type -> billing.v1.InvalidateTestSubscriptionsRequest
+	1,  // 35: billing.v1.BillingAdminService.GetBillingSettings:output_type -> billing.v1.GetBillingSettingsResponse
+	8,  // 36: billing.v1.BillingAdminService.GetTenantBilling:output_type -> billing.v1.GetTenantBillingResponse
+	11, // 37: billing.v1.BillingAdminService.ListBillingAttention:output_type -> billing.v1.ListBillingAttentionResponse
+	13, // 38: billing.v1.BillingAdminService.SetBillingRequired:output_type -> billing.v1.SetBillingRequiredResponse
+	15, // 39: billing.v1.BillingAdminService.SetComplimentary:output_type -> billing.v1.SetComplimentaryResponse
+	17, // 40: billing.v1.BillingAdminService.ResyncSubscription:output_type -> billing.v1.ResyncSubscriptionResponse
+	20, // 41: billing.v1.BillingAdminService.GetFreeTrialTier:output_type -> billing.v1.GetFreeTrialTierResponse
+	22, // 42: billing.v1.BillingAdminService.SetFreeTrialTier:output_type -> billing.v1.SetFreeTrialTierResponse
+	24, // 43: billing.v1.BillingAdminService.InvalidateTestSubscriptions:output_type -> billing.v1.InvalidateTestSubscriptionsResponse
+	35, // [35:44] is the sub-list for method output_type
+	26, // [26:35] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_billing_v1_billing_proto_init() }
@@ -1805,7 +1932,7 @@ func file_billing_v1_billing_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_billing_v1_billing_proto_rawDesc), len(file_billing_v1_billing_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
