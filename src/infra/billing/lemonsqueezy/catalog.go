@@ -20,8 +20,9 @@ const catalogPageSize = 100
 // beyond any real store.
 const maxCatalogPages = 100
 
-// variantStatusPending marks the hidden default variant of a product that has
-// variants of its own; it cannot be bought.
+// variantStatusPending marks a product's default variant. It is hidden when
+// the product has variants of its own, but it is the variant that sells a
+// product without any, so only the hidden one is skipped.
 const variantStatusPending = "pending"
 
 type variantAttrs struct {
@@ -111,6 +112,8 @@ func (c *Client) Catalog(ctx context.Context, testMode bool) (billing.Catalog, e
 			}
 			products[string(p.ID)] = a.Name
 		}
+		variants := make([]billing.Variant, 0, len(doc.Included))
+		perProduct := map[string]int{}
 		for _, r := range doc.Included {
 			if r.Type != "variants" {
 				continue
@@ -119,7 +122,13 @@ func (c *Client) Catalog(ctx context.Context, testMode bool) (billing.Catalog, e
 			if err != nil {
 				return billing.Catalog{}, err
 			}
-			if !subscription || v.Status == variantStatusPending {
+			perProduct[v.ProductID]++
+			if subscription {
+				variants = append(variants, v)
+			}
+		}
+		for _, v := range variants {
+			if v.Status == variantStatusPending && perProduct[v.ProductID] > 1 {
 				continue
 			}
 			v.ProductName = products[v.ProductID]

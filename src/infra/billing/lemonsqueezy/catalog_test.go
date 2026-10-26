@@ -37,8 +37,9 @@ func catalogServer(t *testing.T) (string, *[]string) {
 					]}`)
 			case "2":
 				_, _ = io.WriteString(w, `{"meta":{"page":{"lastPage":2}},
-					"data":[{"type":"products","id":"20","attributes":{"name":"E-book"}}],
-					"included":[{"type":"variants","id":"201","attributes":{"product_id":20,"name":"Default","price":900,"is_subscription":false,"status":"published","test_mode":true}}]}`)
+					"data":[{"type":"products","id":"20","attributes":{"name":"E-book"}},{"type":"products","id":"30","attributes":{"name":"Max"}}],
+					"included":[{"type":"variants","id":"201","attributes":{"product_id":20,"name":"Default","price":900,"is_subscription":false,"status":"published","test_mode":true}},
+						{"type":"variants","id":"301","attributes":{"product_id":30,"name":"Default","price":10000,"is_subscription":true,"interval":"month","interval_count":1,"status":"pending","test_mode":true}}]}`)
 			default:
 				http.Error(w, "bad page", http.StatusBadRequest)
 			}
@@ -57,7 +58,7 @@ func TestCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cat.Currency != "EUR" || !cat.TestMode || len(cat.Variants) != 2 {
+	if cat.Currency != "EUR" || !cat.TestMode || len(cat.Variants) != 3 {
 		t.Fatalf("catalog = %+v", cat)
 	}
 	m, ok := cat.Variant("101")
@@ -68,7 +69,12 @@ func TestCatalog(t *testing.T) {
 		t.Fatal("one-off variant listed")
 	}
 	if _, ok := cat.Variant("100"); ok {
-		t.Fatal("pending default variant listed")
+		t.Fatal("hidden default variant of a product with variants listed")
+	}
+	// A product without variants of its own sells through its pending
+	// default variant.
+	if d, ok := cat.Variant("301"); !ok || d.ProductName != "Max" || d.PriceMinor != 10000 || d.Interval != "month" {
+		t.Fatalf("default variant of a single-variant product = %+v, %v", d, ok)
 	}
 	if len(*keys) != 3 {
 		t.Fatalf("requests = %d, want store + 2 pages", len(*keys))
