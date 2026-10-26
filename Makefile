@@ -91,9 +91,11 @@ lint:
 # billing.v1 (BillingAdminService) + Tenant.billing_status in v1.17.0 (CON-322;
 # v1.13–v1.16 added the river-service jobs.v1 / jobrpc.v1 contracts, CON-332);
 # tenantinvites.v1 (TenantInviteAdminService) + billing.v1 SetComplimentary in
-# v1.18.0 (CON-333) — publish the proto repo tag before `make proto` can resolve it.
+# v1.18.0 (CON-333); billing.v1 variant mapping RPCs + AttentionItem
+# tier_version_price_id in v1.19.0 (CON-404) — publish the proto repo tag before
+# `make proto` can resolve it.
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.18.0
+PROTO_VERSION := v1.19.0
 
 proto:
 	buf generate $(PROTO_MODULE):$(PROTO_VERSION)
