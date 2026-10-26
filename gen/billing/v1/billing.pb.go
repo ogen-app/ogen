@@ -1914,7 +1914,8 @@ func (x *ListProviderVariantsResponse) GetVariants() []*ProviderVariant {
 	return nil
 }
 
-// VariantMapping is one sellable price row, its variant and the check.
+// VariantMapping is one sellable price row (or a retired one still mapped),
+// its variant and the check.
 type VariantMapping struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	TierVersionPriceId string                 `protobuf:"bytes,1,opt,name=tier_version_price_id,json=tierVersionPriceId,proto3" json:"tier_version_price_id,omitempty"`

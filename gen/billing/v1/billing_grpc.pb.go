@@ -100,7 +100,8 @@ type BillingAdminServiceClient interface {
 	// (variant_id = ""). FailedPrecondition, with a readable message, when the
 	// variant does not match the price row (amount excluding tax, currency,
 	// interval, mode, the one-month trial on the free-month tier) or already
-	// sells another price. Recorded in activity with the reason.
+	// sells another price. A draft or retired price cannot be mapped. The
+	// reason is kept on the mapping and logged.
 	SetVariantMapping(ctx context.Context, in *SetVariantMappingRequest, opts ...grpc.CallOption) (*SetVariantMappingResponse, error)
 	// SuggestVariantMappings proposes a variant for every unmapped price row
 	// that exactly one free variant matches. Nothing is saved: the operator
@@ -312,7 +313,8 @@ type BillingAdminServiceServer interface {
 	// (variant_id = ""). FailedPrecondition, with a readable message, when the
 	// variant does not match the price row (amount excluding tax, currency,
 	// interval, mode, the one-month trial on the free-month tier) or already
-	// sells another price. Recorded in activity with the reason.
+	// sells another price. A draft or retired price cannot be mapped. The
+	// reason is kept on the mapping and logged.
 	SetVariantMapping(context.Context, *SetVariantMappingRequest) (*SetVariantMappingResponse, error)
 	// SuggestVariantMappings proposes a variant for every unmapped price row
 	// that exactly one free variant matches. Nothing is saved: the operator
