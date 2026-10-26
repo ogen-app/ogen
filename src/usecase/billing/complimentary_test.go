@@ -127,3 +127,21 @@ func TestEndingComplimentaryAccessGatesAndKeepsFreeMonth(t *testing.T) {
 		t.Fatalf("unknown tenant err = %v", err)
 	}
 }
+
+func TestEndingComplimentaryOnAnExemptWorkspaceKeepsItExempt(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, _, _ := h.workspace("exempt")
+	if err := h.svc.SetBillingRequired(ctx, tenantID, false, "design partner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.SetComplimentary(ctx, tenantID, false, "was never a tester"); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := h.svc.Gated(ctx, tenantID); g {
+		t.Fatal("ending comp on a never-comp workspace gated it")
+	}
+	if tb, err := h.svc.TenantBilling(ctx, tenantID); err != nil || tb.BillingRequired {
+		t.Fatalf("tenant billing = %+v %v", tb, err)
+	}
+}

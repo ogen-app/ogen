@@ -418,7 +418,7 @@ func (r *billingRepository) SetBillingRequired(ctx context.Context, tenantID str
 func (r *billingRepository) SetComplimentary(ctx context.Context, tenantID string, complimentary bool, at time.Time) (bool, error) {
 	res, err := r.db.NewUpdate().Model((*models.Tenant)(nil)).
 		Set("complimentary = ?", complimentary).
-		Set("billing_required = ?", !complimentary).
+		Set("billing_required = (billing_required OR complimentary) AND ?", !complimentary).
 		Set("updated_at = ?", at).
 		Where("id = ?", tenantID).
 		Where("deleted_at IS NULL").
