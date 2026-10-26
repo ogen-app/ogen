@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -78,13 +79,15 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+// subscriptionEvents are the webhooks that carry a subscription snapshot; their
+// object id is the subscription id.
+var subscriptionEvents = []string{
+	"subscription_created", "subscription_updated", "subscription_cancelled", "subscription_resumed",
+	"subscription_expired", "subscription_paused", "subscription_unpaused",
+}
+
 func isSubscriptionEvent(name string) bool {
-	switch name {
-	case "subscription_created", "subscription_updated", "subscription_cancelled", "subscription_resumed",
-		"subscription_expired", "subscription_paused", "subscription_unpaused":
-		return true
-	}
-	return false
+	return slices.Contains(subscriptionEvents, name)
 }
 
 // resyncOne reads one subscription and applies it. A subscription the

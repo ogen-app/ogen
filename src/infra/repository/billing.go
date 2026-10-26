@@ -64,6 +64,9 @@ type BillingRepository interface {
 	// ListFailedWebhookEvents lists failed deliveries since a time; with
 	// unresolvedOnly only those whose tenant could not be resolved.
 	ListFailedWebhookEvents(ctx context.Context, since time.Time, unresolvedOnly bool) ([]models.BillingWebhookEvent, error)
+	// HasUnresolvedSubscriptionEvent reports whether a delivery of one of the
+	// named events for a subscription failed before its tenant was resolved.
+	HasUnresolvedSubscriptionEvent(ctx context.Context, provider, providerSubID string, eventNames []string) (bool, error)
 	DeleteWebhookEventsBefore(ctx context.Context, cutoff time.Time) (int, error)
 
 	// Scheduled changes.
@@ -308,6 +311,16 @@ func (r *billingRepository) ListFailedWebhookEvents(ctx context.Context, since t
 	}
 	err := q.OrderExpr("bwe.received_at DESC").Scan(ctx)
 	return out, err
+}
+
+func (r *billingRepository) HasUnresolvedSubscriptionEvent(ctx context.Context, provider, providerSubID string, eventNames []string) (bool, error) {
+	return r.db.NewSelect().Model((*models.BillingWebhookEvent)(nil)).
+		Where("bwe.provider = ?", provider).
+		Where("bwe.provider_object_id = ?", providerSubID).
+		Where("bwe.event_name IN (?)", bun.List(eventNames)).
+		Where("bwe.outcome = ?", models.WebhookOutcomeFailed).
+		Where("bwe.tenant_id IS NULL").
+		Exists(ctx)
 }
 
 func (r *billingRepository) DeleteWebhookEventsBefore(ctx context.Context, cutoff time.Time) (int, error) {

@@ -127,10 +127,11 @@ func (s *Service) applyPayment(ctx context.Context, ev billingdom.Event) (string
 	var tenantID string
 	err := s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		sub, err := s.d.Repo.GetSubscriptionByProviderID(ctx, tx, s.provider(), ev.PaymentSubscriptionID, true)
+		if errors.Is(err, sql.ErrNoRows) {
+			return s.unknownSubscriptionPayment(ctx, ev.PaymentSubscriptionID)
+		}
 		if err != nil {
-			// The subscription_created webhook may not have landed yet; a 5xx
-			// makes the provider retry this one after it.
-			return fmt.Errorf("payment for unknown subscription %s: %w", ev.PaymentSubscriptionID, err)
+			return err
 		}
 		tenantID = sub.TenantID
 		if sub.FirstPaidAt != nil {
@@ -144,6 +145,23 @@ func (s *Service) applyPayment(ctx context.Context, ev billingdom.Event) (string
 		return "", tenantID, err
 	}
 	return models.WebhookOutcomeApplied, tenantID, nil
+}
+
+// unknownSubscriptionPayment explains a payment for a subscription that is
+// not mirrored. When a snapshot of it was already dropped for an unresolved
+// workspace no retry can apply the payment, so it is errUnresolvedTenant and
+// acknowledged; first_paid_at is not lost, an active snapshot sets it.
+// Otherwise subscription_created may not have landed yet, and the error makes
+// the provider retry this one after it.
+func (s *Service) unknownSubscriptionPayment(ctx context.Context, subID string) error {
+	dropped, err := s.d.Repo.HasUnresolvedSubscriptionEvent(ctx, s.provider(), subID, subscriptionEvents)
+	if err != nil {
+		return err
+	}
+	if dropped {
+		return fmt.Errorf("%w (payment for subscription %s)", errUnresolvedTenant, subID)
+	}
+	return fmt.Errorf("payment for unknown subscription %s: %w", subID, sql.ErrNoRows)
 }
 
 type applyResult struct {
