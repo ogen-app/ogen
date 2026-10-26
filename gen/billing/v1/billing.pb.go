@@ -824,15 +824,18 @@ type AttentionItem struct {
 	TenantId   string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	TenantName string                 `protobuf:"bytes,2,opt,name=tenant_name,json=tenantName,proto3" json:"tenant_name,omitempty"`
 	// past_due | unpaid | paused | expired | expired_never_paid | duplicate |
-	// unresolved_webhook | scheduled_change_failed
+	// unresolved_webhook | scheduled_change_failed | unmapped_price
 	Reason       string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
 	Subscription *Subscription          `protobuf:"bytes,4,opt,name=subscription,proto3" json:"subscription,omitempty"`                     // unset for unresolved_webhook
 	WebhookEvent *WebhookEvent          `protobuf:"bytes,5,opt,name=webhook_event,json=webhookEvent,proto3" json:"webhook_event,omitempty"` // set for unresolved_webhook
 	Since        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=since,proto3" json:"since,omitempty"`
 	// teardown_status for expired_never_paid: ” | dry_run | enqueued
 	TeardownStatus string `protobuf:"bytes,7,opt,name=teardown_status,json=teardownStatus,proto3" json:"teardown_status,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// tier_version_price_id is set for unmapped_price: a sellable price row with
+	// no variant in the current mode. tenant_id and tenant_name are ” then.
+	TierVersionPriceId string `protobuf:"bytes,8,opt,name=tier_version_price_id,json=tierVersionPriceId,proto3" json:"tier_version_price_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *AttentionItem) Reset() {
@@ -910,6 +913,13 @@ func (x *AttentionItem) GetSince() *timestamppb.Timestamp {
 func (x *AttentionItem) GetTeardownStatus() string {
 	if x != nil {
 		return x.TeardownStatus
+	}
+	return ""
+}
+
+func (x *AttentionItem) GetTierVersionPriceId() string {
+	if x != nil {
+		return x.TierVersionPriceId
 	}
 	return ""
 }
@@ -1673,6 +1683,766 @@ func (x *InvalidateTestSubscriptionsResponse) GetTenantIds() []string {
 	return nil
 }
 
+// ProviderVariant is one subscription variant of the store.
+type ProviderVariant struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Id                 string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ProductId          string                 `protobuf:"bytes,2,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
+	ProductName        string                 `protobuf:"bytes,3,opt,name=product_name,json=productName,proto3" json:"product_name,omitempty"`
+	Name               string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	PriceMinor         int64                  `protobuf:"varint,5,opt,name=price_minor,json=priceMinor,proto3" json:"price_minor,omitempty"` // excluding tax, in minor units
+	Currency           string                 `protobuf:"bytes,6,opt,name=currency,proto3" json:"currency,omitempty"`                        // the store's currency (ISO 4217)
+	Interval           string                 `protobuf:"bytes,7,opt,name=interval,proto3" json:"interval,omitempty"`                        // month | year
+	HasFreeTrial       bool                   `protobuf:"varint,8,opt,name=has_free_trial,json=hasFreeTrial,proto3" json:"has_free_trial,omitempty"`
+	TrialInterval      string                 `protobuf:"bytes,9,opt,name=trial_interval,json=trialInterval,proto3" json:"trial_interval,omitempty"` // day | week | month | year; '' without a trial
+	TrialIntervalCount int32                  `protobuf:"varint,10,opt,name=trial_interval_count,json=trialIntervalCount,proto3" json:"trial_interval_count,omitempty"`
+	Status             string                 `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"` // the provider's variant status, e.g. published
+	TestMode           bool                   `protobuf:"varint,12,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	// mapped_price_id is the price row this variant sells in this mode; ”
+	// when it sells none.
+	MappedPriceId string `protobuf:"bytes,13,opt,name=mapped_price_id,json=mappedPriceId,proto3" json:"mapped_price_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderVariant) Reset() {
+	*x = ProviderVariant{}
+	mi := &file_billing_v1_billing_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderVariant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderVariant) ProtoMessage() {}
+
+func (x *ProviderVariant) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderVariant.ProtoReflect.Descriptor instead.
+func (*ProviderVariant) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ProviderVariant) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetProductId() string {
+	if x != nil {
+		return x.ProductId
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetProductName() string {
+	if x != nil {
+		return x.ProductName
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetPriceMinor() int64 {
+	if x != nil {
+		return x.PriceMinor
+	}
+	return 0
+}
+
+func (x *ProviderVariant) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetInterval() string {
+	if x != nil {
+		return x.Interval
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetHasFreeTrial() bool {
+	if x != nil {
+		return x.HasFreeTrial
+	}
+	return false
+}
+
+func (x *ProviderVariant) GetTrialInterval() string {
+	if x != nil {
+		return x.TrialInterval
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetTrialIntervalCount() int32 {
+	if x != nil {
+		return x.TrialIntervalCount
+	}
+	return 0
+}
+
+func (x *ProviderVariant) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ProviderVariant) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+func (x *ProviderVariant) GetMappedPriceId() string {
+	if x != nil {
+		return x.MappedPriceId
+	}
+	return ""
+}
+
+type ListProviderVariantsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TestMode      bool                   `protobuf:"varint,1,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListProviderVariantsRequest) Reset() {
+	*x = ListProviderVariantsRequest{}
+	mi := &file_billing_v1_billing_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListProviderVariantsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListProviderVariantsRequest) ProtoMessage() {}
+
+func (x *ListProviderVariantsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListProviderVariantsRequest.ProtoReflect.Descriptor instead.
+func (*ListProviderVariantsRequest) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ListProviderVariantsRequest) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+type ListProviderVariantsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Variants      []*ProviderVariant     `protobuf:"bytes,1,rep,name=variants,proto3" json:"variants,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListProviderVariantsResponse) Reset() {
+	*x = ListProviderVariantsResponse{}
+	mi := &file_billing_v1_billing_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListProviderVariantsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListProviderVariantsResponse) ProtoMessage() {}
+
+func (x *ListProviderVariantsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListProviderVariantsResponse.ProtoReflect.Descriptor instead.
+func (*ListProviderVariantsResponse) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ListProviderVariantsResponse) GetVariants() []*ProviderVariant {
+	if x != nil {
+		return x.Variants
+	}
+	return nil
+}
+
+// VariantMapping is one sellable price row, its variant and the check.
+type VariantMapping struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TierVersionPriceId string                 `protobuf:"bytes,1,opt,name=tier_version_price_id,json=tierVersionPriceId,proto3" json:"tier_version_price_id,omitempty"`
+	TierId             string                 `protobuf:"bytes,2,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`
+	TierName           string                 `protobuf:"bytes,3,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`
+	TierVersionId      string                 `protobuf:"bytes,4,opt,name=tier_version_id,json=tierVersionId,proto3" json:"tier_version_id,omitempty"`
+	TierVersion        int32                  `protobuf:"varint,5,opt,name=tier_version,json=tierVersion,proto3" json:"tier_version,omitempty"`
+	Interval           string                 `protobuf:"bytes,6,opt,name=interval,proto3" json:"interval,omitempty"`                  // month | year
+	NetMinor           int64                  `protobuf:"varint,7,opt,name=net_minor,json=netMinor,proto3" json:"net_minor,omitempty"` // excluding tax
+	Currency           string                 `protobuf:"bytes,8,opt,name=currency,proto3" json:"currency,omitempty"`
+	CountryCode        string                 `protobuf:"bytes,9,opt,name=country_code,json=countryCode,proto3" json:"country_code,omitempty"` // '' for the currency's default price
+	// free_trial_tier: the tier is the free-month tier, so its variants must
+	// carry a one-month trial.
+	FreeTrialTier bool             `protobuf:"varint,10,opt,name=free_trial_tier,json=freeTrialTier,proto3" json:"free_trial_tier,omitempty"`
+	VariantId     string           `protobuf:"bytes,11,opt,name=variant_id,json=variantId,proto3" json:"variant_id,omitempty"` // '' when unmapped
+	Variant       *ProviderVariant `protobuf:"bytes,12,opt,name=variant,proto3" json:"variant,omitempty"`                      // unset when unmapped or unreadable
+	// status: ok | unmapped | variant_missing | price_mismatch |
+	// currency_mismatch | interval_mismatch | mode_mismatch | trial_missing |
+	// unchecked (the mode's API key is not set, or the provider is unreachable)
+	Status        string                 `protobuf:"bytes,13,opt,name=status,proto3" json:"status,omitempty"`
+	Message       string                 `protobuf:"bytes,14,opt,name=message,proto3" json:"message,omitempty"`                      // readable explanation for every status but ok
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"` // unset when unmapped
+	UpdatedBy     string                 `protobuf:"bytes,16,opt,name=updated_by,json=updatedBy,proto3" json:"updated_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VariantMapping) Reset() {
+	*x = VariantMapping{}
+	mi := &file_billing_v1_billing_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VariantMapping) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VariantMapping) ProtoMessage() {}
+
+func (x *VariantMapping) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VariantMapping.ProtoReflect.Descriptor instead.
+func (*VariantMapping) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *VariantMapping) GetTierVersionPriceId() string {
+	if x != nil {
+		return x.TierVersionPriceId
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetTierId() string {
+	if x != nil {
+		return x.TierId
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetTierName() string {
+	if x != nil {
+		return x.TierName
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetTierVersionId() string {
+	if x != nil {
+		return x.TierVersionId
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetTierVersion() int32 {
+	if x != nil {
+		return x.TierVersion
+	}
+	return 0
+}
+
+func (x *VariantMapping) GetInterval() string {
+	if x != nil {
+		return x.Interval
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetNetMinor() int64 {
+	if x != nil {
+		return x.NetMinor
+	}
+	return 0
+}
+
+func (x *VariantMapping) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetCountryCode() string {
+	if x != nil {
+		return x.CountryCode
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetFreeTrialTier() bool {
+	if x != nil {
+		return x.FreeTrialTier
+	}
+	return false
+}
+
+func (x *VariantMapping) GetVariantId() string {
+	if x != nil {
+		return x.VariantId
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetVariant() *ProviderVariant {
+	if x != nil {
+		return x.Variant
+	}
+	return nil
+}
+
+func (x *VariantMapping) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *VariantMapping) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *VariantMapping) GetUpdatedBy() string {
+	if x != nil {
+		return x.UpdatedBy
+	}
+	return ""
+}
+
+type ListVariantMappingsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TestMode      bool                   `protobuf:"varint,1,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVariantMappingsRequest) Reset() {
+	*x = ListVariantMappingsRequest{}
+	mi := &file_billing_v1_billing_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVariantMappingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVariantMappingsRequest) ProtoMessage() {}
+
+func (x *ListVariantMappingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVariantMappingsRequest.ProtoReflect.Descriptor instead.
+func (*ListVariantMappingsRequest) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ListVariantMappingsRequest) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+type ListVariantMappingsResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TestMode bool                   `protobuf:"varint,1,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	// checked: the mode's API key is set, so statuses come from the provider.
+	Checked       bool              `protobuf:"varint,2,opt,name=checked,proto3" json:"checked,omitempty"`
+	Mappings      []*VariantMapping `protobuf:"bytes,3,rep,name=mappings,proto3" json:"mappings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVariantMappingsResponse) Reset() {
+	*x = ListVariantMappingsResponse{}
+	mi := &file_billing_v1_billing_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVariantMappingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVariantMappingsResponse) ProtoMessage() {}
+
+func (x *ListVariantMappingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVariantMappingsResponse.ProtoReflect.Descriptor instead.
+func (*ListVariantMappingsResponse) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ListVariantMappingsResponse) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+func (x *ListVariantMappingsResponse) GetChecked() bool {
+	if x != nil {
+		return x.Checked
+	}
+	return false
+}
+
+func (x *ListVariantMappingsResponse) GetMappings() []*VariantMapping {
+	if x != nil {
+		return x.Mappings
+	}
+	return nil
+}
+
+type SetVariantMappingRequest struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TierVersionPriceId string                 `protobuf:"bytes,1,opt,name=tier_version_price_id,json=tierVersionPriceId,proto3" json:"tier_version_price_id,omitempty"`
+	TestMode           bool                   `protobuf:"varint,2,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	VariantId          string                 `protobuf:"bytes,3,opt,name=variant_id,json=variantId,proto3" json:"variant_id,omitempty"` // '' unmaps the price
+	Reason             string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`                        // required
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SetVariantMappingRequest) Reset() {
+	*x = SetVariantMappingRequest{}
+	mi := &file_billing_v1_billing_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetVariantMappingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetVariantMappingRequest) ProtoMessage() {}
+
+func (x *SetVariantMappingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetVariantMappingRequest.ProtoReflect.Descriptor instead.
+func (*SetVariantMappingRequest) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SetVariantMappingRequest) GetTierVersionPriceId() string {
+	if x != nil {
+		return x.TierVersionPriceId
+	}
+	return ""
+}
+
+func (x *SetVariantMappingRequest) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+func (x *SetVariantMappingRequest) GetVariantId() string {
+	if x != nil {
+		return x.VariantId
+	}
+	return ""
+}
+
+func (x *SetVariantMappingRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type SetVariantMappingResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mapping       *VariantMapping        `protobuf:"bytes,1,opt,name=mapping,proto3" json:"mapping,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetVariantMappingResponse) Reset() {
+	*x = SetVariantMappingResponse{}
+	mi := &file_billing_v1_billing_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetVariantMappingResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetVariantMappingResponse) ProtoMessage() {}
+
+func (x *SetVariantMappingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetVariantMappingResponse.ProtoReflect.Descriptor instead.
+func (*SetVariantMappingResponse) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *SetVariantMappingResponse) GetMapping() *VariantMapping {
+	if x != nil {
+		return x.Mapping
+	}
+	return nil
+}
+
+// VariantSuggestion pairs an unmapped price row with the one variant that
+// matches it.
+type VariantSuggestion struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	TierVersionPriceId string                 `protobuf:"bytes,1,opt,name=tier_version_price_id,json=tierVersionPriceId,proto3" json:"tier_version_price_id,omitempty"`
+	Variant            *ProviderVariant       `protobuf:"bytes,2,opt,name=variant,proto3" json:"variant,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *VariantSuggestion) Reset() {
+	*x = VariantSuggestion{}
+	mi := &file_billing_v1_billing_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VariantSuggestion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VariantSuggestion) ProtoMessage() {}
+
+func (x *VariantSuggestion) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VariantSuggestion.ProtoReflect.Descriptor instead.
+func (*VariantSuggestion) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *VariantSuggestion) GetTierVersionPriceId() string {
+	if x != nil {
+		return x.TierVersionPriceId
+	}
+	return ""
+}
+
+func (x *VariantSuggestion) GetVariant() *ProviderVariant {
+	if x != nil {
+		return x.Variant
+	}
+	return nil
+}
+
+type SuggestVariantMappingsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TestMode      bool                   `protobuf:"varint,1,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SuggestVariantMappingsRequest) Reset() {
+	*x = SuggestVariantMappingsRequest{}
+	mi := &file_billing_v1_billing_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SuggestVariantMappingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SuggestVariantMappingsRequest) ProtoMessage() {}
+
+func (x *SuggestVariantMappingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SuggestVariantMappingsRequest.ProtoReflect.Descriptor instead.
+func (*SuggestVariantMappingsRequest) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *SuggestVariantMappingsRequest) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+type SuggestVariantMappingsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Suggestions   []*VariantSuggestion   `protobuf:"bytes,1,rep,name=suggestions,proto3" json:"suggestions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SuggestVariantMappingsResponse) Reset() {
+	*x = SuggestVariantMappingsResponse{}
+	mi := &file_billing_v1_billing_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SuggestVariantMappingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SuggestVariantMappingsResponse) ProtoMessage() {}
+
+func (x *SuggestVariantMappingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SuggestVariantMappingsResponse.ProtoReflect.Descriptor instead.
+func (*SuggestVariantMappingsResponse) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *SuggestVariantMappingsResponse) GetSuggestions() []*VariantSuggestion {
+	if x != nil {
+		return x.Suggestions
+	}
+	return nil
+}
+
 var File_billing_v1_billing_proto protoreflect.FileDescriptor
 
 const file_billing_v1_billing_proto_rawDesc = "" +
@@ -1759,7 +2529,7 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\x17GetTenantBillingRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"O\n" +
 	"\x18GetTenantBillingResponse\x123\n" +
-	"\abilling\x18\x01 \x01(\v2\x19.billing.v1.TenantBillingR\abilling\"\xbd\x02\n" +
+	"\abilling\x18\x01 \x01(\v2\x19.billing.v1.TenantBillingR\abilling\"\xf0\x02\n" +
 	"\rAttentionItem\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1f\n" +
 	"\vtenant_name\x18\x02 \x01(\tR\n" +
@@ -1768,7 +2538,8 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\fsubscription\x18\x04 \x01(\v2\x18.billing.v1.SubscriptionR\fsubscription\x12=\n" +
 	"\rwebhook_event\x18\x05 \x01(\v2\x18.billing.v1.WebhookEventR\fwebhookEvent\x120\n" +
 	"\x05since\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\x12'\n" +
-	"\x0fteardown_status\x18\a \x01(\tR\x0eteardownStatus\"Y\n" +
+	"\x0fteardown_status\x18\a \x01(\tR\x0eteardownStatus\x121\n" +
+	"\x15tier_version_price_id\x18\b \x01(\tR\x12tierVersionPriceId\"Y\n" +
 	"\x1bListBillingAttentionRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
@@ -1813,7 +2584,71 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\adry_run\x18\x01 \x01(\bR\x06dryRun\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\x12\x1d\n" +
 	"\n" +
-	"tenant_ids\x18\x03 \x03(\tR\ttenantIds2\xab\a\n" +
+	"tenant_ids\x18\x03 \x03(\tR\ttenantIds\"\xac\x03\n" +
+	"\x0fProviderVariant\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
+	"\n" +
+	"product_id\x18\x02 \x01(\tR\tproductId\x12!\n" +
+	"\fproduct_name\x18\x03 \x01(\tR\vproductName\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12\x1f\n" +
+	"\vprice_minor\x18\x05 \x01(\x03R\n" +
+	"priceMinor\x12\x1a\n" +
+	"\bcurrency\x18\x06 \x01(\tR\bcurrency\x12\x1a\n" +
+	"\binterval\x18\a \x01(\tR\binterval\x12$\n" +
+	"\x0ehas_free_trial\x18\b \x01(\bR\fhasFreeTrial\x12%\n" +
+	"\x0etrial_interval\x18\t \x01(\tR\rtrialInterval\x120\n" +
+	"\x14trial_interval_count\x18\n" +
+	" \x01(\x05R\x12trialIntervalCount\x12\x16\n" +
+	"\x06status\x18\v \x01(\tR\x06status\x12\x1b\n" +
+	"\ttest_mode\x18\f \x01(\bR\btestMode\x12&\n" +
+	"\x0fmapped_price_id\x18\r \x01(\tR\rmappedPriceId\":\n" +
+	"\x1bListProviderVariantsRequest\x12\x1b\n" +
+	"\ttest_mode\x18\x01 \x01(\bR\btestMode\"W\n" +
+	"\x1cListProviderVariantsResponse\x127\n" +
+	"\bvariants\x18\x01 \x03(\v2\x1b.billing.v1.ProviderVariantR\bvariants\"\xc6\x04\n" +
+	"\x0eVariantMapping\x121\n" +
+	"\x15tier_version_price_id\x18\x01 \x01(\tR\x12tierVersionPriceId\x12\x17\n" +
+	"\atier_id\x18\x02 \x01(\tR\x06tierId\x12\x1b\n" +
+	"\ttier_name\x18\x03 \x01(\tR\btierName\x12&\n" +
+	"\x0ftier_version_id\x18\x04 \x01(\tR\rtierVersionId\x12!\n" +
+	"\ftier_version\x18\x05 \x01(\x05R\vtierVersion\x12\x1a\n" +
+	"\binterval\x18\x06 \x01(\tR\binterval\x12\x1b\n" +
+	"\tnet_minor\x18\a \x01(\x03R\bnetMinor\x12\x1a\n" +
+	"\bcurrency\x18\b \x01(\tR\bcurrency\x12!\n" +
+	"\fcountry_code\x18\t \x01(\tR\vcountryCode\x12&\n" +
+	"\x0ffree_trial_tier\x18\n" +
+	" \x01(\bR\rfreeTrialTier\x12\x1d\n" +
+	"\n" +
+	"variant_id\x18\v \x01(\tR\tvariantId\x125\n" +
+	"\avariant\x18\f \x01(\v2\x1b.billing.v1.ProviderVariantR\avariant\x12\x16\n" +
+	"\x06status\x18\r \x01(\tR\x06status\x12\x18\n" +
+	"\amessage\x18\x0e \x01(\tR\amessage\x129\n" +
+	"\n" +
+	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"updated_by\x18\x10 \x01(\tR\tupdatedBy\"9\n" +
+	"\x1aListVariantMappingsRequest\x12\x1b\n" +
+	"\ttest_mode\x18\x01 \x01(\bR\btestMode\"\x8c\x01\n" +
+	"\x1bListVariantMappingsResponse\x12\x1b\n" +
+	"\ttest_mode\x18\x01 \x01(\bR\btestMode\x12\x18\n" +
+	"\achecked\x18\x02 \x01(\bR\achecked\x126\n" +
+	"\bmappings\x18\x03 \x03(\v2\x1a.billing.v1.VariantMappingR\bmappings\"\xa1\x01\n" +
+	"\x18SetVariantMappingRequest\x121\n" +
+	"\x15tier_version_price_id\x18\x01 \x01(\tR\x12tierVersionPriceId\x12\x1b\n" +
+	"\ttest_mode\x18\x02 \x01(\bR\btestMode\x12\x1d\n" +
+	"\n" +
+	"variant_id\x18\x03 \x01(\tR\tvariantId\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"Q\n" +
+	"\x19SetVariantMappingResponse\x124\n" +
+	"\amapping\x18\x01 \x01(\v2\x1a.billing.v1.VariantMappingR\amapping\"}\n" +
+	"\x11VariantSuggestion\x121\n" +
+	"\x15tier_version_price_id\x18\x01 \x01(\tR\x12tierVersionPriceId\x125\n" +
+	"\avariant\x18\x02 \x01(\v2\x1b.billing.v1.ProviderVariantR\avariant\"<\n" +
+	"\x1dSuggestVariantMappingsRequest\x12\x1b\n" +
+	"\ttest_mode\x18\x01 \x01(\bR\btestMode\"a\n" +
+	"\x1eSuggestVariantMappingsResponse\x12?\n" +
+	"\vsuggestions\x18\x01 \x03(\v2\x1d.billing.v1.VariantSuggestionR\vsuggestions2\xd1\n" +
+	"\n" +
 	"\x13BillingAdminService\x12c\n" +
 	"\x12GetBillingSettings\x12%.billing.v1.GetBillingSettingsRequest\x1a&.billing.v1.GetBillingSettingsResponse\x12]\n" +
 	"\x10GetTenantBilling\x12#.billing.v1.GetTenantBillingRequest\x1a$.billing.v1.GetTenantBillingResponse\x12i\n" +
@@ -1823,7 +2658,11 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\x12ResyncSubscription\x12%.billing.v1.ResyncSubscriptionRequest\x1a&.billing.v1.ResyncSubscriptionResponse\x12]\n" +
 	"\x10GetFreeTrialTier\x12#.billing.v1.GetFreeTrialTierRequest\x1a$.billing.v1.GetFreeTrialTierResponse\x12]\n" +
 	"\x10SetFreeTrialTier\x12#.billing.v1.SetFreeTrialTierRequest\x1a$.billing.v1.SetFreeTrialTierResponse\x12~\n" +
-	"\x1bInvalidateTestSubscriptions\x12..billing.v1.InvalidateTestSubscriptionsRequest\x1a/.billing.v1.InvalidateTestSubscriptionsResponseB\x9a\x01\n" +
+	"\x1bInvalidateTestSubscriptions\x12..billing.v1.InvalidateTestSubscriptionsRequest\x1a/.billing.v1.InvalidateTestSubscriptionsResponse\x12i\n" +
+	"\x14ListProviderVariants\x12'.billing.v1.ListProviderVariantsRequest\x1a(.billing.v1.ListProviderVariantsResponse\x12f\n" +
+	"\x13ListVariantMappings\x12&.billing.v1.ListVariantMappingsRequest\x1a'.billing.v1.ListVariantMappingsResponse\x12`\n" +
+	"\x11SetVariantMapping\x12$.billing.v1.SetVariantMappingRequest\x1a%.billing.v1.SetVariantMappingResponse\x12o\n" +
+	"\x16SuggestVariantMappings\x12).billing.v1.SuggestVariantMappingsRequest\x1a*.billing.v1.SuggestVariantMappingsResponseB\x9a\x01\n" +
 	"\x0ecom.billing.v1B\fBillingProtoP\x01Z1github.com/ogen-app/ogen/gen/billing/v1;billingv1\xa2\x02\x03BXX\xaa\x02\n" +
 	"Billing.V1\xca\x02\n" +
 	"Billing\\V1\xe2\x02\x16Billing\\V1\\GPBMetadata\xea\x02\vBilling::V1b\x06proto3"
@@ -1840,7 +2679,7 @@ func file_billing_v1_billing_proto_rawDescGZIP() []byte {
 	return file_billing_v1_billing_proto_rawDescData
 }
 
-var file_billing_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_billing_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_billing_v1_billing_proto_goTypes = []any{
 	(*GetBillingSettingsRequest)(nil),           // 0: billing.v1.GetBillingSettingsRequest
 	(*GetBillingSettingsResponse)(nil),          // 1: billing.v1.GetBillingSettingsResponse
@@ -1867,21 +2706,32 @@ var file_billing_v1_billing_proto_goTypes = []any{
 	(*SetFreeTrialTierResponse)(nil),            // 22: billing.v1.SetFreeTrialTierResponse
 	(*InvalidateTestSubscriptionsRequest)(nil),  // 23: billing.v1.InvalidateTestSubscriptionsRequest
 	(*InvalidateTestSubscriptionsResponse)(nil), // 24: billing.v1.InvalidateTestSubscriptionsResponse
-	(*timestamppb.Timestamp)(nil),               // 25: google.protobuf.Timestamp
+	(*ProviderVariant)(nil),                     // 25: billing.v1.ProviderVariant
+	(*ListProviderVariantsRequest)(nil),         // 26: billing.v1.ListProviderVariantsRequest
+	(*ListProviderVariantsResponse)(nil),        // 27: billing.v1.ListProviderVariantsResponse
+	(*VariantMapping)(nil),                      // 28: billing.v1.VariantMapping
+	(*ListVariantMappingsRequest)(nil),          // 29: billing.v1.ListVariantMappingsRequest
+	(*ListVariantMappingsResponse)(nil),         // 30: billing.v1.ListVariantMappingsResponse
+	(*SetVariantMappingRequest)(nil),            // 31: billing.v1.SetVariantMappingRequest
+	(*SetVariantMappingResponse)(nil),           // 32: billing.v1.SetVariantMappingResponse
+	(*VariantSuggestion)(nil),                   // 33: billing.v1.VariantSuggestion
+	(*SuggestVariantMappingsRequest)(nil),       // 34: billing.v1.SuggestVariantMappingsRequest
+	(*SuggestVariantMappingsResponse)(nil),      // 35: billing.v1.SuggestVariantMappingsResponse
+	(*timestamppb.Timestamp)(nil),               // 36: google.protobuf.Timestamp
 }
 var file_billing_v1_billing_proto_depIdxs = []int32{
-	25, // 0: billing.v1.Subscription.renews_at:type_name -> google.protobuf.Timestamp
-	25, // 1: billing.v1.Subscription.ends_at:type_name -> google.protobuf.Timestamp
-	25, // 2: billing.v1.Subscription.trial_ends_at:type_name -> google.protobuf.Timestamp
-	25, // 3: billing.v1.Subscription.first_paid_at:type_name -> google.protobuf.Timestamp
-	25, // 4: billing.v1.Subscription.invalidated_at:type_name -> google.protobuf.Timestamp
-	25, // 5: billing.v1.Subscription.teardown_at:type_name -> google.protobuf.Timestamp
-	25, // 6: billing.v1.Subscription.created_at:type_name -> google.protobuf.Timestamp
-	25, // 7: billing.v1.Subscription.updated_at:type_name -> google.protobuf.Timestamp
-	25, // 8: billing.v1.ScheduledChange.effective_at:type_name -> google.protobuf.Timestamp
-	25, // 9: billing.v1.ScheduledChange.created_at:type_name -> google.protobuf.Timestamp
-	25, // 10: billing.v1.WebhookEvent.received_at:type_name -> google.protobuf.Timestamp
-	25, // 11: billing.v1.WebhookEvent.processed_at:type_name -> google.protobuf.Timestamp
+	36, // 0: billing.v1.Subscription.renews_at:type_name -> google.protobuf.Timestamp
+	36, // 1: billing.v1.Subscription.ends_at:type_name -> google.protobuf.Timestamp
+	36, // 2: billing.v1.Subscription.trial_ends_at:type_name -> google.protobuf.Timestamp
+	36, // 3: billing.v1.Subscription.first_paid_at:type_name -> google.protobuf.Timestamp
+	36, // 4: billing.v1.Subscription.invalidated_at:type_name -> google.protobuf.Timestamp
+	36, // 5: billing.v1.Subscription.teardown_at:type_name -> google.protobuf.Timestamp
+	36, // 6: billing.v1.Subscription.created_at:type_name -> google.protobuf.Timestamp
+	36, // 7: billing.v1.Subscription.updated_at:type_name -> google.protobuf.Timestamp
+	36, // 8: billing.v1.ScheduledChange.effective_at:type_name -> google.protobuf.Timestamp
+	36, // 9: billing.v1.ScheduledChange.created_at:type_name -> google.protobuf.Timestamp
+	36, // 10: billing.v1.WebhookEvent.received_at:type_name -> google.protobuf.Timestamp
+	36, // 11: billing.v1.WebhookEvent.processed_at:type_name -> google.protobuf.Timestamp
 	2,  // 12: billing.v1.TenantBilling.subscriptions:type_name -> billing.v1.Subscription
 	3,  // 13: billing.v1.TenantBilling.scheduled_changes:type_name -> billing.v1.ScheduledChange
 	4,  // 14: billing.v1.TenantBilling.recent_webhook_events:type_name -> billing.v1.WebhookEvent
@@ -1889,36 +2739,51 @@ var file_billing_v1_billing_proto_depIdxs = []int32{
 	6,  // 16: billing.v1.GetTenantBillingResponse.billing:type_name -> billing.v1.TenantBilling
 	2,  // 17: billing.v1.AttentionItem.subscription:type_name -> billing.v1.Subscription
 	4,  // 18: billing.v1.AttentionItem.webhook_event:type_name -> billing.v1.WebhookEvent
-	25, // 19: billing.v1.AttentionItem.since:type_name -> google.protobuf.Timestamp
+	36, // 19: billing.v1.AttentionItem.since:type_name -> google.protobuf.Timestamp
 	9,  // 20: billing.v1.ListBillingAttentionResponse.items:type_name -> billing.v1.AttentionItem
 	6,  // 21: billing.v1.SetBillingRequiredResponse.billing:type_name -> billing.v1.TenantBilling
 	6,  // 22: billing.v1.SetComplimentaryResponse.billing:type_name -> billing.v1.TenantBilling
 	6,  // 23: billing.v1.ResyncSubscriptionResponse.billing:type_name -> billing.v1.TenantBilling
 	18, // 24: billing.v1.GetFreeTrialTierResponse.offer:type_name -> billing.v1.FreeTrialTier
 	18, // 25: billing.v1.SetFreeTrialTierResponse.offer:type_name -> billing.v1.FreeTrialTier
-	0,  // 26: billing.v1.BillingAdminService.GetBillingSettings:input_type -> billing.v1.GetBillingSettingsRequest
-	7,  // 27: billing.v1.BillingAdminService.GetTenantBilling:input_type -> billing.v1.GetTenantBillingRequest
-	10, // 28: billing.v1.BillingAdminService.ListBillingAttention:input_type -> billing.v1.ListBillingAttentionRequest
-	12, // 29: billing.v1.BillingAdminService.SetBillingRequired:input_type -> billing.v1.SetBillingRequiredRequest
-	14, // 30: billing.v1.BillingAdminService.SetComplimentary:input_type -> billing.v1.SetComplimentaryRequest
-	16, // 31: billing.v1.BillingAdminService.ResyncSubscription:input_type -> billing.v1.ResyncSubscriptionRequest
-	19, // 32: billing.v1.BillingAdminService.GetFreeTrialTier:input_type -> billing.v1.GetFreeTrialTierRequest
-	21, // 33: billing.v1.BillingAdminService.SetFreeTrialTier:input_type -> billing.v1.SetFreeTrialTierRequest
-	23, // 34: billing.v1.BillingAdminService.InvalidateTestSubscriptions:input_type -> billing.v1.InvalidateTestSubscriptionsRequest
-	1,  // 35: billing.v1.BillingAdminService.GetBillingSettings:output_type -> billing.v1.GetBillingSettingsResponse
-	8,  // 36: billing.v1.BillingAdminService.GetTenantBilling:output_type -> billing.v1.GetTenantBillingResponse
-	11, // 37: billing.v1.BillingAdminService.ListBillingAttention:output_type -> billing.v1.ListBillingAttentionResponse
-	13, // 38: billing.v1.BillingAdminService.SetBillingRequired:output_type -> billing.v1.SetBillingRequiredResponse
-	15, // 39: billing.v1.BillingAdminService.SetComplimentary:output_type -> billing.v1.SetComplimentaryResponse
-	17, // 40: billing.v1.BillingAdminService.ResyncSubscription:output_type -> billing.v1.ResyncSubscriptionResponse
-	20, // 41: billing.v1.BillingAdminService.GetFreeTrialTier:output_type -> billing.v1.GetFreeTrialTierResponse
-	22, // 42: billing.v1.BillingAdminService.SetFreeTrialTier:output_type -> billing.v1.SetFreeTrialTierResponse
-	24, // 43: billing.v1.BillingAdminService.InvalidateTestSubscriptions:output_type -> billing.v1.InvalidateTestSubscriptionsResponse
-	35, // [35:44] is the sub-list for method output_type
-	26, // [26:35] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	25, // 26: billing.v1.ListProviderVariantsResponse.variants:type_name -> billing.v1.ProviderVariant
+	25, // 27: billing.v1.VariantMapping.variant:type_name -> billing.v1.ProviderVariant
+	36, // 28: billing.v1.VariantMapping.updated_at:type_name -> google.protobuf.Timestamp
+	28, // 29: billing.v1.ListVariantMappingsResponse.mappings:type_name -> billing.v1.VariantMapping
+	28, // 30: billing.v1.SetVariantMappingResponse.mapping:type_name -> billing.v1.VariantMapping
+	25, // 31: billing.v1.VariantSuggestion.variant:type_name -> billing.v1.ProviderVariant
+	33, // 32: billing.v1.SuggestVariantMappingsResponse.suggestions:type_name -> billing.v1.VariantSuggestion
+	0,  // 33: billing.v1.BillingAdminService.GetBillingSettings:input_type -> billing.v1.GetBillingSettingsRequest
+	7,  // 34: billing.v1.BillingAdminService.GetTenantBilling:input_type -> billing.v1.GetTenantBillingRequest
+	10, // 35: billing.v1.BillingAdminService.ListBillingAttention:input_type -> billing.v1.ListBillingAttentionRequest
+	12, // 36: billing.v1.BillingAdminService.SetBillingRequired:input_type -> billing.v1.SetBillingRequiredRequest
+	14, // 37: billing.v1.BillingAdminService.SetComplimentary:input_type -> billing.v1.SetComplimentaryRequest
+	16, // 38: billing.v1.BillingAdminService.ResyncSubscription:input_type -> billing.v1.ResyncSubscriptionRequest
+	19, // 39: billing.v1.BillingAdminService.GetFreeTrialTier:input_type -> billing.v1.GetFreeTrialTierRequest
+	21, // 40: billing.v1.BillingAdminService.SetFreeTrialTier:input_type -> billing.v1.SetFreeTrialTierRequest
+	23, // 41: billing.v1.BillingAdminService.InvalidateTestSubscriptions:input_type -> billing.v1.InvalidateTestSubscriptionsRequest
+	26, // 42: billing.v1.BillingAdminService.ListProviderVariants:input_type -> billing.v1.ListProviderVariantsRequest
+	29, // 43: billing.v1.BillingAdminService.ListVariantMappings:input_type -> billing.v1.ListVariantMappingsRequest
+	31, // 44: billing.v1.BillingAdminService.SetVariantMapping:input_type -> billing.v1.SetVariantMappingRequest
+	34, // 45: billing.v1.BillingAdminService.SuggestVariantMappings:input_type -> billing.v1.SuggestVariantMappingsRequest
+	1,  // 46: billing.v1.BillingAdminService.GetBillingSettings:output_type -> billing.v1.GetBillingSettingsResponse
+	8,  // 47: billing.v1.BillingAdminService.GetTenantBilling:output_type -> billing.v1.GetTenantBillingResponse
+	11, // 48: billing.v1.BillingAdminService.ListBillingAttention:output_type -> billing.v1.ListBillingAttentionResponse
+	13, // 49: billing.v1.BillingAdminService.SetBillingRequired:output_type -> billing.v1.SetBillingRequiredResponse
+	15, // 50: billing.v1.BillingAdminService.SetComplimentary:output_type -> billing.v1.SetComplimentaryResponse
+	17, // 51: billing.v1.BillingAdminService.ResyncSubscription:output_type -> billing.v1.ResyncSubscriptionResponse
+	20, // 52: billing.v1.BillingAdminService.GetFreeTrialTier:output_type -> billing.v1.GetFreeTrialTierResponse
+	22, // 53: billing.v1.BillingAdminService.SetFreeTrialTier:output_type -> billing.v1.SetFreeTrialTierResponse
+	24, // 54: billing.v1.BillingAdminService.InvalidateTestSubscriptions:output_type -> billing.v1.InvalidateTestSubscriptionsResponse
+	27, // 55: billing.v1.BillingAdminService.ListProviderVariants:output_type -> billing.v1.ListProviderVariantsResponse
+	30, // 56: billing.v1.BillingAdminService.ListVariantMappings:output_type -> billing.v1.ListVariantMappingsResponse
+	32, // 57: billing.v1.BillingAdminService.SetVariantMapping:output_type -> billing.v1.SetVariantMappingResponse
+	35, // 58: billing.v1.BillingAdminService.SuggestVariantMappings:output_type -> billing.v1.SuggestVariantMappingsResponse
+	46, // [46:59] is the sub-list for method output_type
+	33, // [33:46] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_billing_v1_billing_proto_init() }
@@ -1932,7 +2797,7 @@ func file_billing_v1_billing_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_billing_v1_billing_proto_rawDesc), len(file_billing_v1_billing_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
