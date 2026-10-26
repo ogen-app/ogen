@@ -244,6 +244,10 @@ func (s *Service) resolveTenant(ctx context.Context, prev *models.BillingSubscri
 // saveSnapshot inserts or updates the mirror row and returns it with the state
 // it had before.
 func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.BillingSubscription, tenantID string, snap billingdom.Subscription, custom map[string]string) (*models.BillingSubscription, models.BillingSubscription, error) {
+	variants, err := s.variantMap(ctx)
+	if err != nil {
+		return nil, models.BillingSubscription{}, err
+	}
 	sub := prev
 	if sub == nil {
 		id, err := models.NewID()
@@ -256,9 +260,8 @@ func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.Bil
 		}
 	}
 	before := *sub
-	s.copySnapshot(sub, snap)
+	s.copySnapshot(sub, snap, variants)
 	sub.UpdatedAt = s.now()
-	var err error
 	if prev == nil {
 		err = s.d.Repo.InsertSubscription(ctx, tx, sub)
 	} else {
@@ -268,7 +271,7 @@ func (s *Service) saveSnapshot(ctx context.Context, tx bun.IDB, prev *models.Bil
 }
 
 // copySnapshot writes the provider's view onto the mirror row.
-func (s *Service) copySnapshot(sub *models.BillingSubscription, snap billingdom.Subscription) {
+func (s *Service) copySnapshot(sub *models.BillingSubscription, snap billingdom.Subscription, variants billingdom.VariantMap) {
 	sub.ProviderCustomerID = snap.CustomerID
 	sub.ProviderOrderID = snap.OrderID
 	sub.ProviderVariantID = snap.VariantID
@@ -278,7 +281,7 @@ func (s *Service) copySnapshot(sub *models.BillingSubscription, snap billingdom.
 	sub.CardBrand, sub.CardLastFour = snap.CardBrand, snap.CardLastFour
 	sub.ProviderUpdatedAt = snap.UpdatedAt
 	sub.TierVersionPriceID = nil
-	if price, ok := s.d.Settings.Variants.Price(snap.VariantID); ok {
+	if price, ok := variants.Price(snap.VariantID); ok {
 		sub.TierVersionPriceID = new(price)
 	}
 	// "active" means at least one charge went through; it also covers a lost
@@ -296,7 +299,7 @@ func (s *Service) copySnapshot(sub *models.BillingSubscription, snap billingdom.
 func (s *Service) followPlan(ctx context.Context, tx bun.IDB, sub *models.BillingSubscription, before models.BillingSubscription, isNew bool) (bool, error) {
 	if sub.TierVersionPriceID == nil {
 		if sub.ProviderVariantID != "" {
-			slog.ErrorContext(ctx, "billing: subscription variant is not in LEMONSQUEEZY_VARIANTS; tier unchanged", logging.AttrComponent, "billing",
+			slog.ErrorContext(ctx, "billing: subscription variant is not mapped to a price; tier unchanged (map it in Harbor)", logging.AttrComponent, "billing",
 				"tenant_id", sub.TenantID, "variant_id", sub.ProviderVariantID)
 		}
 		return false, nil

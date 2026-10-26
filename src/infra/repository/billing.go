@@ -104,6 +104,25 @@ type BillingRepository interface {
 
 	// Prices resolves price rows with their tier, keyed by price id.
 	Prices(ctx context.Context, ids []string) (map[string]billing.Price, error)
+	// MappablePrices lists the prices a variant may be mapped to (the
+	// non-zero prices of active, purchasable versions; a free price is never
+	// sold through the provider) plus the given ids, by tier and version.
+	MappablePrices(ctx context.Context, extraIDs []string) ([]billing.Price, error)
+
+	// Variant mappings.
+
+	// ListVariantMappings lists one mode's mappings.
+	ListVariantMappings(ctx context.Context, testMode bool) ([]models.BillingVariantMapping, error)
+	// UpsertVariantMapping maps a price in a mode, replacing its variant.
+	// ErrVariantTaken when the variant sells another price in that mode.
+	UpsertVariantMapping(ctx context.Context, m *models.BillingVariantMapping) error
+	// DeleteVariantMapping unmaps a price in a mode; false when it was not
+	// mapped.
+	DeleteVariantMapping(ctx context.Context, priceID string, testMode bool) (bool, error)
+	// SeedVariantMappings inserts the rows when the mode has no mapping yet,
+	// once across concurrently booting replicas. It returns how many rows it
+	// inserted and the price ids it skipped because they do not exist.
+	SeedVariantMappings(ctx context.Context, testMode bool, rows []models.BillingVariantMapping) (int, []string, error)
 
 	// CountConnectedAccounts counts a workspace's connected (not
 	// disconnected) social accounts: the connected_accounts entitlement.
@@ -522,33 +541,3 @@ func (r *billingRepository) SetFreeTrialTier(ctx context.Context, tierID string,
 }
 
 var errUnknownTier = errors.New("unknown tier")
-
-func (r *billingRepository) Prices(ctx context.Context, ids []string) (map[string]billing.Price, error) {
-	out := map[string]billing.Price{}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	var rows []struct {
-		ID            string `bun:"id"`
-		TierID        string `bun:"tier_id"`
-		TierName      string `bun:"tier_name"`
-		TierVersionID string `bun:"tier_version_id"`
-		Currency      string `bun:"currency"`
-		Interval      string `bun:"billing_interval"`
-		NetMinor      int64  `bun:"net_minor"`
-	}
-	err := r.db.NewSelect().
-		TableExpr("tenant_tier_version_prices AS p").
-		Join("JOIN tenant_tier_versions AS v ON v.id = p.tier_version_id").
-		Join("JOIN tenant_tiers AS tt ON tt.id = v.tier_id").
-		ColumnExpr("p.id, v.tier_id, tt.name AS tier_name, p.tier_version_id, p.currency, p.billing_interval, p.net_minor").
-		Where("p.id IN (?)", bun.List(ids)).
-		Scan(ctx, &rows)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		out[row.ID] = billing.Price{ID: row.ID, TierID: row.TierID, TierName: row.TierName, TierVersionID: row.TierVersionID, Currency: row.Currency, Interval: row.Interval, NetMinor: row.NetMinor}
-	}
-	return out, nil
-}

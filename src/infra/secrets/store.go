@@ -41,6 +41,10 @@ const (
 	// and live mode have separate values, rotated here at cutover.
 	NameLemonSqueezyAPIKey        = "lemonsqueezy_api_key"
 	NameLemonSqueezyWebhookSecret = "lemonsqueezy_webhook_secret"
+	// CON-404: the live-mode API key, read-only use while billing still runs
+	// in test mode, so the live variant map can be prepared and checked
+	// before the switch. Optional.
+	NameLemonSqueezyAPIKeyLive = "lemonsqueezy_api_key_live"
 )
 
 // AllowedNames is the closed set of accepted secret names. Anything
@@ -55,6 +59,7 @@ var AllowedNames = []string{
 	NameFirecrawlAPIKey,
 	NameLemonSqueezyAPIKey,
 	NameLemonSqueezyWebhookSecret,
+	NameLemonSqueezyAPIKeyLive,
 }
 
 // MaxValueLen is the inclusive upper bound on a plaintext secret. The

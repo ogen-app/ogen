@@ -60,24 +60,57 @@ type Client struct {
 	http          *http.Client
 	baseURL       string
 	storeID       string
+	testMode      bool
 	apiKey        SecretResolver
+	liveAPIKey    SecretResolver
 	webhookSecret SecretResolver
 }
 
 var _ billing.Provider = (*Client)(nil)
 
-// New builds a client. baseURL and timeout fall back to the defaults.
-func New(apiKey, webhookSecret SecretResolver, storeID, baseURL string, timeout time.Duration) *Client {
+// Options configures a client.
+type Options struct {
+	// APIKey is the key of the mode the server runs in (TestMode).
+	APIKey SecretResolver
+	// LiveAPIKey reads live mode while the server still runs in test mode,
+	// so the live variant map can be prepared before the switch. Optional.
+	LiveAPIKey    SecretResolver
+	WebhookSecret SecretResolver
+	StoreID       string
+	TestMode      bool
+	// BaseURL and Timeout fall back to the defaults.
+	BaseURL string
+	Timeout time.Duration
+}
+
+// New builds a client.
+func New(o Options) *Client {
+	timeout := o.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
 	return &Client{
 		http:          &http.Client{Timeout: timeout},
-		baseURL:       strings.TrimRight(cmp.Or(baseURL, defaultBaseURL), "/"),
-		storeID:       storeID,
-		apiKey:        apiKey,
-		webhookSecret: webhookSecret,
+		baseURL:       strings.TrimRight(cmp.Or(o.BaseURL, defaultBaseURL), "/"),
+		storeID:       o.StoreID,
+		testMode:      o.TestMode,
+		apiKey:        o.APIKey,
+		liveAPIKey:    o.LiveAPIKey,
+		webhookSecret: o.WebhookSecret,
 	}
+}
+
+// keyFor returns the API key that reads a mode, or nil when there is none:
+// the server's own key reads its mode, and the live key reads live mode
+// during the test period. Test mode cannot be read once the server is live.
+func (c *Client) keyFor(testMode bool) SecretResolver {
+	switch {
+	case testMode == c.testMode:
+		return c.apiKey
+	case !testMode:
+		return c.liveAPIKey
+	}
+	return nil
 }
 
 // String never includes credentials.
@@ -137,7 +170,16 @@ func (f *flexTime) UnmarshalJSON(b []byte) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
-	key, err := c.apiKey(ctx)
+	return c.doWith(ctx, c.apiKey, method, path, body, out)
+}
+
+// doWith calls the API with the given key; a nil or unset key is
+// ErrNotConfigured.
+func (c *Client) doWith(ctx context.Context, apiKey SecretResolver, method, path string, body, out any) error {
+	if apiKey == nil {
+		return billing.ErrNotConfigured
+	}
+	key, err := apiKey(ctx)
 	if err != nil {
 		return fmt.Errorf("lemonsqueezy: resolve api key: %w", err)
 	}
@@ -346,26 +388,6 @@ func (c *Client) GetVariant(ctx context.Context, id string) (billing.Variant, er
 	if err := c.do(ctx, http.MethodGet, "/variants/"+id, nil, &doc); err != nil {
 		return billing.Variant{}, err
 	}
-	var a struct {
-		Price              int64   `json:"price"`
-		Interval           *string `json:"interval"`
-		HasFreeTrial       bool    `json:"has_free_trial"`
-		TrialInterval      *string `json:"trial_interval"`
-		TrialIntervalCount *int    `json:"trial_interval_count"`
-		TestMode           bool    `json:"test_mode"`
-	}
-	if err := json.Unmarshal(doc.Data.Attributes, &a); err != nil {
-		return billing.Variant{}, fmt.Errorf("lemonsqueezy: decode variant: %w", err)
-	}
-	v := billing.Variant{ID: string(doc.Data.ID), PriceMinor: a.Price, HasFreeTrial: a.HasFreeTrial, TestMode: a.TestMode}
-	if a.Interval != nil {
-		v.Interval = *a.Interval
-	}
-	if a.TrialInterval != nil {
-		v.TrialInterval = *a.TrialInterval
-	}
-	if a.TrialIntervalCount != nil {
-		v.TrialIntervalCount = *a.TrialIntervalCount
-	}
-	return v, nil
+	v, _, err := decodeVariant(doc.Data)
+	return v, err
 }

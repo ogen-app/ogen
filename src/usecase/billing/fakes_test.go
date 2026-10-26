@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +29,10 @@ type fakeProvider struct {
 	checkouts []billingdom.CheckoutRequest
 	changes   []fakeChange
 	changeErr error
-	clock     func() time.Time
+	// catalogErr fails Catalog; liveKey makes live mode readable.
+	catalogErr error
+	liveKey    bool
+	clock      func() time.Time
 	// duringChange runs once, at the start of the next ChangePlan and outside
 	// the lock, to interleave a caller with a provider call in flight.
 	duringChange func()
@@ -94,6 +97,27 @@ func (f *fakeProvider) GetVariant(_ context.Context, id string) (billingdom.Vari
 		return billingdom.Variant{}, billingdom.ErrNotFound
 	}
 	return v, nil
+}
+
+// Catalog lists the fake's variants of the asked mode in EUR; liveKey false
+// makes live mode unreadable, like a missing lemonsqueezy_api_key_live.
+func (f *fakeProvider) Catalog(_ context.Context, testMode bool) (billingdom.Catalog, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.catalogErr != nil {
+		return billingdom.Catalog{}, f.catalogErr
+	}
+	if !testMode && !f.liveKey {
+		return billingdom.Catalog{}, billingdom.ErrNotConfigured
+	}
+	out := billingdom.Catalog{TestMode: testMode, Currency: "EUR"}
+	for _, v := range f.variants {
+		if v.TestMode == testMode {
+			out.Variants = append(out.Variants, v)
+		}
+	}
+	slices.SortFunc(out.Variants, func(a, b billingdom.Variant) int { return strings.Compare(a.ID, b.ID) })
+	return out, nil
 }
 
 func (f *fakeProvider) VerifyWebhook(_ context.Context, sig string, _ []byte) error {
@@ -189,18 +213,20 @@ func newHarness(t *testing.T, opts ...func(*billingdom.Settings)) *harness {
 	maxID := h.publishVersion(versions, "max", 7900)
 
 	settings := billingdom.Settings{Provider: models.BillingProviderLemonSqueezy, TestMode: true, StoreID: "1", AppBaseURL: "https://app"}
-	variants, err := billingdom.ParseVariantMap(fmt.Sprintf(`{%q:%q,%q:%q}`, proID, proVariant, maxID, maxVariant))
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings.Variants = variants
 	for _, o := range opts {
 		o(&settings)
 	}
-	h.provider.variants[proVariant] = billingdom.Variant{ID: proVariant, PriceMinor: 2900, Interval: "month", HasFreeTrial: true, TrialInterval: "month", TrialIntervalCount: 1, TestMode: true}
-	h.provider.variants[maxVariant] = billingdom.Variant{ID: maxVariant, PriceMinor: 7900, Interval: "month", TestMode: true}
+	h.provider.variants[proVariant] = billingdom.Variant{ID: proVariant, ProductName: "Pro", Name: "Monthly", Status: billingdom.VariantPublished, PriceMinor: 2900, Interval: "month", IntervalCount: 1, HasFreeTrial: true, TrialInterval: "month", TrialIntervalCount: 1, TestMode: true}
+	h.provider.variants[maxVariant] = billingdom.Variant{ID: maxVariant, ProductName: "Max", Name: "Monthly", Status: billingdom.VariantPublished, PriceMinor: 7900, Interval: "month", IntervalCount: 1, TestMode: true}
 
 	h.repo = repository.NewBillingRepository(db)
+	for priceID, variantID := range map[string]string{proID: proVariant, maxID: maxVariant} {
+		if err := h.repo.UpsertVariantMapping(t.Context(), &models.BillingVariantMapping{
+			TierVersionPriceID: priceID, TestMode: settings.TestMode, VariantID: variantID, UpdatedAt: h.now, UpdatedBy: models.VariantMappingByHarbor,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	h.svc = New(Deps{
 		DB: db, Repo: h.repo,
 		Tenants: repository.NewTenantRepository(db), Users: repository.NewUserRepository(db),
@@ -219,15 +245,28 @@ func newHarness(t *testing.T, opts ...func(*billingdom.Settings)) *harness {
 // publishVersion publishes a new purchasable version of a seeded tier with
 // one monthly EUR price and returns that price's id.
 func (h *harness) publishVersion(versions repository.TenantTierVersionRepository, tierID string, net int64) string {
+	return h.publishPrice(versions, tierID, "test", "month", net, true)
+}
+
+// publishPrice creates a purchasable version of a seeded tier with one EUR
+// price at the interval, published when publish is set, and returns the
+// price's id.
+func (h *harness) publishPrice(versions repository.TenantTierVersionRepository, tierID, suffix, interval string, net int64, publish bool) string {
 	ctx := h.t.Context()
 	n, err := versions.NextVersion(ctx, tierID)
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	vid, pid := "ttv-"+tierID+"-test", "price-"+tierID+"-m"
+	vid, pid := "ttv-"+tierID+"-"+suffix, "price-"+tierID+"-"+interval[:1]
+	if suffix != "test" {
+		pid += "-" + suffix
+	}
 	v := &models.TenantTierVersion{ID: vid, TierID: tierID, Version: n, Status: models.TierVersionStatusDraft, Purchasable: true, Entitlements: map[string]any{}}
-	if err := versions.Create(ctx, v, []models.TenantTierVersionPrice{{ID: pid, TierVersionID: vid, Currency: "EUR", BillingInterval: "month", NetMinor: net}}); err != nil {
+	if err := versions.Create(ctx, v, []models.TenantTierVersionPrice{{ID: pid, TierVersionID: vid, Currency: "EUR", BillingInterval: interval, NetMinor: net}}); err != nil {
 		h.t.Fatal(err)
+	}
+	if !publish {
+		return pid
 	}
 	if err := versions.Publish(ctx, vid, "test", h.now.Add(-time.Hour)); err != nil {
 		h.t.Fatal(err)

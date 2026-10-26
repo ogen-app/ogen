@@ -432,11 +432,10 @@ type Config struct {
 	// it, and webhooks or subscriptions from the other mode are ignored.
 	LemonSqueezyTestMode bool   `envconfig:"LEMONSQUEEZY_TEST_MODE" default:"true"`
 	LemonSqueezyStoreID  string `envconfig:"LEMONSQUEEZY_STORE_ID"  default:""`
-	// LemonSqueezyVariants maps tier version price ids to Lemon Squeezy
-	// variants, as JSON: {"<price_id>":"<variant_id>"}. A variant that can carry
-	// the free month has its one-month trial configured in Lemon Squeezy;
-	// checkouts skip it unless the free month applies.
-	// Test and live variant ids differ, so this changes at cutover.
+	// LemonSqueezyVariants is deprecated: the variant map lives in
+	// billing_variant_mappings and is edited in Harbor. This JSON
+	// ({"<price_id>":"<variant_id>"}) only seeds the current mode's map on
+	// boot while that map is empty, and is ignored afterwards.
 	LemonSqueezyVariants      string        `envconfig:"LEMONSQUEEZY_VARIANTS"     default:""`
 	LemonSqueezyBaseURL       string        `envconfig:"LEMONSQUEEZY_BASE_URL"     default:"https://api.lemonsqueezy.com/v1"`
 	LemonSqueezyHTTPTimeout   time.Duration `envconfig:"LEMONSQUEEZY_HTTP_TIMEOUT" default:"15s"`

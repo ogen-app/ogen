@@ -116,7 +116,11 @@ func New(d Deps) (*grpc.Server, error) {
 	tenantsv1.RegisterTenantAdminServiceServer(srv, tenantAdmin)
 	registerPlatformAdmin(srv, d.Platforms, d.PlatformLimits)
 	registerModelConfigAdmin(srv, d.FlowModelConfigs, modelprobe.New(d.Secrets))
-	registerPlanAdmin(srv, d.TierVersions, d.TierAssignments, catalog, resolver, d.Hub)
+	var afterPublish func(context.Context)
+	if d.Billing != nil {
+		afterPublish = checkVariantsAfterPublish(d.Billing)
+	}
+	registerPlanAdmin(srv, d.TierVersions, d.TierAssignments, catalog, resolver, d.Hub, afterPublish)
 	registerEmailAdmin(srv, d.EmailLogs, d.EmailEvents, d.EmailBodies, d.LiveEmailBodies, d.Tenants, d.Users, d.AdminEmailEnqueuer, d.HarborBaseURL)
 	registerAnnouncementAdmin(srv, d.Announcements)
 	registerBillingAdmin(srv, d.Billing)

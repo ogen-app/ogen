@@ -113,3 +113,22 @@ type BillingScheduledChange struct {
 func (c *BillingScheduledChange) Open() bool {
 	return c.Status == ScheduledChangePending || c.Status == ScheduledChangeProviderApplied
 }
+
+// Who set a variant mapping.
+const (
+	VariantMappingByHarbor  = "harbor"
+	VariantMappingByEnvSeed = "env-seed"
+)
+
+// BillingVariantMapping ties a tier version price row to the provider variant
+// that sells it, separately per mode. An operator-wide row, not tenant scoped.
+type BillingVariantMapping struct {
+	bun.BaseModel `bun:"table:billing_variant_mappings,alias:bvm" swaggerignore:"true"`
+
+	TierVersionPriceID string    `bun:"tier_version_price_id,pk"                     json:"tier_version_price_id"`
+	TestMode           bool      `bun:"test_mode,pk"                                 json:"test_mode"`
+	VariantID          string    `bun:"variant_id,notnull"                           json:"variant_id"`
+	UpdatedAt          time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	UpdatedBy          string    `bun:"updated_by,notnull"                           json:"updated_by"`
+	Reason             string    `bun:"reason,notnull"                               json:"reason"`
+}
