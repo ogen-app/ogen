@@ -98,8 +98,11 @@ func TestParseSettings(t *testing.T) {
 		t.Fatal("unknown provider accepted")
 	}
 	s, err = ParseSettings("LemonSqueezy", false, "42", `{"p":"9"}`, true, "https://app/")
-	if err != nil || !s.Enabled() || s.TestMode || s.AppBaseURL != "https://app" || s.Variants.Len() != 1 {
+	if err != nil || !s.Enabled() || s.TestMode || s.AppBaseURL != "https://app" || s.VariantSeed != `{"p":"9"}` {
 		t.Fatalf("lemonsqueezy settings: %+v %v", s, err)
+	}
+	if _, err := ParseSettings("lemonsqueezy", true, "1", `not json`, false, ""); err == nil {
+		t.Fatal("malformed variant seed accepted")
 	}
 }
 

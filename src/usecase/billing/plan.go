@@ -221,7 +221,11 @@ func (s *Service) resolveTarget(ctx context.Context, tierOrVersionID, priceID st
 		}
 		return billingdom.Price{}, "", ErrPriceMismatch
 	}
-	variantID, ok := s.d.Settings.Variants.Variant(priceID)
+	variants, err := s.variantMap(ctx)
+	if err != nil {
+		return billingdom.Price{}, "", err
+	}
+	variantID, ok := variants.Variant(priceID)
 	if !ok {
 		return billingdom.Price{}, "", ErrTierNotAvailable
 	}
@@ -259,6 +263,10 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 		}
 		return providerErr(err)
 	}
+	variants, err := s.variantMap(ctx)
+	if err != nil {
+		return err
+	}
 	err = s.d.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		row, err := s.d.Repo.GetSubscriptionByProviderID(ctx, tx, sub.Provider, sub.ProviderSubscriptionID, true)
 		if err != nil {
@@ -268,7 +276,7 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 			return err
 		}
 		if snap.UpdatedAt.After(row.ProviderUpdatedAt) {
-			s.copySnapshot(row, snap)
+			s.copySnapshot(row, snap, variants)
 		} else {
 			row.ProviderVariantID, row.TierVersionPriceID = variantID, new(target.ID)
 		}
@@ -409,7 +417,11 @@ const cancelAttempts = 3
 // revertProvider puts the subscription back on the change's original price,
 // without proration.
 func (s *Service) revertProvider(ctx context.Context, sub *models.BillingSubscription, change *models.BillingScheduledChange) (billingdom.Subscription, error) {
-	variantID, ok := s.d.Settings.Variants.Variant(change.FromTierVersionPriceID)
+	variants, err := s.variantMap(ctx)
+	if err != nil {
+		return billingdom.Subscription{}, err
+	}
+	variantID, ok := variants.Variant(change.FromTierVersionPriceID)
 	if !ok {
 		return billingdom.Subscription{}, ErrTierNotAvailable
 	}
@@ -459,7 +471,11 @@ func (s *Service) pushScheduledChange(ctx context.Context, change *models.Billin
 	if err != nil {
 		return err
 	}
-	variantID, ok := s.d.Settings.Variants.Variant(change.ToTierVersionPriceID)
+	variants, err := s.variantMap(ctx)
+	if err != nil {
+		return err
+	}
+	variantID, ok := variants.Variant(change.ToTierVersionPriceID)
 	if !ok {
 		return s.failChange(ctx, change, "target price has no variant")
 	}

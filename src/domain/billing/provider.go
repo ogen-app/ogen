@@ -49,8 +49,13 @@ type Provider interface {
 	// ChangePlan switches a subscription to another variant. It applies at
 	// once at the provider; scheduling is the caller's job.
 	ChangePlan(ctx context.Context, providerSubID, variantID string, opts ChangeOpts) (Subscription, error)
-	// GetVariant reads a variant's price and trial configuration.
+	// GetVariant reads a variant's price and trial configuration in the
+	// current mode.
 	GetVariant(ctx context.Context, variantID string) (Variant, error)
+	// Catalog lists the store's subscription variants in one mode, with the
+	// store's currency. Reading the mode the server does not run in needs
+	// that mode's API key; ErrNotConfigured without it.
+	Catalog(ctx context.Context, testMode bool) (Catalog, error)
 	// VerifyWebhook checks a webhook body against its signature header. It
 	// returns ErrNotConfigured without a signing secret and
 	// ErrInvalidSignature on a mismatch.
@@ -113,14 +118,40 @@ type Subscription struct {
 type Variant struct {
 	ID         string
 	PriceMinor int64
-	// Interval is month | year for a subscription variant.
-	Interval string
+	// Interval is month | year for a subscription variant; IntervalCount is
+	// how many of them one billing period spans (0 reads as 1).
+	Interval      string
+	IntervalCount int
 	// HasFreeTrial and TrialInterval/TrialIntervalCount describe the trial
 	// the variant carries (e.g. month / 1).
 	HasFreeTrial       bool
 	TrialInterval      string
 	TrialIntervalCount int
 	TestMode           bool
+	// Catalog details, filled by Provider.Catalog for the mapping picker.
+	ProductID   string
+	ProductName string
+	Name        string
+	// Status is the provider's variant status, e.g. published.
+	Status string
+}
+
+// Catalog is a store's subscription variants in one mode.
+type Catalog struct {
+	TestMode bool
+	// Currency is the store's currency: every variant is priced in it.
+	Currency string
+	Variants []Variant
+}
+
+// Variant finds a variant by id.
+func (c Catalog) Variant(id string) (Variant, bool) {
+	for _, v := range c.Variants {
+		if v.ID == id {
+			return v, true
+		}
+	}
+	return Variant{}, false
 }
 
 // OneMonthTrial reports whether the variant carries exactly a one-month free

@@ -37,7 +37,7 @@ func server(t *testing.T, status int, reply string) (*Client, *recorded) {
 		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(srv.Close)
-	return New(static("key-1"), static("whsec"), "77", srv.URL, time.Second), rec
+	return New(Options{APIKey: static("key-1"), WebhookSecret: static("whsec"), StoreID: "77", TestMode: true, BaseURL: srv.URL, Timeout: time.Second}), rec
 }
 
 func TestCreateCheckout(t *testing.T) {
@@ -148,7 +148,7 @@ func TestErrors(t *testing.T) {
 		t.Fatalf("404 err = %v", err)
 	}
 
-	unconfigured := New(static(""), static(""), "77", "http://127.0.0.1:1", time.Second)
+	unconfigured := New(Options{APIKey: static(""), WebhookSecret: static(""), StoreID: "77", BaseURL: "http://127.0.0.1:1", Timeout: time.Second})
 	if _, err := unconfigured.GetSubscription(t.Context(), "9"); !errors.Is(err, billing.ErrNotConfigured) {
 		t.Fatalf("no key err = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestErrors(t *testing.T) {
 }
 
 func TestVerifyWebhook(t *testing.T) {
-	c := New(static("k"), static("whsec"), "77", "", 0)
+	c := New(Options{APIKey: static("k"), WebhookSecret: static("whsec"), StoreID: "77"})
 	body := []byte(`{"meta":{"event_name":"subscription_created"}}`)
 	if err := c.VerifyWebhook(t.Context(), Sign("whsec", body), body); err != nil {
 		t.Fatalf("valid signature rejected: %v", err)

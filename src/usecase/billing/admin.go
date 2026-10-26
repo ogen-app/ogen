@@ -45,6 +45,9 @@ const (
 	AttentionDuplicate             = "duplicate"
 	AttentionUnresolvedWebhook     = "unresolved_webhook"
 	AttentionScheduledChangeFailed = "scheduled_change_failed"
+	// AttentionUnmappedPrice: a sellable price has no variant, so it cannot
+	// be bought. It names a price, not a workspace.
+	AttentionUnmappedPrice = "unmapped_price"
 )
 
 // OwnerTrial is an owner's free-month eligibility.
@@ -116,7 +119,8 @@ func (s *Service) TenantBilling(ctx context.Context, tenantID string) (TenantBil
 	return out, nil
 }
 
-// AttentionItem is one reason a workspace needs an operator.
+// AttentionItem is one reason a workspace, or for unmapped_price a price,
+// needs an operator.
 type AttentionItem struct {
 	TenantID       string
 	TenantName     string
@@ -125,6 +129,8 @@ type AttentionItem struct {
 	WebhookEvent   *models.BillingWebhookEvent
 	Since          time.Time
 	TeardownStatus string
+	// PriceID is set for unmapped_price.
+	PriceID string
 }
 
 // Attention lists workspaces that need an operator, newest first. The page
@@ -143,7 +149,7 @@ func (s *Service) Attention(ctx context.Context, pageSize int, pageToken string)
 	since := s.now().Add(-attentionWindow)
 	var items []AttentionItem
 	for _, collect := range []func(context.Context, time.Time) ([]AttentionItem, error){
-		s.troubledItems, s.expiredItems, s.duplicateItems, s.unresolvedWebhookItems, s.failedChangeItems,
+		s.troubledItems, s.expiredItems, s.duplicateItems, s.unresolvedWebhookItems, s.failedChangeItems, s.unmappedPriceItems,
 	} {
 		found, err := collect(ctx, since)
 		if err != nil {
@@ -332,9 +338,13 @@ func (s *Service) tierTrialDays(ctx context.Context, tierID string) (int, error)
 	if err != nil {
 		return 0, err
 	}
+	variants, err := s.variantMap(ctx)
+	if err != nil {
+		return 0, err
+	}
 	days, mapped := 0, 0
 	for _, r := range rows {
-		variantID, ok := s.d.Settings.Variants.Variant(r.ID)
+		variantID, ok := variants.Variant(r.ID)
 		if !ok {
 			continue
 		}
@@ -489,7 +499,11 @@ func (s *Service) PricingFlags(ctx context.Context) (PricingFlags, error) {
 		return out, nil
 	}
 	out.Enabled = true
-	for _, id := range s.d.Settings.Variants.PriceIDs() {
+	variants, err := s.variantMap(ctx)
+	if err != nil {
+		return out, err
+	}
+	for _, id := range variants.PriceIDs() {
 		out.MappedPrices[id] = true
 	}
 	marked, err := s.d.Repo.FreeTrialTier(ctx)

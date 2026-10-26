@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+
 	"google.golang.org/grpc"
 
 	plansv1 "github.com/ogen-app/ogen/gen/plans/v1"
@@ -10,7 +12,8 @@ import (
 )
 
 // registerPlanAdmin wires the CON-294 PlanAdminService onto the internal gRPC
-// server, alongside Secrets + TenantAdmin + PlatformAdmin.
+// server, alongside Secrets + TenantAdmin + PlatformAdmin. afterPublish, when
+// set, runs after every publish.
 func registerPlanAdmin(
 	srv *grpc.Server,
 	versionRepo repository.TenantTierVersionRepository,
@@ -18,6 +21,9 @@ func registerPlanAdmin(
 	catalog *entitlements.Catalog,
 	resolver *entitlements.Resolver,
 	hub eventhub.Hub,
+	afterPublish func(context.Context),
 ) {
-	plansv1.RegisterPlanAdminServiceServer(srv, newPlanAdminService(versionRepo, assignmentRepo, catalog, resolver, hub))
+	svc := newPlanAdminService(versionRepo, assignmentRepo, catalog, resolver, hub)
+	svc.afterPublish = afterPublish
+	plansv1.RegisterPlanAdminServiceServer(srv, svc)
 }

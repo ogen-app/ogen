@@ -34,9 +34,16 @@ type Price struct {
 	TierID        string
 	TierName      string
 	TierVersionID string
-	Currency      string
-	Interval      string // month | year
-	NetMinor      int64
+	// TierVersion is the version number, for display.
+	TierVersion int
+	Currency    string
+	Interval    string // month | year
+	NetMinor    int64
+	// CountryCode is "" for the currency's default price.
+	CountryCode string
+	// PublishedAt is when the version was published (its creation for a
+	// draft).
+	PublishedAt time.Time
 }
 
 // Direction of a plan change.

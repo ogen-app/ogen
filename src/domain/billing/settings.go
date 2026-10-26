@@ -16,7 +16,9 @@ type Settings struct {
 	Provider string
 	TestMode bool
 	StoreID  string
-	Variants VariantMap
+	// VariantSeed is the deprecated LEMONSQUEEZY_VARIANTS value. It seeds the
+	// variant mappings of the current mode once, when that mode has none.
+	VariantSeed string
 	// TrialTeardownLive tears down never-paid trials; false only reports them.
 	TrialTeardownLive bool
 	// AppBaseURL builds the checkout return link.
@@ -45,10 +47,9 @@ func ParseSettings(provider string, testMode bool, storeID, variants string, tea
 	if s.StoreID == "" {
 		return Settings{}, fmt.Errorf("billing: LEMONSQUEEZY_STORE_ID is required when BILLING_PROVIDER=lemonsqueezy")
 	}
-	m, err := ParseVariantMap(variants)
-	if err != nil {
+	if _, err := ParseVariantMap(variants); err != nil {
 		return Settings{}, err
 	}
-	s.Variants = m
+	s.VariantSeed = strings.TrimSpace(variants)
 	return s, nil
 }

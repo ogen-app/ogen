@@ -35,6 +35,9 @@ type planAdminService struct {
 	catalog     *entitlements.Catalog
 	resolver    *entitlements.Resolver
 	hub         eventhub.Hub // Entitlement-invalidation events (nil-safe)
+	// afterPublish runs after a version is published: the billing variant
+	// check, which reports prices that cannot be sold yet (nil-safe).
+	afterPublish func(context.Context)
 }
 
 func newPlanAdminService(
@@ -257,6 +260,9 @@ func (s *planAdminService) PublishTierVersion(ctx context.Context, req *plansv1.
 		return nil, s.internal(ctx, "publish tier version", err)
 	}
 	s.warnIfManyActiveVersions(ctx, tv.GetTierId())
+	if s.afterPublish != nil {
+		s.afterPublish(ctx)
+	}
 	return &plansv1.PublishTierVersionResponse{Version: tv}, nil
 }
 

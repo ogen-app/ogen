@@ -30,6 +30,11 @@ type BillingAdmin interface {
 	SetFreeTrialTier(ctx context.Context, tierID, reason string) (billing.FreeTrialOffer, error)
 	InvalidateTestSubscriptions(ctx context.Context, dryRun bool) ([]string, error)
 	BillingStatus(ctx context.Context, t *models.Tenant) (string, error)
+	ProviderVariants(ctx context.Context, testMode bool) ([]billing.ProviderVariant, error)
+	VariantMappingList(ctx context.Context, testMode bool) (billing.VariantMappings, error)
+	SetVariantMapping(ctx context.Context, priceID string, testMode bool, variantID, reason string) (billing.VariantMapping, error)
+	SuggestVariantMappings(ctx context.Context, testMode bool) ([]billing.VariantSuggestion, error)
+	CheckVariants(ctx context.Context) (int, error)
 }
 
 // billingAdminService implements billingv1.BillingAdminServiceServer.
@@ -44,6 +49,10 @@ func newBillingAdminService(svc BillingAdmin) *billingAdminService {
 
 // billingStatusErr maps usecase errors to gRPC codes.
 func billingStatusErr(err error) error {
+	// A refused mapping carries the message the operator reads as is.
+	if refused, ok := errors.AsType[*billing.MappingRefusedError](err); ok {
+		return status.Error(codes.FailedPrecondition, refused.Message)
+	}
 	switch {
 	case err == nil:
 		return nil
@@ -63,6 +72,10 @@ func billingStatusErr(err error) error {
 		return status.Error(codes.FailedPrecondition, "the tier's Lemon Squeezy variants do not all carry a one-month free trial")
 	case errors.Is(err, billing.ErrProvider):
 		return status.Error(codes.Unavailable, "billing provider error")
+	case errors.Is(err, billing.ErrUnknownPrice):
+		return status.Error(codes.NotFound, "price not found")
+	case errors.Is(err, billing.ErrPriceNotSellable), errors.Is(err, billing.ErrModeUnreadable):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Error(codes.Internal, "billing operation failed")
 	}
@@ -123,7 +136,10 @@ func (s *billingAdminService) ListBillingAttention(ctx context.Context, req *bil
 	}
 	out := &billingv1.ListBillingAttentionResponse{NextPageToken: next}
 	for _, it := range items {
-		p := &billingv1.AttentionItem{TenantId: it.TenantID, TenantName: it.TenantName, Reason: it.Reason, Since: timestamppb.New(it.Since), TeardownStatus: it.TeardownStatus}
+		p := &billingv1.AttentionItem{
+			TenantId: it.TenantID, TenantName: it.TenantName, Reason: it.Reason, Since: timestamppb.New(it.Since),
+			TeardownStatus: it.TeardownStatus, TierVersionPriceId: it.PriceID,
+		}
 		if it.Subscription != nil {
 			p.Subscription = toSubscriptionProto(it.Subscription, nil, it.Reason == billing.AttentionDuplicate)
 		}
