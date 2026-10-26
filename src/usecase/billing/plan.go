@@ -277,6 +277,11 @@ func (s *Service) upgradeNow(ctx context.Context, req PlanRequest, sub *models.B
 		}
 		if snap.UpdatedAt.After(row.ProviderUpdatedAt) {
 			s.copySnapshot(row, snap, variants)
+			// The variant was resolved to target before the switch; a
+			// mapping changed since must not detach the price the tier moves to.
+			if snap.VariantID == variantID {
+				row.TierVersionPriceID = new(target.ID)
+			}
 		} else {
 			row.ProviderVariantID, row.TierVersionPriceID = variantID, new(target.ID)
 		}

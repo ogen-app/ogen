@@ -87,7 +87,8 @@ func TestSeedVariantsImportsEnvOnce(t *testing.T) {
 	if err := h.svc.SeedVariants(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if rows, _ := h.repo.ListVariantMappings(ctx, true); len(rows) != 2 || rows[0].VariantID == "301" || rows[1].VariantID == "302" {
+	// Rows sort by price id: price-max-m, then price-pro-m.
+	if rows, _ := h.repo.ListVariantMappings(ctx, true); len(rows) != 2 || rows[0].VariantID != maxVariant || rows[1].VariantID != proVariant {
 		t.Fatalf("seed overwrote Harbor's map: %+v", rows)
 	}
 
@@ -324,6 +325,31 @@ func TestSuggestVariantMappingsBreaksTiesByName(t *testing.T) {
 	}
 	if sg, err := h.svc.SuggestVariantMappings(ctx, true); err != nil || len(sg) != 0 {
 		t.Fatalf("ambiguous suggestions = %+v %v", sg, err)
+	}
+}
+
+func TestUpgradeKeepsTargetPriceWhenUnmappedMidway(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, userID, _ := h.workspace("a")
+	subscribe(t, h, tenantID, models.SubscriptionStatusActive)
+	h.now = h.now.Add(time.Minute)
+
+	// Harbor unmaps the target while the provider switch is in flight.
+	h.provider.duringChange = func() {
+		if _, err := h.svc.SetVariantMapping(ctx, h.maxPrice.ID, true, "", "pulled"); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: Buyer{TenantID: tenantID, UserID: userID}, TierID: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	m := h.mirror("s1")
+	if m.ProviderVariantID != maxVariant || m.TierVersionPriceID == nil || *m.TierVersionPriceID != h.maxPrice.ID {
+		t.Fatalf("mirror after upgrade = variant %s price %v", m.ProviderVariantID, m.TierVersionPriceID)
+	}
+	if got := h.currentVersion(tenantID); got != h.maxPrice.TierVersionID+"/"+models.AssignmentReasonUpgrade {
+		t.Fatalf("assignment = %s", got)
 	}
 }
 
