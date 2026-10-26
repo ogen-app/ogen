@@ -252,3 +252,18 @@ func TestPlatformIndexMatch(t *testing.T) {
 		t.Errorf("toAccountViews(nil) = %#v, want empty non-nil", got)
 	}
 }
+
+func TestWithCauseKeepsCauseBehindGenericMessage(t *testing.T) {
+	cause := errors.New("payment for unknown subscription s1: sql: no rows in result set")
+	err := withCause(fiber.StatusInternalServerError, "webhook side effect failed", cause)
+	if err.Error() != "webhook side effect failed" {
+		t.Fatalf("message = %q", err.Error())
+	}
+	fe, ok := errors.AsType[*fiber.Error](err)
+	if !ok || fe.Code != fiber.StatusInternalServerError {
+		t.Fatalf("fiber error = %v %v", fe, ok)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("cause not in the chain")
+	}
+}

@@ -223,6 +223,6 @@ func (h *BillingHandler) Webhook(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "billing_unavailable")
 	default:
 		slog.ErrorContext(reqCtx(c), "billing webhook failed; the provider will retry", logging.AttrComponent, "handlers.billing", logging.AttrError, err)
-		return fiber.NewError(fiber.StatusInternalServerError, "webhook side effect failed")
+		return withCause(fiber.StatusInternalServerError, "webhook side effect failed", err)
 	}
 }

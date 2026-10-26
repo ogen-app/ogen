@@ -146,3 +146,18 @@ func ensureMutable(post *models.Post) error {
 	}
 	return nil
 }
+
+// causedError answers with a generic message while keeping the cause in its
+// chain, so error reporting shows what failed without echoing it to the caller.
+type causedError struct {
+	resp  *fiber.Error
+	cause error
+}
+
+func (e *causedError) Error() string   { return e.resp.Message }
+func (e *causedError) Unwrap() []error { return []error{e.resp, e.cause} }
+
+// withCause wraps a client-facing fiber error around the internal cause.
+func withCause(code int, msg string, cause error) error {
+	return &causedError{resp: fiber.NewError(code, msg), cause: cause}
+}
