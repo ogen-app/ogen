@@ -28,6 +28,10 @@ const (
 	BillingAdminService_GetFreeTrialTier_FullMethodName            = "/billing.v1.BillingAdminService/GetFreeTrialTier"
 	BillingAdminService_SetFreeTrialTier_FullMethodName            = "/billing.v1.BillingAdminService/SetFreeTrialTier"
 	BillingAdminService_InvalidateTestSubscriptions_FullMethodName = "/billing.v1.BillingAdminService/InvalidateTestSubscriptions"
+	BillingAdminService_ListProviderVariants_FullMethodName        = "/billing.v1.BillingAdminService/ListProviderVariants"
+	BillingAdminService_ListVariantMappings_FullMethodName         = "/billing.v1.BillingAdminService/ListVariantMappings"
+	BillingAdminService_SetVariantMapping_FullMethodName           = "/billing.v1.BillingAdminService/SetVariantMapping"
+	BillingAdminService_SuggestVariantMappings_FullMethodName      = "/billing.v1.BillingAdminService/SuggestVariantMappings"
 )
 
 // BillingAdminServiceClient is the client API for BillingAdminService service.
@@ -86,6 +90,22 @@ type BillingAdminServiceClient interface {
 	// owners to check out again. Refused (FailedPrecondition) while the server
 	// still runs in test mode. dry_run lists the affected workspaces only.
 	InvalidateTestSubscriptions(ctx context.Context, in *InvalidateTestSubscriptionsRequest, opts ...grpc.CallOption) (*InvalidateTestSubscriptionsResponse, error)
+	// ListProviderVariants lists the store's subscription variants in one mode,
+	// for the mapping picker. Unavailable when that mode's API key is not set.
+	ListProviderVariants(ctx context.Context, in *ListProviderVariantsRequest, opts ...grpc.CallOption) (*ListProviderVariantsResponse, error)
+	// ListVariantMappings lists every sellable price row with its mapped variant
+	// in one mode and the result of checking the pair against the provider.
+	ListVariantMappings(ctx context.Context, in *ListVariantMappingsRequest, opts ...grpc.CallOption) (*ListVariantMappingsResponse, error)
+	// SetVariantMapping maps a price row to a variant, or unmaps it
+	// (variant_id = ""). FailedPrecondition, with a readable message, when the
+	// variant does not match the price row (amount excluding tax, currency,
+	// interval, mode, the one-month trial on the free-month tier) or already
+	// sells another price. Recorded in activity with the reason.
+	SetVariantMapping(ctx context.Context, in *SetVariantMappingRequest, opts ...grpc.CallOption) (*SetVariantMappingResponse, error)
+	// SuggestVariantMappings proposes a variant for every unmapped price row
+	// that exactly one free variant matches. Nothing is saved: the operator
+	// confirms each suggestion with SetVariantMapping.
+	SuggestVariantMappings(ctx context.Context, in *SuggestVariantMappingsRequest, opts ...grpc.CallOption) (*SuggestVariantMappingsResponse, error)
 }
 
 type billingAdminServiceClient struct {
@@ -186,6 +206,46 @@ func (c *billingAdminServiceClient) InvalidateTestSubscriptions(ctx context.Cont
 	return out, nil
 }
 
+func (c *billingAdminServiceClient) ListProviderVariants(ctx context.Context, in *ListProviderVariantsRequest, opts ...grpc.CallOption) (*ListProviderVariantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListProviderVariantsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_ListProviderVariants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingAdminServiceClient) ListVariantMappings(ctx context.Context, in *ListVariantMappingsRequest, opts ...grpc.CallOption) (*ListVariantMappingsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVariantMappingsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_ListVariantMappings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingAdminServiceClient) SetVariantMapping(ctx context.Context, in *SetVariantMappingRequest, opts ...grpc.CallOption) (*SetVariantMappingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetVariantMappingResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_SetVariantMapping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingAdminServiceClient) SuggestVariantMappings(ctx context.Context, in *SuggestVariantMappingsRequest, opts ...grpc.CallOption) (*SuggestVariantMappingsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SuggestVariantMappingsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_SuggestVariantMappings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BillingAdminServiceServer is the server API for BillingAdminService service.
 // All implementations must embed UnimplementedBillingAdminServiceServer
 // for forward compatibility.
@@ -242,6 +302,22 @@ type BillingAdminServiceServer interface {
 	// owners to check out again. Refused (FailedPrecondition) while the server
 	// still runs in test mode. dry_run lists the affected workspaces only.
 	InvalidateTestSubscriptions(context.Context, *InvalidateTestSubscriptionsRequest) (*InvalidateTestSubscriptionsResponse, error)
+	// ListProviderVariants lists the store's subscription variants in one mode,
+	// for the mapping picker. Unavailable when that mode's API key is not set.
+	ListProviderVariants(context.Context, *ListProviderVariantsRequest) (*ListProviderVariantsResponse, error)
+	// ListVariantMappings lists every sellable price row with its mapped variant
+	// in one mode and the result of checking the pair against the provider.
+	ListVariantMappings(context.Context, *ListVariantMappingsRequest) (*ListVariantMappingsResponse, error)
+	// SetVariantMapping maps a price row to a variant, or unmaps it
+	// (variant_id = ""). FailedPrecondition, with a readable message, when the
+	// variant does not match the price row (amount excluding tax, currency,
+	// interval, mode, the one-month trial on the free-month tier) or already
+	// sells another price. Recorded in activity with the reason.
+	SetVariantMapping(context.Context, *SetVariantMappingRequest) (*SetVariantMappingResponse, error)
+	// SuggestVariantMappings proposes a variant for every unmapped price row
+	// that exactly one free variant matches. Nothing is saved: the operator
+	// confirms each suggestion with SetVariantMapping.
+	SuggestVariantMappings(context.Context, *SuggestVariantMappingsRequest) (*SuggestVariantMappingsResponse, error)
 	mustEmbedUnimplementedBillingAdminServiceServer()
 }
 
@@ -278,6 +354,18 @@ func (UnimplementedBillingAdminServiceServer) SetFreeTrialTier(context.Context, 
 }
 func (UnimplementedBillingAdminServiceServer) InvalidateTestSubscriptions(context.Context, *InvalidateTestSubscriptionsRequest) (*InvalidateTestSubscriptionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InvalidateTestSubscriptions not implemented")
+}
+func (UnimplementedBillingAdminServiceServer) ListProviderVariants(context.Context, *ListProviderVariantsRequest) (*ListProviderVariantsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListProviderVariants not implemented")
+}
+func (UnimplementedBillingAdminServiceServer) ListVariantMappings(context.Context, *ListVariantMappingsRequest) (*ListVariantMappingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListVariantMappings not implemented")
+}
+func (UnimplementedBillingAdminServiceServer) SetVariantMapping(context.Context, *SetVariantMappingRequest) (*SetVariantMappingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetVariantMapping not implemented")
+}
+func (UnimplementedBillingAdminServiceServer) SuggestVariantMappings(context.Context, *SuggestVariantMappingsRequest) (*SuggestVariantMappingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SuggestVariantMappings not implemented")
 }
 func (UnimplementedBillingAdminServiceServer) mustEmbedUnimplementedBillingAdminServiceServer() {}
 func (UnimplementedBillingAdminServiceServer) testEmbeddedByValue()                             {}
@@ -462,6 +550,78 @@ func _BillingAdminService_InvalidateTestSubscriptions_Handler(srv interface{}, c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingAdminService_ListProviderVariants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProviderVariantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAdminServiceServer).ListProviderVariants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAdminService_ListProviderVariants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAdminServiceServer).ListProviderVariants(ctx, req.(*ListProviderVariantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingAdminService_ListVariantMappings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVariantMappingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAdminServiceServer).ListVariantMappings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAdminService_ListVariantMappings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAdminServiceServer).ListVariantMappings(ctx, req.(*ListVariantMappingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingAdminService_SetVariantMapping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetVariantMappingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAdminServiceServer).SetVariantMapping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAdminService_SetVariantMapping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAdminServiceServer).SetVariantMapping(ctx, req.(*SetVariantMappingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingAdminService_SuggestVariantMappings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SuggestVariantMappingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAdminServiceServer).SuggestVariantMappings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAdminService_SuggestVariantMappings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAdminServiceServer).SuggestVariantMappings(ctx, req.(*SuggestVariantMappingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BillingAdminService_ServiceDesc is the grpc.ServiceDesc for BillingAdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -504,6 +664,22 @@ var BillingAdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InvalidateTestSubscriptions",
 			Handler:    _BillingAdminService_InvalidateTestSubscriptions_Handler,
+		},
+		{
+			MethodName: "ListProviderVariants",
+			Handler:    _BillingAdminService_ListProviderVariants_Handler,
+		},
+		{
+			MethodName: "ListVariantMappings",
+			Handler:    _BillingAdminService_ListVariantMappings_Handler,
+		},
+		{
+			MethodName: "SetVariantMapping",
+			Handler:    _BillingAdminService_SetVariantMapping_Handler,
+		},
+		{
+			MethodName: "SuggestVariantMappings",
+			Handler:    _BillingAdminService_SuggestVariantMappings_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
