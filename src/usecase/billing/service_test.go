@@ -80,6 +80,58 @@ func TestWebhookUnknownTenantIsRecordedNotRetried(t *testing.T) {
 	}
 }
 
+// paymentWebhook delivers a subscription_payment_success for a subscription.
+func (h *harness) paymentWebhook(invoiceID, subID string) error {
+	body, err := json.Marshal(billingdom.Event{Name: "subscription_payment_success", Kind: billingdom.EventPayment, TestMode: true, ObjectID: invoiceID, PaymentSubscriptionID: subID, PaymentAmountMinor: 2900})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return h.svc.HandleWebhook(h.t.Context(), "ok", body)
+}
+
+func TestPaymentForUnresolvedSubscriptionIsAcknowledged(t *testing.T) {
+	h := newHarness(t)
+	snap := h.sub("s1", proVariant, models.SubscriptionStatusActive, h.now)
+	if err := h.webhook("subscription_created", snap, map[string]string{"tenant_id": "nope"}); err != nil {
+		t.Fatalf("unresolved tenant should be acknowledged: %v", err)
+	}
+	// No retry can apply the payment: it is recorded and acknowledged, and so
+	// is its redelivery.
+	for range 2 {
+		if err := h.paymentWebhook("inv1", "s1"); err != nil {
+			t.Fatalf("payment for a dropped subscription should be acknowledged: %v", err)
+		}
+	}
+	items, _, err := h.svc.Attention(t.Context(), 50, "")
+	if err != nil || len(items) != 2 {
+		t.Fatalf("attention = %+v %v", items, err)
+	}
+	for _, it := range items {
+		if it.Reason != AttentionUnresolvedWebhook {
+			t.Fatalf("attention reason = %s", it.Reason)
+		}
+	}
+}
+
+func TestPaymentBeforeSubscriptionIsRetried(t *testing.T) {
+	h := newHarness(t)
+	tenantID, _, _ := h.workspace("a")
+	// A payment that beats subscription_created fails so the provider retries.
+	if err := h.paymentWebhook("inv1", "s1"); err == nil || errors.Is(err, errUnresolvedTenant) {
+		t.Fatalf("early payment err = %v", err)
+	}
+	snap := h.sub("s1", proVariant, models.SubscriptionStatusOnTrial, h.now)
+	if err := h.webhook("subscription_created", snap, map[string]string{"tenant_id": tenantID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.paymentWebhook("inv1", "s1"); err != nil {
+		t.Fatalf("redelivered payment: %v", err)
+	}
+	if h.mirror("s1").FirstPaidAt == nil {
+		t.Fatal("payment not recorded")
+	}
+}
+
 func TestPastDueNotifiesAndKeepsTier(t *testing.T) {
 	h := newHarness(t)
 	tenantID, userID, _ := h.workspace("a")
