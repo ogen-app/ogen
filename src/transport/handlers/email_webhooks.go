@@ -135,7 +135,7 @@ func (h *ResendWebhookHandler) Handle(c *fiber.Ctx) error {
 	// the event rather than dropping a bounce/complaint suppression on the floor.
 	// The side effects are idempotent (upsert / status update), so a retry is safe.
 	if sideErr != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "webhook side effect failed")
+		return withCause(fiber.StatusInternalServerError, "webhook side effect failed", sideErr)
 	}
 	return c.SendStatus(fiber.StatusOK)
 }
