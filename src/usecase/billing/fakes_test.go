@@ -30,6 +30,9 @@ type fakeProvider struct {
 	changes   []fakeChange
 	changeErr error
 	clock     func() time.Time
+	// duringChange runs once, at the start of the next ChangePlan and outside
+	// the lock, to interleave a caller with a provider call in flight.
+	duringChange func()
 }
 
 type fakeChange struct {
@@ -60,6 +63,13 @@ func (f *fakeProvider) GetSubscription(_ context.Context, id string) (billingdom
 }
 
 func (f *fakeProvider) ChangePlan(_ context.Context, id, variantID string, opts billingdom.ChangeOpts) (billingdom.Subscription, error) {
+	f.mu.Lock()
+	hook := f.duringChange
+	f.duringChange = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.changeErr != nil {

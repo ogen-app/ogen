@@ -403,6 +403,46 @@ func TestKeepCurrentPlanCancelsDowngrade(t *testing.T) {
 	}
 }
 
+func TestKeepCurrentPlanDuringScheduledPushRevertsProvider(t *testing.T) {
+	h := newHarness(t)
+	ctx := t.Context()
+	tenantID, userID, _ := h.workspace("a")
+	if err := h.webhook("subscription_created", h.sub("s1", maxVariant, models.SubscriptionStatusActive, h.now), map[string]string{"tenant_id": tenantID}); err != nil {
+		t.Fatal(err)
+	}
+	buyer := Buyer{TenantID: tenantID, UserID: userID}
+	if _, err := h.svc.ChangePlan(ctx, PlanRequest{Buyer: buyer, TierID: "pro"}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := h.svc.PlanState(ctx, tenantID, "")
+	changeID, _, _ := strings.Cut(h.jobs.steps[0], "@")
+	h.now = st.ScheduledChange.EffectiveAt.Add(-30 * time.Minute)
+	// The owner keeps the plan while the T-1h switch is still at the provider:
+	// the cancel sees a pending change, so only the push can put it back.
+	var keepErr error
+	h.provider.duringChange = func() {
+		_, keepErr = h.svc.ChangePlan(ctx, PlanRequest{Buyer: buyer, TierID: "max"})
+	}
+	if err := h.svc.RunScheduledChange(ctx, changeID); err != nil {
+		t.Fatal(err)
+	}
+	if keepErr != nil {
+		t.Fatalf("keep current plan: %v", keepErr)
+	}
+	if len(h.provider.changes) != 2 || h.provider.changes[0].variantID != proVariant || h.provider.changes[1].variantID != maxVariant || !h.provider.changes[1].opts.NoProration {
+		t.Fatalf("provider changes = %+v", h.provider.changes)
+	}
+	if got := h.provider.subs["s1"].VariantID; got != maxVariant {
+		t.Fatalf("provider left on %s", got)
+	}
+	if st, _ := h.svc.PlanState(ctx, tenantID, ""); st.ScheduledChange != nil {
+		t.Fatal("cancelled downgrade still shown")
+	}
+	if got := h.currentVersion(tenantID); !strings.HasPrefix(got, h.maxPrice.TierVersionID) {
+		t.Fatalf("tier moved: %s", got)
+	}
+}
+
 func TestNotChangeableAndBillingView(t *testing.T) {
 	h := newHarness(t)
 	ctx := t.Context()
