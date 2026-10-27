@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS uq_tenant_tier_versions_active_purchasable;

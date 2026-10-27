@@ -280,7 +280,7 @@ func TestTierVersionGuardedRetire(t *testing.T) {
 	if err := vr.Create(ctx, v2, nil); err != nil {
 		t.Fatalf("create v2 draft: %v", err)
 	}
-	if err := vr.Publish(ctx, v2ID, "second active version", now); err != nil {
+	if _, err := vr.Publish(ctx, v2ID, "second active version", repository.SupersedeOptions{}, now); err != nil {
 		t.Fatalf("publish v2: %v", err)
 	}
 
