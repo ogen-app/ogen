@@ -304,6 +304,30 @@ func TestListWithPublisherPostID(t *testing.T) {
 	if _, ok := byID["p5"]; ok {
 		t.Fatalf("p5 (suspended tenant) must be excluded: %+v", byID)
 	}
+
+	// The analytics refresh reads one tenant's posts at a time: under a
+	// tenant's context another active tenant's posts are left out, while the
+	// system context sees both.
+	if _, err := db.NewInsert().Model(&models.Tenant{
+		ID: "t-other", Name: "other", Slug: "t-other", TierID: models.DefaultTierID,
+		Status: models.TenantStatusActive, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}).Exec(ctx); err != nil {
+		t.Fatalf("seed second tenant: %v", err)
+	}
+	if _, err := db.NewInsert().Model(&models.Post{
+		ID: "p6", CampaignID: "camp-1", Content: "content p6",
+		MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+		Status: models.PostStatusPublished, Publisher: models.PublisherZernio,
+		PublisherPostID: "z-6", CTAType: models.CTATypeNone, CreatedBy: "user-1",
+	}).Exec(tenantctx.With(t.Context(), "t-other")); err != nil {
+		t.Fatalf("seed second-tenant post: %v", err)
+	}
+	if posts, err := repo.ListWithPublisherPostID(ctx); err != nil || len(posts) != 3 {
+		t.Fatalf("tenant-scoped list = %d, %v; want the tenant's 3", len(posts), err)
+	}
+	if posts, err := repo.ListWithPublisherPostID(tenantctx.WithSystem(t.Context())); err != nil || len(posts) != 4 {
+		t.Fatalf("system list = %d, %v; want both active tenants' 4", len(posts), err)
+	}
 }
 
 func TestPostAnalyticsUpsertWithSnapshot(t *testing.T) {
