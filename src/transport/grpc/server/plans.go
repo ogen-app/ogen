@@ -510,8 +510,13 @@ func (s *planAdminService) SetTenantTierVersion(ctx context.Context, req *plansv
 	if v.Status != models.TierVersionStatusActive {
 		return nil, status.Errorf(codes.FailedPrecondition, "cannot assign a tenant to a %s version; only active versions are assignable", v.Status)
 	}
-	ok, err := s.assignments.Reassign(ctx, tenantID, v.TierID, &versionID, reason, time.Now().UTC())
-	if err != nil {
+	ok, err := s.assignments.ReassignActive(ctx, tenantID, versionID, reason, time.Now().UTC())
+	switch {
+	case errors.Is(err, repository.ErrVersionNotAssignable):
+		return nil, status.Error(codes.FailedPrecondition, "the tier version was retired meanwhile; only active versions are assignable")
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, status.Error(codes.NotFound, "tier version not found")
+	case err != nil:
 		return nil, s.internal(ctx, "set tenant tier version", err)
 	}
 	if !ok {

@@ -38,9 +38,20 @@ type TenantTierAssignmentRepository interface {
 	// version) and SetTenantTier (the tier's latest active version, or nil).
 	Reassign(ctx context.Context, tenantID, tierID string, tierVersionID *string, reason string, at time.Time) (bool, error)
 	// ReassignTx is Reassign inside the caller's transaction, so billing can
-	// move the tier atomically with the subscription it mirrors.
+	// move the tier atomically with the subscription it mirrors. It takes a
+	// share lock on the version, so a retire or supersede that runs at the same
+	// time either sees the new assignment or makes this one wait until it has
+	// committed.
 	ReassignTx(ctx context.Context, tx bun.IDB, tenantID, tierID string, tierVersionID *string, reason string, at time.Time) (bool, error)
+	// ReassignActive is Reassign onto an explicit version that must still be
+	// active once locked: ErrVersionNotAssignable when it is a draft or was
+	// retired meanwhile, sql.ErrNoRows when it does not exist.
+	ReassignActive(ctx context.Context, tenantID, versionID, reason string, at time.Time) (bool, error)
 }
+
+// ErrVersionNotAssignable means the version is not active, so no tenant may be
+// put on it.
+var ErrVersionNotAssignable = errors.New("tier version is not active")
 
 type tenantTierAssignmentRepository struct {
 	db *bun.DB
@@ -113,7 +124,42 @@ func (r *tenantTierAssignmentRepository) Reassign(ctx context.Context, tenantID,
 	return found, nil
 }
 
+func (r *tenantTierAssignmentRepository) ReassignActive(ctx context.Context, tenantID, versionID, reason string, at time.Time) (bool, error) {
+	var found bool
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		v, err := lockVersionShareTx(ctx, tx, versionID)
+		if err != nil {
+			return err
+		}
+		if v.Status != models.TierVersionStatusActive {
+			return ErrVersionNotAssignable
+		}
+		found, err = r.ReassignTx(ctx, tx, tenantID, v.TierID, &versionID, reason, at)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
+// lockVersionShareTx share-locks a version row against a concurrent retire
+// and returns its tier and status (sql.ErrNoRows if it does not exist).
+func lockVersionShareTx(ctx context.Context, tx bun.IDB, id string) (lockedVersion, error) {
+	var v lockedVersion
+	err := tx.NewSelect().Model((*models.TenantTierVersion)(nil)).
+		Column("id", "tier_id", "status", "purchasable").
+		Where("id = ?", id).For("SHARE").Scan(ctx, &v)
+	return v, err
+}
+
 func (r *tenantTierAssignmentRepository) ReassignTx(ctx context.Context, tx bun.IDB, tenantID, tierID string, tierVersionID *string, reason string, at time.Time) (bool, error) {
+	if tierVersionID != nil {
+		// Taken before any write; the insert's FK check reports a missing version.
+		if _, err := lockVersionShareTx(ctx, tx, *tierVersionID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+	}
 	var noUpper *time.Time
 	// Point the tenant at the tier; the FK validates the tier exists (a bad
 	// tier surfaces as 23503, which the caller maps to FailedPrecondition).

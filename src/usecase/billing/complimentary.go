@@ -7,6 +7,7 @@ import (
 	"expvar"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
@@ -77,7 +78,10 @@ func (s *Service) compChangePlan(ctx context.Context, req PlanRequest) error {
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return err
 	}
-	ok, err := s.d.Assignments.Reassign(ctx, req.TenantID, version.TierID, &version.ID, models.AssignmentReasonComp, now)
+	ok, err := s.d.Assignments.ReassignActive(ctx, req.TenantID, version.ID, models.AssignmentReasonComp, now)
+	if errors.Is(err, repository.ErrVersionNotAssignable) {
+		return ErrTierNotAvailable
+	}
 	if err != nil {
 		return err
 	}

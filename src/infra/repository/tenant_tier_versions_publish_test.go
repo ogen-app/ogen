@@ -1,6 +1,7 @@
 package repository_test
 
 import (
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -199,6 +200,71 @@ func TestTierVersionPublishSupersedeGrandfathers(t *testing.T) {
 	}
 	if len(cur) != 1 || cur[0].ID != next {
 		t.Fatalf("on sale = %+v, want only the new trial version", cur)
+	}
+}
+
+func TestReassignActiveRefusesRetiredVersion(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	vr := repository.NewTenantTierVersionRepository(db)
+	ar := repository.NewTenantTierAssignmentRepository(db)
+	now := time.Now().UTC()
+
+	if _, err := ar.ReassignActive(ctx, models.DefaultTenantID, "ttv-pro-v1", models.AssignmentReasonOperatorSet, now); !errors.Is(err, repository.ErrVersionNotAssignable) {
+		t.Fatalf("assign to a draft: err = %v, want ErrVersionNotAssignable", err)
+	}
+	if _, err := ar.ReassignActive(ctx, models.DefaultTenantID, "ttv-nope", models.AssignmentReasonOperatorSet, now); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("assign to a missing version: err = %v, want sql.ErrNoRows", err)
+	}
+	ok, err := ar.ReassignActive(ctx, models.DefaultTenantID, "ttv-trial-v1", models.AssignmentReasonOperatorSet, now)
+	if err != nil || !ok {
+		t.Fatalf("assign to trial-v1: ok = %v, err = %v", ok, err)
+	}
+	if _, err := vr.Retire(ctx, "ttv-trial-v1", repository.RetireOptions{Force: true}, now.Add(time.Second)); err != nil {
+		t.Fatalf("retire trial-v1: %v", err)
+	}
+	if _, err := ar.ReassignActive(ctx, models.DefaultTenantID, "ttv-trial-v1", models.AssignmentReasonOperatorSet, now.Add(2*time.Second)); !errors.Is(err, repository.ErrVersionNotAssignable) {
+		t.Fatalf("assign to a retired version: err = %v, want ErrVersionNotAssignable", err)
+	}
+}
+
+// A supersede that starts while an assignment onto the old version is still
+// uncommitted waits for it and then counts it, instead of retiring the
+// version under a tenant it did not see.
+func TestSupersedeWaitsForInFlightAssignment(t *testing.T) {
+	db := pgtest.MustDB()
+	ctx := t.Context()
+	vr := repository.NewTenantTierVersionRepository(db)
+	ar := repository.NewTenantTierAssignmentRepository(db)
+	now := time.Now().UTC()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	v1 := "ttv-trial-v1"
+	if _, err := ar.ReassignTx(ctx, tx, models.DefaultTenantID, "trial", &v1, models.AssignmentReasonOperatorSet, now); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("assign in tx: %v", err)
+	}
+
+	next := createDraft(t, vr, "trial", true)
+	done := make(chan error, 1)
+	go func() {
+		_, err := vr.Publish(ctx, next, "v2", repository.SupersedeOptions{VersionID: v1}, now)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		_ = tx.Rollback()
+		t.Fatalf("supersede did not wait for the in-flight assignment: err = %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := <-done; !errors.Is(err, repository.ErrVersionHasLiveAssignments) {
+		t.Fatalf("supersede after the assignment committed: err = %v, want ErrVersionHasLiveAssignments", err)
 	}
 }
 
