@@ -192,6 +192,9 @@ type urlState struct {
 	Replacements map[string]string   `json:"replacements,omitempty"`
 	FailedImages int                 `json:"failed_images,omitzero"`
 	Embed        embedProgress       `json:"embed"`
+	// Empty marks a run that staged no chunks: the page has nothing
+	// embeddable, so its earlier chunks are cleared at commit.
+	Empty bool `json:"empty,omitzero"`
 }
 
 // imageRef is one page image to mirror.
@@ -346,10 +349,12 @@ func (p *ProcessURLProcessor) nextImage(ctx context.Context, in ProcessURLTask, 
 		return StepOutput{}, err
 	}
 	// The title is prepended for context, like embed_asset.
-	if err := p.stages().Begin(ctx, runID, in.AssetID, stageSources(textChunkSources(flows.ChunkText(st.Title+"\n\n"+markdown)))); err != nil {
+	stages := stageSources(textChunkSources(flows.ChunkText(st.Title + "\n\n" + markdown)))
+	if err := p.stages().Begin(ctx, runID, in.AssetID, stages); err != nil {
 		return retry("process_url "+in.AssetID+": stage chunks", err)
 	}
-	next := &urlState{Phase: urlPhaseEmbed, Title: st.Title, Images: st.Images, FailedImages: st.FailedImages, Embed: embedProgress{RunID: runID}}
+	next := &urlState{Phase: urlPhaseEmbed, Title: st.Title, Images: st.Images, FailedImages: st.FailedImages,
+		Embed: embedProgress{RunID: runID}, Empty: len(stages) == 0}
 	return p.embedNext(ctx, in, next, false)
 }
 
@@ -408,9 +413,10 @@ func (p *ProcessURLProcessor) embedNext(ctx context.Context, in ProcessURLTask, 
 		}
 		return StepOutput{State: raw, HTTP: call}, nil
 	}
-	// Chunks left over from the page's earlier content are cleared even when
-	// nothing in it is embeddable.
-	committed, err := p.stages().Commit(ctx, st.Embed.RunID, in.AssetID, true)
+	// Chunks left over from the page's earlier content are cleared when this
+	// run staged nothing. Only then: a run whose stages a later, overlapping
+	// run dropped also counts no attempts, and must not clear the chunks.
+	committed, err := p.stages().Commit(ctx, st.Embed.RunID, in.AssetID, st.Empty)
 	if err != nil {
 		return retry("process_url "+in.AssetID+": store chunks", err)
 	}
