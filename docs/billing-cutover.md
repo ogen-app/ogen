@@ -126,7 +126,7 @@ Those subscriptions are invalidated at the switch.
    about 2.5 minutes).
 6. When the deploy is healthy, run **ResyncSubscription** in Harbor for any
    workspace that checked out during the window, or wait one reconcile tick
-   (`BILLING_RECONCILE_INTERVAL`).
+   (river-service's `BILLING_RECONCILE_INTERVAL`).
 7. In Harbor, run **InvalidateTestSubscriptions** with *dry run* and check the
    list holds exactly the test-period workspaces. Then run it for real. Each
    test-mode subscription is invalidated (`mode_cutover`), its workspace goes
