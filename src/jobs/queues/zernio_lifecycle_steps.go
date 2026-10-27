@@ -132,7 +132,13 @@ func (z *JobSteps) teardown(ctx context.Context, in StepInput) (StepOutput, erro
 		return z.teardownStart(ctx, tid)
 	}
 
-	if trial {
+	// Once the profile delete has run, the profile is gone from Zernio: the
+	// local cleanup must follow whatever billing or a restore did meanwhile,
+	// or the workspace keeps a pointer to a deleted profile.
+	profileGone := st.Phase == tdPhaseDeleteProfile
+	switch {
+	case profileGone:
+	case trial:
 		// The workspace stays in use, so there is no restore to fence: before
 		// every destructive call, check it still has no subscription.
 		if ok, err := z.trialStillUnpaid(ctx, tid); err != nil {
@@ -140,7 +146,7 @@ func (z *JobSteps) teardown(ctx context.Context, in StepInput) (StepOutput, erro
 		} else if !ok {
 			return done("skipped_subscribed")
 		}
-	} else {
+	default:
 		// Every destructive call is made under a fresh lease; if the lease
 		// lapsed and the workspace was restored meanwhile, stop.
 		torn, err := z.deps.TeardownLease.RenewTeardownLease(ctx, tid, teardownLeaseTTL)
