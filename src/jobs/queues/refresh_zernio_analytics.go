@@ -258,17 +258,13 @@ func (p *RefreshZernioAnalyticsProcessor) tenantStep(ctx context.Context, in Ste
 	return p.nextAnalyticsPage(ctx, &st)
 }
 
-// tenantPosts is the tenant's share of the Zernio-published posts.
+// tenantPosts is the tenant's Zernio-published posts. The query runs under
+// the tenant's context, so the scoping hook keeps it to that tenant's rows.
+// Steps hold no state between calls, so each result page reads it again.
 func (p *RefreshZernioAnalyticsProcessor) tenantPosts(ctx context.Context, tenantID string) ([]models.Post, error) {
-	all, err := p.Deps.PostRepo.ListWithPublisherPostID(tenantctx.WithSystem(ctx))
+	posts, err := p.Deps.PostRepo.ListWithPublisherPostID(tenantctx.With(ctx, tenantID))
 	if err != nil {
 		return nil, fmt.Errorf("refresh: list posts: %w", err)
-	}
-	var posts []models.Post
-	for _, post := range all {
-		if post.TenantID == tenantID {
-			posts = append(posts, post)
-		}
 	}
 	return posts, nil
 }
