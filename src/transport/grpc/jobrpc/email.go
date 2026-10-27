@@ -8,7 +8,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	jobrpcv1 "github.com/ogen-app/ogen/gen/jobrpc/v1"
-	jobsv1 "github.com/ogen-app/ogen/gen/jobs/v1"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/email"
 	"github.com/ogen-app/ogen/src/jobs/queues"
@@ -32,7 +31,11 @@ func (e *emailJobs) PrepareEmail(ctx context.Context, req *jobrpcv1.PrepareEmail
 	if e.jobs == nil {
 		return nil, status.Error(codes.Unavailable, "email is not wired")
 	}
-	prep, err := e.jobs.Prepare(ctx, sendEmailTask(req.GetArgs()))
+	t, err := queues.SendEmailTaskFromArgs(req.GetArgs())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	prep, err := e.jobs.Prepare(ctx, t)
 	if err != nil {
 		slog.WarnContext(ctx, "prepare email failed; river-service will retry", logging.AttrComponent, "jobrpc", logging.AttrError, err)
 		return nil, status.Error(codes.Unavailable, "prepare email failed")
@@ -63,7 +66,10 @@ func (e *emailJobs) RecordEmailOutcome(ctx context.Context, req *jobrpcv1.Record
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "unknown email outcome %v", req.GetOutcome())
 	}
-	t := sendEmailTask(req.GetArgs())
+	t, err := queues.SendEmailTaskFromArgs(req.GetArgs())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	m := req.GetMessage()
 	msg := email.Message{
 		From: m.GetFrom(), ReplyTo: m.GetReplyTo(), To: m.GetTo(), Subject: m.GetSubject(),
@@ -74,12 +80,4 @@ func (e *emailJobs) RecordEmailOutcome(ctx context.Context, req *jobrpcv1.Record
 	}
 	e.jobs.RecordOutcome(ctx, queues.NewPreparedEmail(t, msg), st, req.GetProviderMessageId(), req.GetError())
 	return &jobrpcv1.RecordEmailOutcomeResponse{}, nil
-}
-
-func sendEmailTask(a *jobsv1.SendEmailArgs) queues.SendEmailTask {
-	return queues.SendEmailTask{
-		UserID: a.GetUserId(), TenantID: a.GetTenantId(), TemplateKey: a.GetTemplateKey(),
-		EmailKind: models.EmailKind(a.GetEmailKind()), IdempotencyKey: a.GetIdempotencyKey(),
-		ToEmail: a.GetToEmail(), ToName: a.GetToName(), Vars: a.GetVars(),
-	}
 }

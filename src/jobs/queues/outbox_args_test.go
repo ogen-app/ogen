@@ -1,12 +1,14 @@
 package queues
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/riverqueue/river"
 
+	jobsv1 "github.com/ogen-app/ogen/gen/jobs/v1"
 	"github.com/ogen-app/ogen/src/domain/models"
 )
 
@@ -22,7 +24,7 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 		WithdrawZernioPostTask{PublisherPostID: "z1", PostID: "p1", TenantID: "t1", Reason: WithdrawReasonPostDeleted, Actor: "u1"},
 		PostFirstCommentTask{PostID: "p1", PublisherPostID: "z1"},
 		BootstrapZernioProfileTask{TenantID: "t1"},
-		TeardownZernioProfileTask{TenantID: "t1"},
+		TeardownZernioProfileTask{TenantID: "t1", Reason: TeardownReasonTrialUnpaid},
 		SendEmailTask{UserID: "u1", TenantID: "t1", TemplateKey: "welcome", EmailKind: models.EmailKindTransactional, IdempotencyKey: "welcome:u1", Vars: map[string]string{"a": "b"}},
 		NotifyHarborTenantRegisteredTask{TenantID: "t1"},
 		ProcessPDFTask{AssetID: "a1", TenantID: "t1", OriginalName: "x.pdf", MimeType: "application/pdf"},
@@ -33,6 +35,9 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 		ReembedImageTask{AssetID: "a1", TenantID: "t1"},
 		AnalyzeAssetTask{TenantID: "t1", AssetID: "a1", CampaignID: &campaign, Reason: "ingested"},
 		ReanalyzeCampaignTask{TenantID: "t1", CampaignID: "c1"},
+		BillingScheduledChangeTask{ChangeID: "ch1"},
+		DistillBrandTask{TenantID: "t1", RunID: "r1"},
+		DistillAssetIdeasTask{TenantID: "t1", RunID: "r1"},
 	}
 	for _, args := range kinds {
 		t.Run(args.Kind(), func(t *testing.T) {
@@ -71,6 +76,40 @@ func TestEnqueueRequestFields(t *testing.T) {
 
 	if _, err := enqueueRequest(CleanupPostLogsTask{}, nil); err == nil {
 		t.Error("a periodic kind has no args message, want an error")
+	}
+}
+
+// TestEnqueueRequestKeepsFieldsMainAdded guards the fields that once had no
+// jobs.v1 counterpart: without them a weekly report email went out empty and
+// an unpaid-trial teardown ran as a workspace-delete teardown.
+func TestEnqueueRequestKeepsFieldsMainAdded(t *testing.T) {
+	report := &models.WeeklyReportView{SchemaVersion: 1, Workspace: "Acme", Headline: "12 posts went out"}
+	req, err := enqueueRequest(SendEmailTask{UserID: "u1", TemplateKey: "weekly_report", Report: report}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := SendEmailTaskFromArgs(req.GetSendEmail())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Report, report) {
+		t.Errorf("report = %+v, want %+v", got.Report, report)
+	}
+
+	plain, err := SendEmailTaskFromArgs(&jobsv1.SendEmailArgs{UserId: "u1"})
+	if err != nil || plain.Report != nil {
+		t.Errorf("no report: got %+v, %v", plain.Report, err)
+	}
+	if _, err := SendEmailTaskFromArgs(&jobsv1.SendEmailArgs{Report: []byte("{")}); err == nil {
+		t.Error("a malformed report decoded, want an error")
+	}
+
+	req, err = enqueueRequest(TeardownZernioProfileTask{TenantID: "t1", Reason: TeardownReasonTrialUnpaid}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := req.GetTeardownZernioProfile().GetReason(); r != TeardownReasonTrialUnpaid {
+		t.Errorf("teardown reason = %q", r)
 	}
 }
 
