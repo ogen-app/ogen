@@ -157,7 +157,7 @@ func queueDeps(d *deps) queues.Deps {
 		Image:                 d.ingest.image,
 		URL:                   d.ingest.url,
 		Analysis:              queues.AnalysisDeps{Runner: d.analysis, Runs: d.analysis, Distiller: d.analysis, DistillRuns: d.analysis, Tenants: r.tenantRepo, BackfillBatch: cfg.AnalysisBackfillBatch},
-		BrandDistill:          queues.BrandDistillDeps{Runner: d.brandDistill, Tenants: r.tenantRepo},
+		BrandDistill:          queues.BrandDistillDeps{Runner: d.brandDistill, Runs: d.brandDistill, Tenants: r.tenantRepo},
 		Email:                 d.email.Deps,
 		WeeklyReport:          weeklyReportDeps(d),
 		ConnectSessionRepo:    r.zernioConnectSessionRepo,

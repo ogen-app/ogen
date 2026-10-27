@@ -246,6 +246,7 @@ func (s *JobSteps) registerAnalysis() {
 	s.kinds[AnalyzeAssetKind] = (&AnalyzeAssetProcessor{Deps: d.Analysis}).step
 	s.kinds[ReanalyzeCampaignKind] = (&ReanalyzeCampaignProcessor{Deps: d.Analysis}).step
 	s.kinds[DistillAssetIdeasKind] = (&DistillAssetIdeasProcessor{Deps: d.Analysis}).step
+	s.kinds[DistillBrandKind] = (&DistillBrandProcessor{Deps: d.BrandDistill}).step
 }
 
 // snooze stops the job and runs it again after wait, without using an
