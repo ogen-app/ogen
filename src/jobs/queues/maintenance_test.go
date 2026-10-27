@@ -14,8 +14,9 @@ func TestMaintenanceTasksMatchTheContract(t *testing.T) {
 	}
 	slices.Sort(got)
 	want := []string{
-		"backfill_asset_analyses", "cleanup_email_logs", "cleanup_login_security", "cleanup_notifications", "cleanup_plugin_pairings", "cleanup_post_logs",
-		"cleanup_zernio_connect_sessions", "detect_manual_publish_due", "reconcile_scheduled_posts", "sweep_pending_uploads",
+		"backfill_asset_analyses", "billing_webhook_events_sweep", "cleanup_email_logs", "cleanup_login_security", "cleanup_notifications", "cleanup_plugin_pairings", "cleanup_post_logs",
+		"cleanup_zernio_connect_sessions", "detect_manual_publish_due", "expire_brand_distills", "reconcile_scheduled_posts",
+		"sweep_pending_uploads",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("maintenance tasks = %v, want %v", got, want)

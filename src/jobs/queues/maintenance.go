@@ -23,6 +23,8 @@ func MaintenanceTasks(d Deps) map[string]func(context.Context) error {
 		ReconcileScheduledPostsQueue:      sweepRunner(newReconcileScheduledPosts(d), ReconcileScheduledPostsTask{}),
 		DetectManualPublishDueQueue:       sweepRunner(newDetectManualPublishDue(d), DetectManualPublishDueTask{}),
 		BackfillAssetAnalysesKind:         sweepRunner(newBackfillAssetAnalyses(d), BackfillAssetAnalysesTask{}),
+		BillingWebhookSweepQueue:          sweepRunner(&BillingWebhookSweepProcessor{Billing: d.Billing}, BillingWebhookSweepTask{}),
+		ExpireBrandDistillKind:            sweepRunner(&ExpireBrandDistillsProcessor{Deps: d.BrandDistill}, ExpireBrandDistillsTask{}),
 	}
 }
 
