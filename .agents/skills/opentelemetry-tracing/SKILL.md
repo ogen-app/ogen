@@ -22,7 +22,8 @@ OpenTelemetry** in the code; exactly one package decides where the signals go.
         ├─ otelhttp client span    (Gemini / Zernio / Firecrawl / Resend)
         └─ Genkit flow/model/tool spans (reuse the global TracerProvider)
 
-[River job]  → its OWN root span "job <kind>" (no inbound request to continue)
+[job step]  → river-service runs the job in the enqueuing request's trace (carried
+              on its job_outbox row); each step calls back into ogen over otelgrpc
         └─ bun / gRPC / HTTP child spans
 ```
 
@@ -224,10 +225,12 @@ it would just surface each DB query as its own one-span root trace. The fix is a
 - **New outbound HTTP** → if it uses `http.DefaultTransport` it's already traced
   (`telemetry.go` wraps it with `otelhttp.NewTransport`). A custom `http.Client` needs
   its own `Transport: otelhttp.NewTransport(base)`.
-- **New River job / queue** → nothing; `jobs.Middleware()` gives every job a root span
-  `"job <kind>"`. Just thread the `ctx` you're handed into the data layer.
+- **New job kind** → nothing; the enqueuing request's trace context rides its
+  `job_outbox` row to river-service, and the job's step calls come back into ogen
+  over `otelgrpc` on the job RPC listener. Just thread the `ctx` you're handed into
+  the data layer.
 - **Manual span** → `otel.Tracer("ogen/<area>").Start(ctx, "<name>", …)`; always start
-  from a ctx that already has a parent (`reqCtx(c)`, the job ctx, or a detached ctx).
+  from a ctx that already has a parent (`reqCtx(c)`, the job RPC's ctx, or a detached ctx).
 - **Report a non-panic error to Sentry** → `telemetry.CaptureError(ctx, err, attrs…)`;
   it's a no-op when disabled and links to the active trace. Panics are already captured
   by `sentryfiber` (request) / exhausted-retry logic (jobs).

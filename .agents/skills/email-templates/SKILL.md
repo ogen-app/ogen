@@ -190,10 +190,10 @@ Rendering is only half — something must **enqueue** a `send_email` job. See
 
 - `EnqueueWelcomeEmailTx` / `EnqueueDripTx` are the models. Add
   `Enqueue<X>Tx(ctx, tx, userID, tenantID)` inserting a `SendEmailTask`
-  (`TemplateKey`, `EmailKind`, `IdempotencyKey`) via `InsertTx` so the mail
+  (`TemplateKey`, `EmailKind`, `IdempotencyKey`) via `insertTx` so the mail
   commits atomically with the triggering DB write.
-- Immediate: default `ScheduledAt`. Delayed/drip: `river.InsertOpts{ScheduledAt:
-  now.Add(offset)}` (see `dripSchedule`).
+- Immediate: default `ScheduledAt`. Delayed/drip:
+  `&EnqueueOpts{ScheduledAt: now.Add(offset)}` (see `dripSchedule`).
 - `IdempotencyKey` = `"<key>:<userID>"` (Resend `Idempotency-Key` + the
   `email_logs` partial-unique backstop → a retried enqueue can't double-send).
 - The drip cadence (day 2/5/7) is the in-code `dripSchedule` table — one edit.
