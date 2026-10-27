@@ -35,6 +35,7 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 		BillingScheduledChangeTask{ChangeID: "ch1"},
 		DistillBrandTask{TenantID: "t1", RunID: "r1"},
 		DistillAssetIdeasTask{TenantID: "t1", RunID: "r1"},
+		BuildWeeklyReportTask{TenantID: "t1", WeekStart: "2026-10-26"},
 	}
 	for _, args := range kinds {
 		t.Run(args.Kind(), func(t *testing.T) {

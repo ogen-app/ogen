@@ -94,11 +94,11 @@ lint:
 # v1.18.0 (CON-333); billing.v1 variant mapping RPCs + AttentionItem
 # tier_version_price_id in v1.19.0 (CON-404); plans.v1 PublishTierVersion
 # supersede in v1.20.0 (CON-411); jobs.v1 args for the billing, distill and
-# weekly-report kinds in v1.21.0 (CON-332) — publish the proto repo tag before `make proto`
-# can resolve it. To try an untagged change, generate from a local checkout:
+# weekly-report kinds in v1.21.0 and BuildWeeklyReportArgs in v1.22.0 (CON-332)
+# — publish the proto repo tag before `make proto` can resolve it. To try an untagged change, generate from a local checkout:
 # make proto PROTO_SOURCE=../proto/proto
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.21.0
+PROTO_VERSION := v1.22.0
 PROTO_SOURCE  ?= $(PROTO_MODULE):$(PROTO_VERSION)
 
 proto:

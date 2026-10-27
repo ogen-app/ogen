@@ -36,6 +36,8 @@ func TestRetireRiverMovesLiveJobs(t *testing.T) {
 		{"running", "send_email", `{"user_id":"u1","template_key":"welcome","email_kind":"transactional","idempotency_key":"welcome:u1"}`, time.Now()},
 		{"completed", "submit_post_to_zernio", `{"post_id":"p-done"}`, time.Now()},
 		{"available", "cleanup_post_logs", `{}`, time.Now()},
+		{"retryable", "build_weekly_report", `{"tenant_id":"t1","week_start":"2026-10-26"}`, time.Now()},
+		{"scheduled", "billing_apply_scheduled_change", `{"change_id":"ch1"}`, at},
 	} {
 		if _, err := db.DB.ExecContext(ctx, `INSERT INTO river_job (state, kind, args, scheduled_at) VALUES ($1, $2, $3, $4)`,
 			j.state, j.kind, j.args, j.at); err != nil {
@@ -44,8 +46,8 @@ func TestRetireRiverMovesLiveJobs(t *testing.T) {
 	}
 
 	moved, err := queues.RetireRiver(ctx, db.DB)
-	if err != nil || moved != 2 {
-		t.Fatalf("RetireRiver = %d, %v; want 2 moved", moved, err)
+	if err != nil || moved != 4 {
+		t.Fatalf("RetireRiver = %d, %v; want 4 moved", moved, err)
 	}
 	var scheduled time.Time
 	if err := db.DB.QueryRowContext(ctx, `SELECT (payload->>'scheduledAt')::timestamptz FROM job_outbox
@@ -57,6 +59,13 @@ func TestRetireRiverMovesLiveJobs(t *testing.T) {
 	}
 	if n := count(t, db, `SELECT count(*) FROM job_outbox WHERE kind = 'send_email' AND payload->'sendEmail'->>'idempotencyKey' = 'welcome:u1'`); n != 1 {
 		t.Errorf("moved send_email rows = %d, want 1", n)
+	}
+	if n := count(t, db, `SELECT count(*) FROM job_outbox WHERE kind = 'build_weekly_report' AND payload->'buildWeeklyReport'->>'weekStart' = '2026-10-26'`); n != 1 {
+		t.Errorf("moved build_weekly_report rows = %d, want 1", n)
+	}
+	if err := db.DB.QueryRowContext(ctx, `SELECT (payload->>'scheduledAt')::timestamptz FROM job_outbox
+		WHERE kind = 'billing_apply_scheduled_change' AND payload->'billingApplyScheduledChange'->>'changeId' = 'ch1'`).Scan(&scheduled); err != nil || !scheduled.Equal(at) {
+		t.Errorf("moved scheduled change: %v at %v, want %v", err, scheduled, at)
 	}
 	if n := count(t, db, `SELECT count(*) FROM job_outbox WHERE payload->'submitPostToZernio'->>'postId' = 'p-done' OR kind = 'cleanup_post_logs'`); n != 0 {
 		t.Errorf("finished or periodic jobs moved: %d rows", n)
