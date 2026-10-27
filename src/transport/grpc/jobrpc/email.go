@@ -72,6 +72,12 @@ func (e *emailJobs) RecordEmailOutcome(ctx context.Context, req *jobrpcv1.Record
 	if msg.To == "" {
 		msg.To = t.ToEmail
 	}
+	if msg.To == "" {
+		// A user's address is resolved in PrepareEmail; river-service passes
+		// that message back, so a missing recipient is a caller bug, not an
+		// outcome to log against nobody.
+		return nil, status.Error(codes.InvalidArgument, "outcome has no recipient: send the prepared message")
+	}
 	e.jobs.RecordOutcome(ctx, queues.NewPreparedEmail(t, msg), st, req.GetProviderMessageId(), req.GetError())
 	return &jobrpcv1.RecordEmailOutcomeResponse{}, nil
 }
