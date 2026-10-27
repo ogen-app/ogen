@@ -9,6 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/firecrawl"
+	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
 // ---- fakes for the process_url worker (reusing fakeEmbedder/fakeBlob/fakeChunks
@@ -248,5 +249,49 @@ func TestProcessURL_DisabledScraperNoOp(t *testing.T) {
 	}
 	if len(assets.statuses) != 0 {
 		t.Fatalf("disabled scraper must not touch status, saw %v", assets.statuses)
+	}
+}
+
+// recordingStage keeps chunks in memory and records the clearStale flag of
+// each Commit.
+type recordingStage struct {
+	*memChunkStage
+	clearStale []bool
+}
+
+func (r *recordingStage) Commit(ctx context.Context, runID, assetID string, clearStale bool) (repository.ChunkStageStats, error) {
+	r.clearStale = append(r.clearStale, clearStale)
+	return r.memChunkStage.Commit(ctx, runID, assetID, clearStale)
+}
+
+// TestProcessURL_ClearsStaleChunksOnlyForAnEmptyRun guards the commit of a
+// run whose stages a later, overlapping run dropped: it counts no attempts,
+// like a run that staged nothing, but must not clear the asset's live chunks.
+// Only a run that staged nothing clears them.
+func TestProcessURL_ClearsStaleChunksOnlyForAnEmptyRun(t *testing.T) {
+	newProc := func(stage *recordingStage) *ProcessURLProcessor {
+		return newURLProc(URLDeps{
+			Scraper:  &fakeScraper{res: &firecrawl.ScrapeResult{Markdown: "# Heading\n\nA paragraph with enough words to embed into a chunk."}},
+			Embedder: &fakeEmbedder{}, Storage: &fakeBlob{}, Fetcher: &fakeFetcher{}, Assets: &fakeURLAssets{},
+			Chunks: &fakeChunks{}, Images: &fakeImages{}, Hub: &fakeHub{}, Stages: stage,
+		})
+	}
+
+	stage := &recordingStage{memChunkStage: newMemChunkStage(&fakeChunks{})}
+	if err := newProc(stage).process(t.Context(), ProcessURLTask{AssetID: "u1", TenantID: "t1", SourceURL: "https://example.com/x"}, false); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(stage.clearStale) != 1 || stage.clearStale[0] {
+		t.Fatalf("a run that staged chunks committed with clearStale = %v, want [false]", stage.clearStale)
+	}
+
+	// A run that staged nothing (no words on the page) clears the chunks.
+	stage = &recordingStage{memChunkStage: newMemChunkStage(&fakeChunks{})}
+	in := ProcessURLTask{AssetID: "u1", TenantID: "t1", SourceURL: "https://example.com/x"}
+	if _, err := newProc(stage).embedNext(t.Context(), in, &urlState{Phase: urlPhaseEmbed, Embed: embedProgress{RunID: "r1"}, Empty: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(stage.clearStale) != 1 || !stage.clearStale[0] {
+		t.Fatalf("an empty run committed with clearStale = %v, want [true]", stage.clearStale)
 	}
 }
