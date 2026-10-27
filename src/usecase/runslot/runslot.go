@@ -23,6 +23,13 @@ const (
 	Stale = time.Minute
 	// heartbeatEvery is how often a detached run refreshes its slot.
 	heartbeatEvery = 15 * time.Second
+	// selfFence is how long a run goes on without a confirmed heartbeat
+	// before it stops itself: inside Stale, so it has stopped before another
+	// run could take its slot, and the two never both write.
+	selfFence = Stale - heartbeatEvery
+	// finishTries bounds the attempts to record a run's outcome; a lost
+	// outcome would make the job run the model again.
+	finishTries = 3
 )
 
 // Row is a run row's slot columns.
@@ -95,6 +102,7 @@ func run(ctx context.Context, store Store, id, token string, timeout time.Durati
 		done <- fn(runCtx)
 	}()
 	var runErr error
+	lastBeat := time.Now()
 wait:
 	for {
 		select {
@@ -105,7 +113,13 @@ wait:
 			switch {
 			case err != nil:
 				slog.WarnContext(ctx, "could not refresh a run slot", logging.AttrComponent, "runslot", "run_id", id, logging.AttrError, err)
-			case !held:
+				if time.Since(lastBeat) >= selfFence {
+					slog.WarnContext(ctx, "detached run could not confirm its slot; stopping it", logging.AttrComponent, "runslot", "run_id", id)
+					stopRun()
+				}
+			case held:
+				lastBeat = time.Now()
+			default:
 				slog.WarnContext(ctx, "detached run lost its slot to another run; stopping it", logging.AttrComponent, "runslot", "run_id", id)
 				stopRun()
 			}
@@ -119,10 +133,29 @@ wait:
 		}
 	}
 	// The outcome is recorded even when the run's own deadline passed.
-	fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer fcancel()
-	if err := store.Finish(fctx, id, token, errText, errCode); err != nil {
-		slog.ErrorContext(fctx, "could not record a detached run's outcome", logging.AttrComponent, "runslot", "run_id", id, logging.AttrError, err)
+	var err error
+	for try := range finishTries {
+		if err = store.Finish(fctx, id, token, errText, errCode); err == nil {
+			return
+		}
+		if try < finishTries-1 && sleep(fctx, time.Second<<try) != nil {
+			break
+		}
+	}
+	slog.ErrorContext(fctx, "could not record a detached run's outcome", logging.AttrComponent, "runslot", "run_id", id, logging.AttrError, err)
+}
+
+// sleep waits d, or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
