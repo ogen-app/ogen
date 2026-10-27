@@ -450,75 +450,129 @@ func (s *Service) mirrorAfter(ctx context.Context, snap billingdom.Subscription,
 // price); at effective_at it moves the tier. Each step is idempotent, so a
 // duplicate job or the reconcile sweep re-driving it is harmless.
 func (s *Service) RunScheduledChange(ctx context.Context, changeID string) error {
+	call, err := s.NextScheduledChange(ctx, changeID)
+	if err != nil || call == nil {
+		return err
+	}
+	snap, callErr := s.d.Provider.ChangePlan(ctx, call.SubscriptionID, call.VariantID, call.Opts())
+	revert, err := s.ScheduledChangePushed(ctx, changeID, snap, callErr, queues.IsLastAttempt(ctx))
+	if err != nil || revert == nil {
+		return err
+	}
+	snap, callErr = s.d.Provider.ChangePlan(ctx, revert.SubscriptionID, revert.VariantID, revert.Opts())
+	return s.ScheduledChangeReverted(ctx, snap, callErr)
+}
+
+// ProviderSwitch is a provider plan switch a scheduled change needs. A job
+// running in river-service has it make the call.
+type ProviderSwitch struct {
+	SubscriptionID string `json:"subscription_id"`
+	VariantID      string `json:"variant_id"`
+}
+
+// Opts are the switch's options: never prorated, so the renewal charges the
+// new price.
+func (ProviderSwitch) Opts() billingdom.ChangeOpts { return billingdom.ChangeOpts{NoProration: true} }
+
+// NextScheduledChange does the due step of a scheduled change that needs no
+// provider call (moving the tier at effective_at, failing a change whose
+// price lost its variant) and returns the provider switch the push at
+// effective_at - 1h needs. nil means nothing is due.
+func (s *Service) NextScheduledChange(ctx context.Context, changeID string) (*ProviderSwitch, error) {
 	if !s.Enabled() {
-		return nil
+		return nil, nil
 	}
 	change, err := s.d.Repo.GetScheduledChange(ctx, nil, changeID, false)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	now := s.now()
 	switch {
 	case change.Status == models.ScheduledChangePending && !now.Before(change.EffectiveAt.Add(-scheduledChangeLead)):
-		return s.pushScheduledChange(ctx, change)
+		sub, err := s.d.Repo.GetSubscription(ctx, change.BillingSubscriptionID)
+		if err != nil {
+			return nil, err
+		}
+		variants, err := s.variantMap(ctx)
+		if err != nil {
+			return nil, err
+		}
+		variantID, ok := variants.Variant(change.ToTierVersionPriceID)
+		if !ok {
+			return nil, s.failChange(ctx, change, "target price has no variant")
+		}
+		return &ProviderSwitch{SubscriptionID: sub.ProviderSubscriptionID, VariantID: variantID}, nil
 	case change.Status == models.ScheduledChangeProviderApplied && !now.Before(change.EffectiveAt):
-		return s.landScheduledChange(ctx, change)
+		return nil, s.landScheduledChange(ctx, change)
 	default:
-		return nil // not due yet, or already done
+		return nil, nil // not due yet, or already done
 	}
 }
 
-func (s *Service) pushScheduledChange(ctx context.Context, change *models.BillingScheduledChange) error {
+// ScheduledChangePushed records the push's outcome. A failed push is retried,
+// or on the last attempt or a terminal error fails the change. A push that
+// landed after the change left pending (the owner kept the plan, or it
+// failed) returns the switch that puts the provider back on the original
+// price.
+func (s *Service) ScheduledChangePushed(ctx context.Context, changeID string, snap billingdom.Subscription, callErr error, lastAttempt bool) (*ProviderSwitch, error) {
+	change, err := s.d.Repo.GetScheduledChange(ctx, nil, changeID, false)
+	if err != nil {
+		return nil, err
+	}
+	if callErr != nil {
+		if lastAttempt || !billingdom.IsRetryable(callErr) {
+			return nil, s.failChange(ctx, change, callErr.Error())
+		}
+		return nil, callErr
+	}
+	ok, err := s.d.Repo.SetScheduledChangeStatus(ctx, nil, change.ID, []string{models.ScheduledChangePending}, models.ScheduledChangeProviderApplied, "", s.now())
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		// The open change now matches the new variant, so mirroring does not
+		// move the tier early.
+		s.mirrorAfter(ctx, snap, "scheduled push")
+		return nil, nil
+	}
+	return s.missedPush(ctx, change.ID)
+}
+
+// missedPush handles a push whose provider switch landed after the change
+// left pending. A duplicate push already marked it provider_applied and
+// needs nothing; an owner who kept the plan, or a failed change, needs the
+// provider back on the original price.
+func (s *Service) missedPush(ctx context.Context, changeID string) (*ProviderSwitch, error) {
+	change, err := s.d.Repo.GetScheduledChange(ctx, nil, changeID, false)
+	if err != nil {
+		return nil, err
+	}
+	if change.Status != models.ScheduledChangeCancelled && change.Status != models.ScheduledChangeFailed {
+		return nil, nil
+	}
 	sub, err := s.d.Repo.GetSubscription(ctx, change.BillingSubscriptionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	variants, err := s.variantMap(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	variantID, ok := variants.Variant(change.ToTierVersionPriceID)
+	variantID, ok := variants.Variant(change.FromTierVersionPriceID)
 	if !ok {
-		return s.failChange(ctx, change, "target price has no variant")
+		return nil, ErrTierNotAvailable
 	}
-	snap, err := s.d.Provider.ChangePlan(ctx, sub.ProviderSubscriptionID, variantID, billingdom.ChangeOpts{NoProration: true})
-	if err != nil {
-		if queues.IsLastAttempt(ctx) || !billingdom.IsRetryable(err) {
-			return s.failChange(ctx, change, err.Error())
-		}
-		return err
-	}
-	ok, err = s.d.Repo.SetScheduledChangeStatus(ctx, nil, change.ID, []string{models.ScheduledChangePending}, models.ScheduledChangeProviderApplied, "", s.now())
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return s.settleMissedPush(ctx, sub, change.ID)
-	}
-	// The open change now matches the new variant, so mirroring does not move
-	// the tier early.
-	s.mirrorAfter(ctx, snap, "scheduled push")
-	return nil
+	return &ProviderSwitch{SubscriptionID: sub.ProviderSubscriptionID, VariantID: variantID}, nil
 }
 
-// settleMissedPush handles a push whose provider switch landed after the
-// change left pending. A duplicate push already marked it provider_applied and
-// needs nothing; an owner who kept the plan, or a failed change, needs the
-// provider back on the original price.
-func (s *Service) settleMissedPush(ctx context.Context, sub *models.BillingSubscription, changeID string) error {
-	change, err := s.d.Repo.GetScheduledChange(ctx, nil, changeID, false)
-	if err != nil {
-		return err
-	}
-	if change.Status != models.ScheduledChangeCancelled && change.Status != models.ScheduledChangeFailed {
-		return nil
-	}
-	snap, err := s.revertProvider(ctx, sub, change)
-	if err != nil {
-		return err
+// ScheduledChangeReverted mirrors the provider after a missed push was put
+// back.
+func (s *Service) ScheduledChangeReverted(ctx context.Context, snap billingdom.Subscription, callErr error) error {
+	if callErr != nil {
+		return providerErr(callErr)
 	}
 	s.mirrorAfter(ctx, snap, "revert of a cancelled push")
 	return nil
