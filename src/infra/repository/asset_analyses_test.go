@@ -347,3 +347,30 @@ func TestAssetAnalysisRunLedger(t *testing.T) {
 		t.Fatalf("other tenant's runs = %d, %v; want 0", n, err)
 	}
 }
+
+// TestAssetAnalysisHeartbeatReportsALostSlot checks a run learns when another
+// run took its slot after its heartbeat went stale, so it can stop.
+func TestAssetAnalysisHeartbeatReportsALostSlot(t *testing.T) {
+	f := newAnalysisFixture(t)
+	f.seedAsset(t, "asset-1")
+	lens, err := f.analyses.Ensure(f.ctx, f.db, "asset-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := f.analyses.ClaimRunSlot(f.ctx, lens.ID, "tok-1", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if held, err := f.analyses.HeartbeatRunSlot(f.ctx, lens.ID, "tok-1"); err != nil || !held {
+		t.Fatalf("heartbeat of the holder = %v, %v; want held", held, err)
+	}
+	// tok-1's heartbeat counts as stale: another run takes the slot.
+	if ok, err := f.analyses.ClaimRunSlot(f.ctx, lens.ID, "tok-2", time.Now().Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("takeover claim = %v, %v", ok, err)
+	}
+	if held, err := f.analyses.HeartbeatRunSlot(f.ctx, lens.ID, "tok-1"); err != nil || held {
+		t.Fatalf("heartbeat of the displaced run = %v, %v; want not held", held, err)
+	}
+	if held, _ := f.analyses.HeartbeatRunSlot(f.ctx, lens.ID, "tok-2"); !held {
+		t.Fatal("the new holder's heartbeat did not hold")
+	}
+}

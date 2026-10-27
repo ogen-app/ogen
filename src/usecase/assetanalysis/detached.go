@@ -82,6 +82,10 @@ func (s *Service) runDetached(ctx context.Context, l Lens, reason, rowID, token 
 	defer cancel()
 	beat := time.NewTicker(runHeartbeatEvery)
 	defer beat.Stop()
+	// A run that lost its slot is cancelled, so it stops spending on the
+	// model and never records a result over the run that took the slot.
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -89,7 +93,7 @@ func (s *Service) runDetached(ctx context.Context, l Lens, reason, rowID, token 
 				done <- fmt.Errorf("analysis run panicked: %v", r)
 			}
 		}()
-		done <- s.Run(ctx, l, reason)
+		done <- s.Run(runCtx, l, reason)
 	}()
 	var runErr error
 wait:
@@ -98,8 +102,13 @@ wait:
 		case runErr = <-done:
 			break wait
 		case <-beat.C:
-			if err := s.repos.Analyses.HeartbeatRunSlot(ctx, rowID, token); err != nil {
+			held, err := s.repos.Analyses.HeartbeatRunSlot(ctx, rowID, token)
+			switch {
+			case err != nil:
 				slog.WarnContext(ctx, "could not refresh the analysis run slot", logging.AttrComponent, logComponent, logging.AttrError, err)
+			case !held:
+				slog.WarnContext(ctx, "analysis run lost its slot to another run; stopping it", logging.AttrComponent, logComponent, "lens_id", rowID)
+				stopRun()
 			}
 		}
 	}
