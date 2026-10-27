@@ -204,6 +204,7 @@ func NewJobSteps(d Deps) *JobSteps {
 	s.registerPublishing()
 	s.registerIngestion()
 	s.registerAnalysis()
+	s.registerWeeklyReport()
 	return s
 }
 
