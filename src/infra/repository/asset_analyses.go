@@ -51,8 +51,9 @@ type AssetAnalysisRepository interface {
 	// holds it with a heartbeat at or after staleBefore. It reports whether
 	// the slot was claimed.
 	ClaimRunSlot(ctx context.Context, id, token string, staleBefore time.Time) (bool, error)
-	// HeartbeatRunSlot refreshes the heartbeat of token's run.
-	HeartbeatRunSlot(ctx context.Context, id, token string) error
+	// HeartbeatRunSlot refreshes the heartbeat of token's run. It reports
+	// false when token no longer holds an unfinished slot: another run took it.
+	HeartbeatRunSlot(ctx context.Context, id, token string) (bool, error)
 	// FinishRunSlot records the outcome of token's run: errText empty on
 	// success, code naming the failure.
 	FinishRunSlot(ctx context.Context, id, token, errText, code string) error
@@ -328,12 +329,16 @@ func (r *assetAnalysisRepository) ClaimRunSlot(ctx context.Context, id, token st
 	return n == 1, err
 }
 
-func (r *assetAnalysisRepository) HeartbeatRunSlot(ctx context.Context, id, token string) error {
-	_, err := r.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
+func (r *assetAnalysisRepository) HeartbeatRunSlot(ctx context.Context, id, token string) (bool, error) {
+	res, err := r.db.NewUpdate().Model((*models.AssetAnalysis)(nil)).
 		Set("run_heartbeat_at = now()").
 		Where("aa.id = ? AND aa.run_token = ? AND aa.run_done_at IS NULL", id, token).
 		Exec(ctx)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (r *assetAnalysisRepository) FinishRunSlot(ctx context.Context, id, token, errText, code string) error {
