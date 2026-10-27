@@ -18,9 +18,10 @@ import (
 var riverLiveStates = []string{"available", "pending", "retryable", "running", "scheduled"}
 
 // riverKinds decodes a River job's args, by kind, for every kind ogen
-// enqueued. Periodic sweeps are absent: river-service schedules its own. So
-// are the jobs a sweep fans out into (build_weekly_report, the per-tenant
-// analytics jobs): the sweep's next tick in river-service queues them again.
+// enqueued, and for build_weekly_report, so a week's report built on River
+// is handed over too. Periodic sweeps are absent: river-service schedules its
+// own. So are the other jobs a sweep fans out into (the per-tenant analytics
+// jobs): the sweep's next tick in river-service queues them again.
 var riverKinds = map[string]func([]byte) (JobArgs, error){
 	SubmitPostToZernioQueue:     decodeRiverArgs[SubmitPostTask],
 	PollZernioStatusQueue:       decodeRiverArgs[PollZernioStatusTask],
@@ -42,6 +43,7 @@ var riverKinds = map[string]func([]byte) (JobArgs, error){
 	DistillAssetIdeasKind:       decodeRiverArgs[DistillAssetIdeasTask],
 	DistillBrandKind:            decodeRiverArgs[DistillBrandTask],
 	BillingScheduledChangeQueue: decodeRiverArgs[BillingScheduledChangeTask],
+	BuildWeeklyReportQueue:      decodeRiverArgs[BuildWeeklyReportTask],
 }
 
 func decodeRiverArgs[T JobArgs](b []byte) (JobArgs, error) {
