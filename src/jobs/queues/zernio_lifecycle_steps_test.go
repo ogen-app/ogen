@@ -198,8 +198,10 @@ func TestTeardownStepsDisconnectThenDelete(t *testing.T) {
 	if id, found, _ := settings.Get(ctx, zernio.SettingProfileID); found || id != "" {
 		t.Errorf("profile id still stored: %q", id)
 	}
-	if lease.held || lease.renewed != 4 {
-		t.Errorf("lease held %v, renewed %d times; want released after 4 renewals", lease.held, lease.renewed)
+	// Renewed before each destructive call; the profile delete's result is
+	// cleaned up without one, since the profile is already gone.
+	if lease.held || lease.renewed != 3 {
+		t.Errorf("lease held %v, renewed %d times; want released after 3 renewals", lease.held, lease.renewed)
 	}
 }
 
@@ -316,4 +318,31 @@ type switchingBilling struct{ live bool }
 
 func (b *switchingBilling) HasLiveSubscription(context.Context, string) (bool, error) {
 	return b.live, nil
+}
+
+// TestTrialTeardownStepsFinishOnceTheProfileIsDeleted checks a subscription
+// that lands while the profile delete is in flight doesn't stop the local
+// cleanup: the profile is gone from Zernio, so the workspace must not keep a
+// pointer to it.
+func TestTrialTeardownStepsFinishOnceTheProfileIsDeleted(t *testing.T) {
+	accounts := &fakeLocalAccounts{active: []string{"s1"}}
+	billing := &switchingBilling{}
+	steps, settings, ctx := trialTeardownSteps(t, billing, models.TenantStatusActive, accounts)
+	z := &scriptedZernio{replies: map[string]zernio.Result{
+		"GET /accounts":        {Status: 200, Body: []byte(`{"accounts":[]}`)},
+		"DELETE /profiles/p-1": {Status: 200, Body: []byte(`{}`)},
+	}}
+	answer := func(c queues.HTTPCall) queues.StepResult {
+		if c.Method == "DELETE" {
+			billing.live = true
+		}
+		return z.answer(c)
+	}
+	out := runStepsWith(t, steps, queues.TeardownZernioProfileQueue, trialArgs, answer)
+	if out.Done == nil || out.Done.Outcome != "torn_down" || len(accounts.active) != 0 {
+		t.Fatalf("out = %+v, local accounts %v; want the cleanup finished", out, accounts.active)
+	}
+	if _, found, _ := settings.Get(ctx, zernio.SettingProfileID); found {
+		t.Fatal("profile id kept after the profile was deleted")
+	}
 }
