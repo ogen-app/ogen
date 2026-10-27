@@ -106,6 +106,11 @@ func run(cfg *config.Config) error {
 	if err := database.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
+	// Retiring River can't be undone: hand its jobs over only to a pipeline
+	// that will run them, or the boot fails with River already gone.
+	if err := server.RequireJobPipeline(ctx, cfg); err != nil {
+		return err
+	}
 	if moved, err := queues.RetireRiver(ctx, db.DB); err != nil {
 		return err
 	} else if moved > 0 {

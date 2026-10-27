@@ -23,7 +23,8 @@ const jobRPCStopGrace = 10 * time.Second
 // JOB_RPC_ADDR is set. Unlike Harbor's operator server it runs inside the app,
 // so the sweeps it serves use the app's own repositories and storage.
 func (d *deps) initJobRPC(ctx context.Context) error {
-	if d.cfg.JobRPCAddr == "" {
+	// JOBS_DISABLED leaves river-service nothing to call: no job runs.
+	if d.cfg.JobsDisabled || d.cfg.JobRPCAddr == "" {
 		return nil
 	}
 	token := strings.TrimSpace(d.cfg.RiverRPCAuthToken)

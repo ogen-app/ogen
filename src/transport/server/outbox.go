@@ -14,10 +14,10 @@ import (
 )
 
 // initRelay starts the relay that delivers the job outbox to river-service.
-// Without RIVER_SERVICE_ADDR (allowed only with JOBS_DISABLED) jobs wait in the
-// outbox.
+// With JOBS_DISABLED, or without RIVER_SERVICE_ADDR (allowed only with it),
+// jobs wait in the outbox.
 func (d *deps) initRelay(ctx context.Context) error {
-	if d.cfg.RiverServiceAddr == "" {
+	if d.cfg.JobsDisabled || d.cfg.RiverServiceAddr == "" {
 		return nil
 	}
 	client, err := jobsclient.New(jobsclient.Config{Addr: d.cfg.RiverServiceAddr, Token: d.cfg.RiverServiceAuthToken})
@@ -47,10 +47,12 @@ func (d *deps) initRelay(ctx context.Context) error {
 	return nil
 }
 
-// requireJobPipeline fails the boot when river-service can't receive ogen's
+// RequireJobPipeline fails the boot when river-service can't receive ogen's
 // jobs or call back into ogen: every job would then sit in the outbox while
-// the API looked healthy. JOBS_DISABLED makes that an explicit choice.
-func requireJobPipeline(ctx context.Context, cfg *config.Config) error {
+// the API looked healthy. JOBS_DISABLED makes that an explicit choice, and
+// then no job runs: neither the relay nor the job RPC listener starts. Boot
+// checks it before anything it guards has run, River's retirement included.
+func RequireJobPipeline(ctx context.Context, cfg *config.Config) error {
 	var missing []string
 	for _, v := range []struct{ name, value string }{
 		{"RIVER_SERVICE_ADDR", cfg.RiverServiceAddr},
@@ -63,11 +65,11 @@ func requireJobPipeline(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 	switch {
-	case len(missing) == 0:
-		return nil
 	case cfg.JobsDisabled:
 		slog.WarnContext(ctx, "JOBS_DISABLED: background jobs wait in the outbox and never run",
 			logging.AttrComponent, "outbox", "missing", missing)
+		return nil
+	case len(missing) == 0:
 		return nil
 	default:
 		return fmt.Errorf("background jobs need %s; set JOBS_DISABLED=true to run the API without them",
