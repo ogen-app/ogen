@@ -59,7 +59,9 @@ type AnalysisDeps struct {
 	Runs AnalysisRuns
 	// Distiller runs distill jobs; nil makes them no-ops.
 	Distiller DistillRunner
-	Tenants   TenantStatusReader
+	// DistillRuns runs each distill detached; nil runs it inline.
+	DistillRuns DistillRuns
+	Tenants     TenantStatusReader
 	// BackfillBatch caps the lenses one backfill tick queues per tenant, so
 	// one large library cannot fill the analysis queue.
 	BackfillBatch int

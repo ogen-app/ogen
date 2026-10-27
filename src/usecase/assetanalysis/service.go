@@ -30,6 +30,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	"github.com/ogen-app/ogen/src/usecase/runslot"
 )
 
 const logComponent = "assetanalysis"
@@ -78,6 +79,9 @@ type Repos struct {
 	Brands    repository.BrandRepository
 	Tenants   repository.TenantRepository
 	Distills  repository.IdeaDistillRepository
+	// DistillSlots keeps the detached-run slots of distill runs; nil runs a
+	// distill only inline.
+	DistillSlots runslot.Store
 }
 
 // Service runs analyses. It is safe for concurrent use.
