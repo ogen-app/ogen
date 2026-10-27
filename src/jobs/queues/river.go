@@ -73,6 +73,9 @@ type Deps struct {
 	// no-ops and that teardown is skipped.
 	Billing     BillingJobs
 	BillingLive BillingLiveChecker
+	// BillingSteps runs the billing jobs for river-service; nil leaves them
+	// to ogen's own workers.
+	BillingSteps BillingSteps
 
 	// The process_pdf worker's dependencies (pdf-service client,
 	// embedder, storage, asset repos). A nil Client (no PDF_SERVICE_ADDR) makes

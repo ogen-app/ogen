@@ -192,3 +192,21 @@ type Event struct {
 	PaymentAmountMinor    int64
 	PaymentStatus         string
 }
+
+// PlanSwitch is a provider plan switch a scheduled change needs. A job
+// running in river-service has it make the call.
+type PlanSwitch struct {
+	SubscriptionID string `json:"subscription_id"`
+	VariantID      string `json:"variant_id"`
+}
+
+// Opts are the switch's options: never prorated, so the renewal charges the
+// new price.
+func (PlanSwitch) Opts() ChangeOpts { return ChangeOpts{NoProration: true} }
+
+// ReconcilePlan is the provider work one reconcile pass needs: the
+// subscriptions to re-read and the due scheduled changes to re-drive.
+type ReconcilePlan struct {
+	Subscriptions []string
+	DueChanges    []string
+}
