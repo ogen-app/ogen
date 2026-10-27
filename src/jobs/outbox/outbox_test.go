@@ -157,6 +157,34 @@ func TestRelayKeepsRowsRiverServiceRefuses(t *testing.T) {
 	}
 }
 
+// TestRelayStopsAtTheFirstFailedSend checks an unreachable river-service costs
+// one send per poll, not one per claimed row: the failed row is backed off and
+// the rest stay due for the next poll.
+func TestRelayStopsAtTheFirstFailedSend(t *testing.T) {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	w := outbox.NewWriter(db.DB)
+	for _, u := range []string{"u1", "u2", "u3"} {
+		if err := w.Write(t.Context(), "send_email", emailReq(u)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sender := &fakeSender{err: status.Error(codes.Unavailable, "connection refused")}
+	relay := outbox.NewRelay(db.DB, sender, outbox.RelayConfig{})
+	if n, err := relay.RelayOnce(t.Context()); err != nil || n != 1 || len(sender.reqs) != 1 {
+		t.Fatalf("RelayOnce = %d, %v after %d sends; want one send, then stop", n, err, len(sender.reqs))
+	}
+
+	sender.err = nil
+	if n, err := relay.RelayOnce(t.Context()); err != nil || n != 2 {
+		t.Fatalf("next poll = %d, %v; want the 2 untouched rows", n, err)
+	}
+	if p := pending(t, db); p != 1 {
+		t.Errorf("pending = %d, want only the backed-off row", p)
+	}
+}
+
 func TestConcurrentRelaysDeliverEachRowOnce(t *testing.T) {
 	db := pgtest.MustDB()
 	t.Cleanup(func() { _ = db.Close() })
