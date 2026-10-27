@@ -15,6 +15,10 @@ import (
 type memStore struct {
 	mu  sync.Mutex
 	row runslot.Row
+	// beatErr fails every heartbeat; finishErrs fails that many Finish
+	// calls first.
+	beatErr    error
+	finishErrs int
 }
 
 func (m *memStore) Claim(_ context.Context, _, token string, staleBefore time.Time) (bool, error) {
@@ -31,6 +35,9 @@ func (m *memStore) Claim(_ context.Context, _, token string, staleBefore time.Ti
 func (m *memStore) Heartbeat(_ context.Context, _, token string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.beatErr != nil {
+		return false, m.beatErr
+	}
 	if m.row.Token != nil && *m.row.Token == token && m.row.DoneAt == nil {
 		now := time.Now()
 		m.row.HeartbeatAt = &now
@@ -51,6 +58,10 @@ func (m *memStore) steal(token string) {
 func (m *memStore) Finish(_ context.Context, _, token, errText, code string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.finishErrs > 0 {
+		m.finishErrs--
+		return errors.New("db unavailable")
+	}
 	if m.row.Token != nil && *m.row.Token == token {
 		now := time.Now()
 		m.row.DoneAt, m.row.Err, m.row.Code = &now, errText, code
@@ -136,6 +147,50 @@ func TestStartStopsARunThatLostItsSlot(t *testing.T) {
 		}
 		if slot, _ := runslot.Read(t.Context(), store, "r1"); slot.Token != "other" || slot.Done {
 			t.Fatalf("slot = %+v, want the new run's, untouched", slot)
+		}
+	})
+}
+
+// TestStartFencesARunThatCannotConfirmItsSlot checks a run whose heartbeats
+// keep failing stops itself before its slot goes stale, so a run that takes
+// the slot after Stale never writes alongside it.
+func TestStartFencesARunThatCannotConfirmItsSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &memStore{beatErr: errors.New("db unavailable")}
+		stopped := make(chan time.Time, 1)
+		start := time.Now()
+		if _, err := runslot.Start(t.Context(), store, "r1", time.Hour, nil, func(ctx context.Context) error {
+			<-ctx.Done()
+			stopped <- time.Now()
+			return ctx.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(runslot.Stale)
+		synctest.Wait()
+		select {
+		case at := <-stopped:
+			if at.Sub(start) >= runslot.Stale {
+				t.Fatalf("stopped after %v, want before the slot goes stale (%v)", at.Sub(start), runslot.Stale)
+			}
+		default:
+			t.Fatal("the run kept going without a confirmed heartbeat")
+		}
+	})
+}
+
+// TestStartRetriesRecordingTheOutcome checks a failed Finish is retried, so a
+// run that succeeded isn't run again for want of its outcome.
+func TestStartRetriesRecordingTheOutcome(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &memStore{finishErrs: 2}
+		if _, err := runslot.Start(t.Context(), store, "r1", time.Hour, nil, func(context.Context) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		if slot, _ := runslot.Read(t.Context(), store, "r1"); !slot.Done || slot.Err != nil {
+			t.Fatalf("slot = %+v, want the outcome recorded on the third try", slot)
 		}
 	})
 }
