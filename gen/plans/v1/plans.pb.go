@@ -922,9 +922,11 @@ func (x *UpdateTierVersionDraftResponse) GetVersion() *TierVersion {
 }
 
 type PublishTierVersionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ChangeReason  string                 `protobuf:"bytes,2,opt,name=change_reason,json=changeReason,proto3" json:"change_reason,omitempty"` // required, non-empty
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ChangeReason string                 `protobuf:"bytes,2,opt,name=change_reason,json=changeReason,proto3" json:"change_reason,omitempty"` // required, non-empty
+	// optional; retire an active version of the same tier as this draft goes live
+	Supersede     *SupersedeTierVersion `protobuf:"bytes,3,opt,name=supersede,proto3" json:"supersede,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -973,16 +975,90 @@ func (x *PublishTierVersionRequest) GetChangeReason() string {
 	return ""
 }
 
+func (x *PublishTierVersionRequest) GetSupersede() *SupersedeTierVersion {
+	if x != nil {
+		return x.Supersede
+	}
+	return nil
+}
+
+// SupersedeTierVersion names the active version a publish replaces. Live
+// assignments on it follow RetireTierVersion's rules: by default the publish
+// is refused while any remain; force grandfathers them on the retired version;
+// reassign_to_published moves them onto the version being published. force and
+// reassign_to_published are mutually exclusive.
+type SupersedeTierVersion struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	VersionId           string                 `protobuf:"bytes,1,opt,name=version_id,json=versionId,proto3" json:"version_id,omitempty"` // required; an active version of the same tier, not the draft itself
+	Force               bool                   `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	ReassignToPublished bool                   `protobuf:"varint,3,opt,name=reassign_to_published,json=reassignToPublished,proto3" json:"reassign_to_published,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *SupersedeTierVersion) Reset() {
+	*x = SupersedeTierVersion{}
+	mi := &file_plans_v1_plans_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SupersedeTierVersion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SupersedeTierVersion) ProtoMessage() {}
+
+func (x *SupersedeTierVersion) ProtoReflect() protoreflect.Message {
+	mi := &file_plans_v1_plans_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SupersedeTierVersion.ProtoReflect.Descriptor instead.
+func (*SupersedeTierVersion) Descriptor() ([]byte, []int) {
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SupersedeTierVersion) GetVersionId() string {
+	if x != nil {
+		return x.VersionId
+	}
+	return ""
+}
+
+func (x *SupersedeTierVersion) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+func (x *SupersedeTierVersion) GetReassignToPublished() bool {
+	if x != nil {
+		return x.ReassignToPublished
+	}
+	return false
+}
+
 type PublishTierVersionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Version       *TierVersion           `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Version           *TierVersion           `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	SupersededVersion *TierVersion           `protobuf:"bytes,2,opt,name=superseded_version,json=supersededVersion,proto3" json:"superseded_version,omitempty"` // set when the request superseded a version
+	ReassignedCount   int32                  `protobuf:"varint,3,opt,name=reassigned_count,json=reassignedCount,proto3" json:"reassigned_count,omitempty"`      // tenants moved onto the published version (0 unless reassign_to_published)
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PublishTierVersionResponse) Reset() {
 	*x = PublishTierVersionResponse{}
-	mi := &file_plans_v1_plans_proto_msgTypes[16]
+	mi := &file_plans_v1_plans_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -994,7 +1070,7 @@ func (x *PublishTierVersionResponse) String() string {
 func (*PublishTierVersionResponse) ProtoMessage() {}
 
 func (x *PublishTierVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[16]
+	mi := &file_plans_v1_plans_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1007,7 +1083,7 @@ func (x *PublishTierVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishTierVersionResponse.ProtoReflect.Descriptor instead.
 func (*PublishTierVersionResponse) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{16}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *PublishTierVersionResponse) GetVersion() *TierVersion {
@@ -1015,6 +1091,20 @@ func (x *PublishTierVersionResponse) GetVersion() *TierVersion {
 		return x.Version
 	}
 	return nil
+}
+
+func (x *PublishTierVersionResponse) GetSupersededVersion() *TierVersion {
+	if x != nil {
+		return x.SupersededVersion
+	}
+	return nil
+}
+
+func (x *PublishTierVersionResponse) GetReassignedCount() int32 {
+	if x != nil {
+		return x.ReassignedCount
+	}
+	return 0
 }
 
 type RetireTierVersionRequest struct {
@@ -1028,7 +1118,7 @@ type RetireTierVersionRequest struct {
 
 func (x *RetireTierVersionRequest) Reset() {
 	*x = RetireTierVersionRequest{}
-	mi := &file_plans_v1_plans_proto_msgTypes[17]
+	mi := &file_plans_v1_plans_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1040,7 +1130,7 @@ func (x *RetireTierVersionRequest) String() string {
 func (*RetireTierVersionRequest) ProtoMessage() {}
 
 func (x *RetireTierVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[17]
+	mi := &file_plans_v1_plans_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1053,7 +1143,7 @@ func (x *RetireTierVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetireTierVersionRequest.ProtoReflect.Descriptor instead.
 func (*RetireTierVersionRequest) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{17}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RetireTierVersionRequest) GetId() string {
@@ -1087,7 +1177,7 @@ type RetireTierVersionResponse struct {
 
 func (x *RetireTierVersionResponse) Reset() {
 	*x = RetireTierVersionResponse{}
-	mi := &file_plans_v1_plans_proto_msgTypes[18]
+	mi := &file_plans_v1_plans_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1099,7 +1189,7 @@ func (x *RetireTierVersionResponse) String() string {
 func (*RetireTierVersionResponse) ProtoMessage() {}
 
 func (x *RetireTierVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[18]
+	mi := &file_plans_v1_plans_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1112,7 +1202,7 @@ func (x *RetireTierVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetireTierVersionResponse.ProtoReflect.Descriptor instead.
 func (*RetireTierVersionResponse) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{18}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RetireTierVersionResponse) GetVersion() *TierVersion {
@@ -1138,7 +1228,7 @@ type DeleteTierVersionRequest struct {
 
 func (x *DeleteTierVersionRequest) Reset() {
 	*x = DeleteTierVersionRequest{}
-	mi := &file_plans_v1_plans_proto_msgTypes[19]
+	mi := &file_plans_v1_plans_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1150,7 +1240,7 @@ func (x *DeleteTierVersionRequest) String() string {
 func (*DeleteTierVersionRequest) ProtoMessage() {}
 
 func (x *DeleteTierVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[19]
+	mi := &file_plans_v1_plans_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1163,7 +1253,7 @@ func (x *DeleteTierVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTierVersionRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTierVersionRequest) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{19}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *DeleteTierVersionRequest) GetId() string {
@@ -1181,7 +1271,7 @@ type DeleteTierVersionResponse struct {
 
 func (x *DeleteTierVersionResponse) Reset() {
 	*x = DeleteTierVersionResponse{}
-	mi := &file_plans_v1_plans_proto_msgTypes[20]
+	mi := &file_plans_v1_plans_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1193,7 +1283,7 @@ func (x *DeleteTierVersionResponse) String() string {
 func (*DeleteTierVersionResponse) ProtoMessage() {}
 
 func (x *DeleteTierVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[20]
+	mi := &file_plans_v1_plans_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1206,7 +1296,7 @@ func (x *DeleteTierVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTierVersionResponse.ProtoReflect.Descriptor instead.
 func (*DeleteTierVersionResponse) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{20}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{21}
 }
 
 type ListTierVersionAssignmentsRequest struct {
@@ -1220,7 +1310,7 @@ type ListTierVersionAssignmentsRequest struct {
 
 func (x *ListTierVersionAssignmentsRequest) Reset() {
 	*x = ListTierVersionAssignmentsRequest{}
-	mi := &file_plans_v1_plans_proto_msgTypes[21]
+	mi := &file_plans_v1_plans_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1232,7 +1322,7 @@ func (x *ListTierVersionAssignmentsRequest) String() string {
 func (*ListTierVersionAssignmentsRequest) ProtoMessage() {}
 
 func (x *ListTierVersionAssignmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[21]
+	mi := &file_plans_v1_plans_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1245,7 +1335,7 @@ func (x *ListTierVersionAssignmentsRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ListTierVersionAssignmentsRequest.ProtoReflect.Descriptor instead.
 func (*ListTierVersionAssignmentsRequest) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{21}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListTierVersionAssignmentsRequest) GetTierVersionId() string {
@@ -1279,7 +1369,7 @@ type ListTierVersionAssignmentsResponse struct {
 
 func (x *ListTierVersionAssignmentsResponse) Reset() {
 	*x = ListTierVersionAssignmentsResponse{}
-	mi := &file_plans_v1_plans_proto_msgTypes[22]
+	mi := &file_plans_v1_plans_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1291,7 +1381,7 @@ func (x *ListTierVersionAssignmentsResponse) String() string {
 func (*ListTierVersionAssignmentsResponse) ProtoMessage() {}
 
 func (x *ListTierVersionAssignmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[22]
+	mi := &file_plans_v1_plans_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1304,7 +1394,7 @@ func (x *ListTierVersionAssignmentsResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ListTierVersionAssignmentsResponse.ProtoReflect.Descriptor instead.
 func (*ListTierVersionAssignmentsResponse) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{22}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListTierVersionAssignmentsResponse) GetAssignments() []*VersionAssignment {
@@ -1333,7 +1423,7 @@ type VersionAssignment struct {
 
 func (x *VersionAssignment) Reset() {
 	*x = VersionAssignment{}
-	mi := &file_plans_v1_plans_proto_msgTypes[23]
+	mi := &file_plans_v1_plans_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1345,7 +1435,7 @@ func (x *VersionAssignment) String() string {
 func (*VersionAssignment) ProtoMessage() {}
 
 func (x *VersionAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[23]
+	mi := &file_plans_v1_plans_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1358,7 +1448,7 @@ func (x *VersionAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionAssignment.ProtoReflect.Descriptor instead.
 func (*VersionAssignment) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{23}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *VersionAssignment) GetTenantId() string {
@@ -1393,7 +1483,7 @@ type SetTenantTierVersionRequest struct {
 
 func (x *SetTenantTierVersionRequest) Reset() {
 	*x = SetTenantTierVersionRequest{}
-	mi := &file_plans_v1_plans_proto_msgTypes[24]
+	mi := &file_plans_v1_plans_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1405,7 +1495,7 @@ func (x *SetTenantTierVersionRequest) String() string {
 func (*SetTenantTierVersionRequest) ProtoMessage() {}
 
 func (x *SetTenantTierVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[24]
+	mi := &file_plans_v1_plans_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1418,7 +1508,7 @@ func (x *SetTenantTierVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTenantTierVersionRequest.ProtoReflect.Descriptor instead.
 func (*SetTenantTierVersionRequest) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{24}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SetTenantTierVersionRequest) GetTenantId() string {
@@ -1452,7 +1542,7 @@ type SetTenantTierVersionResponse struct {
 
 func (x *SetTenantTierVersionResponse) Reset() {
 	*x = SetTenantTierVersionResponse{}
-	mi := &file_plans_v1_plans_proto_msgTypes[25]
+	mi := &file_plans_v1_plans_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1464,7 +1554,7 @@ func (x *SetTenantTierVersionResponse) String() string {
 func (*SetTenantTierVersionResponse) ProtoMessage() {}
 
 func (x *SetTenantTierVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plans_v1_plans_proto_msgTypes[25]
+	mi := &file_plans_v1_plans_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1477,7 +1567,7 @@ func (x *SetTenantTierVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTenantTierVersionResponse.ProtoReflect.Descriptor instead.
 func (*SetTenantTierVersionResponse) Descriptor() ([]byte, []int) {
-	return file_plans_v1_plans_proto_rawDescGZIP(), []int{25}
+	return file_plans_v1_plans_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SetTenantTierVersionResponse) GetTenantId() string {
@@ -1562,12 +1652,20 @@ const file_plans_v1_plans_proto_rawDesc = "" +
 	"\fentitlements\x18\x03 \x01(\v2\x17.google.protobuf.StructR\fentitlements\x12'\n" +
 	"\x06prices\x18\x04 \x03(\v2\x0f.plans.v1.PriceR\x06prices\"Q\n" +
 	"\x1eUpdateTierVersionDraftResponse\x12/\n" +
-	"\aversion\x18\x01 \x01(\v2\x15.plans.v1.TierVersionR\aversion\"P\n" +
+	"\aversion\x18\x01 \x01(\v2\x15.plans.v1.TierVersionR\aversion\"\x8e\x01\n" +
 	"\x19PublishTierVersionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
-	"\rchange_reason\x18\x02 \x01(\tR\fchangeReason\"M\n" +
+	"\rchange_reason\x18\x02 \x01(\tR\fchangeReason\x12<\n" +
+	"\tsupersede\x18\x03 \x01(\v2\x1e.plans.v1.SupersedeTierVersionR\tsupersede\"\x7f\n" +
+	"\x14SupersedeTierVersion\x12\x1d\n" +
+	"\n" +
+	"version_id\x18\x01 \x01(\tR\tversionId\x12\x14\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\x122\n" +
+	"\x15reassign_to_published\x18\x03 \x01(\bR\x13reassignToPublished\"\xbe\x01\n" +
 	"\x1aPublishTierVersionResponse\x12/\n" +
-	"\aversion\x18\x01 \x01(\v2\x15.plans.v1.TierVersionR\aversion\"u\n" +
+	"\aversion\x18\x01 \x01(\v2\x15.plans.v1.TierVersionR\aversion\x12D\n" +
+	"\x12superseded_version\x18\x02 \x01(\v2\x15.plans.v1.TierVersionR\x11supersededVersion\x12)\n" +
+	"\x10reassigned_count\x18\x03 \x01(\x05R\x0freassignedCount\"u\n" +
 	"\x18RetireTierVersionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x123\n" +
@@ -1625,7 +1723,7 @@ func file_plans_v1_plans_proto_rawDescGZIP() []byte {
 	return file_plans_v1_plans_proto_rawDescData
 }
 
-var file_plans_v1_plans_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_plans_v1_plans_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_plans_v1_plans_proto_goTypes = []any{
 	(*TierVersion)(nil),                        // 0: plans.v1.TierVersion
 	(*Price)(nil),                              // 1: plans.v1.Price
@@ -1643,67 +1741,70 @@ var file_plans_v1_plans_proto_goTypes = []any{
 	(*UpdateTierVersionDraftRequest)(nil),      // 13: plans.v1.UpdateTierVersionDraftRequest
 	(*UpdateTierVersionDraftResponse)(nil),     // 14: plans.v1.UpdateTierVersionDraftResponse
 	(*PublishTierVersionRequest)(nil),          // 15: plans.v1.PublishTierVersionRequest
-	(*PublishTierVersionResponse)(nil),         // 16: plans.v1.PublishTierVersionResponse
-	(*RetireTierVersionRequest)(nil),           // 17: plans.v1.RetireTierVersionRequest
-	(*RetireTierVersionResponse)(nil),          // 18: plans.v1.RetireTierVersionResponse
-	(*DeleteTierVersionRequest)(nil),           // 19: plans.v1.DeleteTierVersionRequest
-	(*DeleteTierVersionResponse)(nil),          // 20: plans.v1.DeleteTierVersionResponse
-	(*ListTierVersionAssignmentsRequest)(nil),  // 21: plans.v1.ListTierVersionAssignmentsRequest
-	(*ListTierVersionAssignmentsResponse)(nil), // 22: plans.v1.ListTierVersionAssignmentsResponse
-	(*VersionAssignment)(nil),                  // 23: plans.v1.VersionAssignment
-	(*SetTenantTierVersionRequest)(nil),        // 24: plans.v1.SetTenantTierVersionRequest
-	(*SetTenantTierVersionResponse)(nil),       // 25: plans.v1.SetTenantTierVersionResponse
-	(*structpb.Struct)(nil),                    // 26: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),              // 27: google.protobuf.Timestamp
+	(*SupersedeTierVersion)(nil),               // 16: plans.v1.SupersedeTierVersion
+	(*PublishTierVersionResponse)(nil),         // 17: plans.v1.PublishTierVersionResponse
+	(*RetireTierVersionRequest)(nil),           // 18: plans.v1.RetireTierVersionRequest
+	(*RetireTierVersionResponse)(nil),          // 19: plans.v1.RetireTierVersionResponse
+	(*DeleteTierVersionRequest)(nil),           // 20: plans.v1.DeleteTierVersionRequest
+	(*DeleteTierVersionResponse)(nil),          // 21: plans.v1.DeleteTierVersionResponse
+	(*ListTierVersionAssignmentsRequest)(nil),  // 22: plans.v1.ListTierVersionAssignmentsRequest
+	(*ListTierVersionAssignmentsResponse)(nil), // 23: plans.v1.ListTierVersionAssignmentsResponse
+	(*VersionAssignment)(nil),                  // 24: plans.v1.VersionAssignment
+	(*SetTenantTierVersionRequest)(nil),        // 25: plans.v1.SetTenantTierVersionRequest
+	(*SetTenantTierVersionResponse)(nil),       // 26: plans.v1.SetTenantTierVersionResponse
+	(*structpb.Struct)(nil),                    // 27: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),              // 28: google.protobuf.Timestamp
 }
 var file_plans_v1_plans_proto_depIdxs = []int32{
-	26, // 0: plans.v1.TierVersion.entitlements:type_name -> google.protobuf.Struct
+	27, // 0: plans.v1.TierVersion.entitlements:type_name -> google.protobuf.Struct
 	1,  // 1: plans.v1.TierVersion.prices:type_name -> plans.v1.Price
-	27, // 2: plans.v1.TierVersion.created_at:type_name -> google.protobuf.Timestamp
-	27, // 3: plans.v1.TierVersion.published_at:type_name -> google.protobuf.Timestamp
-	27, // 4: plans.v1.TierVersion.retired_at:type_name -> google.protobuf.Timestamp
+	28, // 2: plans.v1.TierVersion.created_at:type_name -> google.protobuf.Timestamp
+	28, // 3: plans.v1.TierVersion.published_at:type_name -> google.protobuf.Timestamp
+	28, // 4: plans.v1.TierVersion.retired_at:type_name -> google.protobuf.Timestamp
 	0,  // 5: plans.v1.ListTierVersionsResponse.versions:type_name -> plans.v1.TierVersion
 	0,  // 6: plans.v1.GetTierVersionResponse.version:type_name -> plans.v1.TierVersion
 	2,  // 7: plans.v1.ListFeaturesResponse.features:type_name -> plans.v1.Feature
 	0,  // 8: plans.v1.GetTenantEntitlementsResponse.version:type_name -> plans.v1.TierVersion
-	26, // 9: plans.v1.CreateTierVersionRequest.entitlements:type_name -> google.protobuf.Struct
+	27, // 9: plans.v1.CreateTierVersionRequest.entitlements:type_name -> google.protobuf.Struct
 	1,  // 10: plans.v1.CreateTierVersionRequest.prices:type_name -> plans.v1.Price
 	0,  // 11: plans.v1.CreateTierVersionResponse.version:type_name -> plans.v1.TierVersion
-	26, // 12: plans.v1.UpdateTierVersionDraftRequest.entitlements:type_name -> google.protobuf.Struct
+	27, // 12: plans.v1.UpdateTierVersionDraftRequest.entitlements:type_name -> google.protobuf.Struct
 	1,  // 13: plans.v1.UpdateTierVersionDraftRequest.prices:type_name -> plans.v1.Price
 	0,  // 14: plans.v1.UpdateTierVersionDraftResponse.version:type_name -> plans.v1.TierVersion
-	0,  // 15: plans.v1.PublishTierVersionResponse.version:type_name -> plans.v1.TierVersion
-	0,  // 16: plans.v1.RetireTierVersionResponse.version:type_name -> plans.v1.TierVersion
-	23, // 17: plans.v1.ListTierVersionAssignmentsResponse.assignments:type_name -> plans.v1.VersionAssignment
-	27, // 18: plans.v1.VersionAssignment.valid_from:type_name -> google.protobuf.Timestamp
-	0,  // 19: plans.v1.SetTenantTierVersionResponse.version:type_name -> plans.v1.TierVersion
-	3,  // 20: plans.v1.PlanAdminService.ListTierVersions:input_type -> plans.v1.ListTierVersionsRequest
-	5,  // 21: plans.v1.PlanAdminService.GetTierVersion:input_type -> plans.v1.GetTierVersionRequest
-	7,  // 22: plans.v1.PlanAdminService.ListFeatures:input_type -> plans.v1.ListFeaturesRequest
-	9,  // 23: plans.v1.PlanAdminService.GetTenantEntitlements:input_type -> plans.v1.GetTenantEntitlementsRequest
-	11, // 24: plans.v1.PlanAdminService.CreateTierVersion:input_type -> plans.v1.CreateTierVersionRequest
-	13, // 25: plans.v1.PlanAdminService.UpdateTierVersionDraft:input_type -> plans.v1.UpdateTierVersionDraftRequest
-	15, // 26: plans.v1.PlanAdminService.PublishTierVersion:input_type -> plans.v1.PublishTierVersionRequest
-	17, // 27: plans.v1.PlanAdminService.RetireTierVersion:input_type -> plans.v1.RetireTierVersionRequest
-	19, // 28: plans.v1.PlanAdminService.DeleteTierVersion:input_type -> plans.v1.DeleteTierVersionRequest
-	21, // 29: plans.v1.PlanAdminService.ListTierVersionAssignments:input_type -> plans.v1.ListTierVersionAssignmentsRequest
-	24, // 30: plans.v1.PlanAdminService.SetTenantTierVersion:input_type -> plans.v1.SetTenantTierVersionRequest
-	4,  // 31: plans.v1.PlanAdminService.ListTierVersions:output_type -> plans.v1.ListTierVersionsResponse
-	6,  // 32: plans.v1.PlanAdminService.GetTierVersion:output_type -> plans.v1.GetTierVersionResponse
-	8,  // 33: plans.v1.PlanAdminService.ListFeatures:output_type -> plans.v1.ListFeaturesResponse
-	10, // 34: plans.v1.PlanAdminService.GetTenantEntitlements:output_type -> plans.v1.GetTenantEntitlementsResponse
-	12, // 35: plans.v1.PlanAdminService.CreateTierVersion:output_type -> plans.v1.CreateTierVersionResponse
-	14, // 36: plans.v1.PlanAdminService.UpdateTierVersionDraft:output_type -> plans.v1.UpdateTierVersionDraftResponse
-	16, // 37: plans.v1.PlanAdminService.PublishTierVersion:output_type -> plans.v1.PublishTierVersionResponse
-	18, // 38: plans.v1.PlanAdminService.RetireTierVersion:output_type -> plans.v1.RetireTierVersionResponse
-	20, // 39: plans.v1.PlanAdminService.DeleteTierVersion:output_type -> plans.v1.DeleteTierVersionResponse
-	22, // 40: plans.v1.PlanAdminService.ListTierVersionAssignments:output_type -> plans.v1.ListTierVersionAssignmentsResponse
-	25, // 41: plans.v1.PlanAdminService.SetTenantTierVersion:output_type -> plans.v1.SetTenantTierVersionResponse
-	31, // [31:42] is the sub-list for method output_type
-	20, // [20:31] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	16, // 15: plans.v1.PublishTierVersionRequest.supersede:type_name -> plans.v1.SupersedeTierVersion
+	0,  // 16: plans.v1.PublishTierVersionResponse.version:type_name -> plans.v1.TierVersion
+	0,  // 17: plans.v1.PublishTierVersionResponse.superseded_version:type_name -> plans.v1.TierVersion
+	0,  // 18: plans.v1.RetireTierVersionResponse.version:type_name -> plans.v1.TierVersion
+	24, // 19: plans.v1.ListTierVersionAssignmentsResponse.assignments:type_name -> plans.v1.VersionAssignment
+	28, // 20: plans.v1.VersionAssignment.valid_from:type_name -> google.protobuf.Timestamp
+	0,  // 21: plans.v1.SetTenantTierVersionResponse.version:type_name -> plans.v1.TierVersion
+	3,  // 22: plans.v1.PlanAdminService.ListTierVersions:input_type -> plans.v1.ListTierVersionsRequest
+	5,  // 23: plans.v1.PlanAdminService.GetTierVersion:input_type -> plans.v1.GetTierVersionRequest
+	7,  // 24: plans.v1.PlanAdminService.ListFeatures:input_type -> plans.v1.ListFeaturesRequest
+	9,  // 25: plans.v1.PlanAdminService.GetTenantEntitlements:input_type -> plans.v1.GetTenantEntitlementsRequest
+	11, // 26: plans.v1.PlanAdminService.CreateTierVersion:input_type -> plans.v1.CreateTierVersionRequest
+	13, // 27: plans.v1.PlanAdminService.UpdateTierVersionDraft:input_type -> plans.v1.UpdateTierVersionDraftRequest
+	15, // 28: plans.v1.PlanAdminService.PublishTierVersion:input_type -> plans.v1.PublishTierVersionRequest
+	18, // 29: plans.v1.PlanAdminService.RetireTierVersion:input_type -> plans.v1.RetireTierVersionRequest
+	20, // 30: plans.v1.PlanAdminService.DeleteTierVersion:input_type -> plans.v1.DeleteTierVersionRequest
+	22, // 31: plans.v1.PlanAdminService.ListTierVersionAssignments:input_type -> plans.v1.ListTierVersionAssignmentsRequest
+	25, // 32: plans.v1.PlanAdminService.SetTenantTierVersion:input_type -> plans.v1.SetTenantTierVersionRequest
+	4,  // 33: plans.v1.PlanAdminService.ListTierVersions:output_type -> plans.v1.ListTierVersionsResponse
+	6,  // 34: plans.v1.PlanAdminService.GetTierVersion:output_type -> plans.v1.GetTierVersionResponse
+	8,  // 35: plans.v1.PlanAdminService.ListFeatures:output_type -> plans.v1.ListFeaturesResponse
+	10, // 36: plans.v1.PlanAdminService.GetTenantEntitlements:output_type -> plans.v1.GetTenantEntitlementsResponse
+	12, // 37: plans.v1.PlanAdminService.CreateTierVersion:output_type -> plans.v1.CreateTierVersionResponse
+	14, // 38: plans.v1.PlanAdminService.UpdateTierVersionDraft:output_type -> plans.v1.UpdateTierVersionDraftResponse
+	17, // 39: plans.v1.PlanAdminService.PublishTierVersion:output_type -> plans.v1.PublishTierVersionResponse
+	19, // 40: plans.v1.PlanAdminService.RetireTierVersion:output_type -> plans.v1.RetireTierVersionResponse
+	21, // 41: plans.v1.PlanAdminService.DeleteTierVersion:output_type -> plans.v1.DeleteTierVersionResponse
+	23, // 42: plans.v1.PlanAdminService.ListTierVersionAssignments:output_type -> plans.v1.ListTierVersionAssignmentsResponse
+	26, // 43: plans.v1.PlanAdminService.SetTenantTierVersion:output_type -> plans.v1.SetTenantTierVersionResponse
+	33, // [33:44] is the sub-list for method output_type
+	22, // [22:33] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_plans_v1_plans_proto_init() }
@@ -1717,7 +1818,7 @@ func file_plans_v1_plans_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plans_v1_plans_proto_rawDesc), len(file_plans_v1_plans_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

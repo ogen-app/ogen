@@ -244,26 +244,87 @@ func (s *planAdminService) PublishTierVersion(ctx context.Context, req *plansv1.
 	if changeReason == "" {
 		return nil, status.Error(codes.InvalidArgument, "change_reason is required to publish")
 	}
-	if err := s.versions.Publish(ctx, id, changeReason, time.Now().UTC()); err != nil {
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			return nil, status.Error(codes.NotFound, "tier version not found")
-		case errors.Is(err, repository.ErrVersionNotDraft):
-			return nil, status.Error(codes.FailedPrecondition, "only a draft version can be published")
-		default:
-			return nil, s.internal(ctx, "publish tier version", err)
-		}
+	supersede, err := supersedeOptions(id, req.GetSupersede())
+	if err != nil {
+		return nil, err
 	}
-	slog.InfoContext(ctx, "tier version published", logging.AttrComponent, "grpcserver", "version_id", id)
+	reassigned, err := s.versions.Publish(ctx, id, changeReason, supersede, time.Now().UTC())
+	if err != nil {
+		return nil, s.publishError(ctx, supersede.VersionID, err)
+	}
+	if reassigned > 0 {
+		metricTierVersionReassignments.Add(int64(reassigned))
+	}
+	slog.InfoContext(ctx, "tier version published", logging.AttrComponent, "grpcserver",
+		"version_id", id, "superseded_version_id", supersede.VersionID, "reassigned", reassigned)
 	tv, err := s.versionProto(ctx, id)
 	if err != nil {
 		return nil, s.internal(ctx, "publish tier version", err)
+	}
+	resp := &plansv1.PublishTierVersionResponse{Version: tv, ReassignedCount: int32(reassigned)}
+	if supersede.VersionID != "" {
+		metricTierVersionsRetired.Add(1)
+		if resp.SupersededVersion, err = s.versionProto(ctx, supersede.VersionID); err != nil {
+			return nil, s.internal(ctx, "publish tier version", err)
+		}
 	}
 	s.warnIfManyActiveVersions(ctx, tv.GetTierId())
 	if s.afterPublish != nil {
 		s.afterPublish(ctx)
 	}
-	return &plansv1.PublishTierVersionResponse{Version: tv}, nil
+	return resp, nil
+}
+
+// supersedeOptions validates a publish's optional supersede block.
+func supersedeOptions(id string, in *plansv1.SupersedeTierVersion) (repository.SupersedeOptions, error) {
+	if in == nil {
+		return repository.SupersedeOptions{}, nil
+	}
+	out := repository.SupersedeOptions{
+		VersionID:           strings.TrimSpace(in.GetVersionId()),
+		Force:               in.GetForce(),
+		ReassignToPublished: in.GetReassignToPublished(),
+	}
+	switch {
+	case out.VersionID == "":
+		return out, status.Error(codes.InvalidArgument, "supersede.version_id is required")
+	case out.VersionID == id:
+		return out, status.Error(codes.InvalidArgument, "supersede.version_id must differ from the version being published")
+	case out.Force && out.ReassignToPublished:
+		return out, status.Error(codes.InvalidArgument, "supersede.force and supersede.reassign_to_published are mutually exclusive")
+	}
+	return out, nil
+}
+
+// publishError maps a Publish failure to a gRPC status.
+func (s *planAdminService) publishError(ctx context.Context, supersededID string, err error) error {
+	if clash, ok := errors.AsType[*repository.PurchasableVersionExistsError](err); ok {
+		which := "another version"
+		if clash.Version > 0 {
+			which = fmt.Sprintf("v%d", clash.Version)
+		}
+		return status.Errorf(codes.FailedPrecondition,
+			"purchasable_version_exists: tier already has an active purchasable version (%s); supersede it or retire it first", which)
+	}
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return status.Error(codes.NotFound, "tier version not found")
+	case errors.Is(err, repository.ErrVersionNotDraft):
+		return status.Error(codes.FailedPrecondition, "only a draft version can be published")
+	case errors.Is(err, repository.ErrSupersedeTargetNotFound):
+		return status.Error(codes.NotFound, "supersede.version_id not found")
+	case errors.Is(err, repository.ErrSupersedeTargetNotActive):
+		return status.Error(codes.FailedPrecondition, "supersede.version_id must be an active version")
+	case errors.Is(err, repository.ErrSupersedeTargetOtherTier):
+		return status.Error(codes.InvalidArgument, "supersede.version_id must be a version of the same tier")
+	case errors.Is(err, repository.ErrSupersedeTargetIsSelf):
+		return status.Error(codes.InvalidArgument, "supersede.version_id must differ from the version being published")
+	case errors.Is(err, repository.ErrVersionHasLiveAssignments):
+		return s.liveAssignmentError(ctx, supersededID,
+			"pass supersede.reassign_to_published to move them onto the new version, or supersede.force to grandfather")
+	default:
+		return s.internal(ctx, "publish tier version", err)
+	}
 }
 
 func (s *planAdminService) RetireTierVersion(ctx context.Context, req *plansv1.RetireTierVersionRequest) (*plansv1.RetireTierVersionResponse, error) {
@@ -308,7 +369,7 @@ func (s *planAdminService) RetireTierVersion(ctx context.Context, req *plansv1.R
 		case errors.Is(err, repository.ErrReassignTargetIsSelf):
 			return nil, status.Error(codes.InvalidArgument, "reassign_to_version_id must differ from the version being retired")
 		case errors.Is(err, repository.ErrVersionHasLiveAssignments):
-			return nil, s.liveAssignmentError(ctx, id)
+			return nil, s.liveAssignmentError(ctx, id, "pass reassign_to_version_id to migrate them, or force to grandfather")
 		default:
 			return nil, s.internal(ctx, "retire tier version", err)
 		}
@@ -384,19 +445,18 @@ func (s *planAdminService) ListTierVersionAssignments(ctx context.Context, req *
 // liveAssignmentError builds the FailedPrecondition returned when a retire is
 // refused, naming a bounded sample of the blocking tenants so the operator can
 // act without a second call.
-func (s *planAdminService) liveAssignmentError(ctx context.Context, versionID string) error {
+func (s *planAdminService) liveAssignmentError(ctx context.Context, versionID, hint string) error {
 	const sampleSize = 10
 	sample, err := s.versions.TenantsOnVersion(ctx, versionID, sampleSize, 0)
 	if err != nil || len(sample) == 0 {
-		return status.Error(codes.FailedPrecondition, "tier version still has live assignments; pass reassign_to_version_id to migrate them, or force to grandfather")
+		return status.Error(codes.FailedPrecondition, "tier version still has live assignments; "+hint)
 	}
 	ids := make([]string, 0, len(sample))
 	for i := range sample {
 		ids = append(ids, sample[i].TenantID)
 	}
 	return status.Error(codes.FailedPrecondition, fmt.Sprintf(
-		"tier version still has live assignments (%s); pass reassign_to_version_id to migrate them, or force to grandfather",
-		strings.Join(ids, ", ")))
+		"tier version still has live assignments (%s); %s", strings.Join(ids, ", "), hint))
 }
 
 // warnIfManyActiveVersions logs when a tier carries more than a few concurrent

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/uptrace/bun"
@@ -124,12 +125,38 @@ func TestPlanAdminRoundTrip(t *testing.T) {
 	if _, err := cli.PublishTierVersion(ctx, &plansv1.PublishTierVersionRequest{Id: draftID}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("publish w/o reason: code = %v, want InvalidArgument", status.Code(err))
 	}
-	pub, err := cli.PublishTierVersion(ctx, &plansv1.PublishTierVersionRequest{Id: draftID, ChangeReason: "trial refresh"})
+	// trial-v1 is still on sale, so a second purchasable version must supersede it.
+	_, err = cli.PublishTierVersion(ctx, &plansv1.PublishTierVersionRequest{Id: draftID, ChangeReason: "trial refresh"})
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(status.Convert(err).Message(), "purchasable_version_exists") || !strings.Contains(status.Convert(err).Message(), "(v1)") {
+		t.Fatalf("publish beside trial-v1: err = %v, want FailedPrecondition purchasable_version_exists (v1)", err)
+	}
+	for name, bad := range map[string]*plansv1.SupersedeTierVersion{
+		"no version":     {Force: true},
+		"self":           {VersionId: draftID, Force: true},
+		"both flags":     {VersionId: "ttv-trial-v1", Force: true, ReassignToPublished: true},
+		"other tier":     {VersionId: "ttv-default-v1", Force: true},
+		"missing target": {VersionId: "ttv-nope", Force: true},
+	} {
+		want := codes.InvalidArgument
+		if name == "missing target" {
+			want = codes.NotFound
+		}
+		if _, err := cli.PublishTierVersion(ctx, &plansv1.PublishTierVersionRequest{Id: draftID, ChangeReason: "x", Supersede: bad}); status.Code(err) != want {
+			t.Fatalf("supersede %s: code = %v, want %v", name, status.Code(err), want)
+		}
+	}
+	pub, err := cli.PublishTierVersion(ctx, &plansv1.PublishTierVersionRequest{
+		Id: draftID, ChangeReason: "trial refresh",
+		Supersede: &plansv1.SupersedeTierVersion{VersionId: "ttv-trial-v1", ReassignToPublished: true},
+	})
 	if err != nil {
 		t.Fatalf("PublishTierVersion: %v", err)
 	}
 	if pub.GetVersion().GetStatus() != "active" {
 		t.Fatalf("published status = %q, want active", pub.GetVersion().GetStatus())
+	}
+	if pub.GetSupersededVersion().GetId() != "ttv-trial-v1" || pub.GetSupersededVersion().GetStatus() != "retired" {
+		t.Fatalf("superseded version = %+v, want ttv-trial-v1 retired", pub.GetSupersededVersion())
 	}
 
 	// A published version can no longer be edited as a draft.
@@ -229,9 +256,10 @@ func TestPlanAdminRetireDeleteRoundTrip(t *testing.T) {
 	ctx := t.Context()
 	cli := newPlanAdminClient(t, db, "plan-admin-token")
 
-	// mkActive publishes a fresh active trial version (cloned from trial-v1).
+	// mkActive publishes a fresh active, non-purchasable trial version (cloned
+	// from trial-v1, which stays the one on sale).
 	mkActive := func(reason string) string {
-		c, err := cli.CreateTierVersion(ctx, &plansv1.CreateTierVersionRequest{TierId: "trial", Purchasable: true, CloneFromVersionId: "ttv-trial-v1"})
+		c, err := cli.CreateTierVersion(ctx, &plansv1.CreateTierVersionRequest{TierId: "trial", CloneFromVersionId: "ttv-trial-v1"})
 		if err != nil {
 			t.Fatalf("create %s: %v", reason, err)
 		}

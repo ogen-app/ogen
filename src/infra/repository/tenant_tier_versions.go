@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -22,7 +23,37 @@ var (
 	ErrReassignTargetNotFound  = errors.New("reassignment target version not found")
 	ErrReassignTargetNotActive = errors.New("reassignment target version is not active")
 	ErrReassignTargetIsSelf    = errors.New("reassignment target is the version being retired")
+
+	// ErrPurchasableVersionExists means another active purchasable version of
+	// the tier is on sale; it is the target of PurchasableVersionExistsError.
+	ErrPurchasableVersionExists = errors.New("tier already has an active purchasable version")
+
+	// Supersede-target sentinels for a publish that retires another version.
+	ErrSupersedeTargetNotFound  = errors.New("superseded version not found")
+	ErrSupersedeTargetNotActive = errors.New("superseded version is not active")
+	ErrSupersedeTargetOtherTier = errors.New("superseded version belongs to another tier")
+	ErrSupersedeTargetIsSelf    = errors.New("superseded version is the version being published")
 )
+
+// activePurchasableIndex is the partial unique index allowing one active
+// purchasable version per tier.
+const activePurchasableIndex = "uq_tenant_tier_versions_active_purchasable"
+
+// PurchasableVersionExistsError names the active purchasable version that
+// blocks a publish. Version is 0 when only the unique index caught the clash
+// (a concurrent publish), so the conflicting row is unknown.
+type PurchasableVersionExistsError struct {
+	VersionID string
+	Version   int
+}
+
+func (e *PurchasableVersionExistsError) Error() string {
+	return ErrPurchasableVersionExists.Error()
+}
+
+func (e *PurchasableVersionExistsError) Is(target error) bool {
+	return target == ErrPurchasableVersionExists
+}
 
 // RetireOptions tunes how a retire handles a version that still has live
 // assignments. Force and ReassignToVersionID are mutually exclusive —
@@ -34,6 +65,18 @@ type RetireOptions struct {
 	// ReassignToVersionID, when non-empty, migrates every live assignment onto
 	// that (different, active) version before retiring, in the same transaction.
 	ReassignToVersionID string
+}
+
+// SupersedeOptions names the active version of the same tier that a publish
+// retires in its own transaction, so the tier never goes without a version on
+// sale. Live assignments on it block the publish unless Force grandfathers them
+// on the retired version or ReassignToPublished moves them onto the published
+// one; the two are mutually exclusive and the caller enforces that. The zero
+// value supersedes nothing.
+type SupersedeOptions struct {
+	VersionID           string
+	Force               bool
+	ReassignToPublished bool
 }
 
 // TenantTierVersionRepository reads the immutable tier-version snapshots + their
@@ -65,8 +108,15 @@ type TenantTierVersionRepository interface {
 	// sql.ErrNoRows if it does not exist.
 	UpdateDraft(ctx context.Context, v *models.TenantTierVersion, prices []models.TenantTierVersionPrice) error
 	// Publish transitions a draft version to active (sets change_reason +
-	// published_at). Returns ErrVersionNotDraft otherwise.
-	Publish(ctx context.Context, id, changeReason string, at time.Time) error
+	// published_at), first retiring supersede.VersionID when set, and returns
+	// how many tenants it moved onto the published version (0 unless
+	// supersede.ReassignToPublished). Returns ErrVersionNotDraft if the version
+	// is not a draft, a *PurchasableVersionExistsError when a purchasable draft
+	// would make a second active purchasable version of its tier,
+	// ErrVersionHasLiveAssignments when the superseded version still has
+	// tenants and neither flag is set, and the ErrSupersedeTarget* sentinels
+	// for a bad supersede target.
+	Publish(ctx context.Context, id, changeReason string, supersede SupersedeOptions, at time.Time) (int, error)
 	// DeleteDraft hard-deletes a DRAFT version; its price rows cascade. Returns
 	// ErrVersionNotDraft for a published version, sql.ErrNoRows if it does not
 	// exist. The immutability trigger is the backstop.
@@ -224,22 +274,129 @@ func (r *tenantTierVersionRepository) UpdateDraft(ctx context.Context, v *models
 	})
 }
 
-func (r *tenantTierVersionRepository) Publish(ctx context.Context, id, changeReason string, at time.Time) error {
-	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		status, err := versionStatusForUpdateTx(ctx, tx, id)
+func (r *tenantTierVersionRepository) Publish(ctx context.Context, id, changeReason string, supersede SupersedeOptions, at time.Time) (int, error) {
+	reassigned := 0
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		reassigned = 0 // reset on retry
+		draft, err := lockVersionTx(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if status != models.TierVersionStatusDraft {
+		if draft.Status != models.TierVersionStatusDraft {
 			return ErrVersionNotDraft
 		}
-		_, err = tx.NewUpdate().Model((*models.TenantTierVersion)(nil)).
+		if supersede.VersionID != "" {
+			if err := retireSupersededTx(ctx, tx, draft, supersede, at); err != nil {
+				return err
+			}
+		}
+		if draft.Purchasable {
+			if err := checkNoActivePurchasableTx(ctx, tx, draft.TierID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.NewUpdate().Model((*models.TenantTierVersion)(nil)).
 			Set("status = ?", models.TierVersionStatusActive).
 			Set("change_reason = ?", changeReason).
 			Set("published_at = ?", at).
-			Where("id = ?", id).Exec(ctx)
-		return err
+			Where("id = ?", id).Exec(ctx); err != nil {
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" && pgErr.ConstraintName == activePurchasableIndex {
+				return &PurchasableVersionExistsError{}
+			}
+			return err
+		}
+		if supersede.ReassignToPublished {
+			n, err := migrateOpenAssignmentsTx(ctx, tx, supersede.VersionID, id, at)
+			if err != nil {
+				return err
+			}
+			reassigned = n
+		}
+		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return reassigned, nil
+}
+
+// lockedVersion is the part of a version row a lifecycle transition decides on.
+type lockedVersion struct {
+	ID          string `bun:"id"`
+	TierID      string `bun:"tier_id"`
+	Status      string `bun:"status"`
+	Purchasable bool   `bun:"purchasable"`
+}
+
+// lockVersionTx locks a version row and returns what a transition needs
+// (sql.ErrNoRows if it does not exist).
+func lockVersionTx(ctx context.Context, tx bun.Tx, id string) (lockedVersion, error) {
+	var v lockedVersion
+	err := tx.NewSelect().Model((*models.TenantTierVersion)(nil)).
+		Column("id", "tier_id", "status", "purchasable").
+		Where("id = ?", id).For("UPDATE").Scan(ctx, &v)
+	return v, err
+}
+
+// retireSupersededTx validates and retires the version a publish supersedes.
+// Its live assignments stay put here: Force leaves them grandfathered, and
+// ReassignToPublished moves them once the draft is active.
+func retireSupersededTx(ctx context.Context, tx bun.Tx, draft lockedVersion, opts SupersedeOptions, at time.Time) error {
+	if opts.VersionID == draft.ID {
+		return ErrSupersedeTargetIsSelf
+	}
+	old, err := lockVersionTx(ctx, tx, opts.VersionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSupersedeTargetNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if old.TierID != draft.TierID {
+		return ErrSupersedeTargetOtherTier
+	}
+	if old.Status != models.TierVersionStatusActive {
+		return ErrSupersedeTargetNotActive
+	}
+	if !opts.Force && !opts.ReassignToPublished {
+		n, err := tx.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+			Where("tier_version_id = ?", old.ID).Where("upper_inf(valid)").Count(ctx)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrVersionHasLiveAssignments
+		}
+	}
+	_, err = tx.NewUpdate().Model((*models.TenantTierVersion)(nil)).
+		Set("status = ?", models.TierVersionStatusRetired).
+		Set("retired_at = ?", at).
+		Where("id = ?", old.ID).Exec(ctx)
+	return err
+}
+
+// checkNoActivePurchasableTx returns the tier's active purchasable version, if
+// any, as a *PurchasableVersionExistsError. The unique index catches a
+// concurrent publish this read cannot see yet.
+func checkNoActivePurchasableTx(ctx context.Context, tx bun.Tx, tierID string) error {
+	var clash struct {
+		ID      string `bun:"id"`
+		Version int    `bun:"version"`
+	}
+	err := tx.NewSelect().Model((*models.TenantTierVersion)(nil)).
+		Column("id", "version").
+		Where("tier_id = ?", tierID).
+		Where("status = ?", models.TierVersionStatusActive).
+		Where("purchasable").
+		Limit(1).
+		Scan(ctx, &clash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return &PurchasableVersionExistsError{VersionID: clash.ID, Version: clash.Version}
 }
 
 func (r *tenantTierVersionRepository) DeleteDraft(ctx context.Context, id string) error {

@@ -70,7 +70,11 @@ type PlanAdminServiceClient interface {
 	// published.
 	UpdateTierVersionDraft(ctx context.Context, in *UpdateTierVersionDraftRequest, opts ...grpc.CallOption) (*UpdateTierVersionDraftResponse, error)
 	// PublishTierVersion transitions a draft to active. InvalidArgument if
-	// change_reason is empty.
+	// change_reason is empty. A tier has at most one active purchasable version:
+	// publishing a purchasable draft while another one is active fails with
+	// FailedPrecondition ("purchasable_version_exists: ...") unless the request
+	// supersedes that version, which retires it in the same transaction so the
+	// tier is never left without a version on sale.
 	PublishTierVersion(ctx context.Context, in *PublishTierVersionRequest, opts ...grpc.CallOption) (*PublishTierVersionResponse, error)
 	// RetireTierVersion transitions an active version to retired (CON-297). When
 	// live assignments remain the default is to REFUSE and name the blocking
@@ -250,7 +254,11 @@ type PlanAdminServiceServer interface {
 	// published.
 	UpdateTierVersionDraft(context.Context, *UpdateTierVersionDraftRequest) (*UpdateTierVersionDraftResponse, error)
 	// PublishTierVersion transitions a draft to active. InvalidArgument if
-	// change_reason is empty.
+	// change_reason is empty. A tier has at most one active purchasable version:
+	// publishing a purchasable draft while another one is active fails with
+	// FailedPrecondition ("purchasable_version_exists: ...") unless the request
+	// supersedes that version, which retires it in the same transaction so the
+	// tier is never left without a version on sale.
 	PublishTierVersion(context.Context, *PublishTierVersionRequest) (*PublishTierVersionResponse, error)
 	// RetireTierVersion transitions an active version to retired (CON-297). When
 	// live assignments remain the default is to REFUSE and name the blocking

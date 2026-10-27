@@ -268,10 +268,26 @@ func (h *harness) publishPrice(versions repository.TenantTierVersionRepository, 
 	if !publish {
 		return pid
 	}
-	if err := versions.Publish(ctx, vid, "test", h.now.Add(-time.Hour)); err != nil {
+	if _, err := versions.Publish(ctx, vid, "test", h.supersedeOnSale(versions, tierID), h.now.Add(-time.Hour)); err != nil {
 		h.t.Fatal(err)
 	}
 	return pid
+}
+
+// supersedeOnSale retires the tier's active purchasable version, if any, as
+// the next one is published, grandfathering its tenants: a tier sells one
+// version at a time.
+func (h *harness) supersedeOnSale(versions repository.TenantTierVersionRepository, tierID string) repository.SupersedeOptions {
+	all, err := versions.ListByTier(h.t.Context(), tierID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for _, v := range all {
+		if v.Status == models.TierVersionStatusActive && v.Purchasable {
+			return repository.SupersedeOptions{VersionID: v.ID, Force: true}
+		}
+	}
+	return repository.SupersedeOptions{}
 }
 
 // workspace creates a gated tenant with one owner and returns ids.
