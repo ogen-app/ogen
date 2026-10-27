@@ -248,3 +248,72 @@ func TestZernioStepsWithNoKeyInOgen(t *testing.T) {
 		t.Errorf("teardown with no key: %+v, lease held %v", out, lease.held)
 	}
 }
+
+func trialTeardownSteps(t *testing.T, billing queues.BillingLiveChecker, status string, accounts *fakeLocalAccounts) (*queues.JobSteps, *fakeSettings, context.Context) {
+	t.Helper()
+	settings := newFakeSettings()
+	ctx := tenantctx.With(context.Background(), "t1")
+	_ = settings.Set(ctx, zernio.SettingProfileID, "p-1")
+	d := queues.Deps{
+		TeardownLease: &fakeLease{status: status}, AnalyticsSettings: settings,
+		Tenants: activeTenants{status: status}, BillingLive: billing,
+	}
+	d.Zernio.SocialAccountRepo = accounts
+	return queues.NewJobSteps(d), settings, ctx
+}
+
+var trialArgs = map[string]string{"tenant_id": "t1", "reason": queues.TeardownReasonTrialUnpaid}
+
+func TestTrialTeardownStepsReleaseALiveWorkspace(t *testing.T) {
+	accounts := &fakeLocalAccounts{active: []string{"s1", "s2"}}
+	steps, settings, ctx := trialTeardownSteps(t, fakeBillingLive{}, models.TenantStatusActive, accounts)
+	z := &scriptedZernio{replies: map[string]zernio.Result{
+		"GET /accounts":        {Status: 200, Body: []byte(`{"accounts":[{"_id":"a1"}]}`)},
+		"DELETE /accounts/a1":  {Status: 200, Body: []byte(`{}`)},
+		"DELETE /profiles/p-1": {Status: 200, Body: []byte(`{}`)},
+	}}
+	out := runSteps(t, steps, queues.TeardownZernioProfileQueue, trialArgs, z)
+	if out.Done == nil || out.Done.Outcome != "torn_down" {
+		t.Fatalf("outcome = %+v after %v", out, z.calls)
+	}
+	if len(accounts.active) != 0 {
+		t.Errorf("local accounts still active: %v", accounts.active)
+	}
+	if id, found, _ := settings.Get(ctx, zernio.SettingProfileID); found || id != "" {
+		t.Errorf("profile id still stored: %q", id)
+	}
+}
+
+func TestTrialTeardownStepsSpareASubscribedWorkspace(t *testing.T) {
+	accounts := &fakeLocalAccounts{active: []string{"s1"}}
+	steps, _, _ := trialTeardownSteps(t, fakeBillingLive{live: true}, models.TenantStatusActive, accounts)
+	z := &scriptedZernio{}
+	if out := runSteps(t, steps, queues.TeardownZernioProfileQueue, trialArgs, z); out.Done == nil || out.Done.Outcome != "skipped_subscribed" || len(z.calls) != 0 {
+		t.Fatalf("subscribed: %+v, calls %v", out, z.calls)
+	}
+
+	// Suspended meanwhile: nothing is torn down either.
+	steps, _, _ = trialTeardownSteps(t, fakeBillingLive{}, models.TenantStatusSuspended, accounts)
+	if out := runSteps(t, steps, queues.TeardownZernioProfileQueue, trialArgs, z); out.Done == nil || len(z.calls) != 0 {
+		t.Fatalf("suspended: %+v, calls %v", out, z.calls)
+	}
+
+	// Subscribed after the list: stop before the first delete.
+	billing := &switchingBilling{}
+	steps, _, _ = trialTeardownSteps(t, billing, models.TenantStatusActive, accounts)
+	z = &scriptedZernio{replies: map[string]zernio.Result{"GET /accounts": {Status: 200, Body: []byte(`{"accounts":[{"_id":"a1"}]}`)}}}
+	answer := func(c queues.HTTPCall) queues.StepResult {
+		billing.live = true
+		return z.answer(c)
+	}
+	out := runStepsWith(t, steps, queues.TeardownZernioProfileQueue, trialArgs, answer)
+	if out.Done == nil || out.Done.Outcome != "skipped_subscribed" || len(z.calls) != 1 || len(accounts.active) != 1 {
+		t.Fatalf("subscribed mid-teardown: %+v, calls %v, accounts %v", out, z.calls, accounts.active)
+	}
+}
+
+type switchingBilling struct{ live bool }
+
+func (b *switchingBilling) HasLiveSubscription(context.Context, string) (bool, error) {
+	return b.live, nil
+}
