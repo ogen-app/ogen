@@ -100,6 +100,8 @@ type teardownState struct {
 	ProfileID string   `json:"profile_id"`
 	Accounts  []string `json:"accounts,omitempty"`
 	Next      int      `json:"next,omitzero"`
+	// Trial marks the unpaid-trial teardown of a live workspace.
+	Trial bool `json:"trial,omitzero"`
 }
 
 const (
@@ -122,27 +124,46 @@ func (z *JobSteps) teardown(ctx context.Context, in StepInput) (StepOutput, erro
 	if err := decodeState(in.State, &st); err != nil {
 		return done("skipped_bad_state")
 	}
+	trial := task.Reason == TeardownReasonTrialUnpaid
 	if st.Phase == "" {
+		if trial {
+			return z.trialTeardownStart(ctx, tid)
+		}
 		return z.teardownStart(ctx, tid)
 	}
 
-	// Every destructive call is made under a fresh lease; if the lease lapsed
-	// and the workspace was restored meanwhile, stop.
-	torn, err := z.deps.TeardownLease.RenewTeardownLease(ctx, tid, teardownLeaseTTL)
-	if err != nil {
-		return StepOutput{}, err
+	if trial {
+		// The workspace stays in use, so there is no restore to fence: before
+		// every destructive call, check it still has no subscription.
+		if ok, err := z.trialStillUnpaid(ctx, tid); err != nil {
+			return retry("teardown", err)
+		} else if !ok {
+			return done("skipped_subscribed")
+		}
+	} else {
+		// Every destructive call is made under a fresh lease; if the lease
+		// lapsed and the workspace was restored meanwhile, stop.
+		torn, err := z.deps.TeardownLease.RenewTeardownLease(ctx, tid, teardownLeaseTTL)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		if !torn {
+			return done("aborted_restored")
+		}
 	}
-	if !torn {
-		return done("aborted_restored")
+	endLease := func() {
+		if !trial {
+			_ = z.deps.TeardownLease.EndTeardownLease(ctx, tid)
+		}
 	}
 	if zernioDisabled(in.Result) {
-		_ = z.deps.TeardownLease.EndTeardownLease(ctx, tid)
+		endLease()
 		return done("skipped_zernio_disabled")
 	}
 	out, err := z.teardownAdvance(ctx, &st, zernioResult(in.Result))
 	if zernioAuthFailed(err) {
 		slog.WarnContext(ctx, "teardown gave up: zernio rejected the key", logging.AttrComponent, "jobs.teardown_zernio_profile", "profile_id", st.ProfileID, logging.AttrError, err)
-		_ = z.deps.TeardownLease.EndTeardownLease(ctx, tid)
+		endLease()
 		return done("gave_up_auth")
 	}
 	if err != nil {
@@ -166,21 +187,60 @@ func (z *JobSteps) teardownStart(ctx context.Context, tid string) (StepOutput, e
 	if !found || profileID == "" {
 		return z.teardownFinish(ctx, tid, "noop_no_profile")
 	}
+	return z.teardownList(ctx, teardownState{ProfileID: profileID})
+}
+
+// trialTeardownStart releases the profile of a live workspace whose trial
+// ended unpaid: only while it is active and still has no subscription.
+func (z *JobSteps) trialTeardownStart(ctx context.Context, tid string) (StepOutput, error) {
+	if ok, err := z.trialStillUnpaid(ctx, tid); err != nil {
+		return retry("teardown", err)
+	} else if !ok {
+		slog.InfoContext(ctx, "unpaid-trial teardown skipped", logging.AttrComponent, "jobs.teardown_zernio_profile", "tenant", tid)
+		return done("skipped_subscribed")
+	}
+	profileID, found, err := z.deps.AnalyticsSettings.Get(ctx, zernio.SettingProfileID)
+	if err != nil {
+		return StepOutput{}, err
+	}
+	if !found || profileID == "" {
+		return done("noop_no_profile")
+	}
+	return z.teardownList(ctx, teardownState{ProfileID: profileID, Trial: true})
+}
+
+// trialStillUnpaid reports whether an unpaid-trial teardown may go on: the
+// workspace is active and has not subscribed since.
+func (z *JobSteps) trialStillUnpaid(ctx context.Context, tid string) (bool, error) {
+	if z.deps.BillingLive == nil {
+		return false, nil
+	}
+	active, err := tenantIsActive(ctx, z.deps.Tenants, tid)
+	if err != nil || !active {
+		return false, err
+	}
+	live, err := z.deps.BillingLive.HasLiveSubscription(ctx, tid)
+	return !live, err
+}
+
+// teardownList asks Zernio for the profile's accounts, the first call of
+// either teardown.
+func (z *JobSteps) teardownList(ctx context.Context, st teardownState) (StepOutput, error) {
 	call, err := zernio.Plan(func(c *zernio.Client) error {
-		_, err := c.ListAccounts(ctx, profileID)
+		_, err := c.ListAccounts(ctx, st.ProfileID)
 		return err
 	})
 	if err != nil {
 		return StepOutput{}, err
 	}
-	return nextZernio(teardownState{Phase: tdPhaseList, ProfileID: profileID}, call)
+	st.Phase = tdPhaseList
+	return nextZernio(st, call)
 }
 
 // teardownAdvance handles the result of the last call: disconnect every
 // account, then delete the profile, then clear the local pointer. A 404 at
 // any point means that part is already gone.
 func (z *JobSteps) teardownAdvance(ctx context.Context, st *teardownState, res zernio.Result) (StepOutput, error) {
-	tid, _ := tenantctx.From(ctx)
 	switch st.Phase {
 	case tdPhaseList:
 		var accounts []zernio.Account
@@ -190,7 +250,7 @@ func (z *JobSteps) teardownAdvance(ctx context.Context, st *teardownState, res z
 			return err
 		})
 		if zernio.IsStatus(err, http.StatusNotFound) {
-			return z.teardownFinish(ctx, tid, "torn_down_already_gone")
+			return z.teardownDone(ctx, st, "torn_down_already_gone")
 		}
 		if err != nil {
 			return StepOutput{}, err
@@ -210,7 +270,7 @@ func (z *JobSteps) teardownAdvance(ctx context.Context, st *teardownState, res z
 		if err := zernio.Decode(res, func(c *zernio.Client) error { return c.DeleteProfile(ctx, st.ProfileID) }); err != nil && !zernio.IsStatus(err, http.StatusNotFound) {
 			return StepOutput{}, fmt.Errorf("delete profile: %w", err)
 		}
-		return z.teardownFinish(ctx, tid, "torn_down")
+		return z.teardownDone(ctx, st, "torn_down")
 	default:
 		return StepOutput{}, fmt.Errorf("unknown teardown phase %q", st.Phase)
 	}
@@ -235,19 +295,57 @@ func (z *JobSteps) teardownNextDelete(ctx context.Context, st *teardownState) (S
 	return nextZernio(st, call)
 }
 
+// teardownDone finishes either teardown once the profile is gone upstream.
+// The unpaid-trial one also disconnects the local account rows, so the app
+// stops showing them; they go before the profile pointer, so a failed
+// soft-delete retries with the pointer still set (the remote deletes are
+// idempotent).
+func (z *JobSteps) teardownDone(ctx context.Context, st *teardownState, outcome string) (StepOutput, error) {
+	tid, _ := tenantctx.From(ctx)
+	if !st.Trial {
+		return z.teardownFinish(ctx, tid, outcome)
+	}
+	if accounts := z.deps.Zernio.SocialAccountRepo; accounts != nil {
+		local, err := accounts.ListActive(ctx, st.ProfileID)
+		if err != nil {
+			return StepOutput{}, err
+		}
+		now := time.Now().UTC()
+		for _, a := range local {
+			if _, err := accounts.SoftDelete(ctx, a.ID, now); err != nil {
+				return StepOutput{}, fmt.Errorf("disconnect local account %s: %w", a.ID, err)
+			}
+		}
+	}
+	if err := z.clearProfileKeys(ctx); err != nil {
+		return StepOutput{}, err
+	}
+	slog.InfoContext(ctx, "unpaid-trial teardown finished", logging.AttrComponent, "jobs.teardown_zernio_profile", "outcome", outcome)
+	return done(outcome)
+}
+
 // teardownFinish clears the local profile keys and releases the lease. A
 // failure to clear must fail the step, or a dangling profile id survives.
 func (z *JobSteps) teardownFinish(ctx context.Context, tid, outcome string) (StepOutput, error) {
-	for _, k := range []string{zernio.SettingProfileID, zernio.SettingProfileName, zernio.SettingProfileCreatedAt, zernio.SettingProfileMeta} {
-		if err := z.deps.AnalyticsSettings.Delete(ctx, k); err != nil {
-			return StepOutput{}, fmt.Errorf("clear %s: %w", k, err)
-		}
+	if err := z.clearProfileKeys(ctx); err != nil {
+		return StepOutput{}, err
 	}
 	if err := z.deps.TeardownLease.EndTeardownLease(ctx, tid); err != nil {
 		return StepOutput{}, err
 	}
 	slog.InfoContext(ctx, "teardown finished", logging.AttrComponent, "jobs.teardown_zernio_profile", "outcome", outcome)
 	return done(outcome)
+}
+
+// clearProfileKeys drops the local profile pointer. A failure must fail the
+// step, or a dangling profile id survives.
+func (z *JobSteps) clearProfileKeys(ctx context.Context) error {
+	for _, k := range []string{zernio.SettingProfileID, zernio.SettingProfileName, zernio.SettingProfileCreatedAt, zernio.SettingProfileMeta} {
+		if err := z.deps.AnalyticsSettings.Delete(ctx, k); err != nil {
+			return fmt.Errorf("clear %s: %w", k, err)
+		}
+	}
+	return nil
 }
 
 // --- detect_expiring_connections ------------------------------------------
