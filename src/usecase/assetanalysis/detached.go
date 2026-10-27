@@ -27,6 +27,13 @@ const (
 	runSlotStale = time.Minute
 	// runHeartbeatEvery is how often a detached run refreshes its slot.
 	runHeartbeatEvery = 15 * time.Second
+	// runSelfFence is how long a run goes on without a confirmed heartbeat
+	// before it stops itself: inside runSlotStale, so it has stopped before
+	// another run could take its slot.
+	runSelfFence = runSlotStale - runHeartbeatEvery
+	// finishTries bounds the attempts to record a run's outcome; a lost
+	// outcome would make the job run the model again.
+	finishTries = 3
 	// detachedRunTimeout bounds one detached run, like the attempt timeout of
 	// an analysis run inside a River worker.
 	detachedRunTimeout = 15 * time.Minute
@@ -96,6 +103,7 @@ func (s *Service) runDetached(ctx context.Context, l Lens, reason, rowID, token 
 		done <- s.Run(runCtx, l, reason)
 	}()
 	var runErr error
+	lastBeat := s.now()
 wait:
 	for {
 		select {
@@ -106,9 +114,17 @@ wait:
 			switch {
 			case err != nil:
 				slog.WarnContext(ctx, "could not refresh the analysis run slot", logging.AttrComponent, logComponent, logging.AttrError, err)
+				// Unconfirmed for too long, the slot may soon be taken:
+				// stop before another run can, so the two never both write.
+				if s.now().Sub(lastBeat) >= runSelfFence {
+					slog.WarnContext(ctx, "analysis run could not confirm its slot; stopping it", logging.AttrComponent, logComponent, "lens_id", rowID)
+					stopRun()
+				}
 			case !held:
 				slog.WarnContext(ctx, "analysis run lost its slot to another run; stopping it", logging.AttrComponent, logComponent, "lens_id", rowID)
 				stopRun()
+			default:
+				lastBeat = s.now()
 			}
 		}
 	}
@@ -120,10 +136,29 @@ wait:
 		}
 	}
 	// The outcome is recorded even when the run's own deadline passed.
-	fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer fcancel()
-	if err := s.repos.Analyses.FinishRunSlot(fctx, rowID, token, errText, code); err != nil {
-		slog.ErrorContext(fctx, "could not record the analysis run outcome", logging.AttrComponent, logComponent, logging.AttrError, err)
+	var err error
+	for try := range finishTries {
+		if err = s.repos.Analyses.FinishRunSlot(fctx, rowID, token, errText, code); err == nil {
+			return
+		}
+		if try < finishTries-1 && sleepCtx(fctx, time.Second<<try) != nil {
+			break
+		}
+	}
+	slog.ErrorContext(fctx, "could not record the analysis run outcome", logging.AttrComponent, logComponent, logging.AttrError, err)
+}
+
+// sleepCtx waits d, or until ctx ends.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
