@@ -94,9 +94,14 @@ func weeklyReportEvery(cfg *config.Config) time.Duration {
 }
 
 // weeklyReportDeps wires the weekly report dispatcher. The analytics, activity
-// and limit readers are optional: a missing one only drops its section.
+// and limit readers are optional: a missing one only drops its section. With
+// WEEKLY_REPORT_ENABLED off both jobs are no-ops, since river-service keeps
+// the dispatch schedule whatever the flag.
 func weeklyReportDeps(d *deps) queues.WeeklyReportDeps {
 	cfg, r := d.cfg, d.r
+	if !cfg.WeeklyReportEnabled {
+		return queues.WeeklyReportDeps{}
+	}
 	collector := &weeklyreport.Collector{
 		Store:      r.weeklyReportRepo,
 		Analytics:  r.postAnalyticsRepo,
