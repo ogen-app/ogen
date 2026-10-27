@@ -133,7 +133,10 @@ type row struct {
 }
 
 // RelayOnce claims one batch of due rows, delivers each and records the
-// outcome. It returns how many rows it claimed.
+// outcome. It stops at the first failed send, so an unreachable river-service
+// doesn't hold the claim (a pooled connection and the rows' locks) through a
+// timeout per row; the rest stay due for the next poll. It returns how many
+// rows it delivered or recorded a failure for.
 func (r *Relay) RelayOnce(ctx context.Context) (int, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -145,16 +148,21 @@ func (r *Relay) RelayOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	done := 0
 	for _, rw := range rows {
 		jobID, sendErr := r.send(ctx, rw)
 		if err := record(ctx, tx, rw, jobID, sendErr); err != nil {
 			return 0, err
 		}
+		done++
+		if sendErr != nil {
+			break
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit: %w", err)
 	}
-	return len(rows), nil
+	return done, nil
 }
 
 func claim(ctx context.Context, tx *sql.Tx, limit int) ([]row, error) {
