@@ -214,7 +214,7 @@ func (d *deps) ensureEnqueuer() {
 // initJobs wires email (its jobs' halves run here), the enqueuer and the
 // outbox relay. The jobs themselves run in river-service.
 func (d *deps) initJobs(ctx context.Context) error {
-	if err := requireJobPipeline(ctx, d.cfg); err != nil {
+	if err := RequireJobPipeline(ctx, d.cfg); err != nil {
 		return err
 	}
 	r := d.r
