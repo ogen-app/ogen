@@ -29,9 +29,6 @@ type jobSteps struct {
 }
 
 func (j *jobSteps) Step(ctx context.Context, req *jobrpcv1.StepRequest) (*jobrpcv1.StepResponse, error) {
-	if j.steps == nil {
-		return nil, status.Error(codes.Unavailable, "job steps are not wired")
-	}
 	in := queues.StepInput{
 		Kind: req.GetKind(), Args: req.GetArgs(), State: req.GetState(),
 		Attempt: int(req.GetAttempt()), MaxAttempts: int(req.GetMaxAttempts()),
