@@ -42,48 +42,87 @@ const (
 // it, ErrWaiting while its sources ingest, and other errors when the job
 // should retry.
 func (s *Service) Run(ctx context.Context, tenantID, runID string) error {
-	err := s.run(ctx, tenantID, runID)
+	if err := s.Prepare(ctx, tenantID, runID, s.deps.Mapper); err != nil {
+		return err
+	}
+	return s.finish(ctx, tenantID, runID)
+}
+
+// Prepare does a run's quick work before the model: admit it, collect its
+// website through mapper and wait for its sources. It returns nil once the
+// run is ready for the model or closed, ErrWaiting while its sources ingest,
+// ErrMapDeferred (wrapped) when mapper deferred the site map, and other
+// errors when the job should retry.
+func (s *Service) Prepare(ctx context.Context, tenantID, runID string, mapper Mapper) error {
+	err := s.prepare(ctx, tenantID, runID, mapper)
 	if errors.Is(err, repository.ErrBrandDistillClosed) {
 		return nil
 	}
 	return err
 }
 
-func (s *Service) run(ctx context.Context, tenantID, runID string) error {
+func (s *Service) prepare(ctx context.Context, tenantID, runID string, mapper Mapper) error {
 	ctx = tenantctx.With(ctx, tenantID)
-	run, err := s.repos.Runs.Get(ctx, runID)
-	if errors.Is(err, sql.ErrNoRows) {
+	run, err := s.load(ctx, runID)
+	if run == nil || err != nil || run.ParentRunID != nil {
+		return err
+	}
+	if ok := s.admit(ctx, run); !ok {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("load the run: %w", err)
-	}
-	if !run.Status.Open() {
-		return nil
-	}
-	if run.ParentRunID == nil {
-		if ok := s.admit(ctx, run); !ok {
-			return nil
-		}
-		if run.WebsiteURL != nil && run.Website == nil {
-			if err := s.collectWebsite(ctx, run); err != nil || !run.Status.Open() {
-				return err
-			}
-		}
-		waiting, err := s.settleSources(ctx, run)
-		if err != nil {
+	if run.WebsiteURL != nil && run.Website == nil {
+		if err := s.collectWebsite(ctx, run, mapper); err != nil || !run.Status.Open() {
 			return err
 		}
-		if waiting {
-			return ErrWaiting
-		}
-		if run.Candidates == nil {
-			if err := s.read(ctx, run); err != nil || !run.Status.Open() {
-				return err
+	}
+	waiting, err := s.settleSources(ctx, run)
+	if err != nil {
+		return err
+	}
+	if waiting {
+		return ErrWaiting
+	}
+	// The model stages run apart and reload the run, so they read the
+	// sources as settled here.
+	return s.save(ctx, run, "sources")
+}
+
+// finish runs the model stages of a prepared run: reading its sources, then
+// composing the proposal.
+func (s *Service) finish(ctx context.Context, tenantID, runID string) error {
+	ctx = tenantctx.With(ctx, tenantID)
+	run, err := s.load(ctx, runID)
+	if run == nil || err != nil {
+		return err
+	}
+	if run.ParentRunID == nil && run.Candidates == nil {
+		if err := s.read(ctx, run); err != nil || !run.Status.Open() {
+			if errors.Is(err, repository.ErrBrandDistillClosed) {
+				return nil
 			}
+			return err
 		}
 	}
-	return s.compose(ctx, run)
+	err = s.compose(ctx, run)
+	if errors.Is(err, repository.ErrBrandDistillClosed) {
+		return nil
+	}
+	return err
+}
+
+// load reads an open run; nil when it is gone or closed.
+func (s *Service) load(ctx context.Context, runID string) (*models.BrandDistillRun, error) {
+	run, err := s.repos.Runs.Get(ctx, runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load the run: %w", err)
+	}
+	if !run.Status.Open() {
+		return nil, nil
+	}
+	return run, nil
 }
 
 // Fail settles a run whose job gave up, so it never stays open.
@@ -124,14 +163,17 @@ func (s *Service) admit(ctx context.Context, run *models.BrandDistillRun) bool {
 
 // collectWebsite maps the site, picks its pages and imports them as brand
 // sources. A site map that fails for good falls back to the homepage.
-func (s *Service) collectWebsite(ctx context.Context, run *models.BrandDistillRun) error {
-	if s.deps.Mapper == nil || s.deps.Importer == nil || !s.deps.Importer.Configured(ctx) {
+func (s *Service) collectWebsite(ctx context.Context, run *models.BrandDistillRun, mapper Mapper) error {
+	if mapper == nil || s.deps.Importer == nil || !s.deps.Importer.Configured(ctx) {
 		s.fail(ctx, run, models.BrandDistillCodeScraping, scrapingReason)
 		return nil
 	}
 	site := *run.WebsiteURL
 	root, _, _ := siteRoot(site)
-	links, err := s.deps.Mapper.Map(ctx, firecrawl.MapRequest{URL: root, Limit: mapLimit})
+	links, err := mapper.Map(ctx, firecrawl.MapRequest{URL: root, Limit: mapLimit})
+	if errors.Is(err, ErrMapDeferred) {
+		return err
+	}
 	if err != nil && firecrawl.IsTransient(err) {
 		return fmt.Errorf("map %s: %w", root, err)
 	}
