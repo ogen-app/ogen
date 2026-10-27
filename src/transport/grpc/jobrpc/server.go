@@ -46,6 +46,9 @@ var leasable = map[string]bool{
 	secrets.NameGeminiAPIKey:    true,
 	secrets.NameResendAPIKey:    true,
 	secrets.NameFirecrawlAPIKey: true,
+	// The key of the billing mode ogen runs in; the live key read during the
+	// test period stays in ogen.
+	secrets.NameLemonSqueezyAPIKey: true,
 }
 
 // Deps wires the server.

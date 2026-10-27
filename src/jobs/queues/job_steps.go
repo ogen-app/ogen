@@ -25,6 +25,8 @@ const (
 	UpstreamZernio    = "zernio"
 	UpstreamGemini    = "gemini"
 	UpstreamFirecrawl = "firecrawl"
+	// UpstreamLemonSqueezy is leased the key of the billing mode ogen runs in.
+	UpstreamLemonSqueezy = "lemonsqueezy"
 )
 
 // StepInput is one Step request.
@@ -205,6 +207,7 @@ func NewJobSteps(d Deps) *JobSteps {
 	s.registerIngestion()
 	s.registerAnalysis()
 	s.registerWeeklyReport()
+	s.registerBilling()
 	return s
 }
 
