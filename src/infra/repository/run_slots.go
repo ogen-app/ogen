@@ -58,13 +58,17 @@ func (r *RunSlots) Claim(ctx context.Context, id, token string, staleBefore time
 	return n == 1, err
 }
 
-func (r *RunSlots) Heartbeat(ctx context.Context, id, token string) error {
+func (r *RunSlots) Heartbeat(ctx context.Context, id, token string) (bool, error) {
 	q, err := r.update(ctx, id)
 	if err != nil {
-		return err
+		return false, err
 	}
-	_, err = q.Set("run_heartbeat_at = now()").Where("run_token = ? AND run_done_at IS NULL", token).Exec(ctx)
-	return err
+	res, err := q.Set("run_heartbeat_at = now()").Where("run_token = ? AND run_done_at IS NULL", token).Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (r *RunSlots) Finish(ctx context.Context, id, token, errText, code string) error {

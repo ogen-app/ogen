@@ -38,7 +38,9 @@ type Row struct {
 type Store interface {
 	// Claim takes the slot for token unless a live run holds it.
 	Claim(ctx context.Context, id, token string, staleBefore time.Time) (bool, error)
-	Heartbeat(ctx context.Context, id, token string) error
+	// Heartbeat refreshes token's run; false means token no longer holds
+	// an unfinished slot (another run took it).
+	Heartbeat(ctx context.Context, id, token string) (bool, error)
 	Finish(ctx context.Context, id, token, errText, code string) error
 	// Read returns the row's slot, sql.ErrNoRows when the row is gone.
 	Read(ctx context.Context, id string) (Row, error)
@@ -79,6 +81,10 @@ func run(ctx context.Context, store Store, id, token string, timeout time.Durati
 	defer cancel()
 	beat := time.NewTicker(heartbeatEvery)
 	defer beat.Stop()
+	// A run that lost its slot is cancelled, so it stops spending on the
+	// model and never records a result over the run that took the slot.
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -86,7 +92,7 @@ func run(ctx context.Context, store Store, id, token string, timeout time.Durati
 				done <- fmt.Errorf("detached run panicked: %v", r)
 			}
 		}()
-		done <- fn(ctx)
+		done <- fn(runCtx)
 	}()
 	var runErr error
 wait:
@@ -95,8 +101,13 @@ wait:
 		case runErr = <-done:
 			break wait
 		case <-beat.C:
-			if err := store.Heartbeat(ctx, id, token); err != nil {
+			held, err := store.Heartbeat(ctx, id, token)
+			switch {
+			case err != nil:
 				slog.WarnContext(ctx, "could not refresh a run slot", logging.AttrComponent, "runslot", "run_id", id, logging.AttrError, err)
+			case !held:
+				slog.WarnContext(ctx, "detached run lost its slot to another run; stopping it", logging.AttrComponent, "runslot", "run_id", id)
+				stopRun()
 			}
 		}
 	}
