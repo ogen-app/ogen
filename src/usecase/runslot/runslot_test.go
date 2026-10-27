@@ -28,14 +28,24 @@ func (m *memStore) Claim(_ context.Context, _, token string, staleBefore time.Ti
 	return true, nil
 }
 
-func (m *memStore) Heartbeat(_ context.Context, _, token string) error {
+func (m *memStore) Heartbeat(_ context.Context, _, token string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.row.Token != nil && *m.row.Token == token && m.row.DoneAt == nil {
 		now := time.Now()
 		m.row.HeartbeatAt = &now
+		return true, nil
 	}
-	return nil
+	return false, nil
+}
+
+// steal hands the slot to another run, as a takeover after a stale
+// heartbeat does.
+func (m *memStore) steal(token string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.row = runslot.Row{Token: &token, HeartbeatAt: &now}
 }
 
 func (m *memStore) Finish(_ context.Context, _, token, errText, code string) error {
@@ -99,6 +109,33 @@ func TestStartRecordsAPanic(t *testing.T) {
 		synctest.Wait()
 		if slot, _ := runslot.Read(t.Context(), store, "r1"); !slot.Done || slot.Err == nil {
 			t.Fatalf("slot = %+v, want done with the panic", slot)
+		}
+	})
+}
+
+// TestStartStopsARunThatLostItsSlot checks a run another run took the slot
+// from is cancelled at its next heartbeat, so it stops spending on the model.
+func TestStartStopsARunThatLostItsSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &memStore{}
+		cancelled := make(chan struct{})
+		if _, err := runslot.Start(t.Context(), store, "r1", time.Hour, nil, func(ctx context.Context) error {
+			<-ctx.Done()
+			close(cancelled)
+			return ctx.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		store.steal("other")
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		select {
+		case <-cancelled:
+		default:
+			t.Fatal("the displaced run was not cancelled")
+		}
+		if slot, _ := runslot.Read(t.Context(), store, "r1"); slot.Token != "other" || slot.Done {
+			t.Fatalf("slot = %+v, want the new run's, untouched", slot)
 		}
 	})
 }

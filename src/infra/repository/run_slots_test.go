@@ -48,8 +48,11 @@ func TestRunSlotsClaimHeartbeatFinish(t *testing.T) {
 		t.Fatalf("cross-tenant claim = %v, %v", ok, err)
 	}
 
-	if err := slots.Heartbeat(f.ctx, run.ID, "tok-1"); err != nil {
-		t.Fatal(err)
+	if held, err := slots.Heartbeat(f.ctx, run.ID, "tok-1"); err != nil || !held {
+		t.Fatalf("holder's heartbeat = %v, %v; want held", held, err)
+	}
+	if held, err := slots.Heartbeat(f.ctx, run.ID, "tok-2"); err != nil || held {
+		t.Fatalf("a non-holder's heartbeat = %v, %v; want not held", held, err)
 	}
 	if err := slots.Finish(f.ctx, run.ID, "tok-2", "late", ""); err != nil {
 		t.Fatal(err)
