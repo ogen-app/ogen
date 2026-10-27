@@ -491,7 +491,23 @@ func migrateOpenAssignmentsTx(ctx context.Context, tx bun.Tx, fromID, targetID s
 	}
 
 	var noUpper *time.Time
+	moved := 0
 	for _, tid := range tenantIDs {
+		// Lock the tenant and recheck: a concurrent reassignment may have moved
+		// it off fromID since the scan, and its open range must not be overlapped.
+		if err := tx.NewSelect().Model((*models.Tenant)(nil)).
+			Column("id").Where("id = ?", tid).For("UPDATE").Scan(ctx, new(string)); err != nil {
+			return 0, err
+		}
+		still, err := tx.NewSelect().Model((*models.TenantTierAssignment)(nil)).
+			Where("tenant_id = ?", tid).Where("tier_version_id = ?", fromID).Where("upper_inf(valid)").
+			Exists(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if !still {
+			continue
+		}
 		// Point the tenant at the target's tier (the assignment and tier_id stay in
 		// step). No deleted_at filter: a migrated assignment must match tier_id even
 		// for a soft-deleted tenant, so the retired version ends with zero live rows.
@@ -518,8 +534,9 @@ func migrateOpenAssignmentsTx(ctx context.Context, tx bun.Tx, fromID, targetID s
 			Exec(ctx); err != nil {
 			return 0, err
 		}
+		moved++
 	}
-	return len(tenantIDs), nil
+	return moved, nil
 }
 
 func (r *tenantTierVersionRepository) OpenAssignmentCount(ctx context.Context, versionID string) (int, error) {
