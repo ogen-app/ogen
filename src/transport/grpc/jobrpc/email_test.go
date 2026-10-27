@@ -86,4 +86,11 @@ func TestRecordEmailOutcome(t *testing.T) {
 	if _, err := c.RecordEmailOutcome(ctx, &jobrpcv1.RecordEmailOutcomeRequest{Args: args()}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("no outcome = %v, want InvalidArgument", err)
 	}
+	// A user's address is only known from the prepared message; without it
+	// the outcome would be logged against nobody.
+	if _, err := c.RecordEmailOutcome(ctx, &jobrpcv1.RecordEmailOutcomeRequest{
+		Args: args(), Outcome: jobrpcv1.EmailOutcome_EMAIL_OUTCOME_SKIPPED_DISABLED,
+	}); status.Code(err) != codes.InvalidArgument || len(jobs.recorded) != 1 {
+		t.Errorf("no recipient = %v (recorded %d), want InvalidArgument and nothing recorded", err, len(jobs.recorded))
+	}
 }
