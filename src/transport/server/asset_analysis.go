@@ -9,6 +9,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/genkit/flows"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/config"
 	"github.com/ogen-app/ogen/src/kernel/usage"
@@ -30,6 +31,8 @@ func newAssetAnalysis(d *deps) *assetanalysis.Service {
 		Brands:    r.brandRepo,
 		Tenants:   r.tenantRepo,
 		Distills:  r.ideaDistillRepo,
+		// Raw table writes, scoped by the tenant in the context.
+		DistillSlots: repository.NewIdeaDistillRunSlots(d.db),
 	}, d.entitlements.limiter, d.hub)
 	svc.SetJobs(d.enqueuer, d.cfg.AnalysisRebriefDebounce, d.cfg.AnalysisEditDebounce)
 
