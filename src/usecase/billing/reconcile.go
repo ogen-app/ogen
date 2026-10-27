@@ -49,19 +49,12 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-// ReconcilePlan is the provider work one reconcile pass needs: the
-// subscriptions to re-read and the due scheduled changes to re-drive.
-type ReconcilePlan struct {
-	Subscriptions []string
-	DueChanges    []string
-}
-
 // PlanReconcile does the part of a reconcile pass that needs no provider
 // call (catching unpaid trial expiries) and lists the rest. Only a failure to
 // list the live subscriptions is returned; the other failures are logged and
 // left to the next tick.
-func (s *Service) PlanReconcile(ctx context.Context) (ReconcilePlan, error) {
-	var plan ReconcilePlan
+func (s *Service) PlanReconcile(ctx context.Context) (billingdom.ReconcilePlan, error) {
+	var plan billingdom.ReconcilePlan
 	if !s.Enabled() {
 		return plan, nil
 	}
@@ -72,7 +65,7 @@ func (s *Service) PlanReconcile(ctx context.Context) (ReconcilePlan, error) {
 	for {
 		page, err := s.d.Repo.ListForReconcile(ctx, s.d.Settings.TestMode, after, reconcilePage)
 		if err != nil {
-			return ReconcilePlan{}, err
+			return billingdom.ReconcilePlan{}, err
 		}
 		for _, sub := range page {
 			if !seen[sub.ProviderSubscriptionID] {
