@@ -27,23 +27,57 @@ const (
 // lost, and catches unpaid trial expiries the webhook missed. Each part is
 // idempotent, so a partial run is simply finished by the next tick.
 func (s *Service) Reconcile(ctx context.Context) error {
+	plan, err := s.PlanReconcile(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range plan.Subscriptions {
+		snap, callErr := s.d.Provider.GetSubscription(ctx, id)
+		if err := s.ApplyResync(ctx, id, snap, callErr); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, id := range plan.DueChanges {
+		if err := s.RunScheduledChange(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		slog.WarnContext(ctx, "billing reconcile finished with errors", logging.AttrComponent, "billing", "errors", len(errs), logging.AttrError, errors.Join(errs...))
+	}
+	return nil
+}
+
+// ReconcilePlan is the provider work one reconcile pass needs: the
+// subscriptions to re-read and the due scheduled changes to re-drive.
+type ReconcilePlan struct {
+	Subscriptions []string
+	DueChanges    []string
+}
+
+// PlanReconcile does the part of a reconcile pass that needs no provider
+// call (catching unpaid trial expiries) and lists the rest. Only a failure to
+// list the live subscriptions is returned; the other failures are logged and
+// left to the next tick.
+func (s *Service) PlanReconcile(ctx context.Context) (ReconcilePlan, error) {
+	var plan ReconcilePlan
 	if !s.Enabled() {
-		return nil
+		return plan, nil
 	}
 	reconcileRuns.Add(1)
 
 	seen := map[string]bool{}
-	var errs []error
 	after := ""
 	for {
 		page, err := s.d.Repo.ListForReconcile(ctx, s.d.Settings.TestMode, after, reconcilePage)
 		if err != nil {
-			return err
+			return ReconcilePlan{}, err
 		}
 		for _, sub := range page {
-			seen[sub.ProviderSubscriptionID] = true
-			if err := s.resyncOne(ctx, sub.ProviderSubscriptionID); err != nil {
-				errs = append(errs, err)
+			if !seen[sub.ProviderSubscriptionID] {
+				seen[sub.ProviderSubscriptionID] = true
+				plan.Subscriptions = append(plan.Subscriptions, sub.ProviderSubscriptionID)
 			}
 		}
 		if len(page) < reconcilePage {
@@ -52,6 +86,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		after = page[len(page)-1].ID
 	}
 
+	var errs []error
 	failed, err := s.d.Repo.ListFailedWebhookEvents(ctx, s.now().Add(-failedWebhookLookback), false)
 	if err != nil {
 		errs = append(errs, err)
@@ -62,21 +97,23 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			continue
 		}
 		seen[subID] = true
-		if err := s.resyncOne(ctx, subID); err != nil {
-			errs = append(errs, err)
-		}
+		plan.Subscriptions = append(plan.Subscriptions, subID)
 	}
 
-	if err := s.driveDueChanges(ctx); err != nil {
+	due, err := s.d.Repo.ListDueScheduledChanges(ctx, s.now(), scheduledChangeLead)
+	if err != nil {
 		errs = append(errs, err)
+	}
+	for _, c := range due {
+		plan.DueChanges = append(plan.DueChanges, c.ID)
 	}
 	if err := s.sweepUnpaidExpired(ctx); err != nil {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
-		slog.WarnContext(ctx, "billing reconcile finished with errors", logging.AttrComponent, "billing", "errors", len(errs), logging.AttrError, errors.Join(errs...))
+		slog.WarnContext(ctx, "billing reconcile could not finish every check", logging.AttrComponent, "billing", "errors", len(errs), logging.AttrError, errors.Join(errs...))
 	}
-	return nil
+	return plan, nil
 }
 
 // subscriptionEvents are the webhooks that carry a subscription snapshot; their
@@ -90,16 +127,15 @@ func isSubscriptionEvent(name string) bool {
 	return slices.Contains(subscriptionEvents, name)
 }
 
-// resyncOne reads one subscription and applies it. A subscription the
-// provider no longer knows is left as it is.
-func (s *Service) resyncOne(ctx context.Context, providerSubID string) error {
-	snap, err := s.d.Provider.GetSubscription(ctx, providerSubID)
-	if errors.Is(err, billingdom.ErrNotFound) {
+// ApplyResync applies one re-read subscription: callErr is the read's
+// error. A subscription the provider no longer knows is left as it is.
+func (s *Service) ApplyResync(ctx context.Context, providerSubID string, snap billingdom.Subscription, callErr error) error {
+	if errors.Is(callErr, billingdom.ErrNotFound) {
 		slog.WarnContext(ctx, "billing reconcile: subscription unknown to the provider", logging.AttrComponent, "billing", "subscription", providerSubID)
 		return nil
 	}
-	if err != nil {
-		return err
+	if callErr != nil {
+		return callErr
 	}
 	if snap.TestMode != s.d.Settings.TestMode {
 		return nil
@@ -145,22 +181,6 @@ func (s *Service) ResyncTenant(ctx context.Context, tenantID string) (int, error
 		}
 	}
 	return corrected, nil
-}
-
-// driveDueChanges runs scheduled-change steps whose time has come, covering
-// lost or clock-skewed jobs. RunScheduledChange is idempotent per step.
-func (s *Service) driveDueChanges(ctx context.Context) error {
-	due, err := s.d.Repo.ListDueScheduledChanges(ctx, s.now(), scheduledChangeLead)
-	if err != nil {
-		return err
-	}
-	var errs []error
-	for _, c := range due {
-		if err := s.RunScheduledChange(ctx, c.ID); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // sweepUnpaidExpired catches trials that expired without a payment whose
