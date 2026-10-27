@@ -159,7 +159,8 @@ services:
     riverui:
         image: ghcr.io/riverqueue/riverui:latest
         environment:
-            DATABASE_URL: "${DATABASE_DSN:-postgres://ogen:ogen@postgres:5432/ogen?sslmode=disable}&search_path=river_service"
+            DATABASE_URL: "${DATABASE_DSN:-postgres://ogen:ogen@postgres:5432/ogen?sslmode=disable}"
+            RIVER_SCHEMA: river_service
         ports:
             - "9004:8080"
         depends_on:
