@@ -8,6 +8,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
@@ -38,6 +39,7 @@ func newBrandDistill(d *deps) *branddistill.Service {
 		Assets: r.pieceRepo,
 		Chunks: r.chunksRepo,
 		Brands: r.brandRepo,
+		Slots:  repository.NewBrandDistillRunSlots(d.db),
 	}, d.entitlements.limiter, d.hub, d.enqueuer, branddistill.Deps{
 		Mapper:   d.ingest.firecrawl,
 		Importer: importer,

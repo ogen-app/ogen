@@ -27,6 +27,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/assetsource"
 	"github.com/ogen-app/ogen/src/usecase/brandsource"
 	"github.com/ogen-app/ogen/src/usecase/notify"
+	"github.com/ogen-app/ogen/src/usecase/runslot"
 	"github.com/ogen-app/ogen/src/usecase/urlimport"
 )
 
@@ -78,6 +79,10 @@ var (
 	ErrRefineLimit = errors.New("no more answer rounds for this run")
 	// ErrWaiting tells the job to come back: sources are still ingesting.
 	ErrWaiting = errors.New("sources are still being ingested")
+	// ErrMapDeferred is what a Mapper returns when the site map is made
+	// elsewhere (river-service): Prepare stops, and is called again with a
+	// Mapper holding the map's result.
+	ErrMapDeferred = errors.New("the site map is made elsewhere")
 )
 
 // InputError is a request that cannot be accepted as given. Code is
@@ -153,6 +158,9 @@ type Repos struct {
 	Assets repository.AssetRepository
 	Chunks assetsource.Chunks
 	Brands repository.BrandRepository
+	// Slots keeps the detached-run slots of the runs' model stages; nil
+	// runs them only inline.
+	Slots runslot.Store
 }
 
 // Deps are the collaborators that may be absent: without Mapper or Importer

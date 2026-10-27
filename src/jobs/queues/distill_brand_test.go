@@ -17,10 +17,12 @@ type fakeBrandRunner struct {
 	inactive []string
 }
 
-func (f *fakeBrandRunner) Run(_ context.Context, _, runID string) error {
+func (f *fakeBrandRunner) Prepare(_ context.Context, _, runID string, _ branddistill.Mapper) error {
 	f.runs = append(f.runs, runID)
 	return f.err
 }
+
+func (f *fakeBrandRunner) Finish(context.Context, string, string) error { return nil }
 
 func (f *fakeBrandRunner) Fail(_ context.Context, _, runID string, _ error) {
 	f.failed = append(f.failed, runID)
