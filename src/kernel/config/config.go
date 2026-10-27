@@ -315,13 +315,13 @@ type Config struct {
 
 	ConnectionExpiryLeadDays int `envconfig:"CONNECTION_EXPIRY_LEAD_DAYS"  default:"7"`
 
-	// Weekly report email. Every WEEKLY_REPORT_CHECK_EVERY the dispatcher
-	// mails each workspace whose Monday 09:00 has arrived in its own time zone.
-	// WEEKLY_REPORT_LIMIT_PCT is the plan-usage share from which a limit shows
-	// under "Needs your attention".
-	WeeklyReportEnabled    bool          `envconfig:"WEEKLY_REPORT_ENABLED"     default:"true"`
-	WeeklyReportCheckEvery time.Duration `envconfig:"WEEKLY_REPORT_CHECK_EVERY" default:"1h"`
-	WeeklyReportLimitPct   int           `envconfig:"WEEKLY_REPORT_LIMIT_PCT"   default:"80"`
+	// Weekly report email. river-service's dispatch (every
+	// WEEKLY_REPORT_CHECK_EVERY there) mails each workspace whose Monday 09:00
+	// has arrived in its own time zone; with WEEKLY_REPORT_ENABLED off nothing
+	// is built. WEEKLY_REPORT_LIMIT_PCT is the plan-usage share from which a
+	// limit shows under "Needs your attention".
+	WeeklyReportEnabled  bool `envconfig:"WEEKLY_REPORT_ENABLED" default:"true"`
+	WeeklyReportLimitPct int  `envconfig:"WEEKLY_REPORT_LIMIT_PCT"   default:"80"`
 
 	// Optional post-OAuth redirect target. When set, every connect
 	// link Zernio issues will send the user here after authorization
@@ -391,9 +391,6 @@ type Config struct {
 	LemonSqueezyHTTPTimeout   time.Duration `envconfig:"LEMONSQUEEZY_HTTP_TIMEOUT" default:"15s"`
 	LemonSqueezyAPIKey        string        `envconfig:"LEMONSQUEEZY_API_KEY"        default:""`
 	LemonSqueezyWebhookSecret string        `envconfig:"LEMONSQUEEZY_WEBHOOK_SECRET" default:""`
-	// BillingReconcileInterval re-reads every live subscription from the
-	// provider (its webhooks retry only three times). 0 disables the sweep.
-	BillingReconcileInterval time.Duration `envconfig:"BILLING_RECONCILE_INTERVAL" default:"1h"`
 	// BillingTrialTeardownLive tears down the Zernio profile of a workspace
 	// whose free month ended without a payment. False only reports it.
 	BillingTrialTeardownLive bool `envconfig:"BILLING_TRIAL_TEARDOWN_LIVE" default:"false"`
