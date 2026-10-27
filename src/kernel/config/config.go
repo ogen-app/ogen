@@ -524,7 +524,7 @@ type Config struct {
 	// rescheduled, and the stop gives up at JobShutdownTimeout. Every shutdown
 	// stage together must fit the platform's grace before SIGKILL (Railway:
 	// RAILWAY_DEPLOYMENT_DRAINING_SECONDS, set it to 300 for these defaults).
-	JobSoftStopTimeout time.Duration `envconfig:"JOB_SOFT_STOP_TIMEOUT" default:"210s"`
+	JobSoftStopTimeout time.Duration `envconfig:"JOB_SOFT_STOP_TIMEOUT" default:"195s"`
 	JobShutdownTimeout time.Duration `envconfig:"JOB_SHUTDOWN_TIMEOUT" default:"240s"`
 
 	// river-service takes over job kinds one family at a time. Kinds listed in

@@ -200,8 +200,11 @@ func zernioQueueDeps(d *deps) queues.ZernioDeps {
 
 // minJobCancelMargin is the least time the shutdown leaves between River
 // cancelling running jobs and giving up on the stop, so cancelled jobs can
-// record their reschedule before the process exits.
-const minJobCancelMargin = 15 * time.Second
+// record their reschedule before the process exits. River's completer may take
+// up to ~37s to persist it (three tries of 10s plus backoff, on a context
+// cancellation doesn't stop); a reschedule that never lands leaves the job
+// running at its last attempt for the rescuer to discard.
+const minJobCancelMargin = 45 * time.Second
 
 // softStopTimeout is how long River lets running jobs finish on shutdown
 // before cancelling them. It is clamped below JobShutdownTimeout so the

@@ -14,11 +14,11 @@ func TestSoftStopTimeout(t *testing.T) {
 		shutdown time.Duration
 		want     time.Duration
 	}{
-		{name: "defaults", soft: 210 * time.Second, shutdown: 240 * time.Second, want: 210 * time.Second},
-		{name: "soft past the cancel margin is clamped", soft: 235 * time.Second, shutdown: 240 * time.Second, want: 225 * time.Second},
-		{name: "soft longer than shutdown is clamped", soft: 10 * time.Minute, shutdown: 240 * time.Second, want: 225 * time.Second},
-		{name: "unset soft uses the ceiling", soft: 0, shutdown: 60 * time.Second, want: 45 * time.Second},
-		{name: "shutdown shorter than the margin halves it", soft: 0, shutdown: 10 * time.Second, want: 5 * time.Second},
+		{name: "defaults", soft: 195 * time.Second, shutdown: 240 * time.Second, want: 195 * time.Second},
+		{name: "soft past the cancel margin is clamped", soft: 210 * time.Second, shutdown: 240 * time.Second, want: 195 * time.Second},
+		{name: "soft longer than shutdown is clamped", soft: 10 * time.Minute, shutdown: 240 * time.Second, want: 195 * time.Second},
+		{name: "unset soft uses the ceiling", soft: 0, shutdown: 90 * time.Second, want: 45 * time.Second},
+		{name: "shutdown shorter than the margin halves it", soft: 0, shutdown: 30 * time.Second, want: 15 * time.Second},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
