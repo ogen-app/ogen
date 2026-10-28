@@ -55,3 +55,15 @@ func TestGetReceivedRaw(t *testing.T) {
 		t.Fatalf("nil client: %v", err)
 	}
 }
+
+func TestGetReceivedRawKeepsTheSignatureOutOfErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A link to a port nothing listens on: the download fails in transport.
+		_, _ = w.Write([]byte(`{"raw":{"download_url":"http://127.0.0.1:1/raw/em-1?Signature=s3cret"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := New(staticKey("key"), srv.URL, time.Second).GetReceivedRaw(t.Context(), "em-1", 1<<20)
+	if err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("err = %v, want a download failure without the signed link", err)
+	}
+}
