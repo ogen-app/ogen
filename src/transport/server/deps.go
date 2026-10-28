@@ -225,6 +225,11 @@ func (d *deps) initJobs(ctx context.Context) error {
 	}
 	d.email.Deps.ReportPrefs = r.weeklyReportRepo
 	d.ensureEnqueuer()
+	// Forwarded receipts reach Harbor through its webhook, so without a
+	// Harbor webhook URL nothing is queued.
+	if d.cfg.HarborWebhookURL != "" && d.cfg.ReceiptsInboundAddress != "" {
+		d.email.Webhook.SetReceipts(d.cfg.ReceiptsInboundAddress, d.enqueuer)
+	}
 	if err := d.initRelay(ctx); err != nil {
 		return err
 	}

@@ -394,6 +394,11 @@ type Config struct {
 	// BillingTrialTeardownLive tears down the Zernio profile of a workspace
 	// whose free month ended without a payment. False only reports it.
 	BillingTrialTeardownLive bool `envconfig:"BILLING_TRIAL_TEARDOWN_LIVE" default:"false"`
+	// The Lemon Squeezy fee estimate stored on each payment: the provider's
+	// payloads do not report it. Basis points of the USD total plus a fixed
+	// USD amount in cents per charge (5% + 50¢ is the standard rate).
+	BillingFeePercentBPS int64 `envconfig:"BILLING_FEE_PERCENT_BPS"  default:"500"`
+	BillingFeeFixedCents int64 `envconfig:"BILLING_FEE_FIXED_CENTS"  default:"50"`
 
 	// Envelope encryption. KEKPath points at a Docker-volume directory;
 	// the actual key file lives at <KEKPath>/kek.v1. The versioned
@@ -433,6 +438,11 @@ type Config struct {
 	HarborWebhookURL    string `envconfig:"HARBOR_WEBHOOK_URL"    default:""`
 	HarborWebhookSecret string `envconfig:"HARBOR_WEBHOOK_SECRET" default:""`
 	HarborBaseURL       string `envconfig:"HARBOR_BASE_URL"       default:""`
+	// ReceiptsInboundAddress is the Resend inbound address operators forward
+	// vendor receipts to. An email.received webhook for it queues the
+	// receipt notification to Harbor; every other inbound email is ignored.
+	// Empty (or no HarborWebhookURL) turns the receipt path off.
+	ReceiptsInboundAddress string `envconfig:"RECEIPTS_INBOUND_ADDRESS" default:""`
 
 	// AnalysisFullContextMaxTokens is the largest source analysed in one model
 	// call; a larger one is read in parts and the notes reduced.

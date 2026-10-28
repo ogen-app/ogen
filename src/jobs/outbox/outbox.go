@@ -41,50 +41,66 @@ func NewWriter(db *sql.DB) *Writer { return &Writer{db: db} }
 // and req carries its args and schedule; the idempotency key and request id
 // are filled in at delivery.
 func (w *Writer) WriteTx(ctx context.Context, tx *sql.Tx, kind string, req *jobsv1.EnqueueRequest) error {
-	return write(ctx, tx, kind, req)
+	_, err := write(ctx, tx, kind, "", req)
+	return err
 }
 
 // Write records the job in a transaction of its own, for callers that have
 // none.
 func (w *Writer) Write(ctx context.Context, kind string, req *jobsv1.EnqueueRequest) error {
-	tx, err := w.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("outbox: begin: %w", err)
-	}
-	if err := write(ctx, tx, kind, req); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("outbox: commit: %w", err)
-	}
-	return nil
+	_, err := w.WriteOnce(ctx, kind, "", req)
+	return err
 }
 
-func write(ctx context.Context, ex execer, kind string, req *jobsv1.EnqueueRequest) error {
+// WriteOnce is Write for a job that must be queued once per dedupeKey: while
+// a row with the same key is kept, the write is dropped and reports false.
+// An empty key always writes.
+func (w *Writer) WriteOnce(ctx context.Context, kind, dedupeKey string, req *jobsv1.EnqueueRequest) (bool, error) {
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("outbox: begin: %w", err)
+	}
+	written, err := write(ctx, tx, kind, dedupeKey, req)
+	if err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("outbox: commit: %w", err)
+	}
+	return written, nil
+}
+
+func write(ctx context.Context, ex execer, kind, dedupeKey string, req *jobsv1.EnqueueRequest) (bool, error) {
 	id, err := models.NewID()
 	if err != nil {
-		return fmt.Errorf("outbox: new id: %w", err)
+		return false, fmt.Errorf("outbox: new id: %w", err)
 	}
 	payload, err := protojson.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("outbox: encode %s: %w", kind, err)
+		return false, fmt.Errorf("outbox: encode %s: %w", kind, err)
 	}
 	carrier, err := traceCarrier(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	requestID, _ := logging.RequestIDFrom(ctx)
-	if _, err := ex.ExecContext(ctx,
-		`INSERT INTO job_outbox (id, kind, payload, trace_carrier, request_id) VALUES ($1, $2, $3, $4, NULLIF($5, ''))`,
-		id, kind, payload, carrier, requestID); err != nil {
-		return fmt.Errorf("outbox: insert %s: %w", kind, err)
+	res, err := ex.ExecContext(ctx, `
+		INSERT INTO job_outbox (id, kind, payload, trace_carrier, request_id, dedupe_key)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''))
+		ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+		id, kind, payload, carrier, requestID, dedupeKey)
+	if err != nil {
+		return false, fmt.Errorf("outbox: insert %s: %w", kind, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return false, nil
 	}
 	// Delivered on commit; dropped with a rolled-back transaction.
 	if _, err := ex.ExecContext(ctx, `SELECT pg_notify($1, '')`, notifyChannel); err != nil {
-		return fmt.Errorf("outbox: notify: %w", err)
+		return false, fmt.Errorf("outbox: notify: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // traceCarrier captures the trace context of ctx, so the job continues the

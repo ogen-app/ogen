@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/ogen-app/ogen/src/domain/billing"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 // VerifyWebhook implements billing.Provider: X-Signature is the hex
@@ -96,6 +98,9 @@ func parseWebhook(body []byte) (billing.Event, error) {
 		ev.PaymentSubscriptionID = string(a.SubscriptionID)
 		ev.PaymentAmountMinor = a.Total
 		ev.PaymentStatus = a.Status
+		ev.Payments = webhookPayments(billing.PaymentSourceSubscriptionInvoice, ev, env.Data.Attributes)
+	case strings.HasPrefix(ev.Name, "order_"):
+		ev.Payments = webhookPayments(billing.PaymentSourceOrder, ev, env.Data.Attributes)
 	case strings.HasPrefix(ev.Name, "subscription_"):
 		var a subscriptionAttrs
 		if err := json.Unmarshal(env.Data.Attributes, &a); err != nil {
@@ -109,6 +114,18 @@ func parseWebhook(body []byte) (billing.Event, error) {
 		ev.Subscription = &sub
 	}
 	return ev, nil
+}
+
+// webhookPayments reads the payments an event reports. One that does not
+// decode is logged and skipped, so it never blocks the rest of the event; the
+// payments sync reads it again from the API.
+func webhookPayments(source string, ev billing.Event, attrs json.RawMessage) []billing.Payment {
+	payments, err := decodePayments(source, ev.ObjectID, attrs)
+	if err != nil {
+		slog.Warn("lemonsqueezy: webhook payment skipped", logging.AttrComponent, "billing.lemonsqueezy", "event", ev.Name, logging.AttrError, err)
+		return nil
+	}
+	return payments
 }
 
 // customData flattens meta.custom_data to strings; numbers and booleans are

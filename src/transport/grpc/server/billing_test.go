@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	billingv1 "github.com/ogen-app/ogen/gen/billing/v1"
 	billingdom "github.com/ogen-app/ogen/src/domain/billing"
@@ -26,6 +27,7 @@ type fakeBillingAdmin struct {
 	invalidErr       error
 	offerErr         error
 	setMapping       []any
+	listedPayments   []any
 }
 
 func (f *fakeBillingAdmin) Enabled() bool { return true }
@@ -125,6 +127,52 @@ func (f *fakeBillingAdmin) SuggestVariantMappings(context.Context, bool) ([]bill
 	return []billing.VariantSuggestion{{PriceID: "p2", Variant: fakeVariant}}, nil
 }
 func (f *fakeBillingAdmin) CheckVariants(context.Context) (int, error) { return 0, nil }
+func (f *fakeBillingAdmin) ListPayments(_ context.Context, testMode bool, from, to *time.Time, pageSize int, pageToken string) ([]billing.PaymentRow, string, error) {
+	f.listedPayments = []any{testMode, from, to, pageSize, pageToken}
+	if pageToken == "bad" {
+		return nil, "", billing.ErrBadPageToken
+	}
+	at := time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)
+	return []billing.PaymentRow{{
+		BillingPayment: models.BillingPayment{
+			ID: "pay1", Provider: "lemonsqueezy", ProviderID: "77", Kind: "refund", Currency: "EUR",
+			Subtotal: 900, Tax: 100, Total: 1000, SubtotalUSD: 1050, TaxUSD: 117, TotalUSD: 1167,
+			Status: "partial_refund", OccurredAt: at, TestMode: true,
+		},
+		ResolvedTenantID: "t1", TierID: "pro",
+	}}, "next", nil
+}
+
+func TestBillingListPaymentsRoundTrip(t *testing.T) {
+	fake := &fakeBillingAdmin{}
+	cli := dialBillingAdmin(t, fake)
+	ctx := t.Context()
+	from := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+
+	res, err := cli.ListPayments(ctx, &billingv1.ListPaymentsRequest{From: timestamppb.New(from), To: timestamppb.New(to), TestMode: true, PageSize: 10, PageToken: "tok"})
+	if err != nil || res.GetNextPageToken() != "next" || len(res.GetPayments()) != 1 {
+		t.Fatalf("list = %v %v", res, err)
+	}
+	p := res.GetPayments()[0]
+	if p.GetId() != "pay1" || p.GetKind() != "refund" || p.GetProviderId() != "77" || p.GetTenantId() != "t1" || p.GetTierId() != "pro" ||
+		p.GetTotal() != 1000 || p.GetTaxUsd() != 117 || !p.GetTestMode() || !p.GetOccurredAt().AsTime().Equal(time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("payment = %v", p)
+	}
+	if got := fake.listedPayments; got[0] != true || !got[1].(*time.Time).Equal(from) || !got[2].(*time.Time).Equal(to) || got[3] != 10 || got[4] != "tok" {
+		t.Fatalf("listed with %v", got)
+	}
+
+	if _, err := cli.ListPayments(ctx, &billingv1.ListPaymentsRequest{}); err != nil || fake.listedPayments[1].(*time.Time) != nil {
+		t.Fatalf("open range: %v %v", err, fake.listedPayments)
+	}
+	if _, err := cli.ListPayments(ctx, &billingv1.ListPaymentsRequest{From: timestamppb.New(to), To: timestamppb.New(from)}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("reversed range: %v", err)
+	}
+	if _, err := cli.ListPayments(ctx, &billingv1.ListPaymentsRequest{PageToken: "bad"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("bad token: %v", err)
+	}
+}
 
 func TestBillingVariantMappingRoundTrip(t *testing.T) {
 	fake := &fakeBillingAdmin{}

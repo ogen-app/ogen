@@ -56,6 +56,7 @@ const (
 	FlowAssetAnalysis     = "asset_analysis"
 	FlowIdeaDistill       = "idea_distill"
 	FlowBrandDistill      = "brand_distill"
+	FlowReceiptExtraction = "receipt_extraction"
 )
 
 // Slot keys — stable identifiers persisted in flow_model_config.slot_key.
@@ -185,6 +186,10 @@ var catalog = []Flow{
 			Requires: Requirements{NeedsStructuredOutput: true}},
 		{Key: SlotCompose, Description: "Writes the proposal from those passages and the answers.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true, MinContextWindow: 200_000}},
+	}},
+	{Key: FlowReceiptExtraction, Description: "Vendor receipts forwarded to the receipts inbox, read for Harbor's finance ledger.", Slots: []Slot{
+		{Key: SlotMain, Description: "Reads one receipt or invoice into its figures and line items.", Capability: CapabilityChat, GlobalOnly: true, Vendors: anthropicOnly,
+			Requires: Requirements{NeedsStructuredOutput: true}},
 	}},
 	{Key: FlowEmbed, Description: "Embedding pipeline (assets, PDFs, queries).", Slots: []Slot{
 		{Key: SlotMain, Description: "Embeds text into the shared vector space.", Capability: CapabilityEmbed, GlobalOnly: true,

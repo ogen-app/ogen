@@ -46,6 +46,12 @@ func (s *Service) HandleWebhook(ctx context.Context, signature string, body []by
 	if err != nil {
 		return fmt.Errorf("billing webhook: %w", err)
 	}
+	// Payments are kept in both modes, apart by test_mode, and before the
+	// event is logged: a failure here makes the provider redeliver, and a
+	// redelivery of an applied event stops at the log below.
+	if err := s.recordWebhookPayments(ctx, ev); err != nil {
+		return err
+	}
 
 	sum := sha256.Sum256(body)
 	id, err := models.NewID()
@@ -81,6 +87,14 @@ func (s *Service) HandleWebhook(ctx context.Context, signature string, body []by
 	if err := s.d.Repo.FinishWebhookEvent(ctx, row.ID, outcome, errMsg, tid, s.now()); err != nil {
 		slog.WarnContext(ctx, "billing webhook: outcome write failed", logging.AttrComponent, "billing", logging.AttrError, err)
 	}
+	countWebhookOutcome(outcome)
+	if applyErr != nil && !errors.Is(applyErr, errUnresolvedTenant) {
+		return applyErr
+	}
+	return nil
+}
+
+func countWebhookOutcome(outcome string) {
 	switch outcome {
 	case models.WebhookOutcomeApplied:
 		webhooksApplied.Add(1)
@@ -91,10 +105,6 @@ func (s *Service) HandleWebhook(ctx context.Context, signature string, body []by
 	case models.WebhookOutcomeFailed:
 		webhooksFailed.Add(1)
 	}
-	if applyErr != nil && !errors.Is(applyErr, errUnresolvedTenant) {
-		return applyErr
-	}
-	return nil
 }
 
 // applyEvent routes one parsed event. It returns the outcome and the tenant.

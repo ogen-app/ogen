@@ -59,6 +59,8 @@ type Deps struct {
 	// BillingSteps runs the billing jobs for river-service; nil leaves them
 	// to ogen's own workers.
 	BillingSteps BillingSteps
+	// BillingPayments runs the payments sync; nil leaves it unregistered.
+	BillingPayments BillingPayments
 
 	// The process_pdf worker's dependencies (pdf-service client,
 	// embedder, storage, asset repos). A nil Client (no PDF_SERVICE_ADDR) makes

@@ -45,6 +45,7 @@ func queueDeps(d *deps) queues.Deps {
 		// billing jobs run over the same usecase.
 		BillingLive:           d.billing,
 		BillingSteps:          d.billing,
+		BillingPayments:       d.billing,
 		Billing:               d.billing,
 		PDF:                   d.ingest.pdf,
 		Document:              d.ingest.document,

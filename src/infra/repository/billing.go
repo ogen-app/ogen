@@ -124,6 +124,16 @@ type BillingRepository interface {
 	// inserted and the price ids it skipped because they do not exist.
 	SeedVariantMappings(ctx context.Context, testMode bool, rows []models.BillingVariantMapping) (int, []string, error)
 
+	// Payments.
+
+	// UpsertPayments writes payments, keyed by provider, mode, source,
+	// provider id and kind. A row is only overwritten by a copy at least as
+	// new (provider_updated_at), and keeps its tenant when the copy has none.
+	UpsertPayments(ctx context.Context, rows []models.BillingPayment) error
+	// ListPayments lists one mode's payments that occurred in [from, to),
+	// oldest first, after the keyset cursor, with tenant and tier resolved.
+	ListPayments(ctx context.Context, q PaymentsQuery) ([]PaymentRow, error)
+
 	// CountConnectedAccounts counts a workspace's connected (not
 	// disconnected) social accounts: the connected_accounts entitlement.
 	CountConnectedAccounts(ctx context.Context, tenantID string) (int64, error)

@@ -24,6 +24,7 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 		TeardownZernioProfileTask{TenantID: "t1", Reason: TeardownReasonTrialUnpaid},
 		SendEmailTask{UserID: "u1", TenantID: "t1", TemplateKey: "welcome", EmailKind: models.EmailKindTransactional, IdempotencyKey: "welcome:u1", Vars: map[string]string{"a": "b"}},
 		NotifyHarborTenantRegisteredTask{TenantID: "t1"},
+		NotifyHarborReceiptReceivedTask{ResendEmailID: "e1"},
 		ProcessPDFTask{AssetID: "a1", TenantID: "t1", OriginalName: "x.pdf", MimeType: "application/pdf"},
 		ProcessDocumentTask{AssetID: "a1", TenantID: "t1", StorageKey: "k"},
 		ProcessURLTask{AssetID: "a1", TenantID: "t1", SourceURL: "https://example.com", Refresh: true},
@@ -48,12 +49,16 @@ func TestEnqueueRequestCoversEveryEnqueuedKind(t *testing.T) {
 			if field == nil || string(field.Name()) != args.Kind() {
 				t.Fatalf("args field = %v, want %s", field, args.Kind())
 			}
-			if _, ok := riverKinds[args.Kind()]; !ok {
+			if _, ok := riverKinds[args.Kind()]; !ok && !postRiverKinds[args.Kind()] {
 				t.Errorf("RetireRiver can't move a River %s job", args.Kind())
 			}
 		})
 	}
 }
+
+// postRiverKinds were added after River was retired, so no River job of
+// theirs can be left to move.
+var postRiverKinds = map[string]bool{NotifyHarborReceiptKind: true}
 
 func TestEnqueueRequestFields(t *testing.T) {
 	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
@@ -118,7 +123,7 @@ func TestRetireRiverKnowsEveryRelayedKind(t *testing.T) {
 	oneof := (&jobsv1.EnqueueRequest{}).ProtoReflect().Descriptor().Oneofs().ByName("args")
 	for i := range oneof.Fields().Len() {
 		kind := string(oneof.Fields().Get(i).Name())
-		if _, ok := riverKinds[kind]; !ok {
+		if _, ok := riverKinds[kind]; !ok && !postRiverKinds[kind] {
 			t.Errorf("RetireRiver can't move a pending %s job", kind)
 		}
 	}
