@@ -64,14 +64,14 @@ func (r *billingRepository) ListPayments(ctx context.Context, q PaymentsQuery) (
 		ColumnExpr("bp.*").
 		ColumnExpr("COALESCE(bp.tenant_id, bs.tenant_id, '') AS resolved_tenant_id").
 		ColumnExpr("COALESCE(tv.tier_id, '') AS tier_id").
-		Join("LEFT JOIN billing_subscriptions AS bs ON bp.provider_subscription_id <> '' AND bs.provider = bp.provider AND bs.provider_subscription_id = bp.provider_subscription_id").
+		Join("LEFT JOIN billing_subscriptions AS bs ON bp.provider_subscription_id <> '' AND bs.provider = bp.provider AND bs.test_mode = bp.test_mode AND bs.provider_subscription_id = bp.provider_subscription_id").
 		Join("LEFT JOIN billing_variant_mappings AS bvm ON bvm.test_mode = bp.test_mode AND bvm.variant_id = NULLIF(bp.provider_variant_id, '')").
 		Join("LEFT JOIN tenant_tier_version_prices AS tvp ON tvp.id = COALESCE(bvm.tier_version_price_id, bs.tier_version_price_id)").
 		Join("LEFT JOIN tenant_tier_versions AS tv ON tv.id = tvp.tier_version_id").
 		Where("bp.test_mode = ?", q.TestMode).
 		Where(`NOT (bp.source = 'order' AND EXISTS (
 			SELECT 1 FROM billing_subscriptions AS so
-			WHERE so.provider = bp.provider AND so.provider_order_id = bp.provider_id))`).
+			WHERE so.provider = bp.provider AND so.test_mode = bp.test_mode AND so.provider_order_id = bp.provider_id))`).
 		OrderExpr("bp.occurred_at, bp.id").
 		Limit(q.Limit)
 	if q.From != nil {

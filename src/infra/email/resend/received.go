@@ -82,6 +82,10 @@ func (c *Client) download(ctx context.Context, link string, maxBytes int64) ([]b
 	// a large email may take longer than an API call.
 	resp, err := (&http.Client{Transport: c.httpClient.Transport}).Do(req)
 	if err != nil {
+		// The link carries its signature; keep it out of the error text.
+		if ue, ok := errors.AsType[*url.Error](err); ok {
+			err = ue.Err
+		}
 		return nil, fmt.Errorf("resend: download received email: %w", err)
 	}
 	defer resp.Body.Close()

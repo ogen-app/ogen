@@ -73,8 +73,15 @@ func TestResendWebhook_ReceiptQueuedOnce(t *testing.T) {
 	if code := postResend(t, app, "msg_4", other); code != fiber.StatusOK {
 		t.Fatalf("other address: status %d", code)
 	}
-	if n := count(queues.NotifyHarborReceiptKind); n != 2 {
-		t.Fatalf("receipt outbox rows = %d, want 2", n)
+	// Copied or blind-copied to the address.
+	for i, field := range []string{"cc", "bcc"} {
+		body := []byte(`{"type":"email.received","data":{"email_id":"em-cc-` + field + `","to":["ops@getogen.com"],"` + field + `":["receipts@in.getogen.com"]}}`)
+		if code := postResend(t, app, "msg_cc_"+strconv.Itoa(i), body); code != fiber.StatusOK {
+			t.Fatalf("%s: status %d", field, code)
+		}
+	}
+	if n := count(queues.NotifyHarborReceiptKind); n != 4 {
+		t.Fatalf("receipt outbox rows = %d, want 4", n)
 	}
 }
 

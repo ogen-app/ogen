@@ -61,7 +61,8 @@ type requestData struct {
 }
 
 // extract reads the email once, with one repair turn when the answer is not
-// JSON.
+// JSON. When a model call fails or the answer stays unreadable, the response
+// still comes back with the error, carrying the usage of the calls made.
 func (r *runner) extract(ctx context.Context, req Request) (*Response, error) {
 	start := time.Now()
 	data := requestData{From: req.From, ForwardedFrom: req.ForwardedFrom, Subject: req.Subject, Date: req.Date}
@@ -92,7 +93,7 @@ func (r *runner) extract(ctx context.Context, req Request) (*Response, error) {
 
 	reply, err := r.generate(ctx, call, &resp.Usage)
 	if err != nil {
-		return nil, err
+		return resp, err
 	}
 	a, parseErr := parseAnswer(reply.Text)
 	if parseErr != nil {
@@ -100,10 +101,10 @@ func (r *runner) extract(ctx context.Context, req Request) (*Response, error) {
 		call.Prompt += "\n\nYour previous reply could not be parsed as JSON (" + parseErr.Error() + "):\n" +
 			reply.Text + "\n\nReturn only the corrected JSON object."
 		if reply, err = r.generate(ctx, call, &resp.Usage); err != nil {
-			return nil, err
+			return resp, err
 		}
 		if a, parseErr = parseAnswer(reply.Text); parseErr != nil {
-			return nil, &AIError{Msg: "model reply was not valid JSON: " + parseErr.Error(), Invalid: true}
+			return resp, &AIError{Msg: "model reply was not valid JSON: " + parseErr.Error(), Invalid: true}
 		}
 	}
 	resp.Extraction = a.extraction()

@@ -114,8 +114,12 @@ func TestExtractRepairsBadJSONAndSumsUsage(t *testing.T) {
 
 	r, _ = newTestRunner(t, "nope", "still nope")
 	var ae *AIError
-	if _, err := r.extract(t.Context(), Request{TextBody: "x"}); !errors.As(err, &ae) || !ae.Invalid {
+	resp, err = r.extract(t.Context(), Request{TextBody: "x"})
+	if !errors.As(err, &ae) || !ae.Invalid {
 		t.Fatalf("err = %v", err)
+	}
+	if resp == nil || resp.Usage.CostMicros != 3000 || resp.Usage.ModelID != "claude-haiku-5-5" {
+		t.Fatalf("failed reading lost its usage: %+v", resp)
 	}
 }
 
@@ -134,7 +138,7 @@ func TestExtractionDropsWhatDoesNotHoldUp(t *testing.T) {
 
 func TestMicros(t *testing.T) {
 	cases := map[string]int64{
-		"20.00": 20_000_000, "20": 20_000_000, "1,234.56": 1_234_560_000, "12,50": 12_500_000, "€ 9.99": 9_990_000,
+		"20.00": 20_000_000, "20": 20_000_000, "1,234.56": 1_234_560_000, "1.234,56": 1_234_560_000, "12,50": 12_500_000, "€ 9.99": 9_990_000,
 		"-5.00": 5_000_000, "(3.10)": 3_100_000, "0.0000015": 1, "1.5": 1_500_000, ".5": 500_000,
 	}
 	for in, want := range cases {

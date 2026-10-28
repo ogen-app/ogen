@@ -79,8 +79,11 @@ type resendEvent struct {
 	Data      struct {
 		EmailID string   `json:"email_id"`
 		To      []string `json:"to"`
-		// ReceivedFor is set on email.received: the addresses the inbound
-		// email was delivered for, which To may not name (a forward, a Bcc).
+		// Cc, Bcc and ReceivedFor are set on email.received. ReceivedFor
+		// holds the addresses a forwarding rule delivered the email for,
+		// which no header may name.
+		Cc          []string `json:"cc"`
+		Bcc         []string `json:"bcc"`
 		ReceivedFor []string `json:"received_for"`
 	} `json:"data"`
 }
@@ -153,7 +156,7 @@ func (h *ResendWebhookHandler) Handle(c *fiber.Ctx) error {
 	case "email.delivery_delayed":
 		sideErr = h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventDelayed, occurredAt)
 	case "email.received":
-		sideErr = h.receiptReceived(ctx, evt.Data.EmailID, slices.Concat(evt.Data.To, evt.Data.ReceivedFor))
+		sideErr = h.receiptReceived(ctx, evt.Data.EmailID, slices.Concat(evt.Data.To, evt.Data.Cc, evt.Data.Bcc, evt.Data.ReceivedFor))
 	default:
 		// Any other event type: acknowledged as a no-op so Resend stops retrying.
 		slog.InfoContext(ctx, "resend webhook ignored", logging.AttrComponent, "handlers.resend_webhook", "type", evt.Type)

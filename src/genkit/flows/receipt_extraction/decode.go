@@ -135,17 +135,21 @@ var figureNoise = strings.NewReplacer(" ", "", " ", "", "_", "", "$", "", "€"
 
 // micros converts a decimal figure to positive micros, exactly: "20.5" is
 // 20500000. ok is false for an empty figure. A comma is read as a grouping
-// separator, or as the decimal mark when it is the only separator and two
-// or fewer digits follow it ("12,50").
+// separator, or as the decimal mark when it comes after the last dot
+// ("1.234,56") or is the only separator with two or fewer digits after it
+// ("12,50").
 func micros(s string) (int64, bool, error) {
 	s = figureNoise.Replace(strings.TrimSpace(s))
 	if s == "" {
 		return 0, false, nil
 	}
-	if !strings.Contains(s, ".") {
-		if i := strings.LastIndexByte(s, ','); i >= 0 && strings.Count(s, ",") == 1 && len(s)-i-1 <= 2 {
-			s = s[:i] + "." + s[i+1:]
-		}
+	dot, comma := strings.LastIndexByte(s, '.'), strings.LastIndexByte(s, ',')
+	switch {
+	case dot >= 0 && comma > dot: // "1.234,56": the dots group, the comma is the mark
+		s = strings.ReplaceAll(s, ".", "")
+		s = strings.Replace(s, ",", ".", 1)
+	case dot < 0 && comma >= 0 && strings.Count(s, ",") == 1 && len(s)-comma-1 <= 2:
+		s = s[:comma] + "." + s[comma+1:]
 	}
 	s = strings.ReplaceAll(s, ",", "")
 	whole, frac, _ := strings.Cut(s, ".")

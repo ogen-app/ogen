@@ -96,4 +96,12 @@ func TestProcessUnreadableStillSucceeds(t *testing.T) {
 			t.Fatalf("%v: %+v %v", err, res, perr)
 		}
 	}
+
+	// A reading that failed after paid calls keeps their usage.
+	paid := &receipt_extraction.Response{Usage: receipt_extraction.Usage{ModelID: "claude-haiku-5-5", PromptVersion: "receipt-v1", CostMicros: 1200}}
+	s := &Service{Extractor: &fakeExtractor{resp: paid, err: &receipt_extraction.AIError{Msg: "not JSON", Invalid: true}}}
+	res, err := s.Process(t.Context(), "", []byte(rawReceipt))
+	if err != nil || res.Usage != paid.Usage || res.Extraction.MerchantName != "" {
+		t.Fatalf("invalid answer: %+v %v", res, err)
+	}
 }

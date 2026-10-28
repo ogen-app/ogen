@@ -123,6 +123,10 @@ func (s *Service) extract(ctx context.Context, res *Result) error {
 		req.PDF, req.PDFName = a.Content, a.Filename
 	}
 	resp, err := s.Extractor.ExtractReceipt(ctx, req)
+	// A failed reading still cost its calls: Harbor books them either way.
+	if resp != nil {
+		res.Usage = resp.Usage
+	}
 	if ve, ok := errors.AsType[*receipt_extraction.ValidationError](err); ok {
 		res.Extraction = receipt_extraction.Extraction{ConfidenceNotes: unreadable(ve.Msg)}
 		return nil
@@ -135,7 +139,7 @@ func (s *Service) extract(ctx context.Context, res *Result) error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	res.Extraction, res.Usage = resp.Extraction, resp.Usage
+	res.Extraction = resp.Extraction
 	return nil
 }
 
