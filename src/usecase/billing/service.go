@@ -100,6 +100,8 @@ type Deps struct {
 	// Provider is nil while billing is off.
 	Provider billingdom.Provider
 	Settings billingdom.Settings
+	// Fees estimates the provider's fee on each recorded payment.
+	Fees billingdom.FeeFormula
 	// Variants serves the current mode's variant map; New builds one over
 	// Repo when nil. Share one across the services of a process.
 	Variants *VariantStore

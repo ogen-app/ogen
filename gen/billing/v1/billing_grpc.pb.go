@@ -32,6 +32,7 @@ const (
 	BillingAdminService_ListVariantMappings_FullMethodName         = "/billing.v1.BillingAdminService/ListVariantMappings"
 	BillingAdminService_SetVariantMapping_FullMethodName           = "/billing.v1.BillingAdminService/SetVariantMapping"
 	BillingAdminService_SuggestVariantMappings_FullMethodName      = "/billing.v1.BillingAdminService/SuggestVariantMappings"
+	BillingAdminService_ListPayments_FullMethodName                = "/billing.v1.BillingAdminService/ListPayments"
 )
 
 // BillingAdminServiceClient is the client API for BillingAdminService service.
@@ -107,6 +108,11 @@ type BillingAdminServiceClient interface {
 	// that exactly one free variant matches. Nothing is saved: the operator
 	// confirms each suggestion with SetVariantMapping.
 	SuggestVariantMappings(ctx context.Context, in *SuggestVariantMappingsRequest, opts ...grpc.CallOption) (*SuggestVariantMappingsResponse, error)
+	// ListPayments lists payments that occurred in [from, to) in one mode,
+	// oldest first, keyset-paginated (occurred_at, then id). A payment whose
+	// amounts change later (a partial refund) is listed again by a sync that
+	// covers its occurred_at, so the caller upserts on id.
+	ListPayments(ctx context.Context, in *ListPaymentsRequest, opts ...grpc.CallOption) (*ListPaymentsResponse, error)
 }
 
 type billingAdminServiceClient struct {
@@ -247,6 +253,16 @@ func (c *billingAdminServiceClient) SuggestVariantMappings(ctx context.Context, 
 	return out, nil
 }
 
+func (c *billingAdminServiceClient) ListPayments(ctx context.Context, in *ListPaymentsRequest, opts ...grpc.CallOption) (*ListPaymentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPaymentsResponse)
+	err := c.cc.Invoke(ctx, BillingAdminService_ListPayments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BillingAdminServiceServer is the server API for BillingAdminService service.
 // All implementations must embed UnimplementedBillingAdminServiceServer
 // for forward compatibility.
@@ -320,6 +336,11 @@ type BillingAdminServiceServer interface {
 	// that exactly one free variant matches. Nothing is saved: the operator
 	// confirms each suggestion with SetVariantMapping.
 	SuggestVariantMappings(context.Context, *SuggestVariantMappingsRequest) (*SuggestVariantMappingsResponse, error)
+	// ListPayments lists payments that occurred in [from, to) in one mode,
+	// oldest first, keyset-paginated (occurred_at, then id). A payment whose
+	// amounts change later (a partial refund) is listed again by a sync that
+	// covers its occurred_at, so the caller upserts on id.
+	ListPayments(context.Context, *ListPaymentsRequest) (*ListPaymentsResponse, error)
 	mustEmbedUnimplementedBillingAdminServiceServer()
 }
 
@@ -368,6 +389,9 @@ func (UnimplementedBillingAdminServiceServer) SetVariantMapping(context.Context,
 }
 func (UnimplementedBillingAdminServiceServer) SuggestVariantMappings(context.Context, *SuggestVariantMappingsRequest) (*SuggestVariantMappingsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuggestVariantMappings not implemented")
+}
+func (UnimplementedBillingAdminServiceServer) ListPayments(context.Context, *ListPaymentsRequest) (*ListPaymentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPayments not implemented")
 }
 func (UnimplementedBillingAdminServiceServer) mustEmbedUnimplementedBillingAdminServiceServer() {}
 func (UnimplementedBillingAdminServiceServer) testEmbeddedByValue()                             {}
@@ -624,6 +648,24 @@ func _BillingAdminService_SuggestVariantMappings_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingAdminService_ListPayments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPaymentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAdminServiceServer).ListPayments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAdminService_ListPayments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAdminServiceServer).ListPayments(ctx, req.(*ListPaymentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BillingAdminService_ServiceDesc is the grpc.ServiceDesc for BillingAdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -682,6 +724,10 @@ var BillingAdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SuggestVariantMappings",
 			Handler:    _BillingAdminService_SuggestVariantMappings_Handler,
+		},
+		{
+			MethodName: "ListPayments",
+			Handler:    _BillingAdminService_ListPayments_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

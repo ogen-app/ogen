@@ -40,6 +40,7 @@ type Defaults struct {
 	VisionExtract  string // vision extract
 	VisionEscalate string // vision escalate
 	Transcribe     string // transcribe
+	Receipts       string // receipt_extraction
 }
 
 // SeedDefaults are the models a slot with no row starts on. Every id must be
@@ -53,6 +54,7 @@ var SeedDefaults = Defaults{
 	VisionExtract:  "gemini-3.8-flash",
 	VisionEscalate: "gemini-3.8-flash",
 	Transcribe:     "gemini-3.8-flash",
+	Receipts:       "claude-haiku-5-5",
 }
 
 // For maps a (flow, slot) to its default model id.
@@ -78,6 +80,8 @@ func (d Defaults) For(flowKey, slotKey string) string {
 		return d.VisionClassify // classify, and alt_text which has always run on it
 	case flowKey == FlowTranscribe:
 		return d.Transcribe
+	case flowKey == FlowReceiptExtraction:
+		return d.Receipts
 	default:
 		return d.Generation
 	}

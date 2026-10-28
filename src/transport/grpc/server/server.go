@@ -80,6 +80,8 @@ type Deps struct {
 	Billing BillingAdmin
 	// TenantInvites backs TenantInviteAdminService; nil leaves it off.
 	TenantInvites TenantInvites
+	// Receipts backs ReceiptService; nil leaves it off.
+	Receipts ReceiptProcessor
 	// Hub carries the entitlement-invalidation event an operator tier change
 	// publishes onto the tenant's /api/events stream.
 	Hub eventhub.Hub
@@ -100,6 +102,11 @@ func New(d Deps) (*grpc.Server, error) {
 	srv := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(tokenAuthInterceptor(token)),
+		// ReceiptService moves whole emails (receipts.v1 sets the limit at
+		// 64 MiB). gRPC limits are per server, so every service gets it;
+		// the others send far less.
+		grpc.MaxRecvMsgSize(receiptsMaxMsgBytes),
+		grpc.MaxSendMsgSize(receiptsMaxMsgBytes),
 	)
 	// A malformed embedded feature catalog fails boot here.
 	catalog, err := entitlements.LoadCatalog()
@@ -125,6 +132,7 @@ func New(d Deps) (*grpc.Server, error) {
 	registerAnnouncementAdmin(srv, d.Announcements)
 	registerBillingAdmin(srv, d.Billing)
 	registerTenantInviteAdmin(srv, d.TenantInvites)
+	registerReceipts(srv, d.Receipts)
 	return srv, nil
 }
 

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/mail"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,12 +31,33 @@ var errInvalidSignature = errors.New("resend webhook: invalid signature")
 // Resend signs webhooks with Svix, so every request is signature-verified before
 // any side effect. Hard bounces and complaints auto-suppress the address (scope
 // all); every delivery/open/click/delay/bounce/complaint event is also persisted
-// to the email_events timeline and folded into the email_logs rollup.
+// to the email_events timeline and folded into the email_logs rollup. An
+// inbound email (email.received) to the receipts address queues the receipt
+// notification to Harbor.
 type ResendWebhookHandler struct {
 	suppressions  repository.EmailSuppressionRepository
 	logs          repository.EmailLogRepository
 	events        repository.EmailEventRepository
 	webhookSecret SecretResolver
+
+	// receiptsAddress is the inbound address vendor receipts are forwarded
+	// to, normalised; receipts queues the Harbor notification. Either unset
+	// turns the receipt path off.
+	receiptsAddress string
+	receipts        ReceiptNotifier
+}
+
+// ReceiptNotifier queues the "a receipt arrived" event for Harbor, once per
+// Resend email. *queues.Enqueuer satisfies it.
+type ReceiptNotifier interface {
+	EnqueueNotifyHarborReceiptReceived(ctx context.Context, resendEmailID string) (bool, error)
+}
+
+// SetReceipts turns on the email.received branch: an inbound email addressed
+// to address queues a receipt notification through n.
+func (h *ResendWebhookHandler) SetReceipts(address string, n ReceiptNotifier) {
+	h.receiptsAddress = normalizeAddress(address)
+	h.receipts = n
 }
 
 // NewResendWebhookHandler constructs the webhook handler.
@@ -56,6 +79,9 @@ type resendEvent struct {
 	Data      struct {
 		EmailID string   `json:"email_id"`
 		To      []string `json:"to"`
+		// ReceivedFor is set on email.received: the addresses the inbound
+		// email was delivered for, which To may not name (a forward, a Bcc).
+		ReceivedFor []string `json:"received_for"`
 	} `json:"data"`
 }
 
@@ -126,6 +152,8 @@ func (h *ResendWebhookHandler) Handle(c *fiber.Ctx) error {
 		sideErr = h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventClicked, occurredAt)
 	case "email.delivery_delayed":
 		sideErr = h.recordEvent(ctx, evt.Data.EmailID, svixID, models.EmailEventDelayed, occurredAt)
+	case "email.received":
+		sideErr = h.receiptReceived(ctx, evt.Data.EmailID, slices.Concat(evt.Data.To, evt.Data.ReceivedFor))
 	default:
 		// Any other event type: acknowledged as a no-op so Resend stops retrying.
 		slog.InfoContext(ctx, "resend webhook ignored", logging.AttrComponent, "handlers.resend_webhook", "type", evt.Type)
@@ -207,6 +235,36 @@ func (h *ResendWebhookHandler) recordEvent(ctx context.Context, providerMessageI
 		return err
 	}
 	return nil
+}
+
+// receiptReceived queues the Harbor notification for an inbound email sent to
+// the receipts address. Any other inbound email, or one arriving while the
+// receipt path is off, is acknowledged and ignored. A redelivery queues
+// nothing new: the outbox write is keyed by the Resend email id.
+func (h *ResendWebhookHandler) receiptReceived(ctx context.Context, emailID string, recipients []string) error {
+	if h.receipts == nil || h.receiptsAddress == "" || emailID == "" {
+		return nil
+	}
+	if !slices.ContainsFunc(recipients, func(a string) bool { return normalizeAddress(a) == h.receiptsAddress }) {
+		slog.InfoContext(ctx, "inbound email not for the receipts address ignored", logging.AttrComponent, "handlers.resend_webhook", "email_id", emailID)
+		return nil
+	}
+	queued, err := h.receipts.EnqueueNotifyHarborReceiptReceived(ctx, emailID)
+	if err != nil {
+		slog.WarnContext(ctx, "receipt notification enqueue failed", logging.AttrComponent, "handlers.resend_webhook", "email_id", emailID, logging.AttrError, err)
+		return err
+	}
+	slog.InfoContext(ctx, "receipt received", logging.AttrComponent, "handlers.resend_webhook", "email_id", emailID, "queued", queued)
+	return nil
+}
+
+// normalizeAddress reduces "Name <a@b.com>" or "A@B.com" to "a@b.com".
+func normalizeAddress(s string) string {
+	s = strings.TrimSpace(s)
+	if a, err := mail.ParseAddress(s); err == nil {
+		s = a.Address
+	}
+	return strings.ToLower(s)
 }
 
 // verifySvixSignature validates a Svix-signed webhook (the scheme Resend uses).

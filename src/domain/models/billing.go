@@ -132,3 +132,40 @@ type BillingVariantMapping struct {
 	UpdatedBy          string    `bun:"updated_by,notnull"                           json:"updated_by"`
 	Reason             string    `bun:"reason,notnull"                               json:"reason"`
 }
+
+// BillingPayment is one provider money movement: an order, a subscription
+// invoice, or the refund of one. Amounts are in minor units, with *USD in US
+// cents. TenantID is the checkout's custom data when the payload carried it.
+type BillingPayment struct {
+	bun.BaseModel `bun:"table:billing_payments,alias:bp" swaggerignore:"true"`
+
+	ID                     string    `bun:"id,pk"`
+	Provider               string    `bun:"provider,notnull"`
+	Source                 string    `bun:"source,notnull"`
+	ProviderID             string    `bun:"provider_id,notnull"`
+	Kind                   string    `bun:"kind,notnull"`
+	TestMode               bool      `bun:"test_mode,notnull"`
+	TenantID               *string   `bun:"tenant_id"`
+	ProviderSubscriptionID string    `bun:"provider_subscription_id,notnull"`
+	ProviderVariantID      string    `bun:"provider_variant_id,notnull"`
+	BillingReason          string    `bun:"billing_reason,notnull"`
+	Currency               string    `bun:"currency,notnull"`
+	Subtotal               int64     `bun:"subtotal,notnull"`
+	Discount               int64     `bun:"discount,notnull"`
+	Tax                    int64     `bun:"tax,notnull"`
+	Total                  int64     `bun:"total,notnull"`
+	Refunded               int64     `bun:"refunded,notnull"`
+	SubtotalUSD            int64     `bun:"subtotal_usd,notnull"`
+	DiscountUSD            int64     `bun:"discount_usd,notnull"`
+	TaxUSD                 int64     `bun:"tax_usd,notnull"`
+	TotalUSD               int64     `bun:"total_usd,notnull"`
+	RefundedUSD            int64     `bun:"refunded_usd,notnull"`
+	Fee                    int64     `bun:"fee,notnull"`
+	FeeUSD                 int64     `bun:"fee_usd,notnull"`
+	FeeIsEstimated         bool      `bun:"fee_is_estimated,notnull"`
+	Status                 string    `bun:"status,notnull"`
+	OccurredAt             time.Time `bun:"occurred_at,notnull"`
+	ProviderUpdatedAt      time.Time `bun:"provider_updated_at,notnull"`
+	CreatedAt              time.Time `bun:"created_at,notnull,default:current_timestamp"`
+	UpdatedAt              time.Time `bun:"updated_at,notnull,default:current_timestamp"`
+}

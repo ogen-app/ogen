@@ -35,6 +35,7 @@ type BillingAdmin interface {
 	SetVariantMapping(ctx context.Context, priceID string, testMode bool, variantID, reason string) (billing.VariantMapping, error)
 	SuggestVariantMappings(ctx context.Context, testMode bool) ([]billing.VariantSuggestion, error)
 	CheckVariants(ctx context.Context) (int, error)
+	ListPayments(ctx context.Context, testMode bool, from, to *time.Time, pageSize int, pageToken string) ([]billing.PaymentRow, string, error)
 }
 
 // billingAdminService implements billingv1.BillingAdminServiceServer.
@@ -56,6 +57,8 @@ func billingStatusErr(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, billing.ErrBadPageToken):
+		return status.Error(codes.InvalidArgument, "invalid page_token")
 	case errors.Is(err, billing.ErrUnavailable):
 		return status.Error(codes.Unavailable, "billing is not configured")
 	case errors.Is(err, billing.ErrTenantNotFound):
@@ -256,5 +259,38 @@ func toWebhookEventProto(e *models.BillingWebhookEvent) *billingv1.WebhookEvent 
 	return &billingv1.WebhookEvent{
 		Id: e.ID, EventName: e.EventName, ProviderObjectId: e.ProviderObjectID, TestMode: e.TestMode,
 		Outcome: e.Outcome, Error: e.Error, ReceivedAt: timestamppb.New(e.ReceivedAt), ProcessedAt: ts(e.ProcessedAt),
+	}
+}
+
+func (s *billingAdminService) ListPayments(ctx context.Context, req *billingv1.ListPaymentsRequest) (*billingv1.ListPaymentsResponse, error) {
+	var from, to *time.Time
+	if req.GetFrom() != nil {
+		from = new(req.GetFrom().AsTime())
+	}
+	if req.GetTo() != nil {
+		to = new(req.GetTo().AsTime())
+	}
+	if from != nil && to != nil && !from.Before(*to) {
+		return nil, status.Error(codes.InvalidArgument, "from must be before to")
+	}
+	rows, next, err := s.svc.ListPayments(ctx, req.GetTestMode(), from, to, int(req.GetPageSize()), req.GetPageToken())
+	if err != nil {
+		return nil, billingStatusErr(err)
+	}
+	out := &billingv1.ListPaymentsResponse{NextPageToken: next, Payments: make([]*billingv1.Payment, 0, len(rows))}
+	for _, r := range rows {
+		out.Payments = append(out.Payments, toPaymentProto(r))
+	}
+	return out, nil
+}
+
+func toPaymentProto(r billing.PaymentRow) *billingv1.Payment {
+	return &billingv1.Payment{
+		Id: r.ID, Provider: r.Provider, ProviderId: r.ProviderID, Kind: r.Kind,
+		TenantId: r.ResolvedTenantID, TierId: r.TierID, ProviderVariantId: r.ProviderVariantID, Currency: r.Currency,
+		Subtotal: r.Subtotal, Discount: r.Discount, Tax: r.Tax, Total: r.Total, Refunded: r.Refunded,
+		SubtotalUsd: r.SubtotalUSD, DiscountUsd: r.DiscountUSD, TaxUsd: r.TaxUSD, TotalUsd: r.TotalUSD, RefundedUsd: r.RefundedUSD,
+		Fee: r.Fee, FeeUsd: r.FeeUSD, FeeIsEstimated: r.FeeIsEstimated,
+		Status: r.Status, OccurredAt: timestamppb.New(r.OccurredAt), TestMode: r.TestMode,
 	}
 }

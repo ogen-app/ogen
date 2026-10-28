@@ -46,7 +46,7 @@ func testVendorOf(model string) (string, bool) {
 func testDefaults() Defaults {
 	return Defaults{
 		Generation: "sonnet", Quality: "qual", Planning: "haiku", Embed: "emb",
-		VisionClassify: "flash", VisionExtract: "pro", VisionEscalate: "pro", Transcribe: "asr",
+		VisionClassify: "flash", VisionExtract: "pro", VisionEscalate: "pro", Transcribe: "asr", Receipts: "haiku",
 	}
 }
 
@@ -76,6 +76,7 @@ func TestResolverReconcileAndPrecedence(t *testing.T) {
 		{FlowVision, SlotEscalate}:                "gemini/pro",
 		{FlowVision, SlotAltText}:                 "gemini/flash",
 		{FlowTranscribe, SlotMain}:                "gemini/asr",
+		{FlowReceiptExtraction, SlotMain}:         "anthropic/haiku",
 	}
 	for k, want := range cases {
 		if got := Ref(base, k[0], k[1]); got != want {

@@ -97,6 +97,7 @@ func NewBillingService(rt BillingRuntime) (*billing.Service, error) {
 		Users: repository.NewUserRepository(db), Tiers: repository.NewTenantTierRepository(db),
 		TierVersions: repository.NewTenantTierVersionRepository(db), Assignments: repository.NewTenantTierAssignmentRepository(db),
 		Provider: provider, Settings: settings, Variants: sharedVariantStore(db, repo, settings.TestMode),
+		Fees:     billingdom.FeeFormula{PercentBPS: rt.Config.BillingFeePercentBPS, FixedUSDCents: rt.Config.BillingFeeFixedCents},
 		Notifier: rt.Notifier, Jobs: rt.Jobs, Hub: rt.Hub, Activity: rt.Activity,
 		Configured: func(ctx context.Context) bool {
 			for _, name := range []string{secrets.NameLemonSqueezyAPIKey, secrets.NameLemonSqueezyWebhookSecret} {

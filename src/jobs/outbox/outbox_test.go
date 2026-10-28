@@ -270,3 +270,31 @@ func TestRelayWakesOnCommit(t *testing.T) {
 	}
 	t.Fatal("committed write was not delivered without a poll")
 }
+
+func TestWriteOnceDropsARepeatedKey(t *testing.T) {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := t.Context()
+	w := outbox.NewWriter(db.DB)
+
+	for i, want := range []bool{true, false, false} {
+		written, err := w.WriteOnce(ctx, "send_email", "receipt:e1", emailReq("u1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if written != want {
+			t.Fatalf("write %d: written = %v, want %v", i, written, want)
+		}
+	}
+	if written, err := w.WriteOnce(ctx, "send_email", "receipt:e2", emailReq("u1")); err != nil || !written {
+		t.Fatalf("another key: written = %v, err = %v", written, err)
+	}
+	for range 2 {
+		if err := w.Write(ctx, "send_email", emailReq("u1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := pending(t, db); n != 4 {
+		t.Fatalf("pending = %d, want 4 (two keyed, two without a key)", n)
+	}
+}

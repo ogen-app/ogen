@@ -2444,6 +2444,374 @@ func (x *SuggestVariantMappingsResponse) GetSuggestions() []*VariantSuggestion {
 	return nil
 }
 
+// Payment is one money movement at the provider. Amounts are in minor units
+// and positive for every kind; kind gives the direction. Each amount has a
+// *_usd counterpart in US cents, converted by the provider at the time of
+// the payment.
+type Payment struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Id       string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`             // Ogen's id; the keyset tiebreak
+	Provider string                 `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"` // lemonsqueezy
+	// provider_id is the provider's order or subscription invoice id. A refund
+	// or chargeback carries the id of the order or invoice it reverses.
+	ProviderId        string `protobuf:"bytes,3,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
+	Kind              string `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`                         // order | subscription_invoice | refund | chargeback
+	TenantId          string `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // '' when the customer has no workspace
+	TierId            string `protobuf:"bytes,6,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`       // '' when the variant is unmapped
+	ProviderVariantId string `protobuf:"bytes,7,opt,name=provider_variant_id,json=providerVariantId,proto3" json:"provider_variant_id,omitempty"`
+	Currency          string `protobuf:"bytes,8,opt,name=currency,proto3" json:"currency,omitempty"` // ISO 4217
+	Subtotal          int64  `protobuf:"varint,9,opt,name=subtotal,proto3" json:"subtotal,omitempty"`
+	Discount          int64  `protobuf:"varint,10,opt,name=discount,proto3" json:"discount,omitempty"`
+	Tax               int64  `protobuf:"varint,11,opt,name=tax,proto3" json:"tax,omitempty"`
+	Total             int64  `protobuf:"varint,12,opt,name=total,proto3" json:"total,omitempty"`
+	// refunded is how much of an order or invoice has been refunded so far;
+	// 0 for a refund or chargeback, whose own total is the amount reversed.
+	Refunded    int64 `protobuf:"varint,13,opt,name=refunded,proto3" json:"refunded,omitempty"`
+	SubtotalUsd int64 `protobuf:"varint,14,opt,name=subtotal_usd,json=subtotalUsd,proto3" json:"subtotal_usd,omitempty"`
+	DiscountUsd int64 `protobuf:"varint,15,opt,name=discount_usd,json=discountUsd,proto3" json:"discount_usd,omitempty"`
+	TaxUsd      int64 `protobuf:"varint,16,opt,name=tax_usd,json=taxUsd,proto3" json:"tax_usd,omitempty"`
+	TotalUsd    int64 `protobuf:"varint,17,opt,name=total_usd,json=totalUsd,proto3" json:"total_usd,omitempty"`
+	RefundedUsd int64 `protobuf:"varint,18,opt,name=refunded_usd,json=refundedUsd,proto3" json:"refunded_usd,omitempty"`
+	// fee is the provider's fee. The provider's payload does not report it, so
+	// Ogen estimates it from a configured formula (percentage plus a fixed
+	// amount) and sets fee_is_estimated. Payout reconciliation (CON-413) will
+	// replace estimates with actual fees and clear the flag.
+	Fee            int64                  `protobuf:"varint,19,opt,name=fee,proto3" json:"fee,omitempty"`
+	FeeUsd         int64                  `protobuf:"varint,20,opt,name=fee_usd,json=feeUsd,proto3" json:"fee_usd,omitempty"`
+	FeeIsEstimated bool                   `protobuf:"varint,21,opt,name=fee_is_estimated,json=feeIsEstimated,proto3" json:"fee_is_estimated,omitempty"`
+	Status         string                 `protobuf:"bytes,22,opt,name=status,proto3" json:"status,omitempty"` // the provider's status, e.g. paid | refunded | partial_refund
+	OccurredAt     *timestamppb.Timestamp `protobuf:"bytes,23,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	TestMode       bool                   `protobuf:"varint,24,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *Payment) Reset() {
+	*x = Payment{}
+	mi := &file_billing_v1_billing_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Payment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Payment) ProtoMessage() {}
+
+func (x *Payment) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Payment.ProtoReflect.Descriptor instead.
+func (*Payment) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *Payment) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Payment) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *Payment) GetProviderId() string {
+	if x != nil {
+		return x.ProviderId
+	}
+	return ""
+}
+
+func (x *Payment) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *Payment) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *Payment) GetTierId() string {
+	if x != nil {
+		return x.TierId
+	}
+	return ""
+}
+
+func (x *Payment) GetProviderVariantId() string {
+	if x != nil {
+		return x.ProviderVariantId
+	}
+	return ""
+}
+
+func (x *Payment) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *Payment) GetSubtotal() int64 {
+	if x != nil {
+		return x.Subtotal
+	}
+	return 0
+}
+
+func (x *Payment) GetDiscount() int64 {
+	if x != nil {
+		return x.Discount
+	}
+	return 0
+}
+
+func (x *Payment) GetTax() int64 {
+	if x != nil {
+		return x.Tax
+	}
+	return 0
+}
+
+func (x *Payment) GetTotal() int64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+func (x *Payment) GetRefunded() int64 {
+	if x != nil {
+		return x.Refunded
+	}
+	return 0
+}
+
+func (x *Payment) GetSubtotalUsd() int64 {
+	if x != nil {
+		return x.SubtotalUsd
+	}
+	return 0
+}
+
+func (x *Payment) GetDiscountUsd() int64 {
+	if x != nil {
+		return x.DiscountUsd
+	}
+	return 0
+}
+
+func (x *Payment) GetTaxUsd() int64 {
+	if x != nil {
+		return x.TaxUsd
+	}
+	return 0
+}
+
+func (x *Payment) GetTotalUsd() int64 {
+	if x != nil {
+		return x.TotalUsd
+	}
+	return 0
+}
+
+func (x *Payment) GetRefundedUsd() int64 {
+	if x != nil {
+		return x.RefundedUsd
+	}
+	return 0
+}
+
+func (x *Payment) GetFee() int64 {
+	if x != nil {
+		return x.Fee
+	}
+	return 0
+}
+
+func (x *Payment) GetFeeUsd() int64 {
+	if x != nil {
+		return x.FeeUsd
+	}
+	return 0
+}
+
+func (x *Payment) GetFeeIsEstimated() bool {
+	if x != nil {
+		return x.FeeIsEstimated
+	}
+	return false
+}
+
+func (x *Payment) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *Payment) GetOccurredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return nil
+}
+
+func (x *Payment) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+type ListPaymentsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	From          *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=from,proto3" json:"from,omitempty"` // inclusive; unset = from the first payment
+	To            *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=to,proto3" json:"to,omitempty"`     // exclusive; unset = now
+	TestMode      bool                   `protobuf:"varint,3,opt,name=test_mode,json=testMode,proto3" json:"test_mode,omitempty"`
+	PageSize      int32                  `protobuf:"varint,4,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`   // clamped server-side (default 100, max 500)
+	PageToken     string                 `protobuf:"bytes,5,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"` // opaque cursor from a prior response
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPaymentsRequest) Reset() {
+	*x = ListPaymentsRequest{}
+	mi := &file_billing_v1_billing_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPaymentsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPaymentsRequest) ProtoMessage() {}
+
+func (x *ListPaymentsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPaymentsRequest.ProtoReflect.Descriptor instead.
+func (*ListPaymentsRequest) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ListPaymentsRequest) GetFrom() *timestamppb.Timestamp {
+	if x != nil {
+		return x.From
+	}
+	return nil
+}
+
+func (x *ListPaymentsRequest) GetTo() *timestamppb.Timestamp {
+	if x != nil {
+		return x.To
+	}
+	return nil
+}
+
+func (x *ListPaymentsRequest) GetTestMode() bool {
+	if x != nil {
+		return x.TestMode
+	}
+	return false
+}
+
+func (x *ListPaymentsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListPaymentsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListPaymentsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Payments      []*Payment             `protobuf:"bytes,1,rep,name=payments,proto3" json:"payments,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"` // '' when there is no further page
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPaymentsResponse) Reset() {
+	*x = ListPaymentsResponse{}
+	mi := &file_billing_v1_billing_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPaymentsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPaymentsResponse) ProtoMessage() {}
+
+func (x *ListPaymentsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_billing_v1_billing_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPaymentsResponse.ProtoReflect.Descriptor instead.
+func (*ListPaymentsResponse) Descriptor() ([]byte, []int) {
+	return file_billing_v1_billing_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ListPaymentsResponse) GetPayments() []*Payment {
+	if x != nil {
+		return x.Payments
+	}
+	return nil
+}
+
+func (x *ListPaymentsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_billing_v1_billing_proto protoreflect.FileDescriptor
 
 const file_billing_v1_billing_proto_rawDesc = "" +
@@ -2648,8 +3016,45 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\x1dSuggestVariantMappingsRequest\x12\x1b\n" +
 	"\ttest_mode\x18\x01 \x01(\bR\btestMode\"a\n" +
 	"\x1eSuggestVariantMappingsResponse\x12?\n" +
-	"\vsuggestions\x18\x01 \x03(\v2\x1d.billing.v1.VariantSuggestionR\vsuggestions2\xd1\n" +
+	"\vsuggestions\x18\x01 \x03(\v2\x1d.billing.v1.VariantSuggestionR\vsuggestions\"\xce\x05\n" +
+	"\aPayment\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
+	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x1f\n" +
+	"\vprovider_id\x18\x03 \x01(\tR\n" +
+	"providerId\x12\x12\n" +
+	"\x04kind\x18\x04 \x01(\tR\x04kind\x12\x1b\n" +
+	"\ttenant_id\x18\x05 \x01(\tR\btenantId\x12\x17\n" +
+	"\atier_id\x18\x06 \x01(\tR\x06tierId\x12.\n" +
+	"\x13provider_variant_id\x18\a \x01(\tR\x11providerVariantId\x12\x1a\n" +
+	"\bcurrency\x18\b \x01(\tR\bcurrency\x12\x1a\n" +
+	"\bsubtotal\x18\t \x01(\x03R\bsubtotal\x12\x1a\n" +
+	"\bdiscount\x18\n" +
+	" \x01(\x03R\bdiscount\x12\x10\n" +
+	"\x03tax\x18\v \x01(\x03R\x03tax\x12\x14\n" +
+	"\x05total\x18\f \x01(\x03R\x05total\x12\x1a\n" +
+	"\brefunded\x18\r \x01(\x03R\brefunded\x12!\n" +
+	"\fsubtotal_usd\x18\x0e \x01(\x03R\vsubtotalUsd\x12!\n" +
+	"\fdiscount_usd\x18\x0f \x01(\x03R\vdiscountUsd\x12\x17\n" +
+	"\atax_usd\x18\x10 \x01(\x03R\x06taxUsd\x12\x1b\n" +
+	"\ttotal_usd\x18\x11 \x01(\x03R\btotalUsd\x12!\n" +
+	"\frefunded_usd\x18\x12 \x01(\x03R\vrefundedUsd\x12\x10\n" +
+	"\x03fee\x18\x13 \x01(\x03R\x03fee\x12\x17\n" +
+	"\afee_usd\x18\x14 \x01(\x03R\x06feeUsd\x12(\n" +
+	"\x10fee_is_estimated\x18\x15 \x01(\bR\x0efeeIsEstimated\x12\x16\n" +
+	"\x06status\x18\x16 \x01(\tR\x06status\x12;\n" +
+	"\voccurred_at\x18\x17 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"occurredAt\x12\x1b\n" +
+	"\ttest_mode\x18\x18 \x01(\bR\btestMode\"\xca\x01\n" +
+	"\x13ListPaymentsRequest\x12.\n" +
+	"\x04from\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x04from\x12*\n" +
+	"\x02to\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x02to\x12\x1b\n" +
+	"\ttest_mode\x18\x03 \x01(\bR\btestMode\x12\x1b\n" +
+	"\tpage_size\x18\x04 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
+	"page_token\x18\x05 \x01(\tR\tpageToken\"o\n" +
+	"\x14ListPaymentsResponse\x12/\n" +
+	"\bpayments\x18\x01 \x03(\v2\x13.billing.v1.PaymentR\bpayments\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2\xa4\v\n" +
 	"\x13BillingAdminService\x12c\n" +
 	"\x12GetBillingSettings\x12%.billing.v1.GetBillingSettingsRequest\x1a&.billing.v1.GetBillingSettingsResponse\x12]\n" +
 	"\x10GetTenantBilling\x12#.billing.v1.GetTenantBillingRequest\x1a$.billing.v1.GetTenantBillingResponse\x12i\n" +
@@ -2663,7 +3068,8 @@ const file_billing_v1_billing_proto_rawDesc = "" +
 	"\x14ListProviderVariants\x12'.billing.v1.ListProviderVariantsRequest\x1a(.billing.v1.ListProviderVariantsResponse\x12f\n" +
 	"\x13ListVariantMappings\x12&.billing.v1.ListVariantMappingsRequest\x1a'.billing.v1.ListVariantMappingsResponse\x12`\n" +
 	"\x11SetVariantMapping\x12$.billing.v1.SetVariantMappingRequest\x1a%.billing.v1.SetVariantMappingResponse\x12o\n" +
-	"\x16SuggestVariantMappings\x12).billing.v1.SuggestVariantMappingsRequest\x1a*.billing.v1.SuggestVariantMappingsResponseB\x9a\x01\n" +
+	"\x16SuggestVariantMappings\x12).billing.v1.SuggestVariantMappingsRequest\x1a*.billing.v1.SuggestVariantMappingsResponse\x12Q\n" +
+	"\fListPayments\x12\x1f.billing.v1.ListPaymentsRequest\x1a .billing.v1.ListPaymentsResponseB\x9a\x01\n" +
 	"\x0ecom.billing.v1B\fBillingProtoP\x01Z1github.com/ogen-app/ogen/gen/billing/v1;billingv1\xa2\x02\x03BXX\xaa\x02\n" +
 	"Billing.V1\xca\x02\n" +
 	"Billing\\V1\xe2\x02\x16Billing\\V1\\GPBMetadata\xea\x02\vBilling::V1b\x06proto3"
@@ -2680,7 +3086,7 @@ func file_billing_v1_billing_proto_rawDescGZIP() []byte {
 	return file_billing_v1_billing_proto_rawDescData
 }
 
-var file_billing_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_billing_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_billing_v1_billing_proto_goTypes = []any{
 	(*GetBillingSettingsRequest)(nil),           // 0: billing.v1.GetBillingSettingsRequest
 	(*GetBillingSettingsResponse)(nil),          // 1: billing.v1.GetBillingSettingsResponse
@@ -2718,21 +3124,24 @@ var file_billing_v1_billing_proto_goTypes = []any{
 	(*VariantSuggestion)(nil),                   // 33: billing.v1.VariantSuggestion
 	(*SuggestVariantMappingsRequest)(nil),       // 34: billing.v1.SuggestVariantMappingsRequest
 	(*SuggestVariantMappingsResponse)(nil),      // 35: billing.v1.SuggestVariantMappingsResponse
-	(*timestamppb.Timestamp)(nil),               // 36: google.protobuf.Timestamp
+	(*Payment)(nil),                             // 36: billing.v1.Payment
+	(*ListPaymentsRequest)(nil),                 // 37: billing.v1.ListPaymentsRequest
+	(*ListPaymentsResponse)(nil),                // 38: billing.v1.ListPaymentsResponse
+	(*timestamppb.Timestamp)(nil),               // 39: google.protobuf.Timestamp
 }
 var file_billing_v1_billing_proto_depIdxs = []int32{
-	36, // 0: billing.v1.Subscription.renews_at:type_name -> google.protobuf.Timestamp
-	36, // 1: billing.v1.Subscription.ends_at:type_name -> google.protobuf.Timestamp
-	36, // 2: billing.v1.Subscription.trial_ends_at:type_name -> google.protobuf.Timestamp
-	36, // 3: billing.v1.Subscription.first_paid_at:type_name -> google.protobuf.Timestamp
-	36, // 4: billing.v1.Subscription.invalidated_at:type_name -> google.protobuf.Timestamp
-	36, // 5: billing.v1.Subscription.teardown_at:type_name -> google.protobuf.Timestamp
-	36, // 6: billing.v1.Subscription.created_at:type_name -> google.protobuf.Timestamp
-	36, // 7: billing.v1.Subscription.updated_at:type_name -> google.protobuf.Timestamp
-	36, // 8: billing.v1.ScheduledChange.effective_at:type_name -> google.protobuf.Timestamp
-	36, // 9: billing.v1.ScheduledChange.created_at:type_name -> google.protobuf.Timestamp
-	36, // 10: billing.v1.WebhookEvent.received_at:type_name -> google.protobuf.Timestamp
-	36, // 11: billing.v1.WebhookEvent.processed_at:type_name -> google.protobuf.Timestamp
+	39, // 0: billing.v1.Subscription.renews_at:type_name -> google.protobuf.Timestamp
+	39, // 1: billing.v1.Subscription.ends_at:type_name -> google.protobuf.Timestamp
+	39, // 2: billing.v1.Subscription.trial_ends_at:type_name -> google.protobuf.Timestamp
+	39, // 3: billing.v1.Subscription.first_paid_at:type_name -> google.protobuf.Timestamp
+	39, // 4: billing.v1.Subscription.invalidated_at:type_name -> google.protobuf.Timestamp
+	39, // 5: billing.v1.Subscription.teardown_at:type_name -> google.protobuf.Timestamp
+	39, // 6: billing.v1.Subscription.created_at:type_name -> google.protobuf.Timestamp
+	39, // 7: billing.v1.Subscription.updated_at:type_name -> google.protobuf.Timestamp
+	39, // 8: billing.v1.ScheduledChange.effective_at:type_name -> google.protobuf.Timestamp
+	39, // 9: billing.v1.ScheduledChange.created_at:type_name -> google.protobuf.Timestamp
+	39, // 10: billing.v1.WebhookEvent.received_at:type_name -> google.protobuf.Timestamp
+	39, // 11: billing.v1.WebhookEvent.processed_at:type_name -> google.protobuf.Timestamp
 	2,  // 12: billing.v1.TenantBilling.subscriptions:type_name -> billing.v1.Subscription
 	3,  // 13: billing.v1.TenantBilling.scheduled_changes:type_name -> billing.v1.ScheduledChange
 	4,  // 14: billing.v1.TenantBilling.recent_webhook_events:type_name -> billing.v1.WebhookEvent
@@ -2740,7 +3149,7 @@ var file_billing_v1_billing_proto_depIdxs = []int32{
 	6,  // 16: billing.v1.GetTenantBillingResponse.billing:type_name -> billing.v1.TenantBilling
 	2,  // 17: billing.v1.AttentionItem.subscription:type_name -> billing.v1.Subscription
 	4,  // 18: billing.v1.AttentionItem.webhook_event:type_name -> billing.v1.WebhookEvent
-	36, // 19: billing.v1.AttentionItem.since:type_name -> google.protobuf.Timestamp
+	39, // 19: billing.v1.AttentionItem.since:type_name -> google.protobuf.Timestamp
 	9,  // 20: billing.v1.ListBillingAttentionResponse.items:type_name -> billing.v1.AttentionItem
 	6,  // 21: billing.v1.SetBillingRequiredResponse.billing:type_name -> billing.v1.TenantBilling
 	6,  // 22: billing.v1.SetComplimentaryResponse.billing:type_name -> billing.v1.TenantBilling
@@ -2749,42 +3158,48 @@ var file_billing_v1_billing_proto_depIdxs = []int32{
 	18, // 25: billing.v1.SetFreeTrialTierResponse.offer:type_name -> billing.v1.FreeTrialTier
 	25, // 26: billing.v1.ListProviderVariantsResponse.variants:type_name -> billing.v1.ProviderVariant
 	25, // 27: billing.v1.VariantMapping.variant:type_name -> billing.v1.ProviderVariant
-	36, // 28: billing.v1.VariantMapping.updated_at:type_name -> google.protobuf.Timestamp
+	39, // 28: billing.v1.VariantMapping.updated_at:type_name -> google.protobuf.Timestamp
 	28, // 29: billing.v1.ListVariantMappingsResponse.mappings:type_name -> billing.v1.VariantMapping
 	28, // 30: billing.v1.SetVariantMappingResponse.mapping:type_name -> billing.v1.VariantMapping
 	25, // 31: billing.v1.VariantSuggestion.variant:type_name -> billing.v1.ProviderVariant
 	33, // 32: billing.v1.SuggestVariantMappingsResponse.suggestions:type_name -> billing.v1.VariantSuggestion
-	0,  // 33: billing.v1.BillingAdminService.GetBillingSettings:input_type -> billing.v1.GetBillingSettingsRequest
-	7,  // 34: billing.v1.BillingAdminService.GetTenantBilling:input_type -> billing.v1.GetTenantBillingRequest
-	10, // 35: billing.v1.BillingAdminService.ListBillingAttention:input_type -> billing.v1.ListBillingAttentionRequest
-	12, // 36: billing.v1.BillingAdminService.SetBillingRequired:input_type -> billing.v1.SetBillingRequiredRequest
-	14, // 37: billing.v1.BillingAdminService.SetComplimentary:input_type -> billing.v1.SetComplimentaryRequest
-	16, // 38: billing.v1.BillingAdminService.ResyncSubscription:input_type -> billing.v1.ResyncSubscriptionRequest
-	19, // 39: billing.v1.BillingAdminService.GetFreeTrialTier:input_type -> billing.v1.GetFreeTrialTierRequest
-	21, // 40: billing.v1.BillingAdminService.SetFreeTrialTier:input_type -> billing.v1.SetFreeTrialTierRequest
-	23, // 41: billing.v1.BillingAdminService.InvalidateTestSubscriptions:input_type -> billing.v1.InvalidateTestSubscriptionsRequest
-	26, // 42: billing.v1.BillingAdminService.ListProviderVariants:input_type -> billing.v1.ListProviderVariantsRequest
-	29, // 43: billing.v1.BillingAdminService.ListVariantMappings:input_type -> billing.v1.ListVariantMappingsRequest
-	31, // 44: billing.v1.BillingAdminService.SetVariantMapping:input_type -> billing.v1.SetVariantMappingRequest
-	34, // 45: billing.v1.BillingAdminService.SuggestVariantMappings:input_type -> billing.v1.SuggestVariantMappingsRequest
-	1,  // 46: billing.v1.BillingAdminService.GetBillingSettings:output_type -> billing.v1.GetBillingSettingsResponse
-	8,  // 47: billing.v1.BillingAdminService.GetTenantBilling:output_type -> billing.v1.GetTenantBillingResponse
-	11, // 48: billing.v1.BillingAdminService.ListBillingAttention:output_type -> billing.v1.ListBillingAttentionResponse
-	13, // 49: billing.v1.BillingAdminService.SetBillingRequired:output_type -> billing.v1.SetBillingRequiredResponse
-	15, // 50: billing.v1.BillingAdminService.SetComplimentary:output_type -> billing.v1.SetComplimentaryResponse
-	17, // 51: billing.v1.BillingAdminService.ResyncSubscription:output_type -> billing.v1.ResyncSubscriptionResponse
-	20, // 52: billing.v1.BillingAdminService.GetFreeTrialTier:output_type -> billing.v1.GetFreeTrialTierResponse
-	22, // 53: billing.v1.BillingAdminService.SetFreeTrialTier:output_type -> billing.v1.SetFreeTrialTierResponse
-	24, // 54: billing.v1.BillingAdminService.InvalidateTestSubscriptions:output_type -> billing.v1.InvalidateTestSubscriptionsResponse
-	27, // 55: billing.v1.BillingAdminService.ListProviderVariants:output_type -> billing.v1.ListProviderVariantsResponse
-	30, // 56: billing.v1.BillingAdminService.ListVariantMappings:output_type -> billing.v1.ListVariantMappingsResponse
-	32, // 57: billing.v1.BillingAdminService.SetVariantMapping:output_type -> billing.v1.SetVariantMappingResponse
-	35, // 58: billing.v1.BillingAdminService.SuggestVariantMappings:output_type -> billing.v1.SuggestVariantMappingsResponse
-	46, // [46:59] is the sub-list for method output_type
-	33, // [33:46] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	39, // 33: billing.v1.Payment.occurred_at:type_name -> google.protobuf.Timestamp
+	39, // 34: billing.v1.ListPaymentsRequest.from:type_name -> google.protobuf.Timestamp
+	39, // 35: billing.v1.ListPaymentsRequest.to:type_name -> google.protobuf.Timestamp
+	36, // 36: billing.v1.ListPaymentsResponse.payments:type_name -> billing.v1.Payment
+	0,  // 37: billing.v1.BillingAdminService.GetBillingSettings:input_type -> billing.v1.GetBillingSettingsRequest
+	7,  // 38: billing.v1.BillingAdminService.GetTenantBilling:input_type -> billing.v1.GetTenantBillingRequest
+	10, // 39: billing.v1.BillingAdminService.ListBillingAttention:input_type -> billing.v1.ListBillingAttentionRequest
+	12, // 40: billing.v1.BillingAdminService.SetBillingRequired:input_type -> billing.v1.SetBillingRequiredRequest
+	14, // 41: billing.v1.BillingAdminService.SetComplimentary:input_type -> billing.v1.SetComplimentaryRequest
+	16, // 42: billing.v1.BillingAdminService.ResyncSubscription:input_type -> billing.v1.ResyncSubscriptionRequest
+	19, // 43: billing.v1.BillingAdminService.GetFreeTrialTier:input_type -> billing.v1.GetFreeTrialTierRequest
+	21, // 44: billing.v1.BillingAdminService.SetFreeTrialTier:input_type -> billing.v1.SetFreeTrialTierRequest
+	23, // 45: billing.v1.BillingAdminService.InvalidateTestSubscriptions:input_type -> billing.v1.InvalidateTestSubscriptionsRequest
+	26, // 46: billing.v1.BillingAdminService.ListProviderVariants:input_type -> billing.v1.ListProviderVariantsRequest
+	29, // 47: billing.v1.BillingAdminService.ListVariantMappings:input_type -> billing.v1.ListVariantMappingsRequest
+	31, // 48: billing.v1.BillingAdminService.SetVariantMapping:input_type -> billing.v1.SetVariantMappingRequest
+	34, // 49: billing.v1.BillingAdminService.SuggestVariantMappings:input_type -> billing.v1.SuggestVariantMappingsRequest
+	37, // 50: billing.v1.BillingAdminService.ListPayments:input_type -> billing.v1.ListPaymentsRequest
+	1,  // 51: billing.v1.BillingAdminService.GetBillingSettings:output_type -> billing.v1.GetBillingSettingsResponse
+	8,  // 52: billing.v1.BillingAdminService.GetTenantBilling:output_type -> billing.v1.GetTenantBillingResponse
+	11, // 53: billing.v1.BillingAdminService.ListBillingAttention:output_type -> billing.v1.ListBillingAttentionResponse
+	13, // 54: billing.v1.BillingAdminService.SetBillingRequired:output_type -> billing.v1.SetBillingRequiredResponse
+	15, // 55: billing.v1.BillingAdminService.SetComplimentary:output_type -> billing.v1.SetComplimentaryResponse
+	17, // 56: billing.v1.BillingAdminService.ResyncSubscription:output_type -> billing.v1.ResyncSubscriptionResponse
+	20, // 57: billing.v1.BillingAdminService.GetFreeTrialTier:output_type -> billing.v1.GetFreeTrialTierResponse
+	22, // 58: billing.v1.BillingAdminService.SetFreeTrialTier:output_type -> billing.v1.SetFreeTrialTierResponse
+	24, // 59: billing.v1.BillingAdminService.InvalidateTestSubscriptions:output_type -> billing.v1.InvalidateTestSubscriptionsResponse
+	27, // 60: billing.v1.BillingAdminService.ListProviderVariants:output_type -> billing.v1.ListProviderVariantsResponse
+	30, // 61: billing.v1.BillingAdminService.ListVariantMappings:output_type -> billing.v1.ListVariantMappingsResponse
+	32, // 62: billing.v1.BillingAdminService.SetVariantMapping:output_type -> billing.v1.SetVariantMappingResponse
+	35, // 63: billing.v1.BillingAdminService.SuggestVariantMappings:output_type -> billing.v1.SuggestVariantMappingsResponse
+	38, // 64: billing.v1.BillingAdminService.ListPayments:output_type -> billing.v1.ListPaymentsResponse
+	51, // [51:65] is the sub-list for method output_type
+	37, // [37:51] is the sub-list for method input_type
+	37, // [37:37] is the sub-list for extension type_name
+	37, // [37:37] is the sub-list for extension extendee
+	0,  // [0:37] is the sub-list for field type_name
 }
 
 func init() { file_billing_v1_billing_proto_init() }
@@ -2798,7 +3213,7 @@ func file_billing_v1_billing_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_billing_v1_billing_proto_rawDesc), len(file_billing_v1_billing_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   36,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 
 	billingdom "github.com/ogen-app/ogen/src/domain/billing"
 	"github.com/ogen-app/ogen/src/infra/billing/lemonsqueezy"
@@ -40,6 +43,9 @@ type billingSteps struct {
 // registerBilling adds the billing jobs. ogen's own River workers call the
 // provider directly over the same usecase pieces.
 func (s *JobSteps) registerBilling() {
+	if s.deps.BillingPayments != nil {
+		s.kinds[BillingSyncPaymentsKind] = billingPaymentsSteps{svc: s.deps.BillingPayments}.syncPayments
+	}
 	if s.deps.BillingSteps == nil {
 		return
 	}
@@ -166,12 +172,26 @@ func nextLemonSqueezy[T any](state billingState, op func(c *lemonsqueezy.Client)
 	if err != nil {
 		return StepOutput{}, err
 	}
+	return lemonSqueezyStep(state, call)
+}
+
+// lemonSqueezyStep hands river-service a planned call, its query split off
+// the path so river-service builds the URL with the base it owns.
+func lemonSqueezyStep(state any, call lemonsqueezy.Call) (StepOutput, error) {
 	raw, err := encodeState(state)
 	if err != nil {
 		return StepOutput{}, err
 	}
+	path, rawQuery, _ := strings.Cut(call.Path, "?")
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return StepOutput{}, fmt.Errorf("lemonsqueezy: planned query: %w", err)
+	}
+	if len(query) == 0 {
+		query = nil
+	}
 	return StepOutput{State: raw, HTTP: &HTTPCall{
-		Upstream: UpstreamLemonSqueezy, Method: call.Method, Path: call.Path, Headers: call.Headers, Body: call.Body,
+		Upstream: UpstreamLemonSqueezy, Method: call.Method, Path: path, Query: query, Headers: call.Headers, Body: call.Body,
 	}}, nil
 }
 

@@ -191,6 +191,9 @@ type Event struct {
 	PaymentSubscriptionID string
 	PaymentAmountMinor    int64
 	PaymentStatus         string
+	// Payments are the money movements an order_* or subscription_payment_*
+	// event reports: the charge and, once refunded, its refund.
+	Payments []Payment
 }
 
 // PlanSwitch is a provider plan switch a scheduled change needs. A job

@@ -47,6 +47,7 @@ import (
 	grpcserver "github.com/ogen-app/ogen/src/transport/grpc/server"
 	"github.com/ogen-app/ogen/src/transport/server"
 	"github.com/ogen-app/ogen/src/usecase/notify"
+	"github.com/ogen-app/ogen/src/usecase/receipts"
 )
 
 const (
@@ -251,28 +252,40 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		billingAdmin = svc
 	}
 
+	// Per-call key resolution, so a rotated Resend key applies without a reboot.
+	resendClient := resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout)
+
+	// Harbor's receipt extraction. Without it ProcessReceipt answers
+	// Unimplemented; the rest of the surface is unaffected.
+	var receiptSvc grpcserver.ReceiptProcessor
+	if extractor, err := server.NewReceiptExtractor(context.Background(), store); err != nil {
+		slog.Error("receipt extraction init failed; ProcessReceipt disabled (non-fatal)", logging.AttrComponent, "boot", logging.AttrError, err)
+	} else {
+		receiptSvc = &receipts.Service{Fetcher: resendClient, Extractor: extractor}
+	}
+
 	gs, err := grpcserver.New(grpcserver.Deps{
-		Token:            cfg.GRPCAuthToken,
-		Secrets:          store,
-		Tiers:            repository.NewTenantTierRepository(db),
-		Groups:           repository.NewTenantGroupRepository(db),
-		Tenants:          repository.NewTenantRepository(db),
-		TierVersions:     repository.NewTenantTierVersionRepository(db),
-		TierAssignments:  repository.NewTenantTierAssignmentRepository(db),
-		Platforms:        repository.NewPlatformRepository(db),
-		PlatformLimits:   repository.NewPlatformGlobalLimitsRepository(db),
-		FlowModelConfigs: repository.NewFlowModelConfigRepository(db),
-		EmailLogs:        repository.NewEmailLogRepository(db),
-		EmailEvents:      repository.NewEmailEventRepository(db),
-		EmailBodies:      repository.NewEmailBodyRepository(db),
-		// Per-call key resolution, so a rotated Resend key applies without a reboot.
-		LiveEmailBodies:    resend.New(func(ctx context.Context) (string, error) { return store.Get(ctx, secrets.NameResendAPIKey) }, cfg.EmailBaseURL, cfg.EmailHTTPTimeout),
+		Token:              cfg.GRPCAuthToken,
+		Secrets:            store,
+		Tiers:              repository.NewTenantTierRepository(db),
+		Groups:             repository.NewTenantGroupRepository(db),
+		Tenants:            repository.NewTenantRepository(db),
+		TierVersions:       repository.NewTenantTierVersionRepository(db),
+		TierAssignments:    repository.NewTenantTierAssignmentRepository(db),
+		Platforms:          repository.NewPlatformRepository(db),
+		PlatformLimits:     repository.NewPlatformGlobalLimitsRepository(db),
+		FlowModelConfigs:   repository.NewFlowModelConfigRepository(db),
+		EmailLogs:          repository.NewEmailLogRepository(db),
+		EmailEvents:        repository.NewEmailEventRepository(db),
+		EmailBodies:        repository.NewEmailBodyRepository(db),
+		LiveEmailBodies:    resendClient,
 		Users:              repository.NewUserRepository(db),
 		AdminEmailEnqueuer: adminEmailEnqueuer,
 		HarborBaseURL:      cfg.HarborBaseURL,
 		Announcements:      repository.NewAnnouncementRepository(db),
 		Billing:            billingAdmin,
 		TenantInvites:      server.NewSignupAccessService(db, cfg, adminEmailEnqueuer),
+		Receipts:           receiptSvc,
 		Hub:                hub,
 	})
 	if err != nil {
