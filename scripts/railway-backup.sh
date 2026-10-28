@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # Back up a Railway project's configuration through the public GraphQL API.
 #
-# For every environment it saves:
+# Environment directories and variable files are named <name>--<id>, so
+# distinct names that sanitise to the same string never collide. For every
+# environment it saves:
 #   config.json          full environment config (services: source, build, deploy,
 #                        networking/domains, volume mounts, variables; shared
 #                        variables; volumes; groups) with variables decrypted
-#   variables/<svc>.json unrendered service variables (${{ref}} templates kept),
-#                        the exact map variableCollectionUpsert takes on restore
+#   variables/<svc>--<id>.json  unrendered service variables (${{ref}} templates
+#                        kept), the exact map variableCollectionUpsert takes
 #   variables/_shared.json  unrendered shared (environment-level) variables
 #   services.json        service id -> name map (config.json is keyed by id)
 #   canvas.json          canvasGroupRefs: the environment's canvas group layout
+#   sealed.json          names of sealed variables, whose values Railway never
+#                        returns: the backup cannot restore them
 #
 # At project level, project.json holds the canvas groups (Project.groups) and
 # each service's groupId, and groups.json maps group name -> service names.
@@ -44,13 +48,20 @@ PROJECT_ID=$1
 shift
 ONLY_ENVS=("$@")
 
-# gql QUERY [VARIABLES_JSON] -> prints .data, fails on GraphQL errors.
+umask 077
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# The token goes through a header file so it never shows up in process args.
+auth="$tmp/auth"
+printf 'Authorization: Bearer %s\n' "$RAILWAY_API_TOKEN" >"$auth"
+
+# gql QUERY < VARIABLES_JSON -> prints .data, fails on GraphQL errors.
 gql() {
-  local query=$1 vars=${2:-'{}'} resp
-  resp=$(curl -sS --fail-with-body "$API" \
-    -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
-    -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg q "$query" --argjson v "$vars" '{query: $q, variables: $v}')") \
+  local query=$1 resp
+  resp=$(jq -c --arg q "$query" '{query: $q, variables: .}' \
+    | curl -sS --fail-with-body "$API" -H @"$auth" \
+      -H 'Content-Type: application/json' --data-binary @-) \
     || die "request failed: $resp"
   if jq -e '.errors | length > 0' >/dev/null <<<"$resp"; then
     die "GraphQL error: $(jq -c '.errors | map(.message)' <<<"$resp")"
@@ -60,9 +71,10 @@ gql() {
 
 safe_name() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 
-umask 077
+# entry NAME ID -> unique, readable path component.
+entry() { printf '%s--%s' "$(safe_name "$1")" "$2"; }
 
-project=$(gql '
+project=$(jq -n --arg id "$PROJECT_ID" '{id: $id}' | gql '
   query($id: String!) {
     project(id: $id) {
       id
@@ -71,7 +83,14 @@ project=$(gql '
       services { edges { node { id name groupId } } }
       groups { edges { node { id name groupId color icon isCollapsed } } }
     }
-  }' "$(jq -n --arg id "$PROJECT_ID" '{id: $id}')")
+  }')
+
+if [[ ${#ONLY_ENVS[@]} -gt 0 ]]; then
+  for name in "${ONLY_ENVS[@]}"; do
+    jq -e --arg n "$name" 'any(.project.environments.edges[].node; .name == $n)' \
+      >/dev/null <<<"$project" || die "environment '$name' does not exist in the project"
+  done
+fi
 
 project_name=$(jq -r '.project.name' <<<"$project")
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -90,6 +109,7 @@ jq '(.groups | map({(.id): .name}) | add // {}) as $names
   | from_entries' "$dest/project.json" >"$dest/groups.json"
 
 services=$(jq -c '[.project.services.edges[].node]' <<<"$project")
+sealed_total=0
 
 echo "Backing up project '$project_name' -> $dest"
 
@@ -98,16 +118,27 @@ while IFS=$'\t' read -r env_id env_name; do
     continue
   fi
 
-  env_dir="$dest/$(safe_name "$env_name")"
+  env_dir="$dest/$(entry "$env_name" "$env_id")"
   mkdir -p "$env_dir/variables"
   echo "  environment: $env_name"
 
-  env=$(gql '
+  env=$(jq -n --arg id "$env_id" '{id: $id}' | gql '
     query($id: String!) {
       environment(id: $id) { id name config(decryptVariables: true) canvasGroupRefs }
-    }' "$(jq -n --arg id "$env_id" '{id: $id}')")
+    }')
   jq '.environment.config' <<<"$env" >"$env_dir/config.json"
   jq '.environment.canvasGroupRefs' <<<"$env" >"$env_dir/canvas.json"
+
+  jq 'def sealed: [to_entries[] | select(.value.isSealed == true or .value.value == null) | .key];
+    {shared: (.sharedVariables // {} | sealed),
+     services: (.services // {} | map_values(.variables // {} | sealed)
+       | with_entries(select(.value | length > 0)))}' \
+    "$env_dir/config.json" >"$env_dir/sealed.json"
+  sealed=$(jq '(.shared | length) + ([.services[] | length] | add // 0)' "$env_dir/sealed.json")
+  if [[ $sealed -gt 0 ]]; then
+    echo "    warning: $sealed sealed variable(s) have no value in this backup (see sealed.json)"
+    sealed_total=$((sealed_total + sealed))
+  fi
 
   # Services present in this environment's config (a service may not be
   # deployed to every environment).
@@ -115,19 +146,17 @@ while IFS=$'\t' read -r env_id env_name; do
     '[.[] | select(.id as $id | ($cfg[0].services // {}) | has($id))]' <<<"$services")
   jq 'map({(.id): .name}) | add // {}' <<<"$env_services" >"$env_dir/services.json"
 
-  gql '
+  jq -n --arg p "$PROJECT_ID" --arg e "$env_id" '{p: $p, e: $e}' | gql '
     query($p: String!, $e: String!) {
       variables(projectId: $p, environmentId: $e, unrendered: true)
-    }' "$(jq -n --arg p "$PROJECT_ID" --arg e "$env_id" '{p: $p, e: $e}')" \
-    | jq '.variables' >"$env_dir/variables/_shared.json"
+    }' | jq '.variables' >"$env_dir/variables/_shared.json"
 
   while IFS=$'\t' read -r svc_id svc_name; do
     echo "    service: $svc_name"
-    gql '
+    jq -n --arg p "$PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}' | gql '
       query($p: String!, $e: String!, $s: String!) {
         variables(projectId: $p, environmentId: $e, serviceId: $s, unrendered: true)
-      }' "$(jq -n --arg p "$PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')" \
-      | jq '.variables' >"$env_dir/variables/$(safe_name "$svc_name").json"
+      }' | jq '.variables' >"$env_dir/variables/$(entry "$svc_name" "$svc_id").json"
   done < <(jq -r '.[] | [.id, .name] | @tsv' <<<"$env_services")
 done < <(jq -r '.project.environments.edges[].node | [.id, .name] | @tsv' <<<"$project")
 
@@ -138,4 +167,8 @@ if [[ -n ${AGE_RECIPIENT:-} ]]; then
   echo "Encrypted backup: $archive"
 else
   echo "Done. Plaintext secrets in $dest - encrypt or move it to a vault."
+fi
+if [[ $sealed_total -gt 0 ]]; then
+  echo "INCOMPLETE: $sealed_total sealed variable(s) could not be backed up. Keep their"
+  echo "values elsewhere; railway-restore.sh never deletes them, but cannot recreate them."
 fi
