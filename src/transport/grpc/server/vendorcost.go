@@ -53,9 +53,13 @@ func (s *vendorCostService) GetAnthropicCost(ctx context.Context, req *vendorcos
 		return &vendorcostv1.GetAnthropicCostResponse{Configured: false, FetchedAt: fetchedAt}, nil
 	case errors.Is(err, anthropicadmin.ErrUnauthorized):
 		return nil, status.Error(codes.FailedPrecondition, "Anthropic rejected anthropic_admin_api_key; it must be an Admin key (sk-ant-admin…), not an API key")
+	case errors.Is(err, anthropicadmin.ErrForbidden):
+		return nil, status.Error(codes.FailedPrecondition, "anthropic_admin_api_key may not read the cost report; check the key's organization role and that the organization has the Admin API")
 	case errors.Is(err, anthropicadmin.ErrUnavailable), errors.Is(err, context.DeadlineExceeded):
 		slog.WarnContext(ctx, "anthropic cost report unavailable", logging.AttrComponent, "grpcserver", logging.AttrError, err)
 		return nil, status.Error(codes.Unavailable, "Anthropic cost report is unavailable; retry later")
+	case errors.Is(err, context.Canceled):
+		return nil, status.Error(codes.Canceled, "request canceled")
 	case err != nil:
 		slog.ErrorContext(ctx, "anthropic cost report failed", logging.AttrComponent, "grpcserver", logging.AttrError, err)
 		return nil, status.Error(codes.Internal, "read Anthropic cost report")

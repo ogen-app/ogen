@@ -181,8 +181,57 @@ func TestCentsToMicrosRounding(t *testing.T) {
 		{"99999999.99999", 1_000_000_000_000},
 	} {
 		r, _ := new(big.Rat).SetString(tc.cents)
-		if got := centsToMicros(r); got != tc.want {
-			t.Errorf("centsToMicros(%s) = %d, want %d", tc.cents, got, tc.want)
+		if got, err := centsToMicros(r); err != nil || got != tc.want {
+			t.Errorf("centsToMicros(%s) = %d, %v, want %d", tc.cents, got, err, tc.want)
 		}
+	}
+}
+
+func TestDailyCostsRejectsOverflow(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		// 10^15 cents is 10^19 micros, past int64.
+		_, _ = w.Write([]byte(`{"data":[{"starting_at":"2026-10-01T00:00:00Z","results":[{"amount":"1000000000000000","currency":"USD"}]}],"has_more":false}`))
+	})
+	if _, err := c.DailyCosts(t.Context(), day("2026-10-01"), day("2026-10-01")); err == nil {
+		t.Fatal("want an error for an amount past int64 micros")
+	}
+}
+
+func TestDailyCostsForbiddenIsDistinct(t *testing.T) {
+	var calls atomic.Int32
+	c, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, `{"type":"error","error":{"type":"permission_error","message":"not allowed"}}`, http.StatusForbidden)
+	})
+	_, err := c.DailyCosts(t.Context(), day("2026-10-01"), day("2026-10-01"))
+	if !errors.Is(err, ErrForbidden) || errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrForbidden only", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestDailyCostsLongRetryAfterGivesUp(t *testing.T) {
+	var calls atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "120")
+		http.Error(w, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`, http.StatusTooManyRequests)
+	})
+	_, err := c.DailyCosts(t.Context(), day("2026-10-01"), day("2026-10-01"))
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if calls.Load() != 1 || len(*slept) != 0 {
+		t.Fatalf("calls = %d, waits = %v; want one call and no wait", calls.Load(), *slept)
+	}
+}
+
+func TestSleepCtxHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }

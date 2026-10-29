@@ -10,5 +10,9 @@ import (
 // rotating it in Harbor applies without a restart; while it is unset the
 // reader answers anthropicadmin.ErrNotConfigured.
 func NewAnthropicCosts(store secrets.Store) *anthropicadmin.Client {
-	return anthropicadmin.New(anthropicadmin.KeyResolver(secretResolver(store, secrets.NameAnthropicAdminAPIKey)), "", 0)
+	return newAnthropicCosts(store, "")
+}
+
+func newAnthropicCosts(store secrets.Store, baseURL string) *anthropicadmin.Client {
+	return anthropicadmin.New(anthropicadmin.KeyResolver(secretResolver(store, secrets.NameAnthropicAdminAPIKey)), baseURL, 0)
 }
