@@ -95,7 +95,9 @@ func TestGetAnthropicCostErrors(t *testing.T) {
 		{"bad to", "2026-10-01", "", nil, codes.InvalidArgument},
 		{"reversed", "2026-10-02", "2026-10-01", nil, codes.InvalidArgument},
 		{"93 days", "2026-08-01", "2026-11-01", nil, codes.InvalidArgument},
-		{"rejected key", "2026-10-01", "2026-10-31", fmt.Errorf("%w: status 401", anthropicadmin.ErrUnauthorized), codes.FailedPrecondition},
+		{"rejected key", "2026-10-01", "2026-10-31", anthropicadmin.ErrUnauthorized, codes.FailedPrecondition},
+		{"forbidden key", "2026-10-01", "2026-10-31", anthropicadmin.ErrForbidden, codes.FailedPrecondition},
+		{"canceled", "2026-10-01", "2026-10-31", fmt.Errorf("cost report: %w", context.Canceled), codes.Canceled},
 		{"anthropic down", "2026-10-01", "2026-10-31", fmt.Errorf("%w: status 529", anthropicadmin.ErrUnavailable), codes.Unavailable},
 		{"other", "2026-10-01", "2026-10-31", fmt.Errorf("decode cost report: boom"), codes.Internal},
 	} {

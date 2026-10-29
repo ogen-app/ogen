@@ -33,8 +33,10 @@ const (
 	maxPages = 32
 	// maxAttempts is how often one page is tried on 429, 5xx or a network
 	// error before the call gives up with ErrUnavailable.
-	maxAttempts   = 4
-	baseBackoff   = time.Second
+	maxAttempts = 4
+	baseBackoff = time.Second
+	// maxBackoff caps one wait. A Retry-After longer than that gives up at
+	// once rather than hold the caller's RPC open; the caller retries later.
 	maxBackoff    = 30 * time.Second
 	errorBodySize = 4096
 	dateLayout    = time.DateOnly
@@ -43,9 +45,12 @@ const (
 var (
 	// ErrNotConfigured means no Admin key is set.
 	ErrNotConfigured = errors.New("anthropicadmin: admin key not configured")
-	// ErrUnauthorized means Anthropic rejected the Admin key (401 or 403),
-	// usually because an API key was stored instead of an Admin key.
+	// ErrUnauthorized means Anthropic rejected the key (401), usually
+	// because an API key was stored instead of an Admin key.
 	ErrUnauthorized = errors.New("anthropicadmin: admin key rejected")
+	// ErrForbidden means the key authenticated but may not read the cost
+	// report (403): an organization or role permission, not a wrong key.
+	ErrForbidden = errors.New("anthropicadmin: admin key may not read the cost report")
 	// ErrUnavailable means Anthropic stayed down or rate-limited through
 	// every retry; the caller retries later.
 	ErrUnavailable = errors.New("anthropicadmin: cost report unavailable")
@@ -112,7 +117,7 @@ func (c *Client) DailyCosts(ctx context.Context, from, to time.Time) ([]DailyCos
 			return nil, err
 		}
 		if !rep.HasMore || rep.NextPage == "" {
-			return toDailyCosts(sums), nil
+			return toDailyCosts(sums)
 		}
 		page = rep.NextPage
 	}
@@ -165,10 +170,13 @@ func addBuckets(sums map[costKey]*big.Rat, buckets []bucket, from, to time.Time)
 	return nil
 }
 
-func toDailyCosts(sums map[costKey]*big.Rat) []DailyCost {
+func toDailyCosts(sums map[costKey]*big.Rat) ([]DailyCost, error) {
 	out := make([]DailyCost, 0, len(sums))
 	for k, cents := range sums {
-		micros := centsToMicros(cents)
+		micros, err := centsToMicros(cents)
+		if err != nil {
+			return nil, fmt.Errorf("anthropicadmin: %s %q %q: %w", k.date, k.model, k.costType, err)
+		}
 		if micros == 0 {
 			continue
 		}
@@ -177,22 +185,26 @@ func toDailyCosts(sums map[costKey]*big.Rat) []DailyCost {
 	slices.SortFunc(out, func(a, b DailyCost) int {
 		return cmp.Or(cmp.Compare(a.Date, b.Date), cmp.Compare(a.Model, b.Model), cmp.Compare(a.CostType, b.CostType))
 	})
-	return out
+	return out, nil
 }
 
 // centsToMicros converts cents to USD micros (1 cent = 10,000 micros),
-// rounding half away from zero.
-func centsToMicros(cents *big.Rat) int64 {
+// rounding half away from zero. A sum outside int64 is an error.
+func centsToMicros(cents *big.Rat) (int64, error) {
 	micros := new(big.Rat).Mul(cents, big.NewRat(10_000, 1))
 	q, r := new(big.Int).QuoRem(micros.Num(), micros.Denom(), new(big.Int))
 	if new(big.Int).Mul(new(big.Int).Abs(r), big.NewInt(2)).Cmp(micros.Denom()) >= 0 {
 		q.Add(q, big.NewInt(int64(micros.Sign())))
 	}
-	return q.Int64()
+	if !q.IsInt64() {
+		return 0, fmt.Errorf("%s cents overflows int64 micros", cents.FloatString(5))
+	}
+	return q.Int64(), nil
 }
 
 // fetchPage gets one page, retrying 429, 5xx and network errors with
-// exponential backoff (or the server's Retry-After).
+// exponential backoff, or after the server's Retry-After when that is at most
+// maxBackoff; a longer Retry-After ends the call with ErrUnavailable.
 func (c *Client) fetchPage(ctx context.Context, key string, start, end time.Time, page string) (*report, error) {
 	q := url.Values{}
 	q.Set("starting_at", start.Format(time.RFC3339))
@@ -208,7 +220,11 @@ func (c *Client) fetchPage(ctx context.Context, key string, start, end time.Time
 	var lastErr error
 	for attempt := range maxAttempts {
 		if attempt > 0 {
-			if err := c.sleep(ctx, backoff(attempt, lastErr)); err != nil {
+			wait, ok := backoff(attempt, lastErr)
+			if !ok {
+				break
+			}
+			if err := c.sleep(ctx, wait); err != nil {
 				return nil, err
 			}
 		}
@@ -248,8 +264,11 @@ func (c *Client) get(ctx context.Context, key, endpoint string) (*report, error)
 		return nil, fmt.Errorf("anthropicadmin: cost report: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("%w: status %d", ErrUnauthorized, resp.StatusCode)
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return nil, ErrUnauthorized
+	case http.StatusForbidden:
+		return nil, ErrForbidden
 	}
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodySize))
@@ -267,16 +286,18 @@ func retryable(err error) bool {
 		return se.code == http.StatusTooManyRequests || se.code >= 500
 	}
 	// Transport errors, the client timeout among them, are retried; decode
-	// errors and ErrUnauthorized are not.
+	// errors, ErrUnauthorized and ErrForbidden are not.
 	_, isURL := errors.AsType[*url.Error](err)
 	return isURL
 }
 
-func backoff(attempt int, lastErr error) time.Duration {
+// backoff is the wait before the given retry; false means the server asked
+// for a longer wait than maxBackoff.
+func backoff(attempt int, lastErr error) (time.Duration, bool) {
 	if se, ok := errors.AsType[*statusError](lastErr); ok && se.retryAfter > 0 {
-		return min(se.retryAfter, maxBackoff)
+		return se.retryAfter, se.retryAfter <= maxBackoff
 	}
-	return min(baseBackoff<<(attempt-1), maxBackoff)
+	return min(baseBackoff<<(attempt-1), maxBackoff), true
 }
 
 func parseRetryAfter(v string) time.Duration {
