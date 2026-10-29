@@ -45,6 +45,10 @@ const (
 	// in test mode, so the live variant map can be prepared and checked
 	// before the switch. Optional.
 	NameLemonSqueezyAPIKeyLive = "lemonsqueezy_api_key_live"
+	// Anthropic Admin key (sk-ant-admin…), distinct from the API key: it reads
+	// the organization's cost report for Harbor's credit reconciliation.
+	// Optional; never leased to river-service.
+	NameAnthropicAdminAPIKey = "anthropic_admin_api_key"
 )
 
 // AllowedNames is the closed set of accepted secret names. Anything
@@ -60,6 +64,7 @@ var AllowedNames = []string{
 	NameLemonSqueezyAPIKey,
 	NameLemonSqueezyWebhookSecret,
 	NameLemonSqueezyAPIKeyLive,
+	NameAnthropicAdminAPIKey,
 }
 
 // MaxValueLen is the inclusive upper bound on a plaintext secret. The

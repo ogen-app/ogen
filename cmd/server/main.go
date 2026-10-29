@@ -286,6 +286,7 @@ func startInternalGRPC(cfg *config.Config, db *bun.DB, store secrets.Store, hub 
 		Billing:            billingAdmin,
 		TenantInvites:      server.NewSignupAccessService(db, cfg, adminEmailEnqueuer),
 		Receipts:           receiptSvc,
+		AnthropicCosts:     server.NewAnthropicCosts(store),
 		Hub:                hub,
 	})
 	if err != nil {

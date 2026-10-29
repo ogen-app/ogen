@@ -82,6 +82,8 @@ type Deps struct {
 	TenantInvites TenantInvites
 	// Receipts backs ReceiptService; nil leaves it off.
 	Receipts ReceiptProcessor
+	// AnthropicCosts backs VendorCostService; nil leaves it off.
+	AnthropicCosts AnthropicCosts
 	// Hub carries the entitlement-invalidation event an operator tier change
 	// publishes onto the tenant's /api/events stream.
 	Hub eventhub.Hub
@@ -133,6 +135,7 @@ func New(d Deps) (*grpc.Server, error) {
 	registerBillingAdmin(srv, d.Billing)
 	registerTenantInviteAdmin(srv, d.TenantInvites)
 	registerReceipts(srv, d.Receipts)
+	registerVendorCost(srv, d.AnthropicCosts)
 	return srv, nil
 }
 

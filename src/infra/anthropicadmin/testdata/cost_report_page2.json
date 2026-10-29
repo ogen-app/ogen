@@ -1,0 +1,19 @@
+{
+  "data": [
+    {
+      "starting_at": "2026-10-02T00:00:00Z",
+      "ending_at": "2026-10-03T00:00:00Z",
+      "results": []
+    },
+    {
+      "starting_at": "2026-10-03T00:00:00Z",
+      "ending_at": "2026-10-04T00:00:00Z",
+      "results": [
+        {"amount": "0.00004", "context_window": "0-200k", "cost_type": "tokens", "currency": "USD", "description": "Claude Haiku 5.5 Usage - Input Tokens", "inference_geo": "global", "model": "claude-haiku-5-5", "service_tier": "standard", "speed": "standard", "token_type": "uncached_input_tokens", "workspace_id": null},
+        {"amount": "0.00005", "context_window": "0-200k", "cost_type": "tokens", "currency": "USD", "description": "Claude Sonnet 5 Usage - Input Tokens", "inference_geo": "global", "model": "claude-sonnet-5", "service_tier": "standard", "speed": "standard", "token_type": "uncached_input_tokens", "workspace_id": null}
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}
