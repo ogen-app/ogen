@@ -79,7 +79,6 @@ func buildContext(
 		Assets:              assets,
 		PostTitle:           post.Title,
 		PostBody:            post.Content,
-		SuggestionCap:       cfg.SuggestionCap,
 	}
 
 	system, err := cfg.tmpl.renderSystem()

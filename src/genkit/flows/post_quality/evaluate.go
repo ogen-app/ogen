@@ -23,16 +23,12 @@ import (
 // invalid evaluation ("1-retry / 2s-backoff convention").
 const retryBackoff = 2 * time.Second
 
-// defaultMaxOutputTokens caps the scoring response when the config leaves
-// MaxOutputTokens at 0. It is deliberately small: a four-dimension critique
-// with capped suggestions runs only a few thousand tokens, and evaluate
-// issues a NON-streaming GenerateData call. The Anthropic SDK rejects a
-// non-streaming request whose max_tokens implies a >10-minute run — its
-// estimate is 1h × max_tokens/128000, so anything above ~21k tokens is
-// refused (and the retired Opus 4/4.1 capped non-streaming at 8192; no model
-// in the registry does). 16384 stays under that limit while leaving room for
-// the thinking Claude 5.x models do by default, which counts toward the cap.
-const defaultMaxOutputTokens = 16384
+// defaultMaxOutputTokens caps each per-dimension scoring call when the
+// config leaves MaxOutputTokens at 0. A compact critique is a few hundred
+// tokens; the cap leaves room for the low-effort thinking newer models do,
+// which counts toward it, and stays far below the Anthropic non-streaming
+// limit for the blocking GenerateData call.
+const defaultMaxOutputTokens = 2048
 
 // dimensionTargets enumerates the four dimensions and the label shown to the
 // model. The order matches the assembly in evaluate.
@@ -116,7 +112,7 @@ func evaluateDimension(
 		maxTokens = defaultMaxOutputTokens
 	}
 	modelName := mc.Ref
-	userPrompt := prompts.user + dimensionInstruction(label, cfg.SuggestionCap)
+	userPrompt := prompts.user + dimensionInstruction(label)
 	u := flowkit.Usage{
 		Recorder:  cfg.Recorder,
 		Model:     mc,
@@ -143,7 +139,7 @@ func evaluateDimension(
 			ai.WithModelName(modelName),
 			ai.WithSystem("%s", prompts.system),
 			ai.WithPrompt("%s", userPrompt),
-			ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowPostQuality, u.Record)),
+			ai.WithMiddleware(cfg.Provider.CallMiddleware(modelconfig.FlowPostQuality, u.Record, llm.Effort(llm.EffortLow))),
 			cfg.Provider.CallConfig(mc.Model, maxTokens),
 		)
 		u.WarnIfTruncated(ctx, resp, maxTokens)
@@ -158,9 +154,9 @@ func evaluateDimension(
 		// Record every completed call (one per dimension, plus any empty-rationale
 		// retry that still consumed tokens). Nil recorder = no-op.
 		u.Record(ctx, resp)
-		if strings.TrimSpace(out.Rationale) == "" {
-			lastErr = fmt.Errorf("empty rationale")
-			slog.WarnContext(ctx, "attempt returned empty rationale", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1)
+		if strings.TrimSpace(out.Verdict) == "" {
+			lastErr = fmt.Errorf("empty verdict")
+			slog.WarnContext(ctx, "attempt returned empty verdict", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1)
 			continue
 		}
 		return *out, nil
@@ -170,10 +166,10 @@ func evaluateDimension(
 
 // dimensionInstruction is the per-call directive appended to the post-context
 // user prompt, naming the single dimension to score.
-func dimensionInstruction(label string, suggestionCap int) string {
+func dimensionInstruction(label string) string {
 	return fmt.Sprintf(
-		"\n\nScore ONLY the %s dimension against its anchored bands. Write the rationale as articulate feedback addressed to the author (2-4 flowing sentences) before the score, name one concrete weakness, choose a 0-10 score, and give at most %d span-anchored, guidance-only suggestions — all for %s only.",
-		label, suggestionCap, label,
+		"\n\nScore ONLY the %s dimension. Write the verdict first (one or two sentences, at most 240 characters), then the 0-10 score, then one or two span-anchored suggestions of one sentence each.",
+		label,
 	)
 }
 
@@ -195,15 +191,13 @@ func toDimension(d dimensionOutput, key models.EvaluationDimensionKey) models.Ev
 		suggestions = append(suggestions, models.EvaluationSuggestion{
 			Dimension: key, // implied by the parent block; stamped here
 			Severity:  models.SuggestionSeverity(s.Severity),
-			Issue:     s.Issue,
-			Fix:       s.Fix,
 			Span:      s.Span,
+			Advice:    s.Advice,
 		})
 	}
 	return models.EvaluationDimension{
 		Score:       d.Score,
-		Rationale:   d.Rationale,
-		Weakness:    d.Weakness,
+		Verdict:     d.Verdict,
 		Suggestions: suggestions,
 	}
 }

@@ -175,15 +175,15 @@ What's stopped your team from trying it? 👇`
 			Expect(ev.ModelID).NotTo(BeEmpty())
 			Expect(ev.CaptionScoped).To(BeFalse(), "text post has no unseen media")
 
-			// Every dimension scored in range, with rationale and a mandatory
-			// weakness, and weights stamped by ComposeScore.
+			// Every dimension scored in range, with a short verdict and
+			// weights stamped by ComposeScore.
 			for _, d := range []models.EvaluationDimension{
 				ev.Result.Correctness, ev.Result.Clarity, ev.Result.Engagement, ev.Result.Delivery,
 			} {
 				Expect(d.Score).To(BeNumerically(">=", 0))
 				Expect(d.Score).To(BeNumerically("<=", 10))
-				Expect(d.Rationale).NotTo(BeEmpty())
-				Expect(d.Weakness).NotTo(BeEmpty(), "a weakness is mandatory on every dimension")
+				Expect(d.Verdict).NotTo(BeEmpty())
+				Expect(len([]rune(d.Verdict))).To(BeNumerically("<=", 241))
 				Expect(d.Weight).To(BeNumerically(">", 0), "ComposeScore must stamp the weight")
 			}
 
