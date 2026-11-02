@@ -101,7 +101,7 @@ lint:
 # — publish the proto repo tag before `make proto` can resolve it. To try an untagged change, generate from a local checkout:
 # make proto PROTO_SOURCE=../proto/proto
 PROTO_MODULE  := buf.build/ogen-app/proto
-PROTO_VERSION := v1.24.0
+PROTO_VERSION := v1.25.0
 PROTO_SOURCE  ?= $(PROTO_MODULE):$(PROTO_VERSION)
 
 proto:

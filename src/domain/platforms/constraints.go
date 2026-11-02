@@ -17,6 +17,7 @@ const (
 	RuleAllowedFormat           = "allowed_formats"
 	RuleAnimatedGIF             = "animated_gif_supported"
 	RuleMaxAttachmentsCount     = "max_attachments_per_post"
+	RuleMaxAltTextChars         = "max_alt_text_chars"        // Image alt text exceeds the platform cap
 	RuleMaxPages                = "max_pages"                 // PDF page-count cap
 	RuleAttachmentMix           = "attachment_kind_mix"       // Image+PDF on the same post
 	RulePDFNotSupported         = "pdf_not_supported"         // Platform has no PDF rules

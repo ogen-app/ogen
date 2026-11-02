@@ -23,6 +23,9 @@ type ImageConstraints struct {
 	AllowedFormats        []string `json:"allowed_formats"`
 	AnimatedGIFSupported  bool     `json:"animated_gif_supported"`
 	MaxAttachmentsPerPost int      `json:"max_attachments_per_post"`
+	// MaxAltTextChars caps an image's alt text in characters (runes). 0 means
+	// the platform takes no alt text, so the publisher doesn't send it.
+	MaxAltTextChars int `json:"max_alt_text_chars"`
 }
 
 func (c ImageConstraints) Value() (driver.Value, error) {
@@ -58,7 +61,8 @@ func (c ImageConstraints) IsZero() bool {
 	return c.MaxFileSizeBytes == 0 &&
 		len(c.AllowedFormats) == 0 &&
 		!c.AnimatedGIFSupported &&
-		c.MaxAttachmentsPerPost == 0
+		c.MaxAttachmentsPerPost == 0 &&
+		c.MaxAltTextChars == 0
 }
 
 // PDFConstraints is the sibling rule set for PDF post attachments.
