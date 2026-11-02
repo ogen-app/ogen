@@ -20043,6 +20043,10 @@ const docTemplate = `{
                 "animated_gif_supported": {
                     "type": "boolean"
                 },
+                "max_alt_text_chars": {
+                    "description": "MaxAltTextChars caps an image's alt text in characters (runes). 0 means\nthe platform takes no alt text, so the publisher doesn't send it.",
+                    "type": "integer"
+                },
                 "max_attachments_per_post": {
                     "type": "integer"
                 },

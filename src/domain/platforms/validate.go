@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -80,6 +81,16 @@ func validateImageAttachment(att *models.PostAttachment, p *models.Platform) []V
 			Expected:     "static",
 			Actual:       "animated",
 			Message:      "animated GIFs are not supported on this platform",
+		})
+	}
+	if n := utf8.RuneCountInString(att.AltText); c.MaxAltTextChars > 0 && n > c.MaxAltTextChars {
+		errs = append(errs, ValidationError{
+			Platform:     p.ID,
+			AttachmentID: att.ID,
+			Rule:         RuleMaxAltTextChars,
+			Expected:     fmt.Sprintf("<= %d", c.MaxAltTextChars),
+			Actual:       strconv.Itoa(n),
+			Message:      fmt.Sprintf("alt text is %d characters; %s allows up to %d", n, p.Name, c.MaxAltTextChars),
 		})
 	}
 	return errs

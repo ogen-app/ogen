@@ -253,6 +253,7 @@ type ImageConstraints struct {
 	AllowedFormats        []string               `protobuf:"bytes,2,rep,name=allowed_formats,json=allowedFormats,proto3" json:"allowed_formats,omitempty"` // jpeg|png|webp|gif
 	AnimatedGifSupported  bool                   `protobuf:"varint,3,opt,name=animated_gif_supported,json=animatedGifSupported,proto3" json:"animated_gif_supported,omitempty"`
 	MaxAttachmentsPerPost int32                  `protobuf:"varint,4,opt,name=max_attachments_per_post,json=maxAttachmentsPerPost,proto3" json:"max_attachments_per_post,omitempty"`
+	MaxAltTextChars       int32                  `protobuf:"varint,5,opt,name=max_alt_text_chars,json=maxAltTextChars,proto3" json:"max_alt_text_chars,omitempty"` // 0 = platform takes no alt text; <= GlobalLimits.max_alt_text_chars
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -311,6 +312,13 @@ func (x *ImageConstraints) GetAnimatedGifSupported() bool {
 func (x *ImageConstraints) GetMaxAttachmentsPerPost() int32 {
 	if x != nil {
 		return x.MaxAttachmentsPerPost
+	}
+	return 0
+}
+
+func (x *ImageConstraints) GetMaxAltTextChars() int32 {
+	if x != nil {
+		return x.MaxAltTextChars
 	}
 	return 0
 }
@@ -1364,12 +1372,13 @@ const file_platforms_v1_platforms_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +
 	"\rPlatformUsage\x12-\n" +
 	"\x12connected_accounts\x18\x01 \x01(\x05R\x11connectedAccounts\x12'\n" +
-	"\x0fscheduled_posts\x18\x02 \x01(\x05R\x0escheduledPosts\"\xd9\x01\n" +
+	"\x0fscheduled_posts\x18\x02 \x01(\x05R\x0escheduledPosts\"\x86\x02\n" +
 	"\x10ImageConstraints\x12-\n" +
 	"\x13max_file_size_bytes\x18\x01 \x01(\x03R\x10maxFileSizeBytes\x12'\n" +
 	"\x0fallowed_formats\x18\x02 \x03(\tR\x0eallowedFormats\x124\n" +
 	"\x16animated_gif_supported\x18\x03 \x01(\bR\x14animatedGifSupported\x127\n" +
-	"\x18max_attachments_per_post\x18\x04 \x01(\x05R\x15maxAttachmentsPerPost\"\xa9\x03\n" +
+	"\x18max_attachments_per_post\x18\x04 \x01(\x05R\x15maxAttachmentsPerPost\x12+\n" +
+	"\x12max_alt_text_chars\x18\x05 \x01(\x05R\x0fmaxAltTextChars\"\xa9\x03\n" +
 	"\x10VideoConstraints\x12-\n" +
 	"\x13max_file_size_bytes\x18\x01 \x01(\x03R\x10maxFileSizeBytes\x12'\n" +
 	"\x0fallowed_formats\x18\x02 \x03(\tR\x0eallowedFormats\x120\n" +

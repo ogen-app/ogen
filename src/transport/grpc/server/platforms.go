@@ -344,7 +344,7 @@ func validatePlatformWrite(pb *platformsv1.Platform, limits models.PlatformGloba
 		return err
 	}
 	if img := pb.GetImageConstraints(); img != nil {
-		if err := checkFileSize("image", img.GetMaxFileSizeBytes(), limits.MaxImageUploadBytes); err != nil {
+		if err := validateImageLimits(img, limits); err != nil {
 			return err
 		}
 	}
@@ -372,6 +372,22 @@ func validateSupportedPostTypes(slugs []string) error {
 		if _, ok := domainplatforms.RuleFor(slug); !ok {
 			return status.Errorf(codes.InvalidArgument, "supported post type %q has no publish rule in this build; it cannot be enabled", slug)
 		}
+	}
+	return nil
+}
+
+// validateImageLimits checks the image file size against the global upload
+// ceiling and the alt-text cap against the global alt-text ceiling.
+func validateImageLimits(img *platformsv1.ImageConstraints, limits models.PlatformGlobalLimits) error {
+	if err := checkFileSize("image", img.GetMaxFileSizeBytes(), limits.MaxImageUploadBytes); err != nil {
+		return err
+	}
+	alt := img.GetMaxAltTextChars()
+	if alt < 0 {
+		return status.Error(codes.InvalidArgument, "image max_alt_text_chars must be >= 0")
+	}
+	if int(alt) > limits.MaxAltTextChars {
+		return status.Errorf(codes.InvalidArgument, "image max_alt_text_chars (%d) exceeds the global alt-text ceiling (%d); raise the global cap first", alt, limits.MaxAltTextChars)
 	}
 	return nil
 }
@@ -487,6 +503,7 @@ func fromImageProto(c *platformsv1.ImageConstraints) models.ImageConstraints {
 		AllowedFormats:        c.GetAllowedFormats(),
 		AnimatedGIFSupported:  c.GetAnimatedGifSupported(),
 		MaxAttachmentsPerPost: int(c.GetMaxAttachmentsPerPost()),
+		MaxAltTextChars:       int(c.GetMaxAltTextChars()),
 	}
 }
 
@@ -496,6 +513,7 @@ func toImageProto(c models.ImageConstraints) *platformsv1.ImageConstraints {
 		AllowedFormats:        c.AllowedFormats,
 		AnimatedGifSupported:  c.AnimatedGIFSupported,
 		MaxAttachmentsPerPost: int32(c.MaxAttachmentsPerPost),
+		MaxAltTextChars:       int32(c.MaxAltTextChars),
 	}
 }
 
