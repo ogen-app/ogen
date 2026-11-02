@@ -47,10 +47,20 @@ func ValidateAttachment(att *models.PostAttachment, p *models.Platform) []Valida
 }
 
 func validateImageAttachment(att *models.PostAttachment, p *models.Platform) []ValidationError {
-	if p.ImageConstraints.IsZero() {
+	errs := validateImageFile(att, p)
+	if alt := validateAltText(att, p); alt != nil {
+		errs = append(errs, *alt)
+	}
+	return errs
+}
+
+// validateImageFile checks the file against the platform's size, format and
+// animation rules; none apply until the platform sets one.
+func validateImageFile(att *models.PostAttachment, p *models.Platform) []ValidationError {
+	c := p.ImageConstraints
+	if !c.HasFileRules() {
 		return nil
 	}
-	c := p.ImageConstraints
 	var errs []ValidationError
 	if att.SizeBytes > c.MaxFileSizeBytes {
 		errs = append(errs, ValidationError{
@@ -83,17 +93,25 @@ func validateImageAttachment(att *models.PostAttachment, p *models.Platform) []V
 			Message:      "animated GIFs are not supported on this platform",
 		})
 	}
-	if n := utf8.RuneCountInString(att.AltText); c.MaxAltTextChars > 0 && n > c.MaxAltTextChars {
-		errs = append(errs, ValidationError{
-			Platform:     p.ID,
-			AttachmentID: att.ID,
-			Rule:         RuleMaxAltTextChars,
-			Expected:     fmt.Sprintf("<= %d", c.MaxAltTextChars),
-			Actual:       strconv.Itoa(n),
-			Message:      fmt.Sprintf("alt text is %d characters; %s allows up to %d", n, p.Name, c.MaxAltTextChars),
-		})
-	}
 	return errs
+}
+
+// validateAltText flags alt text over the platform's cap. No cap (0) means the
+// platform takes no alt text, so there is nothing published to measure.
+func validateAltText(att *models.PostAttachment, p *models.Platform) *ValidationError {
+	limit := p.ImageConstraints.MaxAltTextChars
+	n := utf8.RuneCountInString(att.AltText)
+	if limit <= 0 || n <= limit {
+		return nil
+	}
+	return &ValidationError{
+		Platform:     p.ID,
+		AttachmentID: att.ID,
+		Rule:         RuleMaxAltTextChars,
+		Expected:     fmt.Sprintf("<= %d", limit),
+		Actual:       strconv.Itoa(n),
+		Message:      fmt.Sprintf("alt text is %d characters; %s allows up to %d", n, p.Name, limit),
+	}
 }
 
 func validatePDFAttachment(att *models.PostAttachment, p *models.Platform) []ValidationError {
@@ -296,7 +314,7 @@ func ValidatePostAttachments(atts []models.PostAttachment, p *models.Platform) [
 			Message:      "mixing video and PDF attachments on a single post is not supported",
 		})
 	}
-	if hasImageRules && len(images) > p.ImageConstraints.MaxAttachmentsPerPost {
+	if p.ImageConstraints.HasFileRules() && len(images) > p.ImageConstraints.MaxAttachmentsPerPost {
 		errs = append(errs, ValidationError{
 			Platform:     p.ID,
 			AttachmentID: "",

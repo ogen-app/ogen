@@ -58,11 +58,17 @@ func (c *ImageConstraints) Scan(src any) error {
 // IsZero reports whether c carries no rules — used by callers to skip
 // validation cleanly when a platform has not opted in to constraints.
 func (c ImageConstraints) IsZero() bool {
-	return c.MaxFileSizeBytes == 0 &&
-		len(c.AllowedFormats) == 0 &&
-		!c.AnimatedGIFSupported &&
-		c.MaxAttachmentsPerPost == 0 &&
-		c.MaxAltTextChars == 0
+	return !c.HasFileRules() && c.MaxAltTextChars == 0
+}
+
+// HasFileRules reports whether c carries any rule about the image file itself
+// (size, format, animation, count) — as opposed to only an alt-text cap, which
+// must not switch the file checks on against zero-valued rules.
+func (c ImageConstraints) HasFileRules() bool {
+	return c.MaxFileSizeBytes != 0 ||
+		len(c.AllowedFormats) != 0 ||
+		c.AnimatedGIFSupported ||
+		c.MaxAttachmentsPerPost != 0
 }
 
 // PDFConstraints is the sibling rule set for PDF post attachments.
