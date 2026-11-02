@@ -18,19 +18,14 @@ func fieldIndex(t *testing.T, typ reflect.Type, name string) int {
 }
 
 // The model emits fields in schema order, which follows struct field
-// order. Rationale must precede Score so the model reasons before it
-// commits to a number (CON-85 "reason before scoring"). This is the guard
-// against an accidental reorder.
-func TestRationalePrecedesScore(t *testing.T) {
+// order. Verdict must precede Score so the model reasons before it commits
+// to a number. This is the guard against an accidental reorder.
+func TestVerdictPrecedesScore(t *testing.T) {
 	typ := reflect.TypeFor[dimensionOutput]()
-	rationale := fieldIndex(t, typ, "Rationale")
-	weakness := fieldIndex(t, typ, "Weakness")
+	verdict := fieldIndex(t, typ, "Verdict")
 	score := fieldIndex(t, typ, "Score")
-	if rationale >= score {
-		t.Errorf("Rationale (idx %d) must precede Score (idx %d)", rationale, score)
-	}
-	if weakness >= score {
-		t.Errorf("Weakness (idx %d) must precede Score (idx %d)", weakness, score)
+	if verdict >= score {
+		t.Errorf("Verdict (idx %d) must precede Score (idx %d)", verdict, score)
 	}
 }
 
@@ -44,7 +39,7 @@ func TestLoadTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderSystem: %v", err)
 	}
-	for _, marker := range []string{"CORRECTNESS", "CLARITY", "ENGAGEMENT", "DELIVERY", "Reason before scoring", "span", "second person"} {
+	for _, marker := range []string{"CORRECTNESS", "CLARITY", "ENGAGEMENT", "DELIVERY", "verdict", "span", "second person", "240 characters"} {
 		if !strings.Contains(sys, marker) {
 			t.Errorf("system prompt missing %q", marker)
 		}
@@ -57,7 +52,6 @@ func TestLoadTemplates(t *testing.T) {
 		CampaignName:  "Launch",
 		PostBody:      "UNIQUE_BODY_TOKEN here",
 		Assets:        []assetContext{{Title: "Brand doc", Preview: "10x faster"}},
-		SuggestionCap: 3,
 	})
 	if err != nil {
 		t.Fatalf("renderUser: %v", err)
@@ -68,17 +62,17 @@ func TestLoadTemplates(t *testing.T) {
 		}
 	}
 
-	// The per-dimension scoring directive (with the suggestion cap) is added
-	// in code, not the template — verify it renders for a named dimension.
-	instr := dimensionInstruction("Clarity", 3)
-	for _, marker := range []string{"Clarity", "at most 3"} {
+	// The per-dimension scoring directive is added in code, not the
+	// template; verify it renders for a named dimension.
+	instr := dimensionInstruction("Clarity")
+	for _, marker := range []string{"Clarity", "one or two"} {
 		if !strings.Contains(instr, marker) {
 			t.Errorf("dimension instruction missing %q: %s", marker, instr)
 		}
 	}
 
 	// Caption-scoped notice must be absent when the flag is off.
-	usr2, err := tpl.renderUser(assessmentTemplateData{Platform: "X", PostType: "text-post", PostBody: "b", SuggestionCap: 2})
+	usr2, err := tpl.renderUser(assessmentTemplateData{Platform: "X", PostType: "text-post", PostBody: "b"})
 	if err != nil {
 		t.Fatalf("renderUser (no media): %v", err)
 	}

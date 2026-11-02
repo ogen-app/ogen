@@ -1,7 +1,9 @@
 package post_quality
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -35,8 +37,8 @@ func TestValidateInput(t *testing.T) {
 
 func goodDim() dimensionOutput {
 	return dimensionOutput{
-		Score: 7, Rationale: "r", Weakness: "w",
-		Suggestions: []suggestionOutput{{Severity: "high", Issue: "i", Fix: "f", Span: "s"}},
+		Score: 7, Verdict: "v",
+		Suggestions: []suggestionOutput{{Severity: "high", Span: "s", Advice: "a"}},
 	}
 }
 
@@ -76,13 +78,12 @@ func TestValidateOutputHardFailsOnScore(t *testing.T) {
 }
 
 func TestValidateOutputToleratesBlankProse(t *testing.T) {
-	// Blank rationale/weakness no longer fail the evaluation — the scores
-	// are still usable.
+	// A blank verdict does not fail the evaluation; the scores are still
+	// usable.
 	o := goodOutput()
-	o.Clarity.Rationale = ""
-	o.Engagement.Weakness = "  "
+	o.Clarity.Verdict = ""
 	if err := validateOutput(o, 3); err != nil {
-		t.Errorf("blank rationale/weakness should be tolerated, got %v", err)
+		t.Errorf("blank verdict should be tolerated, got %v", err)
 	}
 }
 
@@ -92,8 +93,7 @@ func TestValidateOutputDropsBadSuggestions(t *testing.T) {
 		mutate func(*assessmentOutput)
 	}{
 		{"missing span", func(o *assessmentOutput) { o.Correctness.Suggestions[0].Span = "" }},
-		{"missing issue", func(o *assessmentOutput) { o.Correctness.Suggestions[0].Issue = "" }},
-		{"missing fix", func(o *assessmentOutput) { o.Correctness.Suggestions[0].Fix = "  " }},
+		{"missing advice", func(o *assessmentOutput) { o.Correctness.Suggestions[0].Advice = "  " }},
 		{"bad severity", func(o *assessmentOutput) { o.Correctness.Suggestions[0].Severity = "urgent" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,9 +112,9 @@ func TestValidateOutputDropsBadSuggestions(t *testing.T) {
 func TestValidateOutputTrimsOverCap(t *testing.T) {
 	o := goodOutput()
 	o.Clarity.Suggestions = []suggestionOutput{
-		{Severity: "low", Issue: "i", Fix: "f", Span: "s"},
-		{Severity: "low", Issue: "i", Fix: "f", Span: "s"},
-		{Severity: "low", Issue: "i", Fix: "f", Span: "s"},
+		{Severity: "low", Span: "s", Advice: "a"},
+		{Severity: "low", Span: "s", Advice: "a"},
+		{Severity: "low", Span: "s", Advice: "a"},
 	}
 	if err := validateOutput(o, 2); err != nil {
 		t.Fatalf("over-cap should trim, not fail: %v", err)
@@ -129,7 +129,7 @@ func TestToEvaluationResult(t *testing.T) {
 	out.Engagement.Score = 9
 	r := toEvaluationResult(out)
 
-	if r.Engagement.Score != 9 || r.Correctness.Rationale != "r" || r.Clarity.Weakness != "w" {
+	if r.Engagement.Score != 9 || r.Correctness.Verdict != "v" || r.Clarity.Suggestions[0].Advice != "a" {
 		t.Errorf("dimension fields not mapped: %+v", r)
 	}
 	// Each suggestion must be stamped with its parent dimension.
@@ -143,5 +143,83 @@ func TestToEvaluationResult(t *testing.T) {
 	// Weight/Contribution must be left zero — ComposeScore fills them.
 	if r.Correctness.Weight != 0 || r.Correctness.Contribution != 0 {
 		t.Errorf("weight/contribution should be zero before ComposeScore")
+	}
+}
+
+func TestValidateOutputClipsProse(t *testing.T) {
+	o := goodOutput()
+	o.Clarity.Verdict = strings.Repeat("Your hook is fine. ", 20)
+	o.Clarity.Suggestions[0].Advice = strings.Repeat("word ", 60)
+	if err := validateOutput(o, 3); err != nil {
+		t.Fatal(err)
+	}
+	if n := utf8.RuneCountInString(o.Clarity.Verdict); n > maxVerdictChars {
+		t.Errorf("verdict is %d runes, want <= %d", n, maxVerdictChars)
+	}
+	if !strings.HasSuffix(o.Clarity.Verdict, ".") {
+		t.Errorf("verdict should end on a whole sentence: %q", o.Clarity.Verdict)
+	}
+	advice := o.Clarity.Suggestions[0].Advice
+	if n := utf8.RuneCountInString(advice); n > maxAdviceChars+1 {
+		t.Errorf("advice is %d runes, want <= %d", n, maxAdviceChars+1)
+	}
+	if !strings.HasSuffix(advice, "…") {
+		t.Errorf("advice without a sentence end should be cut at a word: %q", advice)
+	}
+}
+
+func TestClipSentencesShortTextUnchanged(t *testing.T) {
+	if got := clipSentences("  Short one.  ", 240); got != "Short one." {
+		t.Errorf("got %q", got)
+	}
+}
+
+func sug(dim models.EvaluationDimensionKey, sev models.SuggestionSeverity, span string) models.EvaluationSuggestion {
+	return models.EvaluationSuggestion{Dimension: dim, Severity: sev, Span: span, Advice: "a"}
+}
+
+func TestCapPostSuggestions(t *testing.T) {
+	r := models.EvaluationResult{
+		Correctness: models.EvaluationDimension{Weight: 0.1, Suggestions: []models.EvaluationSuggestion{
+			sug(models.DimensionCorrectness, models.SeverityLow, "c1"),
+			sug(models.DimensionCorrectness, models.SeverityLow, "shared"),
+		}},
+		Clarity: models.EvaluationDimension{Weight: 0.2, Suggestions: []models.EvaluationSuggestion{
+			sug(models.DimensionClarity, models.SeverityMedium, "k1"),
+			sug(models.DimensionClarity, models.SeverityLow, "k2"),
+		}},
+		Engagement: models.EvaluationDimension{Weight: 0.4, Suggestions: []models.EvaluationSuggestion{
+			sug(models.DimensionEngagement, models.SeverityHigh, "Shared "),
+			sug(models.DimensionEngagement, models.SeverityLow, "e2"),
+		}},
+		Delivery: models.EvaluationDimension{Weight: 0.3, Suggestions: []models.EvaluationSuggestion{
+			sug(models.DimensionDelivery, models.SeverityMedium, "d1"),
+			sug(models.DimensionDelivery, models.SeverityLow, "d2"),
+		}},
+	}
+	capPostSuggestions(&r, 5)
+
+	var got []string
+	total := 0
+	for _, d := range r.Dimensions() {
+		for _, s := range d.Suggestions {
+			got = append(got, string(s.Dimension)+":"+strings.TrimSpace(s.Span))
+			total++
+		}
+	}
+	if total != 5 {
+		t.Fatalf("kept %d suggestions, want 5: %v", total, got)
+	}
+	// The shared span survives once, under the dimension that rated it high.
+	if len(r.Correctness.Suggestions) != 0 {
+		t.Errorf("correctness keeps %v; its low 'shared' is a duplicate and c1 is the lowest-weight low", r.Correctness.Suggestions)
+	}
+	if r.Engagement.Suggestions[0].Span != "Shared " || r.Engagement.Suggestions[0].Severity != models.SeverityHigh {
+		t.Errorf("engagement should keep the high-severity shared span first: %v", r.Engagement.Suggestions)
+	}
+	// Medium items outrank lows; among lows the heavier dimensions win.
+	want := []string{"clarity:k1", "engagement:Shared", "engagement:e2", "delivery:d1", "delivery:d2"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("kept %v, want %v", got, want)
 	}
 }

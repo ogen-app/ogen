@@ -27,7 +27,11 @@ import (
 
 // defaultSuggestionCap is the top-N suggestions per dimension when the
 // config leaves SuggestionCap at zero.
-const defaultSuggestionCap = 3
+const defaultSuggestionCap = 2
+
+// postSuggestionCap is the most suggestions one assessment keeps across all
+// four dimensions, so the author reads a short list of the fixes that matter.
+const postSuggestionCap = 5
 
 // PostQualityFlowConfig holds the settings for the assessPostQuality flow.
 type PostQualityFlowConfig struct {
@@ -214,6 +218,7 @@ func runPostQuality(
 	result := toEvaluationResult(output)
 	profile := cfg.Weights.For(post.PlatformPostType)
 	overall := ComposeScore(&result, profile)
+	capPostSuggestions(&result, postSuggestionCap)
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "composeScore", Status: "done"})
 
 	// ── Step 6: persist (upsert evaluation + PostLog) ────────────────────
