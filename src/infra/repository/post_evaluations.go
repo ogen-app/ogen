@@ -18,7 +18,9 @@ import (
 type PostEvaluationRepository interface {
 	// Upsert inserts the evaluation, or overwrites the existing row for
 	// the same post_id. The caller supplies eval.ID (used on first insert;
-	// ignored on conflict). updated_at is stamped here.
+	// ignored on conflict). updated_at is stamped here. Every call stands for
+	// one model run: model_runs starts at 1 and is incremented on conflict,
+	// and eval.ModelRuns is set to the stored count.
 	Upsert(ctx context.Context, eval *models.PostEvaluation) error
 
 	// GetByPostID returns the evaluation for a post, or (nil, nil) when the
@@ -36,6 +38,7 @@ func NewPostEvaluationRepository(db *bun.DB) PostEvaluationRepository {
 
 func (r *postEvaluationRepository) Upsert(ctx context.Context, eval *models.PostEvaluation) error {
 	eval.UpdatedAt = time.Now().UTC()
+	eval.ModelRuns = 1
 	_, err := r.db.NewInsert().
 		Model(eval).
 		On("CONFLICT (post_id) DO UPDATE").
@@ -46,7 +49,12 @@ func (r *postEvaluationRepository) Upsert(ctx context.Context, eval *models.Post
 		Set("result = EXCLUDED.result").
 		Set("model_id = EXCLUDED.model_id").
 		Set("input_hash = EXCLUDED.input_hash").
+		Set("content_hash = EXCLUDED.content_hash").
+		Set("context_hash = EXCLUDED.context_hash").
+		Set("trigger = EXCLUDED.trigger").
+		Set("model_runs = pe.model_runs + 1").
 		Set("updated_at = EXCLUDED.updated_at").
+		Returning("model_runs").
 		Exec(ctx)
 	return err
 }

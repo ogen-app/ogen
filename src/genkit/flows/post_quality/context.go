@@ -19,9 +19,14 @@ const previewChars = 200
 // renderedPrompts holds the two prompt strings ready for the model call.
 // system is the static rubric (stable, cacheable prefix); user carries
 // the per-post campaign context, platform conventions, and body.
+//
+// userContext is the user prompt rendered without the post's title and body:
+// everything the model sees besides the scored text, which the context hash
+// fingerprints.
 type renderedPrompts struct {
 	system        string
 	user          string
+	userContext   string
 	captionScoped bool
 }
 
@@ -89,7 +94,12 @@ func buildContext(
 	if err != nil {
 		return nil, err
 	}
-	return &renderedPrompts{system: system, user: user, captionScoped: captionScoped}, nil
+	data.PostTitle, data.PostBody = "", ""
+	userContext, err := cfg.tmpl.renderUser(data)
+	if err != nil {
+		return nil, err
+	}
+	return &renderedPrompts{system: system, user: user, userContext: userContext, captionScoped: captionScoped}, nil
 }
 
 // platformContext derives the platform display name, the post-type label,

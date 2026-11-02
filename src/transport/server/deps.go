@@ -391,5 +391,6 @@ func (d *deps) genkitDeps() genkitDeps {
 		recorder:            d.usage.recorder,
 		checker:             d.usage.checker,
 		notifier:            d.notifier,
+		limiter:             d.entitlements.limiter,
 	}
 }

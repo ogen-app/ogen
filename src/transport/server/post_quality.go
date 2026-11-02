@@ -6,6 +6,8 @@ import (
 
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -15,8 +17,7 @@ import (
 )
 
 // initPostQuality registers the assessPostQuality flow on the shared
-// Genkit instance and returns an SSE-capable callback for the posts
-// handler. The weight profiles come from config (empty → built-in
+// Genkit instance and returns its entry points. The weight profiles come from config (empty → built-in
 // defaults); a malformed override fails here so the misconfiguration
 // surfaces at boot rather than at first request.
 func initPostQuality(
@@ -27,11 +28,12 @@ func initPostQuality(
 	checker *usage.Checker,
 	hub eventhub.Hub,
 	notifier *notify.Service,
+	limiter *entitlements.Limiter,
 	repos post_quality.PostQualityRepos,
-) (func(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error), error) {
+) (postQualityFns, error) {
 	weights, err := post_quality.WeightsFromJSON(cfg.QualityWeightProfiles)
 	if err != nil {
-		return nil, fmt.Errorf("post quality weight profiles: %w", err)
+		return postQualityFns{}, fmt.Errorf("post quality weight profiles: %w", err)
 	}
 
 	// MaxOutputTokens is left at 0 so the flow uses its own small default
@@ -45,10 +47,24 @@ func initPostQuality(
 		Weights:  weights,
 		Hub:      hub,
 		Notifier: notifier,
+		Limiter:  limiter,
 	}
 	if err := post_quality.InitPostQuality(g, flowCfg, repos); err != nil {
-		return nil, fmt.Errorf("init post quality flow: %w", err)
+		return postQualityFns{}, fmt.Errorf("init post quality flow: %w", err)
 	}
 
-	return post_quality.NewPostQualityCallback(), nil
+	return postQualityFns{
+		assess: post_quality.NewPostQualityCallback(),
+		status: post_quality.NewStatusCallback(),
+		auto:   post_quality.NewAutoAssessCallback(),
+	}, nil
+}
+
+// postQualityFns are the post quality flow's entry points: a manual
+// assessment, the stored assessment with its staleness, and an automatic
+// assessment from a lifecycle checkpoint.
+type postQualityFns struct {
+	assess func(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error)
+	status func(ctx context.Context, postID string) (*post_quality.Status, error)
+	auto   func(ctx context.Context, postID string, trigger models.QualityTrigger) (*post_quality.PostQualityResponse, error)
 }

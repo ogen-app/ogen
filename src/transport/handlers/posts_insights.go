@@ -2,12 +2,16 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
@@ -20,6 +24,7 @@ type PostInsightsHandler struct {
 	repo             repository.PostRepository
 	assessQuality    func(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error)
 	evaluationRepo   repository.PostEvaluationRepository
+	qualityStatus    func(ctx context.Context, postID string) (*post_quality.Status, error)
 	analyticsRepo    repository.PostAnalyticsRepository
 	isAssistantReady func() bool
 	activity         *activity.Recorder
@@ -50,6 +55,14 @@ func NewPostInsightsHandler(
 	}
 }
 
+// WithQualityStatus makes GET /:id/assessment report whether the stored
+// assessment is stale and the post's run allowance. Without it, or while the
+// flow is unavailable, the endpoint serves the stored row alone.
+func (h *PostInsightsHandler) WithQualityStatus(fn func(ctx context.Context, postID string) (*post_quality.Status, error)) *PostInsightsHandler {
+	h.qualityStatus = fn
+	return h
+}
+
 func (h *PostInsightsHandler) Register(app *fiber.App) {
 	app.Post("/api/posts/:id/assess", h.auth, h.Assess)
 	app.Get("/api/posts/:id/assessment", h.auth, h.GetAssessment)
@@ -61,8 +74,10 @@ func (h *PostInsightsHandler) Register(app *fiber.App) {
 // @Description  Runs the Post quality assessment agent (CON-85) and streams
 // @Description  Server-Sent Events: a "step" event per flow stage, then a
 // @Description  final "complete" event carrying the persisted evaluation
-// @Description  (four 0-10 dimension scores with rationale, weakness, and
-// @Description  span-anchored suggestions, plus the backend-computed overall).
+// @Description  (four 0-10 dimension scores, each with a short verdict, at
+// @Description  most five span-anchored suggestions across the post, plus the
+// @Description  backend-computed overall). An "error" event with code 402
+// @Description  means the post's quality_reviews_per_post allowance is used up.
 // @Tags         posts
 // @Produce      text/event-stream
 // @Security     CookieAuth
@@ -102,7 +117,7 @@ func (h *PostInsightsHandler) Assess(c *fiber.Ctx) error {
 			emit(string(name), data)
 		})
 		if err != nil {
-			emit(string(post_quality.SSEEventError), flowError[*post_quality.ValidationError, *post_quality.AIError](err))
+			emit(string(post_quality.SSEEventError), assessError(err))
 			return
 		}
 		// "complete" is emitted by the runner itself.
@@ -116,17 +131,28 @@ func (h *PostInsightsHandler) Assess(c *fiber.Ctx) error {
 	return nil
 }
 
+// assessError classifies an assessment failure for the SSE error event; an
+// exhausted run allowance is 402, as the REST endpoints render it.
+func assessError(err error) flowErrorPayload {
+	if q, ok := errors.AsType[*entitlements.QuotaExceededError](err); ok {
+		return flowErrorPayload{Message: q.Error(), Code: fiber.StatusPaymentRequired}
+	}
+	return flowError[*post_quality.ValidationError, *post_quality.AIError](err)
+}
+
 // GetAssessment godoc
 // @Summary      Get stored post quality assessment
 // @Description  Returns the most recent persisted quality evaluation for a
-// @Description  post (CON-85/CON-92) without invoking the model. The frontend
-// @Description  reads this to render an existing assessment and only triggers
-// @Description  POST /assess when the post has changed since it was scored.
+// @Description  post without invoking the model. stale is true when the
+// @Description  post's content or its context (brief, assets, model, rubric)
+// @Description  changed since it was scored, and stale_reason says which;
+// @Description  runs_used / runs_limit report the per-post allowance
+// @Description  (runs_limit null = unlimited).
 // @Tags         posts
 // @Produce      json
 // @Security     CookieAuth
 // @Param        id   path      string  true  "Post Sqid"
-// @Success      200  {object}  models.PostEvaluation
+// @Success      200  {object}  post_quality.Status
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
 // @Failure      503  {object}  map[string]string
@@ -135,17 +161,34 @@ func (h *PostInsightsHandler) GetAssessment(c *fiber.Ctx) error {
 	if h.evaluationRepo == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "post quality assessment is not available")
 	}
-	eval, err := h.evaluationRepo.GetByPostID(reqCtx(c), c.Params("id"))
+	ctx, postID := reqCtx(c), c.Params("id")
+	st, err := h.assessmentStatus(ctx, postID)
 	if err != nil {
 		return err
 	}
-	// GetByPostID returns (nil, nil) when the post has never been assessed.
-	// Surface that as 404 so the frontend shows the "Assess" affordance
-	// rather than a stale or empty result.
-	if eval == nil {
+	// A post that was never assessed is a 404, so the frontend shows the
+	// "Assess" affordance rather than an empty result.
+	if st == nil {
 		return fiber.NewError(fiber.StatusNotFound, "post has not been assessed")
 	}
-	return c.JSON(eval)
+	return c.JSON(st)
+}
+
+// assessmentStatus reads the stored assessment with its staleness, falling
+// back to the stored row alone when the flow is not available.
+func (h *PostInsightsHandler) assessmentStatus(ctx context.Context, postID string) (*post_quality.Status, error) {
+	if h.qualityStatus != nil {
+		st, err := h.qualityStatus(ctx, postID)
+		if err == nil {
+			return st, nil
+		}
+		slog.WarnContext(ctx, "assessment staleness unavailable; serving stored row", logging.AttrComponent, "handlers.posts", "post_id", postID, logging.AttrError, err)
+	}
+	eval, err := h.evaluationRepo.GetByPostID(ctx, postID)
+	if err != nil || eval == nil {
+		return nil, err
+	}
+	return &post_quality.Status{PostEvaluation: eval}, nil
 }
 
 // GetAnalytics godoc
