@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -89,7 +88,7 @@ func evaluate(
 	// Sanitize suggestions across the assembled output (drop span-less / thin
 	// suggestions, trim to cap). Score-range is the only hard error, and the
 	// focused calls return valid scores, so this does not fail here.
-	if err := validateOutput(out, cfg.SuggestionCap); err != nil {
+	if err := validateOutput(ctx, out, cfg.SuggestionCap); err != nil {
 		return nil, &AIError{Msg: fmt.Sprintf("evaluation failed validation: %v", err)}
 	}
 	return out, nil
@@ -154,7 +153,7 @@ func evaluateDimension(
 		// Record every completed call (one per dimension, plus any empty-rationale
 		// retry that still consumed tokens). Nil recorder = no-op.
 		u.Record(ctx, resp)
-		if strings.TrimSpace(out.Verdict) == "" {
+		if isBlankProse(out.Verdict) {
 			lastErr = fmt.Errorf("empty verdict")
 			slog.WarnContext(ctx, "attempt returned empty verdict", logging.AttrComponent, "genkit.post_quality", "dimension", label, "attempt", attempt+1)
 			continue
@@ -168,7 +167,7 @@ func evaluateDimension(
 // user prompt, naming the single dimension to score.
 func dimensionInstruction(label string) string {
 	return fmt.Sprintf(
-		"\n\nScore ONLY the %s dimension. Write the verdict first (one or two sentences, at most 240 characters), then the 0-10 score, then one or two span-anchored suggestions of one sentence each.",
+		"\n\nScore ONLY the %s dimension. Write the verdict first (one or two sentences, at most 240 characters), then the 0-10 score, then one or two span-anchored suggestions of one sentence each. Wrap the one phrase the author must not miss in ** and **, once in the verdict and once in each advice.",
 		label,
 	)
 }

@@ -2,11 +2,14 @@ package post_quality
 
 import (
 	"cmp"
+	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 // validateInput enforces the flow's preconditions on the loaded Post:
@@ -26,8 +29,9 @@ func validateInput(post *models.Post) error {
 	return nil
 }
 
-// Length limits for the model's prose. The prompt asks for them; the backend
-// enforces them so one verbose answer cannot bloat the stored assessment.
+// Length limits for the model's prose, counted without the emphasis markers.
+// The prompt asks for them; the backend enforces them so one verbose answer
+// cannot bloat the stored assessment.
 const (
 	maxVerdictChars = 240
 	maxAdviceChars  = 200
@@ -44,8 +48,9 @@ const (
 // Sanitized in place: verdicts are clipped to maxVerdictChars; suggestions
 // missing a span or advice, or with an invalid severity, are dropped;
 // advice is clipped to maxAdviceChars; survivors are trimmed to
-// suggestionCap per dimension.
-func validateOutput(out *assessmentOutput, suggestionCap int) error {
+// suggestionCap per dimension. Verdict and advice keep at most one
+// **phrase**; text that breaks the emphasis contract is stored plain.
+func validateOutput(ctx context.Context, out *assessmentOutput, suggestionCap int) error {
 	dims := []struct {
 		key models.EvaluationDimensionKey
 		dim *dimensionOutput
@@ -59,24 +64,37 @@ func validateOutput(out *assessmentOutput, suggestionCap int) error {
 		if d.dim.Score < 0 || d.dim.Score > 10 {
 			return fmt.Errorf("%s: score %d out of range 0-10", d.key, d.dim.Score)
 		}
-		d.dim.Verdict = clipSentences(d.dim.Verdict, maxVerdictChars)
-		d.dim.Suggestions = sanitizeSuggestions(d.dim.Suggestions, suggestionCap)
+		var stripped bool
+		d.dim.Verdict, stripped = clipEmphasized(d.dim.Verdict, maxVerdictChars)
+		logStrippedEmphasis(ctx, stripped, d.key, "verdict")
+		d.dim.Suggestions = sanitizeSuggestions(ctx, d.key, d.dim.Suggestions, suggestionCap)
 	}
 	return nil
+}
+
+// logStrippedEmphasis records a verdict or advice whose emphasis markers
+// broke the contract and were removed, so the model's compliance shows in
+// the logs.
+func logStrippedEmphasis(ctx context.Context, stripped bool, dim models.EvaluationDimensionKey, field string) {
+	if stripped {
+		slog.WarnContext(ctx, "emphasis markers stripped", logging.AttrComponent, "genkit.post_quality", "dimension", dim, "field", field)
+	}
 }
 
 // sanitizeSuggestions drops suggestions that are unusable (no span, no
 // advice, or an invalid severity), clips the advice, and trims the
 // survivors to suggestionCap.
-func sanitizeSuggestions(in []suggestionOutput, suggestionCap int) []suggestionOutput {
+func sanitizeSuggestions(ctx context.Context, dim models.EvaluationDimensionKey, in []suggestionOutput, suggestionCap int) []suggestionOutput {
 	kept := in[:0]
 	for _, s := range in {
 		if strings.TrimSpace(s.Span) == "" ||
-			strings.TrimSpace(s.Advice) == "" ||
+			isBlankProse(s.Advice) ||
 			!validSeverity(s.Severity) {
 			continue
 		}
-		s.Advice = clipSentences(s.Advice, maxAdviceChars)
+		var stripped bool
+		s.Advice, stripped = clipEmphasized(s.Advice, maxAdviceChars)
+		logStrippedEmphasis(ctx, stripped, dim, "advice")
 		kept = append(kept, s)
 	}
 	if suggestionCap >= 0 && len(kept) > suggestionCap {
