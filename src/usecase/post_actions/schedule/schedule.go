@@ -361,16 +361,17 @@ func (s *Service) RouteAndPersist(ctx context.Context, post *models.Post, prevSt
 // prior submit snapshot of identical content, so re-scheduling unchanged
 // content adds no noise — but a matching-content user/assistant edit at the
 // head does NOT suppress it (that edit isn't the record of what was submitted).
-// Best-effort: a nil repo or any error is swallowed after a warn.
-func (s *Service) snapshotSubmitted(ctx context.Context, post *models.Post) {
+// Best-effort: a nil repo or any error is swallowed after a warn. It reports
+// whether the submitted content is recorded as the latest version.
+func (s *Service) snapshotSubmitted(ctx context.Context, post *models.Post) bool {
 	if s.versions == nil {
-		return
+		return false
 	}
 	latest, err := s.versions.GetLatestByPostID(ctx, post.ID)
 	if err != nil {
 		slog.WarnContext(ctx, "schedule: load latest version for submit snapshot",
 			logging.AttrComponent, "schedule", "post_id", post.ID, logging.AttrError, err)
-		return
+		return false
 	}
 	// Content is the canonical full thread body, so SnapshotContent is
 	// simply post.Content for every post type — the snapshot captures the whole
@@ -378,11 +379,11 @@ func (s *Service) snapshotSubmitted(ctx context.Context, post *models.Post) {
 	content := post.SnapshotContent()
 	if latest != nil && latest.IsSystemSnapshot() &&
 		latest.Note == models.PostVersionNoteSubmitted && latest.Content == content {
-		return // already snapshotted this exact submission — nothing new went out
+		return true // already snapshotted this exact submission — nothing new went out
 	}
 	id, err := models.NewID()
 	if err != nil {
-		return
+		return false
 	}
 	if err := s.versions.CreateNext(ctx, &models.PostVersion{
 		ID:      id,
@@ -393,7 +394,9 @@ func (s *Service) snapshotSubmitted(ctx context.Context, post *models.Post) {
 	}); err != nil {
 		slog.WarnContext(ctx, "schedule: create submit snapshot",
 			logging.AttrComponent, "schedule", "post_id", post.ID, logging.AttrError, err)
+		return false
 	}
+	return true
 }
 
 // route reads the auto-publish allowlist for the post's platform and
@@ -491,10 +494,12 @@ func (s *Service) persist(ctx context.Context, post *models.Post, autoPublish bo
 	// assistant, PUT) because all three funnel through here. Manual-publish
 	// posts hold no external copy yet, so they get none. Best-effort, outside
 	// the tx — the schedule has already committed.
-	if autoPublish {
-		s.snapshotSubmitted(ctx, post)
+	// The final quality assessment scores the submitted snapshot, so it is
+	// queued only once that snapshot is recorded; otherwise it would score an
+	// older version as if it were what went out.
+	if autoPublish && s.snapshotSubmitted(ctx, post) {
+		s.quality.Schedule(ctx, post, models.QualityTriggerScheduled)
 	}
-	s.quality.Schedule(ctx, post, models.QualityTriggerScheduled)
 	return nil
 }
 

@@ -183,6 +183,9 @@ func runPostQuality(
 	if err != nil {
 		return nil, err
 	}
+	if !triggerStillApplies(req.Trigger, post.Status) {
+		return nil, &SkippedError{Reason: "post is no longer " + string(models.PostStatusReadyForPublish)}
+	}
 	ownerID = post.CreatedBy
 	tenantID = post.TenantID
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateInput", Status: "done"})
@@ -200,9 +203,9 @@ func runPostQuality(
 	// when only the context changed (brief, assets, model, rubric): that
 	// marks the assessment stale for the author to re-run, rather than
 	// re-scoring every post of a campaign on one brief edit.
-	cached, cerr := repos.Evaluations.GetByPostID(ctx, post.ID)
-	if cerr != nil {
-		cached = nil
+	cached, err := repos.Evaluations.GetByPostID(ctx, post.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load evaluation: %w", err)
 	}
 	if reuse(cached, in, req.Trigger) {
 		slog.InfoContext(ctx, "reusing stored evaluation", logging.AttrComponent, "genkit.post_quality", "post_id", req.PostID, "trigger", req.Trigger)
@@ -326,6 +329,9 @@ func resolveAssessedContent(ctx context.Context, repos PostQualityRepos, post *m
 	if latest != nil {
 		post.Content = latest.Content
 	}
+	// A link post publishes with its URL in the message; versions saved by
+	// hand hold the bare text, so the URL is added the way it goes out.
+	post.Content = post.AppendLink(post.Content)
 	return nil
 }
 
@@ -388,7 +394,10 @@ func assessmentInputs(ctx context.Context, cfg PostQualityFlowConfig, repos Post
 // reuse reports whether the stored evaluation can be returned instead of
 // running the model. Identical inputs always reuse. An automatic run also
 // reuses when only the context changed, and the published checkpoint runs
-// only for a post that was never assessed.
+// only for a post that was never assessed. A row stored before content
+// hashes existed has an empty one: it is unknown whether the content changed,
+// so an automatic run leaves it for the author to re-run rather than spend
+// a run on what may be the same text.
 func reuse(cached *models.PostEvaluation, in *inputs, trigger models.QualityTrigger) bool {
 	switch {
 	case cached == nil:
@@ -397,10 +406,17 @@ func reuse(cached *models.PostEvaluation, in *inputs, trigger models.QualityTrig
 		return true
 	case !trigger.IsAuto():
 		return false
-	case trigger == models.QualityTriggerPublished:
+	case trigger == models.QualityTriggerPublished, cached.ContentHash == "":
 		return true
 	}
 	return cached.ContentHash == in.contentHash
+}
+
+// triggerStillApplies reports whether a queued checkpoint still holds when
+// it runs: a post marked ready and moved back to draft before its delay
+// passed is no longer assessed for being ready.
+func triggerStillApplies(trigger models.QualityTrigger, status models.PostStatus) bool {
+	return trigger != models.QualityTriggerReady || status == models.PostStatusReadyForPublish
 }
 
 // contentHash fingerprints the scored post itself: title, body, platform,
@@ -419,14 +435,13 @@ func contextHash(prompts *renderedPrompts, modelID string, profile Profile) stri
 		fmt.Sprintf("%g,%g,%g,%g", profile.Correctness, profile.Clarity, profile.Engagement, profile.Delivery))
 }
 
-// hashParts is sha256 over parts joined by a unit separator, so one part's
-// content cannot bleed into the next.
+// hashParts is sha256 over parts, each prefixed with its length, so one
+// part's content cannot bleed into the next whatever bytes it holds.
 func hashParts(parts ...string) string {
 	h := sha256.New()
-	for i, p := range parts {
-		if i > 0 {
-			h.Write([]byte{0x1f})
-		}
+	for _, p := range parts {
+		h.Write(strconv.AppendInt(nil, int64(len(p)), 10))
+		h.Write([]byte{0x1f})
 		h.Write([]byte(p))
 	}
 	return hex.EncodeToString(h.Sum(nil))

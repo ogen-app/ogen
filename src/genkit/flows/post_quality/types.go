@@ -28,12 +28,15 @@ type PostQualityResponse struct {
 // Status is a post's stored assessment as the read endpoint reports it.
 // Stale is true when the post's content or its context changed since the
 // assessment ran; StaleReason says which. RunsLimit is the
-// quality_reviews_per_post entitlement, nil when unlimited.
+// quality_reviews_per_post entitlement, nil when unlimited. StatusUnknown is
+// true when only the stored row could be read: Stale and RunsLimit then say
+// nothing, and the client should not present the score as current.
 type Status struct {
 	*models.PostEvaluation
-	Stale       bool                      `json:"stale"`
-	StaleReason models.QualityStaleReason `json:"stale_reason,omitempty"`
-	RunsLimit   *int                      `json:"runs_limit"`
+	Stale         bool                      `json:"stale"`
+	StaleReason   models.QualityStaleReason `json:"stale_reason,omitempty"`
+	RunsLimit     *int                      `json:"runs_limit" extensions:"x-nullable"`
+	StatusUnknown bool                      `json:"status_unknown,omitempty"`
 }
 
 // ValidationError is returned when input preconditions are not met

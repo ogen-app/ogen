@@ -106,6 +106,8 @@ func clipSentences(s string, maxChars int) string {
 	if i := strings.LastIndexAny(head, ".!?"); i > 0 {
 		return head[:i+1]
 	}
+	// One rune is kept free for the ellipsis.
+	head = string(r[:maxChars-1])
 	if i := strings.LastIndexByte(head, ' '); i > 0 {
 		head = head[:i]
 	}

@@ -183,7 +183,7 @@ What's stopped your team from trying it? 👇`
 				Expect(d.Score).To(BeNumerically(">=", 0))
 				Expect(d.Score).To(BeNumerically("<=", 10))
 				Expect(d.Verdict).NotTo(BeEmpty())
-				Expect(len([]rune(d.Verdict))).To(BeNumerically("<=", 241))
+				Expect(len([]rune(d.Verdict))).To(BeNumerically("<=", 240))
 				Expect(d.Weight).To(BeNumerically(">", 0), "ComposeScore must stamp the weight")
 			}
 
