@@ -39,7 +39,7 @@ func TestLoadTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderSystem: %v", err)
 	}
-	for _, marker := range []string{"CORRECTNESS", "CLARITY", "ENGAGEMENT", "DELIVERY", "verdict", "span", "second person", "240 characters"} {
+	for _, marker := range []string{"CORRECTNESS", "CLARITY", "ENGAGEMENT", "DELIVERY", "verdict", "span", "second person", "240 characters", "wrap the one phrase the author must not miss in ** and **"} {
 		if !strings.Contains(sys, marker) {
 			t.Errorf("system prompt missing %q", marker)
 		}
@@ -65,7 +65,7 @@ func TestLoadTemplates(t *testing.T) {
 	// The per-dimension scoring directive is added in code, not the
 	// template; verify it renders for a named dimension.
 	instr := dimensionInstruction("Clarity")
-	for _, marker := range []string{"Clarity", "one or two"} {
+	for _, marker := range []string{"Clarity", "one or two", "** and **"} {
 		if !strings.Contains(instr, marker) {
 			t.Errorf("dimension instruction missing %q: %s", marker, instr)
 		}

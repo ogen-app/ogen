@@ -52,7 +52,9 @@ type EvaluationSuggestion struct {
 	Dimension EvaluationDimensionKey `json:"dimension"`
 	Severity  SuggestionSeverity     `json:"severity"`
 	Span      string                 `json:"span"`
-	Advice    string                 `json:"advice"`
+	// Advice may wrap its one essential phrase in a single **…** pair; no
+	// other markup. Rows written before emphasis are plain.
+	Advice string `json:"advice"`
 }
 
 // UnmarshalJSON reads both the current shape and stored rows written with a
@@ -79,7 +81,10 @@ func (s *EvaluationSuggestion) UnmarshalJSON(b []byte) error {
 // per the prompt contract). Weight and Contribution are filled by the
 // backend during score composition; the model never sees or sets them.
 type EvaluationDimension struct {
-	Score       int                    `json:"score"`
+	Score int `json:"score"`
+	// Verdict may wrap its one essential phrase in a single **…** pair; no
+	// other markup. At most 240 characters without the markers. Rows
+	// written before emphasis are plain.
 	Verdict     string                 `json:"verdict"`
 	Suggestions []EvaluationSuggestion `json:"suggestions"`
 

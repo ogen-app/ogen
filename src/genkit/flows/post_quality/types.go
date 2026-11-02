@@ -107,7 +107,7 @@ type assessmentOutput struct {
 // one entry even on a strong post, the counter to sycophantic score
 // inflation.
 type dimensionOutput struct {
-	Verdict     string             `json:"verdict" jsonschema:"description=One or two plain sentences to the author on what works and what does not for THIS dimension, written BEFORE the score. At most 240 characters. Do not restate the score."`
+	Verdict     string             `json:"verdict" jsonschema:"description=One or two plain sentences to the author on what works and what does not for THIS dimension, written BEFORE the score. Wrap the one phrase the author must not miss in ** and ** (exactly one pair, no other markdown). At most 240 characters, not counting the markers. Do not restate the score."`
 	Score       int                `json:"score" jsonschema:"description=Integer from 0 to 10 inclusive, chosen against the anchored bands in the rubric. Do not cluster scores in 7-9."`
 	Suggestions []suggestionOutput `json:"suggestions" jsonschema:"description=One or two fixes for this dimension, most severe first. At least one, even on a strong post."`
 }
@@ -119,7 +119,7 @@ type dimensionOutput struct {
 type suggestionOutput struct {
 	Severity string `json:"severity" jsonschema:"description=Exactly one of: high, medium, low."`
 	Span     string `json:"span" jsonschema:"description=The exact text quoted from the post that this suggestion reacts to. Required - never empty."`
-	Advice   string `json:"advice" jsonschema:"description=ONE sentence to the author: what is wrong with the span and what to do about it. Guidance, not rewritten copy. At most 200 characters. Do not repeat the span."`
+	Advice   string `json:"advice" jsonschema:"description=ONE sentence to the author: what is wrong with the span and what to do about it. Guidance, not rewritten copy. Wrap the one phrase the author must not miss in ** and ** (exactly one pair, no other markdown). At most 200 characters, not counting the markers. Do not repeat the span."`
 }
 
 // assetContext is one brand/reference asset summary shown to the model in

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/anthropic"
@@ -183,7 +184,10 @@ What's stopped your team from trying it? 👇`
 				Expect(d.Score).To(BeNumerically(">=", 0))
 				Expect(d.Score).To(BeNumerically("<=", 10))
 				Expect(d.Verdict).NotTo(BeEmpty())
-				Expect(len([]rune(d.Verdict))).To(BeNumerically("<=", 240))
+				// The limit counts the text without its **emphasis** markers,
+				// and a verdict holds at most one pair.
+				Expect(len([]rune(strings.ReplaceAll(d.Verdict, "*", "")))).To(BeNumerically("<=", 240))
+				Expect(strings.Count(d.Verdict, "**")).To(BeElementOf(0, 2))
 				Expect(d.Weight).To(BeNumerically(">", 0), "ComposeScore must stamp the weight")
 			}
 

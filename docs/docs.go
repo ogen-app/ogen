@@ -19574,6 +19574,7 @@ const docTemplate = `{
                     }
                 },
                 "verdict": {
+                    "description": "Verdict may wrap its one essential phrase in a single **…** pair; no\nother markup. At most 240 characters without the markers. Rows\nwritten before emphasis are plain.",
                     "type": "string"
                 },
                 "weight": {
@@ -19618,6 +19619,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "advice": {
+                    "description": "Advice may wrap its one essential phrase in a single **…** pair; no\nother markup. Rows written before emphasis are plain.",
                     "type": "string"
                 },
                 "dimension": {

@@ -50,7 +50,7 @@ func goodOutput() *assessmentOutput {
 
 func TestValidateOutputValid(t *testing.T) {
 	o := goodOutput()
-	if err := validateOutput(o, 3); err != nil {
+	if err := validateOutput(t.Context(), o, 3); err != nil {
 		t.Errorf("valid output rejected: %v", err)
 	}
 	if len(o.Correctness.Suggestions) != 1 {
@@ -70,7 +70,7 @@ func TestValidateOutputHardFailsOnScore(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			o := goodOutput()
 			tt.mutate(o)
-			if err := validateOutput(o, 3); err == nil {
+			if err := validateOutput(t.Context(), o, 3); err == nil {
 				t.Error("expected hard failure, got nil")
 			}
 		})
@@ -82,7 +82,7 @@ func TestValidateOutputToleratesBlankProse(t *testing.T) {
 	// usable.
 	o := goodOutput()
 	o.Clarity.Verdict = ""
-	if err := validateOutput(o, 3); err != nil {
+	if err := validateOutput(t.Context(), o, 3); err != nil {
 		t.Errorf("blank verdict should be tolerated, got %v", err)
 	}
 }
@@ -99,7 +99,7 @@ func TestValidateOutputDropsBadSuggestions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			o := goodOutput()
 			tt.mutate(o)
-			if err := validateOutput(o, 3); err != nil {
+			if err := validateOutput(t.Context(), o, 3); err != nil {
 				t.Fatalf("should sanitize, not fail: %v", err)
 			}
 			if len(o.Correctness.Suggestions) != 0 {
@@ -116,7 +116,7 @@ func TestValidateOutputTrimsOverCap(t *testing.T) {
 		{Severity: "low", Span: "s", Advice: "a"},
 		{Severity: "low", Span: "s", Advice: "a"},
 	}
-	if err := validateOutput(o, 2); err != nil {
+	if err := validateOutput(t.Context(), o, 2); err != nil {
 		t.Fatalf("over-cap should trim, not fail: %v", err)
 	}
 	if len(o.Clarity.Suggestions) != 2 {
@@ -150,7 +150,7 @@ func TestValidateOutputClipsProse(t *testing.T) {
 	o := goodOutput()
 	o.Clarity.Verdict = strings.Repeat("Your hook is fine. ", 20)
 	o.Clarity.Suggestions[0].Advice = strings.Repeat("word ", 60)
-	if err := validateOutput(o, 3); err != nil {
+	if err := validateOutput(t.Context(), o, 3); err != nil {
 		t.Fatal(err)
 	}
 	if n := utf8.RuneCountInString(o.Clarity.Verdict); n > maxVerdictChars {
