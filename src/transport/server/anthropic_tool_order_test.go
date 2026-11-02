@@ -234,6 +234,56 @@ func TestAnthropicToolOrderTransport_SystemCacheScopedToCall(t *testing.T) {
 	})
 }
 
+func TestSetTopEffort(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		changed bool
+		want    string // output_config after the edit
+	}{
+		{
+			name:    "keeps structured-output format",
+			body:    `{"model":"claude-sonnet-5","output_config":{"format":{"schema":{}}}}`,
+			changed: true,
+			want:    `{"effort":"low","format":{"schema":{}}}`,
+		},
+		{
+			name:    "no output_config yet",
+			body:    `{"model":"claude-opus-4-8"}`,
+			changed: true,
+			want:    `{"effort":"low"}`,
+		},
+		{
+			name: "model without effort",
+			body: `{"model":"claude-haiku-4-5-20251001","output_config":{"format":{}}}`,
+			want: `{"format":{}}`,
+		},
+		{
+			name: "unknown model",
+			body: `{"model":"claude-next"}`,
+		},
+		{
+			name: "effort already set",
+			body: `{"model":"claude-sonnet-5","output_config":{"effort":"high"}}`,
+			want: `{"effort":"high"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var top map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(tc.body), &top); err != nil {
+				t.Fatal(err)
+			}
+			if got := setTopEffort(top, llm.EffortLow); got != tc.changed {
+				t.Fatalf("changed = %v, want %v", got, tc.changed)
+			}
+			if got := string(top["output_config"]); got != tc.want {
+				t.Fatalf("output_config = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 type systemBlock struct {
 	Type         string `json:"type"`
 	Text         string `json:"text"`

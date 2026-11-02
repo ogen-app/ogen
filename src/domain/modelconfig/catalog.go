@@ -100,6 +100,7 @@ type ModelCapabilities struct {
 	EmbedDims        int
 	VisionInput      bool // accepts image input (image-service vision calls)
 	AudioInput       bool // accepts audio input (audio-service transcription)
+	Effort           bool // accepts output_config.effort; sending it to a model without it is a 400
 }
 
 // Supports reports whether a model can serve a slot of the given capability.
