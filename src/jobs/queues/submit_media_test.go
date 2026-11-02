@@ -92,10 +92,51 @@ func (s *fakeStorage) Download(_ context.Context, key string) (io.ReadCloser, er
 	return io.NopCloser(bytes.NewReader(s.objects[key])), nil
 }
 
-// TestSubmitUploadsMediaWithAltText proves the CON-122 media flow end-to-end:
-// the worker uploads each attachment to Zernio (presign → PUT bytes) and the
+// TestSubmitUploadsMediaWithAltText proves the media flow end-to-end: the
+// worker uploads each attachment to Zernio (presign → PUT bytes) and the
 // create-post body references the returned publicUrl with type + altText.
+// altText goes out only for an image on a platform that takes alt text.
 func TestSubmitUploadsMediaWithAltText(t *testing.T) {
+	cases := []struct {
+		name     string
+		mime     string
+		altCap   int
+		wantType string
+		wantAlt  bool
+	}{
+		{name: "image on alt-text platform", mime: "image/png", altCap: 1000, wantType: "image", wantAlt: true},
+		{name: "image on platform without alt text", mime: "image/png", altCap: 0, wantType: "image"},
+		{name: "video never carries alt text", mime: "video/mp4", altCap: 1000, wantType: "video"},
+		{name: "pdf never carries alt text", mime: "application/pdf", altCap: 1000, wantType: "document"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uploaded, uploadedCT, m := submitOneAttachment(t, tc.mime, tc.altCap)
+			if string(uploaded) != "BYTES" {
+				t.Errorf("uploaded bytes = %q, want BYTES", uploaded)
+			}
+			if uploadedCT != tc.mime {
+				t.Errorf("upload content-type = %q, want %s", uploadedCT, tc.mime)
+			}
+			if m["url"] != "https://cdn.zernio.test/one" || m["type"] != tc.wantType {
+				t.Errorf("mediaItem wrong: %+v", m)
+			}
+			alt, has := m["altText"]
+			if tc.wantAlt && alt != "a red bicycle" {
+				t.Errorf("altText = %v, want %q", alt, "a red bicycle")
+			}
+			if !tc.wantAlt && has {
+				t.Errorf("altText sent (%v), want omitted", alt)
+			}
+		})
+	}
+}
+
+// submitOneAttachment publishes a LinkedIn post carrying one attachment with
+// alt text, on a platform whose image alt-text cap is altCap, and returns the
+// uploaded bytes, their content type and the single create-post mediaItem.
+func submitOneAttachment(t *testing.T, mime string, altCap int) ([]byte, string, map[string]any) {
+	t.Helper()
 	stub := newStubZernio()
 	defer stub.Close()
 
@@ -109,7 +150,7 @@ func TestSubmitUploadsMediaWithAltText(t *testing.T) {
 		}
 		writeJSON(w, http.StatusOK, zernio.MediaPresign{
 			UploadURL: stub.URL + "/up/one",
-			PublicURL: "https://cdn.zernio.test/one.png",
+			PublicURL: "https://cdn.zernio.test/one",
 			Key:       "k1",
 			ExpiresIn: 3600,
 		})
@@ -131,33 +172,24 @@ func TestSubmitUploadsMediaWithAltText(t *testing.T) {
 		"p_test": {{ID: "acc-1", Platform: "linkedin"}},
 	})
 	deps.Storage = &fakeStorage{objects: map[string][]byte{
-		"post-attachments/post-1/att1.png": []byte("PNGBYTES"),
+		"post-attachments/post-1/att1": []byte("BYTES"),
 	}}
 	deps.PostAttachmentRepo = &fakeAttachmentRepo{atts: []models.PostAttachment{{
 		ID: "att1", PostID: "post-1", Position: 0,
-		MimeType: "image/png", SizeBytes: 8,
-		S3Key: "post-attachments/post-1/att1.png", AltText: "a red bicycle",
+		MimeType: mime, SizeBytes: 5,
+		S3Key: "post-attachments/post-1/att1", AltText: "a red bicycle",
 	}}}
 	post := seedScheduledPost(postRepo)
+	post.Platform.ImageConstraints.MaxAltTextChars = altCap
 
 	proc := &queues.SubmitPostProcessor{Deps: deps}
 	if err := proc.Process(t.Context(), queues.SubmitPostTask{PostID: post.ID}); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-
-	if string(uploaded) != "PNGBYTES" {
-		t.Errorf("uploaded bytes = %q, want PNGBYTES", uploaded)
-	}
-	if uploadedCT != "image/png" {
-		t.Errorf("upload content-type = %q, want image/png", uploadedCT)
-	}
 	if len(submitBody.MediaItems) != 1 {
 		t.Fatalf("mediaItems = %d, want 1", len(submitBody.MediaItems))
 	}
-	m := submitBody.MediaItems[0]
-	if m["url"] != "https://cdn.zernio.test/one.png" || m["type"] != "image" || m["altText"] != "a red bicycle" {
-		t.Errorf("mediaItem wrong: %+v", m)
-	}
+	return uploaded, uploadedCT, submitBody.MediaItems[0]
 }
 
 // TestSubmitThreadBuildsThreadItems proves the CON-284 egress: a thread post is
@@ -215,7 +247,8 @@ func TestSubmitThreadBuildsThreadItems(t *testing.T) {
 		ThreadSegments:   models.ThreadSegments{{Content: "root msg"}, {Content: "reply msg"}},
 		Status:           models.PostStatusScheduled,
 		ScheduledAt:      &now,
-		Platform:         &models.Platform{ID: "81mUCmc2xsKd", Name: "X (Twitter)"},
+		Platform: &models.Platform{ID: "81mUCmc2xsKd", Name: "X (Twitter)",
+			ImageConstraints: models.ImageConstraints{MaxAltTextChars: 1000}},
 	}
 	postRepo.put(post)
 
