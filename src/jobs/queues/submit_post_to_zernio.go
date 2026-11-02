@@ -358,7 +358,7 @@ func (p *SubmitPostProcessor) planUploads(ctx context.Context, post *models.Post
 		}
 		u := submitUpload{
 			AttachmentID: att.ID, Segment: seg, MediaType: mediaType, MimeType: att.MimeType,
-			Key: att.S3Key, Size: att.SizeBytes, AltText: att.AltText,
+			Key: att.S3Key, Size: att.SizeBytes, AltText: publishedAltText(att, mediaType, post.Platform),
 		}
 		// Reuse the previous upload while Zernio still holds it at publish time.
 		if reusableUpload(att, post, now) {
@@ -367,6 +367,16 @@ func (p *SubmitPostProcessor) planUploads(ctx context.Context, post *models.Post
 		uploads = append(uploads, u)
 	}
 	return uploads, nil
+}
+
+// publishedAltText is the alt text the platform receives for an attachment:
+// images only, and only on a platform that takes alt text (a positive
+// ImageConstraints.MaxAltTextChars).
+func publishedAltText(att *models.PostAttachment, mediaType string, p *models.Platform) string {
+	if mediaType != "image" || p == nil || p.ImageConstraints.MaxAltTextChars <= 0 {
+		return ""
+	}
+	return att.AltText
 }
 
 // nextUpload presigns the next attachment not yet on Zernio, or submits the
