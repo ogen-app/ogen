@@ -202,6 +202,8 @@ What's stopped your team from trying it? 👇`
 			} {
 				for _, s := range d.Suggestions {
 					Expect(s.Span).NotTo(BeEmpty(), "every suggestion must quote a span")
+					Expect(len([]rune(strings.ReplaceAll(s.Advice, "*", "")))).To(BeNumerically("<=", 200))
+					Expect(strings.Count(s.Advice, "**")).To(BeElementOf(0, 2))
 				}
 			}
 
