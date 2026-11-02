@@ -89,6 +89,9 @@ func (t *anthropicToolOrderTransport) RoundTrip(req *http.Request) (*http.Respon
 				logging.AttrComponent, "anthropic.http")
 		}
 	}
+	if level := llm.EffortRequested(req.Context()); level != "" && setTopEffort(top, level) {
+		changed = true
+	}
 	if !changed {
 		return t.send(req)
 	}
@@ -329,6 +332,37 @@ func cacheMarkedContent(raw json.RawMessage) (json.RawMessage, bool) {
 	lastBlock["cache_control"] = json.RawMessage(`{"type":"ephemeral"}`)
 	out, err := json.Marshal(blocks)
 	return out, err == nil
+}
+
+// setTopEffort writes output_config.effort = level, keeping any other
+// output_config fields (the structured-output format). It does nothing when
+// the request's model does not accept effort, or when an effort is already
+// set.
+func setTopEffort(top map[string]json.RawMessage, level string) bool {
+	var model string
+	if err := json.Unmarshal(top["model"], &model); err != nil || !llm.SupportsEffort(model) {
+		return false
+	}
+	cfg := map[string]json.RawMessage{}
+	if raw, ok := top["output_config"]; ok {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return false
+		}
+	}
+	if _, exists := cfg["effort"]; exists {
+		return false
+	}
+	lv, err := json.Marshal(level)
+	if err != nil {
+		return false
+	}
+	cfg["effort"] = lv
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return false
+	}
+	top["output_config"] = out
+	return true
 }
 
 // sortAnthropicToolsByName returns the body with its top-level `tools` array

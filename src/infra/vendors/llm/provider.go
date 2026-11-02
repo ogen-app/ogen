@@ -83,6 +83,9 @@ func (p *Provider) CallMiddleware(flow string, record func(context.Context, *ai.
 			if o.cachePrompt {
 				ctx = WithPromptCache(ctx)
 			}
+			if o.effort != "" {
+				ctx = WithEffort(ctx, o.effort)
+			}
 			resp, err := next(ctx, req, cb)
 			if err != nil {
 				return resp, err
@@ -106,6 +109,7 @@ type CallOption func(*callOptions)
 
 type callOptions struct {
 	cachePrompt bool
+	effort      string
 }
 
 // CachePrompt asks for the call's prompt to be cached: the system prompt with
@@ -116,6 +120,13 @@ type callOptions struct {
 // runs as tools are not cached by it.
 func CachePrompt() CallOption {
 	return func(o *callOptions) { o.cachePrompt = true }
+}
+
+// Effort asks for the call to run at the given output_config.effort level
+// (EffortLow, ...). It is applied only when the slot's model supports effort;
+// on other models the call runs at the model's default.
+func Effort(level string) CallOption {
+	return func(o *callOptions) { o.effort = level }
 }
 
 // addCacheWrites stores a call's cache-write tokens on resp's usage.
