@@ -62,8 +62,9 @@ func parseEmphasis(s string) (e emphasis, ok bool) {
 }
 
 // clipEmphasized clips s to maxChars runes of unmarked text, so the markers
-// never count toward the limit. A phrase that survives the clip whole keeps
-// its markers; one the clip cuts into is stored plain. When s breaks the
+// never count toward the limit. A phrase that survives the clip whole, and
+// still covers under maxEmphasisShare of the clipped text, keeps its
+// markers; otherwise the clipped text is stored plain. When s breaks the
 // emphasis contract every '*' is stripped and stripped reports true, so the
 // caller can log how often the model misses the format.
 func clipEmphasized(s string, maxChars int) (out string, stripped bool) {
@@ -78,6 +79,11 @@ func clipEmphasized(s string, maxChars int) (out string, stripped bool) {
 	r := []rune(clipped)
 	phrase := []rune(e.plain)[e.start:e.end]
 	if e.end > len(r) || string(r[e.start:e.end]) != string(phrase) {
+		return clipped, false
+	}
+	// The clip can remove most of what surrounded the phrase; it must still
+	// single something out in what is stored.
+	if float64(e.end-e.start) >= maxEmphasisShare*float64(len(r)) {
 		return clipped, false
 	}
 	return string(r[:e.start]) + emphasisMarker + string(phrase) + emphasisMarker + string(r[e.end:]), false

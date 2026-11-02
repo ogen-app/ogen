@@ -76,6 +76,16 @@ func TestClipEmphasizedDropsPhraseCutByClip(t *testing.T) {
 	}
 }
 
+func TestClipEmphasizedRechecksShareAfterClip(t *testing.T) {
+	// Under 60% before the clip, but the clip keeps only the phrase's
+	// sentence, so the stored text would be all emphasis.
+	in := "**Fix the hook.** " + strings.Repeat("word ", 60)
+	got, stripped := clipEmphasized(in, maxVerdictChars)
+	if got != "Fix the hook." || stripped {
+		t.Errorf("got %q (stripped %v), want the plain clipped sentence", got, stripped)
+	}
+}
+
 func TestValidateOutputEmphasis(t *testing.T) {
 	o := goodOutput()
 	o.Clarity.Verdict = "Your hook **buries the ask** at the end."
