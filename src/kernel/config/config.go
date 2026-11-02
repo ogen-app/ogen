@@ -194,6 +194,16 @@ type Config struct {
 	//   {"profiles":{"reel":{"correctness":0.2,"clarity":0.15,"engagement":0.4,"delivery":0.25}}}
 	QualityWeightProfiles string `envconfig:"QUALITY_WEIGHT_PROFILES" default:""`
 
+	// Automatic post quality assessment at lifecycle checkpoints. A post is
+	// queued when it is marked ready for publish, when a version is saved,
+	// and when it is scheduled or published; the assess_due_posts sweep runs
+	// it once the delay has passed. Each new checkpoint replaces the post's
+	// pending one, so a burst of version saves collapses into one run after
+	// the last. QualityAutoEnabled=false queues nothing.
+	QualityAutoEnabled      bool          `envconfig:"QUALITY_AUTO_ENABLED"       default:"true"`
+	QualityAutoReadyDelay   time.Duration `envconfig:"QUALITY_AUTO_READY_DELAY"   default:"60s"`
+	QualityAutoVersionDelay time.Duration `envconfig:"QUALITY_AUTO_VERSION_DELAY" default:"10m"`
+
 	// Object storage (S3-compatible: Cloudflare R2, DigitalOcean Spaces, AWS S3).
 	// Leave StorageEndpoint empty to disable image uploads.
 	StorageEndpoint  string `envconfig:"STORAGE_ENDPOINT"   default:""`

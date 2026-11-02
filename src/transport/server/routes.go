@@ -223,7 +223,9 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 	handlers.NewPostInsightsHandler(r.postRepo, gk.AssessPostQuality, r.postEvaluationRepo, r.postAnalyticsRepo, gk.IsAnthropicAvailable, rec, d.auth).
 		WithQualityStatus(gk.PostQualityStatus).
 		Register(app)
-	handlers.NewPostVerificationHandler(r.postRepo, d.zernio.Integration.Client, r.socialAccountRepo, d.zernioProfileID, r.postAnalyticsRepo, r.postVersionRepo, d.hub, d.auth).Register(app)
+	handlers.NewPostVerificationHandler(r.postRepo, d.zernio.Integration.Client, r.socialAccountRepo, d.zernioProfileID, r.postAnalyticsRepo, r.postVersionRepo, d.hub, d.auth).
+		WithQualityAuto(d.qualityAuto).
+		Register(app)
 	handlers.NewPostsHandler(r.postRepo, r.postVersionRepo, r.platformRepo, r.postAttachmentRepo, d.auth, handlers.PostsOptions{
 		Brands:         r.brandRepo,
 		Campaigns:      r.campaignRepo,
@@ -238,6 +240,7 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 		PublicRead:     d.cfg.StoragePublicRead,
 		Series:         d.svc.series,
 		Withdraw:       d.svc.withdraw,
+		Quality:        d.qualityAuto,
 	}).Register(app)
 	handlers.NewPostLogsHandler(r.postLogRepo, r.postRepo, d.auth).Register(app)
 	handlers.NewLinkPreviewHandler(linkpreview.New(netguard.SafeClient(linkPreviewTimeout), netguard.ResolveAllowed), d.auth).Register(app)

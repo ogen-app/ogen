@@ -69,6 +69,7 @@ type repos struct {
 	seriesRepo               repository.SeriesRepository
 	postLogRepo              repository.PostLogRepository
 	postEvaluationRepo       repository.PostEvaluationRepository
+	postQualityQueueRepo     repository.PostQualityQueueRepository
 	postAnalyticsRepo        repository.PostAnalyticsRepository
 	followerStatsRepo        repository.FollowerStatsRepository
 	socialAccountRepo        repository.SocialAccountRepository
@@ -146,6 +147,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		seriesRepo:               repository.NewSeriesRepository(db),
 		postLogRepo:              repository.NewPostLogRepository(db),
 		postEvaluationRepo:       repository.NewPostEvaluationRepository(db),
+		postQualityQueueRepo:     repository.NewPostQualityQueueRepository(db),
 		socialAccountRepo:        repository.NewSocialAccountRepository(db),
 		zernioConnectSessionRepo: repository.NewZernioConnectSessionRepository(db),
 		pluginPairingRepo:        repository.NewPluginPairingRepository(db),

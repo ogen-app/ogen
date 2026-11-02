@@ -623,6 +623,9 @@ func (t *turn) commitEdit(ctx context.Context) error {
 	if err := t.repos.Posts.Update(ctx, t.post); err != nil {
 		return fmt.Errorf("update post: %w", err)
 	}
+	if r.SaveVersion {
+		t.cfg.QualityAuto.Schedule(ctx, t.post, models.QualityTriggerVersion)
+	}
 	return nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // PostAssistantRequest is the input to the postAssistant flow.
@@ -165,6 +166,9 @@ type PostAssistantFlowConfig struct {
 	// NoteService backs the createNote tool. nil disables the
 	// tool — the assistant then cannot capture notes.
 	NoteService *notes.Service
+	// QualityAuto queues an automatic quality assessment when the assistant
+	// saves a version. nil queues none.
+	QualityAuto *qualityauto.Service
 	// Notifier drops a durable "assistant finished / failed" notification to the
 	// post owner. nil is a no-op.
 	Notifier *notify.Service

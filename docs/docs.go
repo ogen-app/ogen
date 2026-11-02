@@ -10238,7 +10238,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Runs the Post quality assessment agent (CON-85) and streams\nServer-Sent Events: a \"step\" event per flow stage, then a\nfinal \"complete\" event carrying the persisted evaluation\n(four 0-10 dimension scores with rationale, weakness, and\nspan-anchored suggestions, plus the backend-computed overall).",
+                "description": "Runs the Post quality assessment agent (CON-85) and streams\nServer-Sent Events: a \"step\" event per flow stage, then a\nfinal \"complete\" event carrying the persisted evaluation\n(four 0-10 dimension scores, each with a short verdict, at\nmost five span-anchored suggestions across the post, plus the\nbackend-computed overall). An \"error\" event with code 402\nmeans the post's quality_reviews_per_post allowance is used up.",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -10299,7 +10299,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns the most recent persisted quality evaluation for a\npost (CON-85/CON-92) without invoking the model. The frontend\nreads this to render an existing assessment and only triggers\nPOST /assess when the post has changed since it was scored.",
+                "description": "Returns the most recent persisted quality evaluation for a\npost without invoking the model. stale is true when the\npost's content or its context (brief, assets, model, rubric)\nchanged since it was scored, and stale_reason says which;\nruns_used / runs_limit report the per-post allowance\n(runs_limit null = unlimited).",
                 "produces": [
                     "application/json"
                 ],
@@ -10320,7 +10320,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.PostEvaluation"
+                            "$ref": "#/definitions/post_quality.Status"
                         }
                     },
                     "401": {
@@ -19564,9 +19564,6 @@ const docTemplate = `{
                 "contribution": {
                     "type": "number"
                 },
-                "rationale": {
-                    "type": "string"
-                },
                 "score": {
                     "type": "integer"
                 },
@@ -19576,7 +19573,7 @@ const docTemplate = `{
                         "$ref": "#/definitions/models.EvaluationSuggestion"
                     }
                 },
-                "weakness": {
+                "verdict": {
                     "type": "string"
                 },
                 "weight": {
@@ -19620,14 +19617,11 @@ const docTemplate = `{
         "models.EvaluationSuggestion": {
             "type": "object",
             "properties": {
+                "advice": {
+                    "type": "string"
+                },
                 "dimension": {
                     "$ref": "#/definitions/models.EvaluationDimensionKey"
-                },
-                "fix": {
-                    "type": "string"
-                },
-                "issue": {
-                    "type": "string"
                 },
                 "severity": {
                     "$ref": "#/definitions/models.SuggestionSeverity"
@@ -20617,6 +20611,18 @@ const docTemplate = `{
                 "result": {
                     "$ref": "#/definitions/models.EvaluationResult"
                 },
+                "runs_used": {
+                    "description": "ModelRuns counts the model runs behind this row; cached reuses do not\ncount. The quality_reviews_per_post entitlement caps it.",
+                    "type": "integer"
+                },
+                "trigger": {
+                    "description": "Trigger is what started the run that produced this row.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.QualityTrigger"
+                        }
+                    ]
+                },
                 "updated_at": {
                     "type": "string"
                 }
@@ -20973,6 +20979,36 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "models.QualityStaleReason": {
+            "type": "string",
+            "enum": [
+                "content",
+                "context",
+                "both"
+            ],
+            "x-enum-varnames": [
+                "QualityStaleContent",
+                "QualityStaleContext",
+                "QualityStaleBoth"
+            ]
+        },
+        "models.QualityTrigger": {
+            "type": "string",
+            "enum": [
+                "manual",
+                "ready",
+                "version",
+                "scheduled",
+                "published"
+            ],
+            "x-enum-varnames": [
+                "QualityTriggerManual",
+                "QualityTriggerReady",
+                "QualityTriggerVersion",
+                "QualityTriggerScheduled",
+                "QualityTriggerPublished"
+            ]
         },
         "models.SavedView": {
             "type": "object",
@@ -21803,6 +21839,66 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "postId": {
+                    "type": "string"
+                }
+            }
+        },
+        "post_quality.Status": {
+            "type": "object",
+            "properties": {
+                "caption_scoped": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "input_hash": {
+                    "description": "InputHash fingerprints the assessment inputs (rendered prompt + model)\nso the assess flow skips re-running the model when nothing the model\nsees has changed.",
+                    "type": "string"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "overall_pct": {
+                    "type": "number"
+                },
+                "platform_id": {
+                    "type": "string"
+                },
+                "platform_post_type": {
+                    "type": "string"
+                },
+                "post_id": {
+                    "type": "string"
+                },
+                "result": {
+                    "$ref": "#/definitions/models.EvaluationResult"
+                },
+                "runs_limit": {
+                    "type": "integer"
+                },
+                "runs_used": {
+                    "description": "ModelRuns counts the model runs behind this row; cached reuses do not\ncount. The quality_reviews_per_post entitlement caps it.",
+                    "type": "integer"
+                },
+                "stale": {
+                    "type": "boolean"
+                },
+                "stale_reason": {
+                    "$ref": "#/definitions/models.QualityStaleReason"
+                },
+                "trigger": {
+                    "description": "Trigger is what started the run that produced this row.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.QualityTrigger"
+                        }
+                    ]
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }

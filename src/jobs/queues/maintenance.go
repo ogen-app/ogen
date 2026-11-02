@@ -51,7 +51,24 @@ func MaintenanceTasks(d Deps) map[string]func(context.Context) error {
 		ExpireBrandDistillKind: sweep(time.Minute, func(ctx context.Context) error {
 			return expireBrandDistills(ctx, d.BrandDistill)
 		}),
+		AssessDuePostsKind: sweep(3*time.Minute, func(ctx context.Context) error {
+			if d.QualityAuto == nil {
+				return nil
+			}
+			return d.QualityAuto.Sweep(ctx)
+		}),
 	}
+}
+
+// AssessDuePostsKind is the sweep that runs the automatic post quality
+// assessments whose checkpoint delay has passed. river-service schedules it
+// every minute.
+const AssessDuePostsKind = "assess_due_posts"
+
+// QualitySweeper runs the due automatic quality assessments.
+// *qualityauto.Service implements it.
+type QualitySweeper interface {
+	Sweep(ctx context.Context) error
 }
 
 // sweep runs one pass across tenants within timeout.

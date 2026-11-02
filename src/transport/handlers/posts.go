@@ -27,6 +27,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/update"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 	"github.com/ogen-app/ogen/src/usecase/series"
 )
 
@@ -81,6 +82,8 @@ type PostsHandler struct {
 	// schedule endpoint (503) and makes the PUT branch fall back to a
 	// plain status update (test fixtures that don't wire scheduling).
 	scheduleSvc *schedule.Service
+	// quality queues automatic quality assessments; nil queues none.
+	quality *qualityauto.Service
 	// activity records CON-125 user-activity events (post_created,
 	// post_scheduled, …) to the analytics store. nil is a no-op (analytics
 	// disabled / fixtures).
@@ -137,8 +140,10 @@ func (h *PostsHandler) updater() *update.Service {
 		Attachments: h.attachmentRepo,
 		Campaigns:   h.campaignRepo,
 		Logs:        h.postLogRepo,
+		Versions:    h.versionRepo,
 		Schedule:    h.scheduleSvc,
 		Activity:    h.activity,
+		Quality:     h.quality,
 	}
 }
 
@@ -508,6 +513,7 @@ func NewPostsHandler(
 		publicRead:     opts.PublicRead,
 		series:         opts.Series,
 		withdraw:       opts.Withdraw,
+		quality:        opts.Quality,
 	}
 }
 
@@ -535,6 +541,9 @@ type PostsOptions struct {
 	// Withdraw deletes a post together with its queued Zernio copy; nil
 	// falls back to the bare row delete.
 	Withdraw *withdraw.Service
+	// Quality queues automatic quality assessments when a post is marked
+	// ready or a version is saved; nil queues none.
+	Quality *qualityauto.Service
 }
 
 // decorateCovers fills each post's CoverURL from its first drawable
@@ -1503,5 +1512,6 @@ func (h *PostsHandler) CreateVersion(c *fiber.Ctx) error {
 	if err := h.versionRepo.CreateNext(reqCtx(c), version); err != nil {
 		return err
 	}
+	h.quality.Schedule(reqCtx(c), post, models.QualityTriggerVersion)
 	return c.Status(fiber.StatusCreated).JSON(version)
 }

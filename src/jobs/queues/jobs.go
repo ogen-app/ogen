@@ -83,6 +83,9 @@ type Deps struct {
 	Analysis AnalysisDeps
 	// BrandDistill runs brand distillations and expires their proposals.
 	BrandDistill BrandDistillDeps
+	// QualityAuto runs the automatic post quality assessments that are due.
+	// nil makes the assess_due_posts sweep a no-op.
+	QualityAuto QualitySweeper
 
 	// The process_image worker's dependencies (image-service client,
 	// embedder, storage, extraction/block/asset/file repos, cost gate). A nil

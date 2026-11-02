@@ -43,6 +43,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 	"github.com/ogen-app/ogen/src/usecase/series"
 	"github.com/ogen-app/ogen/src/usecase/signupaccess"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
@@ -75,6 +76,7 @@ type deps struct {
 	analysis     *assetanalysis.Service
 	billing      *billing.Service
 	brandDistill *branddistill.Service
+	qualityAuto  *qualityauto.Service
 	svc          services
 	genkit       *genkitRuntime
 }
@@ -235,6 +237,11 @@ func (d *deps) initJobs(ctx context.Context) error {
 	}
 	d.analysis = newAssetAnalysis(d)
 	d.brandDistill = newBrandDistill(d)
+	d.qualityAuto = qualityauto.New(r.postQualityQueueRepo, r.tenantRepo, qualityauto.Config{
+		Enabled:      d.cfg.QualityAutoEnabled,
+		ReadyDelay:   d.cfg.QualityAutoReadyDelay,
+		VersionDelay: d.cfg.QualityAutoVersionDelay,
+	})
 	return nil
 }
 
@@ -258,6 +265,9 @@ func (d *deps) initServices(context.Context) error {
 	d.svc.schedule.SetAccountGate(r.socialAccountRepo, d.zernioProfileID)
 	// Keeps a durable record of the content submitted to Zernio.
 	d.svc.schedule.SetVersionSnapshot(r.postVersionRepo)
+	// Every scheduled post gets its final quality assessment.
+	d.svc.schedule.SetQualityAuto(d.qualityAuto)
+	d.svc.restore.SetQualityAuto(d.qualityAuto)
 
 	// Deleting a post or campaign withdraws its Zernio copies in the same
 	// transaction.
@@ -320,6 +330,7 @@ func (d *deps) initGenkit(ctx context.Context) error {
 	d.analysis.SetAnalyzer(d.genkit.AnalyzeAsset)
 	d.analysis.SetDistiller(d.genkit.DistillIdeas)
 	d.brandDistill.SetFlows(d.genkit.brandDistillFlows())
+	d.qualityAuto.SetRunner(autoAssessRunner(d.genkit))
 	slog.Info("genkit flows registered", logging.AttrComponent, "genkit")
 	return nil
 }
@@ -392,5 +403,6 @@ func (d *deps) genkitDeps() genkitDeps {
 		checker:             d.usage.checker,
 		notifier:            d.notifier,
 		limiter:             d.entitlements.limiter,
+		qualityAuto:         d.qualityAuto,
 	}
 }

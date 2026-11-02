@@ -36,6 +36,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // ErrAnthropicUnavailable is returned by the runtime callbacks when no
@@ -90,6 +91,7 @@ type genkitRuntime struct {
 	checker             *usage.Checker
 	notifier            *notify.Service
 	limiter             *entitlements.Limiter
+	qualityAuto         *qualityauto.Service
 }
 
 // genkitDeps groups the runtime's static inputs: things captured at
@@ -113,6 +115,7 @@ type genkitDeps struct {
 	checker             *usage.Checker
 	notifier            *notify.Service
 	limiter             *entitlements.Limiter
+	qualityAuto         *qualityauto.Service
 }
 
 // newGenkitRuntime builds the runtime and runs the initial rebuild.
@@ -138,6 +141,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 		scheduleSvc:         deps.scheduleSvc,
 		noteSvc:             deps.noteSvc,
 		limiter:             deps.limiter,
+		qualityAuto:         deps.qualityAuto,
 		recorder:            deps.recorder,
 		checker:             deps.checker,
 		notifier:            deps.notifier,
@@ -369,7 +373,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	if err != nil {
 		return fmt.Errorf("init content plan: %w", err)
 	}
-	postAssistantFn, err := initPostAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.postAssistRepos, r.cloneSvc, r.restoreSvc, r.scheduleSvc, r.noteSvc)
+	postAssistantFn, err := initPostAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.postAssistRepos, r.cloneSvc, r.restoreSvc, r.scheduleSvc, r.noteSvc, r.qualityAuto)
 	if err != nil {
 		return fmt.Errorf("init post assistant: %w", err)
 	}
