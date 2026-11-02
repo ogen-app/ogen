@@ -79,6 +79,8 @@ func TestReuse(t *testing.T) {
 		{"content changed, auto re-runs", contentChanged, models.QualityTriggerScheduled, false},
 		{"published with an assessment", contentChanged, models.QualityTriggerPublished, true},
 		{"published never assessed", nil, models.QualityTriggerPublished, false},
+		{"legacy row without content hash, auto", &models.PostEvaluation{InputHash: "x"}, models.QualityTriggerVersion, true},
+		{"legacy row without content hash, manual", &models.PostEvaluation{InputHash: "x"}, models.QualityTriggerManual, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,6 +125,24 @@ func TestQuietFinish(t *testing.T) {
 	for _, tc := range cases {
 		if got := quietFinish(tc.trigger, tc.out, tc.err); got != tc.want {
 			t.Errorf("%s: quietFinish = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestTriggerStillApplies(t *testing.T) {
+	cases := []struct {
+		trigger models.QualityTrigger
+		status  models.PostStatus
+		want    bool
+	}{
+		{models.QualityTriggerReady, models.PostStatusReadyForPublish, true},
+		{models.QualityTriggerReady, models.PostStatusDraft, false},
+		{models.QualityTriggerVersion, models.PostStatusDraft, true},
+		{models.QualityTriggerManual, models.PostStatusDraft, true},
+	}
+	for _, tc := range cases {
+		if got := triggerStillApplies(tc.trigger, tc.status); got != tc.want {
+			t.Errorf("triggerStillApplies(%s, %s) = %v, want %v", tc.trigger, tc.status, got, tc.want)
 		}
 	}
 }

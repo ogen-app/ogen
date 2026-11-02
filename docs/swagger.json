@@ -10293,7 +10293,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns the most recent persisted quality evaluation for a\npost without invoking the model. stale is true when the\npost's content or its context (brief, assets, model, rubric)\nchanged since it was scored, and stale_reason says which;\nruns_used / runs_limit report the per-post allowance\n(runs_limit null = unlimited).",
+                "description": "Returns the most recent persisted quality evaluation for a\npost without invoking the model. stale is true when the\npost's content or its context (brief, assets, model, rubric)\nchanged since it was scored, and stale_reason says which;\nruns_used / runs_limit report the per-post allowance\n(runs_limit null = unlimited). status_unknown is true when\nonly the stored row could be read: stale and runs_limit are\nthen not known.",
                 "produces": [
                     "application/json"
                 ],
@@ -21872,7 +21872,8 @@
                     "$ref": "#/definitions/models.EvaluationResult"
                 },
                 "runs_limit": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "runs_used": {
                     "description": "ModelRuns counts the model runs behind this row; cached reuses do not\ncount. The quality_reviews_per_post entitlement caps it.",
@@ -21883,6 +21884,9 @@
                 },
                 "stale_reason": {
                     "$ref": "#/definitions/models.QualityStaleReason"
+                },
+                "status_unknown": {
+                    "type": "boolean"
                 },
                 "trigger": {
                     "description": "Trigger is what started the run that produced this row.",

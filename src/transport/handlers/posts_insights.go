@@ -147,7 +147,9 @@ func assessError(err error) flowErrorPayload {
 // @Description  post's content or its context (brief, assets, model, rubric)
 // @Description  changed since it was scored, and stale_reason says which;
 // @Description  runs_used / runs_limit report the per-post allowance
-// @Description  (runs_limit null = unlimited).
+// @Description  (runs_limit null = unlimited). status_unknown is true when
+// @Description  only the stored row could be read: stale and runs_limit are
+// @Description  then not known.
 // @Tags         posts
 // @Produce      json
 // @Security     CookieAuth
@@ -174,8 +176,10 @@ func (h *PostInsightsHandler) GetAssessment(c *fiber.Ctx) error {
 	return c.JSON(st)
 }
 
-// assessmentStatus reads the stored assessment with its staleness, falling
-// back to the stored row alone when the flow is not available.
+// assessmentStatus reads the stored assessment with its staleness. When that
+// is not available (no flows, or the check failed) it serves the stored row
+// marked StatusUnknown, so the client never reads it as current and
+// unlimited.
 func (h *PostInsightsHandler) assessmentStatus(ctx context.Context, postID string) (*post_quality.Status, error) {
 	if h.qualityStatus != nil {
 		st, err := h.qualityStatus(ctx, postID)
@@ -188,7 +192,7 @@ func (h *PostInsightsHandler) assessmentStatus(ctx context.Context, postID strin
 	if err != nil || eval == nil {
 		return nil, err
 	}
-	return &post_quality.Status{PostEvaluation: eval}, nil
+	return &post_quality.Status{PostEvaluation: eval, StatusUnknown: true}, nil
 }
 
 // GetAnalytics godoc

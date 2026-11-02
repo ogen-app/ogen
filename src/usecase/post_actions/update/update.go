@@ -178,12 +178,15 @@ func (s *Service) Update(ctx context.Context, in Input) (Result, error) {
 // markReady records the content the author marked ready as a version, so the
 // quality assessment scores what they marked ready rather than an older
 // version, and queues the assessment. Deduped against an identical latest
-// version. Best-effort: the transition has already committed.
+// version. Without the snapshot the assessment would score an older version,
+// so it is not queued. Best-effort: the transition has already committed.
 func (s *Service) markReady(ctx context.Context, post *models.Post) {
-	if s.Versions != nil {
-		if err := snapshotMarkedReady(ctx, s.Versions, post); err != nil {
-			slog.WarnContext(ctx, "update: marked-ready snapshot failed", logging.AttrComponent, "post_actions.update", "post_id", post.ID, logging.AttrError, err)
-		}
+	if s.Versions == nil {
+		return
+	}
+	if err := snapshotMarkedReady(ctx, s.Versions, post); err != nil {
+		slog.WarnContext(ctx, "update: marked-ready snapshot failed", logging.AttrComponent, "post_actions.update", "post_id", post.ID, logging.AttrError, err)
+		return
 	}
 	s.Quality.Schedule(ctx, post, models.QualityTriggerReady)
 }

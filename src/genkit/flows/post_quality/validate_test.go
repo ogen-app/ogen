@@ -160,11 +160,18 @@ func TestValidateOutputClipsProse(t *testing.T) {
 		t.Errorf("verdict should end on a whole sentence: %q", o.Clarity.Verdict)
 	}
 	advice := o.Clarity.Suggestions[0].Advice
-	if n := utf8.RuneCountInString(advice); n > maxAdviceChars+1 {
-		t.Errorf("advice is %d runes, want <= %d", n, maxAdviceChars+1)
+	if n := utf8.RuneCountInString(advice); n > maxAdviceChars {
+		t.Errorf("advice is %d runes, want <= %d", n, maxAdviceChars)
 	}
 	if !strings.HasSuffix(advice, "…") {
 		t.Errorf("advice without a sentence end should be cut at a word: %q", advice)
+	}
+}
+
+func TestClipSentencesWithoutBreaksStaysInCap(t *testing.T) {
+	got := clipSentences(strings.Repeat("x", 300), maxAdviceChars)
+	if n := utf8.RuneCountInString(got); n != maxAdviceChars || !strings.HasSuffix(got, "…") {
+		t.Fatalf("clipped to %d runes (%q…), want %d ending in an ellipsis", n, got[:10], maxAdviceChars)
 	}
 }
 
