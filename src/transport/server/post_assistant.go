@@ -17,6 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // initPostAssistant registers the post assistant flow on the shared Genkit
@@ -35,6 +36,7 @@ func initPostAssistant(
 	restoreSvc *restore.Service,
 	scheduleSvc *schedule.Service,
 	noteSvc *notes.Service,
+	qualityAuto *qualityauto.Service,
 ) (func(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error), error) {
 	flowCfg := post_assistant.PostAssistantFlowConfig{
 		Provider:        provider,
@@ -48,6 +50,7 @@ func initPostAssistant(
 		RestoreService:  restoreSvc,
 		ScheduleService: scheduleSvc,
 		NoteService:     noteSvc,
+		QualityAuto:     qualityAuto,
 		// Hybrid model split — the planner loop runs on the planning
 		// model and delegates copywriting to the Sonnet editPost write-tool.
 		// Off reverts to the legacy single-Sonnet path.

@@ -13,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/accountselect"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/verify"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // PostVerificationHandler owns POST /api/posts/:id/verify-external:
@@ -28,6 +29,7 @@ type PostVerificationHandler struct {
 	analyticsRepo     repository.PostAnalyticsRepository
 	versionRepo       repository.PostVersionRepository
 	analyticsHub      eventhub.Hub
+	quality           *qualityauto.Service
 	auth              fiber.Handler
 }
 
@@ -53,6 +55,13 @@ func NewPostVerificationHandler(
 		analyticsHub:      hub,
 		auth:              auth,
 	}
+}
+
+// WithQualityAuto queues a quality assessment for a confirmed post that was
+// never assessed.
+func (h *PostVerificationHandler) WithQualityAuto(q *qualityauto.Service) *PostVerificationHandler {
+	h.quality = q
+	return h
 }
 
 func (h *PostVerificationHandler) Register(app *fiber.App) {
@@ -124,7 +133,7 @@ func (h *PostVerificationHandler) VerifyExternal(c *fiber.Ctx) error {
 	}
 	ext := result.Post
 
-	svc := &verify.Service{Posts: h.repo, Versions: h.versionRepo, Analytics: h.analyticsRepo, Hub: h.analyticsHub}
+	svc := &verify.Service{Posts: h.repo, Versions: h.versionRepo, Analytics: h.analyticsRepo, Hub: h.analyticsHub, Quality: h.quality}
 	if err := svc.Confirm(reqCtx(c), post, ext); err != nil {
 		jobs.ZernioExternalVerifyFailed.Add(1)
 		return err

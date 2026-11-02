@@ -276,6 +276,55 @@ func TestUpdatePersistsAndLogsTransition(t *testing.T) {
 	}
 }
 
+type fakeVersions struct {
+	repository.PostVersionRepository
+	latest  *models.PostVersion
+	created []*models.PostVersion
+}
+
+func (f *fakeVersions) GetLatestByPostID(context.Context, string) (*models.PostVersion, error) {
+	return f.latest, nil
+}
+
+func (f *fakeVersions) CreateNext(_ context.Context, v *models.PostVersion) error {
+	f.created = append(f.created, v)
+	return nil
+}
+
+func TestUpdateMarkedReadySnapshotsContent(t *testing.T) {
+	cases := []struct {
+		name   string
+		from   models.PostStatus
+		to     models.PostStatus
+		latest *models.PostVersion
+		want   int
+	}{
+		{"draft to ready snapshots", models.PostStatusDraft, models.PostStatusReadyForPublish, &models.PostVersion{Content: "older"}, 1},
+		{"identical latest version is reused", models.PostStatusDraft, models.PostStatusReadyForPublish, &models.PostVersion{Content: "body"}, 0},
+		{"no version yet snapshots", models.PostStatusFailed, models.PostStatusReadyForPublish, nil, 1},
+		{"back to draft does not", models.PostStatusReadyForPublish, models.PostStatusDraft, nil, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			versions := &fakeVersions{latest: tc.latest}
+			svc := &Service{Posts: &fakePosts{}, Logs: &fakeLogs{}, Versions: versions}
+			post := &models.Post{ID: "p", CampaignID: "c1", Content: "body", Status: tc.from}
+			if _, err := svc.Update(t.Context(), input(post, tc.to)); err != nil {
+				t.Fatal(err)
+			}
+			if len(versions.created) != tc.want {
+				t.Fatalf("created %d versions, want %d", len(versions.created), tc.want)
+			}
+			if tc.want == 1 {
+				v := versions.created[0]
+				if v.Content != "body" || v.Note != models.PostVersionNoteMarkedReady || v.Creator != models.PostVersionCreatorSystem {
+					t.Fatalf("snapshot = %+v", v)
+				}
+			}
+		})
+	}
+}
+
 func TestApplyThreadSegmentsClearsNonThread(t *testing.T) {
 	p := &models.Post{PlatformPostType: "text", ThreadSegments: models.ThreadSegments{{Content: "x"}}}
 	ApplyThreadSegments(p, 280)

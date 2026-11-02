@@ -25,6 +25,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/internal/postaudit"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 var (
@@ -93,6 +94,7 @@ type Service struct {
 	versions repository.PostVersionRepository
 	logs     repository.PostLogRepository
 	hub      eventhub.Hub
+	quality  *qualityauto.Service
 }
 
 // New wires a restore Service. logs and hub may be nil (audit / eventing
@@ -105,6 +107,12 @@ func New(
 	hub eventhub.Hub,
 ) *Service {
 	return &Service{db: db, posts: posts, versions: versions, logs: logs, hub: hub}
+}
+
+// SetQualityAuto queues an automatic quality assessment after a restore,
+// which saves the restored content as the newest version.
+func (s *Service) SetQualityAuto(q *qualityauto.Service) {
+	s.quality = q
 }
 
 // Restore rolls the post identified by postID back to the content of
@@ -135,6 +143,7 @@ func (s *Service) Restore(ctx context.Context, postID string, opts Options) (*Re
 	if err != nil {
 		return nil, err
 	}
+	s.quality.Schedule(ctx, post, models.QualityTriggerVersion)
 
 	// Dotted bus wire type; the persisted post_logs / activity taxonomy
 	// stays "post_restored".

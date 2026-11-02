@@ -35,6 +35,9 @@ const (
 const (
 	PostVersionNoteSubmitted = "Submitted for scheduled publishing"
 	PostVersionNotePublished = "Published"
+	// PostVersionNoteMarkedReady marks the content the author moved to ready
+	// for publish: the version the automatic quality assessment scores.
+	PostVersionNoteMarkedReady = "Marked ready for publish"
 )
 
 // IsSystemSnapshot reports whether v is a CON-251 system-authored "what went

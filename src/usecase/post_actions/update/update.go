@@ -9,14 +9,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/platforms"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/logs"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // ErrScheduleChanged means a scheduled post was cancelled, published or
@@ -70,16 +73,19 @@ func (e *NotReadyError) Error() string { return "post is not ready for publish" 
 // Service applies post edits. Every dependency except Posts is optional:
 // nil Platforms leaves thread limits unknown, nil Attachments skips the
 // publish gate, nil Campaigns leaves phase ownership to the DB trigger, nil
-// Logs/Activity drop audit and analytics events, and nil Schedule persists a
-// move to scheduled as a plain status update.
+// Logs/Activity drop audit and analytics events, nil Schedule persists a
+// move to scheduled as a plain status update, nil Versions skips the
+// marked-ready snapshot, and nil Quality queues no automatic assessment.
 type Service struct {
 	Posts       repository.PostRepository
 	Platforms   repository.PlatformRepository
 	Attachments repository.PostAttachmentRepository
 	Campaigns   repository.CampaignRepository
 	Logs        repository.PostLogRepository
+	Versions    repository.PostVersionRepository
 	Schedule    *schedule.Service
 	Activity    *activity.Recorder
+	Quality     *qualityauto.Service
 }
 
 // Input is one edit. Apply copies the request's fields (including Status) onto
@@ -162,8 +168,46 @@ func (s *Service) Update(ctx context.Context, in Input) (Result, error) {
 		return res, err
 	}
 
+	if in.Status == models.PostStatusReadyForPublish && prev != models.PostStatusReadyForPublish {
+		s.markReady(ctx, post)
+	}
 	res.Post, err = s.Posts.GetByID(ctx, post.ID)
 	return res, err
+}
+
+// markReady records the content the author marked ready as a version, so the
+// quality assessment scores what they marked ready rather than an older
+// version, and queues the assessment. Deduped against an identical latest
+// version. Best-effort: the transition has already committed.
+func (s *Service) markReady(ctx context.Context, post *models.Post) {
+	if s.Versions != nil {
+		if err := snapshotMarkedReady(ctx, s.Versions, post); err != nil {
+			slog.WarnContext(ctx, "update: marked-ready snapshot failed", logging.AttrComponent, "post_actions.update", "post_id", post.ID, logging.AttrError, err)
+		}
+	}
+	s.Quality.Schedule(ctx, post, models.QualityTriggerReady)
+}
+
+func snapshotMarkedReady(ctx context.Context, versions repository.PostVersionRepository, post *models.Post) error {
+	content := post.SnapshotContent()
+	latest, err := versions.GetLatestByPostID(ctx, post.ID)
+	if err != nil {
+		return err
+	}
+	if latest != nil && latest.Content == content {
+		return nil
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return err
+	}
+	return versions.CreateNext(ctx, &models.PostVersion{
+		ID:      id,
+		PostID:  post.ID,
+		Content: content,
+		Note:    models.PostVersionNoteMarkedReady,
+		Creator: models.PostVersionCreatorSystem,
+	})
 }
 
 // check runs the pre-persist rules in order; the first failure wins.

@@ -14,15 +14,18 @@ import (
 	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
-// Service confirms external posts. Versions, Analytics and Hub are optional
-// (nil skips the content snapshot, the analytics row, and the update event).
+// Service confirms external posts. Versions, Analytics, Hub and Quality are
+// optional (nil skips the content snapshot, the analytics row, the update
+// event, and the quality assessment of a post that never had one).
 type Service struct {
 	Posts     repository.PostRepository
 	Versions  repository.PostVersionRepository
 	Analytics repository.PostAnalyticsRepository
 	Hub       eventhub.Hub
+	Quality   *qualityauto.Service
 }
 
 // Confirm applies a confirmed external post to post and persists it. Only the
@@ -35,6 +38,7 @@ func (s *Service) Confirm(ctx context.Context, post *models.Post, ext *zernio.Ex
 	}
 	s.snapshotPublished(ctx, post)
 	s.recordAnalytics(ctx, post, ext)
+	s.Quality.Schedule(ctx, post, models.QualityTriggerPublished)
 	return nil
 }
 

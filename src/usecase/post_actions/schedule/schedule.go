@@ -30,6 +30,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/accountselect"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 var (
@@ -155,6 +156,10 @@ type Service struct {
 	// SetVersionSnapshot.
 	versions repository.PostVersionRepository
 
+	// quality queues the automatic quality assessment of a scheduled post.
+	// nil queues none; wired via SetQualityAuto.
+	quality *qualityauto.Service
+
 	// now is injectable so tests can pin "current time" for future-time
 	// validation. nil → time.Now().UTC().
 	now func() time.Time
@@ -202,6 +207,12 @@ func (s *Service) SetAccountGate(accounts repository.SocialAccountRepository, pr
 // snapshot; it is best-effort and never fails a schedule.
 func (s *Service) SetVersionSnapshot(versions repository.PostVersionRepository) {
 	s.versions = versions
+}
+
+// SetQualityAuto queues an automatic quality assessment for every scheduled
+// post: the content is final from here, so the score is too.
+func (s *Service) SetQualityAuto(q *qualityauto.Service) {
+	s.quality = q
 }
 
 // SetClock overrides the time source (tests only).
@@ -483,6 +494,7 @@ func (s *Service) persist(ctx context.Context, post *models.Post, autoPublish bo
 	if autoPublish {
 		s.snapshotSubmitted(ctx, post)
 	}
+	s.quality.Schedule(ctx, post, models.QualityTriggerScheduled)
 	return nil
 }
 
