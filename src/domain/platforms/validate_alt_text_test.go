@@ -43,6 +43,20 @@ func TestValidateImageAttachment_AltTextLength(t *testing.T) {
 	}
 }
 
+// A platform that sets only an alt-text cap must not have its zero-valued file
+// rules (size 0, no formats, 0 attachments) applied to every image.
+func TestValidatePostAttachments_AltTextOnlyPlatform(t *testing.T) {
+	p := &models.Platform{ID: "altonly", Name: "AltOnly", ImageConstraints: models.ImageConstraints{MaxAltTextChars: 5}}
+	atts := []models.PostAttachment{
+		{ID: "a1", MimeType: "image/png", SizeBytes: 10, AltText: "short"},
+		{ID: "a2", MimeType: "image/png", SizeBytes: 10, AltText: "too long"},
+	}
+	errs := ValidatePostAttachments(atts, p)
+	if len(errs) != 1 || errs[0].Rule != RuleMaxAltTextChars || errs[0].AttachmentID != "a2" {
+		t.Fatalf("want only a2's max_alt_text_chars error, got %+v", errs)
+	}
+}
+
 func TestValidateImageAttachment_AltTextMessageNamesPlatform(t *testing.T) {
 	att := &models.PostAttachment{ID: "a1", MimeType: "image/png", SizeBytes: 10, AltText: "abcdef"}
 	for _, e := range ValidateAttachment(att, altTextPlatform(5)) {
