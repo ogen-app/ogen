@@ -12,6 +12,8 @@ import (
 	"github.com/firebase/genkit/go/plugins/anthropic"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
@@ -60,7 +62,7 @@ type genkitRuntime struct {
 
 	contentPlanFn       func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	postAssistantFn     func(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error)
-	postQualityFn       func(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error)
+	postQualityFns      postQualityFns
 	enrichBriefFn       func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	campaignAssistantFn func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
 	generatePostsFn     func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
@@ -87,6 +89,7 @@ type genkitRuntime struct {
 	recorder            *usage.Recorder
 	checker             *usage.Checker
 	notifier            *notify.Service
+	limiter             *entitlements.Limiter
 }
 
 // genkitDeps groups the runtime's static inputs: things captured at
@@ -109,6 +112,7 @@ type genkitDeps struct {
 	recorder            *usage.Recorder
 	checker             *usage.Checker
 	notifier            *notify.Service
+	limiter             *entitlements.Limiter
 }
 
 // newGenkitRuntime builds the runtime and runs the initial rebuild.
@@ -133,6 +137,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 		restoreSvc:          deps.restoreSvc,
 		scheduleSvc:         deps.scheduleSvc,
 		noteSvc:             deps.noteSvc,
+		limiter:             deps.limiter,
 		recorder:            deps.recorder,
 		checker:             deps.checker,
 		notifier:            deps.notifier,
@@ -183,7 +188,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 func (r *genkitRuntime) IsAnthropicAvailable() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.contentPlanFn != nil && r.postAssistantFn != nil && r.postQualityFn != nil && r.enrichBriefFn != nil && r.campaignAssistantFn != nil && r.checkBriefFn != nil && r.checkPostsFn != nil
+	return r.contentPlanFn != nil && r.postAssistantFn != nil && r.postQualityFns.assess != nil && r.enrichBriefFn != nil && r.campaignAssistantFn != nil && r.checkBriefFn != nil && r.checkPostsFn != nil
 }
 
 func (r *genkitRuntime) GenerateDraft(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
@@ -208,12 +213,35 @@ func (r *genkitRuntime) RunPostAssistant(ctx context.Context, req post_assistant
 
 func (r *genkitRuntime) AssessPostQuality(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error) {
 	r.mu.RLock()
-	fn := r.postQualityFn
+	fn := r.postQualityFns.assess
 	r.mu.RUnlock()
 	if fn == nil {
 		return nil, ErrAnthropicUnavailable
 	}
 	return fn(ctx, postID, onEvent)
+}
+
+// PostQualityStatus returns a post's stored assessment and whether it is
+// stale.
+func (r *genkitRuntime) PostQualityStatus(ctx context.Context, postID string) (*post_quality.Status, error) {
+	r.mu.RLock()
+	fn := r.postQualityFns.status
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil, ErrAnthropicUnavailable
+	}
+	return fn(ctx, postID)
+}
+
+// AutoAssessPost runs an automatic assessment for a lifecycle checkpoint.
+func (r *genkitRuntime) AutoAssessPost(ctx context.Context, postID string, trigger models.QualityTrigger) (*post_quality.PostQualityResponse, error) {
+	r.mu.RLock()
+	fn := r.postQualityFns.auto
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil, ErrAnthropicUnavailable
+	}
+	return fn(ctx, postID, trigger)
 }
 
 func (r *genkitRuntime) EnrichBrief(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error) {
@@ -311,7 +339,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 			logging.AttrComponent, "genkit")
 		r.contentPlanFn = nil
 		r.postAssistantFn = nil
-		r.postQualityFn = nil
+		r.postQualityFns = postQualityFns{}
 		r.enrichBriefFn = nil
 		r.campaignAssistantFn = nil
 		r.generatePostsFn = nil
@@ -345,7 +373,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	if err != nil {
 		return fmt.Errorf("init post assistant: %w", err)
 	}
-	postQualityFn, err := initPostQuality(g, r.cfg, provider, r.recorder, r.checker, r.hub, r.notifier, r.postQualityRepos)
+	postQualityFns, err := initPostQuality(g, r.cfg, provider, r.recorder, r.checker, r.hub, r.notifier, r.limiter, r.postQualityRepos)
 	if err != nil {
 		return fmt.Errorf("init post quality: %w", err)
 	}
@@ -390,7 +418,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.brandDistill = brandDistill
 	r.contentPlanFn = contentPlanFn
 	r.postAssistantFn = postAssistantFn
-	r.postQualityFn = postQualityFn
+	r.postQualityFns = postQualityFns
 	r.enrichBriefFn = enrichBriefFn
 	r.campaignAssistantFn = campaignAssistantFn
 	r.generatePostsFn = generatePostsFn

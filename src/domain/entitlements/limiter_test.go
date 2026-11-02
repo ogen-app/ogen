@@ -71,6 +71,58 @@ func TestLimiterAllow(t *testing.T) {
 	}
 }
 
+func TestLimiterAllowCounted(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name    string
+		mode    Mode
+		vals    map[string]any
+		current int64
+		want    bool
+	}{
+		{"under cap", ModeEnforce, map[string]any{"quality_reviews_per_post": float64(3)}, 2, true},
+		{"at cap", ModeEnforce, map[string]any{"quality_reviews_per_post": float64(3)}, 3, false},
+		{"unlimited", ModeEnforce, map[string]any{"quality_reviews_per_post": nil}, 99, true},
+		{"absent feature", ModeEnforce, map[string]any{}, 99, true},
+		{"warn never blocks", ModeWarn, map[string]any{"quality_reviews_per_post": float64(1)}, 5, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := NewLimiter(fakeResolver{res: resWith(tc.vals)}, nil, tc.mode)
+			dec, err := l.AllowCounted(ctx, "tn-1", "quality_reviews_per_post", tc.current)
+			if err != nil {
+				t.Fatalf("AllowCounted: %v", err)
+			}
+			if dec.Allowed != tc.want {
+				t.Fatalf("Allowed = %v, want %v (%+v)", dec.Allowed, tc.want, dec)
+			}
+		})
+	}
+
+	t.Run("resolve error fails open", func(t *testing.T) {
+		l := NewLimiter(fakeResolver{err: errors.New("down")}, nil, ModeEnforce)
+		dec, err := l.AllowCounted(ctx, "tn-1", "quality_reviews_per_post", 99)
+		if err != nil || !dec.Allowed {
+			t.Fatalf("want fail-open allow, got %+v err=%v", dec, err)
+		}
+	})
+}
+
+func TestLimiterNumericLimit(t *testing.T) {
+	ctx := context.Background()
+	l := NewLimiter(fakeResolver{res: resWith(map[string]any{"a": float64(5), "b": nil})}, nil, ModeEnforce)
+	if got := l.NumericLimit(ctx, "tn-1", "a"); got == nil || *got != 5 {
+		t.Errorf("a = %v, want 5", got)
+	}
+	if got := l.NumericLimit(ctx, "tn-1", "b"); got != nil {
+		t.Errorf("unlimited b = %v, want nil", *got)
+	}
+	var nilLimiter *Limiter
+	if got := nilLimiter.NumericLimit(ctx, "tn-1", "a"); got != nil {
+		t.Errorf("nil limiter = %v, want nil", *got)
+	}
+}
+
 func TestLimiterAllowAmount(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {

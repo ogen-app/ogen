@@ -1,6 +1,7 @@
 package post_quality
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -56,8 +59,11 @@ type PostQualityFlowConfig struct {
 	// nil = silent.
 	Hub eventhub.Hub
 	// Notifier drops a durable "assessment finished / failed" notification to the
-	// post owner. nil is a no-op.
+	// post owner after a manual run. nil is a no-op.
 	Notifier *notify.Service
+	// Limiter enforces the quality_reviews_per_post entitlement against the
+	// stored run count. nil = no cap.
+	Limiter *entitlements.Limiter
 
 	tmpl *templates
 }
@@ -81,6 +87,10 @@ type PostQualityRepos struct {
 // OnEventFunc through for SSE streaming. Set by InitPostQuality.
 var postQualityRunner func(ctx context.Context, req PostQualityRequest, onEvent OnEventFunc) (*PostQualityResponse, error)
 
+// postQualityStatus is a closure over (cfg, repos) that reads a post's stored
+// assessment and whether it is stale. Set by InitPostQuality.
+var postQualityStatus func(ctx context.Context, postID string) (*Status, error)
+
 // InitPostQuality registers the assessPostQuality Genkit flow. It must be
 // called after the Genkit instance is initialised with the Anthropic
 // plugin.
@@ -102,14 +112,34 @@ func InitPostQuality(g *genkit.Genkit, cfg PostQualityFlowConfig, repos PostQual
 	postQualityRunner = func(ctx context.Context, req PostQualityRequest, onEvent OnEventFunc) (*PostQualityResponse, error) {
 		return runPostQuality(ctx, g, req, cfg, repos, onEvent)
 	}
+	postQualityStatus = func(ctx context.Context, postID string) (*Status, error) {
+		return readStatus(ctx, cfg, repos, postID)
+	}
 	return nil
 }
 
-// NewPostQualityCallback returns a callback for the posts handler. onEvent
-// is forwarded for SSE streaming; pass nil for a silent call.
+// NewPostQualityCallback returns a callback for the posts handler: a manual
+// assessment. onEvent is forwarded for SSE streaming; pass nil for a silent
+// call.
 func NewPostQualityCallback() func(ctx context.Context, postID string, onEvent OnEventFunc) (*PostQualityResponse, error) {
 	return func(ctx context.Context, postID string, onEvent OnEventFunc) (*PostQualityResponse, error) {
-		return postQualityRunner(ctx, PostQualityRequest{PostID: postID}, onEvent)
+		return postQualityRunner(ctx, PostQualityRequest{PostID: postID, Trigger: models.QualityTriggerManual}, onEvent)
+	}
+}
+
+// NewAutoAssessCallback returns the entry point for automatic assessments
+// started by a lifecycle checkpoint. It runs silently (no SSE).
+func NewAutoAssessCallback() func(ctx context.Context, postID string, trigger models.QualityTrigger) (*PostQualityResponse, error) {
+	return func(ctx context.Context, postID string, trigger models.QualityTrigger) (*PostQualityResponse, error) {
+		return postQualityRunner(ctx, PostQualityRequest{PostID: postID, Trigger: trigger}, nil)
+	}
+}
+
+// NewStatusCallback returns the read side for the posts handler: the stored
+// assessment plus whether it is stale.
+func NewStatusCallback() func(ctx context.Context, postID string) (*Status, error) {
+	return func(ctx context.Context, postID string) (*Status, error) {
+		return postQualityStatus(ctx, postID)
 	}
 }
 
@@ -137,31 +167,20 @@ func runPostQuality(
 	// validateInput → very-early failures emit no finalisation.
 	var ownerID, tenantID string
 	defer func() {
-		if ownerID == "" {
+		if ownerID == "" || quietFinish(req.Trigger, out, retErr) {
 			return
 		}
-		publishAssessmentFinalised(cfg.Hub, req.PostID, ownerID, out, retErr)
-		// A durable assessment finished/failed row for the initiator.
-		notifyAssessmentFinalised(cfg.Notifier, tenantID, ownerID, req.PostID, out, retErr)
+		publishAssessmentFinalised(cfg.Hub, req.PostID, ownerID, req.Trigger, out, retErr)
+		// A durable assessment finished/failed row for the author who asked;
+		// automatic runs only update the open page.
+		if !req.Trigger.IsAuto() {
+			notifyAssessmentFinalised(cfg.Notifier, tenantID, ownerID, req.PostID, out, retErr)
+		}
 	}()
 
 	// ── Step 1: validateInput ────────────────────────────────────────────
-	post, err := repos.Posts.GetByID(ctx, req.PostID)
+	post, err := loadAssessedPost(ctx, repos, req.PostID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, &ValidationError{Msg: "post not found"}
-		}
-		return nil, fmt.Errorf("load post: %w", err)
-	}
-
-	// Assess the latest committed version rather than the live editor HEAD.
-	// Runs before validateInput so the body precondition is
-	// checked against the content that is actually scored.
-	if err := resolveAssessedContent(ctx, repos, post); err != nil {
-		return nil, err
-	}
-
-	if err := validateInput(post); err != nil {
 		return nil, err
 	}
 	ownerID = post.CreatedBy
@@ -169,25 +188,24 @@ func runPostQuality(
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateInput", Status: "done"})
 
 	// ── Step 2: buildContext ─────────────────────────────────────────────
-	prompts, err := buildContext(ctx, post, cfg, repos)
+	in, err := assessmentInputs(ctx, cfg, repos, post)
 	if err != nil {
 		return nil, fmt.Errorf("build context: %w", err)
 	}
+	prompts, mc := in.prompts, in.model
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "buildContext", Status: "done"})
 
-	// ── Change detection: the rendered prompt encodes everything
-	// the model sees (post body, platform, type, campaign brief, phase,
-	// asset previews); the model id and the resolved weight profile cover
-	// the rest of what determines the score. If all of them are unchanged
-	// since the stored evaluation, skip the model run and return the cached
-	// result — so we re-assess only when something that actually affects the
-	// score changed.
-	// Resolved once per run so the cache key, the scoring calls and the
-	// persisted model id always agree.
-	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
-	hash := inputHash(prompts, mc.Ref, cfg.Weights.For(post.PlatformPostType))
-	if cached, cerr := repos.Evaluations.GetByPostID(ctx, post.ID); cerr == nil && cached != nil && cached.InputHash == hash {
-		slog.InfoContext(ctx, "inputs unchanged, returning cached evaluation", logging.AttrComponent, "genkit.post_quality", "post_id", req.PostID)
+	// ── Change detection: skip the model when nothing that affects the
+	// score changed since the stored evaluation. Automatic runs also skip
+	// when only the context changed (brief, assets, model, rubric): that
+	// marks the assessment stale for the author to re-run, rather than
+	// re-scoring every post of a campaign on one brief edit.
+	cached, cerr := repos.Evaluations.GetByPostID(ctx, post.ID)
+	if cerr != nil {
+		cached = nil
+	}
+	if reuse(cached, in, req.Trigger) {
+		slog.InfoContext(ctx, "reusing stored evaluation", logging.AttrComponent, "genkit.post_quality", "post_id", req.PostID, "trigger", req.Trigger)
 		resp := &PostQualityResponse{
 			PostID:      post.ID,
 			GeneratedAt: time.Now().UTC(),
@@ -198,10 +216,15 @@ func runPostQuality(
 		return resp, nil
 	}
 
-	// Enforcement gate: placed AFTER the cache short-circuit so a
-	// cached assessment (no provider call) is never blocked. Nil checker = no gate.
-	if err := cfg.Checker.Enforce(ctx); err != nil {
+	// Enforcement gates: placed AFTER the cache short-circuit so a cached
+	// assessment (no provider call) is never blocked. A blocked automatic run
+	// is skipped quietly; a blocked manual run reports the cap to the author.
+	runs, err := allowRun(ctx, cfg, tenantID, cached, req.Trigger)
+	if err != nil {
 		return nil, err
+	}
+	if req.Trigger.IsAuto() {
+		publishAssessmentStarted(cfg.Hub, post.ID, ownerID, req.Trigger)
 	}
 
 	// ── Step 3: evaluate (single model call, 1-retry/2s-backoff) ─────────
@@ -222,11 +245,14 @@ func runPostQuality(
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "composeScore", Status: "done"})
 
 	// ── Step 6: persist (upsert evaluation + PostLog) ────────────────────
-	eval, err := persist(ctx, repos, post, result, overall, prompts.captionScoped, mc.Ref, hash)
+	eval, err := persist(ctx, repos, post, result, overall, prompts.captionScoped, mc.Ref, in, req.Trigger)
 	if err != nil {
 		return nil, fmt.Errorf("persist evaluation: %w", err)
 	}
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "persist", Status: "done"})
+	if !req.Trigger.IsAuto() {
+		cfg.Limiter.DispatchCrossing(ctx, tenantID, runs)
+	}
 
 	slog.InfoContext(ctx, "done", logging.AttrComponent, "genkit.post_quality", "post_id", req.PostID, "duration_ms", time.Since(start).Milliseconds(), "overall_pct", overall, "type", post.PlatformPostType)
 
@@ -237,6 +263,42 @@ func runPostQuality(
 	}
 	emit(onEvent, SSEEventComplete, resp)
 	return resp, nil
+}
+
+// QualityRunsFeature is the entitlement capping model runs per post.
+const QualityRunsFeature = "quality_reviews_per_post"
+
+// allowRun applies the per-post run allowance and the tenant spend cap before
+// a model run. For an automatic run a denial is a *SkippedError.
+func allowRun(ctx context.Context, cfg PostQualityFlowConfig, tenantID string, cached *models.PostEvaluation, trigger models.QualityTrigger) (entitlements.Decision, error) {
+	var used int64
+	if cached != nil {
+		used = int64(cached.ModelRuns)
+	}
+	dec, err := cfg.Limiter.AllowCounted(ctx, tenantID, QualityRunsFeature, used)
+	if err == nil {
+		err = dec.Err()
+	}
+	if err == nil {
+		err = cfg.Checker.Enforce(ctx)
+	}
+	if err != nil && trigger.IsAuto() {
+		return dec, &SkippedError{Reason: err.Error()}
+	}
+	return dec, err
+}
+
+// quietFinish reports whether a run ends without a finalisation event: an
+// automatic run that was skipped or reused the stored assessment changed
+// nothing the author could see.
+func quietFinish(trigger models.QualityTrigger, out *PostQualityResponse, err error) bool {
+	if !trigger.IsAuto() {
+		return false
+	}
+	if _, skipped := errors.AsType[*SkippedError](err); skipped {
+		return true
+	}
+	return out != nil && out.Cached
 }
 
 // resolveAssessedContent overrides post.Content with the latest committed
@@ -267,24 +329,106 @@ func resolveAssessedContent(ctx context.Context, repos PostQualityRepos, post *m
 	return nil
 }
 
-// inputHash fingerprints everything that determines an assessment's stored
-// result: the rendered system and user prompts plus the model id (what the
-// model sees), and the resolved weight profile (which ComposeScore folds
-// into OverallPct and each dimension's Weight/Contribution — values the
-// model never produces). The assess flow compares it against the stored
-// hash to decide whether to re-run; including the profile means a
-// weights config change invalidates the cache rather than serving a stale
-// score. A unit-separator between parts prevents one field's content from
-// bleeding into the next.
-func inputHash(prompts *renderedPrompts, modelID string, profile Profile) string {
+// loadAssessedPost loads the post with its content resolved to the version
+// being scored, and checks it can be assessed.
+func loadAssessedPost(ctx context.Context, repos PostQualityRepos, postID string) (*models.Post, error) {
+	post, err := repos.Posts.GetByID(ctx, postID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, &ValidationError{Msg: "post not found"}
+		}
+		return nil, fmt.Errorf("load post: %w", err)
+	}
+	// Runs before validateInput so the body precondition is checked against
+	// the content that is actually scored.
+	if err := resolveAssessedContent(ctx, repos, post); err != nil {
+		return nil, err
+	}
+	if err := validateInput(post); err != nil {
+		return nil, err
+	}
+	return post, nil
+}
+
+// inputs is everything one assessment of a post depends on: the rendered
+// prompts, the resolved model and weight profile, and their fingerprints.
+type inputs struct {
+	prompts     *renderedPrompts
+	model       modelconfig.Resolved
+	profile     Profile
+	contentHash string
+	contextHash string
+}
+
+// inputHash is the combined fingerprint the cache compares.
+func (in *inputs) inputHash() string {
+	return hashParts(in.contentHash, in.contextHash)
+}
+
+// assessmentInputs renders the prompts for post and fingerprints them. It is
+// DB reads only, so the read side can call it to report staleness.
+func assessmentInputs(ctx context.Context, cfg PostQualityFlowConfig, repos PostQualityRepos, post *models.Post) (*inputs, error) {
+	prompts, err := buildContext(ctx, post, cfg, repos)
+	if err != nil {
+		return nil, err
+	}
+	// Resolved once per run so the cache key, the scoring calls and the
+	// persisted model id always agree.
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostQuality, modelconfig.SlotMain)
+	profile := cfg.Weights.For(post.PlatformPostType)
+	return &inputs{
+		prompts:     prompts,
+		model:       mc,
+		profile:     profile,
+		contentHash: contentHash(post, prompts.captionScoped),
+		contextHash: contextHash(prompts, mc.Ref, profile),
+	}, nil
+}
+
+// reuse reports whether the stored evaluation can be returned instead of
+// running the model. Identical inputs always reuse. An automatic run also
+// reuses when only the context changed, and the published checkpoint runs
+// only for a post that was never assessed.
+func reuse(cached *models.PostEvaluation, in *inputs, trigger models.QualityTrigger) bool {
+	switch {
+	case cached == nil:
+		return false
+	case cached.InputHash == in.inputHash():
+		return true
+	case !trigger.IsAuto():
+		return false
+	case trigger == models.QualityTriggerPublished:
+		return true
+	}
+	return cached.ContentHash == in.contentHash
+}
+
+// contentHash fingerprints the scored post itself: title, body, platform,
+// post type and whether it carries media the model cannot see.
+func contentHash(post *models.Post, captionScoped bool) string {
+	return hashParts(post.Title, post.Content, post.PlatformID, post.PlatformPostType, strconv.FormatBool(captionScoped))
+}
+
+// contextHash fingerprints everything else that determines the stored
+// result: the rubric, the campaign/phase/asset context, the model id, and
+// the resolved weight profile (which ComposeScore folds into OverallPct and
+// each dimension's Weight/Contribution, values the model never produces),
+// so a weights config change marks the assessment stale too.
+func contextHash(prompts *renderedPrompts, modelID string, profile Profile) string {
+	return hashParts(prompts.system, prompts.userContext, modelID,
+		fmt.Sprintf("%g,%g,%g,%g", profile.Correctness, profile.Clarity, profile.Engagement, profile.Delivery))
+}
+
+// hashParts is sha256 over parts joined by a unit separator, so one part's
+// content cannot bleed into the next.
+func hashParts(parts ...string) string {
 	h := sha256.New()
-	h.Write([]byte(prompts.system))
-	h.Write([]byte{0x1f})
-	h.Write([]byte(prompts.user))
-	h.Write([]byte{0x1f})
-	h.Write([]byte(modelID))
-	h.Write([]byte{0x1f})
-	h.Write(fmt.Appendf(nil, "%g,%g,%g,%g", profile.Correctness, profile.Clarity, profile.Engagement, profile.Delivery))
+	for i, p := range parts {
+		if i > 0 {
+			h.Write([]byte{0x1f})
+		}
+		h.Write([]byte(p))
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -299,7 +443,8 @@ func persist(
 	overall float64,
 	captionScoped bool,
 	modelID string,
-	hash string,
+	in *inputs,
+	trigger models.QualityTrigger,
 ) (*models.PostEvaluation, error) {
 	id, err := models.NewID()
 	if err != nil {
@@ -314,7 +459,10 @@ func persist(
 		OverallPct:       overall,
 		Result:           result,
 		ModelID:          modelID,
-		InputHash:        hash,
+		InputHash:        in.inputHash(),
+		ContentHash:      in.contentHash,
+		ContextHash:      in.contextHash,
+		Trigger:          triggerOrManual(trigger),
 	}
 	if err := repos.Evaluations.Upsert(ctx, eval); err != nil {
 		return nil, err
@@ -341,6 +489,7 @@ func appendQualityLog(ctx context.Context, repos PostQualityRepos, postID string
 		"clarity":     eval.Result.Clarity.Score,
 		"engagement":  eval.Result.Engagement.Score,
 		"delivery":    eval.Result.Delivery.Score,
+		"trigger":     eval.Trigger,
 	})
 	if err := repos.PostLogs.Append(ctx, &models.PostLog{
 		ID:        logID,
@@ -361,6 +510,7 @@ func appendQualityLog(ctx context.Context, repos PostQualityRepos, postID string
 func publishAssessmentFinalised(
 	hub eventhub.Hub,
 	postID, ownerID string,
+	trigger models.QualityTrigger,
 	resp *PostQualityResponse,
 	err error,
 ) {
@@ -379,18 +529,45 @@ func publishAssessmentFinalised(
 	}
 	if err != nil {
 		ev.Type = "assessment.failed"
-		ev.Payload = map[string]any{"postId": postID, "error": err.Error()}
+		ev.Payload = map[string]any{"postId": postID, "error": err.Error(), "trigger": triggerOrManual(trigger)}
 	} else {
 		overall := 0.0
 		if resp != nil && resp.Evaluation != nil {
 			overall = resp.Evaluation.OverallPct
 		}
 		ev.Type = "assessment.completed"
-		ev.Payload = map[string]any{"postId": postID, "overallPct": overall}
+		ev.Payload = map[string]any{"postId": postID, "overallPct": overall, "trigger": triggerOrManual(trigger)}
 	}
 	if pubErr := hub.Publish(context.Background(), ev); pubErr != nil {
 		slog.Error("hub publish failed", logging.AttrComponent, "genkit.post_quality", "post_id", postID, logging.AttrError, pubErr)
 	}
+}
+
+// publishAssessmentStarted tells the open post page that an automatic
+// assessment began, so it can show progress until assessment.completed.
+func publishAssessmentStarted(hub eventhub.Hub, postID, ownerID string, trigger models.QualityTrigger) {
+	if hub == nil {
+		return
+	}
+	id, err := models.NewID()
+	if err != nil {
+		slog.Error("cannot mint event id", logging.AttrComponent, "genkit.post_quality", logging.AttrError, err)
+		return
+	}
+	ev := eventhub.Event{
+		ID:      id,
+		Topic:   "entity:post:" + postID,
+		UserID:  ownerID,
+		Type:    "assessment.started",
+		Payload: map[string]any{"postId": postID, "trigger": triggerOrManual(trigger)},
+	}
+	if err := hub.Publish(context.Background(), ev); err != nil {
+		slog.Error("hub publish failed", logging.AttrComponent, "genkit.post_quality", "post_id", postID, logging.AttrError, err)
+	}
+}
+
+func triggerOrManual(t models.QualityTrigger) models.QualityTrigger {
+	return cmp.Or(t, models.QualityTriggerManual)
 }
 
 // notifyAssessmentFinalised drops a durable "assessment finished / failed"

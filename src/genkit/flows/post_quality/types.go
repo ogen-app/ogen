@@ -9,6 +9,8 @@ import (
 // PostQualityRequest is the input to the assessPostQuality flow.
 type PostQualityRequest struct {
 	PostID string `json:"postId"`
+	// Trigger is what started the run; empty means manual.
+	Trigger models.QualityTrigger `json:"trigger,omitempty"`
 }
 
 // PostQualityResponse is returned by the flow and the handler. Evaluation
@@ -23,11 +25,30 @@ type PostQualityResponse struct {
 	Cached      bool                   `json:"cached"`
 }
 
+// Status is a post's stored assessment as the read endpoint reports it.
+// Stale is true when the post's content or its context changed since the
+// assessment ran; StaleReason says which. RunsLimit is the
+// quality_reviews_per_post entitlement, nil when unlimited.
+type Status struct {
+	*models.PostEvaluation
+	Stale       bool                      `json:"stale"`
+	StaleReason models.QualityStaleReason `json:"stale_reason,omitempty"`
+	RunsLimit   *int                      `json:"runs_limit"`
+}
+
 // ValidationError is returned when input preconditions are not met
 // (missing post, empty body, no platform/type). Handlers map it to 400.
 type ValidationError struct{ Msg string }
 
 func (e *ValidationError) Error() string { return e.Msg }
+
+// SkippedError is returned by an automatic run that did not call the model
+// because the post's run allowance or the tenant's spend cap blocked it. The
+// stored assessment is left as it is (and reads as stale); nothing is
+// reported to the author.
+type SkippedError struct{ Reason string }
+
+func (e *SkippedError) Error() string { return "assessment skipped: " + e.Reason }
 
 // AIError is returned when the model call or output validation fails after
 // the retry. Handlers map it to 502.

@@ -250,7 +250,6 @@ func (l *Limiter) AllowAmount(ctx context.Context, tenantID, featureKey string, 
 	if !present || limit == nil {
 		return dec, nil // unlimited, or the feature is not on this version
 	}
-	dec.Limit = limit
 	counter, has := l.counters[featureKey]
 	if !has {
 		slog.WarnContext(ctx, "entitlements: no counter registered; allowing", logging.AttrComponent, "entitlements", "feature", featureKey)
@@ -261,22 +260,61 @@ func (l *Limiter) AllowAmount(ctx context.Context, tenantID, featureKey string, 
 		l.failOpen(ctx, featureKey, "count", err)
 		return dec, nil
 	}
-	dec.Current = current
-	if current+amount <= *limit {
+	return l.decide(ctx, featureKey, *limit, current, amount), nil
+}
+
+// AllowCounted is Allow for a cap whose usage is not a tenant-wide count, such
+// as a per-post allowance: the caller supplies the current usage. Same
+// fail-open and warn/off semantics as Allow.
+func (l *Limiter) AllowCounted(ctx context.Context, tenantID, featureKey string, current int64) (Decision, error) {
+	dec := Decision{Key: featureKey, Allowed: true}
+	if l == nil || l.mode == ModeOff {
+		return dec, nil
+	}
+	limit, present, err := l.numericValue(ctx, tenantID, featureKey)
+	if err != nil {
+		l.failOpen(ctx, featureKey, "resolve", err)
+		return dec, nil
+	}
+	if !present || limit == nil {
+		return dec, nil
+	}
+	return l.decide(ctx, featureKey, *limit, current, 1), nil
+}
+
+// NumericLimit returns the tenant's cap for a numeric feature, or nil when it
+// is unlimited, absent, or cannot be resolved (fail open).
+func (l *Limiter) NumericLimit(ctx context.Context, tenantID, featureKey string) *int64 {
+	if l == nil || l.mode == ModeOff {
+		return nil
+	}
+	limit, _, err := l.numericValue(ctx, tenantID, featureKey)
+	if err != nil {
+		l.failOpen(ctx, featureKey, "resolve", err)
+		return nil
+	}
+	return limit
+}
+
+// decide applies a numeric cap to a create that adds amount units on top of
+// current. Allowed = current + amount <= limit; over the cap only enforce mode
+// denies, warn logs and counts the would-block.
+func (l *Limiter) decide(ctx context.Context, featureKey string, limit, current, amount int64) Decision {
+	dec := Decision{Key: featureKey, Allowed: true, Limit: &limit, Current: current}
+	if current+amount <= limit {
 		// This create is allowed and adds amount units; record (do not dispatch)
 		// any near-limit crossing so the caller can fire it after the resource
-		// commits (crossing-only, low-noise — CON-295 §12).
-		dec.event = l.crossingEvent(featureKey, *limit, current, current+amount)
-		return dec, nil
+		// commits (crossing-only, low-noise).
+		dec.event = l.crossingEvent(featureKey, limit, current, current+amount)
+		return dec
 	}
 	if l.mode == ModeEnforce {
 		dec.Allowed = false
-		return dec, nil
+		return dec
 	}
-	// warn
 	wouldBlock.Add(1)
-	slog.WarnContext(ctx, "entitlements: cap reached (warn mode, allowed)", logging.AttrComponent, "entitlements", "feature", featureKey, "limit", *limit, "current", current)
-	return dec, nil
+	slog.WarnContext(ctx, "entitlements: cap reached (warn mode, allowed)", logging.AttrComponent, "entitlements", "feature", featureKey, "limit", limit, "current", current)
+	return dec
 }
 
 // Gate reports whether a boolean capability is enabled. A missing feature or a

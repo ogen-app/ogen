@@ -200,7 +200,60 @@ type PostEvaluation struct {
 	// InputHash fingerprints the assessment inputs (rendered prompt + model)
 	// so the assess flow skips re-running the model when nothing the model
 	// sees has changed.
-	InputHash string    `bun:"input_hash,notnull"                           json:"input_hash"`
-	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt time.Time `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+	InputHash string `bun:"input_hash,notnull"                           json:"input_hash"`
+	// ContentHash and ContextHash split InputHash into the scored post text
+	// and everything else the model saw, so a read can say which side went
+	// stale and automatic runs can skip context-only changes.
+	ContentHash string `bun:"content_hash,notnull" json:"-"`
+	ContextHash string `bun:"context_hash,notnull" json:"-"`
+	// ModelRuns counts the model runs behind this row; cached reuses do not
+	// count. The quality_reviews_per_post entitlement caps it.
+	ModelRuns int `bun:"model_runs,notnull" json:"runs_used"`
+	// Trigger is what started the run that produced this row.
+	Trigger   QualityTrigger `bun:"trigger,notnull"                              json:"trigger"`
+	CreatedAt time.Time      `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt time.Time      `bun:"updated_at,notnull,default:current_timestamp" json:"updated_at"`
+}
+
+// QualityTrigger is what started a quality assessment: the author's request,
+// or one of the post lifecycle checkpoints that assess automatically.
+type QualityTrigger string
+
+const (
+	QualityTriggerManual    QualityTrigger = "manual"
+	QualityTriggerReady     QualityTrigger = "ready"
+	QualityTriggerVersion   QualityTrigger = "version"
+	QualityTriggerScheduled QualityTrigger = "scheduled"
+	QualityTriggerPublished QualityTrigger = "published"
+)
+
+// IsAuto reports whether the trigger is an automatic lifecycle checkpoint.
+func (t QualityTrigger) IsAuto() bool {
+	return t != "" && t != QualityTriggerManual
+}
+
+// QualityStaleReason says which side of an assessment's inputs changed since
+// it ran.
+type QualityStaleReason string
+
+const (
+	QualityStaleContent QualityStaleReason = "content"
+	QualityStaleContext QualityStaleReason = "context"
+	QualityStaleBoth    QualityStaleReason = "both"
+)
+
+// StaleReason compares the stored hashes with the post's current ones and
+// returns what changed, or "" when the assessment is current.
+func (e *PostEvaluation) StaleReason(contentHash, contextHash string) QualityStaleReason {
+	content := e.ContentHash != contentHash
+	context := e.ContextHash != contextHash
+	switch {
+	case content && context:
+		return QualityStaleBoth
+	case content:
+		return QualityStaleContent
+	case context:
+		return QualityStaleContext
+	}
+	return ""
 }

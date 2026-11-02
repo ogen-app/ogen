@@ -220,7 +220,9 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 
 	handlers.NewPostAssistantHandler(gk.RunPostAssistant, gk.IsAnthropicAvailable, r.postMessageRepo, rec, d.auth).Register(app)
 	handlers.NewPostActionsHandler(r.postRepo, d.svc.clone, d.svc.restore, rec, d.auth).Register(app)
-	handlers.NewPostInsightsHandler(r.postRepo, gk.AssessPostQuality, r.postEvaluationRepo, r.postAnalyticsRepo, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
+	handlers.NewPostInsightsHandler(r.postRepo, gk.AssessPostQuality, r.postEvaluationRepo, r.postAnalyticsRepo, gk.IsAnthropicAvailable, rec, d.auth).
+		WithQualityStatus(gk.PostQualityStatus).
+		Register(app)
 	handlers.NewPostVerificationHandler(r.postRepo, d.zernio.Integration.Client, r.socialAccountRepo, d.zernioProfileID, r.postAnalyticsRepo, r.postVersionRepo, d.hub, d.auth).Register(app)
 	handlers.NewPostsHandler(r.postRepo, r.postVersionRepo, r.platformRepo, r.postAttachmentRepo, d.auth, handlers.PostsOptions{
 		Brands:         r.brandRepo,
