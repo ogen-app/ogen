@@ -46,8 +46,10 @@ const requestStateKey ctxKey = iota
 type requestState struct {
 	campaignID string
 	campaign   *models.Campaign
-	repos      CampaignAssistantRepos
-	onEvent    OnEventFunc
+	// sourceAssetIDs limits the turn's sources; empty is all of them.
+	sourceAssetIDs []string
+	repos          CampaignAssistantRepos
+	onEvent        OnEventFunc
 	// instruction is the current user turn, passed to draftPost as steering for
 	// the Sonnet drafter.
 	instruction string
@@ -757,6 +759,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		WindowStart: windowStart,
 		WindowEnd:   windowEnd,
 		PostType:    in.PostType,
+		AssetIDs:    st.sourceAssetIDs,
 	}, nested)
 	if ve, ok := errors.AsType[*content_plan.ValidationError](err); ok {
 		return assistantkit.Refuse[GeneratePostsOutput](ve.Msg), nil
@@ -1160,6 +1163,9 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 	ids, err := readyCampaignAssetIDs(ctx, st.campaign, st.repos.Assets)
 	if err != nil {
 		return nil, fmt.Errorf("resolve campaign assets: %w", err)
+	}
+	if len(st.sourceAssetIDs) > 0 {
+		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(st.sourceAssetIDs, id) })
 	}
 	if len(ids) == 0 {
 		return &AskCampaignAssetsOutput{Available: true, Note: "this campaign has no ready assets to search"}, nil
