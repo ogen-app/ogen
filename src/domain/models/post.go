@@ -19,6 +19,11 @@ const PublisherZernio = "zernio"
 type PostStatus string
 
 const (
+	// PostStatusPlanned is a post with its theses drafted (a draft_thesis
+	// note) and no body yet. It shows the campaign's shape without claiming
+	// to be content: it can only become a draft, which happens on its own
+	// once a body is written.
+	PostStatusPlanned                   PostStatus = "planned"
 	PostStatusDraft                     PostStatus = "draft"
 	PostStatusReadyForPublish           PostStatus = "ready_for_publish"
 	PostStatusScheduled                 PostStatus = "scheduled"
@@ -50,6 +55,7 @@ const (
 // point: these are precisely the states a post reaches because its content
 // needed changing.
 var ValidPostTransitions = map[PostStatus][]PostStatus{
+	PostStatusPlanned:                   {PostStatusDraft},
 	PostStatusDraft:                     {PostStatusReadyForPublish},
 	PostStatusReadyForPublish:           {PostStatusScheduled, PostStatusScheduledForManualPublish, PostStatusDraft},
 	PostStatusScheduled:                 {PostStatusFailed, PostStatusPublished, PostStatusReadyForPublish, PostStatusDraft, PostStatusScheduledForManualPublish},
@@ -73,6 +79,23 @@ var ValidPostTransitions = map[PostStatus][]PostStatus{
 // nobody holds a copy yet, so nothing is locked.
 func (s PostStatus) IsSubmitted() bool {
 	return s == PostStatusScheduled || s == PostStatusPublished
+}
+
+// WithBody is the status a post of status s has once its body is content:
+// a planned post becomes a draft when it gets a body, every other status
+// stays. A blank body leaves a planned post planned.
+func (s PostStatus) WithBody(content string) PostStatus {
+	if s == PostStatusPlanned && strings.TrimSpace(content) != "" {
+		return PostStatusDraft
+	}
+	return s
+}
+
+// IsUnwritten reports whether a post may still lack a body and a target:
+// planned or draft. Only these skip the platform and post type requirement
+// and the publish gate.
+func (s PostStatus) IsUnwritten() bool {
+	return s == PostStatusPlanned || s == PostStatusDraft
 }
 
 // CanTransition reports whether moving from the current status to next is allowed.

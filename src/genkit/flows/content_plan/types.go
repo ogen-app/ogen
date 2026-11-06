@@ -23,7 +23,7 @@ type GeneratePostsRequest struct {
 }
 
 // DraftPost is both the AI output schema (via GenerateData[[]DraftPost]) and
-// the shape persisted as a Post record with status=draft.
+// the shape persisted as a Post record with status=planned (theses, no body).
 type DraftPost struct {
 	Title       string   `json:"title"                   jsonschema:"description=Short descriptive title for the post"`
 	Body        string   `json:"body"                    jsonschema:"description=A concise bullet-point thesis: 5-7 short key-point lines to expand later, NOT finished copy (max 500 chars). Stored as a draft_thesis note, not the post body."`
