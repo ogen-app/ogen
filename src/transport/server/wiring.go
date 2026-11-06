@@ -64,6 +64,7 @@ type repos struct {
 	mediaPreviewRepo         repository.MediaPreviewRepository
 	postNoteRepo             repository.PostNoteRepository
 	postIdeaRepo             repository.PostIdeaRepository
+	dismissalRepo            repository.AssistantDismissalRepository
 	ideaRepo                 repository.IdeaRepository
 	savedViewRepo            repository.SavedViewRepository
 	assetAnalysisRepo        repository.AssetAnalysisRepository
@@ -147,6 +148,7 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		mediaPreviewRepo:         repository.NewMediaPreviewRepository(db),
 		postNoteRepo:             repository.NewPostNoteRepository(db),
 		postIdeaRepo:             repository.NewPostIdeaRepository(db),
+		dismissalRepo:            repository.NewAssistantDismissalRepository(db),
 		ideaRepo:                 repository.NewIdeaRepository(db),
 		savedViewRepo:            repository.NewSavedViewRepository(db),
 		assetAnalysisRepo:        repository.NewAssetAnalysisRepository(db),
