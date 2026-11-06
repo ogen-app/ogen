@@ -87,6 +87,8 @@ func (h *IdeasHandler) Register(app *fiber.App) {
 	g.Get("/", h.List)
 	g.Post("/", h.Create)
 	g.Post("/bulk-delete", h.BulkDelete)
+	g.Get("/duplicates", h.Duplicates)
+	g.Post("/merge", h.Merge)
 	g.Patch("/:id", h.Update)
 	g.Put("/:id/verdict", h.SetVerdict)
 	g.Delete("/:id", h.Delete)
@@ -405,6 +407,114 @@ func (h *IdeasHandler) BulkDelete(c *fiber.Ctx) error {
 	}
 	h.publishIdeasDeleted(c, deleted)
 	return c.JSON(resp)
+}
+
+// duplicateIdea is one idea of a duplicate group.
+type duplicateIdea struct {
+	ID         string              `json:"id"`
+	Title      string              `json:"title"`
+	Note       string              `json:"note"`
+	Verdict    *models.IdeaVerdict `json:"verdict"     swaggertype:"string" enums:"yes,later" extensions:"x-nullable"`
+	Origin     models.IdeaOrigin   `json:"origin"      swaggertype:"string" enums:",asset_analysis,content_plan,assistant"`
+	AssetCount int                 `json:"asset_count"`
+	CreatedAt  time.Time           `json:"created_at"`
+}
+
+// duplicateGroup is a set of open ideas that read as one idea.
+type duplicateGroup struct {
+	// KeepID is the suggested idea to merge the rest into; it is listed first.
+	KeepID string `json:"keep_id"`
+	// Similarity is the weakest pair score that joined the group, 0–1.
+	Similarity float64         `json:"similarity"`
+	Ideas      []duplicateIdea `json:"ideas"`
+}
+
+// duplicatesResponse is a duplicate search.
+type duplicatesResponse struct {
+	Groups []duplicateGroup `json:"groups"`
+	// Scanned is how many open ideas were compared; Truncated says the scope
+	// holds more, and only the newest were.
+	Scanned   int  `json:"scanned"`
+	Truncated bool `json:"truncated"`
+}
+
+// Duplicates godoc
+// @Summary      Find near-duplicate ideas
+// @Description  Groups the open ideas of one scope — not turned down, no post made from them — that read as the same idea. Without `campaign_id` the scope is the workspace-wide ideas (those in no campaign); with it, that campaign's. Two ideas match when their normalised title words, or title and note words, overlap by a Jaccard index of at least 0.6 (lowercased, punctuation and common English words dropped, plurals trimmed); matches chain into groups. Groups come largest first; each lists its suggested `keep_id` first (a `yes`, else most assets, else the oldest), then the rest oldest first. At most the 500 newest open ideas are compared; `truncated` says there were more.
+// @Tags         ideas
+// @Produce      json
+// @Security     CookieAuth
+// @Param        campaign_id  query  string  false  "Campaign whose ideas to search; absent for the workspace-wide ideas"
+// @Success      200  {object}  duplicatesResponse
+// @Failure      404  {object}  map[string]string  "campaign_id names no live campaign"
+// @Router       /api/ideas/duplicates [get]
+func (h *IdeasHandler) Duplicates(c *fiber.Ctx) error {
+	var campaignID *string
+	if id := c.Query("campaign_id"); id != "" {
+		campaignID = &id
+	}
+	res, err := h.svc.Duplicates(reqCtx(c), campaignID)
+	if errors.Is(err, ideas.ErrScopeNotFound) {
+		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
+	}
+	if err != nil {
+		return err
+	}
+	resp := duplicatesResponse{Groups: make([]duplicateGroup, len(res.Groups)), Scanned: res.Scanned, Truncated: res.Truncated}
+	for i, g := range res.Groups {
+		group := duplicateGroup{KeepID: g.KeepID, Similarity: g.Similarity, Ideas: make([]duplicateIdea, len(g.Ideas))}
+		for j, d := range g.Ideas {
+			group.Ideas[j] = duplicateIdea{
+				ID: d.Idea.ID, Title: d.Idea.Title, Note: d.Idea.Note, Verdict: d.Idea.Verdict,
+				Origin: d.Idea.Origin, AssetCount: d.AssetCount, CreatedAt: d.Idea.CreatedAt,
+			}
+		}
+		resp.Groups[i] = group
+	}
+	return c.JSON(resp)
+}
+
+// mergeIdeasRequest names the idea to keep and the ideas to fold into it.
+type mergeIdeasRequest struct {
+	KeepID   string   `json:"keep_id"`
+	MergeIDs []string `json:"merge_ids"`
+}
+
+// mergeIdeasResponse is a done merge.
+type mergeIdeasResponse struct {
+	// Idea is the kept idea as it is now.
+	Idea models.Idea `json:"idea"`
+	// Deleted lists the merged ideas, now deleted.
+	Deleted []string `json:"deleted"`
+}
+
+// Merge godoc
+// @Summary      Merge near-duplicate ideas into one
+// @Description  Folds 1–50 ideas into `keep_id` in one transaction and deletes them. The kept idea keeps its title, verdict, plan and campaign; it gains every asset the merged ideas drew on (its own first), becomes `grounded` when any of them was, and gains each merged note it does not already contain (ignoring case and spacing), appended as a paragraph while it stays within the note limit. An analysed idea's note belongs to its analysis and gains nothing. Every idea must be in the kept one's campaign (or all workspace-wide), and none may have had a post made from it; any unknown id is a 404 and nothing changes. Publishes `ideas.deleted` on `entity:ideas:list` with the merged ids.
+// @Tags         ideas
+// @Accept       json
+// @Produce      json
+// @Security     CookieAuth
+// @Param        body  body  mergeIdeasRequest  true  "the idea to keep and the ideas to merge into it"
+// @Success      200  {object}  mergeIdeasResponse
+// @Failure      400  {object}  map[string]string  "bad ids, mixed campaigns, or an idea a post was made from"
+// @Failure      404  {object}  map[string]string
+// @Router       /api/ideas/merge [post]
+func (h *IdeasHandler) Merge(c *fiber.Ctx) error {
+	if _, err := bodyKeys(c, []string{"keep_id", "merge_ids"}); err != nil {
+		return err
+	}
+	var req mergeIdeasRequest
+	if err := json.Unmarshal(c.Body(), &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "keep_id must be a string and merge_ids an array of strings")
+	}
+	res, err := h.svc.Merge(reqCtx(c), req.KeepID, req.MergeIDs)
+	if err != nil {
+		return ideaError(c, err)
+	}
+	h.recordActivity(c, "idea_merged", res.Idea.ID, map[string]any{"merged": res.Deleted})
+	h.publishIdeasDeleted(c, res.Deleted)
+	return c.JSON(mergeIdeasResponse{Idea: *res.Idea, Deleted: res.Deleted})
 }
 
 // Create godoc
