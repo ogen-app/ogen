@@ -22,10 +22,13 @@ type Assignment struct {
 	ScheduledAt time.Time
 }
 
-// Eligible reports whether a post's status makes it redistributable: only
-// posts with no committed schedule (draft, ready-for-publish).
+// EligibleStatuses are the statuses a redistribution may move: posts with no
+// committed schedule.
+var EligibleStatuses = []models.PostStatus{models.PostStatusPlanned, models.PostStatusDraft, models.PostStatusReadyForPublish}
+
+// Eligible reports whether a post's status makes it redistributable.
 func Eligible(status models.PostStatus) bool {
-	return status == models.PostStatusDraft || status == models.PostStatusReadyForPublish
+	return slices.Contains(EligibleStatuses, status)
 }
 
 // Plan returns a new publish date for every eligible post. It returns nil when
