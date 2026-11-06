@@ -57,7 +57,12 @@ func toolConfirmProposal(ctx context.Context, in ConfirmProposalInput) (any, err
 		return nil, err
 	}
 	tool, args := p.Tool, p.Args
-	if in.OptionID == "" && len(p.Options) > 0 {
+	// A single way forward is what a plain "yes" means; with several, the
+	// user must pick.
+	if in.OptionID == "" && len(p.Options) == 1 {
+		in.OptionID = p.Options[0].ID
+	}
+	if in.OptionID == "" && len(p.Options) > 1 {
 		return nil, assistantkit.Refused("This offer has options: pick one.", optionIDs(p)...)
 	}
 	if in.OptionID != "" {

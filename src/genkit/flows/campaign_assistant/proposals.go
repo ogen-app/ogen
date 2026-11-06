@@ -136,8 +136,16 @@ func proposalThreshold(ctx context.Context) int {
 
 // Whole-campaign rewrites always wait for a yes.
 var (
-	contentPlanGate = assistantkit.Gate[struct{}]{
-		Summary: func(struct{}) string { return "Generate a new content plan for this campaign" },
+	contentPlanGate = assistantkit.Gate[RunContentPlanInput]{
+		Precheck: func(ctx context.Context, in RunContentPlanInput) error {
+			return needSources(ctx, "runContentPlan", in.Exploratory, func() any { in.Exploratory = true; return in })
+		},
+		Summary: func(in RunContentPlanInput) string {
+			if in.Exploratory {
+				return "Generate a new content plan for this campaign, without its sources"
+			}
+			return "Generate a new content plan for this campaign"
+		},
 	}
 	redistributeGate = assistantkit.Gate[struct{}]{
 		Precheck: func(ctx context.Context, _ struct{}) error { return checkCampaignDated(getRequestState(ctx).campaign) },
@@ -151,6 +159,9 @@ var (
 	generatePostsGate = assistantkit.Gate[GeneratePostsInput]{
 		Precheck: func(ctx context.Context, in GeneratePostsInput) error {
 			if err := precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType); err != nil {
+				return err
+			}
+			if err := needSources(ctx, "generatePosts", in.Exploratory, func() any { in.Exploratory = true; return in }); err != nil {
 				return err
 			}
 			return overGoal(ctx, "generatePosts", max(in.Count, 1), in, func(n int) any { in.Count = n; return in })
