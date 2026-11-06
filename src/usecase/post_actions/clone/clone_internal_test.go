@@ -114,3 +114,21 @@ func TestDefaultPostType(t *testing.T) {
 		})
 	}
 }
+
+func TestCloneStatus(t *testing.T) {
+	cases := []struct {
+		src     models.PostStatus
+		content string
+		want    models.PostStatus
+	}{
+		{models.PostStatusPlanned, "", models.PostStatusPlanned},
+		{models.PostStatusPlanned, "body", models.PostStatusDraft},
+		{models.PostStatusPublished, "body", models.PostStatusDraft},
+		{models.PostStatusDraft, "", models.PostStatusDraft},
+	}
+	for _, tc := range cases {
+		if got := cloneStatus(tc.src, tc.content); got != tc.want {
+			t.Errorf("clone of %s with %q = %s, want %s", tc.src, tc.content, got, tc.want)
+		}
+	}
+}
