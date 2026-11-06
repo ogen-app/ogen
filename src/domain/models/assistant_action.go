@@ -18,6 +18,11 @@ const (
 	// AssistantActionCampaignPlatforms is a change to the platforms a
 	// campaign targets and the post types it uses on them.
 	AssistantActionCampaignPlatforms AssistantActionKind = "campaign_platforms"
+	// AssistantActionCampaignAssets is a change to the assets a campaign
+	// draws on.
+	AssistantActionCampaignAssets AssistantActionKind = "campaign_assets"
+	// AssistantActionIdeaVerdict is a change to one idea's triage verdict.
+	AssistantActionIdeaVerdict AssistantActionKind = "idea_verdict"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's
