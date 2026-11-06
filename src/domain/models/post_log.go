@@ -51,6 +51,10 @@ const (
 	// source id, target platform, adaptation flag and trigger.
 	PostLogEventPostCloned PostLogEventType = "post_cloned"
 
+	// Compile: recorded on a post compiled from ideas; payload carries the
+	// idea ids.
+	PostLogEventPostCompiled PostLogEventType = "post_compiled"
+
 	// Restore: recorded when a post is rolled back to an earlier
 	// version. Payload carries the restored-from version, the new version
 	// number, whether a pre-restore safety snapshot was taken, and the
