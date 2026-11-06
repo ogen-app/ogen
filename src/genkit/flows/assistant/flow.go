@@ -15,6 +15,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
@@ -25,7 +26,7 @@ var promptFS embed.FS
 
 // Init registers the core tools and the packs', and returns the turn runner.
 // It must be called after g has the Anthropic plugin.
-func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (Runner, error) {
+func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (*Assistant, error) {
 	tools, err := defineTools(g, repos, packs)
 	if err != nil {
 		return nil, fmt.Errorf("register assistant tools: %w", err)
@@ -37,8 +38,11 @@ func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (Runner,
 	if cfg.PrewarmTools {
 		go prewarm(g, cfg, tools)
 	}
-	return func(ctx context.Context, req Request, onEvent OnEventFunc) (*Response, error) {
-		return run(ctx, g, req, cfg, repos, p, tools, onEvent)
+	return &Assistant{
+		Run: func(ctx context.Context, req Request, onEvent OnEventFunc) (*Response, error) {
+			return run(ctx, g, req, cfg, repos, p, tools, onEvent)
+		},
+		Answer: tools.answer,
 	}, nil
 }
 
@@ -131,12 +135,24 @@ type viewData struct {
 	Filter       string
 	Window       string
 	Visible      []string
+	Offers       []string
 }
 
 // renderView renders the per-turn <view> block that opens the user's message,
 // after the cache breakpoints.
-func renderView(p *prompts, v *viewresolve.Resolved, now time.Time) (string, error) {
+func renderView(p *prompts, v *viewresolve.Resolved, offers []models.AssistantProposal, now time.Time) (string, error) {
 	d := viewData{Summary: v.Summary, Today: now.Format(time.DateOnly), Filter: v.View.Filter}
+	for _, o := range offers {
+		line := o.ID + ": " + o.Summary
+		if len(o.Options) > 0 {
+			ids := make([]string, len(o.Options))
+			for i, c := range o.Options {
+				ids[i] = c.ID + " (" + c.Title + ")"
+			}
+			line += " — options: " + strings.Join(ids, ", ")
+		}
+		d.Offers = append(d.Offers, line)
+	}
 	if v.Focus != nil {
 		d.Focus = itemLabel(*v.Focus)
 	}
