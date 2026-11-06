@@ -57,6 +57,8 @@ type repos struct {
 	campaignMessageRepo      repository.CampaignAssistantMessageRepository
 	proposalRepo             repository.AssistantProposalRepository
 	actionRepo               repository.AssistantActionRepository
+	assistantMessageRepo     repository.AssistantMessageRepository
+	entityTitleRepo          repository.EntityTitleRepository
 	postAttachmentRepo       repository.PostAttachmentRepository
 	pendingUploadRepo        repository.PendingUploadRepository
 	mediaPreviewRepo         repository.MediaPreviewRepository
@@ -137,6 +139,8 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		campaignMessageRepo:      repository.NewCampaignAssistantMessageRepository(db),
 		proposalRepo:             repository.NewAssistantProposalRepository(db),
 		actionRepo:               repository.NewAssistantActionRepository(db),
+		assistantMessageRepo:     repository.NewAssistantMessageRepository(db),
+		entityTitleRepo:          repository.NewEntityTitleRepository(db),
 		postAttachmentRepo:       repository.NewPostAttachmentRepository(db),
 		pendingUploadRepo:        repository.NewPendingUploadRepository(db),
 		mediaPreviewRepo:         repository.NewMediaPreviewRepository(db),
