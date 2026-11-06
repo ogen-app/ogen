@@ -91,6 +91,7 @@ func IsValidation(err error) bool {
 		ErrEmptyTitle, ErrTitleTooLong, ErrNoteTooLong, ErrInvalidVerdict,
 		ErrRemindAtRequired, ErrRemindAtNotAllowed, ErrRemindAtOutOfRange,
 		ErrCampaignNotFound, ErrInvalidPlan, ErrPlanPhaseNeedsCampaign,
+		ErrMergeSize, ErrMergeSelf, ErrMergeScope, ErrMergeCompiled,
 	} {
 		if errors.Is(err, target) {
 			return true
