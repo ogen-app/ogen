@@ -31,6 +31,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
+	"github.com/ogen-app/ogen/src/usecase/analytics"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 	"github.com/ogen-app/ogen/src/usecase/billing"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
@@ -410,6 +411,18 @@ func (d *deps) genkitDeps() genkitDeps {
 			Actions:           r.actionRepo,
 			ProposalThreshold: d.cfg.AssistantProposalThreshold,
 			DraftMax:          d.cfg.DraftPostMax,
+			Posts:             r.postRepo,
+			Links:             r.postIdeaRepo,
+			Dismissals:        r.dismissalRepo,
+			Analytics: &analytics.Service{
+				Repo: r.postAnalyticsRepo, Followers: r.followerStatsRepo, Posts: r.postRepo, Platforms: r.platformRepo,
+				Accounts: r.socialAccountRepo, Campaigns: r.campaignRepo,
+			},
+			Brand:          r.brandRepo,
+			Activity:       d.svc.activityReport,
+			Settings:       r.settingRepo,
+			SocialAccounts: r.socialAccountRepo,
+			ProfileID:      d.zernioProfileID,
 		},
 		assistantRepos: assistant.Repos{
 			Proposals:  r.proposalRepo,
