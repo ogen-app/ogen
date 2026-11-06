@@ -127,3 +127,22 @@ func TestPersistIdea_SnapsWithinWindow(t *testing.T) {
 		t.Fatalf("targeting window: date = %s, want kept at 2026-08-12", got)
 	}
 }
+
+// "Use only these": a targeted plan draws on the chosen assets the campaign
+// holds, and on assets at all, even when the campaign doesn't by default.
+func TestLimitAssets(t *testing.T) {
+	c := &models.Campaign{ID: "c", AssetIDs: models.StringSlice{"a1", "a2", "a3"}}
+	got, err := limitAssets(c, []string{"a3", "a1", "elsewhere"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UseAssets || len(got.AssetIDs) != 2 || got.AssetIDs[0] != "a1" || got.AssetIDs[1] != "a3" {
+		t.Fatalf("limited = %+v", got)
+	}
+	if len(c.AssetIDs) != 3 || c.UseAssets {
+		t.Fatal("the campaign itself changed")
+	}
+	if _, err := limitAssets(c, []string{"elsewhere"}); err == nil {
+		t.Fatal("assets the campaign doesn't hold passed")
+	}
+}
