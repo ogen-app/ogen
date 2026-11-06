@@ -79,17 +79,20 @@ func TestPlan_PhaseAwareEvenSpread(t *testing.T) {
 func TestPlan_ExcludesCommittedAndPublished(t *testing.T) {
 	posts := []models.Post{
 		mkPost("draft", "p1", models.PostStatusDraft, day("2025-01-01")),
+		mkPost("planned", "p1", models.PostStatusPlanned, day("2025-01-01")),
 		mkPost("sched", "p1", models.PostStatusScheduled, day("2025-01-01")),
 		mkPost("manual", "p1", models.PostStatusScheduledForManualPublish, day("2025-01-01")),
 		mkPost("pub", "p1", models.PostStatusPublished, day("2025-01-01")),
 		mkPost("failed", "p1", models.PostStatusFailed, day("2025-01-01")),
 	}
 	got := planMap(threePhaseCampaign(), posts)
-	if len(got) != 1 {
-		t.Fatalf("only the draft is eligible, got %v", got)
+	if len(got) != 2 {
+		t.Fatalf("only the draft and the planned post are eligible, got %v", got)
 	}
-	if _, ok := got["draft"]; !ok {
-		t.Fatalf("draft should be redistributed, got %v", got)
+	for _, id := range []string{"draft", "planned"} {
+		if _, ok := got[id]; !ok {
+			t.Fatalf("%s should be redistributed, got %v", id, got)
+		}
 	}
 }
 
