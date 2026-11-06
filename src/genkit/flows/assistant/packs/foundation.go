@@ -1,0 +1,219 @@
+package packs
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/firebase/genkit/go/genkit"
+
+	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/assistantundo"
+	"github.com/ogen-app/ogen/src/usecase/brandfacts"
+)
+
+const foundationPackName = "foundation"
+
+// foundationPack reads the brand foundation — voices, audiences,
+// guardrails, facts — and keeps the fact ledger, each change undoable.
+func foundationPack(d Deps) assistant.Pack {
+	facts := brandfacts.New(d.Brand)
+	return assistant.Pack{
+		Name:    foundationPackName,
+		Summary: "read the brand foundation (voices, audiences, guardrails, facts) and add, correct or retire facts in the fact ledger",
+		Screens: []viewcontext.Screen{
+			"foundation", "foundation.voices", "foundation.voice", "foundation.audiences", "foundation.audience",
+			"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions",
+		},
+		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
+			get := genkit.DefineTool(g, "getBrand",
+				"Returns the brand foundation: its voices (when to use each), audiences, guardrails (may and never claim, banned words), and the facts still current.",
+				assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) }))
+			add := genkit.DefineTool(g, "addFact",
+				"Adds a fact to the ledger: a claim posts may make, with its kind and source. Returns an undo id.",
+				assistantkit.Wrap(func(ctx context.Context, in FactInput) (*FactOut, error) { return addFact(ctx, d, facts, in) }))
+			edit := genkit.DefineTool(g, "updateFact",
+				"Corrects a fact in the ledger: only the fields passed change. Returns an undo id.",
+				assistantkit.Wrap(func(ctx context.Context, in UpdateFactInput) (*FactOut, error) { return updateFact(ctx, d, facts, in) }))
+			remove := genkit.DefineTool(g, "removeFact",
+				"Removes a fact from the ledger, so no post claims it any more. Returns an undo id.",
+				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }))
+			return []assistantkit.Spec{
+				spec(foundationPackName, get, assistantkit.TierRead,
+					`Call this when the user asks about their brand — "what's our voice for LinkedIn?", "which facts can we claim?" — or before editing facts.`),
+				spec(foundationPackName, add, assistantkit.TierReversible,
+					`Call this when the user gives a fact to remember — "we have 4,000 customers", "our NPS is 62 as of March". kind is measured, documented (default), commitment or judgement; subject is us (default), problem or opportunity. Pass expiresAt (YYYY-MM-DD) for anything that goes stale. It can be undone.`),
+				spec(foundationPackName, edit, assistantkit.TierReversible,
+					`Call this when the user corrects a fact or confirms it is still true (checkedAt today). Pass factId from getBrand. It can be undone.`),
+				spec(foundationPackName, remove, assistantkit.TierReversible,
+					`Call this when the user says a fact is no longer true or shouldn't be claimed. It can be undone.`),
+			}, nil
+		},
+	}
+}
+
+// BrandOut is the foundation, compact.
+type BrandOut struct {
+	Voices     []BrandVoiceOut         `json:"voices"`
+	Audiences  []BrandAudienceOut      `json:"audiences"`
+	Guardrails *models.BrandGuardrails `json:"guardrails,omitempty"`
+	Facts      []models.BrandFact      `json:"facts"`
+}
+
+// BrandVoiceOut is a voice, compact.
+type BrandVoiceOut struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	WhenToUse string `json:"whenToUse"`
+	IsDefault bool   `json:"isDefault,omitempty"`
+}
+
+// BrandAudienceOut is an audience, compact.
+type BrandAudienceOut struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Who             string `json:"who"`
+	ScrollsPastWhen string `json:"scrollsPastWhen,omitempty"`
+	BelievesWhen    string `json:"believesWhen,omitempty"`
+}
+
+func getBrand(ctx context.Context, d Deps, facts *brandfacts.Service) (*BrandOut, error) {
+	all, err := d.Brand.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	current, err := facts.Current(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &BrandOut{Guardrails: all.Guardrails, Facts: current, Voices: []BrandVoiceOut{}, Audiences: []BrandAudienceOut{}}
+	for _, v := range all.Voices {
+		out.Voices = append(out.Voices, BrandVoiceOut{ID: v.ID, Name: v.Name, WhenToUse: v.WhenToUse, IsDefault: v.IsDefault})
+	}
+	for _, a := range all.Audiences {
+		out.Audiences = append(out.Audiences, BrandAudienceOut{ID: a.ID, Name: a.Name, Who: a.Who, ScrollsPastWhen: a.ScrollsPastWhen, BelievesWhen: a.BelievesWhen})
+	}
+	return out, nil
+}
+
+// FactInput is a new fact.
+type FactInput struct {
+	Statement string `json:"statement"`
+	Subject   string `json:"subject,omitempty"   jsonschema:"description=us (default), problem or opportunity"`
+	Kind      string `json:"kind,omitempty"      jsonschema:"description=measured, documented (default), commitment or judgement"`
+	Source    string `json:"source,omitempty"    jsonschema:"description=Where it comes from, e.g. a report or URL"`
+	CheckedAt string `json:"checkedAt,omitempty" jsonschema:"description=When it was last confirmed, YYYY-MM-DD"`
+	ExpiresAt string `json:"expiresAt,omitempty" jsonschema:"description=When it goes stale, YYYY-MM-DD"`
+}
+
+// UpdateFactInput corrects a fact; empty fields keep their value.
+type UpdateFactInput struct {
+	FactID string `json:"factId"`
+	FactInput
+	// ClearExpiry removes the expiry date.
+	ClearExpiry bool `json:"clearExpiry,omitempty"`
+}
+
+// RemoveFactInput names the fact to remove.
+type RemoveFactInput struct {
+	FactID string `json:"factId"`
+}
+
+// FactOut is the fact and the undo handle.
+type FactOut struct {
+	Fact   *models.BrandFact `json:"fact"`
+	UndoID string            `json:"undoId,omitempty"`
+}
+
+func factErr(err error) error {
+	switch {
+	case brandfacts.IsRule(err):
+		return assistantkit.Refused(err.Error())
+	case errors.Is(err, repository.ErrFactDuplicate):
+		return assistantkit.Refused("that fact is already in the ledger")
+	case errors.Is(err, repository.ErrFactLimit):
+		return assistantkit.Refused(fmt.Sprintf("the ledger holds at most %d facts; remove one first", repository.MaxBrandFacts))
+	case errors.Is(err, sql.ErrNoRows):
+		return assistantkit.Refused("that fact doesn't exist")
+	}
+	return err
+}
+
+func setDates(in FactInput, into *brandfacts.Input) error {
+	var err error
+	if in.CheckedAt != "" {
+		if into.CheckedAt, err = calendarDate(in.CheckedAt); err != nil {
+			return err
+		}
+	}
+	if in.ExpiresAt != "" {
+		if into.ExpiresAt, err = calendarDate(in.ExpiresAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func addFact(ctx context.Context, d Deps, facts *brandfacts.Service, in FactInput) (*FactOut, error) {
+	fi := brandfacts.Input{Statement: in.Statement, Subject: models.FactSubject(in.Subject), Kind: models.FactKind(in.Kind), Source: in.Source}
+	if err := setDates(in, &fi); err != nil {
+		return nil, err
+	}
+	by := actor(ctx)
+	f, err := facts.Create(ctx, fi, &by)
+	if err != nil {
+		return nil, factErr(err)
+	}
+	assistantkit.Touch(ctx, "fact", f.ID)
+	undo := recordUndo(ctx, d, models.AssistantActionBrandFact, f.ID, assistantundo.BrandFact(nil), assistantundo.BrandFact(f))
+	return &FactOut{Fact: f, UndoID: undo}, nil
+}
+
+func updateFact(ctx context.Context, d Deps, facts *brandfacts.Service, in UpdateFactInput) (*FactOut, error) {
+	cur, err := d.Brand.GetFact(ctx, strings.TrimSpace(in.FactID))
+	if err != nil {
+		return nil, factErr(err)
+	}
+	fi := brandfacts.InputOf(cur)
+	if in.Statement != "" {
+		fi.Statement = in.Statement
+	}
+	if in.Subject != "" {
+		fi.Subject = models.FactSubject(in.Subject)
+	}
+	if in.Kind != "" {
+		fi.Kind = models.FactKind(in.Kind)
+	}
+	if in.Source != "" {
+		fi.Source = in.Source
+	}
+	if in.ClearExpiry {
+		fi.ExpiresAt = nil
+	}
+	if err := setDates(in.FactInput, &fi); err != nil {
+		return nil, err
+	}
+	before, after, err := facts.Update(ctx, cur.ID, fi)
+	if err != nil {
+		return nil, factErr(err)
+	}
+	assistantkit.Touch(ctx, "fact", after.ID)
+	undo := recordUndo(ctx, d, models.AssistantActionBrandFact, after.ID, assistantundo.BrandFact(before), assistantundo.BrandFact(after))
+	return &FactOut{Fact: after, UndoID: undo}, nil
+}
+
+func removeFact(ctx context.Context, d Deps, facts *brandfacts.Service, in RemoveFactInput) (*FactOut, error) {
+	gone, err := facts.Delete(ctx, strings.TrimSpace(in.FactID))
+	if err != nil {
+		return nil, factErr(err)
+	}
+	assistantkit.Touch(ctx, "fact", gone.ID)
+	undo := recordUndo(ctx, d, models.AssistantActionBrandFact, gone.ID, assistantundo.BrandFact(gone), assistantundo.BrandFact(nil))
+	return &FactOut{Fact: gone, UndoID: undo}, nil
+}
