@@ -480,7 +480,7 @@ func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*mo
 			Set("updated_at = _data.updated_at").
 			Where("po.id = _data.id").
 			Where("po.status IN (?)", bun.List([]models.PostStatus{
-				models.PostStatusDraft, models.PostStatusReadyForPublish,
+				models.PostStatusPlanned, models.PostStatusDraft, models.PostStatusReadyForPublish,
 			})).
 			Exec(ctx)
 		if err != nil {
