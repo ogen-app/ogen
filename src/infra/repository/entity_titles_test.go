@@ -11,12 +11,12 @@ import (
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
-	"github.com/ogen-app/ogen/src/pgtest"
 )
 
 func TestEntityTitles(t *testing.T) {
-	db := pgtest.MustDB()
-	t.Cleanup(func() { _ = db.Close() })
+	// Seeded without the campaign type and platform rows the foreign keys
+	// would want.
+	db := openMigratedDB(t)
 	ctx := tenantCtx()
 	campaigns := repository.NewCampaignRepository(db, nil, nil, nil)
 	posts := repository.NewPostRepository(db)
