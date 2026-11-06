@@ -56,6 +56,10 @@ type CampaignAssistantResponse struct {
 	// PostsReview is set by the server when the checkPostsConsistency tool ran
 	// this turn (read-only). Action is then "posts_reviewed".
 	PostsReview *consistency.PostsReview `json:"postsReview,omitempty" jsonschema:"-"`
+	// Proposals is set by the server when a change was held back for the
+	// user to confirm this turn. Action is then "proposed" unless something
+	// was also written.
+	Proposals []ProposalCreatedEventPayload `json:"proposals,omitempty" jsonschema:"-"`
 }
 
 // DatesResult summarises a setCampaignDates tool invocation.
