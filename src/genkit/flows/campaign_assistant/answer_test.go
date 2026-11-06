@@ -142,7 +142,7 @@ func TestAnswerProposal_ContentPlanNotifiesOwner(t *testing.T) {
 	notes := &notifRows{}
 	h.cfg.Notifier = notify.New(notes, nil)
 	h.cfg.ContentPlan = func(context.Context, string, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
-		return &content_plan.ContentPlanResponse{Posts: make([]content_plan.DraftPost, 3)}, nil
+		return &content_plan.ContentPlanResponse{Ideas: make([]content_plan.DraftPost, 3)}, nil
 	}
 	if err := h.proposals.Create(t.Context(), &models.AssistantProposal{
 		ID: "plan", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "runContentPlan",
