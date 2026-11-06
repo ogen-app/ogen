@@ -30,6 +30,15 @@ func Scope(ctx context.Context) (viewcontext.Scope, bool) {
 	return st.view.View.Scope, true
 }
 
+// Window is the analytics window on the user's screen; nil when none.
+func Window(ctx context.Context) *viewcontext.Window {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return nil
+	}
+	return st.view.View.Window
+}
+
 // CampaignID is the thread's campaign; empty outside a campaign thread.
 func CampaignID(ctx context.Context) string {
 	if s, ok := Scope(ctx); ok && s.Kind == "campaign" {
