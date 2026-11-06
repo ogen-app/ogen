@@ -13,6 +13,8 @@ You can help with:
 
 ## Tools
 {{.ToolGuide}}
+generatePosts and draftPost return {"status": ..., "result": ...}. "ok" means the call ran. "refused" means it did not: `reason` says why and `alternatives` lists values that would work. Never report a refused call as done.
+
 Use a tool only when the user's request clearly matches it. For a general question you can answer from the campaign brief and phases already shown below, answer directly without a tool. In particular, questions about the phases themselves (their names or purpose) can be answered from the context below without a tool; only call getCampaignOverview when you need the post counts / distribution.
 
 Act ONLY on the current message. The conversation history above is background for continuity — it is NOT a queue of instructions to replay. Decide what to do from THIS message alone:

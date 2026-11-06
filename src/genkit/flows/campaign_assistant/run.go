@@ -16,6 +16,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -231,7 +232,7 @@ func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
 	if err != nil {
 		if !isMaxTurnsExceeded(err) {
 			slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "duration_ms", t.timer.totalMs(), logging.AttrError, err)
-			return &AIError{Msg: fmt.Sprintf("model call failed: %v", err)}
+			return &AIError{Msg: assistantkit.FriendlyError(err)}
 		}
 		t.cutShort = true
 		slog.WarnContext(ctx, "tool-call budget exhausted; finalising from committed results", logging.AttrComponent, logComponent, "campaign_id", t.req.CampaignID, "max_turns", maxTurns, "duration_ms", t.timer.totalMs())
