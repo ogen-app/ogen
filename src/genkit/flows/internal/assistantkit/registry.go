@@ -1,6 +1,7 @@
 package assistantkit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -79,6 +80,22 @@ func (r *Registry) Guide(packs ...string) string {
 		fmt.Fprintf(&b, "- %s: %s\n", s.Name, strings.Join(strings.Fields(s.Guide), " "))
 	}
 	return b.String()
+}
+
+// RunConfirmed runs a stored proposal: the named tool with args, as a call the
+// user confirmed, so its gate lets it through. args is the tool input as
+// stored (decoded JSON is fine); genkit converts it to the tool's input type
+// and returns the outcome as decoded JSON, ready to hand back to the model.
+func (r *Registry) RunConfirmed(ctx context.Context, name string, args any) (any, error) {
+	s, ok := r.Lookup(name)
+	if !ok {
+		return nil, fmt.Errorf("assistantkit: no tool %q to run", name)
+	}
+	tool, ok := s.Tool.(ai.Tool)
+	if !ok {
+		return nil, fmt.Errorf("assistantkit: tool %q cannot be run directly", name)
+	}
+	return tool.RunRaw(WithConfirmed(ctx), args)
 }
 
 // Actions returns the distinct response actions of the given packs in
