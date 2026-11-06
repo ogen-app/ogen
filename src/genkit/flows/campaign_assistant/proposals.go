@@ -182,28 +182,17 @@ var (
 			if err := precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType, false); err != nil {
 				return err
 			}
-			// Without sources, every way forward the user can pick goes
-			// ahead without them, so the goal choice is still offered.
-			noSources := lacksSources(ctx, in.Exploratory)
-			if noSources {
-				in.Exploratory = true
-			}
-			if err := overGoal(ctx, "generatePosts", max(in.Count, 1), in, func(n int) any { in.Count = n; return in }); err != nil {
-				if noSources {
-					return withoutSources(err)
-				}
+			if err := needSources(ctx, "generatePosts", in.Exploratory, func() any { in.Exploratory = true; return in }); err != nil {
 				return err
 			}
-			if noSources {
-				return needSources(ctx, "generatePosts", false, func() any { return in })
-			}
+			// Ideas fill no goal, so the plan is never over it.
 			return nil
 		},
 		Needs: func(ctx context.Context, in GeneratePostsInput) bool {
 			return generateTotal(ctx, in) > proposalThreshold(ctx)
 		},
 		Summary: func(in GeneratePostsInput) string {
-			return fmt.Sprintf("Add %d draft posts for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
+			return fmt.Sprintf("Plan %d ideas for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
 		},
 	}
 	draftPostGate = assistantkit.Gate[DraftPostInput]{

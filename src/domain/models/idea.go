@@ -143,6 +143,13 @@ type Idea struct {
 	// idea without one. The columns are plan_platform_id, plan_post_type,
 	// plan_phase_id and plan_target_date.
 	Plan IdeaPlan `bun:"embed:plan_" json:"plan"`
+	// GroundingMode says whether a generated idea drew on the campaign's
+	// sources; nil for ideas people wrote and for analysis ideas, whose
+	// source is SourceAsset.
+	GroundingMode *GroundingMode `bun:"grounding_mode" json:"grounding_mode" swaggertype:"string" enums:"grounded,exploratory" extensions:"x-nullable"`
+	// AssetIDs are the assets a generated idea drew on, in order; empty
+	// for the others.
+	AssetIDs []string `bun:"asset_ids,array,notnull,default:'{}'" json:"asset_ids"`
 	// SourceAsset is hydrated on reads while the asset exists.
 	SourceAsset *IdeaSourceAsset `bun:"-" json:"source_asset,omitempty"`
 	// Author is derived on reads: the writer of a manual idea, nil for an

@@ -64,7 +64,6 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 		platformRepo := repository.NewPlatformRepository(db)
 		campaignTypeRepo := repository.NewCampaignTypeRepository(db)
 		campaignRepo := repository.NewCampaignRepository(db, tagRepo, platformRepo, campaignTypeRepo)
-		postRepo := repository.NewPostRepository(db)
 
 		// Seed user (separate from the non-batched suite to avoid email
 		// collisions when both suites run in the same process).
@@ -138,13 +137,13 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			Assets:    assetRepo,
 			Chunks:    chunksRepo,
 			Platforms: platformRepo,
-			Posts:     postRepo,
+			Ideas:     repository.NewIdeaRepository(db),
 		}
 		Expect(content_plan.InitContentPlan(g, flowCfg, repos)).To(Succeed())
 	})
 
 	AfterAll(func() {
-		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("campaigns").Where("id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("users").Where("id = ?", userID).Exec(ctx)
 		_, err := db.NewDelete().TableExpr("accounts").Where("id = ?", userID).Exec(ctx)
@@ -162,10 +161,10 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			// than the per-batch ask — validate against a tolerance band
 			// rather than exact equality. Two batches of ~5 each gives a
 			// reasonable window of [6..14].
-			Expect(len(resp.Posts)).To(BeNumerically(">=", 6),
-				"expected at least 6 posts across two batches, got %d", len(resp.Posts))
-			Expect(len(resp.Posts)).To(BeNumerically("<=", 14),
-				"expected at most 14 posts across two batches, got %d", len(resp.Posts))
+			Expect(len(resp.Ideas)).To(BeNumerically(">=", 6),
+				"expected at least 6 posts across two batches, got %d", len(resp.Ideas))
+			Expect(len(resp.Ideas)).To(BeNumerically("<=", 14),
+				"expected at most 14 posts across two batches, got %d", len(resp.Ideas))
 
 			// Awareness campaign type's phase IDs (see migration
 			// 20260414000001_create_campaign_types.up.sql).
@@ -175,7 +174,7 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			endStr := time.Now().UTC().Truncate(24 * time.Hour).Add(21 * 24 * time.Hour).Format("2006-01-02")
 
 			seenPhases := map[string]bool{}
-			for _, p := range resp.Posts {
+			for _, p := range resp.Ideas {
 				Expect(p.Title).NotTo(BeEmpty())
 				Expect(p.Body).NotTo(BeEmpty())
 				Expect(p.PlatformID).To(Equal(platformID))
@@ -208,17 +207,17 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 		// interleaved by completion time.
 		It("emits post events with unique global indices across batches", func() {
 			// Clean up so the run starts fresh.
-			_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+			_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 
 			var (
 				mu     sync.Mutex
-				events []content_plan.PostEventPayload
+				events []content_plan.IdeaEventPayload
 			)
 			onEvent := content_plan.OnEventFunc(func(name content_plan.SSEEventKind, data any) {
-				if name != content_plan.SSEEventPost {
+				if name != content_plan.SSEEventIdea {
 					return
 				}
-				if p, ok := data.(content_plan.PostEventPayload); ok {
+				if p, ok := data.(content_plan.IdeaEventPayload); ok {
 					// onEvent fires from per-batch goroutines under
 					// runBatchesParallel; the production wrapper
 					// serialises it, but we add a defensive lock here
@@ -237,8 +236,8 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			// Every post in the final response must have arrived as a
 			// post event — each batch streams or falls back to blocking,
 			// either path emits.
-			Expect(events).To(HaveLen(len(resp.Posts)),
-				"streamed event count must match resp.Posts len; got %d events for %d posts", len(events), len(resp.Posts))
+			Expect(events).To(HaveLen(len(resp.Ideas)),
+				"streamed event count must match resp.Ideas len; got %d events for %d posts", len(events), len(resp.Ideas))
 
 			// Indices must be unique. Sort and walk to detect dupes.
 			idxs := make([]int, len(events))
@@ -263,21 +262,21 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 		// that the row exists. Verify that:
 		//   1. Every emitted event has a non-empty ID.
 		//   2. The DB has exactly one row per emitted ID.
-		//   3. The persisted row count matches resp.Posts (the run's
+		//   3. The persisted row count matches resp.Ideas (the run's
 		//      authoritative result is also the persisted set — there's
 		//      no separate aggregate persist step any more).
 		It("persists each post before its event fires (per-CON-66)", func() {
-			_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+			_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 
 			var (
 				mu     sync.Mutex
-				events []content_plan.PostEventPayload
+				events []content_plan.IdeaEventPayload
 			)
 			onEvent := content_plan.OnEventFunc(func(name content_plan.SSEEventKind, data any) {
-				if name != content_plan.SSEEventPost {
+				if name != content_plan.SSEEventIdea {
 					return
 				}
-				if p, ok := data.(content_plan.PostEventPayload); ok {
+				if p, ok := data.(content_plan.IdeaEventPayload); ok {
 					mu.Lock()
 					events = append(events, p)
 					mu.Unlock()
@@ -292,19 +291,18 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			// Every event must carry a persisted row ID.
 			for _, e := range events {
 				Expect(e.ID).NotTo(BeEmpty(),
-					"PostEventPayload.ID must be set under CON-66; missing for index %d (%q)", e.Index, e.Post.Title)
+					"PostEventPayload.ID must be set under CON-66; missing for index %d (%q)", e.Index, e.Idea.Title)
 			}
 
-			// DB row count = streamed event count = resp.Posts length.
-			postRepo := repository.NewPostRepository(db)
-			persisted, err := postRepo.ListByCampaign(ctx, campaignID)
+			// DB row count = streamed event count = resp.Ideas length.
+			persisted, err := repository.NewIdeaRepository(db).List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(persisted)).To(Equal(len(events)),
 				"DB row count (%d) must match emitted post-event count (%d) — CON-66 promise is per-event persistence",
 				len(persisted), len(events))
-			Expect(len(persisted)).To(Equal(len(resp.Posts)),
-				"DB row count (%d) must match resp.Posts len (%d) — flow now returns the persisted set",
-				len(persisted), len(resp.Posts))
+			Expect(len(persisted)).To(Equal(len(resp.Ideas)),
+				"DB row count (%d) must match resp.Ideas len (%d) — flow now returns the persisted set",
+				len(persisted), len(resp.Ideas))
 
 			// Every emitted ID must reference a real row in the DB.
 			gotIDs := map[string]bool{}
@@ -313,7 +311,7 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			}
 			for _, e := range events {
 				Expect(gotIDs[e.ID]).To(BeTrue(),
-					"emitted ID %q (slot %d, %q) is not present in the posts table", e.ID, e.Index, e.Post.Title)
+					"emitted ID %q (slot %d, %q) is not present in the ideas table", e.ID, e.Index, e.Idea.Title)
 			}
 		})
 	})
