@@ -8,10 +8,10 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/ogen-app/ogen/src/domain/brandcheck"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/usecase/brandfacts"
 )
 
 // Facts ledger: per-row CRUD under /api/brand/facts, and the
@@ -47,6 +47,8 @@ func sessionUserID(c *fiber.Ctx) *string {
 
 func factError(err error) error {
 	switch {
+	case brandfacts.IsRule(err):
+		return ruleError(err)
 	case errors.Is(err, repository.ErrFactDuplicate):
 		return fiber.NewError(fiber.StatusConflict, repository.ErrFactDuplicate.Error())
 	case errors.Is(err, repository.ErrFactLimit):
@@ -70,28 +72,26 @@ func parseFactDate(field string, raw *string) (*models.CalendarDate, error) {
 	return &d, nil
 }
 
-// factFromRequest validates the body into the editable fields of a fact.
-func factFromRequest(req *brandFactRequest) (*models.BrandFact, error) {
-	f := &models.BrandFact{
-		Statement: strings.TrimSpace(req.Statement),
+// factInput reads the body into a fact's editable fields; the ledger's rules
+// run in brandfacts.
+func factInput(req *brandFactRequest) (brandfacts.Input, error) {
+	in := brandfacts.Input{
+		Statement: req.Statement,
 		Subject:   models.FactSubject(req.Subject),
 		Kind:      models.FactKind(req.Kind),
-		Source:    strings.TrimSpace(req.Source),
-	}
-	if err := ruleError(brandcheck.Fact(f)); err != nil {
-		return nil, err
+		Source:    req.Source,
 	}
 	var err error
-	if f.AddedAt, err = parseFactDate("addedAt", req.AddedAt); err != nil {
-		return nil, err
+	if in.AddedAt, err = parseFactDate("addedAt", req.AddedAt); err != nil {
+		return in, err
 	}
-	if f.CheckedAt, err = parseFactDate("checkedAt", req.CheckedAt); err != nil {
-		return nil, err
+	if in.CheckedAt, err = parseFactDate("checkedAt", req.CheckedAt); err != nil {
+		return in, err
 	}
-	if f.ExpiresAt, err = parseFactDate("expiresAt", req.ExpiresAt); err != nil {
-		return nil, err
+	if in.ExpiresAt, err = parseFactDate("expiresAt", req.ExpiresAt); err != nil {
+		return in, err
 	}
-	return f, nil
+	return in, nil
 }
 
 func decodeFactRequest(c *fiber.Ctx) (*brandFactRequest, error) {
@@ -119,27 +119,12 @@ func (h *BrandHandler) CreateFact(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	now := brandNow()
-	if req.Subject == "" {
-		req.Subject = string(models.FactSubjectUs)
-	}
-	if req.Kind == "" {
-		req.Kind = string(models.FactKindDocumented)
-	}
-	if req.AddedAt == nil {
-		today := models.CalendarDateOf(now).String()
-		req.AddedAt = &today
-	}
-	f, err := factFromRequest(req)
+	in, err := factInput(req)
 	if err != nil {
 		return err
 	}
-	if f.ID, err = models.NewID(); err != nil {
-		return err
-	}
-	f.CreatedBy = sessionUserID(c)
-	f.CreatedAt, f.UpdatedAt = now, now
-	if err := h.repo.CreateFact(reqCtx(c), f); err != nil {
+	f, err := brandfacts.New(h.repo).Create(reqCtx(c), in, sessionUserID(c))
+	if err != nil {
 		return factError(err)
 	}
 	h.recordActivity(c, "brand_fact_created",
@@ -172,13 +157,11 @@ func (h *BrandHandler) UpdateFact(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	f, err := factFromRequest(req)
+	in, err := factInput(req)
 	if err != nil {
 		return err
 	}
-	f.ID = c.Params("id")
-	f.UpdatedAt = brandNow()
-	before, err := h.repo.UpdateFact(reqCtx(c), f)
+	before, f, err := brandfacts.New(h.repo).Update(reqCtx(c), c.Params("id"), in)
 	if err != nil {
 		return factError(err)
 	}
