@@ -30,7 +30,7 @@ type CampaignAssistantRequest struct {
 // ran this turn.
 type CampaignAssistantResponse struct {
 	Explanation string `json:"explanation"          jsonschema:"description=Conversational reply to the user"`
-	Action      string `json:"action"               jsonschema:"description=answered for a grounded reply; content_plan_generated when runContentPlan ran; brief_enriched when enrichBrief ran; posts_generated when generatePosts ran; post_drafted when draftPost ran; dates_updated when setCampaignDates ran; posts_redistributed when redistributePosts ran; brief_reviewed when checkBrief ran; posts_reviewed when checkPostsConsistency ran; declined when the request is out of scope,enum=answered,enum=content_plan_generated,enum=brief_enriched,enum=posts_generated,enum=post_drafted,enum=dates_updated,enum=posts_redistributed,enum=brief_reviewed,enum=posts_reviewed,enum=declined"`
+	Action      string `json:"action"               jsonschema:"description=answered for a grounded reply; content_plan_generated when runContentPlan ran; brief_enriched when enrichBrief ran; posts_generated when generatePosts ran; post_drafted when draftPost ran; dates_updated when setCampaignDates ran; posts_redistributed when redistributePosts ran; brief_reviewed when checkBrief ran; posts_reviewed when checkPostsConsistency ran; proposed when a requested change is waiting for the user's confirmation; declined when the request is out of scope,enum=answered,enum=proposed,enum=content_plan_generated,enum=brief_enriched,enum=posts_generated,enum=post_drafted,enum=dates_updated,enum=posts_redistributed,enum=brief_reviewed,enum=posts_reviewed,enum=declined"`
 	// ContentPlan is set by the server when the runContentPlan tool created
 	// draft posts this turn. Action is then "content_plan_generated".
 	ContentPlan *ContentPlanResult `json:"contentPlan,omitempty" jsonschema:"-"`
@@ -126,6 +126,9 @@ type CampaignAssistantRepos struct {
 	// Brands resolves the campaign's brand voice/audience/guardrails into the
 	// context block. nil falls back to the legacy tone prose.
 	Brands repository.BrandRepository
+	// Proposals stores proposal-tier calls held back for the user to confirm.
+	// nil fails every proposal-tier call closed instead of running it.
+	Proposals repository.AssistantProposalRepository
 }
 
 // CampaignAssistantFlowConfig holds static settings for the flow.
@@ -180,6 +183,9 @@ type CampaignAssistantFlowConfig struct {
 	// MaxDraftPosts caps how many posts one draftPost call may create.
 	// 0 falls back to 5.
 	MaxDraftPosts int
+	// ProposalThreshold is the largest batch generatePosts / draftPost create
+	// without asking; a bigger request becomes a proposal. 0 falls back to 3.
+	ProposalThreshold int
 	// CheckBrief / CheckPosts back the read-only consistency review tools.
 	// nil disables the corresponding tool.
 	CheckBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
@@ -246,9 +252,21 @@ const (
 	SSEEventCheckPostsStarted  SSEEventKind = "check_posts_started"
 	SSEEventCheckPostsComplete SSEEventKind = "check_posts_complete"
 
+	// SSEEventProposalCreated reports a call held back for the user to
+	// confirm; the UI renders it as a proposal card.
+	SSEEventProposalCreated SSEEventKind = "proposal_created"
+
 	SSEEventComplete SSEEventKind = "complete"
 	SSEEventError    SSEEventKind = "error"
 )
+
+// ProposalCreatedEventPayload describes a held-back call.
+type ProposalCreatedEventPayload struct {
+	ID        string `json:"id"`
+	Tool      string `json:"tool"`
+	Summary   string `json:"summary"`
+	ExpiresAt string `json:"expiresAt"`
+}
 
 // DeltaEventPayload carries a fragment of a streamed string value.
 type DeltaEventPayload struct {
