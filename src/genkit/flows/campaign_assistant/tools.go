@@ -89,6 +89,10 @@ type requestState struct {
 	// this turn (tool and args) to its offer's id.
 	proposeMu    sync.Mutex
 	proposedKeys map[string]string
+	// resolved lists the offers the user answered this turn.
+	resolved []ProposalResolvedEventPayload
+	// registry runs an accepted offer's tool by name.
+	registry *assistantkit.Registry
 
 	// Results set by tools, read by the runner after generation. Only the tool
 	// that won the heavy-action reservation writes a heavy result, so these need
@@ -298,6 +302,8 @@ type toolSet struct {
 	checkBrief            ai.ToolRef
 	checkPostsConsistency ai.ToolRef
 	askCampaignAssets     ai.ToolRef
+	confirmProposal       ai.ToolRef
+	dismissProposal       ai.ToolRef
 
 	reg *assistantkit.Registry
 }
@@ -412,6 +418,17 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		}),
 	)
 
+	confirmProposal := genkit.DefineTool(g, "confirmProposal",
+		"Runs an offer the user accepted, exactly as it was proposed, and returns that work's result. "+
+			"Pass the offer's id from \"Waiting for the user's answer\", and optionId when the user picked one of its options.",
+		confirmProposalTool,
+	)
+
+	dismissProposal := genkit.DefineTool(g, "dismissProposal",
+		"Withdraws an offer the user turned down. Pass the offer's id from \"Waiting for the user's answer\".",
+		assistantkit.Wrap(toolDismissProposal),
+	)
+
 	t := &toolSet{
 		runContentPlan:        runContentPlan,
 		enrichBrief:           enrichBrief,
@@ -424,6 +441,8 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		checkBrief:            checkBrief,
 		checkPostsConsistency: checkPostsConsistency,
 		askCampaignAssets:     askCampaignAssets,
+		confirmProposal:       confirmProposal,
+		dismissProposal:       dismissProposal,
 	}
 	reg, err := newToolRegistry(t)
 	if err != nil {
