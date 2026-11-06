@@ -20,6 +20,9 @@ type GeneratePostsRequest struct {
 	WindowStart string   `json:"windowStart"` // ISO YYYY-MM-DD (inclusive)
 	WindowEnd   string   `json:"windowEnd"`   // ISO YYYY-MM-DD (inclusive)
 	PostType    string   `json:"postType"`    // optional post-type slug; empty = platform default(s)
+	// AssetIDs limits the sources to these of the campaign's assets ("use
+	// only these"); empty uses all of them.
+	AssetIDs []string `json:"assetIds,omitempty"`
 }
 
 // DraftPost is both the AI output schema (via GenerateData[[]DraftPost]) and
