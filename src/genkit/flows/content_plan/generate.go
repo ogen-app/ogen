@@ -518,14 +518,15 @@ func persistOne(ctx context.Context, dp *DraftPost, campaign *models.Campaign, w
 	}
 
 	row := &models.Post{
-		ID:                  id,
-		CampaignID:          campaign.ID,
-		PlatformID:          dp.PlatformID,
-		PlatformPostType:    dp.ContentType,
-		Title:               dp.Title,
-		Content:             "",
-		MediaURLs:           models.StringSlice{},
-		Status:              models.PostStatusDraft,
+		ID:               id,
+		CampaignID:       campaign.ID,
+		PlatformID:       dp.PlatformID,
+		PlatformPostType: dp.ContentType,
+		Title:            dp.Title,
+		Content:          "",
+		MediaURLs:        models.StringSlice{},
+		// Theses without a body: planned until someone writes it.
+		Status:              models.PostStatusPlanned,
 		CTAType:             models.CTATypeNone,
 		CTAUrl:              "",
 		TargetAudienceNotes: dp.ToneNotes,
