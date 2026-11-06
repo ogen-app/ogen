@@ -97,6 +97,31 @@ func TestPersistOne_DraftThesisNote(t *testing.T) {
 	}
 }
 
+// Each post records whether it drew on the campaign's sources, so the label
+// outlives the chat turn that made it.
+func TestPersistOne_RecordsGrounding(t *testing.T) {
+	cases := map[string]struct {
+		used []string
+		want models.GroundingMode
+	}{
+		"drew on an asset": {[]string{"asset-1"}, models.GroundingGrounded},
+		"used none":        {nil, models.GroundingExploratory},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			postRepo := &stubPostRepo{}
+			campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
+			dp := DraftPost{Title: "T", PlatformID: "linkedin", ContentType: "article"}
+			if _, err := persistOne(t.Context(), &dp, campaign, nil, nil, postRepo, nil, tc.used); err != nil {
+				t.Fatal(err)
+			}
+			if g := postRepo.created.GroundingMode; g == nil || *g != tc.want {
+				t.Fatalf("grounding = %v, want %s", g, tc.want)
+			}
+		})
+	}
+}
+
 // An empty thesis creates no note (but the post is still created).
 func TestPersistOne_EmptyThesisNoNote(t *testing.T) {
 	postRepo := &stubPostRepo{}
