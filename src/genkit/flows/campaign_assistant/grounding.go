@@ -2,21 +2,20 @@ package campaign_assistant
 
 import (
 	"context"
-	"errors"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 )
 
-// groundingOf labels generated posts by the offered sources they cite. A
-// source the model was given but no post drew on does not count, and an
+// groundingOf labels generated ideas by the offered sources they cite. A
+// source the model was given but no idea drew on does not count, and an
 // exploratory run is exploratory whatever it returned.
-func groundingOf(exploratory bool, offered []AssetRef, posts []content_plan.DraftPost) assistantkit.Grounding {
+func groundingOf(exploratory bool, offered []AssetRef, ideas []content_plan.DraftPost) assistantkit.Grounding {
 	if exploratory {
 		return assistantkit.GroundingFrom(nil)
 	}
 	cited := make(map[string]bool)
-	for _, p := range posts {
+	for _, p := range ideas {
 		for _, id := range p.AssetRefs {
 			cited[id] = true
 		}
@@ -51,21 +50,6 @@ func needSources(ctx context.Context, tool string, explicit bool, exploratory fu
 		noSourcesReason+" Add a document or a link on the campaign's Assets tab, or go ahead without them.",
 		assistantkit.Option{ID: "exploratory", Title: "Go ahead without sources (marked not grounded)", Tool: tool, Args: exploratory()},
 	)
-}
-
-// withoutSources marks another conflict's options as going ahead without
-// sources, so one answer settles both. The options' calls must already carry
-// the exploratory flag.
-func withoutSources(err error) error {
-	c, ok := errors.AsType[*assistantkit.ConflictError](err)
-	if !ok {
-		return err
-	}
-	c.Reason = noSourcesReason + " " + c.Reason
-	for i := range c.Options {
-		c.Options[i].Title += ", without sources (marked not grounded)"
-	}
-	return c
 }
 
 // explore returns ctx for a generation run: an exploratory call must not draw
