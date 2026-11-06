@@ -26,6 +26,22 @@ type ProposalSink interface {
 	Propose(ctx context.Context, p Proposal) (id string, err error)
 }
 
+// ConflictError is a precheck's answer when the request clashes with the
+// current state but there are ways forward: the gate stores them as a
+// proposal with options, and the user picks one.
+type ConflictError struct {
+	Reason  string
+	Options []Option
+}
+
+func (e *ConflictError) Error() string { return e.Reason }
+
+// Conflicted returns a ConflictError offering options. Each option's Tool and
+// Args are what picking it runs.
+func Conflicted(reason string, options ...Option) error {
+	return &ConflictError{Reason: reason, Options: options}
+}
+
 // ErrNoProposalSink is returned when a gated tool runs without a sink in its
 // context: the call can neither run unconfirmed nor be stored.
 var ErrNoProposalSink = errors.New("assistantkit: proposal-tier tool called without a proposal sink")
@@ -77,28 +93,42 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 			return next(ctx, in)
 		}
 		if gate.Precheck != nil {
-			if err := gate.Precheck(ctx, in); err != nil {
-				if r, ok := errors.AsType[*Refusal](err); ok {
-					return Refuse[Out](r.Reason, r.Alternatives...), nil
-				}
+			err := gate.Precheck(ctx, in)
+			if r, ok := errors.AsType[*Refusal](err); ok {
+				return Refuse[Out](r.Reason, r.Alternatives...), nil
+			}
+			if c, ok := errors.AsType[*ConflictError](err); ok {
+				return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: c.Reason, Options: c.Options}, StatusConflict)
+			}
+			if err != nil {
 				return Outcome[Out]{}, err
 			}
 		}
 		if gate.Needs != nil && !gate.Needs(ctx, in) {
 			return next(ctx, in)
 		}
-		sink, _ := ctx.Value(sinkKey{}).(ProposalSink)
-		if sink == nil {
-			return Outcome[Out]{}, ErrNoProposalSink
-		}
 		summary := tool
 		if gate.Summary != nil {
 			summary = gate.Summary(in)
 		}
-		id, err := sink.Propose(ctx, Proposal{Tool: tool, Args: in, Summary: summary})
-		if err != nil {
-			return Outcome[Out]{}, err
-		}
-		return Outcome[Out]{Status: StatusProposed, ProposalID: id, Summary: summary}, nil
+		return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: summary}, StatusProposed)
 	}
+}
+
+// propose stores p and tells the model what is waiting: a plain proposal to
+// confirm, or a conflict whose options the user picks from.
+func propose[Out any](ctx context.Context, p Proposal, status Status) (Outcome[Out], error) {
+	sink, _ := ctx.Value(sinkKey{}).(ProposalSink)
+	if sink == nil {
+		return Outcome[Out]{}, ErrNoProposalSink
+	}
+	id, err := sink.Propose(ctx, p)
+	if err != nil {
+		return Outcome[Out]{}, err
+	}
+	out := Outcome[Out]{Status: status, ProposalID: id, Summary: p.Summary, Options: p.Options}
+	if status == StatusConflict {
+		out.Reason = p.Summary
+	}
+	return out, nil
 }
