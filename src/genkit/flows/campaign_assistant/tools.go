@@ -302,9 +302,9 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+
 			"Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many posts were created.",
-		func(ctx *ai.ToolContext, _ struct{}) (*RunContentPlanOutput, error) {
+		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RunContentPlanOutput, error) {
 			return toolRunContentPlan(ctx)
-		},
+		}, contentPlanInvalid),
 	)
 
 	enrichBrief := genkit.DefineTool(g, "enrichBrief",
@@ -312,24 +312,24 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			"An existing brief is edited in place — its subject, voice and tone guidelines are kept; an empty brief is drafted from the campaign's title and type. "+
 			"Call this when the user asks to enrich, improve, refine, or rewrite the brief. Pass the user's steering as instruction when they give any. "+
 			"Returns the applied brief: compare it with the brief in your context before describing what changed.",
-		func(ctx *ai.ToolContext, in EnrichBriefInput) (*EnrichBriefOutput, error) {
+		assistantkit.Wrap(func(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutput, error) {
 			return toolEnrichBrief(ctx, in)
-		},
+		}, enrichBriefInvalid),
 	)
 
 	listCampaignPosts := genkit.DefineTool(g, "listCampaignPosts",
 		"Lists the campaign's existing posts with their id, title, platform, and status. Use it to answer questions about what's already in the campaign. Takes no arguments.",
-		func(ctx *ai.ToolContext, _ struct{}) ([]CampaignPostInfo, error) {
+		assistantkit.Wrap(func(ctx context.Context, _ struct{}) ([]CampaignPostInfo, error) {
 			return toolListCampaignPosts(ctx)
-		},
+		}),
 	)
 
 	getCampaignOverview := genkit.DefineTool(g, "getCampaignOverview",
 		"Returns a quick overview of the campaign: its phases (with per-phase post counts) and how the content is distributed by status, platform, and content type. "+
 			"Use it for questions like 'give me a quick overview', 'how is the content distributed', 'which phase has the most/least content', or 'what's the state of this campaign'. Takes no arguments.",
-		func(ctx *ai.ToolContext, _ struct{}) (*overview.Overview, error) {
+		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*overview.Overview, error) {
 			return toolGetCampaignOverview(ctx)
-		},
+		}),
 	)
 
 	generatePosts := genkit.DefineTool(g, "generatePosts",
@@ -356,34 +356,34 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		"Changes the campaign's start and/or end date. Call this when the user asks to move, shift, extend, or shorten the campaign's dates (e.g. 'move the campaign end to the beginning of July', 'push the start to next Monday'). "+
 			"Resolve any relative phrasing into ISO YYYY-MM-DD dates using today's date shown in the context; pass only the field(s) that change. The change is saved automatically. "+
 			"If the reply reports posts now outside the new range, offer to redistribute them (do not redistribute unless the user asks).",
-		func(ctx *ai.ToolContext, in SetCampaignDatesInput) (*SetCampaignDatesOutput, error) {
+		assistantkit.Wrap(func(ctx context.Context, in SetCampaignDatesInput) (*SetCampaignDatesOutput, error) {
 			return toolSetCampaignDates(ctx, in)
-		},
+		}),
 	)
 
 	redistributePosts := genkit.DefineTool(g, "redistributePosts",
 		"Redistributes the publish dates of the campaign's non-published posts (drafts and ready-for-publish) evenly across the campaign timeline, phase by phase. "+
 			"Call this when the user asks to redistribute, re-spread, rebalance, or re-schedule the drafts / unpublished posts. It never moves already-scheduled or published posts. Takes no arguments.",
-		func(ctx *ai.ToolContext, _ struct{}) (*RedistributePostsOutput, error) {
+		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RedistributePostsOutput, error) {
 			return toolRedistributePosts(ctx)
-		},
+		}),
 	)
 
 	checkBrief := genkit.DefineTool(g, "checkBrief",
 		"Reviews the campaign brief for internal consistency and completeness (goal alignment, persona, key messages, tone) and returns specific findings with suggestions. "+
 			"Read-only — it does NOT change the brief. Call it when the user asks to check/review the brief or whether it's consistent. Takes no arguments. "+
 			"After reporting the findings, OFFER to improve the brief with enrichBrief when there are issues, but do NOT call enrichBrief in the same turn unless the user asks.",
-		func(ctx *ai.ToolContext, _ struct{}) (*consistency.BriefReview, error) {
+		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*consistency.BriefReview, error) {
 			return toolCheckBrief(ctx)
-		},
+		}, consistencyInvalid),
 	)
 
 	checkPostsConsistency := genkit.DefineTool(g, "checkPostsConsistency",
 		"Checks whether the campaign's non-published posts follow the brief (persona, key messages, tone) and returns per-post findings for the ones that drift. "+
 			"Read-only — it does NOT change any post. Call it when the user asks whether the posts match/follow the brief. Only the first N posts are checked (report the cap when it applies).",
-		func(ctx *ai.ToolContext, in CheckPostsInput) (*consistency.PostsReview, error) {
+		assistantkit.Wrap(func(ctx context.Context, in CheckPostsInput) (*consistency.PostsReview, error) {
 			return toolCheckPostsConsistency(ctx, in)
-		},
+		}, consistencyInvalid),
 	)
 
 	askCampaignAssets := genkit.DefineTool(g, "askCampaignAssets",
@@ -391,9 +391,9 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			"Call this when the user asks what an attached asset says or wants facts pulled from the campaign's assets — e.g. \"what does the pricing PDF say about enterprise tiers?\". "+
 			"Read-only: it returns the most relevant excerpts (with asset title + page) for you to answer from; it does NOT generate posts. "+
 			"If the result reports available:false or no excerpts, tell the user you couldn't search / find matching asset content.",
-		func(ctx *ai.ToolContext, in AskCampaignAssetsInput) (*AskCampaignAssetsOutput, error) {
+		assistantkit.Wrap(func(ctx context.Context, in AskCampaignAssetsInput) (*AskCampaignAssetsOutput, error) {
 			return toolAskCampaignAssets(ctx, in)
-		},
+		}),
 	)
 
 	t := &toolSet{
@@ -995,7 +995,7 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 	st := getRequestState(ctx)
 	query := strings.TrimSpace(in.Query)
 	if query == "" {
-		return nil, fmt.Errorf("ask a question about the campaign's assets")
+		return nil, assistantkit.Refused("ask a question about the campaign's assets")
 	}
 	if !embedopts.Available(st.embedder) || st.repos.Chunks == nil || st.repos.Assets == nil {
 		return &AskCampaignAssetsOutput{Available: false, Note: "asset search is unavailable right now"}, nil
@@ -1225,31 +1225,31 @@ func toolSetCampaignDates(ctx context.Context, in SetCampaignDatesInput) (*SetCa
 	const iso = "2006-01-02"
 
 	if strings.TrimSpace(in.StartDate) == "" && strings.TrimSpace(in.EndDate) == "" {
-		return nil, fmt.Errorf("give a new start or end date")
+		return nil, assistantkit.Refused("give a new start or end date")
 	}
 	start, end := c.StartDate, c.EndDate
 	if s := strings.TrimSpace(in.StartDate); s != "" {
 		t, err := time.Parse(iso, s)
 		if err != nil {
-			return nil, fmt.Errorf("startDate must be an ISO date (YYYY-MM-DD)")
+			return nil, assistantkit.Refused("startDate must be an ISO date (YYYY-MM-DD)")
 		}
 		start = &t
 	}
 	if e := strings.TrimSpace(in.EndDate); e != "" {
 		t, err := time.Parse(iso, e)
 		if err != nil {
-			return nil, fmt.Errorf("endDate must be an ISO date (YYYY-MM-DD)")
+			return nil, assistantkit.Refused("endDate must be an ISO date (YYYY-MM-DD)")
 		}
 		end = &t
 	}
 	if start == nil || end == nil {
-		return nil, fmt.Errorf("the campaign needs both a start and an end date — please provide both")
+		return nil, assistantkit.Refused("the campaign needs both a start and an end date — please provide both")
 	}
 	if !start.Before(*end) {
-		return nil, fmt.Errorf("the start date must be before the end date")
+		return nil, assistantkit.Refused("the start date must be before the end date")
 	}
 	if end.Sub(*start) < 24*time.Hour {
-		return nil, fmt.Errorf("the campaign must span at least one day")
+		return nil, assistantkit.Refused("the campaign must span at least one day")
 	}
 
 	// Count eligible (draft/ready) posts that will fall outside the new range.
@@ -1286,7 +1286,7 @@ func toolRedistributePosts(ctx context.Context) (*RedistributePostsOutput, error
 	st := getRequestState(ctx)
 	c := st.campaign
 	if c.StartDate == nil || c.EndDate == nil {
-		return nil, fmt.Errorf("set the campaign's start and end dates first, then I can redistribute the posts")
+		return nil, assistantkit.Refused("set the campaign's start and end dates first, then I can redistribute the posts")
 	}
 
 	posts, err := st.repos.Posts.ListByCampaign(ctx, st.campaignID)
