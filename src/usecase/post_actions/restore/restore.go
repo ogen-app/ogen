@@ -52,6 +52,7 @@ const (
 // is blocked. Failed / NotPublished are editable again per
 // the state machine, so a restore there is allowed.
 var editableStatuses = map[models.PostStatus]bool{
+	models.PostStatusPlanned:         true,
 	models.PostStatusDraft:           true,
 	models.PostStatusReadyForPublish: true,
 	models.PostStatusFailed:          true,
@@ -137,6 +138,8 @@ func (s *Service) Restore(ctx context.Context, postID string, opts Options) (*Re
 
 	preRestoreContent := post.Content
 	post.Content = target.Content
+	// Restoring a body onto a planned post makes it a draft.
+	post.Status = post.Status.WithBody(target.Content)
 	post.UpdatedAt = time.Now().UTC()
 
 	appended, err := s.appendVersions(ctx, post, preRestoreContent, opts)

@@ -50,7 +50,7 @@ func TestBuildOverview_DistributionAndReconciliation(t *testing.T) {
 	posts := []models.Post{
 		{ID: "a", CampaignTypePhaseID: new("p1"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
 		{ID: "b", CampaignTypePhaseID: new("p1"), PlatformID: "pl2", PlatformPostType: "article", Status: models.PostStatusPublished},
-		{ID: "c", CampaignTypePhaseID: new("p2"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusDraft},
+		{ID: "c", CampaignTypePhaseID: new("p2"), PlatformID: "pl1", PlatformPostType: "text-post", Status: models.PostStatusPlanned},
 		{ID: "d", CampaignTypePhaseID: nil, PlatformID: "", PlatformPostType: "", Status: models.PostStatusScheduled},
 	}
 	names := map[string]string{"pl1": "LinkedIn", "pl2": "X"}
@@ -78,13 +78,13 @@ func TestBuildOverview_DistributionAndReconciliation(t *testing.T) {
 		t.Fatalf("unassigned = %d, want 1", ov.Distribution.UnassignedPhasePostCount)
 	}
 
-	// byStatus emits in the fixed lifecycle order: draft, scheduled, published.
+	// byStatus emits in the fixed lifecycle order: planned, draft, scheduled, published.
 	gotStatusOrder := []string{}
 	for _, b := range ov.Distribution.ByStatus {
 		gotStatusOrder = append(gotStatusOrder, b.Key)
 	}
-	wantStatusOrder := []string{"draft", "scheduled", "published"}
-	if len(gotStatusOrder) != 3 {
+	wantStatusOrder := []string{"planned", "draft", "scheduled", "published"}
+	if len(gotStatusOrder) != 4 {
 		t.Fatalf("byStatus = %+v", ov.Distribution.ByStatus)
 	}
 	for i := range wantStatusOrder {
@@ -92,7 +92,7 @@ func TestBuildOverview_DistributionAndReconciliation(t *testing.T) {
 			t.Fatalf("byStatus order = %v, want %v", gotStatusOrder, wantStatusOrder)
 		}
 	}
-	if m := bucketMap(ov.Distribution.ByStatus); m["draft"] != 2 || m["scheduled"] != 1 || m["published"] != 1 {
+	if m := bucketMap(ov.Distribution.ByStatus); m["planned"] != 1 || m["draft"] != 1 || m["scheduled"] != 1 || m["published"] != 1 {
 		t.Fatalf("byStatus counts = %+v", m)
 	}
 
