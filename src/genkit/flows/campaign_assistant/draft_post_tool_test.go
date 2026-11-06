@@ -8,6 +8,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -111,8 +112,8 @@ func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Note != noDraftSourceNote {
-		t.Fatalf("note = %q, want the no-source note", out.Note)
+	if out.Status != assistantkit.StatusRefused || out.Reason != noDraftSourceNote {
+		t.Fatalf("out = %+v, want a refusal with the no-source reason", out)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("flow must not run without source, got %d calls", len(calls))
@@ -140,15 +141,15 @@ func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.PostCount != 5 || !out.Clamped {
-		t.Fatalf("out = {PostCount:%d Clamped:%v}, want {5 true}", out.PostCount, out.Clamped)
+	if !out.Succeeded() || out.Result.PostCount != 5 || !out.Result.Clamped {
+		t.Fatalf("out = %+v, want 5 posts, clamped", out)
 	}
 	if len(calls) != 2 {
 		t.Fatalf("flow calls = %d, want 2", len(calls))
 	}
 	// The platforms are drafted concurrently; the budget follows platform order.
 	countByPlatform := map[string]int{calls[0].PlatformID: calls[0].Count, calls[1].PlatformID: calls[1].Count}
-	if got := []int{countByPlatform[out.PlatformIDs[0]], countByPlatform[out.PlatformIDs[1]]}; got[0] != 3 || got[1] != 2 {
+	if got := []int{countByPlatform[out.Result.PlatformIDs[0]], countByPlatform[out.Result.PlatformIDs[1]]}; got[0] != 3 || got[1] != 2 {
 		t.Fatalf("flow call counts in platform order = %v, want [3 2]", got)
 	}
 	// Source + steering are threaded to the flow.
@@ -160,8 +161,8 @@ func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	}
 }
 
-// CON-215 parity: a user-correctable input (past date, non-target platform)
-// fails soft — zero posts + a warning, no flow call, draftPostResult unset, and
+// A user-correctable input (past date, non-target platform) fails soft — a
+// refusal with a reason, no flow call, draftPostResult unset, and
 // the heavy-action slot left free — so the turn stays conversational instead of
 // aborting with a raw "model call failed".
 func TestToolDraftPost_SoftFailsUserInput(t *testing.T) {
@@ -177,8 +178,8 @@ func TestToolDraftPost_SoftFailsUserInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("past date must not error: %v", err)
 	}
-	if out.PostCount != 0 || len(out.Warnings) == 0 {
-		t.Fatalf("past date: out = {PostCount:%d Warnings:%v}, want zero posts + a warning", out.PostCount, out.Warnings)
+	if out.Status != assistantkit.StatusRefused || out.Reason == "" {
+		t.Fatalf("past date: out = %+v, want a refusal with a reason", out)
 	}
 	if len(calls) != 0 || st.draftPostResult != nil {
 		t.Fatal("past date must not run the flow or set draftPostResult")
@@ -195,7 +196,7 @@ func TestToolDraftPost_SoftFailsUserInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("non-target platform must not error: %v", err)
 	}
-	if out.PostCount != 0 || len(out.Warnings) == 0 || len(calls) != 0 {
+	if out.Status != assistantkit.StatusRefused || out.Reason == "" || len(calls) != 0 {
 		t.Fatalf("non-target platform: out = %+v, calls = %d", out, len(calls))
 	}
 }
@@ -230,8 +231,8 @@ func TestToolDraftPost_HeavyLatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Note != heavySkipNote {
-		t.Fatalf("note = %q, want heavy skip note", out.Note)
+	if !out.Succeeded() || out.Result.Note != heavySkipNote {
+		t.Fatalf("out = %+v, want the heavy skip note", out)
 	}
 	if len(calls) != 0 {
 		t.Fatal("flow must not run once a heavy action was reserved")
