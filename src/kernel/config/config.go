@@ -177,9 +177,9 @@ type Config struct {
 	// tool so it stays an incremental add rather than a full re-plan.
 	GeneratePostsMax int `envconfig:"GENERATE_POSTS_MAX" default:"10"`
 
-	// DraftPostMax caps the Campaign Assistant's draftPost tool — how
-	// many finished, content-first drafts one "create a post from this research"
-	// call may produce (total across platforms). Smaller than GeneratePostsMax:
+	// DraftPostMax caps how many finished, content-first drafts one request
+	// may produce (total across platforms): the Campaign Assistant's
+	// draftPost tool, and POST /api/ideas/draft. Smaller than GeneratePostsMax:
 	// each draft is full-length copy, not a terse thesis.
 	DraftPostMax int `envconfig:"DRAFT_POST_MAX" default:"5"`
 
