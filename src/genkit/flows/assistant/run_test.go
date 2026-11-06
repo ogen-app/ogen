@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,45 @@ func (m *memMessages) ListRecent(_ context.Context, kind models.AssistantScopeKi
 	return out, nil
 }
 
+// memViews reloads references from a fixed set of titles.
+type memViews struct {
+	byKind map[viewcontext.EntityKind]map[string]string
+}
+
+func (v memViews) Items(_ context.Context, kind viewcontext.EntityKind, ids []string) ([]viewresolve.Item, error) {
+	var out []viewresolve.Item
+	for _, id := range ids {
+		if t, ok := v.byKind[kind][id]; ok {
+			out = append(out, viewresolve.Item{Kind: kind, ID: id, Title: t})
+		}
+	}
+	return out, nil
+}
+
+func (memViews) CheckFilter(_ viewcontext.EntityKind, filter string) error {
+	if strings.Contains(filter, "nope") {
+		return &viewcontext.InvalidError{Field: "filter", Reason: "unknown pile"}
+	}
+	return nil
+}
+
+type memSavedViews map[string]*models.SavedView
+
+func (m memSavedViews) GetByID(_ context.Context, id string) (*models.SavedView, error) {
+	if v, ok := m[id]; ok {
+		return v, nil
+	}
+	return nil, sql.ErrNoRows
+}
+
+func testViews() memViews {
+	return memViews{byKind: map[viewcontext.EntityKind]map[string]string{
+		viewcontext.KindCampaign: {"c1": "Spring launch", "c2": "Autumn"},
+		viewcontext.KindAsset:    {"a1": "Q3 deck"},
+		viewcontext.KindIdea:     {"i1": "Pricing myths", "i2": "Founder story"},
+	}}
+}
+
 type harness struct {
 	t     *testing.T
 	g     *genkit.Genkit
@@ -59,12 +99,21 @@ type harness struct {
 	repos Repos
 	msgs  *memMessages
 	n     int
+	// payloads are the last turn's event payloads, in order.
+	payloads []any
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T, packs ...Pack) *harness {
 	t.Helper()
 	g := genkit.Init(t.Context())
-	tools, err := defineTools(g)
+	msgs := &memMessages{}
+	user := "u1"
+	repos := Repos{Messages: msgs, Views: testViews(), SavedViews: memSavedViews{
+		"sv1":     {ID: "sv1", Surface: "ideas", Name: "Undecided", Shared: true},
+		"private": {ID: "private", Surface: "assets", Name: "Mine", CreatedBy: &user},
+		"theirs":  {ID: "theirs", Surface: "assets", Name: "Theirs", CreatedBy: new("u2")},
+	}}
+	tools, err := defineTools(g, repos, packs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +121,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs := &memMessages{}
-	return &harness{t: t, g: g, tools: tools, p: p, repos: Repos{Messages: msgs}, msgs: msgs}
+	return &harness{t: t, g: g, tools: tools, p: p, repos: repos, msgs: msgs}
 }
 
 // turn runs one message from view against a scripted model and returns the
@@ -84,9 +132,13 @@ func (h *harness) turn(view *viewresolve.Resolved, instruction string, script ..
 	m := fakemodel.Define(h.g, fmt.Sprint("turn", h.n), script...)
 	fakemodel.Route(h.t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
 	var events []SSEEventKind
+	h.payloads = nil
 	ctx := context.WithValue(h.t.Context(), logging.UserIDKey, "u1")
 	resp, err := run(ctx, h.g, Request{Instruction: instruction, View: view}, FlowConfig{}, h.repos, h.p, h.tools,
-		func(kind SSEEventKind, _ any) { events = append(events, kind) })
+		func(kind SSEEventKind, data any) {
+			events = append(events, kind)
+			h.payloads = append(h.payloads, data)
+		})
 	return resp, events, m, err
 }
 

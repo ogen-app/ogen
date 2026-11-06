@@ -64,9 +64,15 @@ type assistantTurnRequest struct {
 // @Description  references only; the server reloads them in the caller's workspace and drops ids that no
 // @Description  longer exist. The scope names the thread: the conversation continues across the screens of
 // @Description  one workspace, campaign or post. A malformed viewContext is a 400 that names the field; a
-// @Description  campaign or post scope that doesn't exist is a 404. Events: "explanation_delta" {"delta"},
-// @Description  "tool_call", "tool_result", then "complete" with {"explanation","action"}. "error" carries
-// @Description  {"message":"...","code":<http_code>}.
+// @Description  campaign or post scope that doesn't exist is a 404.
+// @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
+// @Description  and "tool_result" {"name","ref","ok"} for each tool; "pack_loaded" {"pack"} when the turn restarted
+// @Description  with another domain's tools (deltas before it are void); one "ui_action" per change to the screen,
+// @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view, "screen", "campaignId",
+// @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId"}, every reference already checked;
+// @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs"}, where
+// @Description  touched names what changed (no id: every entity of the kind) for the client to refresh. "error"
+// @Description  carries {"message":"...","code":<http_code>} and ends the stream.
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream

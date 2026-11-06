@@ -156,31 +156,29 @@ func (r *Resolver) Resolve(ctx context.Context, v *viewcontext.ViewContext) (*Re
 // syntax, confined to the thread's campaign. It returns at most MaxSelection
 // ids and the size of the whole match.
 func (r *Resolver) matching(ctx context.Context, v *viewcontext.ViewContext) ([]string, int, error) {
-	params, err := url.ParseQuery(v.Filter)
-	if err != nil {
-		return nil, 0, &viewcontext.InvalidError{Field: "filter", Reason: "not a query string"}
-	}
 	var campaign string
 	if v.Scope.Kind == models.AssistantScopeCampaign {
 		campaign = v.Scope.ID
 	}
-	switch v.Selection.Kind {
-	case viewcontext.KindIdea:
-		q, err := ideas.ParseQuery(params, r.now())
-		if err != nil {
-			return nil, 0, filterError(err)
+	q, err := r.parseFilter(v.Selection.Kind, v.Filter)
+	if err != nil {
+		if errors.Is(err, errNoListQuery) {
+			return nil, 0, &viewcontext.InvalidError{
+				Field:  "selection.allMatching",
+				Reason: fmt.Sprintf("not supported for %s; send ids", v.Selection.Kind),
+			}
 		}
+		return nil, 0, err
+	}
+	switch q := q.(type) {
+	case models.IdeaQuery:
 		q.ScopeCampaign = campaign
 		ids, total, err := r.ideas.QueryIDs(ctx, q, MaxSelection)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, ErrScopeNotFound
 		}
 		return ids, total, err
-	case viewcontext.KindAsset:
-		q, err := assets.ParseQuery(params, r.now())
-		if err != nil {
-			return nil, 0, filterError(err)
-		}
+	case models.AssetQuery:
 		q.ScopeCampaign = campaign
 		ids, err := r.assets.QueryIDs(ctx, q)
 		if err != nil {
@@ -188,10 +186,54 @@ func (r *Resolver) matching(ctx context.Context, v *viewcontext.ViewContext) ([]
 		}
 		return ids[:min(len(ids), MaxSelection)], len(ids), nil
 	}
-	return nil, 0, &viewcontext.InvalidError{
-		Field:  "selection.allMatching",
-		Reason: fmt.Sprintf("not supported for %s; send ids", v.Selection.Kind),
+	return nil, 0, errNoListQuery
+}
+
+// errNoListQuery is a kind without a list query syntax.
+var errNoListQuery = errors.New("no list query for this kind")
+
+// parseFilter reads filter in the list syntax of kind: a models.IdeaQuery or
+// a models.AssetQuery. A filter the list rejects is a
+// *viewcontext.InvalidError on "filter".
+func (r *Resolver) parseFilter(kind viewcontext.EntityKind, filter string) (any, error) {
+	params, err := url.ParseQuery(filter)
+	if err != nil {
+		return nil, &viewcontext.InvalidError{Field: "filter", Reason: "not a query string"}
 	}
+	switch kind {
+	case viewcontext.KindIdea:
+		q, err := ideas.ParseQuery(params, r.now())
+		if err != nil {
+			return nil, filterError(err)
+		}
+		return q, nil
+	case viewcontext.KindAsset:
+		q, err := assets.ParseQuery(params, r.now())
+		if err != nil {
+			return nil, filterError(err)
+		}
+		return q, nil
+	}
+	return nil, errNoListQuery
+}
+
+// CheckFilter reports whether the list of kind accepts filter: nil, a
+// *viewcontext.InvalidError naming what it rejects, or an error for a kind
+// with no filter syntax.
+func (r *Resolver) CheckFilter(kind viewcontext.EntityKind, filter string) error {
+	_, err := r.parseFilter(kind, filter)
+	return err
+}
+
+// Items reloads ids of kind in the caller's tenant, in order, dropping those
+// that no longer exist. A kind without titles passes its ids through.
+func (r *Resolver) Items(ctx context.Context, kind viewcontext.EntityKind, ids []string) ([]Item, error) {
+	refs := newRefs()
+	refs.add(kind, ids...)
+	if err := refs.load(ctx, r.titles); err != nil {
+		return nil, err
+	}
+	return refs.items(kind, ids), nil
 }
 
 func filterError(err error) error {
