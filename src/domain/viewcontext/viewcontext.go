@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -42,6 +43,44 @@ var screens = []Screen{
 	"campaign.overview", "campaign.strategy", "campaign.list", "campaign.ideas", "campaign.assets",
 	"campaign.asset", "campaign.analytics", "campaign.calendar", "campaign.activity", "campaign.settings",
 	"post",
+}
+
+// Screens lists every screen, in a stable order.
+func Screens() []Screen { return slices.Clone(screens) }
+
+// Valid reports whether s names a screen of the app.
+func (s Screen) Valid() bool { return slices.Contains(screens, s) }
+
+// InCampaign reports whether s is a campaign-level screen, which needs a
+// campaign to show.
+func (s Screen) InCampaign() bool { return strings.HasPrefix(string(s), "campaign.") }
+
+// detailKinds names the entity each detail screen shows.
+var detailKinds = map[Screen]EntityKind{
+	"asset": KindAsset, "campaign.asset": KindAsset,
+	"post": KindPost, "analytics.post": KindPost,
+	"foundation.voice": KindVoice, "foundation.audience": KindAudience,
+	"foundation.series_item": KindSeries,
+}
+
+// DetailKind is the kind of entity a detail screen shows; false for a screen
+// that shows no single entity.
+func (s Screen) DetailKind() (EntityKind, bool) {
+	k, ok := detailKinds[s]
+	return k, ok
+}
+
+// listKinds names what each filterable list screen lists.
+var listKinds = map[Screen]EntityKind{
+	"ideas": KindIdea, "campaign.ideas": KindIdea,
+	"assets": KindAsset, "campaign.assets": KindAsset,
+}
+
+// ListKind is the kind a filterable list screen lists; false for any other
+// screen.
+func (s Screen) ListKind() (EntityKind, bool) {
+	k, ok := listKinds[s]
+	return k, ok
 }
 
 // EntityKind names what a reference points at.
@@ -149,7 +188,7 @@ func (v *ViewContext) Validate() error {
 	if v.Version != Version {
 		return invalid("version", "unsupported version %d, want %d", v.Version, Version)
 	}
-	if !slices.Contains(screens, v.Screen) {
+	if !v.Screen.Valid() {
 		return invalid("screen", "unknown screen %q", v.Screen)
 	}
 	if err := v.Scope.validate(); err != nil {
