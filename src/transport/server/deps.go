@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/uptrace/bun"
 
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
@@ -390,6 +391,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Actions:   r.actionRepo,
 			Platforms: r.platformRepo,
 		},
+		assistantRepos: assistant.Repos{Messages: r.assistantMessageRepo},
 		draftPostRepos: draft_post.DraftPostRepos{
 			Campaigns: r.campaignRepo,
 			Platforms: r.platformRepo,
