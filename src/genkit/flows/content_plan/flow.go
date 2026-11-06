@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"slices"
 	"text/template"
 	"time"
 
@@ -396,6 +397,13 @@ func runGeneratePosts(
 		return nil, &ValidationError{Msg: "windowEnd must be on or after windowStart"}
 	}
 
+	if len(req.AssetIDs) > 0 {
+		limited, err := limitAssets(campaign, req.AssetIDs)
+		if err != nil {
+			return nil, err
+		}
+		campaign = limited
+	}
 	assets, assetWarnings, err := resolveAssets(ctx, campaign, cfg, repos)
 	if err != nil {
 		return nil, err
@@ -432,4 +440,22 @@ func runGeneratePosts(
 		Warnings:    warnings,
 		UsedAssets:  assetRefsOf(assets),
 	}, nil
+}
+
+// limitAssets returns a copy of campaign drawing only on ids of its assets:
+// the user's "use only these". Asking for sources means using them, so the
+// copy uses assets even when the campaign doesn't by default.
+func limitAssets(campaign *models.Campaign, ids []string) (*models.Campaign, error) {
+	keep := models.StringSlice{}
+	for _, id := range campaign.AssetIDs {
+		if slices.Contains(ids, id) {
+			keep = append(keep, id)
+		}
+	}
+	if len(keep) == 0 {
+		return nil, &ValidationError{Msg: "none of those assets are attached to this campaign"}
+	}
+	c := *campaign
+	c.AssetIDs, c.UseAssets = keep, true
+	return &c, nil
 }
