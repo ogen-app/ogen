@@ -9,6 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -90,6 +91,8 @@ type GeneratedPostsResult struct {
 	// UsedAssets lists the campaign assets that informed the posts;
 	// empty when none were used.
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
+	// Grounding says whether the posts came from the campaign's sources.
+	Grounding assistantkit.Grounding `json:"grounding"`
 }
 
 // DraftPostResult summarises a draftPost tool invocation.
@@ -110,6 +113,8 @@ type ContentPlanResult struct {
 	Warnings  []string `json:"warnings,omitempty"`
 	// UsedAssets lists the campaign assets that informed the plan.
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
+	// Grounding says whether the posts came from the campaign's sources.
+	Grounding assistantkit.Grounding `json:"grounding"`
 }
 
 // AssetRef is the id+title of a campaign asset that informed generation.
@@ -332,8 +337,9 @@ type ContentPlanStartedEventPayload struct{}
 
 // ContentPlanCompleteEventPayload is emitted once the content plan is persisted.
 type ContentPlanCompleteEventPayload struct {
-	PostCount int      `json:"postCount"`
-	Warnings  []string `json:"warnings,omitempty"`
+	PostCount int                    `json:"postCount"`
+	Warnings  []string               `json:"warnings,omitempty"`
+	Grounding assistantkit.Grounding `json:"grounding"`
 }
 
 // EnrichBriefStartedEventPayload is emitted when the enrichBrief tool begins.
@@ -356,8 +362,9 @@ type GeneratePostsStartedEventPayload struct {
 
 // GeneratePostsCompleteEventPayload is emitted once targeted posts are persisted.
 type GeneratePostsCompleteEventPayload struct {
-	PostCount int      `json:"postCount"`
-	Warnings  []string `json:"warnings,omitempty"`
+	PostCount int                    `json:"postCount"`
+	Warnings  []string               `json:"warnings,omitempty"`
+	Grounding assistantkit.Grounding `json:"grounding"`
 }
 
 // DraftPostStartedEventPayload is emitted when the draftPost tool begins.
