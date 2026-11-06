@@ -525,6 +525,7 @@ func persistOne(ctx context.Context, dp *DraftPost, campaign *models.Campaign, w
 		CTAUrl:              "",
 		TargetAudienceNotes: dp.ToneNotes,
 		UsedAssetIDs:        models.StringSlice(usedAssetIDs),
+		GroundingMode:       models.GroundingFor(len(usedAssetIDs)),
 		CampaignTypePhaseID: phaseID,
 		ScheduledAt:         scheduledAt,
 		BrandVoiceID:        dp.BrandVoiceID, // Provenance of the voice it was written in

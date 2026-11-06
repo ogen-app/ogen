@@ -218,10 +218,14 @@ type Post struct {
 	// resolution falls back to the campaign's, then the workspace default /
 	// legacy prose. content_plan/draft_post stamp the voice; both are overridable
 	// via PUT /api/posts/:id or the targeted /:id/brand. FK ON DELETE SET NULL.
-	BrandVoiceID        *string     `bun:"brand_voice_id"                               json:"brand_voice_id"`
-	BrandAudienceID     *string     `bun:"brand_audience_id"                            json:"brand_audience_id"`
-	UsedAssetIDs        StringSlice `bun:"used_asset_ids,notnull,type:jsonb"           json:"used_asset_ids"`
-	CampaignTypePhaseID *string     `bun:"campaign_type_phase_id"                       json:"campaign_type_phase_id"`
+	BrandVoiceID    *string     `bun:"brand_voice_id"                               json:"brand_voice_id"`
+	BrandAudienceID *string     `bun:"brand_audience_id"                            json:"brand_audience_id"`
+	UsedAssetIDs    StringSlice `bun:"used_asset_ids,notnull,type:jsonb"           json:"used_asset_ids"`
+	// GroundingMode records whether generation drew on the campaign's own
+	// sources. Nil for posts written by hand, or generated before it was
+	// recorded.
+	GroundingMode       *GroundingMode `bun:"grounding_mode"                         json:"grounding_mode" swaggertype:"string" enums:"grounded,exploratory" extensions:"x-nullable"`
+	CampaignTypePhaseID *string        `bun:"campaign_type_phase_id"                 json:"campaign_type_phase_id"`
 	// ContentFormat is the post's rhetorical shape, independent of its
 	// container (PlatformPostType). Nil means no format, the normal case.
 	ContentFormat *ContentFormat `bun:"content_format"                               json:"content_format"`
@@ -335,4 +339,24 @@ func urlEndsAt(text string, i int) bool {
 		}
 	}
 	return true
+}
+
+// GroundingMode says whether generated content came from the user's own
+// material.
+type GroundingMode string
+
+const (
+	// GroundingGrounded content drew on the campaign's sources.
+	GroundingGrounded GroundingMode = "grounded"
+	// GroundingExploratory content came from general knowledge.
+	GroundingExploratory GroundingMode = "exploratory"
+)
+
+// GroundingFor labels content by the sources it used.
+func GroundingFor(usedSources int) *GroundingMode {
+	m := GroundingExploratory
+	if usedSources > 0 {
+		m = GroundingGrounded
+	}
+	return &m
 }
