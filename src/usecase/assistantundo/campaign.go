@@ -3,6 +3,7 @@ package assistantundo
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -24,6 +25,17 @@ func CampaignBrief(c *models.Campaign) models.JSONMap {
 		"keyMessages":    c.KeyMessages,
 		"toneGuidelines": c.ToneGuidelines,
 	}
+}
+
+// CampaignPlatforms is the snapshot a platforms change is logged and compared
+// with: the target platforms as they read back from JSON, so a logged snapshot
+// and a fresh one compare equal.
+func CampaignPlatforms(c *models.Campaign) models.JSONMap {
+	var v any
+	if b, err := json.Marshal(c.TargetPlatforms); err == nil {
+		_ = json.Unmarshal(b, &v)
+	}
+	return models.JSONMap{"platforms": v}
 }
 
 func timeValue(t *time.Time) any {
@@ -89,6 +101,29 @@ func (u campaignDates) Undo(ctx context.Context, a *models.AssistantAction) erro
 		return fmt.Errorf("restore end date: %w", err)
 	}
 	c.StartDate, c.EndDate = start, end
+	c.UpdatedAt = time.Now().UTC()
+	return u.campaigns.Update(ctx, c)
+}
+
+type campaignPlatforms struct{ campaigns repository.CampaignRepository }
+
+func (u campaignPlatforms) Undo(ctx context.Context, a *models.AssistantAction) error {
+	c, err := loadCampaign(ctx, u.campaigns, a.EntityID)
+	if err != nil {
+		return err
+	}
+	if !same(CampaignPlatforms(c), a.After) {
+		return ErrChangedSince
+	}
+	b, err := json.Marshal(a.Before["platforms"])
+	if err != nil {
+		return fmt.Errorf("restore platforms: %w", err)
+	}
+	var restored models.CampaignPlatforms
+	if err := json.Unmarshal(b, &restored); err != nil {
+		return fmt.Errorf("restore platforms: %w", err)
+	}
+	c.TargetPlatforms = restored
 	c.UpdatedAt = time.Now().UTC()
 	return u.campaigns.Update(ctx, c)
 }

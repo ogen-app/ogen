@@ -151,6 +151,23 @@ func TestUndo_RefusesWhenChangedSince(t *testing.T) {
 	}
 }
 
+func TestUndo_CampaignPlatforms(t *testing.T) {
+	actions := &memActions{}
+	campaigns := &memCampaigns{c: &models.Campaign{ID: "c1", TargetPlatforms: models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}}}
+	svc := assistantundo.New(actions, campaigns)
+	id := logChange(t, actions, campaigns, models.AssistantActionCampaignPlatforms, assistantundo.CampaignPlatforms, func(c *models.Campaign) {
+		c.TargetPlatforms = append(c.TargetPlatforms, models.CampaignPlatform{ID: "pl2"})
+	})
+
+	if _, err := svc.Undo(t.Context(), id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	tp := campaigns.c.TargetPlatforms
+	if len(tp) != 1 || tp[0].ID != "pl1" || len(tp[0].PostTypes) != 1 || tp[0].PostTypes[0] != "article" {
+		t.Fatalf("restored platforms = %+v", tp)
+	}
+}
+
 func TestUndo_NotFound(t *testing.T) {
 	svc := assistantundo.New(&memActions{}, &memCampaigns{})
 	if _, err := svc.Undo(t.Context(), "nope", "user-1"); !errors.Is(err, assistantundo.ErrNotFound) {
