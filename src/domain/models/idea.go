@@ -38,7 +38,29 @@ const (
 	// IdeaOriginAssetAnalysis marks an idea distilled from an asset by its
 	// analysis; AssetAnalysisID points at that analysis while it exists.
 	IdeaOriginAssetAnalysis IdeaOrigin = "asset_analysis"
+	// IdeaOriginContentPlan marks an idea a content plan proposed, usually
+	// with a plan (platform, post type, phase, date).
+	IdeaOriginContentPlan IdeaOrigin = "content_plan"
+	// IdeaOriginAssistant marks an idea the assistant wrote down for the user.
+	IdeaOriginAssistant IdeaOrigin = "assistant"
 )
+
+// IdeaPlan is where an idea would land as a post. Every field is a
+// suggestion, re-checked when the post is made; all nil means no plan.
+type IdeaPlan struct {
+	PlatformID *string `bun:"platform_id" json:"platform_id" extensions:"x-nullable"`
+	PostType   *string `bun:"post_type"   json:"post_type"   extensions:"x-nullable"`
+	// PhaseID is a campaign type phase of the idea's campaign.
+	PhaseID *string `bun:"phase_id" json:"phase_id" extensions:"x-nullable"`
+	// TargetDate is the day it would publish; a dated idea shows on the
+	// calendar as a slot, never as a post.
+	TargetDate *CalendarDate `bun:"target_date,type:date" json:"target_date" swaggertype:"string" example:"2026-09-01" extensions:"x-nullable"`
+}
+
+// IsZero reports whether the plan sets nothing.
+func (p IdeaPlan) IsZero() bool {
+	return p.PlatformID == nil && p.PostType == nil && p.PhaseID == nil && p.TargetDate == nil
+}
 
 // IdeaSourceAsset is the asset an analysis idea came from, with what the
 // idea's source line draws.
@@ -94,7 +116,7 @@ type Idea struct {
 	// Origin and AssetAnalysisID trace an analysis idea back to its source.
 	// AssetAnalysisID goes null when that analysis is removed; a triaged idea
 	// outlives it.
-	Origin          IdeaOrigin `bun:"origin,notnull,default:''"                    json:"origin"            swaggertype:"string" enums:",asset_analysis"`
+	Origin          IdeaOrigin `bun:"origin,notnull,default:''"                    json:"origin"            swaggertype:"string" enums:",asset_analysis,content_plan,assistant"`
 	AssetAnalysisID *string    `bun:"asset_analysis_id"                            json:"asset_analysis_id" extensions:"x-nullable"`
 	// DistillRunID names the distill run an idea came from; nil for the
 	// analysis's own batch. Re-running the analysis keeps these ideas.
@@ -117,6 +139,10 @@ type Idea struct {
 	Angle     *string  `bun:"angle"         json:"angle"     extensions:"x-nullable"`
 	Rationale *string  `bun:"rationale"     json:"rationale" extensions:"x-nullable"`
 	Sources   []string `bun:"sources,array" json:"sources"   extensions:"x-nullable"`
+	// Plan is where the idea would land as a post; every field nil for an
+	// idea without one. The columns are plan_platform_id, plan_post_type,
+	// plan_phase_id and plan_target_date.
+	Plan IdeaPlan `bun:"embed:plan_" json:"plan"`
 	// SourceAsset is hydrated on reads while the asset exists.
 	SourceAsset *IdeaSourceAsset `bun:"-" json:"source_asset,omitempty"`
 	// Author is derived on reads: the writer of a manual idea, nil for an
