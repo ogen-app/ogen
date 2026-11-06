@@ -3709,7 +3709,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Sends an instruction to the Campaign Assistant and streams progress via Server-Sent Events.\n\"explanation_delta\" carries {\"delta\":\"...\"} fragments as the reply streams. \"tool_call\"/\"tool_result\"\nsignal tool invocations. When a content plan runs, \"content_plan_started\", \"content_plan_post\"\n(etc.) and \"content_plan_complete\" are forwarded; when the brief is enriched, \"enrich_brief_started\",\nthe per-field \"enrich_brief_*_delta\" events and \"enrich_brief_complete\" are forwarded. A final\n\"complete\" event carries the CampaignAssistantResponse. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}.\nAvailable to any user in the campaign's tenant.",
+                "description": "Sends an instruction to the Campaign Assistant and streams progress via Server-Sent Events.\n\"explanation_delta\" carries {\"delta\":\"...\"} fragments as the reply streams. \"tool_call\"/\"tool_result\"\nsignal tool invocations. When a content plan runs, \"content_plan_started\", \"content_plan_idea\"\n(etc.) and \"content_plan_complete\" are forwarded; when the brief is enriched, \"enrich_brief_started\",\nthe per-field \"enrich_brief_*_delta\" events and \"enrich_brief_complete\" are forwarded. A final\n\"complete\" event carries the CampaignAssistantResponse. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}.\nAvailable to any user in the campaign's tenant.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3924,14 +3924,14 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Calls the AI content plan flow and streams progress via Server-Sent Events.\nEach step emits an SSE event of type \"step\" with payload {\"step\":\"\u003cname\u003e\",\"status\":\"done\"}.\nOn success a final \"complete\" event carries the full ContentPlanResponse payload.\nOn failure an \"error\" event carries {\"message\":\"\u003ctext\u003e\",\"code\":\u003chttp_code\u003e}.",
+                "description": "Calls the AI content plan flow and streams progress via Server-Sent Events. The plan is saved\nas ideas (origin content_plan), each with its thesis as the note and a plan (platform, post type,\nphase, target date); no post is created until ideas are compiled or drafted. Running it again\nadds a new batch. Each step emits \"step\" {\"step\":\"\u003cname\u003e\",\"status\":\"done\"}; each saved idea emits\n\"idea\" {\"idea\":{...},\"index\":\u003cslot\u003e,\"id\":\"\u003cidea id\u003e\"}; dropped items emit \"warning\".\nOn success a final \"complete\" event carries the full ContentPlanResponse payload ({ideas, ...}).\nOn failure an \"error\" event carries {\"message\":\"\u003ctext\u003e\",\"code\":\u003chttp_code\u003e}.",
                 "produces": [
                     "text/event-stream"
                 ],
                 "tags": [
                     "campaigns"
                 ],
-                "summary": "Generate draft posts (SSE)",
+                "summary": "Plan the campaign's content as ideas (SSE)",
                 "parameters": [
                     {
                         "type": "string",
@@ -3943,7 +3943,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "SSE stream: step / complete / error events"
+                        "description": "SSE stream: step / idea / warning / complete / error events"
                     },
                     "401": {
                         "description": "Unauthorized",
@@ -3991,7 +3991,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Generates a few new draft posts for a platform subset, a single\nphase, and a publish-date window (CON-114). Streams the same\nstep / post / warning / complete / error events as generate-draft.\nAvailable to any user in the campaign's tenant.",
+                "description": "Plans a few new ideas for a platform subset, a single phase, and a\npublish-date window (CON-114), saved as ideas with that plan; no post is\ncreated. Streams the same step / idea / warning / complete / error events\nas generate-draft.\nAvailable to any user in the campaign's tenant.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4001,7 +4001,7 @@ const docTemplate = `{
                 "tags": [
                     "campaigns"
                 ],
-                "summary": "Generate targeted posts (SSE)",
+                "summary": "Plan targeted ideas (SSE)",
                 "parameters": [
                     {
                         "type": "string",
@@ -4013,7 +4013,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "SSE stream: step / post / warning / complete / error events"
+                        "description": "SSE stream: step / idea / warning / complete / error events"
                     },
                     "400": {
                         "description": "Bad Request",
@@ -20507,6 +20507,13 @@ const docTemplate = `{
                     "type": "string",
                     "x-nullable": true
                 },
+                "asset_ids": {
+                    "description": "AssetIDs are the assets a generated idea drew on, in order; empty\nfor the others.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "author": {
                     "description": "Author is derived on reads: the writer of a manual idea, nil for an\nanalysis idea.",
                     "allOf": [
@@ -20554,6 +20561,15 @@ const docTemplate = `{
                 "fit_score": {
                     "description": "FitScore is how well an analysis idea fits the lens it was made in,\n10–100, computed from FitBreakdown with the weights of FitRubricVersion.\nIt is set once, at generation: moving or editing the idea keeps it, and\nFitBreakdown names the lens that scored it. All three are nil for manual\nideas and for ideas analysed before scoring existed; FitScore alone is\nnil when too few criteria were rated.",
                     "type": "integer",
+                    "x-nullable": true
+                },
+                "grounding_mode": {
+                    "description": "GroundingMode says whether a generated idea drew on the campaign's\nsources; nil for ideas people wrote and for analysis ideas, whose\nsource is SourceAsset.",
+                    "type": "string",
+                    "enum": [
+                        "grounded",
+                        "exploratory"
+                    ],
                     "x-nullable": true
                 },
                 "group_key": {
