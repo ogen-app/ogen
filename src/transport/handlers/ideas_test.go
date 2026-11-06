@@ -97,7 +97,7 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 
 	AfterEach(func() {
 		ctx := context.Background()
-		for _, tbl := range []string{"ideas", "campaigns", "sessions", "users", "accounts"} {
+		for _, tbl := range []string{"post_ideas", "posts", "ideas", "campaigns", "sessions", "users", "accounts"} {
 			_, _ = db.NewDelete().TableExpr(tbl).Where("1 = 1").Exec(ctx)
 		}
 		_, _ = db.NewDelete().Model((*models.Tenant)(nil)).Where("id <> ?", models.DefaultTenantID).Exec(tenantCtx())
@@ -659,5 +659,117 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		for _, bad := range []string{`{"ids": []}`, `{"ids": "x"}`, `{"ids": ["a"], "verdict": "no"}`, `[]`} {
 			Expect(doRaw(admin, "POST", "/api/ideas/bulk-delete", bad).StatusCode).To(Equal(400), bad)
 		}
+	})
+
+	type duplicatesWire struct {
+		Groups []struct {
+			KeepID     string  `json:"keep_id"`
+			Similarity float64 `json:"similarity"`
+			Ideas      []struct {
+				ID         string `json:"id"`
+				Title      string `json:"title"`
+				AssetCount int    `json:"asset_count"`
+			} `json:"ideas"`
+		} `json:"groups"`
+		Scanned   int  `json:"scanned"`
+		Truncated bool `json:"truncated"`
+	}
+
+	duplicates := func(cookie *http.Cookie, query string) duplicatesWire {
+		GinkgoHelper()
+		resp := do(cookie, "GET", "/api/ideas/duplicates"+query, nil)
+		Expect(resp.StatusCode).To(Equal(200))
+		var body duplicatesWire
+		Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+		return body
+	}
+
+	It("finds near-duplicate open ideas per scope", func() {
+		older := capture(admin, fiber.Map{"title": "Pricing myths that cost you deals"})
+		newer := capture(admin, fiber.Map{"title": "5 pricing myths that cost you deals!"})
+		capture(admin, fiber.Map{"title": "Hiring our first designer"})
+		turnedDown := capture(admin, fiber.Map{"title": "Pricing myths that cost deals"})
+		Expect(do(admin, "PUT", "/api/ideas/"+turnedDown.ID+"/verdict", fiber.Map{"verdict": "no", "remind_at": nil}).StatusCode).To(Equal(200))
+		campID := createCampaign(admin, "Launch")
+		capture(admin, fiber.Map{"title": "Pricing myths that cost you deals", "campaign_id": campID})
+		capture(admin, fiber.Map{"title": "Launch week recap", "campaign_id": campID})
+		capture(admin, fiber.Map{"title": "Recap of launch week", "campaign_id": campID})
+
+		ws := duplicates(admin, "")
+		Expect(ws.Scanned).To(Equal(3))
+		Expect(ws.Truncated).To(BeFalse())
+		Expect(ws.Groups).To(HaveLen(1))
+		g := ws.Groups[0]
+		Expect(g.KeepID).To(Equal(older.ID))
+		Expect([]string{g.Ideas[0].ID, g.Ideas[1].ID}).To(Equal([]string{older.ID, newer.ID}))
+		Expect(g.Similarity).To(BeNumerically(">=", ideas.DuplicateThreshold))
+
+		camp := duplicates(admin, "?campaign_id="+campID)
+		Expect(camp.Groups).To(HaveLen(1))
+		Expect(camp.Groups[0].Ideas[0].Title).To(Equal("Launch week recap"))
+
+		Expect(do(admin, "GET", "/api/ideas/duplicates?campaign_id=ghost", nil).StatusCode).To(Equal(404))
+		Expect(duplicates(signupTenant("Other", "other@example.com"), "").Groups).To(BeEmpty())
+	})
+
+	It("merges ideas into the kept one and deletes them", func() {
+		keep := capture(admin, fiber.Map{"title": "Pricing myths", "note": "Bust three myths."})
+		dup := capture(bob, fiber.Map{"title": "5 pricing myths", "note": "Use the CFO survey."})
+		same := capture(bob, fiber.Map{"title": "Pricing myths again", "note": "bust three  MYTHS."})
+		_, err := db.NewUpdate().TableExpr("ideas").Set("asset_ids = ?", "{a2,a1}").Where("id = ?", dup.ID).Exec(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+
+		resp := do(bob, "POST", "/api/ideas/merge", fiber.Map{"keep_id": keep.ID, "merge_ids": []string{dup.ID, same.ID}})
+		Expect(resp.StatusCode).To(Equal(200))
+		var body struct {
+			Idea struct {
+				ideaWire
+				AssetIDs []string `json:"asset_ids"`
+			} `json:"idea"`
+			Deleted []string `json:"deleted"`
+		}
+		Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+		Expect(body.Deleted).To(Equal([]string{dup.ID, same.ID}))
+		Expect(body.Idea.ID).To(Equal(keep.ID))
+		Expect(body.Idea.Title).To(Equal("Pricing myths"))
+		Expect(body.Idea.Note).To(Equal("Bust three myths.\n\nUse the CFO survey."))
+		Expect(body.Idea.AssetIDs).To(Equal([]string{"a2", "a1"}))
+		Expect(*body.Idea.CreatedBy).To(Equal(adminUser.ID))
+		Expect(ids(list(admin, ""))).To(Equal([]string{keep.ID}))
+
+		Expect(ideaHub.events).To(HaveLen(1))
+		Expect(ideaHub.events[0].Type).To(Equal("ideas.deleted"))
+		Expect(ideaHub.events[0].Payload).To(HaveKeyWithValue("ids", Equal([]string{dup.ID, same.ID})))
+	})
+
+	It("refuses a merge across campaigns, of a compiled idea, or of unknown ids, and changes nothing", func() {
+		campID := createCampaign(admin, "Launch")
+		keep := capture(admin, fiber.Map{"title": "Pricing myths", "campaign_id": campID})
+		posted := capture(admin, fiber.Map{"title": "Pricing myths 2", "campaign_id": campID})
+		elsewhere := capture(admin, fiber.Map{"title": "Pricing myths 3"})
+		theirs := capture(signupTenant("Other", "other@example.com"), fiber.Map{"title": "Pricing myths"})
+
+		tctx := tenantctx.With(context.Background(), adminUser.TenantID)
+		Expect(repository.NewPostRepository(db).Create(tctx, &models.Post{
+			ID: "merge-post", CampaignID: campID, PlatformID: "AXqWG7U2qnpt", Title: "t", Content: "c",
+			Status: models.PostStatusDraft, MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+			CTAType: models.CTATypeNone, CreatedBy: adminUser.ID,
+		})).To(Succeed())
+		Expect(repository.NewPostIdeaRepository(db).Link(tctx, db, "merge-post", []string{posted.ID})).To(Succeed())
+
+		merge := func(keepID string, mergeIDs ...string) int {
+			return do(admin, "POST", "/api/ideas/merge", fiber.Map{"keep_id": keepID, "merge_ids": mergeIDs}).StatusCode
+		}
+		Expect(merge(keep.ID, posted.ID)).To(Equal(400))
+		Expect(merge(keep.ID, elsewhere.ID)).To(Equal(400))
+		Expect(merge(keep.ID, keep.ID)).To(Equal(400))
+		Expect(merge(keep.ID)).To(Equal(400))
+		Expect(merge(keep.ID, theirs.ID)).To(Equal(404))
+		Expect(merge("ghost", posted.ID)).To(Equal(404))
+		for _, bad := range []string{`{"keep_id": "x", "merge_ids": "y"}`, `{"keep_id": "x", "merge_ids": ["y"], "title": "z"}`, `[]`} {
+			Expect(doRaw(admin, "POST", "/api/ideas/merge", bad).StatusCode).To(Equal(400), bad)
+		}
+		Expect(list(admin, "")).To(HaveLen(3))
+		Expect(ideaHub.events).To(BeEmpty())
 	})
 })
