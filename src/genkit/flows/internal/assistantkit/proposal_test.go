@@ -23,7 +23,7 @@ func (s *memSink) Propose(_ context.Context, p Proposal) (string, error) {
 
 func countTool(ran *int) ai.ToolFunc[countIn, Outcome[int]] {
 	return Gated("generate", Gate[countIn]{
-		Needs:   func(in countIn) bool { return in.Count > 3 },
+		Needs:   func(_ context.Context, in countIn) bool { return in.Count > 3 },
 		Summary: func(in countIn) string { return fmt.Sprintf("Generate %d posts", in.Count) },
 	}, Wrap(func(_ context.Context, in countIn) (int, error) {
 		*ran++
@@ -99,6 +99,25 @@ func TestRegistry_RunConfirmed(t *testing.T) {
 	}
 	if _, err := r.RunConfirmed(t.Context(), "missing", nil); err == nil {
 		t.Fatal("running an unknown tool succeeded")
+	}
+}
+
+// A request that could never run is refused up front, not stored as a
+// proposal that fails after the user says yes.
+func TestGated_PrecheckRefusesBeforeProposing(t *testing.T) {
+	var ran int
+	tool := Gated("generate", Gate[countIn]{
+		Precheck: func(_ context.Context, in countIn) error {
+			if in.Count < 0 {
+				return Refused("count must be positive")
+			}
+			return nil
+		},
+	}, Wrap(func(context.Context, countIn) (int, error) { ran++; return 0, nil }))
+	sink := &memSink{}
+	out, err := tool(&ai.ToolContext{Context: WithProposalSink(t.Context(), sink)}, countIn{Count: -1})
+	if err != nil || out.Status != StatusRefused || out.Reason != "count must be positive" || len(sink.got) != 0 || ran != 0 {
+		t.Fatalf("out = %+v, err = %v, proposals = %d, ran = %d", out, err, len(sink.got), ran)
 	}
 }
 

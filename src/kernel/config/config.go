@@ -183,6 +183,12 @@ type Config struct {
 	// each draft is full-length copy, not a terse thesis.
 	DraftPostMax int `envconfig:"DRAFT_POST_MAX" default:"5"`
 
+	// AssistantProposalThreshold is the largest batch the assistant generates
+	// without asking: a request for more posts becomes a proposal the user
+	// confirms first. Moves to a Harbor-managed setting once the runtime
+	// settings registry exists.
+	AssistantProposalThreshold int `envconfig:"ASSISTANT_PROPOSAL_THRESHOLD" default:"3"`
+
 	// ConsistencyPostsMax caps how many posts the Campaign Assistant's posts-vs-
 	// brief consistency check analyzes in a single model call.
 	ConsistencyPostsMax int `envconfig:"CONSISTENCY_POSTS_MAX" default:"20"`

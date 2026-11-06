@@ -1,0 +1,171 @@
+package campaign_assistant
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/kernel/logging"
+)
+
+// actionProposed labels a turn whose only result is work waiting for the
+// user's confirmation.
+const actionProposed = "proposed"
+
+// proposalTTL is how long an offer can be accepted. After that the state it
+// was planned against may have moved on, so the user asks again.
+const proposalTTL = 24 * time.Hour
+
+// defaultProposalThreshold is the largest batch generated without asking.
+const defaultProposalThreshold = 3
+
+// campaignSink stores held-back calls against the turn's campaign.
+type campaignSink struct{ st *requestState }
+
+func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (string, error) {
+	st := s.st
+	if st.repos.Proposals == nil {
+		return "", assistantkit.ErrNoProposalSink
+	}
+	args, err := toJSONMap(p.Args)
+	if err != nil {
+		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return "", err
+	}
+	by, _ := logging.UserIDFrom(ctx)
+	now := time.Now().UTC()
+	row := &models.AssistantProposal{
+		ID: id, ScopeKind: models.AssistantScopeCampaign, ScopeID: st.campaignID,
+		Tool: p.Tool, Args: args, Summary: p.Summary, CreatedBy: by, ExpiresAt: now.Add(proposalTTL),
+	}
+	if err := st.repos.Proposals.Create(ctx, row); err != nil {
+		return "", fmt.Errorf("store %s proposal: %w", p.Tool, err)
+	}
+	st.mu.Lock()
+	st.proposed = append(st.proposed, ProposalCreatedEventPayload{
+		ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339),
+	})
+	st.mu.Unlock()
+	return id, nil
+}
+
+func toJSONMap(v any) (models.JSONMap, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	m := models.JSONMap{}
+	if string(b) == "null" {
+		return m, nil
+	}
+	return m, json.Unmarshal(b, &m)
+}
+
+// proposalOutcomes reports this turn's held-back calls. They are read-only, so
+// a turn that also wrote something is labelled by the write.
+func proposalOutcomes(proposed []ProposalCreatedEventPayload) []outcome {
+	out := make([]outcome, 0, len(proposed))
+	for _, p := range proposed {
+		out = append(out, outcome{
+			action:      actionProposed,
+			explanation: fmt.Sprintf("I've prepared this for you to confirm: %s.", p.Summary),
+			event:       SSEEventProposalCreated,
+			payload:     p,
+			readOnly:    true,
+		})
+	}
+	return out
+}
+
+// openProposals lists the campaign's offers still waiting for an answer. A
+// failed read only costs matching a "yes" to an offer, so it is logged, not
+// fatal.
+func (t *turn) openProposals(ctx context.Context) []openProposal {
+	if t.repos.Proposals == nil {
+		return nil
+	}
+	rows, err := t.repos.Proposals.ListOpen(ctx, models.AssistantScopeCampaign, t.req.CampaignID, time.Now().UTC())
+	if err != nil {
+		slog.WarnContext(ctx, "list open proposals failed", logging.AttrComponent, logComponent,
+			"campaign_id", t.req.CampaignID, logging.AttrError, err)
+		return nil
+	}
+	out := make([]openProposal, len(rows))
+	for i, r := range rows {
+		out[i] = openProposal{ID: r.ID, Summary: r.Summary}
+	}
+	return out
+}
+
+func proposalThreshold(ctx context.Context) int {
+	return cmp.Or(getRequestState(ctx).proposalThreshold, defaultProposalThreshold)
+}
+
+// Whole-campaign rewrites always wait for a yes.
+var (
+	contentPlanGate = assistantkit.Gate[struct{}]{
+		Summary: func(struct{}) string { return "Generate a new content plan for this campaign" },
+	}
+	redistributeGate = assistantkit.Gate[struct{}]{
+		Precheck: func(ctx context.Context, _ struct{}) error { return checkCampaignDated(getRequestState(ctx).campaign) },
+		Summary:  func(struct{}) string { return "Re-date the campaign's unpublished drafts across its timeline" },
+	}
+)
+
+// Small batches run straight away; a batch above the threshold waits for a
+// yes. Input that could never run is refused before anything is proposed.
+var (
+	generatePostsGate = assistantkit.Gate[GeneratePostsInput]{
+		Precheck: func(ctx context.Context, in GeneratePostsInput) error {
+			return precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType)
+		},
+		Needs: func(ctx context.Context, in GeneratePostsInput) bool {
+			return max(in.Count, 1) > proposalThreshold(ctx)
+		},
+		Summary: func(in GeneratePostsInput) string {
+			return fmt.Sprintf("Add %d draft posts for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
+		},
+	}
+	draftPostGate = assistantkit.Gate[DraftPostInput]{
+		Precheck: func(ctx context.Context, in DraftPostInput) error {
+			return precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType)
+		},
+		Needs: func(ctx context.Context, in DraftPostInput) bool {
+			return max(in.Count, 1)*len(in.Platforms) > proposalThreshold(ctx)
+		},
+		Summary: func(in DraftPostInput) string {
+			return fmt.Sprintf("Write %d finished posts for %s from the research in this chat", max(in.Count, 1)*len(in.Platforms), strings.Join(in.Platforms, ", "))
+		},
+	}
+)
+
+// precheckPosts runs the post tools' user-correctable checks — target
+// platform, phase, publish window, post type — so a request that could never
+// run is refused instead of proposed.
+func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, windowEnd, postType string) error {
+	st := getRequestState(ctx)
+	now := time.Now().UTC()
+	ids, _, err := resolveTargetPlatforms(st.campaign, platforms)
+	if err != nil {
+		return assistantkit.Refused(err.Error())
+	}
+	if _, _, err := resolvePhase(st.campaign, phase, now); err != nil {
+		return assistantkit.Refused(err.Error())
+	}
+	if _, _, err := resolveWindow(windowStart, windowEnd, now); err != nil {
+		return assistantkit.Refused(err.Error())
+	}
+	if reason, alts, bad := unsupportedPostType(st.campaign, ids, postType); bad {
+		return assistantkit.Refused(reason, alts...)
+	}
+	return nil
+}
