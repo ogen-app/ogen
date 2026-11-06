@@ -365,6 +365,7 @@ func (s *draftSink) persist(ctx context.Context, publishDate, title, content str
 		CTAType:             models.CTATypeNone,
 		CTAUrl:              "",
 		UsedAssetIDs:        models.StringSlice(s.assetIDs),
+		GroundingMode:       models.GroundingFor(len(s.assetIDs)),
 		CampaignTypePhaseID: s.phaseIDFor(ctx, id),
 		ScheduledAt:         scheduledAt,
 		BrandVoiceID:        s.brand.VoiceID(),
