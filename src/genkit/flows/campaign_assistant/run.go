@@ -183,6 +183,7 @@ func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error)
 	t.timer.lap("history")
 
 	t.st = newRequestState(t.cfg, t.repos, campaign, t.req.Instruction, t.onEvent)
+	t.st.sourceAssetIDs = t.req.SourceAssetIDs
 	t.st.snapshot = snap
 	return t.st.bind(ctx), nil
 }
