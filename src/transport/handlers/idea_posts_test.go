@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -109,6 +110,71 @@ func TestCompileIdeas(t *testing.T) {
 	}
 }
 
+type fakeDrafts struct {
+	got     compose.DraftInput
+	max     int
+	planErr error
+	runErr  error
+}
+
+func (f *fakeDrafts) PlanDraft(_ context.Context, in compose.DraftInput, maxPosts int) (*compose.DraftPlan, error) {
+	f.got, f.max = in, maxPosts
+	if f.planErr != nil {
+		return nil, f.planErr
+	}
+	return &compose.DraftPlan{Jobs: make([]compose.DraftJob, 2)}, nil
+}
+
+func (f *fakeDrafts) RunDraft(_ context.Context, _ *compose.DraftPlan, onPost func(compose.DraftedPost)) (*compose.DraftResult, error) {
+	p := compose.DraftedPost{Written: compose.Written{PostID: "p1", PlatformID: "linkedin"}, IdeaIDs: []string{"i1"}}
+	onPost(p)
+	if f.runErr != nil {
+		return nil, f.runErr
+	}
+	return &compose.DraftResult{Posts: []compose.DraftedPost{p}}, nil
+}
+
+func TestDraftIdeas(t *testing.T) {
+	drafts := &fakeDrafts{}
+	app := fiber.New()
+	auth := func(c *fiber.Ctx) error {
+		c.Locals(tenantctx.Key, "tenant-1")
+		c.Locals("session", &models.Session{TenantID: "tenant-1", UserID: "user-1"})
+		return c.Next()
+	}
+	up := true
+	handlers.NewIdeaPostsHandler(nil, linkRepo{}, knownIdeas{}, knownPosts{}, nil, auth).
+		WithDraft(drafts, 5, func() bool { return up }).Register(app)
+
+	status, body := call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1","i2"],"platform_ids":["linkedin"],"together":true,"instruction":"punchier"}`)
+	if status != 200 {
+		t.Fatalf("status = %d: %s", status, body)
+	}
+	names := eventNames(body)
+	if strings.Join(names, ",") != "post,complete" {
+		t.Fatalf("events = %v", names)
+	}
+	if !drafts.got.Together || drafts.got.Instruction != "punchier" || drafts.got.Actor != "user-1" || drafts.max != 5 {
+		t.Fatalf("input = %+v, max %d", drafts.got, drafts.max)
+	}
+
+	// A request that can't run is a plain 400 before the stream.
+	drafts.planErr = compose.ErrNoPlatform
+	if status, _ := call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`); status != 400 {
+		t.Fatalf("plan refusal = %d", status)
+	}
+	// A writer failure ends the stream with an error, after what was written.
+	drafts.planErr, drafts.runErr = nil, errors.New("writer down")
+	_, body = call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`)
+	if names := eventNames(body); strings.Join(names, ",") != "post,error" {
+		t.Fatalf("events = %v", names)
+	}
+	up = false
+	if status, _ := call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`); status != 503 {
+		t.Fatalf("writer unavailable = %d", status)
+	}
+}
+
 func TestIdeaPostLinks(t *testing.T) {
 	app := ideaPostsApp(nil)
 	if status, body := call(t, app, "GET", "/api/ideas/i1/posts", ""); status != 200 || !strings.Contains(body, `"planned"`) {
@@ -123,4 +189,15 @@ func TestIdeaPostLinks(t *testing.T) {
 	if status, _ := call(t, app, "GET", "/api/posts/nope/ideas", ""); status != 404 {
 		t.Fatalf("unknown post = %d", status)
 	}
+}
+
+// eventNames lists the "event:" names of an SSE body, in order.
+func eventNames(body string) []string {
+	var out []string
+	for line := range strings.SplitSeq(body, "\n") {
+		if v, ok := strings.CutPrefix(line, "event: "); ok {
+			out = append(out, v)
+		}
+	}
+	return out
 }

@@ -189,8 +189,10 @@ func registerContentBankRoutes(app *fiber.App, d *deps) {
 	handlers.NewBrandHandler(r.brandRepo, d.store, d.auth, d.activity.recorder).Register(app)
 	handlers.NewBrandDistillHandler(d.brandDistill, r.brandRepo, d.auth, d.activity.recorder).Register(app)
 	// Before the ideas routes, so POST /api/ideas/compile wins over /:id.
-	handlers.NewIdeaPostsHandler(compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub).Compile,
-		r.postIdeaRepo, r.ideaRepo, r.postRepo, d.activity.recorder, d.auth).Register(app)
+	composer := compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub).WithDrafter(ideaDrafter(d.genkit))
+	handlers.NewIdeaPostsHandler(composer.Compile, r.postIdeaRepo, r.ideaRepo, r.postRepo, d.activity.recorder, d.auth).
+		WithDraft(composer, d.cfg.DraftPostMax, d.genkit.IsAnthropicAvailable).
+		Register(app)
 	handlers.NewIdeasHandler(ideas.New(r.ideaRepo, r.userRepo), d.auth, d.activity.recorder).WithEventHub(d.hub).Register(app)
 	handlers.NewSavedViewsHandler(savedviews.New(r.savedViewRepo, d.hub, ideas.NewSurface(r.ideaRepo), assets.NewSurface(r.pieceRepo)), r.userRepo, d.auth).Register(app)
 	handlers.NewAssetAnalysesHandler(r.assetAnalysisRepo, r.ideaRepo, r.pieceRepo, r.campaignRepo, d.analysis, d.auth).Register(app)
