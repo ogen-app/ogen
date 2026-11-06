@@ -80,6 +80,19 @@ func TestGated_AlwaysWithoutNeeds(t *testing.T) {
 	}
 }
 
+func TestGated_DescribeReadsContext(t *testing.T) {
+	type key struct{}
+	tool := Gated("merge", Gate[countIn]{
+		Summary:  func(countIn) string { return "static" },
+		Describe: func(ctx context.Context, in countIn) string { return fmt.Sprintf("%v %d", ctx.Value(key{}), in.Count) },
+	}, Wrap(func(context.Context, countIn) (int, error) { return 0, nil }))
+	ctx := context.WithValue(WithProposalSink(t.Context(), &memSink{}), key{}, "Merge")
+	out, err := tool(&ai.ToolContext{Context: ctx}, countIn{Count: 2})
+	if err != nil || out.Summary != "Merge 2" {
+		t.Fatalf("out = %+v, err = %v; want Describe over Summary", out, err)
+	}
+}
+
 // A stored proposal runs by tool name with its stored (JSON-decoded) args,
 // past its own gate.
 func TestRegistry_RunConfirmed(t *testing.T) {
