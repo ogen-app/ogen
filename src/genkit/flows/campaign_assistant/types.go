@@ -282,6 +282,16 @@ type ProposalCreatedEventPayload struct {
 	Tool      string `json:"tool"`
 	Summary   string `json:"summary"`
 	ExpiresAt string `json:"expiresAt"`
+	// Options, when set, are the choices the user picks from instead of a
+	// plain yes; the card shows one button each.
+	Options []ProposalChoice `json:"options,omitempty"`
+}
+
+// ProposalChoice is one option on a proposal card.
+type ProposalChoice struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
 }
 
 // ProposalResolvedEventPayload reports how an offer was answered.

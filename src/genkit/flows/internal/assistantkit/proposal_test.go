@@ -2,8 +2,10 @@ package assistantkit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -118,6 +120,34 @@ func TestGated_PrecheckRefusesBeforeProposing(t *testing.T) {
 	out, err := tool(&ai.ToolContext{Context: WithProposalSink(t.Context(), sink)}, countIn{Count: -1})
 	if err != nil || out.Status != StatusRefused || out.Reason != "count must be positive" || len(sink.got) != 0 || ran != 0 {
 		t.Fatalf("out = %+v, err = %v, proposals = %d, ran = %d", out, err, len(sink.got), ran)
+	}
+}
+
+// A conflict is stored as a proposal whose options carry their own calls; the
+// model sees the reason and the options' ids and titles only.
+func TestGated_ConflictStoresOptions(t *testing.T) {
+	var ran int
+	tool := Gated("generate", Gate[countIn]{
+		Precheck: func(_ context.Context, in countIn) error {
+			return Conflicted("over the goal",
+				Option{ID: "fill", Title: "Add 2 to reach the goal", Tool: "generate", Args: countIn{Count: 2}},
+				Option{ID: "anyway", Title: "Add all 9 anyway", Tool: "generate", Args: in})
+		},
+	}, Wrap(func(context.Context, countIn) (int, error) { ran++; return 0, nil }))
+	sink := &memSink{}
+	out, err := tool(&ai.ToolContext{Context: WithProposalSink(t.Context(), sink)}, countIn{Count: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != StatusConflict || out.Reason != "over the goal" || out.ProposalID == "" || len(out.Options) != 2 || ran != 0 {
+		t.Fatalf("out = %+v, ran = %d", out, ran)
+	}
+	if len(sink.got) != 1 || sink.got[0].Options[0].Args.(countIn).Count != 2 {
+		t.Fatalf("stored = %+v", sink.got)
+	}
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "Args") || strings.Contains(string(b), `"tool"`) {
+		t.Fatalf("the option's call leaked to the model: %s", b)
 	}
 }
 

@@ -151,7 +151,8 @@ func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error)
 	if err != nil {
 		return ctx, fmt.Errorf("assemble context: %w", err)
 	}
-	t.actx.StateBlock, err = renderState(p, t.snapshot(ctx, campaign), t.openProposals(ctx))
+	snap := t.snapshot(ctx, campaign)
+	t.actx.StateBlock, err = renderState(p, snap, t.openProposals(ctx))
 	if err != nil {
 		return ctx, fmt.Errorf("render campaign state: %w", err)
 	}
@@ -171,6 +172,7 @@ func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error)
 	t.timer.lap("history")
 
 	t.st = newRequestState(t.cfg, t.repos, campaign, t.req.Instruction, t.onEvent)
+	t.st.snapshot = snap
 	return t.st.bind(ctx), nil
 }
 
