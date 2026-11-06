@@ -49,6 +49,7 @@ func IsValidation(err error) bool {
 	for _, target := range []error{
 		ErrIdeaCount, ErrIdeaNotFound, ErrNoCampaign, ErrMixedCampaigns, ErrCampaignGone,
 		ErrNotTarget, ErrPostType, ErrPostTypeAlone, ErrInvalidPhase, ErrTitleTooLong,
+		ErrNoPlatform, ErrTooManyDrafts, ErrPostTypeOneFor,
 	} {
 		if errors.Is(err, target) {
 			return true
@@ -90,6 +91,7 @@ type Service struct {
 	links     repository.PostIdeaRepository
 	logs      repository.PostLogRepository
 	hub       eventhub.Hub
+	draft     Drafter
 	now       func() time.Time
 }
 
@@ -102,23 +104,16 @@ func New(db *bun.DB, ideas repository.IdeaRepository, campaigns repository.Campa
 // ideas' source assets as its sources, and a link to each idea. The ideas are
 // left as they are; one idea can feed several posts.
 func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
-	ids := dedupe(in.IdeaIDs)
-	if len(ids) == 0 || len(ids) > MaxIdeas {
-		return nil, ErrIdeaCount
-	}
 	if len([]rune(in.Title)) > maxTitle {
 		return nil, ErrTitleTooLong
 	}
-	ideas := make([]models.Idea, 0, len(ids))
-	for _, id := range ids {
-		idea, err := s.ideas.GetByID(ctx, id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrIdeaNotFound
-		}
-		if err != nil {
-			return nil, err
-		}
-		ideas = append(ideas, *idea)
+	ideas, err := s.loadIdeas(ctx, in.IdeaIDs)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(ideas))
+	for i, idea := range ideas {
+		ids[i] = idea.ID
 	}
 	campaign, err := s.campaign(ctx, in.CampaignID, ideas)
 	if err != nil {
@@ -163,6 +158,26 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 	return &Result{Post: post, Ideas: ideas}, nil
 }
 
+// loadIdeas loads 1 to MaxIdeas distinct ideas, in the order given.
+func (s *Service) loadIdeas(ctx context.Context, idList []string) ([]models.Idea, error) {
+	ids := dedupe(idList)
+	if len(ids) == 0 || len(ids) > MaxIdeas {
+		return nil, ErrIdeaCount
+	}
+	ideas := make([]models.Idea, 0, len(ids))
+	for _, id := range ids {
+		idea, err := s.ideas.GetByID(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrIdeaNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		ideas = append(ideas, *idea)
+	}
+	return ideas, nil
+}
+
 // campaign resolves the post's campaign: the one asked for, else the one
 // every idea is in.
 func (s *Service) campaign(ctx context.Context, id string, ideas []models.Idea) (*models.Campaign, error) {
@@ -191,17 +206,7 @@ func (s *Service) campaign(ctx context.Context, id string, ideas []models.Idea) 
 // build assembles the post: the request's fields, else the first idea plan
 // that sets each, checked against the campaign's platforms.
 func (s *Service) build(in Input, ideas []models.Idea, campaign *models.Campaign) (*models.Post, error) {
-	plan := models.IdeaPlan{}
-	for _, idea := range slices.Backward(ideas) {
-		p := idea.Plan
-		plan.PlatformID = cmp.Or(p.PlatformID, plan.PlatformID)
-		plan.PostType = cmp.Or(p.PostType, plan.PostType)
-		plan.TargetDate = cmp.Or(p.TargetDate, plan.TargetDate)
-		// A phase is one of its own campaign's.
-		if idea.CampaignID != nil && *idea.CampaignID == campaign.ID {
-			plan.PhaseID = cmp.Or(p.PhaseID, plan.PhaseID)
-		}
-	}
+	plan := firstPlan(ideas, campaign.ID)
 	platformID := cmp.Or(in.PlatformID, deref(plan.PlatformID))
 	postType := cmp.Or(in.PostType, deref(plan.PostType))
 	// A suggested post type belongs to its suggested platform.
