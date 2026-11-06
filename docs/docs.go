@@ -1080,6 +1080,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/assistant/actions/{id}/undo": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Restores what a reversible assistant change replaced (campaign dates, the campaign brief).\n409 when it was already undone, or when it was edited again since: undo never overwrites a later edit.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assistant"
+                ],
+                "summary": "Undo an assistant change",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Undo id from the change's result",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.undoResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/assistant/proposals/{id}/confirm": {
             "post": {
                 "security": [
@@ -17884,6 +17954,20 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.transcriptEntry"
                     }
+                }
+            }
+        },
+        "handlers.undoResponse": {
+            "type": "object",
+            "properties": {
+                "entityId": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "undone": {
+                    "type": "boolean"
                 }
             }
         },
