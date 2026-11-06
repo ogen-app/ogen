@@ -9,8 +9,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/analytics/performers"
 	"github.com/ogen-app/ogen/src/analytics/timeframe"
-	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/analytics"
 )
 
 // Performers serves the CON-238 "performers and outliers" board: the window's
@@ -42,9 +41,8 @@ import (
 // @Router       /api/analytics/performers [get]
 func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 	if h.repo == nil {
-		return c.JSON(insightEnvelope{Available: false, Reason: "not_configured"})
+		return c.JSON(insightEnvelope{Available: false, Reason: analytics.ReasonNotConfigured})
 	}
-
 	rng, err := timeframe.Resolve(c.Query("from"), c.Query("to"), c.Query("window"), "", time.Now().UTC())
 	if err != nil {
 		if errors.Is(err, timeframe.ErrWindowTooLarge) {
@@ -66,98 +64,12 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-
-	ctx := reqCtx(c)
-	cur, err := h.repo.PublishedBetween(ctx, rng.From, rng.To)
+	res, reason, err := h.service().Performers(reqCtx(c), rng, scope, by, limit)
 	if err != nil {
 		return err
 	}
-	if err := h.filterRows(ctx, scope, &cur); err != nil {
-		return err
+	if res == nil {
+		return c.JSON(insightEnvelope{Available: false, Reason: reason})
 	}
-	if len(cur) == 0 {
-		return c.JSON(insightEnvelope{Available: false, Reason: "no_data"})
-	}
-
-	// The typical-at-age baseline stays workspace-wide under any scope, so a
-	// campaign's posts are scored against the workspace's usual post rather than
-	// against each other.
-	samples, err := h.reachByAgeSamples(ctx)
-	if err != nil {
-		return err
-	}
-
-	ids := make([]string, 0, len(cur))
-	seen := map[string]bool{}
-	for i := range cur {
-		if id, _ := accountRef(&cur[i]); id != "" && !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	known := h.loadAccounts(ctx, ids)
-
-	now := time.Now().UTC()
-	cands := make([]performers.Candidate, 0, len(cur))
-	for i := range cur {
-		r := cur[i]
-		if r.PublishedAt == nil {
-			continue
-		}
-		cands = append(cands, performers.Candidate{
-			PostID:          r.PostID,
-			PublisherPostID: r.PublisherPostID,
-			Title:           r.Title,
-			Platform:        r.Platform,
-			Account:         performersAccount(&r, known),
-			Reach:           r.Reach,
-			Impressions:     r.Impressions,
-			Likes:           r.Likes,
-			Comments:        r.Comments,
-			Shares:          r.Shares,
-			EngagementRate:  r.EngagementRate,
-			PublishedAt:     *r.PublishedAt,
-			AgeDays:         daysBetween(*r.PublishedAt, now),
-		})
-	}
-
-	res := performers.Build(cands, toPerfSamples(samples), performers.Options{By: by, Limit: limit})
-
-	return c.JSON(insightEnvelope{Available: true, Data: fiber.Map{
-		"window":      fiber.Map{"from": rng.FromISO(), "to": rng.ToISO(), "days": rng.Days},
-		"updated_at":  maxLastChecked(cur),
-		"by":          res.By,
-		"total_posts": res.TotalPosts,
-		"best":        res.Best,
-		"worst":       res.Worst,
-		"insights":    res.Insights,
-	}})
-}
-
-func performersAccount(r *models.PostAnalytics, known map[string]models.SocialAccount) performers.Account {
-	id, username := accountRef(r)
-	l := labelAccount(id, username, known)
-	return performers.Account{ID: l.ID, Username: l.Username, DisplayName: l.DisplayName, AvatarURL: l.AvatarURL}
-}
-
-func toPerfSamples(in []repository.ReachAgeSample) []performers.Sample {
-	out := make([]performers.Sample, len(in))
-	for i, s := range in {
-		out[i] = performers.Sample{
-			Platform:     s.Platform,
-			PostID:       s.PostID,
-			AgeDay:       s.AgeDay,
-			Reach:        s.Reach,
-			Interactions: s.Interactions,
-		}
-	}
-	return out
-}
-
-func daysBetween(from, to time.Time) int {
-	d := int(to.Sub(from) / (24 * time.Hour))
-	if d < 0 {
-		return 0
-	}
-	return d
+	return c.JSON(insightEnvelope{Available: true, Data: res})
 }

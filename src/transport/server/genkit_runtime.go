@@ -480,6 +480,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	// this rebuild's callbacks.
 	pd := r.packDeps
 	pd.Campaign = campaignAssistantFn
+	pd.CheckBrief, pd.CheckPosts = checkBriefFn, checkPostsFn
 	if pd.Compose != nil {
 		pd.Compose = pd.Compose.WithDrafter(ideaDrafter(r))
 	}
