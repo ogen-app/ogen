@@ -66,15 +66,34 @@ func run(
 		return nil, fmt.Errorf("render view: %w", err)
 	}
 
-	ctx = withTurnState(ctx, &turnState{view: req.View})
-	scanner, err := callModel(ctx, g, cfg, p, tools, history, view+req.Instruction, onEvent)
+	st := newTurnState(req.View, tools.packs.defaults(req.View.View.Screen, scope.Kind))
+	ctx = withTurnState(ctx, st)
+	scanner, err := callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent)
 	if err != nil {
 		return nil, err
+	}
+	// loadPack interrupts the call; the turn starts again, once, with the
+	// pack's tools.
+	if scanner == nil {
+		pack, ok := st.restart(tools.packs)
+		if !ok {
+			return nil, &AIError{Msg: "the assistant stopped without replying"}
+		}
+		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
+		if scanner, err = callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent); err != nil {
+			return nil, err
+		}
+		if scanner == nil {
+			return nil, &AIError{Msg: "the assistant stopped without replying"}
+		}
 	}
 	result, err := assemble(ctx, scanner)
 	if err != nil {
 		return nil, err
 	}
+	result.UIActions = st.uiActions()
+	result.Touched = st.touches.List()
+	result.Packs = st.loaded
 
 	// The turn's work is done by now, so a failed history write does not
 	// fail it: an error would report work that happened as lost, and a retry
@@ -83,14 +102,25 @@ func run(
 		slog.ErrorContext(ctx, "persist conversation turn failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		result.Unsaved = true
 	}
+	// The screen moves only once the reply is final, so a restarted call
+	// never leaves half a plan on it.
+	for _, a := range result.UIActions {
+		emit(onEvent, SSEEventUIAction, a)
+	}
 	emit(onEvent, SSEEventComplete, result)
 	return result, nil
 }
 
-// callModel runs the orchestrator's tool loop, streaming the explanation and
-// the tool events. The reply is read by the tolerant scanner rather than
-// ai.WithOutputType, whose strict validator drops a reply on common drift.
-func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts, tools *toolSet, history []*ai.Message, prompt string, onEvent OnEventFunc) (*jsonstream.Scanner, error) {
+// callModel runs the orchestrator's tool loop on the core tools plus loaded,
+// streaming the explanation and the tool events. The reply is read by the
+// tolerant scanner rather than ai.WithOutputType, whose strict validator
+// drops a reply on common drift. A nil scanner means a tool interrupted the
+// call (loadPack).
+func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts, tools *toolSet, loaded []string, history []*ai.Message, prompt string, onEvent OnEventFunc) (*jsonstream.Scanner, error) {
+	system, err := p.system(loaded)
+	if err != nil {
+		return nil, err
+	}
 	maxTokens := cmp.Or(cfg.MaxOutputTokens, 4096)
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowAssistant, modelconfig.SlotOrchestrator)
 	reply := &replyScanner{newScanner: func() *jsonstream.Scanner {
@@ -104,10 +134,10 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	usage := flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "assistant", Component: logComponent}
 	resp, err := genkit.Generate(ctx, g,
 		ai.WithModelName(mc.Ref),
-		ai.WithSystem(p.system),
+		ai.WithSystem(system),
 		ai.WithMessages(history...),
 		ai.WithPrompt(prompt),
-		ai.WithTools(tools.all()...),
+		ai.WithTools(tools.tools(loaded)...),
 		ai.WithMaxTurns(cmp.Or(cfg.MaxTurns, 4)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{
 			OnRound: reply.round,
@@ -129,6 +159,9 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		return nil, &AIError{Msg: assistantkit.FriendlyError(err)}
 	}
 	usage.FinishMetered(ctx, resp, maxTokens)
+	if len(resp.Interrupts()) > 0 {
+		return nil, nil
+	}
 	return reply.cur, nil
 }
 
