@@ -10,6 +10,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant/packs"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
@@ -35,12 +36,14 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
+	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/loginsecurity"
 	"github.com/ogen-app/ogen/src/usecase/notes"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 	"github.com/ogen-app/ogen/src/usecase/plugins"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
@@ -393,7 +396,23 @@ func (d *deps) genkitDeps() genkitDeps {
 			Actions:   r.actionRepo,
 			Platforms: r.platformRepo,
 		},
+		packDeps: packs.Deps{
+			Ideas:             ideas.New(r.ideaRepo, r.userRepo),
+			IdeaRepo:          r.ideaRepo,
+			Compose:           compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub),
+			Assets:            r.pieceRepo,
+			Campaigns:         r.campaignRepo,
+			Tags:              r.tagRepo,
+			Chunks:            r.chunksRepo,
+			Embedder:          d.ingest.embedder,
+			Analysis:          d.analysis,
+			URLImport:         newURLImporter(d),
+			Actions:           r.actionRepo,
+			ProposalThreshold: d.cfg.AssistantProposalThreshold,
+			DraftMax:          d.cfg.DraftPostMax,
+		},
 		assistantRepos: assistant.Repos{
+			Proposals:  r.proposalRepo,
 			Messages:   r.assistantMessageRepo,
 			Views:      viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo),
 			SavedViews: r.savedViewRepo,
