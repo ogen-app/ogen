@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -55,6 +56,49 @@ type turnState struct {
 	requested string
 	ui        []UIAction
 	touches   assistantkit.Touches
+	cards     []ProposalCard
+	resolved  []ProposalResolved
+	// emit streams pack events; nil outside a streamed turn.
+	emit OnEventFunc
+}
+
+func (st *turnState) addCard(c ProposalCard) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.cards = append(st.cards, c)
+}
+
+func (st *turnState) addResolved(r ProposalResolved) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.resolved = append(st.resolved, r)
+}
+
+func (st *turnState) cardList() []ProposalCard {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return append([]ProposalCard(nil), st.cards...)
+}
+
+func (st *turnState) resolvedList() []ProposalResolved {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return append([]ProposalResolved(nil), st.resolved...)
+}
+
+// bind gives ctx the turn's proposal sink, for the gated pack tools.
+func (t *toolSet) bind(ctx context.Context, st *turnState) context.Context {
+	return assistantkit.WithProposalSink(ctx, turnSink{st: st, repos: t.deps})
+}
+
+// finish copies what the turn did onto resp.
+func finish(st *turnState, resp *Response) {
+	resp.UIActions = st.uiActions()
+	resp.Touched = st.touches.List()
+	resp.Proposals = st.cardList()
+	st.mu.Lock()
+	resp.Packs = append([]string(nil), st.loaded...)
+	st.mu.Unlock()
 }
 
 func newTurnState(view *viewresolve.Resolved, loaded []string) *turnState {
@@ -251,6 +295,24 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 			"Opens one of the user's saved views of the Ideas or Assets list. Takes the saved view's id.",
 			assistantkit.Wrap(t.openSavedView)),
 			`Call this when the user asks to open one of their saved views by name and you know its id.`),
+	}
+	if deps.Proposals != nil {
+		specs = append(specs,
+			spec(genkit.DefineTool(g, "confirmOffer",
+				"Runs an offer that is waiting for the user's answer, exactly as it was offered. Takes the offer's id, and optionId when it has options.",
+				func(ctx *ai.ToolContext, in AnswerProposalInput) (any, error) {
+					out, err := t.confirmProposal(ctx, in)
+					if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
+						return assistantkit.Refuse[struct{}](r.Reason, r.Alternatives...), nil
+					}
+					return out, err
+				}),
+				`Call this when the user accepts an offer listed under "Waiting for the user's answer" in <view> — "yes", "go ahead", or by picking one of its options. It runs exactly what was offered and returns that work's result: report it as that tool's own result. Never call the offered tool again yourself. If several offers wait and it isn't clear which the user means, ask.`),
+			spec(genkit.DefineTool(g, "dismissOffer",
+				"Withdraws an offer that is waiting for the user's answer. Takes the offer's id. Nothing runs.",
+				assistantkit.Wrap(t.dismissProposal)),
+				`Call this when the user turns down an offer listed under "Waiting for the user's answer" — "no", "never mind". Nothing runs.`),
+		)
 	}
 	if len(packs) > 0 {
 		specs = append(specs, spec(genkit.DefineTool(g, "loadPack",

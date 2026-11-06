@@ -36,6 +36,11 @@ type Response struct {
 	Touched []assistantkit.Touched `json:"touched"`
 	// Packs are the packs the turn ran with, besides the core tools.
 	Packs []string `json:"packs,omitempty"`
+	// Proposals are the offers this turn made, waiting for the user's yes;
+	// each was also streamed as "proposal_created".
+	Proposals []ProposalCard `json:"proposals,omitempty"`
+	// Result is the work's result when an offer was answered from its card.
+	Result any `json:"result,omitempty"`
 }
 
 const (
@@ -50,6 +55,8 @@ const (
 //     the orchestrator ran.
 //   - pack_loaded {pack}: the turn restarted with another pack's tools;
 //     the deltas streamed before it are void.
+//   - proposal_created ProposalCard / proposal_resolved ProposalResolved:
+//     an offer made, or answered, this turn; once the reply is final.
 //   - ui_action UIAction: a change to the client's screen, in order, once
 //     the reply is final.
 //   - complete Response: the turn's result. Last.
@@ -62,6 +69,8 @@ const (
 	SSEEventToolResult       SSEEventKind = "tool_result"
 	SSEEventPackLoaded       SSEEventKind = "pack_loaded"
 	SSEEventUIAction         SSEEventKind = "ui_action"
+	SSEEventProposalCreated  SSEEventKind = "proposal_created"
+	SSEEventProposalResolved SSEEventKind = "proposal_resolved"
 	SSEEventComplete         SSEEventKind = "complete"
 	SSEEventError            SSEEventKind = "error"
 )
@@ -114,6 +123,14 @@ type Repos struct {
 	Views ViewReader
 	// SavedViews finds the saved view openSavedView opens.
 	SavedViews SavedViewReader
+	// Proposals stores the offers pack tools hold back for a yes; nil
+	// leaves the proposal-tier tools unable to run and drops
+	// confirmOffer / dismissOffer.
+	Proposals repository.AssistantProposalRepository
+	// ForeignAnswer answers an offer another assistant made in the same
+	// thread — the campaign assistant's, through the campaign pack — so a
+	// "yes" here runs it. nil refuses such offers.
+	ForeignAnswer func(ctx context.Context, req AnswerRequest) (any, error)
 }
 
 // ViewReader reloads references in the caller's tenant;
@@ -140,3 +157,16 @@ func (e *AIError) Error() string { return e.Msg }
 
 // Runner runs one turn.
 type Runner func(ctx context.Context, req Request, onEvent OnEventFunc) (*Response, error)
+
+// Assistant is the initialised flow.
+type Assistant struct {
+	// Run runs one turn.
+	Run Runner
+	// Answer confirms or dismisses one of this assistant's offers from its
+	// card, without a model call. Another assistant's offer is
+	// ErrNotThisAssistant.
+	Answer func(ctx context.Context, req AnswerRequest, onEvent OnEventFunc) (*Response, error)
+}
+
+// ErrNotThisAssistant is an offer another assistant made.
+var ErrNotThisAssistant = errNotMine

@@ -23,6 +23,10 @@ import (
 type CampaignAssistantRequest struct {
 	CampaignID  string `json:"campaignId"`
 	Instruction string `json:"instruction"`
+	// SourceAssetIDs limits the turn's sources to these of the campaign's
+	// assets — the user's "use only these" — for planning and for asking
+	// the assets. Empty uses all of them.
+	SourceAssetIDs []string `json:"sourceAssetIds,omitempty"`
 }
 
 // CampaignAssistantResponse is the structured output for one turn. Explanation

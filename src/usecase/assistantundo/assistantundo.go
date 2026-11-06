@@ -38,8 +38,8 @@ type Service struct {
 	undoers map[models.AssistantActionKind]Undoer
 }
 
-// New returns a service that can undo campaign date, brief and platform
-// changes.
+// New returns a service that can undo campaign date, brief, platform and
+// asset changes; WithIdeas adds idea verdicts.
 func New(actions repository.AssistantActionRepository, campaigns repository.CampaignRepository) *Service {
 	return &Service{
 		actions: actions,
@@ -47,6 +47,7 @@ func New(actions repository.AssistantActionRepository, campaigns repository.Camp
 			models.AssistantActionCampaignDates:     campaignDates{campaigns},
 			models.AssistantActionCampaignBrief:     campaignBrief{campaigns},
 			models.AssistantActionCampaignPlatforms: campaignPlatforms{campaigns},
+			models.AssistantActionCampaignAssets:    campaignAssets{campaigns},
 		},
 	}
 }
