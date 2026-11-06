@@ -88,6 +88,9 @@ var evalCases = []evalCase{
 	// analytics
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How did we do over the last 4 weeks?", want: []string{"analyticsOverview"}, not: writes},
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Which posts performed best?", want: []string{"topPosts"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "What's the best time of day to post, judging by what worked?", want: []string{"analyticsLessons"}, not: writes},
+	{pack: "analytics", screen: "analytics.post", scope: evalPost, say: "How is this post doing?", want: []string{"postStats"}, not: writes},
+	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, say: "Merge the duplicate ideas.", want: []string{"findDuplicateIdeas"}, not: []string{"deleteIdeas"}},
 	// foundation
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Add a fact: we have 1,200 customers.", want: []string{"addFact"}},
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "What's our brand voice?", want: []string{"getBrand"}, not: writes},
