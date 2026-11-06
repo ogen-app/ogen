@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
@@ -67,6 +68,7 @@ type genkitRuntime struct {
 	enrichBriefFn       func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	campaignAssistantFn func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
 	answerProposalFn    func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
+	assistantFn         assistant.Runner
 	generatePostsFn     func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	checkBriefFn        func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPostsFn        func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
@@ -82,6 +84,7 @@ type genkitRuntime struct {
 	postQualityRepos    post_quality.PostQualityRepos
 	enrichBriefRepos    enrich_brief.EnrichBriefRepos
 	campaignAssistRepos campaign_assistant.CampaignAssistantRepos
+	assistantRepos      assistant.Repos
 	draftPostRepos      draft_post.DraftPostRepos
 	campaignOverviewSvc *overview.Service
 	cloneSvc            *clone.Service
@@ -106,6 +109,7 @@ type genkitDeps struct {
 	postQualityRepos    post_quality.PostQualityRepos
 	enrichBriefRepos    enrich_brief.EnrichBriefRepos
 	campaignAssistRepos campaign_assistant.CampaignAssistantRepos
+	assistantRepos      assistant.Repos
 	draftPostRepos      draft_post.DraftPostRepos
 	campaignOverviewSvc *overview.Service
 	cloneSvc            *clone.Service
@@ -135,6 +139,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 		postQualityRepos:    deps.postQualityRepos,
 		enrichBriefRepos:    deps.enrichBriefRepos,
 		campaignAssistRepos: deps.campaignAssistRepos,
+		assistantRepos:      deps.assistantRepos,
 		draftPostRepos:      deps.draftPostRepos,
 		campaignOverviewSvc: deps.campaignOverviewSvc,
 		cloneSvc:            deps.cloneSvc,
@@ -262,6 +267,17 @@ func (r *genkitRuntime) EnrichBrief(ctx context.Context, req enrich_brief.Enrich
 func (r *genkitRuntime) RunCampaignAssistant(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
 	r.mu.RLock()
 	fn := r.campaignAssistantFn
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil, ErrAnthropicUnavailable
+	}
+	return fn(ctx, req, onEvent)
+}
+
+// RunAssistant runs one universal assistant turn.
+func (r *genkitRuntime) RunAssistant(ctx context.Context, req assistant.Request, onEvent assistant.OnEventFunc) (*assistant.Response, error) {
+	r.mu.RLock()
+	fn := r.assistantFn
 	r.mu.RUnlock()
 	if fn == nil {
 		return nil, ErrAnthropicUnavailable
@@ -420,6 +436,19 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		return fmt.Errorf("init campaign assistant: %w", err)
 	}
 
+	assistantFn, err := assistant.Init(g, assistant.FlowConfig{
+		Provider: provider,
+		Recorder: r.recorder,
+		Checker:  r.checker,
+		// The orchestrator answers in a short envelope; the cap leaves room for
+		// the thinking Claude 5.x models do by default.
+		MaxOutputTokens: 4096,
+		MaxTurns:        4,
+	}, r.assistantRepos)
+	if err != nil {
+		return fmt.Errorf("init assistant: %w", err)
+	}
+
 	analysisFlows, err := initAssetAnalysis(g, r.cfg, provider, r.recorder, r.checker)
 	if err != nil {
 		return fmt.Errorf("init asset analysis: %w", err)
@@ -440,6 +469,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.enrichBriefFn = enrichBriefFn
 	r.campaignAssistantFn = campaignAssistantFn
 	r.answerProposalFn = campaign_assistant.NewAnswerProposalCallback()
+	r.assistantFn = assistantFn
 	r.generatePostsFn = generatePostsFn
 	r.checkBriefFn = checkBriefFn
 	r.checkPostsFn = checkPostsFn
