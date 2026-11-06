@@ -9,6 +9,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 )
 
 func day(s string) time.Time {
@@ -115,10 +116,9 @@ func TestResolveTargetPlatforms(t *testing.T) {
 
 // TestGeneratePosts_SoftFailsUserInput verifies that generatePosts does NOT
 // abort the turn (return a Go error) for user-correctable input — a past date,
-// a non-target platform, or an unknown phase. Instead it returns a zero-post
-// result carrying the reason as a warning, so the assistant can relay it and
-// suggest a valid alternative. A Go error here would surface to the
-// user as a raw "model call failed".
+// a non-target platform, or an unknown phase. Instead it returns a refused
+// outcome carrying the reason, so the assistant can relay it and suggest a
+// valid alternative. A Go error here would abort the whole generation.
 func TestGeneratePosts_SoftFailsUserInput(t *testing.T) {
 	newState := func() *requestState {
 		return &requestState{
@@ -149,8 +149,8 @@ func TestGeneratePosts_SoftFailsUserInput(t *testing.T) {
 			if err != nil {
 				t.Fatalf("want soft failure (nil error), got %v", err)
 			}
-			if out == nil || out.PostCount != 0 || len(out.Warnings) == 0 {
-				t.Fatalf("want zero posts + a warning, got %+v", out)
+			if out.Status != assistantkit.StatusRefused || out.Reason == "" || out.Result != nil {
+				t.Fatalf("want a refusal with a reason, got %+v", out)
 			}
 			// Must stay conversational: a soft failure never records a generated-posts result.
 			if st.generatedPostsResult != nil {
@@ -207,7 +207,7 @@ func TestGeneratePosts_HeavySlotOnlyBurnedOnSuccess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("valid generation: %v", err)
 		}
-		if out == nil || out.PostCount != 1 {
+		if !out.Succeeded() || out.Result.PostCount != 1 {
 			t.Fatalf("want one generated post, got %+v", out)
 		}
 		if !st.heavyReserved {
