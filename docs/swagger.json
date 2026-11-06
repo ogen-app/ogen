@@ -7351,6 +7351,69 @@
                 }
             }
         },
+        "/api/ideas/draft": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Writes finished posts from 1–10 ideas and saves them as drafts with a body. Each idea gets its own\npost on each platform, or with `together` one post per platform from all of them; at most\nDRAFT_POST_MAX posts a request. The writer works from each idea's title, angle, reasoning and\nsources (or its note), in the campaign's brand voice; the ideas' source assets become the posts'\nsources, and every post links to its ideas (GET /api/posts/{id}/ideas). The campaign defaults to\nthe one the ideas share; the platform, post type, phase and date to the first idea plan that sets\neach. Requests that can't run are a plain 400 before the stream opens.\nEvents: \"post\" {postId,title,platformId,ideaIds} as each post is saved; \"complete\"\n{posts,warnings}; \"error\" {message,code}, after which the posts already written are kept.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Write posts from ideas (SSE)",
+                "parameters": [
+                    {
+                        "description": "Ideas, platforms and steering",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.draftIdeasRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: post / complete / error"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/ideas/{id}": {
             "delete": {
                 "security": [
@@ -16511,6 +16574,52 @@
                     "items": {
                         "$ref": "#/definitions/models.IdeaDistillRun"
                     }
+                }
+            }
+        },
+        "handlers.draftIdeasRequest": {
+            "type": "object",
+            "required": [
+                "idea_ids"
+            ],
+            "properties": {
+                "campaign_id": {
+                    "description": "CampaignID defaults to the campaign the ideas share.",
+                    "type": "string"
+                },
+                "idea_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "instruction": {
+                    "description": "Instruction steers the writing (\"punchier\", \"for CFOs\").",
+                    "type": "string"
+                },
+                "phase_id": {
+                    "type": "string"
+                },
+                "platform_ids": {
+                    "description": "PlatformIDs default to the first idea plan's platform.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "platform_post_type": {
+                    "description": "PlatformPostType needs exactly one platform.",
+                    "type": "string"
+                },
+                "target_date": {
+                    "type": "string",
+                    "x-nullable": true,
+                    "example": "2026-12-01"
+                },
+                "together": {
+                    "description": "Together writes one post per platform from all the ideas; otherwise\neach idea gets its own post on each platform.",
+                    "type": "boolean"
                 }
             }
         },
