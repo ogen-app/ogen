@@ -16,13 +16,16 @@ const (
 var IdeaPiles = []string{IdeaPileWaiting, IdeaPileYes, IdeaPileLater, IdeaPileNo}
 
 // Values of the origin filter, facet and grouping.
+// Every key but manual is the stored origin itself.
 const (
-	IdeaOriginKeyAnalysis = "asset_analysis"
-	IdeaOriginKeyManual   = "manual"
+	IdeaOriginKeyAnalysis    = "asset_analysis"
+	IdeaOriginKeyContentPlan = "content_plan"
+	IdeaOriginKeyAssistant   = "assistant"
+	IdeaOriginKeyManual      = "manual"
 )
 
 // IdeaOriginKeys lists the origin values in facet order.
-var IdeaOriginKeys = []string{IdeaOriginKeyAnalysis, IdeaOriginKeyManual}
+var IdeaOriginKeys = []string{IdeaOriginKeyAnalysis, IdeaOriginKeyContentPlan, IdeaOriginKeyAssistant, IdeaOriginKeyManual}
 
 // Fit bands of the fit filter, facet and grouping, over the 10–100 fit score.
 const (
