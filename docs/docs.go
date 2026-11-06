@@ -20658,6 +20658,15 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "grounding_mode": {
+                    "description": "GroundingMode records whether generation drew on the campaign's own\nsources. Nil for posts written by hand, or generated before it was\nrecorded.",
+                    "type": "string",
+                    "enum": [
+                        "grounded",
+                        "exploratory"
+                    ],
+                    "x-nullable": true
+                },
                 "id": {
                     "type": "string"
                 },
