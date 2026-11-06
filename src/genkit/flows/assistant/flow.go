@@ -5,23 +5,28 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
 //go:embed prompts/assistant.tmpl
 var promptFS embed.FS
 
-// Init registers the assistant's tools and returns the turn runner. It must be
-// called after g has the Anthropic plugin.
-func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos) (Runner, error) {
-	tools, err := defineTools(g)
+// Init registers the core tools and the packs', and returns the turn runner.
+// It must be called after g has the Anthropic plugin.
+func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (Runner, error) {
+	tools, err := defineTools(g, repos, packs)
 	if err != nil {
 		return nil, fmt.Errorf("register assistant tools: %w", err)
 	}
@@ -29,16 +34,39 @@ func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos) (Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.PrewarmTools {
+		go prewarm(g, cfg, tools)
+	}
 	return func(ctx context.Context, req Request, onEvent OnEventFunc) (*Response, error) {
 		return run(ctx, g, req, cfg, repos, p, tools, onEvent)
 	}, nil
 }
 
-// prompts holds the system prompt, rendered once so it stays a stable cache
-// prefix, and the per-turn <view> template.
+// prompts holds the system prompt of each pack set, rendered once so it
+// stays a stable cache prefix, and the per-turn <view> template.
 type prompts struct {
-	system string
-	view   *template.Template
+	tools        *toolSet
+	systemTmpl   *template.Template
+	view         *template.Template
+	mu           sync.Mutex
+	systemByPack map[string]string
+}
+
+// system returns the system prompt for the core tools plus loaded, which
+// must be normalized.
+func (p *prompts) system(loaded []string) (string, error) {
+	key := strings.Join(loaded, ",")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if s, ok := p.systemByPack[key]; ok {
+		return s, nil
+	}
+	s, err := flowkit.RenderTemplate(p.systemTmpl, struct{ ToolGuide string }{p.tools.reg.Guide(append([]string{corePack}, loaded...)...)})
+	if err != nil {
+		return "", fmt.Errorf("render assistant system prompt: %w", err)
+	}
+	p.systemByPack[key] = s
+	return s, nil
 }
 
 func loadPrompts(tools *toolSet) (*prompts, error) {
@@ -54,11 +82,40 @@ func loadPrompts(tools *toolSet) (*prompts, error) {
 	if systemTmpl == nil || viewTmpl == nil {
 		return nil, fmt.Errorf(`assistant.tmpl must define the {{define "system"}} and {{define "view"}} blocks`)
 	}
-	system, err := flowkit.RenderTemplate(systemTmpl, struct{ ToolGuide string }{tools.reg.Guide()})
-	if err != nil {
-		return nil, fmt.Errorf("render assistant system prompt: %w", err)
+	p := &prompts{tools: tools, systemTmpl: systemTmpl, view: viewTmpl, systemByPack: map[string]string{}}
+	// Render the default sets now, so a broken template fails at init.
+	for _, set := range tools.packs.combinations() {
+		if _, err := p.system(set); err != nil {
+			return nil, err
+		}
 	}
-	return &prompts{system: system, view: viewTmpl}, nil
+	return p, nil
+}
+
+// prewarm compiles Anthropic's strict-tool grammar for each default pack
+// set, one throwaway call each with max_tokens 1, so the first real turn of
+// a set doesn't pay the compile. Best-effort: failures are logged.
+func prewarm(g *genkit.Genkit, cfg FlowConfig, tools *toolSet) {
+	for _, set := range tools.packs.combinations() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		start := time.Now()
+		mc := modelconfig.Resolve(ctx, modelconfig.FlowAssistant, modelconfig.SlotOrchestrator)
+		_, err := genkit.Generate(ctx, g,
+			ai.WithModelName(mc.Ref),
+			ai.WithSystem("warmup"),
+			ai.WithPrompt("warmup"),
+			ai.WithTools(tools.tools(set)...),
+			ai.WithMaxTurns(1),
+			cfg.Provider.CallConfig(mc.Model, 1),
+		)
+		cancel()
+		attrs := []any{logging.AttrComponent, logComponent, "packs", strings.Join(set, ","), "duration_ms", time.Since(start).Milliseconds()}
+		if err != nil {
+			slog.Warn("tool-cache prewarm failed (non-fatal)", append(attrs, logging.AttrError, err)...)
+			continue
+		}
+		slog.Info("tool-cache prewarmed", attrs...)
+	}
 }
 
 // viewListed caps the selected items the <view> block lists; getSelection
