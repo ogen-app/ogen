@@ -824,16 +824,19 @@ func (h *CampaignsHandler) Unarchive(c *fiber.Ctx) error {
 }
 
 // GenerateDraft godoc
-// @Summary      Generate draft posts (SSE)
-// @Description  Calls the AI content plan flow and streams progress via Server-Sent Events.
-// @Description  Each step emits an SSE event of type "step" with payload {"step":"<name>","status":"done"}.
-// @Description  On success a final "complete" event carries the full ContentPlanResponse payload.
+// @Summary      Plan the campaign's content as ideas (SSE)
+// @Description  Calls the AI content plan flow and streams progress via Server-Sent Events. The plan is saved
+// @Description  as ideas (origin content_plan), each with its thesis as the note and a plan (platform, post type,
+// @Description  phase, target date); no post is created until ideas are compiled or drafted. Running it again
+// @Description  adds a new batch. Each step emits "step" {"step":"<name>","status":"done"}; each saved idea emits
+// @Description  "idea" {"idea":{...},"index":<slot>,"id":"<idea id>"}; dropped items emit "warning".
+// @Description  On success a final "complete" event carries the full ContentPlanResponse payload ({ideas, ...}).
 // @Description  On failure an "error" event carries {"message":"<text>","code":<http_code>}.
 // @Tags         campaigns
 // @Produce      text/event-stream
 // @Security     CookieAuth
 // @Param        id   path  string  true  "Campaign Sqid"
-// @Success      200  "SSE stream: step / complete / error events"
+// @Success      200  "SSE stream: step / idea / warning / complete / error events"
 // @Failure      401  {object}  map[string]string
 // @Failure      403  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
@@ -960,7 +963,7 @@ func (h *CampaignsHandler) EnrichBrief(c *fiber.Ctx) error {
 // @Summary      Campaign assistant (SSE)
 // @Description  Sends an instruction to the Campaign Assistant and streams progress via Server-Sent Events.
 // @Description  "explanation_delta" carries {"delta":"..."} fragments as the reply streams. "tool_call"/"tool_result"
-// @Description  signal tool invocations. When a content plan runs, "content_plan_started", "content_plan_post"
+// @Description  signal tool invocations. When a content plan runs, "content_plan_started", "content_plan_idea"
 // @Description  (etc.) and "content_plan_complete" are forwarded; when the brief is enriched, "enrich_brief_started",
 // @Description  the per-field "enrich_brief_*_delta" events and "enrich_brief_complete" are forwarded. A final
 // @Description  "complete" event carries the CampaignAssistantResponse. "error" carries {"message":"...","code":<http_code>}.
