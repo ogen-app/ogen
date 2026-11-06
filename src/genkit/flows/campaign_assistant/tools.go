@@ -171,10 +171,16 @@ type EnrichBriefOutput struct {
 }
 
 // RunContentPlanOutput is returned to the model after a content plan runs.
+// RunContentPlanInput is the runContentPlan tool input.
+type RunContentPlanInput struct {
+	Exploratory bool `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants a plan without the campaign's sources (from general knowledge)."`
+}
+
 type RunContentPlanOutput struct {
-	PostCount    int        `json:"postCount"`
-	WarningCount int        `json:"warningCount"`
-	UsedAssets   []AssetRef `json:"usedAssets,omitempty"` // Assets that informed the plan
+	PostCount    int                    `json:"postCount"`
+	WarningCount int                    `json:"warningCount"`
+	UsedAssets   []AssetRef             `json:"usedAssets,omitempty"` // Assets that informed the plan
+	Grounding    assistantkit.Grounding `json:"grounding"`
 	// Note carries a status when the tool short-circuited without running.
 	Note string `json:"note,omitempty"`
 }
@@ -197,19 +203,21 @@ type GeneratePostsInput struct {
 	WindowStart string   `json:"windowStart,omitempty" jsonschema:"description=First publish date (ISO YYYY-MM-DD), resolved from the requested timeframe against today."`
 	WindowEnd   string   `json:"windowEnd,omitempty"   jsonschema:"description=Last publish date (ISO YYYY-MM-DD). For a single specific date, set this equal to windowStart."`
 	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Optional post-type slug (e.g. text-post, article); omit for the platform default."`
+	Exploratory bool     `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants posts without the campaign's sources (from general knowledge)."`
 }
 
 // GeneratePostsOutput is returned to the model after targeted posts are created.
 type GeneratePostsOutput struct {
-	PostCount      int        `json:"postCount"`
-	RequestedCount int        `json:"requestedCount"`
-	Clamped        bool       `json:"clamped"` // true when requestedCount exceeded the per-call cap
-	PhaseID        string     `json:"phaseId"`
-	PhaseName      string     `json:"phaseName"`
-	Platforms      []string   `json:"platforms"`       // resolved platform names
-	Dates          []string   `json:"dates,omitempty"` // Actual publish dates of the created posts, so the model reports them instead of inventing dates
-	Warnings       []string   `json:"warnings,omitempty"`
-	UsedAssets     []AssetRef `json:"usedAssets,omitempty"` // Assets that informed the posts
+	PostCount      int                    `json:"postCount"`
+	RequestedCount int                    `json:"requestedCount"`
+	Clamped        bool                   `json:"clamped"` // true when requestedCount exceeded the per-call cap
+	PhaseID        string                 `json:"phaseId"`
+	PhaseName      string                 `json:"phaseName"`
+	Platforms      []string               `json:"platforms"`       // resolved platform names
+	Dates          []string               `json:"dates,omitempty"` // Actual publish dates of the created posts, so the model reports them instead of inventing dates
+	Warnings       []string               `json:"warnings,omitempty"`
+	UsedAssets     []AssetRef             `json:"usedAssets,omitempty"` // Assets that informed the posts
+	Grounding      assistantkit.Grounding `json:"grounding"`
 	// Note carries a status when the tool short-circuited without running.
 	Note string `json:"note,omitempty"`
 }
@@ -321,7 +329,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+
 			"Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many posts were created.",
 		assistantkit.Gated("runContentPlan", contentPlanGate,
-			assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RunContentPlanOutput, error) {
+			assistantkit.Wrap(func(ctx context.Context, _ RunContentPlanInput) (*RunContentPlanOutput, error) {
 				return toolRunContentPlan(ctx)
 			}, contentPlanInvalid)),
 	)
@@ -500,10 +508,10 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
 	}
 
-	res := &ContentPlanResult{PostCount: len(resp.Posts), Warnings: resp.Warnings, UsedAssets: used}
+	res := &ContentPlanResult{PostCount: len(resp.Posts), Warnings: resp.Warnings, UsedAssets: used, Grounding: groundingOf(used)}
 	st.contentPlanResult = res
 	st.recordWrite(actionContentPlan)
-	return &RunContentPlanOutput{PostCount: res.PostCount, WarningCount: len(res.Warnings), UsedAssets: used}, nil
+	return &RunContentPlanOutput{PostCount: res.PostCount, WarningCount: len(res.Warnings), UsedAssets: used, Grounding: res.Grounding}, nil
 }
 
 // toAssetRefs maps the content_plan provenance list into the assistant's local
@@ -708,6 +716,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		PhaseID:     phaseID,
 		Warnings:    resp.Warnings,
 		UsedAssets:  used,
+		Grounding:   groundingOf(used),
 	}
 	st.recordWrite(actionPostsGenerated)
 	return assistantkit.OK(GeneratePostsOutput{
@@ -720,6 +729,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		Dates:          publishDatesOf(resp.Posts),
 		Warnings:       resp.Warnings,
 		UsedAssets:     used,
+		Grounding:      groundingOf(used),
 	}), nil
 }
 

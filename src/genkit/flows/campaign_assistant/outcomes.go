@@ -106,7 +106,7 @@ func contentPlanOutcome(r *ContentPlanResult) outcome {
 		explanation: explanation,
 		attach:      func(resp *CampaignAssistantResponse) { resp.ContentPlan = r },
 		event:       SSEEventContentPlanComplete,
-		payload:     ContentPlanCompleteEventPayload{PostCount: r.PostCount, Warnings: r.Warnings},
+		payload:     ContentPlanCompleteEventPayload{PostCount: r.PostCount, Warnings: r.Warnings, Grounding: r.Grounding},
 	}
 }
 
@@ -120,7 +120,7 @@ func generatedPostsOutcome(r *GeneratedPostsResult) outcome {
 		explanation: explanation,
 		attach:      func(resp *CampaignAssistantResponse) { resp.GeneratedPosts = r },
 		event:       SSEEventGeneratePostsComplete,
-		payload:     GeneratePostsCompleteEventPayload{PostCount: r.PostCount, Warnings: r.Warnings},
+		payload:     GeneratePostsCompleteEventPayload{PostCount: r.PostCount, Warnings: r.Warnings, Grounding: r.Grounding},
 	}
 }
 
