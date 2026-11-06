@@ -20,7 +20,7 @@ import (
 // decodes its outcome.
 func runTool(t *testing.T, st *requestState, name string, input map[string]any) assistantkit.Outcome[json.RawMessage] {
 	t.Helper()
-	raw, err := runToolRaw(t, st, name, input)
+	raw, err := runToolRaw(t, toolCtx(t, st), name, input)
 	if err != nil {
 		t.Fatalf("%s returned an error, want an outcome: %v", name, err)
 	}
@@ -32,9 +32,15 @@ func runTool(t *testing.T, st *requestState, name string, input map[string]any) 
 	return out
 }
 
-// runToolRaw calls a registered tool as genkit does and returns what it
-// returned, error included.
-func runToolRaw(t *testing.T, st *requestState, name string, input map[string]any) (any, error) {
+// toolCtx is a turn's context for st, with the campaign assistant's
+// proposal sink.
+func toolCtx(t *testing.T, st *requestState) context.Context {
+	return assistantkit.WithProposalSink(withRequestState(t.Context(), st), campaignSink{st: st})
+}
+
+// runToolRaw calls a registered tool as genkit does, with ctx, and returns
+// what it returned, error included.
+func runToolRaw(t *testing.T, ctx context.Context, name string, input map[string]any) (any, error) {
 	t.Helper()
 	spec, ok := newTestTools(t).reg.Lookup(name)
 	if !ok {
@@ -44,7 +50,7 @@ func runToolRaw(t *testing.T, st *requestState, name string, input map[string]an
 	if !ok {
 		t.Fatalf("tool %s is a %T, not an ai.Tool", name, spec.Tool)
 	}
-	return tool.RunRaw(withRequestState(t.Context(), st), input)
+	return tool.RunRaw(ctx, input)
 }
 
 // The sub-flow tools are registered with the matcher for their own flow's
@@ -84,7 +90,20 @@ func TestToolRefusals_SubFlowValidationErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
-			out := runTool(t, tc.state(fmt.Errorf("flow: %w", tc.err)), tc.tool, map[string]any{})
+			// Run as a confirmed call, so runContentPlan, always offered first,
+			// reaches its flow.
+			run := func(st *requestState) (any, error) {
+				return runToolRaw(t, assistantkit.WithConfirmed(toolCtx(t, st)), tc.tool, map[string]any{})
+			}
+			raw, err := run(tc.state(fmt.Errorf("flow: %w", tc.err)))
+			if err != nil {
+				t.Fatalf("%s returned an error, want a refusal: %v", tc.tool, err)
+			}
+			var out assistantkit.Outcome[json.RawMessage]
+			b, _ := json.Marshal(raw)
+			if err := json.Unmarshal(b, &out); err != nil {
+				t.Fatal(err)
+			}
 			if out.Status != assistantkit.StatusRefused || out.Reason != tc.err.Error() {
 				t.Fatalf("outcome = %+v, want refused %q", out, tc.err.Error())
 			}
@@ -92,7 +111,7 @@ func TestToolRefusals_SubFlowValidationErrors(t *testing.T) {
 			// Another flow's ValidationError, or an infrastructure failure, is
 			// not this tool's to refuse.
 			for _, other := range []error{errors.New("database is down"), &draft_post.ValidationError{Msg: "not mine"}} {
-				if _, err := runToolRaw(t, tc.state(other), tc.tool, map[string]any{}); err == nil {
+				if _, err := run(tc.state(other)); err == nil {
 					t.Fatalf("%v came back as an outcome, want the call to fail", other)
 				}
 			}

@@ -53,11 +53,15 @@ func Confirmed(ctx context.Context) bool {
 
 // Gate decides when a proposal-tier tool must wait for the user's yes.
 type Gate[In any] struct {
+	// Precheck validates the call before anything is proposed, so a request
+	// that could never run is refused now instead of after the user said yes.
+	// A *Refusal becomes a refused outcome; any other error aborts the turn.
+	Precheck func(context.Context, In) error
 	// Needs reports whether this call must be confirmed first. Nil means
 	// every call must, e.g. regenerating a whole content plan. A count-based
 	// tool returns true only above its threshold, so a small request runs
 	// straight away.
-	Needs func(In) bool
+	Needs func(context.Context, In) bool
 	// Summary describes the call on the proposal card, e.g. "Draft 5 LinkedIn
 	// posts for the launch phase".
 	Summary func(In) string
@@ -69,7 +73,18 @@ type Gate[In any] struct {
 // the tool running. A confirmed call runs next unchanged.
 func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome[Out]]) ai.ToolFunc[In, Outcome[Out]] {
 	return func(ctx *ai.ToolContext, in In) (Outcome[Out], error) {
-		if Confirmed(ctx) || (gate.Needs != nil && !gate.Needs(in)) {
+		if Confirmed(ctx) {
+			return next(ctx, in)
+		}
+		if gate.Precheck != nil {
+			if err := gate.Precheck(ctx, in); err != nil {
+				if r, ok := errors.AsType[*Refusal](err); ok {
+					return Refuse[Out](r.Reason, r.Alternatives...), nil
+				}
+				return Outcome[Out]{}, err
+			}
+		}
+		if gate.Needs != nil && !gate.Needs(ctx, in) {
 			return next(ctx, in)
 		}
 		sink, _ := ctx.Value(sinkKey{}).(ProposalSink)

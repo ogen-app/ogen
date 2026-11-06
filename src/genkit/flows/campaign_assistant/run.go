@@ -146,7 +146,7 @@ func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error)
 		slog.WarnContext(ctx, "brand resolve failed; using legacy tone",
 			logging.AttrComponent, logComponent, "error", err)
 	}
-	t.actx, err = assembleContext(campaign, brand.PromptBlock(""), time.Now().UTC(), p)
+	t.actx, err = assembleContext(campaign, brand.PromptBlock(""), t.openProposals(ctx), time.Now().UTC(), p)
 	if err != nil {
 		return ctx, fmt.Errorf("assemble context: %w", err)
 	}
@@ -166,23 +166,24 @@ func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error)
 	t.timer.lap("history")
 
 	t.st = &requestState{
-		campaignID:       t.req.CampaignID,
-		campaign:         campaign,
-		repos:            t.repos,
-		onEvent:          t.onEvent,
-		instruction:      t.req.Instruction,
-		embedder:         t.cfg.Embedder,
-		contentPlan:      t.cfg.ContentPlan,
-		enrichBrief:      t.cfg.EnrichBrief,
-		overview:         t.cfg.Overview,
-		generatePosts:    t.cfg.GeneratePosts,
-		maxGeneratePosts: t.cfg.MaxGeneratePosts,
-		draftPost:        t.cfg.DraftPost,
-		maxDraftPosts:    t.cfg.MaxDraftPosts,
-		checkBrief:       t.cfg.CheckBrief,
-		checkPosts:       t.cfg.CheckPosts,
+		campaignID:        t.req.CampaignID,
+		campaign:          campaign,
+		repos:             t.repos,
+		onEvent:           t.onEvent,
+		instruction:       t.req.Instruction,
+		embedder:          t.cfg.Embedder,
+		contentPlan:       t.cfg.ContentPlan,
+		enrichBrief:       t.cfg.EnrichBrief,
+		overview:          t.cfg.Overview,
+		generatePosts:     t.cfg.GeneratePosts,
+		maxGeneratePosts:  t.cfg.MaxGeneratePosts,
+		draftPost:         t.cfg.DraftPost,
+		maxDraftPosts:     t.cfg.MaxDraftPosts,
+		proposalThreshold: t.cfg.ProposalThreshold,
+		checkBrief:        t.cfg.CheckBrief,
+		checkPosts:        t.cfg.CheckPosts,
 	}
-	return withRequestState(ctx, t.st), nil
+	return assistantkit.WithProposalSink(withRequestState(ctx, t.st), campaignSink{st: t.st}), nil
 }
 
 // callModel runs the planner tool loop on the orchestrator slot, streaming the

@@ -34,6 +34,15 @@ type contextTemplateData struct {
 	// Phases lists the campaign type's phases. Already hydrated on
 	// the campaign, so surfacing them here costs no extra query.
 	Phases []phaseContext
+	// OpenProposals are offers waiting for the user's answer, so a "yes"
+	// in this turn can be matched to one.
+	OpenProposals []openProposal
+}
+
+// openProposal is one pending offer surfaced to the planner.
+type openProposal struct {
+	ID      string
+	Summary string
 }
 
 // phaseContext is one campaign phase surfaced to the planner.
@@ -54,7 +63,7 @@ type phaseContext struct {
 // the cached prefix rotates daily and on brief edits — fine, since consecutive
 // turns within the cache TTL share it. Note this is separate from the
 // strict-tool grammar cache the tool-order stabilizer keeps warm.
-func assembleContext(campaign *models.Campaign, brandBlock string, today time.Time, p *prompts) (*assistantContext, error) {
+func assembleContext(campaign *models.Campaign, brandBlock string, open []openProposal, today time.Time, p *prompts) (*assistantContext, error) {
 	campaignType := campaign.CampaignTypeID
 	var phases []phaseContext
 	if campaign.CampaignType != nil {
@@ -80,6 +89,7 @@ func assembleContext(campaign *models.Campaign, brandBlock string, today time.Ti
 		BrandBlock:     brandBlock,
 		Today:          today.Format("2006-01-02"),
 		Phases:         phases,
+		OpenProposals:  open,
 	}
 
 	contextBlock, err := flowkit.RenderTemplate(p.context, data)
