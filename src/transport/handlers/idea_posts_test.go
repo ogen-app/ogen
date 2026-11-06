@@ -40,6 +40,10 @@ func (knownIdeas) GetByID(_ context.Context, id string) (*models.Idea, error) {
 	return nil, sql.ErrNoRows
 }
 
+func (knownIdeas) Slots(_ context.Context, from, _ models.CalendarDate, campaignID string) ([]models.IdeaSlot, error) {
+	return []models.IdeaSlot{{Kind: models.IdeaSlotKind, ID: "i1", Date: from, CampaignName: campaignID}}, nil
+}
+
 type knownPosts struct{ repository.PostRepository }
 
 func (knownPosts) GetByID(_ context.Context, id string) (*models.Post, error) {
@@ -189,6 +193,24 @@ func TestDraftIdeas(t *testing.T) {
 	up = false
 	if status, _ := call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`); status != 503 {
 		t.Fatalf("writer unavailable = %d", status)
+	}
+}
+
+func TestIdeaSlots(t *testing.T) {
+	app := ideaPostsApp(nil)
+	status, body := call(t, app, "GET", "/api/ideas/slots?from=2026-12-01&to=2026-12-31&campaign_id=c1", "")
+	if status != 200 || !strings.Contains(body, `"kind":"idea"`) || !strings.Contains(body, `"date":"2026-12-01"`) || !strings.Contains(body, `"campaign_name":"c1"`) {
+		t.Fatalf("slots = %d %s", status, body)
+	}
+	for _, q := range []string{
+		"from=2026-12-01",               // no to
+		"from=Dec&to=2026-12-31",        // not a date
+		"from=2026-12-31&to=2026-12-01", // backwards
+		"from=2026-01-01&to=2026-12-31", // a year
+	} {
+		if status, _ := call(t, app, "GET", "/api/ideas/slots?"+q, ""); status != 400 {
+			t.Errorf("%s = %d, want 400", q, status)
+		}
 	}
 }
 
