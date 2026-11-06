@@ -82,7 +82,7 @@ func newRunnerHarness(t *testing.T) *runnerHarness {
 		MaxGeneratePosts: 10,
 		GeneratePosts: func(_ context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 			h.generated = append(h.generated, req)
-			return &content_plan.ContentPlanResponse{Posts: make([]content_plan.DraftPost, req.Count)}, nil
+			return &content_plan.ContentPlanResponse{Ideas: make([]content_plan.DraftPost, req.Count)}, nil
 		},
 	}
 	return h
@@ -149,7 +149,7 @@ func TestRunner_ProposeThenConfirm(t *testing.T) {
 			_ = json.Unmarshal(b, &confirmed)
 		}
 	}
-	if result, _ := confirmed["result"].(map[string]any); confirmed["status"] != string(assistantkit.StatusOK) || result["postCount"] != float64(10) {
+	if result, _ := confirmed["result"].(map[string]any); confirmed["status"] != string(assistantkit.StatusOK) || result["ideaCount"] != float64(10) {
 		t.Fatalf("turn 2: confirmProposal returned %v", confirmed)
 	}
 

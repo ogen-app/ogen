@@ -198,7 +198,7 @@ func TestGeneratePosts_HeavySlotOnlyBurnedOnSuccess(t *testing.T) {
 			campaign:         timelineCampaign(),
 			maxGeneratePosts: 10,
 			generatePosts: func(context.Context, content_plan.GeneratePostsRequest, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
-				return &content_plan.ContentPlanResponse{Posts: []content_plan.DraftPost{{Title: "t", PublishDate: "2026-01-15"}}}, nil
+				return &content_plan.ContentPlanResponse{Ideas: []content_plan.DraftPost{{Title: "t", PublishDate: "2026-01-15"}}}, nil
 			},
 		}
 		ctx := withRequestState(t.Context(), st)
@@ -207,7 +207,7 @@ func TestGeneratePosts_HeavySlotOnlyBurnedOnSuccess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("valid generation: %v", err)
 		}
-		if !out.Succeeded() || out.Result.PostCount != 1 {
+		if !out.Succeeded() || out.Result.IdeaCount != 1 {
 			t.Fatalf("want one generated post, got %+v", out)
 		}
 		if !st.heavyReserved {
