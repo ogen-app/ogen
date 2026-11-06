@@ -42,7 +42,6 @@ var _ = Describe("Content plan flow", Ordered, func() {
 		platformRepo := repository.NewPlatformRepository(db)
 		campaignTypeRepo := repository.NewCampaignTypeRepository(db)
 		campaignRepo := repository.NewCampaignRepository(db, tagRepo, platformRepo, campaignTypeRepo)
-		postRepo := repository.NewPostRepository(db)
 
 		// Seed user.
 		var err error
@@ -109,13 +108,13 @@ var _ = Describe("Content plan flow", Ordered, func() {
 			Assets:    assetRepo,
 			Chunks:    chunksRepo,
 			Platforms: platformRepo,
-			Posts:     postRepo,
+			Ideas:     repository.NewIdeaRepository(db),
 		}
 		Expect(content_plan.InitContentPlan(g, flowCfg, repos)).To(Succeed())
 	})
 
 	AfterAll(func() {
-		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("campaigns").Where("id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("users").Where("id = ?", userID).Exec(ctx)
 		_, err := db.NewDelete().TableExpr("accounts").Where("id = ?", userID).Exec(ctx)
@@ -127,25 +126,27 @@ var _ = Describe("Content plan flow", Ordered, func() {
 			resp, err := content_plan.ContentPlanFlow.Run(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
-			Expect(resp.Posts).NotTo(BeEmpty())
+			Expect(resp.Ideas).NotTo(BeEmpty())
 
-			for _, p := range resp.Posts {
+			for _, p := range resp.Ideas {
 				Expect(p.Title).NotTo(BeEmpty())
 				Expect(p.Body).NotTo(BeEmpty())
 				Expect(p.PlatformID).To(Equal(platformID))
 				Expect(p.PublishDate).NotTo(BeEmpty())
 			}
 
-			// Verify posts were persisted.
-			postRepo := repository.NewPostRepository(db)
-			posts, err := postRepo.ListByCampaign(ctx, campaignID)
+			// Verify the ideas were saved, and no post was made.
+			ideas, err := repository.NewIdeaRepository(db).List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(posts).To(HaveLen(len(resp.Posts)))
+			Expect(ideas).To(HaveLen(len(resp.Ideas)))
+			posts, err := repository.NewPostRepository(db).ListByCampaign(ctx, campaignID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(posts).To(BeEmpty())
 		})
 
 		It("emits SSE step events via NewContentPlanCallback", func() {
 			// Clean up posts from previous test so the run is fresh.
-			_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+			_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 
 			var events []content_plan.StepEventPayload
 			onEvent := content_plan.OnEventFunc(func(name content_plan.SSEEventKind, data any) {
@@ -173,18 +174,18 @@ var _ = Describe("Content plan flow", Ordered, func() {
 				"resolvePlatforms",
 				"generatePosts",
 				"validateOutput",
-				"persistDraftPosts",
+				"persistIdeas",
 			))
 		})
 
 		It("emits SSE post events incrementally during model streaming", func() {
 			// Clean up posts from previous tests so the run is fresh.
-			_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+			_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 
-			var postEvents []content_plan.PostEventPayload
+			var postEvents []content_plan.IdeaEventPayload
 			onEvent := content_plan.OnEventFunc(func(name content_plan.SSEEventKind, data any) {
-				if name == content_plan.SSEEventPost {
-					if p, ok := data.(content_plan.PostEventPayload); ok {
+				if name == content_plan.SSEEventIdea {
+					if p, ok := data.(content_plan.IdeaEventPayload); ok {
 						postEvents = append(postEvents, p)
 					}
 				}
@@ -196,13 +197,13 @@ var _ = Describe("Content plan flow", Ordered, func() {
 			Expect(resp).NotTo(BeNil())
 
 			// Every post in the final response must have been streamed as a post event.
-			Expect(postEvents).To(HaveLen(len(resp.Posts)))
+			Expect(postEvents).To(HaveLen(len(resp.Ideas)))
 
 			// Indices must be sequential starting from 0.
 			for i, pe := range postEvents {
 				Expect(pe.Index).To(Equal(i))
-				Expect(pe.Post.Title).NotTo(BeEmpty())
-				Expect(pe.Post.PlatformID).NotTo(BeEmpty())
+				Expect(pe.Idea.Title).NotTo(BeEmpty())
+				Expect(pe.Idea.PlatformID).NotTo(BeEmpty())
 			}
 		})
 	})
