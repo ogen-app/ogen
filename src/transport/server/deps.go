@@ -357,6 +357,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Campaigns:   r.campaignRepo,
 			Versions:    r.postVersionRepo,
 			Messages:    r.postMessageRepo,
+			Logs:        r.postLogRepo,
 			Platforms:   r.platformRepo,
 			Settings:    r.settingRepo,
 			Allowlist:   r.autoPublishAllowlistRepo,

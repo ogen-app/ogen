@@ -76,6 +76,9 @@ func TestPersistOne_DraftThesisNote(t *testing.T) {
 	if postRepo.created.Content != "" {
 		t.Errorf("post body = %q, want empty (thesis goes to a note)", postRepo.created.Content)
 	}
+	if postRepo.created.Status != models.PostStatusPlanned {
+		t.Errorf("status = %q, want planned: theses without a body", postRepo.created.Status)
+	}
 	if noteRepo.created == nil {
 		t.Fatal("expected a draft_thesis note to be created")
 	}
