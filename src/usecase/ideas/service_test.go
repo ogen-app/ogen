@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,6 +146,60 @@ func TestUpdate_WritesOnlyPresentFields(t *testing.T) {
 
 	if _, _, err := svc.Update(t.Context(), "missing", UpdateInput{Note: new("")}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing idea: got %v", err)
+	}
+}
+
+func TestUpdate_Plan(t *testing.T) {
+	day, _ := models.ParseCalendarDate("2026-10-02")
+	repo := &stubRepo{
+		idea:          &models.Idea{ID: "i1", Title: "t", CampaignID: new("c1")},
+		liveCampaigns: map[string]bool{"c1": true, "c2": true},
+	}
+	svc := newTestService(repo, nil)
+
+	plan := models.IdeaPlan{PlatformID: new("linkedin"), PostType: new("carousel"), PhaseID: new("ph1"), TargetDate: &day}
+	idea, fields, err := svc.Update(t.Context(), "i1", UpdateInput{SetPlan: true, Plan: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *idea.Plan.PhaseID != "ph1" || idea.Plan.TargetDate.String() != "2026-10-02" || !slices.Equal(fields, planColumns) {
+		t.Fatalf("plan = %+v, fields = %v", idea.Plan, fields)
+	}
+
+	// Moving campaign drops the phase, a phase of the old campaign's type.
+	idea, fields, err = svc.Update(t.Context(), "i1", UpdateInput{SetCampaign: true, CampaignID: new("c2")})
+	if err != nil || idea.Plan.PhaseID != nil || *idea.Plan.PlatformID != "linkedin" || !slices.Equal(fields, []string{"plan_phase_id", "campaign_id"}) {
+		t.Fatalf("moved: plan = %+v, fields = %v, err = %v", idea.Plan, fields, err)
+	}
+	// Staying in the same campaign keeps it.
+	if _, _, err := svc.Update(t.Context(), "i1", UpdateInput{SetPlan: true, Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	if idea, _, _ = svc.Update(t.Context(), "i1", UpdateInput{SetCampaign: true, CampaignID: new("c2")}); idea.Plan.PhaseID == nil {
+		t.Fatal("re-attaching to the same campaign dropped the phase")
+	}
+
+	// The zero plan clears it.
+	if idea, _, _ = svc.Update(t.Context(), "i1", UpdateInput{SetPlan: true}); !idea.Plan.IsZero() {
+		t.Fatalf("cleared plan = %+v", idea.Plan)
+	}
+
+	for name, tc := range map[string]struct {
+		plan     models.IdeaPlan
+		campaign *string
+		want     error
+	}{
+		"blank platform":           {models.IdeaPlan{PlatformID: new(" ")}, new("c2"), ErrInvalidPlan},
+		"long post type":           {models.IdeaPlan{PostType: new(strings.Repeat("x", 65))}, new("c2"), ErrInvalidPlan},
+		"phase outside a campaign": {models.IdeaPlan{PhaseID: new("ph1")}, nil, ErrPlanPhaseNeedsCampaign},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo.idea.CampaignID = tc.campaign
+			_, _, err := svc.Update(t.Context(), "i1", UpdateInput{SetPlan: true, Plan: tc.plan})
+			if !errors.Is(err, tc.want) || !IsValidation(err) {
+				t.Fatalf("err = %v, want %v as a validation error", err, tc.want)
+			}
+		})
 	}
 }
 

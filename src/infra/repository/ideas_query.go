@@ -122,7 +122,7 @@ func writeIdeaFacts(b *sqlBuf, q models.IdeaQuery, tenantID string) {
 	SELECT i.id, i.title, i.note, i.created_at,
 		coalesce(i.fit_score, 0)::bigint AS fit_key,
 		CASE WHEN `+undecidedIdeaSQL+` THEN ?::text ELSE i.verdict END AS pile,
-		CASE WHEN i.origin = 'asset_analysis' THEN ?::text ELSE ?::text END AS origin,
+		CASE WHEN i.origin = '' THEN ?::text ELSE i.origin END AS origin,
 		coalesce(a.id, ?::text) AS source_asset,
 		coalesce(a.title, '') AS source_title,
 		CASE WHEN a.id IS NULL THEN '' ELSE `+assetKindSQL+` END AS kind,
@@ -140,7 +140,7 @@ func writeIdeaFacts(b *sqlBuf, q models.IdeaQuery, tenantID string) {
 	LEFT JOIN asset_files af ON af.asset_id = a.id
 	WHERE i.tenant_id = ?`,
 		q.Now, models.IdeaPileWaiting,
-		models.IdeaOriginKeyAnalysis, models.IdeaOriginKeyManual,
+		models.IdeaOriginKeyManual,
 		ideaNone, ideaNone,
 		models.IdeaFitUnscored, models.IdeaFitHighMin, models.IdeaFitHigh,
 		models.IdeaFitMediumMin, models.IdeaFitMedium, models.IdeaFitLow,
