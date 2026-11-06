@@ -72,9 +72,15 @@ type assistantTurnRequest struct {
 // @Description  longer exist. The scope names the thread: the conversation continues across the screens of
 // @Description  one workspace, campaign or post. A malformed viewContext is a 400 that names the field; a
 // @Description  campaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.
-// @Description  Events: "explanation_delta" {"delta"}, "tool_call", "tool_result" (with "ok" false when the
-// @Description  tool refused), then "complete" with {"explanation","action"}, plus "unsaved": true when the
-// @Description  turn ran but could not be stored in the thread. "error" carries {"message":"...","code":<http_code>}.
+// @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
+// @Description  and "tool_result" {"name","ref","ok"} for each tool, "ok" false when the tool refused; "pack_loaded"
+// @Description  {"pack"} when the turn restarted with another domain's tools (deltas before it are void); one
+// @Description  "ui_action" per change to the screen, once the reply is final: {"type": navigate|set_filter|select|
+// @Description  open_saved_view, "screen", "campaignId", "focus" {kind,id}, "filter", "selection" {kind,ids},
+// @Description  "savedViewId"}, every reference already checked; then "complete" with {"explanation","action",
+// @Description  "uiActions","touched":[{"kind","id"}],"packs"}, where touched names what changed (no id: every entity
+// @Description  of the kind) for the client to refresh, plus "unsaved": true when the turn ran but could not be
+// @Description  stored in the thread. "error" carries {"message":"...","code":<http_code>} and ends the stream.
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream
