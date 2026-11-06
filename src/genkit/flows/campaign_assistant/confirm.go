@@ -57,14 +57,13 @@ func toolConfirmProposal(ctx context.Context, in ConfirmProposalInput) (any, err
 		return nil, err
 	}
 	tool, args := p.Tool, p.Args
+	if in.OptionID == "" && len(p.Options) > 0 {
+		return nil, assistantkit.Refused("This offer has options: pick one.", optionIDs(p)...)
+	}
 	if in.OptionID != "" {
 		o, ok := p.Option(in.OptionID)
 		if !ok {
-			ids := make([]string, len(p.Options))
-			for i, o := range p.Options {
-				ids[i] = o.ID
-			}
-			return nil, assistantkit.Refused(fmt.Sprintf("%q is not one of the options offered.", in.OptionID), ids...)
+			return nil, assistantkit.Refused(fmt.Sprintf("%q is not one of the options offered.", in.OptionID), optionIDs(p)...)
 		}
 		if o.Tool != "" {
 			tool, args = o.Tool, o.Args
@@ -74,6 +73,14 @@ func toolConfirmProposal(ctx context.Context, in ConfirmProposalInput) (any, err
 		return nil, err
 	}
 	return st.registry.RunConfirmed(ctx, tool, map[string]any(args))
+}
+
+func optionIDs(p *models.AssistantProposal) []string {
+	ids := make([]string, len(p.Options))
+	for i, o := range p.Options {
+		ids[i] = o.ID
+	}
+	return ids
 }
 
 func toolDismissProposal(ctx context.Context, in DismissProposalInput) (*DismissProposalOutput, error) {
