@@ -48,6 +48,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/series"
 	"github.com/ogen-app/ogen/src/usecase/signupaccess"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
+	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
 // deps is the API server's wired object graph. server.New fills it in phases,
@@ -392,7 +393,11 @@ func (d *deps) genkitDeps() genkitDeps {
 			Actions:   r.actionRepo,
 			Platforms: r.platformRepo,
 		},
-		assistantRepos: assistant.Repos{Messages: r.assistantMessageRepo},
+		assistantRepos: assistant.Repos{
+			Messages:   r.assistantMessageRepo,
+			Views:      viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo),
+			SavedViews: r.savedViewRepo,
+		},
 		draftPostRepos: draft_post.DraftPostRepos{
 			Campaigns: r.campaignRepo,
 			Platforms: r.platformRepo,
