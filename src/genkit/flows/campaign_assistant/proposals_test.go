@@ -78,7 +78,7 @@ func proposalState(proposals *memProposals, generated *int) *requestState {
 		generatePosts: func(_ context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 			*generated++
 			posts := make([]content_plan.DraftPost, req.Count)
-			return &content_plan.ContentPlanResponse{Posts: posts}, nil
+			return &content_plan.ContentPlanResponse{Ideas: posts}, nil
 		},
 		contentPlan: func(context.Context, string, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 			*generated++

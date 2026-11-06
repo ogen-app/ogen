@@ -349,8 +349,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Assets:    r.pieceRepo,
 			Chunks:    r.chunksRepo,
 			Platforms: r.platformRepo,
-			Posts:     r.postRepo,
-			Notes:     r.postNoteRepo,
+			Ideas:     r.ideaRepo,
 			Brands:    r.brandRepo,
 		},
 		postAssistRepos: post_assistant.PostAssistantRepos{
