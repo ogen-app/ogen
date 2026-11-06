@@ -257,6 +257,9 @@ func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, 
 	now := time.Now().UTC()
 	ids, _, err := resolveTargetPlatforms(st.campaign, platforms)
 	if err != nil {
+		if offer := offerPlatforms(ctx, platforms, postType); offer != nil {
+			return offer
+		}
 		return assistantkit.Refused(err.Error())
 	}
 	if _, _, err := resolvePhase(st.campaign, phase, now); err != nil {
