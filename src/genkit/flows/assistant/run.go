@@ -61,13 +61,14 @@ func run(
 		return nil, fmt.Errorf("load history: %w", err)
 	}
 	history := flowkit.History(rows, historyTurn)
-	view, err := renderView(p, req.View, time.Now().UTC())
+	view, err := renderView(p, req.View, tools.openProposals(ctx, scope), time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("render view: %w", err)
 	}
 
 	st := newTurnState(req.View, tools.packs.defaults(req.View.View.Screen, scope.Kind))
-	ctx = withTurnState(ctx, st)
+	st.emit = onEvent
+	ctx = tools.bind(withTurnState(ctx, st), st)
 	scanner, err := callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent)
 	if err != nil {
 		return nil, err
@@ -91,9 +92,7 @@ func run(
 	if err != nil {
 		return nil, err
 	}
-	result.UIActions = st.uiActions()
-	result.Touched = st.touches.List()
-	result.Packs = st.loaded
+	finish(st, result)
 
 	// The turn's work is done by now, so a failed history write does not
 	// fail it: an error would report work that happened as lost, and a retry
@@ -104,6 +103,12 @@ func run(
 	}
 	// The screen moves only once the reply is final, so a restarted call
 	// never leaves half a plan on it.
+	for _, c := range result.Proposals {
+		emit(onEvent, SSEEventProposalCreated, c)
+	}
+	for _, r := range st.resolvedList() {
+		emit(onEvent, SSEEventProposalResolved, r)
+	}
 	for _, a := range result.UIActions {
 		emit(onEvent, SSEEventUIAction, a)
 	}
