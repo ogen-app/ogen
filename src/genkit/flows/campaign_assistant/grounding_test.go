@@ -15,7 +15,7 @@ func sourcesState(store *memProposals, generated *int, ready int, used []content
 	st.snapshot = state.Snapshot{Sources: &state.Sources{Ready: ready}}
 	st.generatePosts = func(_ context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 		*generated++
-		return &content_plan.ContentPlanResponse{Posts: make([]content_plan.DraftPost, req.Count), UsedAssets: used}, nil
+		return &content_plan.ContentPlanResponse{Ideas: make([]content_plan.DraftPost, req.Count), UsedAssets: used}, nil
 	}
 	return st
 }
