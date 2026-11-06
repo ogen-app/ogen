@@ -122,6 +122,12 @@ func TestGeneratePosts_LargeBatchIsProposed(t *testing.T) {
 	if outs[0].event != SSEEventProposalCreated || outs[0].payload.(ProposalCreatedEventPayload).ID != p.ID {
 		t.Fatalf("outcome = %+v", outs[0])
 	}
+	// The runner attaches every outcome to the response.
+	var resp CampaignAssistantResponse
+	outs[0].attach(&resp)
+	if len(resp.Proposals) != 1 || resp.Proposals[0].ID != p.ID {
+		t.Fatalf("response proposals = %+v", resp.Proposals)
+	}
 
 	// Confirming runs the stored call unchanged, past the gate.
 	reg := newTestTools(t).reg
