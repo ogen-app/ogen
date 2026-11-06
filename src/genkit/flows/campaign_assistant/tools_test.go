@@ -217,6 +217,24 @@ func TestGeneratePosts_HeavySlotOnlyBurnedOnSuccess(t *testing.T) {
 			t.Fatal("a second heavy reservation must be turned away after a successful generation")
 		}
 	})
+
+	t.Run("the turn's source limit reaches the plan", func(t *testing.T) {
+		var got content_plan.GeneratePostsRequest
+		st := &requestState{
+			campaignID: "c1", campaign: timelineCampaign(), maxGeneratePosts: 10,
+			sourceAssetIDs: []string{"a2"},
+			generatePosts: func(_ context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+				got = req
+				return &content_plan.ContentPlanResponse{}, nil
+			},
+		}
+		if _, err := toolGeneratePosts(withRequestState(t.Context(), st), GeneratePostsInput{Platforms: []string{"Threads"}}); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.AssetIDs) != 1 || got.AssetIDs[0] != "a2" {
+			t.Fatalf("request assets = %v", got.AssetIDs)
+		}
+	})
 }
 
 func TestResolveWindow(t *testing.T) {

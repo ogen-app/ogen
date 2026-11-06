@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant/packs"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
@@ -69,6 +70,7 @@ type genkitRuntime struct {
 	campaignAssistantFn func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
 	answerProposalFn    func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
 	assistantFn         assistant.Runner
+	answerAssistantFn   func(ctx context.Context, req assistant.AnswerRequest, onEvent assistant.OnEventFunc) (*assistant.Response, error)
 	generatePostsFn     func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	draftPostFn         func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
 	checkBriefFn        func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
@@ -86,6 +88,7 @@ type genkitRuntime struct {
 	enrichBriefRepos    enrich_brief.EnrichBriefRepos
 	campaignAssistRepos campaign_assistant.CampaignAssistantRepos
 	assistantRepos      assistant.Repos
+	packDeps            packs.Deps
 	draftPostRepos      draft_post.DraftPostRepos
 	campaignOverviewSvc *overview.Service
 	cloneSvc            *clone.Service
@@ -111,6 +114,7 @@ type genkitDeps struct {
 	enrichBriefRepos    enrich_brief.EnrichBriefRepos
 	campaignAssistRepos campaign_assistant.CampaignAssistantRepos
 	assistantRepos      assistant.Repos
+	packDeps            packs.Deps
 	draftPostRepos      draft_post.DraftPostRepos
 	campaignOverviewSvc *overview.Service
 	cloneSvc            *clone.Service
@@ -141,6 +145,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 		enrichBriefRepos:    deps.enrichBriefRepos,
 		campaignAssistRepos: deps.campaignAssistRepos,
 		assistantRepos:      deps.assistantRepos,
+		packDeps:            deps.packDeps,
 		draftPostRepos:      deps.draftPostRepos,
 		campaignOverviewSvc: deps.campaignOverviewSvc,
 		cloneSvc:            deps.cloneSvc,
@@ -302,10 +307,32 @@ func (r *genkitRuntime) RunAssistant(ctx context.Context, req assistant.Request,
 // card, without a model call.
 func (r *genkitRuntime) AnswerProposal(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
 	r.mu.RLock()
-	fn := r.answerProposalFn
+	fn, universal := r.answerProposalFn, r.answerAssistantFn
 	r.mu.RUnlock()
 	if fn == nil {
 		return nil, ErrAnthropicUnavailable
+	}
+	// The universal assistant answers the offers its packs made; every
+	// other offer is the campaign assistant's.
+	if universal != nil {
+		resp, err := universal(ctx, assistant.AnswerRequest{ProposalID: req.ProposalID, OptionID: req.OptionID, Confirm: req.Confirm},
+			func(kind assistant.SSEEventKind, data any) {
+				if onEvent != nil {
+					onEvent(campaign_assistant.SSEEventKind(kind), data)
+				}
+			})
+		switch {
+		case errors.Is(err, assistant.ErrNotThisAssistant):
+		case errors.Is(err, assistant.ErrProposalNotFound):
+			return nil, campaign_assistant.ErrProposalNotFound
+		case err != nil:
+			if ce, ok := errors.AsType[*assistant.ProposalConflictError](err); ok {
+				return nil, &campaign_assistant.ProposalConflictError{Msg: ce.Msg}
+			}
+			return nil, err
+		default:
+			return &campaign_assistant.CampaignAssistantResponse{Explanation: resp.Explanation, Action: resp.Action}, nil
+		}
 	}
 	return fn(ctx, req, onEvent)
 }
@@ -451,7 +478,26 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		return fmt.Errorf("init campaign assistant: %w", err)
 	}
 
-	assistantFn, err := assistant.Init(g, assistant.FlowConfig{
+	// The packs reach the campaign assistant and the draft writer through
+	// this rebuild's callbacks.
+	pd := r.packDeps
+	pd.Campaign = campaignAssistantFn
+	if pd.Compose != nil {
+		pd.Compose = pd.Compose.WithDrafter(ideaDrafter(r))
+	}
+	repos := r.assistantRepos
+	answerCampaign := campaign_assistant.NewAnswerProposalCallback()
+	repos.ForeignAnswer = func(ctx context.Context, req assistant.AnswerRequest) (any, error) {
+		resp, err := answerCampaign(ctx, campaign_assistant.AnswerProposalRequest{ProposalID: req.ProposalID, OptionID: req.OptionID, Confirm: req.Confirm}, nil)
+		if errors.Is(err, campaign_assistant.ErrProposalNotFound) {
+			return nil, assistant.ErrProposalNotFound
+		}
+		if ce, ok := errors.AsType[*campaign_assistant.ProposalConflictError](err); ok {
+			return nil, &assistant.ProposalConflictError{Msg: ce.Msg}
+		}
+		return resp, err
+	}
+	universal, err := assistant.Init(g, assistant.FlowConfig{
 		Provider: provider,
 		Recorder: r.recorder,
 		Checker:  r.checker,
@@ -461,7 +507,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		MaxTurns:        4,
 		// The warmed grammar key only matches with the stable tool order.
 		PrewarmTools: r.cfg.AnthropicStableToolOrder,
-	}, r.assistantRepos)
+	}, repos, packs.All(pd)...)
 	if err != nil {
 		return fmt.Errorf("init assistant: %w", err)
 	}
@@ -486,7 +532,8 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.enrichBriefFn = enrichBriefFn
 	r.campaignAssistantFn = campaignAssistantFn
 	r.answerProposalFn = campaign_assistant.NewAnswerProposalCallback()
-	r.assistantFn = assistantFn
+	r.assistantFn = universal.Run
+	r.answerAssistantFn = universal.Answer
 	r.generatePostsFn = generatePostsFn
 	r.draftPostFn = draftPostFn
 	r.checkBriefFn = checkBriefFn
