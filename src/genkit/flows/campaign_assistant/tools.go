@@ -22,6 +22,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -287,19 +288,16 @@ type toolSet struct {
 	checkBrief            ai.ToolRef
 	checkPostsConsistency ai.ToolRef
 	askCampaignAssets     ai.ToolRef
+
+	reg *assistantkit.Registry
 }
 
-// all lists every tool in one fixed order. The planner call and the boot
-// prewarm both use it: Anthropic caches the compiled strict-tool grammar per
-// exact tool set, so a prewarm over any other set warms nothing.
-func (t *toolSet) all() []ai.ToolRef {
-	return []ai.ToolRef{
-		t.runContentPlan, t.enrichBrief, t.listCampaignPosts, t.getCampaignOverview, t.generatePosts, t.draftPost,
-		t.setCampaignDates, t.redistributePosts, t.checkBrief, t.checkPostsConsistency, t.askCampaignAssets,
-	}
-}
+// all lists every tool in the registry's fixed order. The planner call and the
+// boot prewarm both use it: Anthropic caches the compiled strict-tool grammar
+// per exact tool set, so a prewarm over any other set warms nothing.
+func (t *toolSet) all() []ai.ToolRef { return t.reg.Tools() }
 
-func defineTools(g *genkit.Genkit) *toolSet {
+func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+
 			"Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many posts were created.",
@@ -397,7 +395,7 @@ func defineTools(g *genkit.Genkit) *toolSet {
 		},
 	)
 
-	return &toolSet{
+	t := &toolSet{
 		runContentPlan:        runContentPlan,
 		enrichBrief:           enrichBrief,
 		listCampaignPosts:     listCampaignPosts,
@@ -410,6 +408,12 @@ func defineTools(g *genkit.Genkit) *toolSet {
 		checkPostsConsistency: checkPostsConsistency,
 		askCampaignAssets:     askCampaignAssets,
 	}
+	reg, err := newToolRegistry(t)
+	if err != nil {
+		return nil, err
+	}
+	t.reg = reg
+	return t, nil
 }
 
 // ── Tool implementations ─────────────────────────────────────────────────────
