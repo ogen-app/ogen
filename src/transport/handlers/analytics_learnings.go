@@ -133,7 +133,7 @@ func narrowLearnings(scope *analyticsScope, posts []models.Post, samples []repos
 	if scope == nil {
 		return posts, samples
 	}
-	posts = slices.DeleteFunc(posts, func(p models.Post) bool { return !scope.allowsPlatformID(p.PlatformID) })
+	posts = slices.DeleteFunc(posts, func(p models.Post) bool { return !scope.AllowsPlatformID(p.PlatformID) })
 	inScope := make(map[string]bool, len(posts))
 	for i := range posts {
 		inScope[posts[i].ID] = true
