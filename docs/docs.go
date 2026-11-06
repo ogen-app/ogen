@@ -1080,6 +1080,137 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/assistant/proposals/{id}/confirm": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Runs an offer the assistant proposed, exactly as proposed, and streams the work's events\nlike a chat turn: the work's own events, \"proposal_resolved\", then \"complete\" with a\nCampaignAssistantResponse. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}: 404 when the\noffer does not exist, 409 when it was already answered, expired, names an unknown option, or\nthe work itself was refused.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "assistant"
+                ],
+                "summary": "Confirm an assistant offer (SSE)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Proposal id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Picked option",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.confirmProposalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: work events / proposal_resolved / complete / error"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/assistant/proposals/{id}/dismiss": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Withdraws an offer the assistant proposed. Nothing runs. Returns the turn's\nCampaignAssistantResponse (action \"answered\").",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assistant"
+                ],
+                "summary": "Dismiss an assistant offer",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Proposal id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/auth/google/callback": {
             "get": {
                 "description": "Google redirects here. Always answers 302: into the app with a session cookie on success, or to the login page with ?error=\u003ccode\u003e.",
@@ -15717,6 +15848,15 @@ const docTemplate = `{
                 },
                 "user": {
                     "$ref": "#/definitions/models.User"
+                }
+            }
+        },
+        "handlers.confirmProposalRequest": {
+            "type": "object",
+            "properties": {
+                "optionId": {
+                    "description": "OptionID is the option the user picked, when the offer had options.",
+                    "type": "string"
                 }
             }
         },
