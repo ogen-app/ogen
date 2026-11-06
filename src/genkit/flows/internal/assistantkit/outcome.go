@@ -22,6 +22,10 @@ type Option struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
+	// Tool and Args are the call picking this option runs. They stay on the
+	// server: the model only needs the id to name the user's pick.
+	Tool string `json:"-"`
+	Args any    `json:"-"`
 }
 
 // Outcome is what every assistant tool returns to the model. Expected
