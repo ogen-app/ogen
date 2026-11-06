@@ -12,9 +12,12 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/activity/report"
+	"github.com/ogen-app/ogen/src/usecase/analytics"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
@@ -40,6 +43,23 @@ type Deps struct {
 	Analysis  *assetanalysis.Service
 	URLImport *urlimport.Service
 
+	Posts     repository.PostRepository
+	Links     repository.PostIdeaRepository
+	Analytics *analytics.Service
+
+	Brand          repository.BrandRepository
+	Activity       *report.Service
+	Settings       repository.SettingRepository
+	SocialAccounts repository.SocialAccountRepository
+	// ProfileID is the workspace's publishing profile, which its connected
+	// accounts hang off.
+	ProfileID  func(ctx context.Context) (string, error)
+	Dismissals repository.AssistantDismissalRepository
+	// CheckBrief and CheckPosts review a campaign's consistency; nil leaves
+	// reviewCampaign out of the repair pack.
+	CheckBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
+	CheckPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
+
 	// Actions logs reversible changes for undo; nil leaves them without one.
 	Actions repository.AssistantActionRepository
 	// ProposalThreshold is N: a bulk change or a generation above it waits
@@ -61,6 +81,18 @@ func All(d Deps) []assistant.Pack {
 	}
 	if d.Assets != nil && d.Campaigns != nil {
 		out = append(out, assetsPack(d))
+	}
+	if d.Posts != nil && d.Campaigns != nil {
+		out = append(out, repairPack(d))
+	}
+	if d.Analytics != nil && d.Posts != nil {
+		out = append(out, analyticsPack(d))
+	}
+	if d.Brand != nil {
+		out = append(out, foundationPack(d))
+	}
+	if d.Activity != nil {
+		out = append(out, workspacePack(d))
 	}
 	return out
 }
