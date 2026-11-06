@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/assets"
+	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/linkpreview"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
@@ -209,6 +210,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 	}).Register(app)
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, rec, d.auth).Register(app)
 	handlers.NewAssistantProposalsHandler(gk.AnswerProposal, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
+	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).Undo, rec, d.auth).Register(app)
 }
 
 // registerPostRoutes serves the platform and tag catalogs and everything

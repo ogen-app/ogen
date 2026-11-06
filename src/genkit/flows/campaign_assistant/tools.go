@@ -28,6 +28,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
 )
@@ -587,6 +588,7 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 	// The four fields map 1:1 to EnrichBriefResponse. Update is tenant-scoped
 	// via the TenantScoped BeforeUpdate hook.
 	c := st.campaign
+	before := assistantundo.CampaignBrief(c)
 	c.Description = resp.Description
 	c.TargetPersona = resp.TargetPersona
 	c.KeyMessages = resp.KeyMessages
@@ -596,7 +598,7 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 		return nil, fmt.Errorf("apply enriched brief: %w", err)
 	}
 
-	st.briefResult = &BriefResult{Applied: true}
+	st.briefResult = &BriefResult{Applied: true, UndoID: st.logChange(ctx, models.AssistantActionCampaignBrief, before, assistantundo.CampaignBrief(c))}
 	st.recordWrite(actionBriefEnriched)
 	return &EnrichBriefOutput{
 		Description:    resp.Description,
@@ -1387,6 +1389,7 @@ func toolSetCampaignDates(ctx context.Context, in SetCampaignDatesInput) (*SetCa
 		}
 	}
 
+	before := assistantundo.CampaignDates(c)
 	c.StartDate = start
 	c.EndDate = end
 	c.UpdatedAt = time.Now().UTC()
@@ -1394,7 +1397,8 @@ func toolSetCampaignDates(ctx context.Context, in SetCampaignDatesInput) (*SetCa
 		return nil, fmt.Errorf("update campaign dates: %w", err)
 	}
 
-	st.datesResult = &DatesResult{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside}
+	st.datesResult = &DatesResult{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside,
+		UndoID: st.logChange(ctx, models.AssistantActionCampaignDates, before, assistantundo.CampaignDates(c))}
 	st.recordWrite(actionDatesUpdated)
 	return &SetCampaignDatesOutput{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside}, nil
 }
