@@ -444,6 +444,8 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		// the thinking Claude 5.x models do by default.
 		MaxOutputTokens: 4096,
 		MaxTurns:        4,
+		// The warmed grammar key only matches with the stable tool order.
+		PrewarmTools: r.cfg.AnthropicStableToolOrder,
 	}, r.assistantRepos)
 	if err != nil {
 		return fmt.Errorf("init assistant: %w", err)

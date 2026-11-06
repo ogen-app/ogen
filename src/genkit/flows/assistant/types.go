@@ -7,6 +7,9 @@ package assistant
 import (
 	"context"
 
+	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
@@ -25,6 +28,14 @@ type Response struct {
 	Explanation string `json:"explanation"`
 	// Action is "answered", or "declined" for a request out of scope.
 	Action string `json:"action" enums:"answered,declined"`
+	// UIActions drive the client's screen, in order. Each was also streamed
+	// as a "ui_action" event just before "complete".
+	UIActions []UIAction `json:"uiActions,omitempty"`
+	// Touched is what the turn changed, for the client to refresh; [] when
+	// nothing.
+	Touched []assistantkit.Touched `json:"touched"`
+	// Packs are the packs the turn ran with, besides the core tools.
+	Packs []string `json:"packs,omitempty"`
 }
 
 const (
@@ -32,13 +43,25 @@ const (
 	actionDeclined = "declined"
 )
 
-// SSEEventKind names an event the turn streams.
+// SSEEventKind names an event the turn streams. In order:
+//
+//   - explanation_delta {delta}: a fragment of the reply, as it streams.
+//   - tool_call {name, input, ref} and tool_result {name, ref, ok}: a tool
+//     the orchestrator ran.
+//   - pack_loaded {pack}: the turn restarted with another pack's tools;
+//     the deltas streamed before it are void.
+//   - ui_action UIAction: a change to the client's screen, in order, once
+//     the reply is final.
+//   - complete Response: the turn's result. Last.
+//   - error {message, code}: the turn failed; nothing follows.
 type SSEEventKind string
 
 const (
 	SSEEventExplanationDelta SSEEventKind = "explanation_delta"
 	SSEEventToolCall         SSEEventKind = "tool_call"
 	SSEEventToolResult       SSEEventKind = "tool_result"
+	SSEEventPackLoaded       SSEEventKind = "pack_loaded"
+	SSEEventUIAction         SSEEventKind = "ui_action"
 	SSEEventComplete         SSEEventKind = "complete"
 	SSEEventError            SSEEventKind = "error"
 )
@@ -65,6 +88,11 @@ type ToolResultEventPayload struct {
 	OK   bool   `json:"ok"`
 }
 
+// PackLoadedEventPayload is a "pack_loaded" event.
+type PackLoadedEventPayload struct {
+	Pack string `json:"pack"`
+}
+
 // FlowConfig is the flow's static configuration.
 type FlowConfig struct {
 	Provider *llm.Provider
@@ -72,13 +100,32 @@ type FlowConfig struct {
 	Checker  *usage.Checker
 	// MaxOutputTokens caps the orchestrator's reply; 0 means 4096.
 	MaxOutputTokens int64
-	// MaxTurns bounds tool round trips per turn; 0 means 4.
+	// MaxTurns bounds tool round trips per model call; 0 means 4.
 	MaxTurns int
+	// PrewarmTools compiles Anthropic's strict-tool grammar for every default
+	// pack combination at init, off the user's path.
+	PrewarmTools bool
 }
 
 // Repos are the stores the flow reads and writes.
 type Repos struct {
 	Messages repository.AssistantMessageRepository
+	// Views reloads the references the UI tools are given.
+	Views ViewReader
+	// SavedViews finds the saved view openSavedView opens.
+	SavedViews SavedViewReader
+}
+
+// ViewReader reloads references in the caller's tenant;
+// viewresolve.Resolver.
+type ViewReader interface {
+	Items(ctx context.Context, kind viewcontext.EntityKind, ids []string) ([]viewresolve.Item, error)
+	CheckFilter(kind viewcontext.EntityKind, filter string) error
+}
+
+// SavedViewReader reads one saved view; repository.SavedViewRepository.
+type SavedViewReader interface {
+	GetByID(ctx context.Context, id string) (*models.SavedView, error)
 }
 
 // ValidationError is a turn the server won't run (HTTP 400).

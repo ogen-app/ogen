@@ -176,6 +176,30 @@ func TestResolve_UntitledKindPassesThrough(t *testing.T) {
 	}
 }
 
+func TestItemsAndCheckFilter(t *testing.T) {
+	r := New(titles(), &fakeIdeas{}, &fakeAssets{})
+	got, err := r.Items(t.Context(), viewcontext.KindIdea, []string{"i3", "gone", "i1"})
+	if err != nil || !slices.Equal(itemIDs(got), []string{"i3", "i1"}) || got[0].Title != "FAQ" {
+		t.Fatalf("items = %+v, %v", got, err)
+	}
+	if got, err := r.Items(t.Context(), viewcontext.KindVoice, []string{"v1"}); err != nil || len(got) != 1 {
+		t.Fatalf("untitled kind: %+v, %v", got, err)
+	}
+
+	if err := r.CheckFilter(viewcontext.KindIdea, "origin=asset_analysis"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CheckFilter(viewcontext.KindAsset, ""); err != nil {
+		t.Fatal(err)
+	}
+	if ie, ok := errors.AsType[*viewcontext.InvalidError](r.CheckFilter(viewcontext.KindIdea, "pile=nope")); !ok || ie.Field != "filter" {
+		t.Fatal("a pile the list doesn't know passed")
+	}
+	if err := r.CheckFilter(viewcontext.KindPost, "x=1"); !errors.Is(err, errNoListQuery) {
+		t.Fatalf("posts have no list filter: %v", err)
+	}
+}
+
 func itemIDs(items []Item) []string {
 	out := make([]string, len(items))
 	for i, it := range items {

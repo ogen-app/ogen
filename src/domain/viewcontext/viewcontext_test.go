@@ -42,6 +42,36 @@ func TestParse_AllMatching(t *testing.T) {
 	}
 }
 
+func TestScreenKinds(t *testing.T) {
+	for _, s := range Screens() {
+		if !s.Valid() {
+			t.Fatalf("%s is listed but not valid", s)
+		}
+		if k, ok := s.DetailKind(); ok && !slices.Contains(kinds, k) {
+			t.Fatalf("%s shows unknown kind %s", s, k)
+		}
+		if k, ok := s.ListKind(); ok && k != KindIdea && k != KindAsset {
+			t.Fatalf("%s lists %s, which has no filter syntax", s, k)
+		}
+	}
+	for s := range detailKinds {
+		if !s.Valid() {
+			t.Fatalf("detail screen %s is not a screen", s)
+		}
+	}
+	for s := range listKinds {
+		if !s.Valid() {
+			t.Fatalf("list screen %s is not a screen", s)
+		}
+	}
+	if !Screen("campaign.ideas").InCampaign() || Screen("ideas").InCampaign() || Screen("billing").Valid() {
+		t.Fatal("screen predicates")
+	}
+	if k, ok := Screen("analytics.post").DetailKind(); !ok || k != KindPost {
+		t.Fatal("analytics.post shows a post")
+	}
+}
+
 func TestParse_Invalid(t *testing.T) {
 	many := make([]string, MaxSelectionIDs+1)
 	for i := range many {
