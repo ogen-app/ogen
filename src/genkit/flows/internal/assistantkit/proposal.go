@@ -82,6 +82,9 @@ type Gate[In any] struct {
 	// Summary describes the call on the proposal card, e.g. "Draft 5 LinkedIn
 	// posts for the launch phase".
 	Summary func(In) string
+	// Describe is Summary for a card that needs to read something, e.g. the
+	// title of the idea a merge keeps. It wins over Summary when set.
+	Describe func(context.Context, In) string
 }
 
 // Gated holds a proposal-tier tool back until the user confirms it. Unless
@@ -109,7 +112,10 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 			return next(ctx, in)
 		}
 		summary := tool
-		if gate.Summary != nil {
+		switch {
+		case gate.Describe != nil:
+			summary = gate.Describe(ctx, in)
+		case gate.Summary != nil:
 			summary = gate.Summary(in)
 		}
 		return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: summary}, StatusProposed)
