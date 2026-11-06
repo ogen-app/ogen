@@ -112,6 +112,17 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 	}
 }
 
+// Offer stores p as an offer from a tool that computed it — e.g. a plan of
+// moves the user confirms as previewed — and returns its id. p.Tool is the
+// proposal-tier tool confirming it runs, with p.Args.
+func Offer(ctx context.Context, p Proposal) (string, error) {
+	sink, _ := ctx.Value(sinkKey{}).(ProposalSink)
+	if sink == nil {
+		return "", ErrNoProposalSink
+	}
+	return sink.Propose(ctx, p)
+}
+
 // propose stores p and tells the model what is waiting: a plain proposal to
 // confirm, or a conflict whose options the user picks from.
 func propose[Out any](ctx context.Context, p Proposal, status Status) (Outcome[Out], error) {

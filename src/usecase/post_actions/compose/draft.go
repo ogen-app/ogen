@@ -194,6 +194,16 @@ func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(Dra
 	return res, nil
 }
 
+// Write runs one writer call outside a plan — posts written from source
+// material other than ideas, such as posts that performed well — and links
+// each written post to ideaIDs, its provenance.
+func (s *Service) Write(ctx context.Context, req DraftRequest, ideaIDs []string, onPost func(DraftedPost)) (*DraftResult, error) {
+	if s.draft == nil {
+		return nil, errors.New("compose: no writer")
+	}
+	return s.RunDraft(ctx, &DraftPlan{Jobs: []DraftJob{{Request: req, IdeaIDs: ideaIDs}}}, onPost)
+}
+
 // WithDrafter returns s writing through d.
 func (s *Service) WithDrafter(d Drafter) *Service {
 	s.draft = d
