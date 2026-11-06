@@ -95,7 +95,7 @@ func ideasPack(d Deps) assistant.Pack {
 					return draftIdeas(ctx, d, in)
 				})))
 
-			return []assistantkit.Spec{
+			return append([]assistantkit.Spec{
 				spec(ideasPackName, find, assistantkit.TierRead,
 					`Call this to look up ideas by what they are about or by state — e.g. "which ideas are about pricing?", "the undecided ones from analyses". filter is a URL query string in the Ideas list's syntax: text=, pile=waiting|yes|later|no, origin=asset_analysis|content_plan|assistant|manual, fit=high|medium|low, campaign=<id>. To show the user, also call setFilter with the same filter.`),
 				spec(ideasPackName, verdict, assistantkit.TierReversible,
@@ -110,7 +110,7 @@ func ideasPack(d Deps) assistant.Pack {
 					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these". It writes no body: the post holds their theses until someone drafts it. Pass ideaIds in the order the theses should come; the campaign defaults to the one they share.`),
 				spec(ideasPackName, draft, assistantkit.TierProposal,
 					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. More than a few posts are offered first.`),
-			}, nil
+			}, defineMergeTools(g, d)...), nil
 		},
 	}
 }

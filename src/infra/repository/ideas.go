@@ -65,6 +65,18 @@ type IdeaRepository interface {
 	// campaignID keeps that campaign's; otherwise ideas of archived
 	// campaigns are left out, as the calendar leaves out their posts.
 	Slots(ctx context.Context, from, to models.CalendarDate, campaignID string) ([]models.IdeaSlot, error)
+	// OpenIdeas returns up to limit open ideas of one scope, newest first:
+	// those of the live campaign campaignID, or with campaignID empty the
+	// workspace-wide ones. Open is not turned down and no post made from
+	// it. more reports that the scope holds further open ideas.
+	OpenIdeas(ctx context.Context, campaignID string, limit int) (ideas []models.Idea, more bool, err error)
+	// MergeSet reads the ideas of ids and which of them a post was made
+	// from, without locking them.
+	MergeSet(ctx context.Context, ids []string) (IdeaMergeSet, error)
+	// MergeIdeas locks the ideas of ids, hands their merge set to plan, and
+	// in the same transaction writes the merge plan returns. An error from
+	// plan rolls back and is returned as it is.
+	MergeIdeas(ctx context.Context, ids []string, plan func(IdeaMergeSet) (IdeaMerge, error)) error
 }
 
 type ideaRepository struct {
@@ -78,7 +90,12 @@ func NewIdeaRepository(db *bun.DB) IdeaRepository {
 // selectIdeas builds the shared read: every idea column, with campaign_id taken
 // from the joined live campaign rather than the stored FK.
 func (r *ideaRepository) selectIdeas(model any) *bun.SelectQuery {
-	return r.db.NewSelect().
+	return selectIdeasOn(r.db, model)
+}
+
+// selectIdeasOn is selectIdeas on db, a transaction or the pool.
+func selectIdeasOn(db bun.IDB, model any) *bun.SelectQuery {
+	return db.NewSelect().
 		Model(model).
 		ColumnExpr("i.id, i.title, i.note, i.verdict, i.remind_at, i.decided_at, i.decided_by").
 		ColumnExpr("i.origin, i.asset_analysis_id, i.distill_run_id, i.source_asset_id, i.angle, i.rationale, i.sources").

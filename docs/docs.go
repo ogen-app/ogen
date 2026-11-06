@@ -7304,6 +7304,105 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/ideas/duplicates": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Groups the open ideas of one scope — not turned down, no post made from them — that read as the same idea. Without ` + "`" + `campaign_id` + "`" + ` the scope is the workspace-wide ideas (those in no campaign); with it, that campaign's. Two ideas match when their normalised title words, or title and note words, overlap by a Jaccard index of at least 0.6 (lowercased, punctuation and common English words dropped, plurals trimmed); matches chain into groups. Groups come largest first; each lists its suggested ` + "`" + `keep_id` + "`" + ` first (a ` + "`" + `yes` + "`" + `, else most assets, else the oldest), then the rest oldest first. At most the 500 newest open ideas are compared; ` + "`" + `truncated` + "`" + ` says there were more.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Find near-duplicate ideas",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign whose ideas to search; absent for the workspace-wide ideas",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.duplicatesResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "campaign_id names no live campaign",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/ideas/merge": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Folds 1–50 ideas into ` + "`" + `keep_id` + "`" + ` in one transaction and deletes them. The kept idea keeps its title, verdict, plan and campaign; it gains every asset the merged ideas drew on (its own first), becomes ` + "`" + `grounded` + "`" + ` when any of them was, and gains each merged note it does not already contain (ignoring case and spacing), appended as a paragraph while it stays within the note limit. An analysed idea's note belongs to its analysis and gains nothing. Every idea must be in the kept one's campaign (or all workspace-wide), and none may have had a post made from it; any unknown id is a 404 and nothing changes. Publishes ` + "`" + `ideas.deleted` + "`" + ` on ` + "`" + `entity:ideas:list` + "`" + ` with the merged ids.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Merge near-duplicate ideas into one",
+                "parameters": [
+                    {
+                        "description": "the idea to keep and the ideas to merge into it",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.mergeIdeasRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.mergeIdeasResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "bad ids, mixed campaigns, or an idea a post was made from",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/ideas/slots": {
             "get": {
                 "security": [
@@ -16445,6 +16544,80 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.duplicateGroup": {
+            "type": "object",
+            "properties": {
+                "ideas": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.duplicateIdea"
+                    }
+                },
+                "keep_id": {
+                    "description": "KeepID is the suggested idea to merge the rest into; it is listed first.",
+                    "type": "string"
+                },
+                "similarity": {
+                    "description": "Similarity is the weakest pair score that joined the group, 0–1.",
+                    "type": "number"
+                }
+            }
+        },
+        "handlers.duplicateIdea": {
+            "type": "object",
+            "properties": {
+                "asset_count": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "origin": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "asset_analysis",
+                        "content_plan",
+                        "assistant"
+                    ]
+                },
+                "title": {
+                    "type": "string"
+                },
+                "verdict": {
+                    "type": "string",
+                    "enum": [
+                        "yes",
+                        "later"
+                    ],
+                    "x-nullable": true
+                }
+            }
+        },
+        "handlers.duplicatesResponse": {
+            "type": "object",
+            "properties": {
+                "groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.duplicateGroup"
+                    }
+                },
+                "scanned": {
+                    "description": "Scanned is how many open ideas were compared; Truncated says the scope\nholds more, and only the newest were.",
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
         "handlers.emailPreferences": {
             "type": "object",
             "properties": {
@@ -16729,6 +16902,40 @@ const docTemplate = `{
                 "before": {
                     "description": "Before bounds the update to notifications the caller has actually seen\n(seq \u003c= Before), so one that arrives mid-click stays unread. 0 = all.",
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.mergeIdeasRequest": {
+            "type": "object",
+            "properties": {
+                "keep_id": {
+                    "type": "string"
+                },
+                "merge_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.mergeIdeasResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "description": "Deleted lists the merged ideas, now deleted.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "idea": {
+                    "description": "Idea is the kept idea as it is now.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Idea"
+                        }
+                    ]
                 }
             }
         },
