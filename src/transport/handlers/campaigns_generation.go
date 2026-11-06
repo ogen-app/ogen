@@ -68,17 +68,18 @@ func (h *CampaignGenerationHandler) recordActivity(c *fiber.Ctx, category, typ s
 }
 
 // GeneratePosts godoc
-// @Summary      Generate targeted posts (SSE)
-// @Description  Generates a few new draft posts for a platform subset, a single
-// @Description  phase, and a publish-date window (CON-114). Streams the same
-// @Description  step / post / warning / complete / error events as generate-draft.
+// @Summary      Plan targeted ideas (SSE)
+// @Description  Plans a few new ideas for a platform subset, a single phase, and a
+// @Description  publish-date window (CON-114), saved as ideas with that plan; no post is
+// @Description  created. Streams the same step / idea / warning / complete / error events
+// @Description  as generate-draft.
 // @Description  Available to any user in the campaign's tenant.
 // @Tags         campaigns
 // @Accept       json
 // @Produce      text/event-stream
 // @Security     CookieAuth
 // @Param        id    path  string  true  "Campaign Sqid"
-// @Success      200  "SSE stream: step / post / warning / complete / error events"
+// @Success      200  "SSE stream: step / idea / warning / complete / error events"
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string

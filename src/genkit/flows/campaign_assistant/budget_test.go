@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 )
@@ -16,46 +15,22 @@ func budgetState(store *memProposals, generated *int, room int) *requestState {
 	return st
 }
 
-// The Daria case: the goal has room for 2, the request is for 10. Nothing
-// runs; the user gets a choice, and picking "fill" adds exactly 2.
-func TestGeneratePosts_OverGoalOffersAChoice(t *testing.T) {
-	store := &memProposals{}
-	var generated int
-	st := budgetState(store, &generated, 2)
-	out := runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 10})
-	if out.Status != assistantkit.StatusConflict || out.ProposalID == "" || generated != 0 {
-		t.Fatalf("outcome = %+v, generated = %d", out, generated)
-	}
-	if len(out.Options) != 2 || out.Options[0].ID != "fill" || out.Options[1].ID != "anyway" {
-		t.Fatalf("options = %+v", out.Options)
-	}
-	p := store.rows[0]
-	if fill, _ := p.Option("fill"); fill.Tool != "generatePosts" || fill.Args["count"] != float64(2) {
-		t.Fatalf("stored fill option = %+v", fill)
-	}
-	if len(st.proposed) != 1 || len(st.proposed[0].Options) != 2 {
-		t.Fatalf("card payload = %+v", st.proposed)
-	}
-
-	st.registry = newTestTools(t).reg
-	// A plain yes is not enough when there is a choice.
-	if out := runTool(t, st, "confirmProposal", map[string]any{"proposalId": p.ID}); out.Status != assistantkit.StatusRefused || generated != 0 {
-		t.Fatalf("confirm without an option = %+v, generated = %d", out, generated)
-	}
-	out = runTool(t, st, "confirmProposal", map[string]any{"proposalId": p.ID, "optionId": "fill"})
-	if out.Status != assistantkit.StatusOK || generated != 1 || p.Status != models.ProposalConfirmed || p.Chosen != "fill" {
-		t.Fatalf("confirm fill = %+v, generated = %d, proposal = %+v", out, generated, p)
-	}
-}
-
-// With no room left, the only way forward is past the goal, and it still
-// waits for a yes.
-func TestGeneratePosts_NoRoomOffersOnlyAnyway(t *testing.T) {
+// Planning makes ideas, which fill no goal: with no room left a small plan
+// still runs, and a big one waits for a yes only because of its size.
+func TestGeneratePosts_IdeasFillNoGoal(t *testing.T) {
 	store := &memProposals{}
 	var generated int
 	out := runTool(t, budgetState(store, &generated, 0), "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 1})
-	if out.Status != assistantkit.StatusConflict || len(out.Options) != 1 || out.Options[0].ID != "anyway" || generated != 0 {
-		t.Fatalf("outcome = %+v, generated = %d", out, generated)
+	if out.Status != assistantkit.StatusOK || generated != 1 {
+		t.Fatalf("no room, 1 idea: outcome = %+v, generated = %d", out, generated)
+	}
+
+	out = runTool(t, budgetState(store, &generated, 2), "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 10})
+	if out.Status != assistantkit.StatusProposed || len(out.Options) != 0 || generated != 1 {
+		t.Fatalf("room for 2, 10 ideas: outcome = %+v, generated = %d; want a plain proposal, no goal choice", out, generated)
+	}
+	if out.Summary != "Plan 10 ideas for Threads" {
+		t.Fatalf("summary = %q", out.Summary)
 	}
 }
 
@@ -85,5 +60,32 @@ func TestGeneratePosts_WithinGoalRuns(t *testing.T) {
 	out := runTool(t, budgetState(store, &generated, 5), "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2})
 	if out.Status != assistantkit.StatusOK || generated != 1 || len(store.rows) != 0 {
 		t.Fatalf("outcome = %+v, generated = %d, proposals = %d", out, generated, len(store.rows))
+	}
+}
+
+// Drafted posts do fill the goal: past it, the user chooses between filling
+// it exactly and adding them all anyway.
+func TestOverGoal_OffersAChoice(t *testing.T) {
+	var generated int
+	st := budgetState(&memProposals{}, &generated, 2)
+	ctx := st.bind(t.Context())
+	args := map[string]any{"count": 10}
+	err := overGoal(ctx, "draftPost", 10, args, func(n int) any { return map[string]any{"count": n} })
+	ce, ok := errors.AsType[*assistantkit.ConflictError](err)
+	if !ok || len(ce.Options) != 2 || ce.Options[0].ID != "fill" || ce.Options[1].ID != "anyway" {
+		t.Fatalf("err = %v", err)
+	}
+	if fill := ce.Options[0].Args.(map[string]any); fill["count"] != 2 {
+		t.Fatalf("fill = %+v", fill)
+	}
+
+	// No room: only "anyway". Within the goal: no conflict.
+	st = budgetState(&memProposals{}, &generated, 0)
+	if ce, ok := errors.AsType[*assistantkit.ConflictError](overGoal(st.bind(t.Context()), "draftPost", 1, args, nil)); !ok || len(ce.Options) != 1 || ce.Options[0].ID != "anyway" {
+		t.Fatalf("no room = %+v", ce)
+	}
+	st = budgetState(&memProposals{}, &generated, 5)
+	if err := overGoal(st.bind(t.Context()), "draftPost", 2, args, nil); err != nil {
+		t.Fatalf("within the goal: %v", err)
 	}
 }
