@@ -24,7 +24,8 @@ func TestIdeas_PlanAndOrigins(t *testing.T) {
 	}
 	planned := &models.Idea{
 		ID: "ip-plan", Title: "Launch teaser", Origin: models.IdeaOriginContentPlan,
-		Plan: models.IdeaPlan{PlatformID: new("linkedin"), PostType: new("carousel"), PhaseID: new("ph1"), TargetDate: &day},
+		Plan:     models.IdeaPlan{PlatformID: new("linkedin"), PostType: new("carousel"), PhaseID: new("ph1"), TargetDate: &day},
+		AssetIDs: []string{"a1", "a2"}, GroundingMode: models.GroundingFor(2),
 	}
 	for _, i := range []*models.Idea{
 		planned,
@@ -42,6 +43,13 @@ func TestIdeas_PlanAndOrigins(t *testing.T) {
 	}
 	if p := got.Plan; *p.PlatformID != "linkedin" || *p.PostType != "carousel" || *p.PhaseID != "ph1" || p.TargetDate.String() != "2026-12-01" {
 		t.Fatalf("plan = %+v", p)
+	}
+	if len(got.AssetIDs) != 2 || got.AssetIDs[1] != "a2" || got.GroundingMode == nil || *got.GroundingMode != models.GroundingGrounded {
+		t.Fatalf("sources = %v, grounding = %v", got.AssetIDs, got.GroundingMode)
+	}
+	manual, err := repo.GetByID(ctx, "ip-manual")
+	if err != nil || manual.AssetIDs == nil || len(manual.AssetIDs) != 0 || manual.GroundingMode != nil {
+		t.Fatalf("manual idea sources = %#v, grounding = %v (%v); want [] and nil", manual.AssetIDs, manual.GroundingMode, err)
 	}
 
 	got.Plan = models.IdeaPlan{}
