@@ -3,6 +3,7 @@ package assistantundo_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -311,6 +312,67 @@ func TestUndo_DatesReanchorManualPlan(t *testing.T) {
 	}
 	if !windows[0].End.Equal(*day("2026-06-20")) || !windows[1].End.Equal(*day("2026-06-30")) {
 		t.Fatalf("windows = %+v, want 06-01..06-20, 06-21..06-30", windows)
+	}
+}
+
+func TestUndo_CampaignPlatforms(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) {
+		c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}
+	})
+	id := f.logChange(t, models.AssistantActionCampaignPlatforms, assistantundo.CampaignPlatforms, func(c *models.Campaign) {
+		c.TargetPlatforms = append(c.TargetPlatforms, models.CampaignPlatform{ID: "pl2"})
+	})
+	// The content bank changes after the assistant's edit.
+	if _, err := f.campaigns.AddAssetIDs(f.ctx, "c1", []string{"asset-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.load(t)
+	tp := c.TargetPlatforms
+	if len(tp) != 1 || tp[0].ID != "pl1" || len(tp[0].PostTypes) != 1 || tp[0].PostTypes[0] != "article" {
+		t.Fatalf("restored platforms = %+v", tp)
+	}
+	if !c.UseAssets || len(c.AssetIDs) != 1 {
+		t.Fatalf("assets = %v (use %t), undo rewrote the content bank", c.AssetIDs, c.UseAssets)
+	}
+}
+
+// A later edit to the platforms, or to a platform's post types, is kept.
+func TestUndo_PlatformsRefuseWhenChangedSince(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*models.Campaign)
+	}{
+		{"platform", func(c *models.Campaign) { c.TargetPlatforms = c.TargetPlatforms[:1] }},
+		{"post types", func(c *models.Campaign) { c.TargetPlatforms[0].PostTypes = []string{"article", "carousel"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.seedCampaign(t, func(c *models.Campaign) {
+				c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}
+			})
+			id := f.logChange(t, models.AssistantActionCampaignPlatforms, assistantundo.CampaignPlatforms, func(c *models.Campaign) {
+				c.TargetPlatforms = append(c.TargetPlatforms, models.CampaignPlatform{ID: "pl2"})
+			})
+			c := f.load(t)
+			tc.edit(c)
+			f.save(t, c)
+			want := assistantundo.CampaignPlatforms(c)
+
+			if _, err := f.svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+				t.Fatalf("err = %v, want ErrChangedSince", err)
+			}
+			if got := assistantundo.CampaignPlatforms(f.load(t)); fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("platforms = %v, want the later edit %v", got, want)
+			}
+			if f.undone(t, id) {
+				t.Fatal("a refused undo was recorded")
+			}
+		})
 	}
 }
 
