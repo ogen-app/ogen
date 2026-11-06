@@ -14,11 +14,12 @@ import (
 type analyticsScope = analytics.Scope
 
 // service is the analytics reads over the handler's stores, with its cached
-// baseline.
+// baselines.
 func (h *AnalyticsHandler) service() *analytics.Service {
 	return &analytics.Service{
 		Repo: h.repo, Followers: h.followerRepo, Posts: h.posts, Platforms: h.platforms,
 		Accounts: h.accounts, Campaigns: h.campaigns, ReachSamples: h.reachByAgeSamples,
+		LifespanSamples: h.lifespanSamples,
 	}
 }
 

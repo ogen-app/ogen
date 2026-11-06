@@ -1,6 +1,7 @@
 // Package analytics reads what happened to a workspace's posts: the overview
 // over a window and the best and worst performers, narrowed to platforms
-// and/or a campaign. The HTTP handlers and the assistant read through it, so
+// and/or a campaign, the lessons of its whole history, and one post's
+// statistics. The HTTP handlers and the assistant read through it, so
 // a number on the dashboard and one in the chat are the same number.
 package analytics
 
@@ -48,6 +49,9 @@ type Service struct {
 	// ReachSamples returns the workspace's reach-at-age baseline; nil reads
 	// Repo each time. The HTTP handler passes its cached read.
 	ReachSamples func(ctx context.Context) ([]repository.ReachAgeSample, error)
+	// LifespanSamples returns the workspace's lifespan samples since a day
+	// (zero for all time); nil reads Repo each time.
+	LifespanSamples func(ctx context.Context, since time.Time) ([]repository.LifespanSample, error)
 }
 
 // Scope is what a read is narrowed to: platforms and/or one campaign. A nil
