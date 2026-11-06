@@ -50,7 +50,7 @@ func (st *requestState) outcomes() []outcome {
 			explanation: "I enriched the campaign brief and saved it to the campaign.",
 			attach:      func(resp *CampaignAssistantResponse) { resp.Brief = r },
 			event:       SSEEventEnrichBriefComplete,
-			payload:     EnrichBriefCompleteEventPayload{Applied: r.Applied},
+			payload:     EnrichBriefCompleteEventPayload{Applied: r.Applied, UndoID: r.UndoID},
 		})
 	}
 	if r := st.generatedPostsResult; r != nil {
@@ -148,7 +148,7 @@ func datesOutcome(r *DatesResult) outcome {
 		explanation: explanation,
 		attach:      func(resp *CampaignAssistantResponse) { resp.Dates = r },
 		event:       SSEEventDatesUpdated,
-		payload:     DatesUpdatedEventPayload{StartDate: r.StartDate, EndDate: r.EndDate, PostsOutsideRange: r.PostsOutsideRange},
+		payload:     DatesUpdatedEventPayload{StartDate: r.StartDate, EndDate: r.EndDate, PostsOutsideRange: r.PostsOutsideRange, UndoID: r.UndoID},
 	}
 }
 
