@@ -108,6 +108,7 @@ type requestState struct {
 	generatedPostsResult *GeneratedPostsResult
 	draftPostResult      *DraftPostResult
 	datesResult          *DatesResult
+	platformsResult      *PlatformsResult
 	redistributeResult   *RedistributeResult
 	briefReviewResult    *consistency.BriefReview
 	postsReviewResult    *consistency.PostsReview
@@ -335,19 +336,20 @@ type AssetExcerpt struct {
 // ── Tool registration ────────────────────────────────────────────────────────
 
 type toolSet struct {
-	runContentPlan        ai.ToolRef
-	enrichBrief           ai.ToolRef
-	listCampaignPosts     ai.ToolRef
-	getCampaignOverview   ai.ToolRef
-	generatePosts         ai.ToolRef
-	draftPost             ai.ToolRef
-	setCampaignDates      ai.ToolRef
-	redistributePosts     ai.ToolRef
-	checkBrief            ai.ToolRef
-	checkPostsConsistency ai.ToolRef
-	askCampaignAssets     ai.ToolRef
-	confirmProposal       ai.ToolRef
-	dismissProposal       ai.ToolRef
+	runContentPlan          ai.ToolRef
+	enrichBrief             ai.ToolRef
+	listCampaignPosts       ai.ToolRef
+	getCampaignOverview     ai.ToolRef
+	generatePosts           ai.ToolRef
+	draftPost               ai.ToolRef
+	setCampaignDates        ai.ToolRef
+	redistributePosts       ai.ToolRef
+	checkBrief              ai.ToolRef
+	checkPostsConsistency   ai.ToolRef
+	askCampaignAssets       ai.ToolRef
+	updateCampaignPlatforms ai.ToolRef
+	confirmProposal         ai.ToolRef
+	dismissProposal         ai.ToolRef
 
 	reg *assistantkit.Registry
 }
@@ -462,6 +464,12 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		}),
 	)
 
+	updateCampaignPlatforms := genkit.DefineTool(g, "updateCampaignPlatforms",
+		"Adds platforms to the campaign, or post types to a platform it already targets, checked against the platforms Ogen publishes to. "+
+			"It is proposed for the user to confirm before anything changes.",
+		assistantkit.Gated("updateCampaignPlatforms", updatePlatformsGate, assistantkit.Wrap(toolUpdateCampaignPlatforms)),
+	)
+
 	confirmProposal := genkit.DefineTool(g, "confirmProposal",
 		"Runs an offer the user accepted, exactly as it was proposed, and returns that work's result. "+
 			"Pass the offer's id from \"Waiting for the user's answer\", and optionId when the user picked one of its options.",
@@ -474,19 +482,20 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	)
 
 	t := &toolSet{
-		runContentPlan:        runContentPlan,
-		enrichBrief:           enrichBrief,
-		listCampaignPosts:     listCampaignPosts,
-		getCampaignOverview:   getCampaignOverview,
-		generatePosts:         generatePosts,
-		draftPost:             draftPost,
-		setCampaignDates:      setCampaignDates,
-		redistributePosts:     redistributePosts,
-		checkBrief:            checkBrief,
-		checkPostsConsistency: checkPostsConsistency,
-		askCampaignAssets:     askCampaignAssets,
-		confirmProposal:       confirmProposal,
-		dismissProposal:       dismissProposal,
+		runContentPlan:          runContentPlan,
+		enrichBrief:             enrichBrief,
+		listCampaignPosts:       listCampaignPosts,
+		getCampaignOverview:     getCampaignOverview,
+		generatePosts:           generatePosts,
+		draftPost:               draftPost,
+		setCampaignDates:        setCampaignDates,
+		redistributePosts:       redistributePosts,
+		checkBrief:              checkBrief,
+		checkPostsConsistency:   checkPostsConsistency,
+		askCampaignAssets:       askCampaignAssets,
+		updateCampaignPlatforms: updateCampaignPlatforms,
+		confirmProposal:         confirmProposal,
+		dismissProposal:         dismissProposal,
 	}
 	reg, err := newToolRegistry(t)
 	if err != nil {
