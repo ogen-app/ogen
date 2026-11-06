@@ -59,6 +59,12 @@ type IdeaRepository interface {
 	// LiveCampaignExists reports whether campaignID names a campaign in the
 	// caller's tenant that is not soft-deleted (archived counts as live).
 	LiveCampaignExists(ctx context.Context, campaignID string) (bool, error)
+	// Slots returns the calendar's idea slots from from to to, both
+	// inclusive, ordered by day: ideas with a target date that are still
+	// open — no post made from them, not turned down. A non-empty
+	// campaignID keeps that campaign's; otherwise ideas of archived
+	// campaigns are left out, as the calendar leaves out their posts.
+	Slots(ctx context.Context, from, to models.CalendarDate, campaignID string) ([]models.IdeaSlot, error)
 }
 
 type ideaRepository struct {
@@ -77,6 +83,7 @@ func (r *ideaRepository) selectIdeas(model any) *bun.SelectQuery {
 		ColumnExpr("i.id, i.title, i.note, i.verdict, i.remind_at, i.decided_at, i.decided_by").
 		ColumnExpr("i.origin, i.asset_analysis_id, i.distill_run_id, i.source_asset_id, i.angle, i.rationale, i.sources").
 		ColumnExpr("i.fit_score, i.fit_breakdown, i.fit_rubric_version").
+		ColumnExpr("i.plan_platform_id, i.plan_post_type, i.plan_phase_id, i.plan_target_date").
 		ColumnExpr("i.created_by, i.created_by_name, i.created_at, i.updated_at").
 		ColumnExpr("c.id AS campaign_id").
 		Join("LEFT JOIN campaigns AS c ON c.id = i.campaign_id AND c.deleted_at IS NULL")
@@ -309,6 +316,29 @@ func (r *ideaRepository) DeleteMany(ctx context.Context, ids []string) ([]string
 		Returning("id").
 		Exec(ctx, &deleted)
 	return deleted, err
+}
+
+func (r *ideaRepository) Slots(ctx context.Context, from, to models.CalendarDate, campaignID string) ([]models.IdeaSlot, error) {
+	out := []models.IdeaSlot{}
+	q := r.db.NewSelect().Model((*models.Idea)(nil)).
+		ColumnExpr("? AS kind", models.IdeaSlotKind).
+		ColumnExpr("i.id, i.title, i.plan_target_date AS date").
+		ColumnExpr("c.id AS campaign_id, coalesce(c.name, '') AS campaign_name").
+		ColumnExpr("i.plan_platform_id AS platform_id, i.plan_post_type AS post_type, i.plan_phase_id AS phase_id").
+		ColumnExpr("i.origin, i.verdict").
+		Join("LEFT JOIN campaigns AS c ON c.id = i.campaign_id AND c.deleted_at IS NULL").
+		Where("i.plan_target_date BETWEEN ? AND ?", from, to).
+		Where("i.verdict IS DISTINCT FROM ?", models.IdeaVerdictNo).
+		// An idea a post was made from is that post now.
+		Where("NOT EXISTS (SELECT 1 FROM post_ideas AS pi WHERE pi.idea_id = i.id AND pi.tenant_id = i.tenant_id)").
+		OrderExpr("i.plan_target_date, i.created_at, i.id")
+	if campaignID != "" {
+		q = q.Where("c.id = ?", campaignID)
+	} else {
+		q = q.Where("c.archived_at IS NULL")
+	}
+	err := q.Scan(ctx, &out)
+	return out, err
 }
 
 // LiveCampaignExists deliberately uses Scan, not Exists: bun's Exists skips the

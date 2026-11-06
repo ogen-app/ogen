@@ -282,9 +282,10 @@ func buildClone(src *models.Post, tgt target, opts Options, newID, content strin
 		// The body is copied, so its shape is too — even across platforms.
 		ContentFormat: src.ContentFormat,
 		// Same campaign, so the series stays in scope.
-		SeriesID:         src.SeriesID,
-		MediaURLs:        models.StringSlice{},
-		Status:           models.PostStatusDraft,
+		SeriesID:  src.SeriesID,
+		MediaURLs: models.StringSlice{},
+		// A copy of a planned post stays planned until it has a body.
+		Status:           cloneStatus(src.Status, content),
 		CTAType:          models.CTATypeNone,
 		UsedAssetIDs:     models.StringSlice{},
 		ClonedFromPostID: &src.ID,
@@ -447,4 +448,13 @@ func defaultPostType(types models.PostTypeMap) string {
 		return ""
 	}
 	return slices.Min(slices.Collect(maps.Keys(types)))
+}
+
+// cloneStatus is a copy's status: planned for a planned source whose body
+// is still empty, a draft otherwise.
+func cloneStatus(src models.PostStatus, content string) models.PostStatus {
+	if src == models.PostStatusPlanned {
+		return src.WithBody(content)
+	}
+	return models.PostStatusDraft
 }

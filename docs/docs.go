@@ -7018,7 +7018,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "asset_analysis, manual",
+                        "description": "asset_analysis, content_plan, assistant, manual",
                         "name": "origin",
                         "in": "query"
                     },
@@ -7300,6 +7300,194 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/ideas/compile": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Makes one ` + "`" + `planned` + "`" + ` post from 1–10 ideas: a draft_thesis note with a thesis per idea (its\ntitle, then its angle or note), the ideas' source assets as its sources, and a link to each\nidea (GET /api/posts/{id}/ideas). The campaign defaults to the one every idea is in; the title\nto the first idea's; platform, post type, phase and target date to the first idea plan that sets\neach. A target date is placed at the campaign's publishing time. A platform or post type you name\nmust be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as\nthey are, so one idea can feed several posts.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Compile ideas into a planned post",
+                "parameters": [
+                    {
+                        "description": "Ideas and overrides",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.compileIdeasRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.compileIdeasResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/ideas/draft": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Writes finished posts from 1–10 ideas and saves them as drafts with a body. Each idea gets its own\npost on each platform, or with ` + "`" + `together` + "`" + ` one post per platform from all of them; at most\nDRAFT_POST_MAX posts a request. The writer works from each idea's title, angle, reasoning and\nsources (or its note), in the campaign's brand voice; the ideas' source assets become the posts'\nsources, and every post links to its ideas (GET /api/posts/{id}/ideas). The campaign defaults to\nthe one the ideas share; the platform, post type, phase and date to the first idea plan that sets\neach. Requests that can't run are a plain 400 before the stream opens.\nEvents: \"post\" {postId,title,platformId,ideaIds} as each post is saved; \"complete\"\n{posts,warnings}; \"error\" {message,code}, after which the posts already written are kept.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Write posts from ideas (SSE)",
+                "parameters": [
+                    {
+                        "description": "Ideas, platforms and steering",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.draftIdeasRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: post / complete / error"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/ideas/slots": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the ideas planned for days from ` + "`" + `from` + "`" + ` to ` + "`" + `to` + "`" + ` (both YYYY-MM-DD, inclusive, at most 93\ndays), ordered by day, for the calendar to draw beside the posts. Each item is ` + "`" + `kind: \"idea\"` + "`" + `:\na day an idea plans to land on, never a post, so it doesn't count toward goals. Only open ideas\nare slots: one with a post made from it is that post now, and one turned down (\"no\") is gone.\nWith ` + "`" + `campaign_id` + "`" + ` the slots are that campaign's; without, every campaign's but the archived ones.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Calendar slots of dated ideas",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "First day, YYYY-MM-DD",
+                        "name": "from",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Last day, YYYY-MM-DD",
+                        "name": "to",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this campaign's ideas",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.IdeaSlot"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/ideas/{id}": {
             "delete": {
                 "security": [
@@ -7350,7 +7538,7 @@ const docTemplate = `{
                 "tags": [
                     "ideas"
                 ],
-                "summary": "Edit an idea's title, note, or campaign (presence-aware)",
+                "summary": "Edit an idea's title, note, campaign or plan (presence-aware)",
                 "parameters": [
                     {
                         "type": "string",
@@ -7360,7 +7548,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "any of title, note, campaign_id (null detaches)",
+                        "description": "any of title, note, campaign_id (null detaches), plan (replaces the whole plan; null clears it; a phase needs a campaign, and moving campaign drops the phase)",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -7382,6 +7570,51 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/ideas/{id}/posts": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Posts made from an idea, oldest first",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Idea id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.IdeaPostRef"
                             }
                         }
                     },
@@ -10130,7 +10363,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Creates a new post. The created_by field is set from the authenticated session.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when ` + "`" + `status` + "`" + ` is not ` + "`" + `draft` + "`" + `;\ndrafts can be saved without a platform chosen up front.",
+                "description": "Creates a new post. The created_by field is set from the authenticated session.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when ` + "`" + `status` + "`" + ` is not ` + "`" + `planned` + "`" + `\nor ` + "`" + `draft` + "`" + `; those can be saved without a platform chosen up front. ` + "`" + `planned` + "`" + ` is a post\nwith theses (a draft_thesis note) and no body: sent with a non-empty ` + "`" + `content` + "`" + `, it is\ncreated as a ` + "`" + `draft` + "`" + `.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10361,7 +10594,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Replaces all mutable fields of an existing post.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when the new ` + "`" + `status` + "`" + ` is\nnot ` + "`" + `draft` + "`" + `; transitioning a draft to ` + "`" + `ready_for_publish` + "`" + ` (or beyond) without a\nplatform chosen returns 400.",
+                "description": "Replaces all mutable fields of an existing post.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when the new ` + "`" + `status` + "`" + ` is\nnot ` + "`" + `planned` + "`" + ` or ` + "`" + `draft` + "`" + `; transitioning a draft to ` + "`" + `ready_for_publish` + "`" + ` (or beyond) without a\nplatform chosen returns 400. A ` + "`" + `planned` + "`" + ` post becomes a ` + "`" + `draft` + "`" + ` as soon as an update gives\nit a non-empty ` + "`" + `content` + "`" + `, whatever status the request sends; it can't move anywhere else.",
                 "consumes": [
                     "application/json"
                 ],
@@ -11074,6 +11307,51 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/ideas": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Ideas a post was made from, in order",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.PostSourceIdea"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -16027,6 +16305,59 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.compileIdeasRequest": {
+            "type": "object",
+            "required": [
+                "idea_ids"
+            ],
+            "properties": {
+                "campaign_id": {
+                    "description": "CampaignID defaults to the campaign the ideas share.",
+                    "type": "string"
+                },
+                "idea_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "phase_id": {
+                    "type": "string"
+                },
+                "platform_id": {
+                    "description": "PlatformID, PlatformPostType, PhaseID and TargetDate default to the\nfirst idea plan that sets each.",
+                    "type": "string"
+                },
+                "platform_post_type": {
+                    "type": "string"
+                },
+                "target_date": {
+                    "type": "string",
+                    "x-nullable": true,
+                    "example": "2026-12-01"
+                },
+                "title": {
+                    "description": "Title defaults to the first idea's title.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.compileIdeasResponse": {
+            "type": "object",
+            "properties": {
+                "ideas": {
+                    "description": "Ideas are the ideas the post was made from, in order.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.PostSourceIdea"
+                    }
+                },
+                "post": {
+                    "$ref": "#/definitions/models.Post"
+                }
+            }
+        },
         "handlers.completeGoogleSignupRequest": {
             "type": "object",
             "required": [
@@ -16317,6 +16648,52 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/models.IdeaDistillRun"
                     }
+                }
+            }
+        },
+        "handlers.draftIdeasRequest": {
+            "type": "object",
+            "required": [
+                "idea_ids"
+            ],
+            "properties": {
+                "campaign_id": {
+                    "description": "CampaignID defaults to the campaign the ideas share.",
+                    "type": "string"
+                },
+                "idea_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "instruction": {
+                    "description": "Instruction steers the writing (\"punchier\", \"for CFOs\").",
+                    "type": "string"
+                },
+                "phase_id": {
+                    "type": "string"
+                },
+                "platform_ids": {
+                    "description": "PlatformIDs default to the first idea plan's platform.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "platform_post_type": {
+                    "description": "PlatformPostType needs exactly one platform.",
+                    "type": "string"
+                },
+                "target_date": {
+                    "type": "string",
+                    "x-nullable": true,
+                    "example": "2026-12-01"
+                },
+                "together": {
+                    "description": "Together writes one post per platform from all the ideas; otherwise\neach idea gets its own post on each platform.",
+                    "type": "boolean"
                 }
             }
         },
@@ -17522,7 +17899,7 @@ const docTemplate = `{
                     }
                 },
                 "platform_id": {
-                    "description": "PlatformID + PlatformPostType are required only when status is not\n\"draft\" — see update.RequirePlatformIfNotDraft. Drafts can be saved\nbefore the user has picked a platform.",
+                    "description": "PlatformID + PlatformPostType are required only when status is not\n\"planned\" or \"draft\" — see update.RequirePlatformIfNotDraft. Those can be saved\nbefore the user has picked a platform.",
                     "type": "string"
                 },
                 "platform_post_type": {
@@ -18164,6 +18541,10 @@ const docTemplate = `{
                 },
                 "note": {
                     "type": "string"
+                },
+                "plan": {
+                    "description": "Plan replaces the whole plan; null clears it.",
+                    "type": "object"
                 },
                 "title": {
                     "type": "string"
@@ -20185,7 +20566,17 @@ const docTemplate = `{
                     "type": "string",
                     "enum": [
                         "",
-                        "asset_analysis"
+                        "asset_analysis",
+                        "content_plan",
+                        "assistant"
+                    ]
+                },
+                "plan": {
+                    "description": "Plan is where the idea would land as a post; every field nil for an\nidea without one. The columns are plan_platform_id, plan_post_type,\nplan_phase_id and plan_target_date.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IdeaPlan"
+                        }
                     ]
                 },
                 "rationale": {
@@ -20321,6 +20712,54 @@ const docTemplate = `{
                 }
             }
         },
+        "models.IdeaPlan": {
+            "type": "object",
+            "properties": {
+                "phase_id": {
+                    "description": "PhaseID is a campaign type phase of the idea's campaign.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "platform_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "post_type": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "target_date": {
+                    "description": "TargetDate is the day it would publish; a dated idea shows on the\ncalendar as a slot, never as a post.",
+                    "type": "string",
+                    "x-nullable": true,
+                    "example": "2026-09-01"
+                }
+            }
+        },
+        "models.IdeaPostRef": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "platform_id": {
+                    "type": "string"
+                },
+                "scheduled_at": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "status": {
+                    "$ref": "#/definitions/models.PostStatus"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "models.IdeaReading": {
             "type": "object",
             "properties": {
@@ -20329,6 +20768,64 @@ const docTemplate = `{
                 },
                 "campaign_name": {
                     "type": "string"
+                }
+            }
+        },
+        "models.IdeaSlot": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "campaign_name": {
+                    "type": "string"
+                },
+                "date": {
+                    "type": "string",
+                    "example": "2026-12-01"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "idea"
+                    ]
+                },
+                "origin": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "asset_analysis",
+                        "content_plan",
+                        "assistant"
+                    ]
+                },
+                "phase_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "platform_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "platform_post_type": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "title": {
+                    "type": "string"
+                },
+                "verdict": {
+                    "description": "Verdict is nil while the idea waits for triage.",
+                    "type": "string",
+                    "enum": [
+                        "yes",
+                        "later"
+                    ],
+                    "x-nullable": true
                 }
             }
         },
@@ -21113,6 +21610,7 @@ const docTemplate = `{
                 "user_cancel",
                 "user_retry",
                 "post_cloned",
+                "post_compiled",
                 "post_restored",
                 "quality_assessed"
             ],
@@ -21138,6 +21636,7 @@ const docTemplate = `{
                 "PostLogEventUserCancel",
                 "PostLogEventUserRetry",
                 "PostLogEventPostCloned",
+                "PostLogEventPostCompiled",
                 "PostLogEventPostRestored",
                 "PostLogEventQualityAssessed"
             ]
@@ -21177,9 +21676,30 @@ const docTemplate = `{
                 }
             }
         },
+        "models.PostSourceIdea": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "origin": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "asset_analysis",
+                        "content_plan",
+                        "assistant"
+                    ]
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "models.PostStatus": {
             "type": "string",
             "enum": [
+                "planned",
                 "draft",
                 "ready_for_publish",
                 "scheduled",
@@ -21189,6 +21709,7 @@ const docTemplate = `{
                 "not_published"
             ],
             "x-enum-varnames": [
+                "PostStatusPlanned",
                 "PostStatusDraft",
                 "PostStatusReadyForPublish",
                 "PostStatusScheduled",
