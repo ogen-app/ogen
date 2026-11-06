@@ -23,6 +23,9 @@ const (
 	AssistantActionCampaignAssets AssistantActionKind = "campaign_assets"
 	// AssistantActionIdeaVerdict is a change to one idea's triage verdict.
 	AssistantActionIdeaVerdict AssistantActionKind = "idea_verdict"
+	// AssistantActionBrandFact is a fact added to, changed in or removed
+	// from the ledger.
+	AssistantActionBrandFact AssistantActionKind = "brand_fact"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's
