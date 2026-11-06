@@ -15,6 +15,9 @@ const (
 	AssistantActionCampaignDates AssistantActionKind = "campaign_dates"
 	// AssistantActionCampaignBrief is a change to a campaign's brief fields.
 	AssistantActionCampaignBrief AssistantActionKind = "campaign_brief"
+	// AssistantActionCampaignPlatforms is a change to the platforms a
+	// campaign targets and the post types it uses on them.
+	AssistantActionCampaignPlatforms AssistantActionKind = "campaign_platforms"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's
