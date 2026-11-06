@@ -151,10 +151,20 @@ type updateIdeaRequest struct {
 	Title      Optional[string] `json:"title"       swaggertype:"string"`
 	Note       Optional[string] `json:"note"        swaggertype:"string"`
 	CampaignID Optional[string] `json:"campaign_id" swaggertype:"string"`
+	// Plan replaces the whole plan; null clears it.
+	Plan Optional[models.IdeaPlan] `json:"plan" swaggertype:"object"`
+}
+
+// planOf is the plan a PATCH sets: null clears it to the zero plan.
+func planOf(o Optional[models.IdeaPlan]) models.IdeaPlan {
+	if o.Value == nil {
+		return models.IdeaPlan{}
+	}
+	return *o.Value
 }
 
 // updateIdeaFields is the closed set of keys PATCH accepts.
-var updateIdeaFields = []string{"title", "note", "campaign_id"}
+var updateIdeaFields = []string{"title", "note", "campaign_id", "plan"}
 
 // ideaVerdictRequest is the PUT …/verdict body. Both keys must be present;
 // verdict null returns the idea to the inbox.
@@ -220,7 +230,7 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Param        pile            query  string  false  "waiting, yes, later, no"
 // @Param        pile_not        query  string  false  "Piles to exclude"
 // @Param        text            query  string  false  "Title or note substring (at most 200 characters)"
-// @Param        origin          query  string  false  "asset_analysis, manual"
+// @Param        origin          query  string  false  "asset_analysis, content_plan, assistant, manual"
 // @Param        origin_not      query  string  false  "Origins to exclude"
 // @Param        source_asset    query  string  false  "Asset ids, or none"
 // @Param        source_asset_not query string  false  "Asset ids (or none) to exclude"
@@ -412,13 +422,13 @@ func (h *IdeasHandler) Create(c *fiber.Ctx) error {
 }
 
 // Update godoc
-// @Summary  Edit an idea's title, note, or campaign (presence-aware)
+// @Summary  Edit an idea's title, note, campaign or plan (presence-aware)
 // @Tags     ideas
 // @Accept   json
 // @Produce  json
 // @Security CookieAuth
 // @Param    id   path string            true "Idea id"
-// @Param    body body updateIdeaRequest true "any of title, note, campaign_id (null detaches)"
+// @Param    body body updateIdeaRequest true "any of title, note, campaign_id (null detaches), plan (replaces the whole plan; null clears it; a phase needs a campaign, and moving campaign drops the phase)"
 // @Success  200 {object} models.Idea
 // @Failure  400 {object} map[string]string
 // @Failure  404 {object} map[string]string
@@ -429,7 +439,7 @@ func (h *IdeasHandler) Update(c *fiber.Ctx) error {
 		return err
 	}
 	if len(raw) == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "at least one of title, note or campaign_id is required")
+		return fiber.NewError(fiber.StatusBadRequest, "at least one of title, note, campaign_id or plan is required")
 	}
 	var req updateIdeaRequest
 	if err := json.Unmarshal(c.Body(), &req); err != nil {
@@ -443,6 +453,8 @@ func (h *IdeasHandler) Update(c *fiber.Ctx) error {
 		Note:        req.Note.Value,
 		SetCampaign: req.CampaignID.Present,
 		CampaignID:  req.CampaignID.Value,
+		SetPlan:     req.Plan.Present,
+		Plan:        planOf(req.Plan),
 	})
 	if err != nil {
 		return ideaError(c, err)
