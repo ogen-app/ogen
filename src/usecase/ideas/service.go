@@ -42,7 +42,15 @@ var (
 	// ErrCampaignNotFound means the campaign is unknown, in another tenant, or
 	// soft-deleted. It is a 400 (bad reference), not a 404 on the idea.
 	ErrCampaignNotFound = errors.New("campaign not found")
+	// ErrInvalidPlan is a plan field that is blank or too long.
+	ErrInvalidPlan = errors.New("plan fields must be non-empty and at most 64 characters")
+	// ErrPlanPhaseNeedsCampaign is a plan phase on an idea outside a campaign:
+	// phases belong to a campaign's type.
+	ErrPlanPhaseNeedsCampaign = errors.New("a plan phase needs the idea in a campaign")
 )
+
+// maxPlanField caps a plan id or slug.
+const maxPlanField = 64
 
 // ErrNotFound is returned when no idea matches (unknown id or cross-tenant).
 var ErrNotFound = errors.New("idea not found")
@@ -82,7 +90,7 @@ func IsValidation(err error) bool {
 	for _, target := range []error{
 		ErrEmptyTitle, ErrTitleTooLong, ErrNoteTooLong, ErrInvalidVerdict,
 		ErrRemindAtRequired, ErrRemindAtNotAllowed, ErrRemindAtOutOfRange,
-		ErrCampaignNotFound,
+		ErrCampaignNotFound, ErrInvalidPlan, ErrPlanPhaseNeedsCampaign,
 	} {
 		if errors.Is(err, target) {
 			return true
@@ -220,7 +228,13 @@ type UpdateInput struct {
 	Note        *string
 	SetCampaign bool
 	CampaignID  *string
+	// SetPlan replaces the whole plan with Plan; the zero plan clears it.
+	SetPlan bool
+	Plan    models.IdeaPlan
 }
+
+// planColumns are the columns a plan write persists.
+var planColumns = []string{"plan_platform_id", "plan_post_type", "plan_phase_id", "plan_target_date"}
 
 // Update applies the edit and returns the idea plus the names of the fields it
 // wrote. Only those columns are persisted.
@@ -245,8 +259,20 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (*model
 		if err := s.checkCampaign(ctx, in.CampaignID); err != nil {
 			return nil, nil, err
 		}
+		// A phase is one of the old campaign's; moving drops it.
+		if idea.Plan.PhaseID != nil && !in.SetPlan && !sameCampaign(idea.CampaignID, in.CampaignID) {
+			idea.Plan.PhaseID = nil
+			columns = append(columns, "plan_phase_id")
+		}
 		idea.CampaignID = in.CampaignID
 		columns = append(columns, "campaign_id")
+	}
+	if in.SetPlan {
+		if err := validatePlan(in.Plan, idea.CampaignID); err != nil {
+			return nil, nil, err
+		}
+		idea.Plan = in.Plan
+		columns = append(columns, planColumns...)
 	}
 	if err := validateText(idea.Title, idea.Note); err != nil {
 		return nil, nil, err
@@ -256,6 +282,24 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateInput) (*model
 		return nil, nil, err
 	}
 	return idea, columns, nil
+}
+
+func sameCampaign(a, b *string) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+// validatePlan checks a plan's shape. Whether its platform, post type and
+// phase still fit is checked when the idea becomes a post.
+func validatePlan(p models.IdeaPlan, campaignID *string) error {
+	for _, f := range []*string{p.PlatformID, p.PostType, p.PhaseID} {
+		if f != nil && (strings.TrimSpace(*f) == "" || len(*f) > maxPlanField) {
+			return ErrInvalidPlan
+		}
+	}
+	if p.PhaseID != nil && campaignID == nil {
+		return ErrPlanPhaseNeedsCampaign
+	}
+	return nil
 }
 
 // SetVerdict records a triage decision and returns the idea plus
