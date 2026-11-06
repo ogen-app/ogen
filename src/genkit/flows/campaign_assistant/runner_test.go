@@ -93,7 +93,13 @@ func newRunnerHarness(t *testing.T) *runnerHarness {
 func (h *runnerHarness) turn(instruction string, script ...fakemodel.Turn) (*CampaignAssistantResponse, []SSEEventKind) {
 	h.t.Helper()
 	h.turns++
-	m := fakemodel.Define(h.g, "turn"+string(rune('a'+h.turns)), script...)
+	return h.turnWith(fakemodel.Define(h.g, "turn"+string(rune('a'+h.turns)), script...), instruction)
+}
+
+// turnWith runs one user message on an already defined scripted model, so the
+// test can inspect what the model was sent.
+func (h *runnerHarness) turnWith(m *fakemodel.Model, instruction string) (*CampaignAssistantResponse, []SSEEventKind) {
+	h.t.Helper()
 	h.last = m
 	fakemodel.Route(h.t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowCampaignAssistant, Slot: modelconfig.SlotOrchestrator})
 	var events []SSEEventKind

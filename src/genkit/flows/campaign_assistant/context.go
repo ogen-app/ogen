@@ -5,12 +5,21 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 )
 
 // assistantContext holds the rendered prompts ready for the model call.
 type assistantContext struct {
 	SystemPrompt string // stable system instructions (cacheable prefix)
 	ContextBlock string // the campaign's current brief (stable within a turn)
+	// StateBlock is the per-turn campaign state prepended to the user's
+	// message.
+	StateBlock string
+}
+
+// renderState renders the <campaign_state> block for this turn.
+func renderState(p *prompts, s state.Snapshot, open []openProposal) (string, error) {
+	return flowkit.RenderTemplate(p.state, stateTemplateData{Snapshot: s, OpenProposals: open})
 }
 
 // contextTemplateData is the view model for the prompt template. It carries
@@ -34,6 +43,13 @@ type contextTemplateData struct {
 	// Phases lists the campaign type's phases. Already hydrated on
 	// the campaign, so surfacing them here costs no extra query.
 	Phases []phaseContext
+}
+
+// stateTemplateData is the campaign as it is at the start of a turn. It
+// changes from turn to turn, so it opens the user's message instead of
+// living in the cached system prompt.
+type stateTemplateData struct {
+	state.Snapshot
 	// OpenProposals are offers waiting for the user's answer, so a "yes"
 	// in this turn can be matched to one.
 	OpenProposals []openProposal
@@ -63,7 +79,7 @@ type phaseContext struct {
 // the cached prefix rotates daily and on brief edits — fine, since consecutive
 // turns within the cache TTL share it. Note this is separate from the
 // strict-tool grammar cache the tool-order stabilizer keeps warm.
-func assembleContext(campaign *models.Campaign, brandBlock string, open []openProposal, today time.Time, p *prompts) (*assistantContext, error) {
+func assembleContext(campaign *models.Campaign, brandBlock string, today time.Time, p *prompts) (*assistantContext, error) {
 	campaignType := campaign.CampaignTypeID
 	var phases []phaseContext
 	if campaign.CampaignType != nil {
@@ -89,7 +105,6 @@ func assembleContext(campaign *models.Campaign, brandBlock string, open []openPr
 		BrandBlock:     brandBlock,
 		Today:          today.Format("2006-01-02"),
 		Phases:         phases,
-		OpenProposals:  open,
 	}
 
 	contextBlock, err := flowkit.RenderTemplate(p.context, data)
