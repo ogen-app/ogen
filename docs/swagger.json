@@ -7086,6 +7086,74 @@
                 }
             }
         },
+        "/api/ideas/slots": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns the ideas planned for days from `from` to `to` (both YYYY-MM-DD, inclusive, at most 93\ndays), ordered by day, for the calendar to draw beside the posts. Each item is `kind: \"idea\"`:\na day an idea plans to land on, never a post, so it doesn't count toward goals. Only open ideas\nare slots: one with a post made from it is that post now, and one turned down (\"no\") is gone.\nWith `campaign_id` the slots are that campaign's; without, every campaign's but the archived ones.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Calendar slots of dated ideas",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "First day, YYYY-MM-DD",
+                        "name": "from",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Last day, YYYY-MM-DD",
+                        "name": "to",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only this campaign's ideas",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.IdeaSlot"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/ideas/{id}": {
             "delete": {
                 "security": [
@@ -20280,6 +20348,64 @@
                 },
                 "campaign_name": {
                     "type": "string"
+                }
+            }
+        },
+        "models.IdeaSlot": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "campaign_name": {
+                    "type": "string"
+                },
+                "date": {
+                    "type": "string",
+                    "example": "2026-12-01"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "idea"
+                    ]
+                },
+                "origin": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "asset_analysis",
+                        "content_plan",
+                        "assistant"
+                    ]
+                },
+                "phase_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "platform_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "platform_post_type": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "title": {
+                    "type": "string"
+                },
+                "verdict": {
+                    "description": "Verdict is nil while the idea waits for triage.",
+                    "type": "string",
+                    "enum": [
+                        "yes",
+                        "later"
+                    ],
+                    "x-nullable": true
                 }
             }
         },
