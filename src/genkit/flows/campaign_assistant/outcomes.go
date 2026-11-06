@@ -62,6 +62,9 @@ func (st *requestState) outcomes() []outcome {
 	if r := st.datesResult; r != nil {
 		out = append(out, datesOutcome(r))
 	}
+	if r := st.platformsResult; r != nil {
+		out = append(out, platformsOutcome(r))
+	}
 	if r := st.redistributeResult; r != nil {
 		out = append(out, redistributeOutcome(r))
 	}
