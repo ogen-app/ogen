@@ -31,6 +31,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 )
 
 // ── Context key for per-request state ────────────────────────────────────────
@@ -93,6 +94,9 @@ type requestState struct {
 	proposedKeys map[string]string
 	// resolved lists the offers the user answered this turn.
 	resolved []ProposalResolvedEventPayload
+	// snapshot is the campaign's state at the start of the turn; the budget
+	// guard reads its goal.
+	snapshot state.Snapshot
 	// registry runs an accepted offer's tool by name.
 	registry *assistantkit.Registry
 

@@ -52,6 +52,10 @@ func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (str
 	if id, ok := st.proposedKeys[dedupKey]; ok {
 		return id, nil
 	}
+	options, choices, err := proposalOptions(p.Options)
+	if err != nil {
+		return "", fmt.Errorf("encode %s proposal options: %w", p.Tool, err)
+	}
 	id, err := models.NewID()
 	if err != nil {
 		return "", err
@@ -60,14 +64,14 @@ func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (str
 	now := time.Now().UTC()
 	row := &models.AssistantProposal{
 		ID: id, ScopeKind: models.AssistantScopeCampaign, ScopeID: st.campaignID,
-		Tool: p.Tool, Args: args, Summary: p.Summary, CreatedBy: by, ExpiresAt: now.Add(proposalTTL),
+		Tool: p.Tool, Args: args, Summary: p.Summary, Options: options, CreatedBy: by, ExpiresAt: now.Add(proposalTTL),
 	}
 	if err := st.repos.Proposals.Create(ctx, row); err != nil {
 		return "", fmt.Errorf("store %s proposal: %w", p.Tool, err)
 	}
 	st.mu.Lock()
 	st.proposed = append(st.proposed, ProposalCreatedEventPayload{
-		ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339),
+		ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices,
 	})
 	st.mu.Unlock()
 	if st.proposedKeys == nil {
@@ -75,6 +79,25 @@ func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (str
 	}
 	st.proposedKeys[dedupKey] = id
 	return id, nil
+}
+
+// proposalOptions converts a proposal's options for storage, and for the
+// card, which shows only their ids and titles.
+func proposalOptions(opts []assistantkit.Option) ([]models.ProposalOption, []ProposalChoice, error) {
+	if len(opts) == 0 {
+		return nil, nil, nil
+	}
+	stored := make([]models.ProposalOption, len(opts))
+	choices := make([]ProposalChoice, len(opts))
+	for i, o := range opts {
+		args, err := toJSONMap(o.Args)
+		if err != nil {
+			return nil, nil, err
+		}
+		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Tool: o.Tool, Args: args}
+		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description}
+	}
+	return stored, choices, nil
 }
 
 // toJSONMap converts a tool input into the JSON object stored with a proposal.
@@ -148,7 +171,10 @@ var (
 var (
 	generatePostsGate = assistantkit.Gate[GeneratePostsInput]{
 		Precheck: func(ctx context.Context, in GeneratePostsInput) error {
-			return precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType, false)
+			if err := precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType, false); err != nil {
+				return err
+			}
+			return overGoal(ctx, "generatePosts", max(in.Count, 1), in, func(n int) any { in.Count = n; return in })
 		},
 		Needs: func(ctx context.Context, in GeneratePostsInput) bool {
 			return generateTotal(ctx, in) > proposalThreshold(ctx)
@@ -159,7 +185,14 @@ var (
 	}
 	draftPostGate = assistantkit.Gate[DraftPostInput]{
 		Precheck: func(ctx context.Context, in DraftPostInput) error {
-			return precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType, true)
+			if err := precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType, true); err != nil {
+				return err
+			}
+			var fill func(int) any
+			if len(in.Platforms) == 1 {
+				fill = func(n int) any { in.Count = n; return in }
+			}
+			return overGoal(ctx, "draftPost", max(in.Count, 1)*len(in.Platforms), in, fill)
 		},
 		Needs: func(ctx context.Context, in DraftPostInput) bool {
 			return draftTotal(ctx, in) > proposalThreshold(ctx)
@@ -183,6 +216,25 @@ func draftTotal(ctx context.Context, in DraftPostInput) int {
 	maxN := getRequestState(ctx).draftCap()
 	perPlatform, _, _ := resolveGenerateCount(in.Count, maxN)
 	return min(perPlatform*len(in.Platforms), maxN)
+}
+
+// overGoal returns a conflict when adding count posts would take the
+// campaign past its goal. The options are to fill the goal exactly (when
+// there is room and fill can rebuild the call for fewer posts) or to add
+// them all anyway; each is the tool call picking it runs.
+func overGoal(ctx context.Context, tool string, count int, args any, fill func(int) any) error {
+	g := getRequestState(ctx).snapshot.Goal
+	if g == nil || count <= g.Room {
+		return nil
+	}
+	reason := fmt.Sprintf("That would add %d posts, but the goal is %d and the campaign already has %d, so there is room for %d more.",
+		count, g.Target, g.Planned, g.Room)
+	var opts []assistantkit.Option
+	if g.Room > 0 && fill != nil {
+		opts = append(opts, assistantkit.Option{ID: "fill", Title: fmt.Sprintf("Add %d to reach the goal", g.Room), Tool: tool, Args: fill(g.Room)})
+	}
+	opts = append(opts, assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Add all %d anyway, past the goal", count), Tool: tool, Args: args})
+	return assistantkit.Conflicted(reason, opts...)
 }
 
 // precheckPosts runs the post tools' user-correctable checks — target
