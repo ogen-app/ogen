@@ -164,13 +164,14 @@ var (
 			if err := needSources(ctx, "generatePosts", in.Exploratory, func() any { in.Exploratory = true; return in }); err != nil {
 				return err
 			}
-			return overGoal(ctx, "generatePosts", max(in.Count, 1), in, func(n int) any { in.Count = n; return in })
+			// Ideas fill no goal, so the plan is never over it.
+			return nil
 		},
 		Needs: func(ctx context.Context, in GeneratePostsInput) bool {
 			return max(in.Count, 1) > proposalThreshold(ctx)
 		},
 		Summary: func(in GeneratePostsInput) string {
-			return fmt.Sprintf("Add %d draft posts for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
+			return fmt.Sprintf("Plan %d ideas for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
 		},
 	}
 	draftPostGate = assistantkit.Gate[DraftPostInput]{

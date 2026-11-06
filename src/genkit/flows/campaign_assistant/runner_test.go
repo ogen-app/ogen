@@ -78,7 +78,7 @@ func newRunnerHarness(t *testing.T) *runnerHarness {
 		MaxGeneratePosts: 10,
 		GeneratePosts: func(_ context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 			h.generated = append(h.generated, req)
-			return &content_plan.ContentPlanResponse{Posts: make([]content_plan.DraftPost, req.Count)}, nil
+			return &content_plan.ContentPlanResponse{Ideas: make([]content_plan.DraftPost, req.Count)}, nil
 		},
 	}
 	return h

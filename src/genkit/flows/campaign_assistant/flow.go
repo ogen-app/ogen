@@ -187,16 +187,16 @@ func notifyContentPlanReady(n *notify.Service, tenantID, ownerID, campaignID str
 	// if the DB is slow. Keep the tenant scope; just add a deadline + cancel.
 	ctx, cancel := context.WithTimeout(tenantctx.With(context.Background(), tenantID), 5*time.Second)
 	defer cancel()
-	postCount := resp.ContentPlan.PostCount
+	ideaCount := resp.ContentPlan.IdeaCount
 	_ = n.Emit(ctx, ownerID, notify.Spec{
 		Level:      models.NotificationLevelSuccess,
 		Type:       "campaign.content_plan_ready",
 		Title:      "Content plan ready",
-		Body:       fmt.Sprintf("Your content plan is ready — %d post(s) drafted.", postCount),
+		Body:       fmt.Sprintf("Your content plan is ready — %d idea(s) to pick from.", ideaCount),
 		EntityType: "campaign",
 		EntityID:   campaignID,
-		ActionURL:  "/campaigns/" + campaignID,
-		Data:       map[string]any{"post_count": postCount},
+		ActionURL:  "/campaigns/" + campaignID + "/ideas",
+		Data:       map[string]any{"idea_count": ideaCount},
 	})
 }
 

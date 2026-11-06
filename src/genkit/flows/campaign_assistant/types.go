@@ -84,7 +84,9 @@ type RedistributeResult struct {
 
 // GeneratedPostsResult summarises a generatePosts tool invocation.
 type GeneratedPostsResult struct {
-	PostCount   int      `json:"postCount"`
+	// IdeaCount is how many ideas were planned; the plan writes ideas, not
+	// posts.
+	IdeaCount   int      `json:"ideaCount"`
 	PlatformIDs []string `json:"platformIds"`
 	PhaseID     string   `json:"phaseId"`
 	Warnings    []string `json:"warnings,omitempty"`
@@ -109,7 +111,8 @@ type DraftPostResult struct {
 
 // ContentPlanResult summarises a runContentPlan tool invocation.
 type ContentPlanResult struct {
-	PostCount int      `json:"postCount"`
+	// IdeaCount is how many ideas the plan proposed.
+	IdeaCount int      `json:"ideaCount"`
 	Warnings  []string `json:"warnings,omitempty"`
 	// UsedAssets lists the campaign assets that informed the plan.
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
@@ -241,7 +244,7 @@ const (
 
 	SSEEventContentPlanStarted  SSEEventKind = "content_plan_started"
 	SSEEventContentPlanStep     SSEEventKind = "content_plan_step"
-	SSEEventContentPlanPost     SSEEventKind = "content_plan_post"
+	SSEEventContentPlanIdea     SSEEventKind = "content_plan_idea"
 	SSEEventContentPlanWarning  SSEEventKind = "content_plan_warning"
 	SSEEventContentPlanComplete SSEEventKind = "content_plan_complete"
 
@@ -254,7 +257,7 @@ const (
 
 	SSEEventGeneratePostsStarted  SSEEventKind = "generate_posts_started"
 	SSEEventGeneratePostsStep     SSEEventKind = "generate_posts_step"
-	SSEEventGeneratePostsPost     SSEEventKind = "generate_posts_post"
+	SSEEventGeneratePostsIdea     SSEEventKind = "generate_posts_idea"
 	SSEEventGeneratePostsWarning  SSEEventKind = "generate_posts_warning"
 	SSEEventGeneratePostsComplete SSEEventKind = "generate_posts_complete"
 
@@ -335,9 +338,9 @@ type ToolResultEventPayload struct {
 // ContentPlanStartedEventPayload is emitted when the runContentPlan tool begins.
 type ContentPlanStartedEventPayload struct{}
 
-// ContentPlanCompleteEventPayload is emitted once the content plan is persisted.
+// ContentPlanCompleteEventPayload is emitted once the plan's ideas are saved.
 type ContentPlanCompleteEventPayload struct {
-	PostCount int                    `json:"postCount"`
+	IdeaCount int                    `json:"ideaCount"`
 	Warnings  []string               `json:"warnings,omitempty"`
 	Grounding assistantkit.Grounding `json:"grounding"`
 }
@@ -360,9 +363,9 @@ type GeneratePostsStartedEventPayload struct {
 	Count       int      `json:"count"`
 }
 
-// GeneratePostsCompleteEventPayload is emitted once targeted posts are persisted.
+// GeneratePostsCompleteEventPayload is emitted once the targeted ideas are saved.
 type GeneratePostsCompleteEventPayload struct {
-	PostCount int                    `json:"postCount"`
+	IdeaCount int                    `json:"ideaCount"`
 	Warnings  []string               `json:"warnings,omitempty"`
 	Grounding assistantkit.Grounding `json:"grounding"`
 }
