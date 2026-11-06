@@ -20,6 +20,7 @@ import (
 // statusOrder is the fixed display order for the byStatus breakdown, so the
 // output is deterministic and reads lifecycle-first.
 var statusOrder = []models.PostStatus{
+	models.PostStatusPlanned,
 	models.PostStatusDraft,
 	models.PostStatusReadyForPublish,
 	models.PostStatusScheduled,

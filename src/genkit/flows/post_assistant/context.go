@@ -582,6 +582,8 @@ func buildSchedulingContext(ctx context.Context, post *models.Post, repos PostAs
 	switch post.Status {
 	case models.PostStatusReadyForPublish:
 		b.WriteString("ready — schedule directly (no allowPromote needed).\n")
+	case models.PostStatusPlanned:
+		b.WriteString("planned — only theses so far, no body; it cannot be scheduled. Offer to write the body from its theses (editPost, mode draft); the post becomes a draft once it has one.\n")
 	case models.PostStatusDraft:
 		reasons := schedulingReadinessReasons(ctx, post, repos)
 		switch {
