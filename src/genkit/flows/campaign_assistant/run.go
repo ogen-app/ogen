@@ -147,9 +147,13 @@ func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error)
 		slog.WarnContext(ctx, "brand resolve failed; using legacy tone",
 			logging.AttrComponent, logComponent, "error", err)
 	}
-	t.actx, err = assembleContext(campaign, brand.PromptBlock(""), t.openProposals(ctx), time.Now().UTC(), p)
+	t.actx, err = assembleContext(campaign, brand.PromptBlock(""), time.Now().UTC(), p)
 	if err != nil {
 		return ctx, fmt.Errorf("assemble context: %w", err)
+	}
+	t.actx.StateBlock, err = renderState(p, t.snapshot(ctx, campaign), t.openProposals(ctx))
+	if err != nil {
+		return ctx, fmt.Errorf("render campaign state: %w", err)
 	}
 	t.timer.lap("context")
 
@@ -231,7 +235,7 @@ func (t *turn) callModel(ctx context.Context, tools *toolSet) error {
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(t.actx.SystemPrompt+"\n\n"+t.actx.ContextBlock),
 		ai.WithMessages(t.history...),
-		ai.WithPrompt(t.req.Instruction),
+		ai.WithPrompt(t.actx.StateBlock+t.req.Instruction),
 		ai.WithTools(tools.all()...),
 		ai.WithMaxTurns(maxTurns),
 		ai.WithStreaming(flowkit.StreamCallback(t.streamHandlers())),
