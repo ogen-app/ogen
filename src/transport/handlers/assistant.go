@@ -81,6 +81,11 @@ type assistantTurnRequest struct {
 // @Description  "uiActions","touched":[{"kind","id"}],"packs"}, where touched names what changed (no id: every entity
 // @Description  of the kind) for the client to refresh, plus "unsaved": true when the turn ran but could not be
 // @Description  stored in the thread. "error" carries {"message":"...","code":<http_code>} and ends the stream.
+// @Description  Offers: a bulk or generative pack tool is held back as an offer; "proposal_created" {"id","tool","summary",
+// @Description  "expiresAt","options"} streams once the reply is final, and "proposal_resolved" {"id","status","chosen"} when
+// @Description  one is answered in chat. Cards answer through POST /api/assistant/proposals/{id}/confirm or /dismiss.
+// @Description  Packs stream their own progress between: the campaign pack forwards the campaign assistant's events
+// @Description  (content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends "idea_draft_post" per post.
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream
