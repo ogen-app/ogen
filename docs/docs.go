@@ -7300,6 +7300,63 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/ideas/compile": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Makes one ` + "`" + `planned` + "`" + ` post from 1–10 ideas: a draft_thesis note with a thesis per idea (its\ntitle, then its angle or note), the ideas' source assets as its sources, and a link to each\nidea (GET /api/posts/{id}/ideas). The campaign defaults to the one every idea is in; the title\nto the first idea's; platform, post type, phase and target date to the first idea plan that sets\neach. A target date is placed at the campaign's publishing time. A platform or post type you name\nmust be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as\nthey are, so one idea can feed several posts.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Compile ideas into a planned post",
+                "parameters": [
+                    {
+                        "description": "Ideas and overrides",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.compileIdeasRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.compileIdeasResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/ideas/{id}": {
             "delete": {
                 "security": [
@@ -7382,6 +7439,51 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/ideas/{id}/posts": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ideas"
+                ],
+                "summary": "Posts made from an idea, oldest first",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Idea id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.IdeaPostRef"
                             }
                         }
                     },
@@ -11074,6 +11176,51 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/posts/{id}/ideas": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "posts"
+                ],
+                "summary": "Ideas a post was made from, in order",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Post Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.PostSourceIdea"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -16027,6 +16174,59 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.compileIdeasRequest": {
+            "type": "object",
+            "required": [
+                "idea_ids"
+            ],
+            "properties": {
+                "campaign_id": {
+                    "description": "CampaignID defaults to the campaign the ideas share.",
+                    "type": "string"
+                },
+                "idea_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "phase_id": {
+                    "type": "string"
+                },
+                "platform_id": {
+                    "description": "PlatformID, PlatformPostType, PhaseID and TargetDate default to the\nfirst idea plan that sets each.",
+                    "type": "string"
+                },
+                "platform_post_type": {
+                    "type": "string"
+                },
+                "target_date": {
+                    "type": "string",
+                    "x-nullable": true,
+                    "example": "2026-12-01"
+                },
+                "title": {
+                    "description": "Title defaults to the first idea's title.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.compileIdeasResponse": {
+            "type": "object",
+            "properties": {
+                "ideas": {
+                    "description": "Ideas are the ideas the post was made from, in order.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.PostSourceIdea"
+                    }
+                },
+                "post": {
+                    "$ref": "#/definitions/models.Post"
+                }
+            }
+        },
         "handlers.completeGoogleSignupRequest": {
             "type": "object",
             "required": [
@@ -20364,6 +20564,30 @@ const docTemplate = `{
                 }
             }
         },
+        "models.IdeaPostRef": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "platform_id": {
+                    "type": "string"
+                },
+                "scheduled_at": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "status": {
+                    "$ref": "#/definitions/models.PostStatus"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "models.IdeaReading": {
             "type": "object",
             "properties": {
@@ -21156,6 +21380,7 @@ const docTemplate = `{
                 "user_cancel",
                 "user_retry",
                 "post_cloned",
+                "post_compiled",
                 "post_restored",
                 "quality_assessed"
             ],
@@ -21181,6 +21406,7 @@ const docTemplate = `{
                 "PostLogEventUserCancel",
                 "PostLogEventUserRetry",
                 "PostLogEventPostCloned",
+                "PostLogEventPostCompiled",
                 "PostLogEventPostRestored",
                 "PostLogEventQualityAssessed"
             ]
@@ -21216,6 +21442,26 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "sync_status": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.PostSourceIdea": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "origin": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "asset_analysis",
+                        "content_plan",
+                        "assistant"
+                    ]
+                },
+                "title": {
                     "type": "string"
                 }
             }
