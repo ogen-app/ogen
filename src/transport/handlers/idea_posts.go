@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
@@ -22,6 +23,10 @@ type IdeaPostsHandler struct {
 	posts    repository.PostRepository
 	activity *activity.Recorder
 	auth     fiber.Handler
+
+	drafts         IdeaDrafts
+	draftMax       int
+	draftAvailable func() bool
 }
 
 // NewIdeaPostsHandler wires the endpoints; activity nil is a no-op.
@@ -36,10 +41,24 @@ func NewIdeaPostsHandler(
 	return &IdeaPostsHandler{compile: compile, links: links, ideas: ideas, posts: posts, activity: activityRec, auth: auth}
 }
 
+// IdeaDrafts writes posts from ideas; *compose.Service.
+type IdeaDrafts interface {
+	PlanDraft(ctx context.Context, in compose.DraftInput, maxPosts int) (*compose.DraftPlan, error)
+	RunDraft(ctx context.Context, plan *compose.DraftPlan, onPost func(compose.DraftedPost)) (*compose.DraftResult, error)
+}
+
+// WithDraft enables POST /api/ideas/draft: at most maxPosts posts a request,
+// and only while available reports the writer is up.
+func (h *IdeaPostsHandler) WithDraft(drafts IdeaDrafts, maxPosts int, available func() bool) *IdeaPostsHandler {
+	h.drafts, h.draftMax, h.draftAvailable = drafts, maxPosts, available
+	return h
+}
+
 // Register must run before the ideas and posts handlers, so /compile wins
 // over /:id.
 func (h *IdeaPostsHandler) Register(app *fiber.App) {
 	app.Post("/api/ideas/compile", h.auth, h.Compile)
+	app.Post("/api/ideas/draft", h.auth, h.Draft)
 	app.Get("/api/ideas/:id/posts", h.auth, h.PostsOfIdea)
 	app.Get("/api/posts/:id/ideas", h.auth, h.IdeasOfPost)
 }
@@ -120,6 +139,98 @@ func (h *IdeaPostsHandler) Compile(c *fiber.Ctx) error {
 		activity.WithPayload(map[string]any{"idea_ids": ids}),
 	)
 	return c.Status(fiber.StatusCreated).JSON(compileIdeasResponse{Post: *res.Post, Ideas: ideas})
+}
+
+type draftIdeasRequest struct {
+	IdeaIDs []string `json:"idea_ids" validate:"required,min=1"`
+	// CampaignID defaults to the campaign the ideas share.
+	CampaignID string `json:"campaign_id"`
+	// PlatformIDs default to the first idea plan's platform.
+	PlatformIDs []string `json:"platform_ids"`
+	// PlatformPostType needs exactly one platform.
+	PlatformPostType string               `json:"platform_post_type"`
+	PhaseID          string               `json:"phase_id"`
+	TargetDate       *models.CalendarDate `json:"target_date" swaggertype:"string" example:"2026-12-01" extensions:"x-nullable"`
+	// Instruction steers the writing ("punchier", "for CFOs").
+	Instruction string `json:"instruction"`
+	// Together writes one post per platform from all the ideas; otherwise
+	// each idea gets its own post on each platform.
+	Together bool `json:"together"`
+}
+
+// Event names of the draft stream.
+const (
+	ideaDraftEventPost     = "post"
+	ideaDraftEventComplete = "complete"
+	ideaDraftEventError    = "error"
+)
+
+// Draft godoc
+// @Summary      Write posts from ideas (SSE)
+// @Description  Writes finished posts from 1–10 ideas and saves them as drafts with a body. Each idea gets its own
+// @Description  post on each platform, or with `together` one post per platform from all of them; at most
+// @Description  DRAFT_POST_MAX posts a request. The writer works from each idea's title, angle, reasoning and
+// @Description  sources (or its note), in the campaign's brand voice; the ideas' source assets become the posts'
+// @Description  sources, and every post links to its ideas (GET /api/posts/{id}/ideas). The campaign defaults to
+// @Description  the one the ideas share; the platform, post type, phase and date to the first idea plan that sets
+// @Description  each. Requests that can't run are a plain 400 before the stream opens.
+// @Description  Events: "post" {postId,title,platformId,ideaIds} as each post is saved; "complete"
+// @Description  {posts,warnings}; "error" {message,code}, after which the posts already written are kept.
+// @Tags         ideas
+// @Accept       json
+// @Produce      text/event-stream
+// @Security     CookieAuth
+// @Param        body  body  draftIdeasRequest  true  "Ideas, platforms and steering"
+// @Success      200  "SSE stream: post / complete / error"
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /api/ideas/draft [post]
+func (h *IdeaPostsHandler) Draft(c *fiber.Ctx) error {
+	if h.drafts == nil || (h.draftAvailable != nil && !h.draftAvailable()) {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "writing posts is not available")
+	}
+	var req draftIdeasRequest
+	if err := bindAndValidate(c, &req); err != nil {
+		return err
+	}
+	session, err := sessionFrom(c)
+	if err != nil {
+		return err
+	}
+	plan, err := h.drafts.PlanDraft(reqCtx(c), compose.DraftInput{
+		IdeaIDs:     req.IdeaIDs,
+		CampaignID:  req.CampaignID,
+		PlatformIDs: req.PlatformIDs,
+		PostType:    req.PlatformPostType,
+		PhaseID:     req.PhaseID,
+		TargetDate:  req.TargetDate,
+		Instruction: req.Instruction,
+		Together:    req.Together,
+		Actor:       session.UserID,
+	}, h.draftMax)
+	if err != nil {
+		if compose.IsValidation(err) {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return err
+	}
+	h.activity.Record(reqCtx(c), activity.CategoryIdea, "ideas_drafted",
+		activity.WithSource(activity.SourceAPI),
+		activity.WithPayload(map[string]any{"idea_ids": req.IdeaIDs, "posts": len(plan.Jobs)}),
+	)
+
+	drafts := h.drafts
+	flowCtx := detachedContext(c, session.TenantID)
+	streamFlow(c, func(emit sseEmit) {
+		res, err := drafts.RunDraft(flowCtx, plan, func(p compose.DraftedPost) { emit(ideaDraftEventPost, p) })
+		if err != nil {
+			emit(ideaDraftEventError, flowError[*draft_post.ValidationError, *draft_post.AIError](err))
+			return
+		}
+		emit(ideaDraftEventComplete, res)
+	})
+	return nil
 }
 
 // PostsOfIdea godoc

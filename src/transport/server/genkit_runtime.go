@@ -67,6 +67,7 @@ type genkitRuntime struct {
 	enrichBriefFn       func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	campaignAssistantFn func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
 	generatePostsFn     func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
+	draftPostFn         func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
 	checkBriefFn        func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPostsFn        func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 	analyzeAssetFn      func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error)
@@ -268,6 +269,18 @@ func (r *genkitRuntime) RunCampaignAssistant(ctx context.Context, req campaign_a
 	return fn(ctx, req, onEvent)
 }
 
+// DraftPost writes finished posts from source material and saves them as
+// drafts.
+func (r *genkitRuntime) DraftPost(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
+	r.mu.RLock()
+	fn := r.draftPostFn
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil, ErrAnthropicUnavailable
+	}
+	return fn(ctx, req, onEvent)
+}
+
 func (r *genkitRuntime) GeneratePosts(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 	r.mu.RLock()
 	fn := r.generatePostsFn
@@ -426,6 +439,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.enrichBriefFn = enrichBriefFn
 	r.campaignAssistantFn = campaignAssistantFn
 	r.generatePostsFn = generatePostsFn
+	r.draftPostFn = draftPostFn
 	r.checkBriefFn = checkBriefFn
 	r.checkPostsFn = checkPostsFn
 	slog.InfoContext(ctx, "anthropic flows rebuilt",
