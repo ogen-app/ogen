@@ -33,78 +33,67 @@ func TestWithinCount(t *testing.T) {
 	}
 }
 
-// stubPostRepo embeds the interface so it satisfies the type; only Create is
+// stubIdeaRepo embeds the interface so it satisfies the type; only Create is
 // implemented (the rest panic if unexpectedly called).
-type stubPostRepo struct {
-	repository.PostRepository
-	created *models.Post
+type stubIdeaRepo struct {
+	repository.IdeaRepository
+	created *models.Idea
 }
 
-func (s *stubPostRepo) Create(_ context.Context, p *models.Post) error {
-	s.created = p
+func (s *stubIdeaRepo) Create(_ context.Context, i *models.Idea) error {
+	s.created = i
 	return nil
 }
 
-type stubNoteRepo struct {
-	repository.PostNoteRepository
-	created *models.PostNote
-}
-
-func (s *stubNoteRepo) Create(_ context.Context, n *models.PostNote) error {
-	s.created = n
-	return nil
-}
-
-// Content-plan no longer writes the thesis into the post body — the
-// post is created with an empty body and the thesis is captured as a
-// draft_thesis note (origin content_plan, authored by the campaign owner).
-func TestPersistOne_DraftThesisNote(t *testing.T) {
-	postRepo := &stubPostRepo{}
-	noteRepo := &stubNoteRepo{}
+// A planned item is saved as the campaign's idea: its thesis is the note,
+// its platform, post type, phase and date are the plan, and nothing becomes
+// a post.
+func TestPersistIdea_SavesThePlan(t *testing.T) {
+	ideas := &stubIdeaRepo{}
 	campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
-	dp := DraftPost{Title: "T", Body: "- point 1\n- point 2", PlatformID: "linkedin", ContentType: "article"}
-
-	id, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, noteRepo, nil)
+	dp := DraftPost{
+		Title: "Why pricing pages fail", Body: "- point 1\n- point 2", ToneNotes: "dry humour",
+		PlatformID: "linkedin", ContentType: "article", PhaseID: "ph1", PublishDate: "2026-08-12",
+	}
+	id, err := persistIdea(t.Context(), &dp, campaign, nil, nil, ideas, []string{"asset-1", "asset-2"})
 	if err != nil {
-		t.Fatalf("persistOne: %v", err)
+		t.Fatal(err)
 	}
-	if id == "" {
-		t.Fatal("expected a non-empty post id")
+	i := ideas.created
+	if i == nil || i.ID != id || i.Title != dp.Title || i.Origin != models.IdeaOriginContentPlan || *i.CampaignID != "camp1" || *i.CreatedBy != "user1" {
+		t.Fatalf("idea = %+v", i)
 	}
-	if postRepo.created == nil {
-		t.Fatal("expected a post to be created")
+	if i.Note != "- point 1\n- point 2\n\nTone: dry humour" {
+		t.Errorf("note = %q", i.Note)
 	}
-	if postRepo.created.Content != "" {
-		t.Errorf("post body = %q, want empty (thesis goes to a note)", postRepo.created.Content)
+	if p := i.Plan; *p.PlatformID != "linkedin" || *p.PostType != "article" || *p.PhaseID != "ph1" || p.TargetDate.String() != "2026-08-12" {
+		t.Errorf("plan = %+v", p)
 	}
-	if postRepo.created.Status != models.PostStatusPlanned {
-		t.Errorf("status = %q, want planned: theses without a body", postRepo.created.Status)
-	}
-	if noteRepo.created == nil {
-		t.Fatal("expected a draft_thesis note to be created")
-	}
-	n := noteRepo.created
-	if n.Type != models.PostNoteTypeDraftThesis {
-		t.Errorf("note type = %q, want draft_thesis", n.Type)
-	}
-	if n.Origin != models.PostNoteOriginContentPlan {
-		t.Errorf("note origin = %q, want content_plan", n.Origin)
-	}
-	if n.Body != dp.Body {
-		t.Errorf("note body = %q, want %q", n.Body, dp.Body)
-	}
-	if n.PostID != id {
-		t.Errorf("note post_id = %q, want %q", n.PostID, id)
-	}
-	if n.CreatedBy != "user1" {
-		t.Errorf("note created_by = %q, want user1", n.CreatedBy)
+	if len(i.AssetIDs) != 2 || *i.SourceAssetID != "asset-1" || *i.GroundingMode != models.GroundingGrounded {
+		t.Errorf("sources = %v / %v, grounding %v", i.AssetIDs, i.SourceAssetID, i.GroundingMode)
 	}
 }
 
-// Each post records whether it drew on the campaign's sources, so the label
-// outlives the chat turn that made it.
-// It goes through the persist step generation uses, which binds each post to
-// the retrieved assets it cites.
+// An idea that drew on no source is exploratory, with no plan fields the
+// model left out.
+func TestPersistIdea_Exploratory(t *testing.T) {
+	ideas := &stubIdeaRepo{}
+	dp := DraftPost{Title: "T", Body: "  "}
+	if _, err := persistIdea(t.Context(), &dp, &models.Campaign{ID: "c", CreatedBy: "u"}, nil, nil, ideas, nil); err != nil {
+		t.Fatal(err)
+	}
+	i := ideas.created
+	if *i.GroundingMode != models.GroundingExploratory || i.SourceAssetID != nil || len(i.AssetIDs) != 0 || i.Note != "" {
+		t.Fatalf("idea = %+v", i)
+	}
+	if p := i.Plan; p.PlatformID != nil || p.PostType != nil || p.PhaseID != nil || p.TargetDate != nil {
+		t.Fatalf("plan = %+v; a malformed date and empty fields set nothing", p)
+	}
+}
+
+// Each idea records whether it drew on the campaign's sources. It goes
+// through the persist step generation uses, which binds each idea to the
+// retrieved assets it cites.
 func TestPersistCited_RecordsGrounding(t *testing.T) {
 	cases := map[string]struct {
 		cites    []string
@@ -117,123 +106,58 @@ func TestPersistCited_RecordsGrounding(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			postRepo := &stubPostRepo{}
+			ideas := &stubIdeaRepo{}
 			campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
-			persist := persistCited(campaign, planScope{}, ContentPlanRepos{Posts: postRepo}, []resolvedPiece{{ID: "asset-1", Title: "Report"}}, nil)
+			persist := persistCited(campaign, planScope{}, ContentPlanRepos{Ideas: ideas}, []resolvedPiece{{ID: "asset-1", Title: "Report"}}, nil)
 			dp := DraftPost{Title: "T", PlatformID: "linkedin", ContentType: "article", AssetRefs: tc.cites}
 			if _, err := persist(t.Context(), &dp); err != nil {
 				t.Fatal(err)
 			}
-			p := postRepo.created
-			if !slices.Equal([]string(p.UsedAssetIDs), tc.wantUsed) {
-				t.Errorf("used assets = %v, want %v", p.UsedAssetIDs, tc.wantUsed)
+			i := ideas.created
+			if !slices.Equal(i.AssetIDs, tc.wantUsed) {
+				t.Errorf("used assets = %v, want %v", i.AssetIDs, tc.wantUsed)
 			}
-			if g := p.GroundingMode; g == nil || *g != tc.want {
+			if g := i.GroundingMode; g == nil || *g != tc.want {
 				t.Fatalf("grounding = %v, want %s", g, tc.want)
 			}
 		})
 	}
 }
 
-// An empty thesis creates no note (but the post is still created).
-func TestPersistOne_EmptyThesisNoNote(t *testing.T) {
-	postRepo := &stubPostRepo{}
-	noteRepo := &stubNoteRepo{}
-	campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
-	dp := DraftPost{Title: "T", Body: "   ", PlatformID: "linkedin", ContentType: "article"}
-
-	if _, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, noteRepo, nil); err != nil {
-		t.Fatalf("persistOne: %v", err)
-	}
-	if postRepo.created == nil {
-		t.Fatal("expected a post to be created")
-	}
-	if noteRepo.created != nil {
-		t.Errorf("expected no note for an empty thesis, got %+v", noteRepo.created)
-	}
-}
-
-// persistOne composes scheduled_at from the campaign's scheduling
-// settings — the model's date placed at the publishing time in the campaign
-// timezone — and reflects the (unchanged, enabled-day) date back onto dp.
-func TestPersistOne_ComposesScheduledAt(t *testing.T) {
-	postRepo := &stubPostRepo{}
-	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
-	campaign := &models.Campaign{
-		ID: "camp1", CreatedBy: "user1",
-		PublishingTime: "09:00",
-		Timezone:       "", // UTC
-		PublishingDays: models.StringSlice{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
-		SpreadMinutes:  0,
-		StartDate:      &start,
-		EndDate:        &end,
-	}
-	dp := DraftPost{Title: "T", Body: "x", PlatformID: "linkedin", ContentType: "article", PublishDate: "2026-08-12"}
-
-	if _, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, nil, nil); err != nil {
-		t.Fatalf("persistOne: %v", err)
-	}
-	want := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
-	if postRepo.created.ScheduledAt == nil || !postRepo.created.ScheduledAt.Equal(want) {
-		t.Errorf("scheduled_at = %v, want %v", postRepo.created.ScheduledAt, want)
-	}
-	if dp.PublishDate != "2026-08-12" {
-		t.Errorf("dp.PublishDate = %q, want 2026-08-12 (reflected)", dp.PublishDate)
-	}
-}
-
-// A nil note repo must not panic — the post is still created (note skipped).
-func TestPersistOne_NilNoteRepo(t *testing.T) {
-	postRepo := &stubPostRepo{}
-	campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
-	dp := DraftPost{Title: "T", Body: "- point 1", PlatformID: "linkedin", ContentType: "article"}
-
-	if _, err := persistOne(t.Context(), &dp, campaign, campaign.StartDate, campaign.EndDate, postRepo, nil, nil); err != nil {
-		t.Fatalf("persistOne: %v", err)
-	}
-	if postRepo.created == nil {
-		t.Fatal("expected a post to be created even with a nil note repo")
-	}
-}
-
-// Day-snapping is bounded by the window passed to persistOne (the
-// targeting window), not the full campaign window — so a targeted run can't snap
-// a post onto an enabled day outside the requested window.
-func TestPersistOne_SnapsWithinWindow(t *testing.T) {
-	postRepo := &stubPostRepo{}
+// Day-snapping is bounded by the window passed in (the targeting window),
+// not the full campaign window — so a targeted run can't move an idea onto an
+// enabled day outside the requested window.
+func TestPersistIdea_SnapsWithinWindow(t *testing.T) {
 	campStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	campEnd := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
 	date := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
-
-	// Enable only the weekday AFTER the model's date, so the date itself is on a
-	// disabled day and the nearest enabled day is date+1 — inside the campaign
-	// window but outside the single-day targeting window below.
 	tok := map[time.Weekday]string{
 		time.Sunday: "sun", time.Monday: "mon", time.Tuesday: "tue", time.Wednesday: "wed",
 		time.Thursday: "thu", time.Friday: "fri", time.Saturday: "sat",
 	}
+	// Only the day after the model's date is enabled.
 	campaign := &models.Campaign{
-		ID: "camp1", CreatedBy: "user1",
-		PublishingTime: "09:00", Timezone: "",
+		ID: "camp1", CreatedBy: "user1", PublishingTime: "09:00",
 		PublishingDays: models.StringSlice{tok[(date.Weekday()+1)%7]},
-		SpreadMinutes:  0,
 		StartDate:      &campStart, EndDate: &campEnd,
 	}
-	dp := DraftPost{Title: "T", Body: "x", PlatformID: "linkedin", ContentType: "article", PublishDate: "2026-08-12"}
 
-	// Targeting window is the single (disabled) day: no enabled day inside it, so
-	// the date is kept rather than snapped forward to date+1. With the full
-	// campaign window it would snap to 2026-08-13.
+	ideas := &stubIdeaRepo{}
+	dp := DraftPost{Title: "T", PublishDate: "2026-08-12"}
+	if _, err := persistIdea(t.Context(), &dp, campaign, &campStart, &campEnd, ideas, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ideas.created.Plan.TargetDate.String(); got != "2026-08-13" || dp.PublishDate != "2026-08-13" {
+		t.Fatalf("campaign window: date = %s / %s, want snapped to 2026-08-13", got, dp.PublishDate)
+	}
+
+	// A single-day targeting window on the disabled day keeps the date.
+	dp = DraftPost{Title: "T", PublishDate: "2026-08-12"}
 	win := date
-	if _, err := persistOne(t.Context(), &dp, campaign, &win, &win, postRepo, nil, nil); err != nil {
-		t.Fatalf("persistOne: %v", err)
+	if _, err := persistIdea(t.Context(), &dp, campaign, &win, &win, ideas, nil); err != nil {
+		t.Fatal(err)
 	}
-	want := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
-	if postRepo.created.ScheduledAt == nil || !postRepo.created.ScheduledAt.Equal(want) {
-		t.Errorf("scheduled_at = %v, want %v (kept in-window, not snapped to date+1)", postRepo.created.ScheduledAt, want)
-	}
-	if dp.PublishDate != "2026-08-12" {
-		t.Errorf("dp.PublishDate = %q, want 2026-08-12 (not snapped out of window)", dp.PublishDate)
+	if got := ideas.created.Plan.TargetDate.String(); got != "2026-08-12" {
+		t.Fatalf("targeting window: date = %s, want kept at 2026-08-12", got)
 	}
 }
