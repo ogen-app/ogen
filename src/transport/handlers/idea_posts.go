@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -59,6 +60,7 @@ func (h *IdeaPostsHandler) WithDraft(drafts IdeaDrafts, maxPosts int, available 
 func (h *IdeaPostsHandler) Register(app *fiber.App) {
 	app.Post("/api/ideas/compile", h.auth, h.Compile)
 	app.Post("/api/ideas/draft", h.auth, h.Draft)
+	app.Get("/api/ideas/slots", h.auth, h.Slots)
 	app.Get("/api/ideas/:id/posts", h.auth, h.PostsOfIdea)
 	app.Get("/api/posts/:id/ideas", h.auth, h.IdeasOfPost)
 }
@@ -251,6 +253,49 @@ func (h *IdeaPostsHandler) Draft(c *fiber.Ctx) error {
 		emit(ideaDraftEventComplete, res)
 	})
 	return nil
+}
+
+// maxSlotDays caps the span one slots read covers: a month view with its
+// spill-over weeks, with room to spare.
+const maxSlotDays = 93
+
+// Slots godoc
+// @Summary      Calendar slots of dated ideas
+// @Description  Returns the ideas planned for days from `from` to `to` (both YYYY-MM-DD, inclusive, at most 93
+// @Description  days), ordered by day, for the calendar to draw beside the posts. Each item is `kind: "idea"`:
+// @Description  a day an idea plans to land on, never a post, so it doesn't count toward goals. Only open ideas
+// @Description  are slots: one with a post made from it is that post now, and one turned down ("no") is gone.
+// @Description  With `campaign_id` the slots are that campaign's; without, every campaign's but the archived ones.
+// @Tags         ideas
+// @Produce      json
+// @Security     CookieAuth
+// @Param        from         query  string  true   "First day, YYYY-MM-DD"
+// @Param        to           query  string  true   "Last day, YYYY-MM-DD"
+// @Param        campaign_id  query  string  false  "Only this campaign's ideas"
+// @Success      200  {array}   models.IdeaSlot
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Router       /api/ideas/slots [get]
+func (h *IdeaPostsHandler) Slots(c *fiber.Ctx) error {
+	from, err := models.ParseCalendarDate(c.Query("from"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "from must be a YYYY-MM-DD date")
+	}
+	to, err := models.ParseCalendarDate(c.Query("to"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "to must be a YYYY-MM-DD date")
+	}
+	if to.Before(from.Time) {
+		return fiber.NewError(fiber.StatusBadRequest, "to is before from")
+	}
+	if to.Sub(from.Time).Hours()/24 >= maxSlotDays {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("a slots read covers at most %d days", maxSlotDays))
+	}
+	slots, err := h.ideas.Slots(reqCtx(c), from, to, c.Query("campaign_id"))
+	if err != nil {
+		return err
+	}
+	return c.JSON(slots)
 }
 
 // PostsOfIdea godoc
