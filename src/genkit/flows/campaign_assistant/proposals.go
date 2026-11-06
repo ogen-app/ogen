@@ -78,6 +78,7 @@ func proposalOutcomes(proposed []ProposalCreatedEventPayload) []outcome {
 		out = append(out, outcome{
 			action:      actionProposed,
 			explanation: fmt.Sprintf("I've prepared this for you to confirm: %s.", p.Summary),
+			attach:      func(resp *CampaignAssistantResponse) { resp.Proposals = append(resp.Proposals, p) },
 			event:       SSEEventProposalCreated,
 			payload:     p,
 			readOnly:    true,
