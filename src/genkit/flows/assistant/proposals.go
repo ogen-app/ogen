@@ -1,0 +1,326 @@
+package assistant
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/viewresolve"
+)
+
+// proposalTTL is how long an offer waits for an answer.
+const proposalTTL = 24 * time.Hour
+
+const (
+	refuseOfferGone     = "That offer is no longer available. Ask again and I'll set it up."
+	refuseOfferAnswered = "That offer has already been answered or has expired. Ask again and I'll set it up."
+)
+
+// ErrProposalNotFound is an offer that doesn't exist for the caller (404).
+var ErrProposalNotFound = errors.New("proposal not found")
+
+// errNotMine is an offer another assistant made, which it answers.
+var errNotMine = errors.New("proposal belongs to another assistant")
+
+// ProposalConflictError is an offer that can no longer be answered (409).
+type ProposalConflictError struct{ Msg string }
+
+func (e *ProposalConflictError) Error() string { return e.Msg }
+
+// ProposalCard is an offer waiting for the user, as its card shows it.
+type ProposalCard struct {
+	ID        string           `json:"id"`
+	Tool      string           `json:"tool"`
+	Summary   string           `json:"summary"`
+	ExpiresAt string           `json:"expiresAt"`
+	Options   []ProposalChoice `json:"options,omitempty"`
+}
+
+// ProposalChoice is one option on a card.
+type ProposalChoice struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+// ProposalResolved is an offer answered this turn.
+type ProposalResolved struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Chosen string `json:"chosen,omitempty"`
+}
+
+// turnSink stores the turn's held-back calls as the thread's offers.
+type turnSink struct {
+	st    *turnState
+	repos Repos
+}
+
+func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string, error) {
+	if s.repos.Proposals == nil {
+		return "", assistantkit.ErrNoProposalSink
+	}
+	args, err := toJSONMap(p.Args)
+	if err != nil {
+		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
+	}
+	stored := make([]models.ProposalOption, len(p.Options))
+	choices := make([]ProposalChoice, len(p.Options))
+	for i, o := range p.Options {
+		oargs, err := toJSONMap(o.Args)
+		if err != nil {
+			return "", fmt.Errorf("encode %s proposal option: %w", p.Tool, err)
+		}
+		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Tool: o.Tool, Args: oargs}
+		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description}
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return "", err
+	}
+	by, _ := logging.UserIDFrom(ctx)
+	scope := s.st.view.View.Scope
+	row := &models.AssistantProposal{
+		ID: id, ScopeKind: scope.Kind, ScopeID: scope.ID, Tool: p.Tool, Args: args, Summary: p.Summary,
+		Options: stored, CreatedBy: by, ExpiresAt: time.Now().UTC().Add(proposalTTL),
+	}
+	if err := s.repos.Proposals.Create(ctx, row); err != nil {
+		return "", fmt.Errorf("store %s proposal: %w", p.Tool, err)
+	}
+	s.st.addCard(ProposalCard{ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices})
+	return id, nil
+}
+
+func toJSONMap(v any) (models.JSONMap, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	m := models.JSONMap{}
+	if string(b) == "null" {
+		return m, nil
+	}
+	return m, json.Unmarshal(b, &m)
+}
+
+// AnswerProposalInput answers an offer waiting in this thread.
+type AnswerProposalInput struct {
+	ProposalID string `json:"proposalId"         jsonschema:"description=The offer's id, from the offers waiting for an answer"`
+	OptionID   string `json:"optionId,omitempty" jsonschema:"description=The option the user picked, when the offer has options"`
+}
+
+// DismissProposalOutput confirms a dismissal.
+type DismissProposalOutput struct {
+	Dismissed bool `json:"dismissed"`
+}
+
+// confirmProposal runs a waiting offer exactly as it was stored, past its
+// gate, once.
+func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (any, error) {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p, err := t.openProposal(ctx, st, in.ProposalID)
+	if err != nil {
+		return nil, err
+	}
+	if !t.Owns(p.Tool) && !t.ownsOption(p) {
+		return t.foreign(ctx, AnswerRequest{ProposalID: p.ID, OptionID: in.OptionID, Confirm: true})
+	}
+	tool, args := p.Tool, p.Args
+	if in.OptionID == "" && len(p.Options) == 1 {
+		in.OptionID = p.Options[0].ID
+	}
+	if in.OptionID == "" && len(p.Options) > 1 {
+		return nil, assistantkit.Refused("This offer has options: pick one.", optionIDs(p)...)
+	}
+	if in.OptionID != "" {
+		o, ok := p.Option(in.OptionID)
+		if !ok {
+			return nil, assistantkit.Refused(fmt.Sprintf("%q is not one of the options offered.", in.OptionID), optionIDs(p)...)
+		}
+		if o.Tool != "" {
+			tool, args = o.Tool, o.Args
+		}
+	}
+	if err := t.resolve(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
+		return nil, err
+	}
+	return t.reg.RunConfirmed(ctx, tool, map[string]any(args))
+}
+
+func (t *toolSet) dismissProposal(ctx context.Context, in AnswerProposalInput) (*DismissProposalOutput, error) {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p, err := t.openProposal(ctx, st, in.ProposalID)
+	if err != nil {
+		return nil, err
+	}
+	if !t.Owns(p.Tool) && !t.ownsOption(p) {
+		if _, err := t.foreign(ctx, AnswerRequest{ProposalID: p.ID}); err != nil {
+			return nil, err
+		}
+		return &DismissProposalOutput{Dismissed: true}, nil
+	}
+	if err := t.resolve(ctx, st, p.ID, models.ProposalDismissed, ""); err != nil {
+		return nil, err
+	}
+	return &DismissProposalOutput{Dismissed: true}, nil
+}
+
+// openProposal returns the thread's offer if it can still be answered.
+// Another thread's offer reads as gone.
+func (t *toolSet) openProposal(ctx context.Context, st *turnState, id string) (*models.AssistantProposal, error) {
+	if t.deps.Proposals == nil {
+		return nil, assistantkit.ErrNoProposalSink
+	}
+	p, err := t.deps.Proposals.GetByID(ctx, strings.TrimSpace(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, assistantkit.Refused(refuseOfferGone)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load proposal: %w", err)
+	}
+	scope := st.view.View.Scope
+	if p.ScopeKind != scope.Kind || p.ScopeID != scope.ID {
+		return nil, assistantkit.Refused(refuseOfferGone)
+	}
+	if !p.Open(time.Now().UTC()) {
+		return nil, assistantkit.Refused(refuseOfferAnswered)
+	}
+	return p, nil
+}
+
+// resolve records the answer; losing the race to another answer is a
+// refusal, so the work never runs twice.
+func (t *toolSet) resolve(ctx context.Context, st *turnState, id string, status models.AssistantProposalStatus, chosen string) error {
+	by, _ := logging.UserIDFrom(ctx)
+	ok, err := t.deps.Proposals.Resolve(ctx, id, status, chosen, by, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("resolve proposal: %w", err)
+	}
+	if !ok {
+		return assistantkit.Refused(refuseOfferAnswered)
+	}
+	st.addResolved(ProposalResolved{ID: id, Status: string(status), Chosen: chosen})
+	return nil
+}
+
+// foreign hands an offer to the assistant that made it; one it can't answer
+// any more is a refusal the model relays.
+func (t *toolSet) foreign(ctx context.Context, req AnswerRequest) (any, error) {
+	if t.deps.ForeignAnswer == nil {
+		return nil, assistantkit.Refused(refuseOfferGone)
+	}
+	out, err := t.deps.ForeignAnswer(ctx, req)
+	if errors.Is(err, ErrProposalNotFound) {
+		return nil, assistantkit.Refused(refuseOfferGone)
+	}
+	if ce, ok := errors.AsType[*ProposalConflictError](err); ok {
+		return nil, assistantkit.Refused(ce.Msg)
+	}
+	return out, err
+}
+
+func optionIDs(p *models.AssistantProposal) []string {
+	ids := make([]string, len(p.Options))
+	for i, o := range p.Options {
+		ids[i] = o.ID
+	}
+	return ids
+}
+
+// openProposals lists the thread's offers still waiting, for the <view>
+// block. A failed read lists none: the model then can't confirm by id, which
+// the card's button still can.
+func (t *toolSet) openProposals(ctx context.Context, scope viewcontext.Scope) []models.AssistantProposal {
+	if t.deps.Proposals == nil {
+		return nil
+	}
+	ps, err := t.deps.Proposals.ListOpen(ctx, scope.Kind, scope.ID, time.Now().UTC())
+	if err != nil {
+		return nil
+	}
+	return ps
+}
+
+// AnswerRequest confirms or dismisses an offer from its card.
+type AnswerRequest struct {
+	ProposalID string
+	OptionID   string
+	Confirm    bool
+}
+
+// Owns reports whether this assistant made an offer for tool.
+func (t *toolSet) Owns(tool string) bool {
+	_, ok := t.reg.Lookup(tool)
+	return ok
+}
+
+// answer confirms or dismisses an offer from its card, without a model call:
+// the same work as a "yes" or "no" in the chat. An offer for a tool this
+// assistant doesn't have returns errNotMine.
+func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEventFunc) (*Response, error) {
+	if t.deps.Proposals == nil {
+		return nil, ErrProposalNotFound
+	}
+	p, err := t.deps.Proposals.GetByID(ctx, req.ProposalID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrProposalNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load proposal: %w", err)
+	}
+	if !t.Owns(p.Tool) && !t.ownsOption(p) {
+		return nil, errNotMine
+	}
+	view := &viewresolve.Resolved{View: &viewcontext.ViewContext{
+		Version: viewcontext.Version, Screen: "home", Scope: viewcontext.Scope{Kind: p.ScopeKind, ID: p.ScopeID},
+	}}
+	st := newTurnState(view, nil)
+	ctx = t.bind(withTurnState(ctx, st), st)
+
+	in := AnswerProposalInput{ProposalID: p.ID, OptionID: req.OptionID}
+	var result any
+	if req.Confirm {
+		result, err = t.confirmProposal(ctx, in)
+	} else {
+		_, err = t.dismissProposal(ctx, in)
+	}
+	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
+		return nil, &ProposalConflictError{Msg: r.Reason}
+	}
+	if err != nil {
+		return nil, err
+	}
+	resp := &Response{Action: actionAnswered, Explanation: "Dismissed: " + p.Summary, Result: result}
+	if req.Confirm {
+		resp.Explanation = "Done: " + p.Summary
+	}
+	finish(st, resp)
+	for _, r := range st.resolvedList() {
+		emit(onEvent, SSEEventProposalResolved, r)
+	}
+	emit(onEvent, SSEEventComplete, resp)
+	return resp, nil
+}
+
+func (t *toolSet) ownsOption(p *models.AssistantProposal) bool {
+	for _, o := range p.Options {
+		if o.Tool != "" && t.Owns(o.Tool) {
+			return true
+		}
+	}
+	return false
+}
