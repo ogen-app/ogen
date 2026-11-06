@@ -67,6 +67,9 @@ type DatesResult struct {
 	StartDate         string `json:"startDate"`
 	EndDate           string `json:"endDate"`
 	PostsOutsideRange int    `json:"postsOutsideRange"` // eligible posts now dated outside the new range
+	// UndoID reverses the change via POST /api/assistant/actions/:id/undo;
+	// empty when the change could not be logged.
+	UndoID string `json:"undoId,omitempty"`
 }
 
 // RedistributeResult summarises a redistributePosts tool invocation.
@@ -115,6 +118,9 @@ type AssetRef struct {
 // BriefResult reports whether the enrichBrief tool applied a new brief.
 type BriefResult struct {
 	Applied bool `json:"applied"`
+	// UndoID reverses the change via POST /api/assistant/actions/:id/undo;
+	// empty when the change could not be logged.
+	UndoID string `json:"undoId,omitempty"`
 }
 
 // CampaignAssistantRepos bundles the repository dependencies for the flow.
@@ -133,6 +139,9 @@ type CampaignAssistantRepos struct {
 	// Proposals stores proposal-tier calls held back for the user to confirm.
 	// nil fails every proposal-tier call closed instead of running it.
 	Proposals repository.AssistantProposalRepository
+	// Actions logs reversible changes so they can be undone. nil makes them
+	// not undoable; the change itself still applies.
+	Actions repository.AssistantActionRepository
 }
 
 // CampaignAssistantFlowConfig holds static settings for the flow.
@@ -317,7 +326,8 @@ type EnrichBriefStartedEventPayload struct {
 
 // EnrichBriefCompleteEventPayload is emitted once the brief is applied.
 type EnrichBriefCompleteEventPayload struct {
-	Applied bool `json:"applied"`
+	Applied bool   `json:"applied"`
+	UndoID  string `json:"undoId,omitempty"`
 }
 
 // GeneratePostsStartedEventPayload is emitted when the generatePosts tool begins.
@@ -355,6 +365,7 @@ type DatesUpdatedEventPayload struct {
 	StartDate         string `json:"startDate"`
 	EndDate           string `json:"endDate"`
 	PostsOutsideRange int    `json:"postsOutsideRange"`
+	UndoID            string `json:"undoId,omitempty"`
 }
 
 // PostsRedistributedEventPayload is emitted once posts are re-dated.
