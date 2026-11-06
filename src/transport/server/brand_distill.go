@@ -16,12 +16,10 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/urlimport"
 )
 
-// newBrandDistill builds the brand distillation service. Its website read
-// imports pages through the same use case as POST /assets/url; the model
-// stages are bound once the Genkit runtime is up (initGenkit).
-func newBrandDistill(d *deps) *branddistill.Service {
+// newURLImporter imports a web page as an asset, as POST /assets/url does.
+func newURLImporter(d *deps) *urlimport.Service {
 	r := d.r
-	importer := &urlimport.Service{
+	return &urlimport.Service{
 		DB:      d.db,
 		Assets:  r.pieceRepo,
 		Ingest:  &ingest.Service{DB: d.db, Assets: r.pieceRepo, Files: r.assetFileRepo, Images: r.assetImageRepo},
@@ -29,6 +27,14 @@ func newBrandDistill(d *deps) *branddistill.Service {
 		Gate:    d.ingest.firecrawl,
 		Limiter: d.entitlements.limiter,
 	}
+}
+
+// newBrandDistill builds the brand distillation service. Its website read
+// imports pages through the same use case as POST /assets/url; the model
+// stages are bound once the Genkit runtime is up (initGenkit).
+func newBrandDistill(d *deps) *branddistill.Service {
+	r := d.r
+	importer := newURLImporter(d)
 	return branddistill.New(d.db, branddistill.Repos{
 		Runs:   r.brandDistillRepo,
 		Assets: r.pieceRepo,
