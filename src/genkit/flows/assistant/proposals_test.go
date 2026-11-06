@@ -94,13 +94,13 @@ func bulkPack(ran *int) Pack {
 	}
 }
 
-func proposalHarness(t *testing.T, foreign func(context.Context, AnswerRequest) (any, error)) (*harness, *memProposals, *int) {
+func proposalHarness(t *testing.T) (*harness, *memProposals, *int) {
 	t.Helper()
 	ran := new(int)
 	store := &memProposals{}
 	g := genkit.Init(t.Context())
 	msgs := &memMessages{}
-	repos := Repos{Messages: msgs, Views: testViews(), SavedViews: memSavedViews{}, Proposals: store, ForeignAnswer: foreign}
+	repos := Repos{Messages: msgs, Views: testViews(), SavedViews: memSavedViews{}, Proposals: store}
 	tools, err := defineTools(g, repos, []Pack{bulkPack(ran)})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func proposalHarness(t *testing.T, foreign func(context.Context, AnswerRequest) 
 }
 
 func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
-	h, store, ran := proposalHarness(t, nil)
+	h, store, ran := proposalHarness(t)
 	home := viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`)
 
 	resp, events, _, err := h.turn(home, "do 5 things",
@@ -152,16 +152,12 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 }
 
 func TestProposals_AnswerFromTheCard(t *testing.T) {
-	var foreignCalls []AnswerRequest
-	h, store, ran := proposalHarness(t, func(_ context.Context, req AnswerRequest) (any, error) {
-		foreignCalls = append(foreignCalls, req)
-		return "campaign work done", nil
-	})
+	h, store, ran := proposalHarness(t)
 	ctx := context.WithValue(t.Context(), logging.UserIDKey, "u1")
 	future := time.Now().Add(time.Hour)
 	store.rows = []*models.AssistantProposal{
 		{ID: "mine", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(4)}, Summary: "Do 4 things", Status: models.ProposalPending, ExpiresAt: future},
-		{ID: "theirs", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "runContentPlan", Summary: "Plan the campaign", Status: models.ProposalPending, ExpiresAt: future},
+		{ID: "gone", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "retiredTool", Summary: "Plan the campaign", Status: models.ProposalPending, ExpiresAt: future},
 	}
 
 	var events []SSEEventKind
@@ -172,23 +168,19 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "mine", Confirm: true}, nil); !isConflict(err) {
 		t.Fatalf("answering twice: %v, want a conflict", err)
 	}
-	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "theirs", Confirm: true}, nil); !errors.Is(err, ErrNotThisAssistant) {
-		t.Fatalf("another assistant's offer: %v", err)
+	// An offer for a tool no pack has any more can't run, only be dismissed.
+	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "gone", Confirm: true}, nil); !isConflict(err) {
+		t.Fatalf("an offer for a retired tool: %v, want a conflict", err)
+	}
+	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "gone"}, nil); err != nil || store.rows[1].Status != models.ProposalDismissed {
+		t.Fatalf("dismissing it: %v", err)
 	}
 	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "nope"}, nil); !errors.Is(err, ErrProposalNotFound) {
 		t.Fatalf("missing offer: %v", err)
 	}
-
-	// In the campaign's own thread, a "yes" to the campaign assistant's
-	// offer goes to it.
-	campaign := viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`)
-	if _, _, _, err := h.turn(campaign, "yes",
-		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": "theirs"}}),
-		fakemodel.Answer(`{"explanation":"Planned.","action":"answered"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if len(foreignCalls) != 1 || foreignCalls[0].ProposalID != "theirs" || !foreignCalls[0].Confirm {
-		t.Fatalf("foreign answers = %+v", foreignCalls)
+	// The answer joins the thread.
+	if len(h.msgs.msgs) == 0 || h.msgs.msgs[0].Content != "Confirmed: Do 4 things" {
+		t.Fatalf("thread = %+v", h.msgs.msgs)
 	}
 }
 

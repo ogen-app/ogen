@@ -48,8 +48,6 @@ const (
 	FlowEnrichBrief       = "enrich_brief"
 	FlowConsistency       = "consistency"
 	FlowPostQuality       = "post_quality"
-	FlowPostAssistant     = "post_assistant"
-	FlowCampaignAssistant = "campaign_assistant"
 	FlowAssistant         = "assistant"
 	FlowEmbed             = "embed"
 	FlowVision            = "vision"
@@ -63,7 +61,6 @@ const (
 // Slot keys — stable identifiers persisted in flow_model_config.slot_key.
 const (
 	SlotMain         = "main"
-	SlotPlanner      = "planner"
 	SlotWriter       = "writer"
 	SlotOrchestrator = "orchestrator"
 	SlotClassify     = "classify"
@@ -164,18 +161,10 @@ var catalog = []Flow{
 		{Key: SlotMain, Description: "Scores quality dimensions.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true}},
 	}},
-	{Key: FlowPostAssistant, Description: "Interactive post editing assistant (hybrid).", Slots: []Slot{
-		{Key: SlotPlanner, Description: "Cheap orchestration/routing loop.", Capability: CapabilityChat, Vendors: anthropicOnly,
-			Requires: Requirements{NeedsTools: true}},
-		{Key: SlotWriter, Description: "Capable copywriter behind the editPost tool.", Capability: CapabilityChat, Vendors: anthropicOnly},
-	}},
-	{Key: FlowCampaignAssistant, Description: "Campaign orchestration assistant.", Slots: []Slot{
-		{Key: SlotOrchestrator, Description: "Cheap orchestration/routing loop (delegates to sub-flows).", Capability: CapabilityChat, Vendors: anthropicOnly,
-			Requires: Requirements{NeedsTools: true}},
-	}},
-	{Key: FlowAssistant, Description: "Universal assistant: one thread per workspace, campaign or post, aware of the screen.", Slots: []Slot{
+	{Key: FlowAssistant, Description: "The assistant: one thread per workspace, campaign or post, aware of the screen.", Slots: []Slot{
 		{Key: SlotOrchestrator, Description: "Cheap orchestration loop over the core tools and the loaded packs.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsTools: true}},
+		{Key: SlotWriter, Description: "Capable copywriter behind the post pack's editPost and clonePost.", Capability: CapabilityChat, Vendors: anthropicOnly},
 	}},
 	{Key: FlowAssetAnalysis, Description: "Summary, meeting notes and ideas distilled from text assets.", Slots: []Slot{
 		{Key: SlotAnalyze, Description: "Analyses the whole source, or reduces the map notes of a long one.", Capability: CapabilityChat, Vendors: anthropicOnly,

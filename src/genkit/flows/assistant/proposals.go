@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -26,9 +27,6 @@ const (
 
 // ErrProposalNotFound is an offer that doesn't exist for the caller (404).
 var ErrProposalNotFound = errors.New("proposal not found")
-
-// errNotMine is an offer another assistant made, which it answers.
-var errNotMine = errors.New("proposal belongs to another assistant")
 
 // ProposalConflictError is an offer that can no longer be answered (409).
 type ProposalConflictError struct{ Msg string }
@@ -133,8 +131,9 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	if err != nil {
 		return nil, err
 	}
+	// An offer for a tool no pack has any more can only be dismissed.
 	if !t.Owns(p.Tool) && !t.ownsOption(p) {
-		return t.foreign(ctx, AnswerRequest{ProposalID: p.ID, OptionID: in.OptionID, Confirm: true})
+		return nil, assistantkit.Refused(refuseOfferGone)
 	}
 	tool, args := p.Tool, p.Args
 	if in.OptionID == "" && len(p.Options) == 1 {
@@ -152,6 +151,12 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 			tool, args = o.Tool, o.Args
 		}
 	}
+	// The pack begins before the offer is resolved, so an offer whose
+	// subject is gone stays open rather than answered and not run.
+	ctx, err = t.beginFor(ctx, st, tool, args)
+	if err != nil {
+		return nil, err
+	}
 	if err := t.resolve(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
 		return nil, err
 	}
@@ -166,12 +171,6 @@ func (t *toolSet) dismissProposal(ctx context.Context, in AnswerProposalInput) (
 	p, err := t.openProposal(ctx, st, in.ProposalID)
 	if err != nil {
 		return nil, err
-	}
-	if !t.Owns(p.Tool) && !t.ownsOption(p) {
-		if _, err := t.foreign(ctx, AnswerRequest{ProposalID: p.ID}); err != nil {
-			return nil, err
-		}
-		return &DismissProposalOutput{Dismissed: true}, nil
 	}
 	if err := t.resolve(ctx, st, p.ID, models.ProposalDismissed, ""); err != nil {
 		return nil, err
@@ -217,22 +216,6 @@ func (t *toolSet) resolve(ctx context.Context, st *turnState, id string, status 
 	return nil
 }
 
-// foreign hands an offer to the assistant that made it; one it can't answer
-// any more is a refusal the model relays.
-func (t *toolSet) foreign(ctx context.Context, req AnswerRequest) (any, error) {
-	if t.deps.ForeignAnswer == nil {
-		return nil, assistantkit.Refused(refuseOfferGone)
-	}
-	out, err := t.deps.ForeignAnswer(ctx, req)
-	if errors.Is(err, ErrProposalNotFound) {
-		return nil, assistantkit.Refused(refuseOfferGone)
-	}
-	if ce, ok := errors.AsType[*ProposalConflictError](err); ok {
-		return nil, assistantkit.Refused(ce.Msg)
-	}
-	return out, err
-}
-
 func optionIDs(p *models.AssistantProposal) []string {
 	ids := make([]string, len(p.Options))
 	for i, o := range p.Options {
@@ -269,8 +252,7 @@ func (t *toolSet) Owns(tool string) bool {
 }
 
 // answer confirms or dismisses an offer from its card, without a model call:
-// the same work as a "yes" or "no" in the chat. An offer for a tool this
-// assistant doesn't have returns errNotMine.
+// the same work as a "yes" or "no" in the chat.
 func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEventFunc) (*Response, error) {
 	if t.deps.Proposals == nil {
 		return nil, ErrProposalNotFound
@@ -282,13 +264,15 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	if err != nil {
 		return nil, fmt.Errorf("load proposal: %w", err)
 	}
-	if !t.Owns(p.Tool) && !t.ownsOption(p) {
-		return nil, errNotMine
-	}
 	view := &viewresolve.Resolved{View: &viewcontext.ViewContext{
 		Version: viewcontext.Version, Screen: "home", Scope: viewcontext.Scope{Kind: p.ScopeKind, ID: p.ScopeID},
 	}}
 	st := newTurnState(view, nil)
+	st.emit = onEvent
+	st.turn.Instruction = "Confirmed: " + p.Summary
+	if !req.Confirm {
+		st.turn.Instruction = "Dismissed: " + p.Summary
+	}
 	ctx = t.bind(withTurnState(ctx, st), st)
 
 	in := AnswerProposalInput{ProposalID: p.ID, OptionID: req.OptionID}
@@ -304,16 +288,36 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	if err != nil {
 		return nil, err
 	}
+	if reason, refused := refusedResult(result); refused {
+		return nil, &ProposalConflictError{Msg: reason}
+	}
 	resp := &Response{Action: actionAnswered, Explanation: "Dismissed: " + p.Summary, Result: result}
 	if req.Confirm {
 		resp.Explanation = "Done: " + p.Summary
 	}
-	finish(st, resp)
+	t.finish(st, resp)
+	// The answer joins the thread, so the next chat turn knows it happened.
+	if t.deps.Messages != nil {
+		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: view}, resp); err != nil {
+			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+		}
+	}
 	for _, r := range st.resolvedList() {
 		emit(onEvent, SSEEventProposalResolved, r)
 	}
 	emit(onEvent, SSEEventComplete, resp)
 	return resp, nil
+}
+
+// refusedResult reports whether a confirmed tool refused to run — e.g. the
+// date it was offered for has passed — with its reason.
+func refusedResult(raw any) (string, bool) {
+	m, ok := raw.(map[string]any)
+	if !ok || m["status"] != string(assistantkit.StatusRefused) {
+		return "", false
+	}
+	reason, _ := m["reason"].(string)
+	return reason, true
 }
 
 func (t *toolSet) ownsOption(p *models.AssistantProposal) bool {

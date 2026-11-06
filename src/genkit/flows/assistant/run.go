@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,21 +60,23 @@ func run(
 	if err != nil {
 		return nil, fmt.Errorf("load history: %w", err)
 	}
-	history := flowkit.History(rows, func(m models.AssistantMessage) (string, string) {
-		if m.Role == flowkit.RoleModel {
-			return m.Role, modelTurn(m.Content)
-		}
-		return m.Role, m.Content
-	})
+	history := flowkit.History(rows, historyTurn)
 	view, err := renderView(p, req.View, tools.openProposals(ctx, scope), time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("render view: %w", err)
 	}
 
 	st := newTurnState(req.View, tools.packs.defaults(req.View.View.Screen, scope.Kind))
+	st.turn.Instruction = req.Instruction
 	st.emit = onEvent
 	ctx = tools.bind(withTurnState(ctx, st), st)
-	scanner, err := callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent)
+	if ctx, err = tools.begin(ctx, st, slices.Clone(st.loaded)); err != nil {
+		return nil, err
+	}
+	call := func(ctx context.Context) (*jsonstream.Scanner, error) {
+		return callModel(ctx, g, cfg, p, tools, st.loadedList(), history, view+st.packPrompt()+req.Instruction, onEvent)
+	}
+	scanner, err := call(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -84,19 +87,24 @@ func run(
 		if !ok {
 			return nil, &AIError{Msg: "the assistant stopped without replying"}
 		}
-		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
-		if scanner, err = callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent); err != nil {
+		if ctx, err = tools.begin(ctx, st, []string{pack}); err != nil {
+			return nil, err
+		}
+		if st.hasBegun(pack) {
+			emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
+		}
+		if scanner, err = call(ctx); err != nil {
 			return nil, err
 		}
 		if scanner == nil {
 			return nil, &AIError{Msg: "the assistant stopped without replying"}
 		}
 	}
-	result, err := assemble(ctx, scanner)
-	if err != nil {
-		return nil, err
+	result := assemble(ctx, scanner)
+	tools.finish(st, result)
+	if result.Explanation == "" {
+		return nil, &AIError{Msg: unusableReply(ctx, scanner)}
 	}
-	finish(st, result)
 
 	// Nothing a turn does depends on its own history row, so a failed write
 	// is logged, not returned.
@@ -157,6 +165,13 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		ai.WithMiddleware(usage.Meter(), cfg.Provider.CallMiddleware(modelconfig.FlowAssistant, usage.Record, llm.CachePrompt())),
 		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
+	// Running out of tool rounds is recoverable: the tools that ran have
+	// committed, and the packs' results stand in for the missing reply.
+	if isMaxTurnsExceeded(err) {
+		slog.WarnContext(ctx, "tool rounds exhausted; finalising from the work done", logging.AttrComponent, logComponent)
+		usage.FinishMetered(ctx, nil, maxTokens)
+		return scanner, nil
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		return nil, &AIError{Msg: assistantkit.FriendlyError(err)}
@@ -168,25 +183,49 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	return scanner, nil
 }
 
+// isMaxTurnsExceeded reports genkit's "exceeded maximum tool call
+// iterations" abort, which has no sentinel.
+func isMaxTurnsExceeded(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "maximum tool call iterations")
+}
+
 // assemble reads the reply envelope. A reply in plain prose, with no JSON,
-// is taken as the answer.
-func assemble(ctx context.Context, scanner *jsonstream.Scanner) (*Response, error) {
+// is taken as the answer; one with neither leaves Explanation empty for the
+// packs' fallback.
+func assemble(ctx context.Context, scanner *jsonstream.Scanner) *Response {
 	vals := scanner.Values()
 	r := &Response{}
 	r.Explanation, _ = vals["explanation"].(string)
 	r.Action, _ = vals["action"].(string)
 	if r.Explanation == "" {
-		raw := strings.TrimSpace(scanner.FullText())
-		if raw == "" || strings.Contains(raw, "{") {
-			slog.ErrorContext(ctx, "reply had no usable fields", logging.AttrComponent, logComponent, "raw_preview", logging.Preview(raw, 500))
-			return nil, &AIError{Msg: "model response did not contain the expected fields"}
+		if raw := strings.TrimSpace(scanner.FullText()); raw != "" && !strings.Contains(raw, "{") {
+			r.Explanation = raw
 		}
-		r.Explanation, r.Action = raw, actionAnswered
 	}
 	if r.Action != actionDeclined {
 		r.Action = actionAnswered
 	}
-	return r, nil
+	return r
+}
+
+// unusableReply logs a turn that left neither a reply nor work to report,
+// and says so in words the user can act on.
+func unusableReply(ctx context.Context, scanner *jsonstream.Scanner) string {
+	raw := scanner.FullText()
+	slog.ErrorContext(ctx, "reply had no usable fields", logging.AttrComponent, logComponent, "raw_preview", logging.Preview(raw, 500))
+	if strings.TrimSpace(raw) == "" {
+		return "I couldn't complete that in a single step. Try splitting it into smaller requests, or rephrasing."
+	}
+	return "model response did not contain the expected fields"
+}
+
+// historyTurn replays a stored message: the user's as typed, a model turn
+// as its envelope.
+func historyTurn(m models.AssistantMessage) (string, string) {
+	if m.Role == flowkit.RoleModel {
+		return m.Role, modelTurn(m.Content)
+	}
+	return m.Role, m.Content
 }
 
 // modelTurn replays a stored model turn as its envelope, without the

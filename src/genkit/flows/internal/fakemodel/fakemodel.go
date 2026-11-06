@@ -160,8 +160,18 @@ type Slot struct {
 // lifetime of ctx. The resolver is process-global, so tests that call Route
 // must not run in parallel with other tests that resolve models.
 func Route(ctx context.Context, m *Model, slots ...Slot) {
-	rows := make([]models.FlowModelConfig, 0, len(slots))
+	routes := make(map[Slot]*Model, len(slots))
 	for _, s := range slots {
+		routes[s] = m
+	}
+	RouteEach(ctx, routes)
+}
+
+// RouteEach points each slot at its own model, as Route does, for a flow
+// whose slots run different scripts — an orchestrator and its writer.
+func RouteEach(ctx context.Context, routes map[Slot]*Model) {
+	rows := make([]models.FlowModelConfig, 0, len(routes))
+	for s, m := range routes {
 		rows = append(rows, models.FlowModelConfig{FlowKey: s.Flow, SlotKey: s.Slot, ModelID: m.name})
 	}
 	modelconfig.Init(ctx, &memSource{rows: rows}, modelconfig.Defaults{},

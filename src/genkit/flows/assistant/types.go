@@ -41,6 +41,9 @@ type Response struct {
 	Proposals []ProposalCard `json:"proposals,omitempty"`
 	// Result is the work's result when an offer was answered from its card.
 	Result any `json:"result,omitempty"`
+	// Results are what the packs' tools did this turn, by pack — the
+	// campaign pack's plan or dates, the post pack's edit or schedule.
+	Results map[string]any `json:"results,omitempty"`
 }
 
 const (
@@ -127,10 +130,6 @@ type Repos struct {
 	// leaves the proposal-tier tools unable to run and drops
 	// confirmOffer / dismissOffer.
 	Proposals repository.AssistantProposalRepository
-	// ForeignAnswer answers an offer another assistant made in the same
-	// thread — the campaign assistant's, through the campaign pack — so a
-	// "yes" here runs it. nil refuses such offers.
-	ForeignAnswer func(ctx context.Context, req AnswerRequest) (any, error)
 }
 
 // ViewReader reloads references in the caller's tenant;
@@ -162,11 +161,10 @@ type Runner func(ctx context.Context, req Request, onEvent OnEventFunc) (*Respon
 type Assistant struct {
 	// Run runs one turn.
 	Run Runner
-	// Answer confirms or dismisses one of this assistant's offers from its
-	// card, without a model call. Another assistant's offer is
-	// ErrNotThisAssistant.
+	// Answer confirms or dismisses an offer from its card, without a model
+	// call.
 	Answer func(ctx context.Context, req AnswerRequest, onEvent OnEventFunc) (*Response, error)
+	// Route makes a turn's first model call without running the tools it
+	// asks for: what the evals check.
+	Route func(ctx context.Context, req Request) (*Routing, error)
 }
-
-// ErrNotThisAssistant is an offer another assistant made.
-var ErrNotThisAssistant = errNotMine

@@ -34,11 +34,11 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 		t.Fatalf("exploratory option args = %+v", o.Args)
 	}
 
-	// A plain yes takes the only way forward.
-	st.registry = newTestTools(t).reg
-	out = runTool(t, st, "confirmProposal", map[string]any{"proposalId": store.rows[0].ID})
-	if out.Status != assistantkit.StatusOK || generated != 1 || store.rows[0].Chosen != "exploratory" {
-		t.Fatalf("plain yes = %+v, generated = %d, chosen = %q", out, generated, store.rows[0].Chosen)
+	// Taking the option runs its call past the gate.
+	o, _ := store.rows[0].Option("exploratory")
+	raw, err := newTestTools(t).reg.RunConfirmed(st.bind(t.Context()), o.Tool, map[string]any(o.Args))
+	if res, _ := raw.(map[string]any); err != nil || res["status"] != string(assistantkit.StatusOK) || generated != 1 {
+		t.Fatalf("taking the option = %#v, %v, generated = %d", raw, err, generated)
 	}
 	if g := st.generatedPostsResult.Grounding; g.Mode != assistantkit.Exploratory {
 		t.Fatalf("grounding = %+v", g)

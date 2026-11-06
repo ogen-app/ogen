@@ -11,7 +11,6 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
-	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -28,8 +27,11 @@ import (
 // Deps are the services the packs work through. A pack whose service is nil
 // is left out.
 type Deps struct {
-	// Campaign runs a campaign assistant turn: the campaign pack.
-	Campaign func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
+	// Campaign and Post are the campaign and post packs, built with their
+	// own services; nil leaves them out, and the repair pack's fixes that
+	// run through the campaign's tools with them.
+	Campaign *assistant.Pack
+	Post     *assistant.Pack
 
 	Ideas    *ideas.Service
 	IdeaRepo repository.IdeaRepository
@@ -74,7 +76,10 @@ type Deps struct {
 func All(d Deps) []assistant.Pack {
 	var out []assistant.Pack
 	if d.Campaign != nil {
-		out = append(out, campaignPack(d))
+		out = append(out, *d.Campaign)
+	}
+	if d.Post != nil {
+		out = append(out, *d.Post)
 	}
 	if d.Ideas != nil && d.IdeaRepo != nil && d.Compose != nil {
 		out = append(out, ideasPack(d))

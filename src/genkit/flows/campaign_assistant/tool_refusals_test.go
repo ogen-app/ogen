@@ -21,7 +21,7 @@ func runTool(t *testing.T, st *requestState, name string, input map[string]any) 
 	if !ok {
 		t.Fatalf("tool %s is a %T, not an ai.Tool", name, spec.Tool)
 	}
-	ctx := assistantkit.WithProposalSink(withRequestState(t.Context(), st), campaignSink{st: st})
+	ctx := st.bind(t.Context())
 	raw, err := tool.RunRaw(ctx, input)
 	if err != nil {
 		t.Fatalf("%s returned an error, want an outcome: %v", name, err)

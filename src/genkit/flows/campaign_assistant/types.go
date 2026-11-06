@@ -12,27 +12,13 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/infra/vendors/llm"
-	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
-// CampaignAssistantRequest is the input to the campaignAssistant flow — one
-// conversational turn scoped to a single campaign.
-type CampaignAssistantRequest struct {
-	CampaignID  string `json:"campaignId"`
-	Instruction string `json:"instruction"`
-	// SourceAssetIDs limits the turn's sources to these of the campaign's
-	// assets — the user's "use only these" — for planning and for asking
-	// the assets. Empty uses all of them.
-	SourceAssetIDs []string `json:"sourceAssetIds,omitempty"`
-}
-
-// CampaignAssistantResponse is the structured output for one turn. Explanation
-// is ordered first so it streams to the client before the metadata. ContentPlan
-// and Brief are populated by the server (not the model) when the matching tool
-// ran this turn.
+// CampaignAssistantResponse is what the campaign pack's tools did in a turn,
+// under "campaign" in the assistant's results: the fallback reply, the action
+// that labels the turn, and each committed tool result.
 type CampaignAssistantResponse struct {
 	Explanation string `json:"explanation"          jsonschema:"description=Conversational reply to the user"`
 	Action      string `json:"action"               jsonschema:"description=answered for a grounded reply; content_plan_generated when runContentPlan ran; brief_enriched when enrichBrief ran; posts_generated when generatePosts ran; post_drafted when draftPost ran; dates_updated when setCampaignDates ran; platforms_updated when updateCampaignPlatforms ran; posts_redistributed when redistributePosts ran; brief_reviewed when checkBrief ran; posts_reviewed when checkPostsConsistency ran; proposed when a requested change is waiting for the user's confirmation; declined when the request is out of scope,enum=answered,enum=proposed,enum=content_plan_generated,enum=brief_enriched,enum=posts_generated,enum=post_drafted,enum=dates_updated,enum=platforms_updated,enum=posts_redistributed,enum=brief_reviewed,enum=posts_reviewed,enum=declined"`
@@ -61,10 +47,6 @@ type CampaignAssistantResponse struct {
 	// PostsReview is set by the server when the checkPostsConsistency tool ran
 	// this turn (read-only). Action is then "posts_reviewed".
 	PostsReview *consistency.PostsReview `json:"postsReview,omitempty" jsonschema:"-"`
-	// Proposals is set by the server when a change was held back for the
-	// user to confirm this turn. Action is then "proposed" unless something
-	// was also written.
-	Proposals []ProposalCreatedEventPayload `json:"proposals,omitempty" jsonschema:"-"`
 	// Platforms is set by the server when updateCampaignPlatforms added
 	// platforms or post types this turn. Action is then "platforms_updated".
 	Platforms *PlatformsResult `json:"platforms,omitempty" jsonschema:"-"`
@@ -140,7 +122,9 @@ type BriefResult struct {
 
 // CampaignAssistantRepos bundles the repository dependencies for the flow.
 type CampaignAssistantRepos struct {
-	Messages  repository.CampaignAssistantMessageRepository
+	// Messages is the assistant's history; draftPost reads the research
+	// discussed in the thread from it.
+	Messages  repository.AssistantMessageRepository
 	Campaigns repository.CampaignRepository
 	// Posts backs the listCampaignPosts read tool used for grounded Q&A.
 	Posts repository.PostRepository
@@ -162,37 +146,17 @@ type CampaignAssistantRepos struct {
 	Platforms repository.PlatformRepository
 }
 
-// CampaignAssistantFlowConfig holds static settings for the flow.
+// CampaignAssistantFlowConfig holds the campaign pack's services and limits.
 type CampaignAssistantFlowConfig struct {
-	// Provider resolves the model reference + call config by role. The
-	// orchestration/routing loop runs on RolePlanning (cheap/fast); the
-	// content_plan / enrich_brief sub-flows keep their own generation model.
-	Provider *llm.Provider
-	// Recorder captures the planner's usage event; nil disables recording.
-	Recorder *usage.Recorder
-	// Checker gates the flow against the tenant's spend caps; nil = no gate.
-	Checker *usage.Checker
 	// Embedder embeds the askCampaignAssets query for chunk search.
 	// A nil / unavailable embedder disables asset Q&A gracefully.
 	Embedder ai.Embedder
-	// MaxOutputTokens caps a single planner call. 0 falls back to 8192 — the
-	// planner only emits a short JSON envelope, never long prose.
-	MaxOutputTokens int64
-	// MaxTurns caps tool-use round-trips. 0 falls back to 4 (routing rarely
-	// needs more than one tool call plus the final answer).
-	MaxTurns int
 	// Hub publishes "operation finalised" events on success/failure. nil = silent.
 	Hub eventhub.Hub
 	// Notifier drops a persistent "content plan ready" notification to the
 	// campaign owner when a run generates a content plan — only that action, not
 	// every assistant turn. nil = silent.
 	Notifier *notify.Service
-
-	// PrewarmTools, when true, fires one throwaway generation carrying the full
-	// tool set at init so Anthropic compiles + caches the strict-tool grammar
-	// off the user path. Only worth it alongside a stable tool order,
-	// so the server sets this from cfg.AnthropicStableToolOrder.
-	PrewarmTools bool
 
 	// ContentPlan and EnrichBrief are the existing flow callbacks, invoked as
 	// tools. Injected so the assistant reuses them verbatim — no duplicate LLM
@@ -223,17 +187,6 @@ type CampaignAssistantFlowConfig struct {
 	CheckPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 }
 
-// ValidationError is returned when preconditions are not met (HTTP 400).
-type ValidationError struct{ Msg string }
-
-func (e *ValidationError) Error() string { return e.Msg }
-
-// AIError is returned when the model call fails or returns nothing usable
-// (HTTP 502).
-type AIError struct{ Msg string }
-
-func (e *AIError) Error() string { return e.Msg }
-
 // ── SSE types ─────────────────────────────────────────────────────────────────
 
 // SSEEventKind identifies the SSE event types emitted by the assistant flow.
@@ -242,10 +195,6 @@ func (e *AIError) Error() string { return e.Msg }
 type SSEEventKind string
 
 const (
-	SSEEventExplanationDelta SSEEventKind = "explanation_delta"
-	SSEEventToolCall         SSEEventKind = "tool_call"
-	SSEEventToolResult       SSEEventKind = "tool_result"
-
 	SSEEventContentPlanStarted  SSEEventKind = "content_plan_started"
 	SSEEventContentPlanStep     SSEEventKind = "content_plan_step"
 	SSEEventContentPlanIdea     SSEEventKind = "content_plan_idea"
@@ -283,61 +232,7 @@ const (
 	SSEEventCheckBriefComplete SSEEventKind = "check_brief_complete"
 	SSEEventCheckPostsStarted  SSEEventKind = "check_posts_started"
 	SSEEventCheckPostsComplete SSEEventKind = "check_posts_complete"
-
-	// SSEEventProposalCreated reports a call held back for the user to
-	// confirm; the UI renders it as a proposal card.
-	SSEEventProposalCreated SSEEventKind = "proposal_created"
-	// SSEEventProposalResolved reports an offer the user accepted or turned
-	// down, so the UI can close its card.
-	SSEEventProposalResolved SSEEventKind = "proposal_resolved"
-
-	SSEEventComplete SSEEventKind = "complete"
-	SSEEventError    SSEEventKind = "error"
 )
-
-// ProposalCreatedEventPayload describes a held-back call.
-type ProposalCreatedEventPayload struct {
-	ID        string `json:"id"`
-	Tool      string `json:"tool"`
-	Summary   string `json:"summary"`
-	ExpiresAt string `json:"expiresAt"`
-	// Options, when set, are the choices the user picks from instead of a
-	// plain yes; the card shows one button each.
-	Options []ProposalChoice `json:"options,omitempty"`
-}
-
-// ProposalChoice is one option on a proposal card.
-type ProposalChoice struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-}
-
-// ProposalResolvedEventPayload reports how an offer was answered.
-type ProposalResolvedEventPayload struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Chosen string `json:"chosen,omitempty"`
-}
-
-// DeltaEventPayload carries a fragment of a streamed string value.
-type DeltaEventPayload struct {
-	Delta string `json:"delta"`
-}
-
-// ToolCallEventPayload is emitted once per fully-formed tool request.
-type ToolCallEventPayload struct {
-	Name  string `json:"name"`
-	Input any    `json:"input,omitempty"`
-	Ref   string `json:"ref,omitempty"`
-}
-
-// ToolResultEventPayload is emitted once a tool invocation returns.
-type ToolResultEventPayload struct {
-	Name string `json:"name"`
-	Ref  string `json:"ref,omitempty"`
-	OK   bool   `json:"ok"`
-}
 
 // ContentPlanStartedEventPayload is emitted when the runContentPlan tool begins.
 type ContentPlanStartedEventPayload struct{}
@@ -416,12 +311,6 @@ type CheckPostsCompleteEventPayload struct {
 	Total      int  `json:"total"`
 	Capped     bool `json:"capped"`
 	DriftCount int  `json:"driftCount"`
-}
-
-// ErrorEventPayload is emitted when the flow fails mid-stream.
-type ErrorEventPayload struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"` // HTTP semantic: 400, 402, 502, 500
 }
 
 // OnEventFunc is an optional callback invoked as SSE events are produced.

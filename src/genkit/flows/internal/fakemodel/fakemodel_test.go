@@ -91,9 +91,9 @@ func TestModel_ExhaustedScriptFails(t *testing.T) {
 func TestRoute_ResolvesSlotToModel(t *testing.T) {
 	g := genkit.Init(t.Context())
 	m := Define(g, "routed", Answer("ok"))
-	Route(t.Context(), m, Slot{Flow: modelconfig.FlowCampaignAssistant, Slot: modelconfig.SlotOrchestrator})
+	Route(t.Context(), m, Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
 
-	mc := modelconfig.Resolve(t.Context(), modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)
+	mc := modelconfig.Resolve(t.Context(), modelconfig.FlowAssistant, modelconfig.SlotOrchestrator)
 	if mc.Ref != m.Ref() || mc.Vendor != Vendor {
 		t.Fatalf("resolved = %+v, want ref %q", mc, m.Ref())
 	}

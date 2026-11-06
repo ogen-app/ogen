@@ -11,13 +11,13 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 )
 
-type answerFn = func(context.Context, campaign_assistant.AnswerProposalRequest, campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
+type answerFn = func(context.Context, assistant.AnswerRequest, assistant.OnEventFunc) (*assistant.Response, error)
 
 // proposalApp mounts the proposal endpoints behind a stand-in auth that sets
 // the tenant and user the real middleware would.
@@ -49,15 +49,15 @@ func sseEvents(t *testing.T, body io.Reader) (names, data []string) {
 }
 
 func TestConfirmProposal_StreamsTheWork(t *testing.T) {
-	var got campaign_assistant.AnswerProposalRequest
+	var got assistant.AnswerRequest
 	var user string
-	app := proposalApp(func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
+	app := proposalApp(func(ctx context.Context, req assistant.AnswerRequest, onEvent assistant.OnEventFunc) (*assistant.Response, error) {
 		got = req
 		user, _ = logging.UserIDFrom(ctx)
-		resp := &campaign_assistant.CampaignAssistantResponse{Action: "posts_generated", Explanation: "Done."}
-		onEvent(campaign_assistant.SSEEventGeneratePostsComplete, map[string]int{"postCount": 10})
-		onEvent(campaign_assistant.SSEEventProposalResolved, map[string]string{"id": req.ProposalID, "status": "confirmed"})
-		onEvent(campaign_assistant.SSEEventComplete, resp)
+		resp := &assistant.Response{Action: "answered", Explanation: "Done."}
+		onEvent("generate_posts_complete", map[string]int{"ideaCount": 10})
+		onEvent(assistant.SSEEventProposalResolved, map[string]string{"id": req.ProposalID, "status": "confirmed"})
+		onEvent(assistant.SSEEventComplete, resp)
 		return resp, nil
 	})
 
@@ -87,13 +87,13 @@ func TestConfirmProposal_ErrorCodes(t *testing.T) {
 		err  error
 		code int
 	}{
-		"not found": {campaign_assistant.ErrProposalNotFound, fiber.StatusNotFound},
-		"conflict":  {&campaign_assistant.ProposalConflictError{Msg: "already answered"}, fiber.StatusConflict},
-		"ai error":  {&campaign_assistant.AIError{Msg: "busy"}, fiber.StatusBadGateway},
+		"not found": {assistant.ErrProposalNotFound, fiber.StatusNotFound},
+		"conflict":  {&assistant.ProposalConflictError{Msg: "already answered"}, fiber.StatusConflict},
+		"ai error":  {&assistant.AIError{Msg: "busy"}, fiber.StatusBadGateway},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			app := proposalApp(func(context.Context, campaign_assistant.AnswerProposalRequest, campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
+			app := proposalApp(func(context.Context, assistant.AnswerRequest, assistant.OnEventFunc) (*assistant.Response, error) {
 				return nil, tc.err
 			})
 			resp, err := app.Test(httptest.NewRequest("POST", "/api/assistant/proposals/prop-1/confirm", nil), 5000)
@@ -104,7 +104,9 @@ func TestConfirmProposal_ErrorCodes(t *testing.T) {
 			if len(names) != 1 || names[0] != "error" {
 				t.Fatalf("events = %v", names)
 			}
-			var payload campaign_assistant.ErrorEventPayload
+			var payload struct {
+				Code int `json:"code"`
+			}
 			if err := json.Unmarshal([]byte(data[0]), &payload); err != nil || payload.Code != tc.code {
 				t.Fatalf("error payload = %s (%v), want code %d", data[0], err, tc.code)
 			}
@@ -113,20 +115,20 @@ func TestConfirmProposal_ErrorCodes(t *testing.T) {
 }
 
 func TestDismissProposal(t *testing.T) {
-	var got campaign_assistant.AnswerProposalRequest
-	app := proposalApp(func(_ context.Context, req campaign_assistant.AnswerProposalRequest, _ campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
+	var got assistant.AnswerRequest
+	app := proposalApp(func(_ context.Context, req assistant.AnswerRequest, _ assistant.OnEventFunc) (*assistant.Response, error) {
 		got = req
 		if req.ProposalID == "gone" {
-			return nil, campaign_assistant.ErrProposalNotFound
+			return nil, assistant.ErrProposalNotFound
 		}
-		return &campaign_assistant.CampaignAssistantResponse{Action: "answered", Explanation: "OK, I've dropped that."}, nil
+		return &assistant.Response{Action: "answered", Explanation: "OK, I've dropped that."}, nil
 	})
 
 	resp, err := app.Test(httptest.NewRequest("POST", "/api/assistant/proposals/prop-1/dismiss", nil), 5000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var body campaign_assistant.CampaignAssistantResponse
+	var body assistant.Response
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || resp.StatusCode != fiber.StatusOK || body.Action != "answered" || got.Confirm {
 		t.Fatalf("status = %d, body = %+v, request = %+v, err = %v", resp.StatusCode, body, got, err)
 	}

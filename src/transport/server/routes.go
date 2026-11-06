@@ -208,7 +208,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 	handlers.NewCampaignTypesHandler(r.campaignTypeRepo, d.auth).Register(app)
 	handlers.NewCampaignReadHandler(d.svc.campaignOverview, d.svc.campaignSummaries, d.auth).Register(app)
 	handlers.NewCampaignGenerationHandler(r.campaignRepo, gk.GeneratePosts, d.cfg.GeneratePostsMax, gk.CheckBrief, gk.CheckPosts, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
-	handlers.NewCampaignsHandler(r.campaignRepo, r.campaignTypeRepo, d.auth, gk.GenerateDraft, gk.IsAnthropicAvailable, gk.EnrichBrief, r.campaignMessageRepo, gk.RunCampaignAssistant, handlers.CampaignsOptions{
+	handlers.NewCampaignsHandler(r.campaignRepo, r.campaignTypeRepo, d.auth, gk.GenerateDraft, gk.IsAnthropicAvailable, gk.EnrichBrief, handlers.CampaignsOptions{
 		Limiter:  d.entitlements.limiter,
 		Activity: rec,
 		Brands:   r.brandRepo,
@@ -230,7 +230,6 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 	handlers.NewPlatformsHandler(r.platformRepo, d.publishers(), r.autoPublishAllowlistRepo, d.auth).Register(app)
 	handlers.NewTagsHandler(r.tagRepo, d.auth).Register(app)
 
-	handlers.NewPostAssistantHandler(gk.RunPostAssistant, gk.IsAnthropicAvailable, r.postMessageRepo, rec, d.auth).Register(app)
 	handlers.NewPostActionsHandler(r.postRepo, d.svc.clone, d.svc.restore, rec, d.auth).Register(app)
 	handlers.NewPostInsightsHandler(r.postRepo, gk.AssessPostQuality, r.postEvaluationRepo, r.postAnalyticsRepo, gk.IsAnthropicAvailable, rec, d.auth).
 		WithQualityStatus(gk.PostQualityStatus).

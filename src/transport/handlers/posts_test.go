@@ -21,7 +21,6 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_quality"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/jobs/queues"
@@ -127,7 +126,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		postLogRepo := repository.NewPostLogRepository(db)
 		withdrawals = &recordedWithdrawals{}
 		withdrawSvc := withdraw.New(db, postRepo, campaignRepo, postLogRepo, withdrawals)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{Withdraw: withdrawSvc}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{Withdraw: withdrawSvc}).Register(app)
 		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 		// Wire the audit log so transition tests can read it back.
 		ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{PostLogs: postLogRepo, Withdraw: withdrawSvc})
@@ -137,10 +136,6 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		// exist — 401 unauthenticated, 503 when authenticated — for the route-level
 		// specs; the assessor/eval/analytics behaviour is covered by dedicated apps.
 		handlers.NewPostInsightsHandler(postRepo, nil, nil, nil, nil, nil, auth).Register(app)
-		// Likewise the assistant surface — nil deps so /assistant + /messages exist
-		// (401 unauthenticated) for the route-level specs; the streaming behaviour is
-		// covered by a dedicated stub app.
-		handlers.NewPostAssistantHandler(nil, nil, nil, nil, auth).Register(app)
 		handlers.NewPostLogsHandler(postLogRepo, postRepo, auth).Register(app)
 
 		// Seed auth user and log in.
@@ -174,8 +169,6 @@ var _ = Describe("PostsHandler", Ordered, func() {
 
 	AfterEach(func() {
 		_, err := db.NewDelete().TableExpr("post_logs").Where("1 = 1").Exec(tenantCtx())
-		Expect(err).NotTo(HaveOccurred())
-		_, err = db.NewDelete().TableExpr("post_assistant_messages").Where("1 = 1").Exec(tenantCtx())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = db.NewDelete().TableExpr("post_versions").Where("1 = 1").Exec(tenantCtx())
 		Expect(err).NotTo(HaveOccurred())
@@ -1544,186 +1537,6 @@ var _ = Describe("PostsHandler", Ordered, func() {
 
 	// ── Assistant ────────────────────────────────────────────────────────────
 
-	Describe("POST /api/posts/:id/assistant", func() {
-		Context("when not authenticated", func() {
-			It("returns 401", func() {
-				body, _ := json.Marshal(fiber.Map{"instruction": "make it shorter"})
-				req := httptest.NewRequest("POST", "/api/posts/someid/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				resp, err := app.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(401))
-			})
-		})
-
-		Context("when authenticated", func() {
-			It("returns 503 when assistant callback is nil", func() {
-				p := createPost("Assist Me", nil)
-				body, _ := json.Marshal(fiber.Map{"instruction": "make it shorter"})
-				req := httptest.NewRequest("POST", "/api/posts/"+p.ID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(authCookie)
-				resp, err := app.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(503))
-			})
-		})
-
-		Context("with a stub assistant callback", func() {
-			buildStubApp := func(
-				stub func(context.Context, post_assistant.PostAssistantRequest, post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error),
-			) (*fiber.App, *http.Cookie, string) {
-				stubApp := fiber.New(fiber.Config{
-					ErrorHandler: func(c *fiber.Ctx, err error) error {
-						code := fiber.StatusInternalServerError
-						if e, ok := err.(*fiber.Error); ok {
-							code = e.Code
-						}
-						return c.Status(code).JSON(fiber.Map{"error": err.Error()})
-					},
-				})
-				userRepo := repository.NewUserRepository(db)
-				sessionRepo := repository.NewSessionRepository(db)
-				settingRepo := repository.NewSettingRepository(db)
-				tagRepo := repository.NewTagRepository(db)
-				campaignTypeRepo := repository.NewCampaignTypeRepository(db)
-				campaignRepo := repository.NewCampaignRepository(db, tagRepo, repository.NewPlatformRepository(db), campaignTypeRepo)
-				postRepo := repository.NewPostRepository(db)
-				postVersionRepo := repository.NewPostVersionRepository(db)
-				postMessageRepo := repository.NewPostAssistantMessageRepository(db)
-				auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
-				handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(stubApp)
-				handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(stubApp)
-				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(stubApp)
-				handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{}).Register(stubApp)
-				// POST /:id/assistant now lives on the assistant handler.
-				handlers.NewPostAssistantHandler(stub, nil, postMessageRepo, nil, auth).Register(stubApp)
-
-				seedTenantUser(db, "SSE", "sse-assist@example.com", "sse-password")
-				loginBody, _ := json.Marshal(fiber.Map{"email": "sse-assist@example.com", "password": "sse-password"})
-				loginReq := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(loginBody))
-				loginReq.Header.Set("Content-Type", "application/json")
-				loginResp, err := stubApp.Test(loginReq, -1) // -1: setup call, not a latency assertion (see BeforeEach)
-				Expect(err).NotTo(HaveOccurred())
-				var cookie *http.Cookie
-				for _, ck := range loginResp.Cookies() {
-					cookie = ck
-				}
-
-				campBody, _ := json.Marshal(fiber.Map{"name": "Stub Campaign", "campaign_type_id": "Uk"})
-				campReq := httptest.NewRequest("POST", "/api/campaigns", bytes.NewReader(campBody))
-				campReq.Header.Set("Content-Type", "application/json")
-				campReq.AddCookie(cookie)
-				campResp, err := stubApp.Test(campReq, -1)
-				Expect(err).NotTo(HaveOccurred())
-				var camp models.Campaign
-				Expect(json.NewDecoder(campResp.Body).Decode(&camp)).To(Succeed())
-
-				postBody, _ := json.Marshal(fiber.Map{
-					"campaign_id":        camp.ID,
-					"platform_id":        "AXqWG7U2qnpt", // seeded LinkedIn platform Sqid
-					"platform_post_type": "text-post",
-					"title":              "Stub Post",
-					"content":            "original content",
-				})
-				postReq := httptest.NewRequest("POST", "/api/posts", bytes.NewReader(postBody))
-				postReq.Header.Set("Content-Type", "application/json")
-				postReq.AddCookie(cookie)
-				postResp, err := stubApp.Test(postReq, -1)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(postResp.StatusCode).To(Equal(fiber.StatusCreated))
-				var p models.Post
-				Expect(json.NewDecoder(postResp.Body).Decode(&p)).To(Succeed())
-
-				return stubApp, cookie, p.ID
-			}
-
-			type sseEvent struct{ event, data string }
-			parseSSE := func(body io.Reader) []sseEvent {
-				var events []sseEvent
-				scanner := bufio.NewScanner(body)
-				var curEvent, curData string
-				for scanner.Scan() {
-					line := scanner.Text()
-					switch {
-					case strings.HasPrefix(line, "event: "):
-						curEvent = strings.TrimPrefix(line, "event: ")
-					case strings.HasPrefix(line, "data: "):
-						curData = strings.TrimPrefix(line, "data: ")
-					case line == "":
-						if curEvent != "" {
-							events = append(events, sseEvent{curEvent, curData})
-						}
-						curEvent, curData = "", ""
-					}
-				}
-				return events
-			}
-
-			It("streams delta and complete events with text/event-stream content-type", func() {
-				final := &post_assistant.PostAssistantResponse{
-					Explanation:    "shortened it",
-					UpdatedContent: "# Shorter body",
-					Action:         "edited",
-				}
-				stub := func(_ context.Context, _ post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error) {
-					onEvent(post_assistant.SSEEventExplanationDelta, post_assistant.DeltaEventPayload{Delta: "short"})
-					onEvent(post_assistant.SSEEventExplanationDelta, post_assistant.DeltaEventPayload{Delta: "ened it"})
-					onEvent(post_assistant.SSEEventContentDelta, post_assistant.DeltaEventPayload{Delta: "body"})
-					onEvent(post_assistant.SSEEventComplete, final)
-					return final, nil
-				}
-				stubApp, cookie, postID := buildStubApp(stub)
-
-				body, _ := json.Marshal(fiber.Map{"instruction": "make it shorter"})
-				req := httptest.NewRequest("POST", "/api/posts/"+postID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(cookie)
-				resp, err := stubApp.Test(req, 5000)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-				Expect(resp.Header.Get("Content-Type")).To(ContainSubstring("text/event-stream"))
-
-				events := parseSSE(resp.Body)
-				names := make([]string, len(events))
-				for i, e := range events {
-					names[i] = e.event
-				}
-				Expect(names).To(Equal([]string{
-					"explanation_delta",
-					"explanation_delta",
-					"content_delta",
-					"complete",
-				}))
-				Expect(events[0].data).To(Equal(`{"delta":"short"}`))
-				Expect(events[3].data).To(ContainSubstring(`"explanation":"shortened it"`))
-			})
-
-			It("emits an error event with code 400 on ValidationError", func() {
-				stub := func(_ context.Context, _ post_assistant.PostAssistantRequest, _ post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error) {
-					return nil, &post_assistant.ValidationError{Msg: "instruction is required"}
-				}
-				stubApp, cookie, postID := buildStubApp(stub)
-
-				body, _ := json.Marshal(fiber.Map{"instruction": "x"}) // bypass handler-level validation
-				req := httptest.NewRequest("POST", "/api/posts/"+postID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(cookie)
-				resp, err := stubApp.Test(req, 5000)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-
-				events := parseSSE(resp.Body)
-				Expect(events).To(HaveLen(1))
-				Expect(events[0].event).To(Equal("error"))
-				Expect(events[0].data).To(ContainSubstring(`"code":400`))
-				Expect(events[0].data).To(ContainSubstring("instruction is required"))
-			})
-		})
-	})
-
-	// ── Quality assessment ───────────────────────────────────────────
-
 	Describe("POST /api/posts/:id/assess", func() {
 		Context("when not authenticated", func() {
 			It("returns 401", func() {
@@ -1772,7 +1585,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 				handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(stubApp)
 				handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(stubApp)
-				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(stubApp)
+				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(stubApp)
 				ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{})
 				ph.Register(stubApp)
 				// POST /:id/assess now lives on the insights handler.
@@ -1978,7 +1791,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 				handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(readApp)
 				handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(readApp)
-				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(readApp)
+				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(readApp)
 				ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{})
 				ph.Register(readApp)
 				// GET /:id/assessment now lives on the insights handler.

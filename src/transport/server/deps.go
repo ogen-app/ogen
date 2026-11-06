@@ -361,7 +361,6 @@ func (d *deps) genkitDeps() genkitDeps {
 			Chunks:      r.chunksRepo,
 			Campaigns:   r.campaignRepo,
 			Versions:    r.postVersionRepo,
-			Messages:    r.postMessageRepo,
 			Logs:        r.postLogRepo,
 			Platforms:   r.platformRepo,
 			Settings:    r.settingRepo,
@@ -386,7 +385,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Brands:        r.brandRepo,
 		},
 		campaignAssistRepos: campaign_assistant.CampaignAssistantRepos{
-			Messages:  r.campaignMessageRepo,
+			Messages:  r.assistantMessageRepo,
 			Campaigns: r.campaignRepo,
 			Posts:     r.postRepo,
 			Assets:    r.pieceRepo,

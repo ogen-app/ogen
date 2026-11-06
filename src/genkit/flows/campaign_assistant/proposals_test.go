@@ -12,7 +12,6 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 )
 
 // memProposals is an in-memory AssistantProposalRepository.
@@ -115,24 +114,9 @@ func TestGeneratePosts_LargeBatchIsProposed(t *testing.T) {
 	if !p.ExpiresAt.After(time.Now()) {
 		t.Fatalf("proposal expires at %v, in the past", p.ExpiresAt)
 	}
-	// The turn is labelled "proposed" and the card event carries the proposal.
-	outs := st.outcomes()
-	if got := turnAction(outs, st.writes); got != actionProposed {
-		t.Fatalf("turn action = %q, want %q", got, actionProposed)
-	}
-	if outs[0].event != SSEEventProposalCreated || outs[0].payload.(ProposalCreatedEventPayload).ID != p.ID {
-		t.Fatalf("outcome = %+v", outs[0])
-	}
-	// The runner attaches every outcome to the response.
-	var resp CampaignAssistantResponse
-	outs[0].attach(&resp)
-	if len(resp.Proposals) != 1 || resp.Proposals[0].ID != p.ID {
-		t.Fatalf("response proposals = %+v", resp.Proposals)
-	}
-
 	// Confirming runs the stored call unchanged, past the gate.
 	reg := newTestTools(t).reg
-	ctx := assistantkit.WithProposalSink(withRequestState(t.Context(), st), campaignSink{st: st})
+	ctx := st.bind(t.Context())
 	raw, err := reg.RunConfirmed(ctx, p.Tool, map[string]any(p.Args))
 	if err != nil {
 		t.Fatal(err)
@@ -172,38 +156,8 @@ func TestRunContentPlan_NoStoreFailsClosed(t *testing.T) {
 	tool := spec.Tool.(interface {
 		RunRaw(context.Context, any) (any, error)
 	})
-	ctx := assistantkit.WithProposalSink(withRequestState(t.Context(), st), campaignSink{st: st})
+	ctx := st.bind(t.Context())
 	if _, err := tool.RunRaw(ctx, map[string]any{}); err == nil || generated != 0 {
 		t.Fatalf("err = %v, generated = %d, want a failure and no run", err, generated)
-	}
-}
-
-func TestStateBlock_ListsOpenProposals(t *testing.T) {
-	p, err := loadPrompts(newTestTools(t).reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap := state.Build(timelineCampaign(), nil, -1)
-	block, err := renderState(p, snap, []openProposal{{ID: "prop-1", Summary: "Add 10 draft posts for Threads"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(block, "- Waiting for the user's answer:\n  - prop-1: Add 10 draft posts for Threads") {
-		t.Fatalf("state block:\n%s", block)
-	}
-	block, err = renderState(p, snap, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(block, "Waiting for the user's answer") {
-		t.Fatal("the section renders with no open proposals")
-	}
-	// Per-turn state stays out of the cached system and context prompts.
-	actx, err := assembleContext(timelineCampaign(), "", time.Now(), p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(actx.SystemPrompt+actx.ContextBlock, "prop-1") {
-		t.Fatal("open proposals leaked into the cached prompt")
 	}
 }

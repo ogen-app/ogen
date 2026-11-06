@@ -40,9 +40,9 @@ func TestRunner_YesPleaseAddsThePlatform(t *testing.T) {
 
 	resp, _ := h.turn("Add a few Threads posts",
 		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 3}}),
-		fakemodel.Answer(`{"explanation":"Threads isn't in this campaign yet. Want me to add it?","action":"proposed"}`))
-	if resp.Action != actionProposed || len(h.generated) != 0 || len(h.proposals.rows) != 1 {
-		t.Fatalf("turn 1: action = %q, generated = %d, proposals = %d", resp.Action, len(h.generated), len(h.proposals.rows))
+		fakemodel.Answer(`{"explanation":"Threads isn't in this campaign yet. Want me to add it?","action":"answered"}`))
+	if len(resp.Proposals) != 1 || len(h.generated) != 0 || len(h.proposals.rows) != 1 {
+		t.Fatalf("turn 1: proposals = %+v, generated = %d, stored = %d", resp.Proposals, len(h.generated), len(h.proposals.rows))
 	}
 	offer := h.proposals.rows[0]
 	if o, ok := offer.Option("add_platform"); !ok || o.Tool != "updateCampaignPlatforms" {
@@ -50,10 +50,11 @@ func TestRunner_YesPleaseAddsThePlatform(t *testing.T) {
 	}
 
 	resp, _ = h.turn("yes please",
-		fakemodel.Tools(fakemodel.Call{Name: "confirmProposal", Input: map[string]any{"proposalId": offer.ID, "optionId": "add_platform"}}),
-		fakemodel.Answer(`{"explanation":"Threads is in.","action":"platforms_updated"}`))
-	if resp.Action != actionPlatformsUpdated || resp.Platforms == nil || resp.Platforms.UndoID == "" {
-		t.Fatalf("turn 2: action = %q, platforms = %+v", resp.Action, resp.Platforms)
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": offer.ID, "optionId": "add_platform"}}),
+		fakemodel.Answer(`{"explanation":"Threads is in.","action":"answered"}`))
+	r := campaignResult(resp)
+	if r == nil || r.Action != actionPlatformsUpdated || r.Platforms == nil || r.Platforms.UndoID == "" {
+		t.Fatalf("turn 2: result = %+v", r)
 	}
 	tp := campaigns.c.TargetPlatforms
 	if !slices.ContainsFunc(tp, func(p models.CampaignPlatform) bool { return p.ID == "pl2" }) {
@@ -61,7 +62,7 @@ func TestRunner_YesPleaseAddsThePlatform(t *testing.T) {
 	}
 
 	// And it can be undone.
-	if _, err := assistantundo.New(actions, campaigns).Undo(t.Context(), resp.Platforms.UndoID, "user-1"); err != nil {
+	if _, err := assistantundo.New(actions, campaigns).Undo(t.Context(), r.Platforms.UndoID, "user-1"); err != nil {
 		t.Fatal(err)
 	}
 	if len(campaigns.c.TargetPlatforms) != 1 {
