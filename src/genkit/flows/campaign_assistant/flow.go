@@ -12,6 +12,8 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -34,21 +36,14 @@ var campaignAssistantRunner func(ctx context.Context, req CampaignAssistantReque
 // registers the campaignAssistant Genkit flow. Must be called after the Genkit
 // instance has been initialised with the Anthropic plugin.
 func InitCampaignAssistant(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, repos CampaignAssistantRepos) error {
-	raw, err := promptFS.ReadFile("prompts/campaign_assistant.tmpl")
+	tools, err := defineTools(g)
 	if err != nil {
-		return fmt.Errorf("load campaign_assistant.tmpl: %w", err)
+		return fmt.Errorf("register campaign_assistant tools: %w", err)
 	}
-	tmpl, err := template.New("campaign_assistant").Parse(string(raw))
+	p, err := loadPrompts(tools.reg)
 	if err != nil {
-		return fmt.Errorf("parse campaign_assistant.tmpl: %w", err)
+		return err
 	}
-	systemTmpl := tmpl.Lookup("system")
-	contextTmpl := tmpl.Lookup("context")
-	if systemTmpl == nil || contextTmpl == nil {
-		return fmt.Errorf("campaign_assistant.tmpl must define both {{define \"system\"}} and {{define \"context\"}} blocks")
-	}
-
-	tools := defineTools(g)
 
 	// Warm Anthropic's strict-tool grammar cache in the background so
 	// the first real request doesn't pay the ~50s compile. Non-blocking.
@@ -58,15 +53,51 @@ func InitCampaignAssistant(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, re
 
 	CampaignAssistantFlow = genkit.DefineFlow(g, "campaignAssistant",
 		func(ctx context.Context, req CampaignAssistantRequest) (*CampaignAssistantResponse, error) {
-			return runCampaignAssistant(ctx, g, req, cfg, repos, systemTmpl, contextTmpl, tools, nil)
+			return runCampaignAssistant(ctx, g, req, cfg, repos, p, tools, nil)
 		},
 	)
 
 	campaignAssistantRunner = func(ctx context.Context, req CampaignAssistantRequest, onEvent OnEventFunc) (*CampaignAssistantResponse, error) {
-		return runCampaignAssistant(ctx, g, req, cfg, repos, systemTmpl, contextTmpl, tools, onEvent)
+		return runCampaignAssistant(ctx, g, req, cfg, repos, p, tools, onEvent)
 	}
 
 	return nil
+}
+
+// prompts holds the system prompt, rendered once from the registered tools,
+// and the per-turn context template. The system prompt is identical for every
+// turn, so it stays a stable cache prefix.
+type prompts struct {
+	system  string
+	context *template.Template
+}
+
+// systemTemplateData is what the system block is rendered from: the tool
+// guide and the tool-bound response actions, both taken from the registry.
+type systemTemplateData struct {
+	ToolGuide string
+	Actions   []assistantkit.Action
+}
+
+func loadPrompts(reg *assistantkit.Registry) (*prompts, error) {
+	raw, err := promptFS.ReadFile("prompts/campaign_assistant.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("load campaign_assistant.tmpl: %w", err)
+	}
+	tmpl, err := template.New("campaign_assistant").Parse(string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("parse campaign_assistant.tmpl: %w", err)
+	}
+	systemTmpl := tmpl.Lookup("system")
+	contextTmpl := tmpl.Lookup("context")
+	if systemTmpl == nil || contextTmpl == nil {
+		return nil, fmt.Errorf("campaign_assistant.tmpl must define both {{define \"system\"}} and {{define \"context\"}} blocks")
+	}
+	system, err := flowkit.RenderTemplate(systemTmpl, systemTemplateData{ToolGuide: reg.Guide(), Actions: reg.Actions()})
+	if err != nil {
+		return nil, fmt.Errorf("render campaign_assistant system prompt: %w", err)
+	}
+	return &prompts{system: system, context: contextTmpl}, nil
 }
 
 // NewCampaignAssistantCallback returns a callback suitable for passing to the
