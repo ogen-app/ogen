@@ -85,6 +85,7 @@ func runCampaignAssistant(
 	if err != nil {
 		return nil, err
 	}
+	t.st.registry = tools.reg
 	if err := t.callModel(ctx, tools); err != nil {
 		return nil, err
 	}
@@ -270,7 +271,9 @@ func (t *turn) assembleResult(ctx context.Context) error {
 		r.Action = action
 	}
 	for _, o := range t.outcomes {
-		o.attach(r)
+		if o.attach != nil {
+			o.attach(r)
+		}
 		if r.Explanation == "" {
 			r.Explanation = o.explanation
 		}

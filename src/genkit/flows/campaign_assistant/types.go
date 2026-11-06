@@ -259,6 +259,9 @@ const (
 	// SSEEventProposalCreated reports a call held back for the user to
 	// confirm; the UI renders it as a proposal card.
 	SSEEventProposalCreated SSEEventKind = "proposal_created"
+	// SSEEventProposalResolved reports an offer the user accepted or turned
+	// down, so the UI can close its card.
+	SSEEventProposalResolved SSEEventKind = "proposal_resolved"
 
 	SSEEventComplete SSEEventKind = "complete"
 	SSEEventError    SSEEventKind = "error"
@@ -270,6 +273,13 @@ type ProposalCreatedEventPayload struct {
 	Tool      string `json:"tool"`
 	Summary   string `json:"summary"`
 	ExpiresAt string `json:"expiresAt"`
+}
+
+// ProposalResolvedEventPayload reports how an offer was answered.
+type ProposalResolvedEventPayload struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Chosen string `json:"chosen,omitempty"`
 }
 
 // DeltaEventPayload carries a fragment of a streamed string value.
