@@ -66,6 +66,7 @@ type genkitRuntime struct {
 	postQualityFns      postQualityFns
 	enrichBriefFn       func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	campaignAssistantFn func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
+	answerProposalFn    func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
 	generatePostsFn     func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	checkBriefFn        func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPostsFn        func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
@@ -268,6 +269,18 @@ func (r *genkitRuntime) RunCampaignAssistant(ctx context.Context, req campaign_a
 	return fn(ctx, req, onEvent)
 }
 
+// AnswerProposal confirms or dismisses a campaign assistant offer from its
+// card, without a model call.
+func (r *genkitRuntime) AnswerProposal(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
+	r.mu.RLock()
+	fn := r.answerProposalFn
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil, ErrAnthropicUnavailable
+	}
+	return fn(ctx, req, onEvent)
+}
+
 func (r *genkitRuntime) GeneratePosts(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 	r.mu.RLock()
 	fn := r.generatePostsFn
@@ -346,6 +359,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		r.postQualityFns = postQualityFns{}
 		r.enrichBriefFn = nil
 		r.campaignAssistantFn = nil
+		r.answerProposalFn = nil
 		r.generatePostsFn = nil
 		r.checkBriefFn = nil
 		r.checkPostsFn = nil
@@ -425,6 +439,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.postQualityFns = postQualityFns
 	r.enrichBriefFn = enrichBriefFn
 	r.campaignAssistantFn = campaignAssistantFn
+	r.answerProposalFn = campaign_assistant.NewAnswerProposalCallback()
 	r.generatePostsFn = generatePostsFn
 	r.checkBriefFn = checkBriefFn
 	r.checkPostsFn = checkPostsFn

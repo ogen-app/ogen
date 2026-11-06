@@ -60,6 +60,9 @@ func InitCampaignAssistant(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, re
 	campaignAssistantRunner = func(ctx context.Context, req CampaignAssistantRequest, onEvent OnEventFunc) (*CampaignAssistantResponse, error) {
 		return runCampaignAssistant(ctx, g, req, cfg, repos, p, tools, onEvent)
 	}
+	answerProposalRunner = func(ctx context.Context, req AnswerProposalRequest, onEvent OnEventFunc) (*CampaignAssistantResponse, error) {
+		return answerProposal(ctx, cfg, repos, tools, req, onEvent)
+	}
 
 	return nil
 }

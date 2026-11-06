@@ -166,25 +166,35 @@ func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error)
 	})
 	t.timer.lap("history")
 
-	t.st = &requestState{
-		campaignID:        t.req.CampaignID,
+	t.st = newRequestState(t.cfg, t.repos, campaign, t.req.Instruction, t.onEvent)
+	return t.st.bind(ctx), nil
+}
+
+// newRequestState builds the state the tools of one turn share.
+func newRequestState(cfg CampaignAssistantFlowConfig, repos CampaignAssistantRepos, campaign *models.Campaign, instruction string, onEvent OnEventFunc) *requestState {
+	return &requestState{
+		campaignID:        campaign.ID,
 		campaign:          campaign,
-		repos:             t.repos,
-		onEvent:           t.onEvent,
-		instruction:       t.req.Instruction,
-		embedder:          t.cfg.Embedder,
-		contentPlan:       t.cfg.ContentPlan,
-		enrichBrief:       t.cfg.EnrichBrief,
-		overview:          t.cfg.Overview,
-		generatePosts:     t.cfg.GeneratePosts,
-		maxGeneratePosts:  t.cfg.MaxGeneratePosts,
-		draftPost:         t.cfg.DraftPost,
-		maxDraftPosts:     t.cfg.MaxDraftPosts,
-		proposalThreshold: t.cfg.ProposalThreshold,
-		checkBrief:        t.cfg.CheckBrief,
-		checkPosts:        t.cfg.CheckPosts,
+		repos:             repos,
+		onEvent:           onEvent,
+		instruction:       instruction,
+		embedder:          cfg.Embedder,
+		contentPlan:       cfg.ContentPlan,
+		enrichBrief:       cfg.EnrichBrief,
+		overview:          cfg.Overview,
+		generatePosts:     cfg.GeneratePosts,
+		maxGeneratePosts:  cfg.MaxGeneratePosts,
+		draftPost:         cfg.DraftPost,
+		maxDraftPosts:     cfg.MaxDraftPosts,
+		proposalThreshold: cfg.ProposalThreshold,
+		checkBrief:        cfg.CheckBrief,
+		checkPosts:        cfg.CheckPosts,
 	}
-	return assistantkit.WithProposalSink(withRequestState(ctx, t.st), campaignSink{st: t.st}), nil
+}
+
+// bind returns ctx carrying the state and the proposal sink the tools use.
+func (st *requestState) bind(ctx context.Context) context.Context {
+	return assistantkit.WithProposalSink(withRequestState(ctx, st), campaignSink{st: st})
 }
 
 // callModel runs the planner tool loop on the orchestrator slot, streaming the

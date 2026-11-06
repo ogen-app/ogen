@@ -18,6 +18,8 @@ import (
 //   - the tenant, so usage recording + entitlement enforcement attribute
 //     correctly;
 //   - the request id, so the detached work's logs stay correlated;
+//   - the user id, so what the work records (activity, assistant proposals)
+//     names the user who asked for it;
 //   - the request's OpenTelemetry span context, so the detached flow's spans
 //     (Genkit → model → DB) join the SAME trace as the originating request,
 //     even though the request's server span has already finished by
@@ -30,6 +32,9 @@ func detachedContext(c *fiber.Ctx, tenantID string) context.Context {
 	ctx := tenantctx.With(context.Background(), tenantID)
 	if reqID, ok := logging.RequestIDFrom(c.Context()); ok {
 		ctx = logging.WithRequestID(ctx, reqID)
+	}
+	if userID, ok := logging.UserIDFrom(c.Context()); ok {
+		ctx = logging.WithUserID(ctx, userID)
 	}
 	return graftRequestSpan(ctx, c)
 }
