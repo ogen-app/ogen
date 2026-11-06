@@ -23,7 +23,7 @@ type GeneratePostsRequest struct {
 }
 
 // DraftPost is both the AI output schema (via GenerateData[[]DraftPost]) and
-// the shape persisted as a Post record with status=planned (theses, no body).
+// the shape persisted as an idea (origin content_plan) with its plan.
 type DraftPost struct {
 	Title       string   `json:"title"                   jsonschema:"description=Short descriptive title for the post"`
 	Body        string   `json:"body"                    jsonschema:"description=A concise bullet-point thesis: 5-7 short key-point lines to expand later, NOT finished copy (max 500 chars). Stored as a draft_thesis note, not the post body."`
@@ -40,10 +40,12 @@ type DraftPost struct {
 
 // ContentPlanResponse is returned by the handler and the flow.
 type ContentPlanResponse struct {
-	CampaignID  string      `json:"campaignId"`
-	GeneratedAt time.Time   `json:"generatedAt"`
-	Posts       []DraftPost `json:"posts"`
-	Warnings    []string    `json:"warnings,omitempty"`
+	CampaignID  string    `json:"campaignId"`
+	GeneratedAt time.Time `json:"generatedAt"`
+	// Ideas are what the plan proposes, saved as ideas (origin
+	// content_plan) carrying their plan.
+	Ideas    []DraftPost `json:"ideas"`
+	Warnings []string    `json:"warnings,omitempty"`
 	// UsedAssets lists the campaign assets retrieved into the generation context
 	// and offered to the model for this plan. Each post records only
 	// the subset it actually drew on (Post.UsedAssetIDs), so this plan-level list
@@ -140,7 +142,7 @@ type SSEEventKind string
 
 const (
 	SSEEventStep     SSEEventKind = "step"
-	SSEEventPost     SSEEventKind = "post"
+	SSEEventIdea     SSEEventKind = "idea"
 	SSEEventWarning  SSEEventKind = "warning"
 	SSEEventComplete SSEEventKind = "complete"
 	SSEEventError    SSEEventKind = "error"
@@ -152,8 +154,8 @@ type StepEventPayload struct {
 	Status string `json:"status"` // always "done"
 }
 
-// PostEventPayload is the data payload for a "post" SSE event.
-// Emitted incrementally during model generation for each draft post
+// IdeaEventPayload is the data payload for an "idea" SSE event.
+// Emitted incrementally during model generation for each planned idea
 // as it is parsed from the streaming model response.
 //
 // Index is the post's deterministic global slot index assigned by the batch
@@ -162,12 +164,11 @@ type StepEventPayload struct {
 // stream-arrival order is not a reliable identifier; the UI should place
 // posts by Index, not by the order they appear on the wire.
 //
-// ID is the persisted Post row's primary key. Every post is inserted
-// before its event fires, so the client can reference the row
-// (edit, delete, drag) immediately rather than waiting for the
-// "complete" event.
-type PostEventPayload struct {
-	Post  DraftPost `json:"post"`
+// ID is the saved idea's id. Every idea is inserted before its event
+// fires, so the client can reference it (triage, compile, draft)
+// immediately rather than waiting for the "complete" event.
+type IdeaEventPayload struct {
+	Idea  DraftPost `json:"idea"`
 	Index int       `json:"index"`
 	ID    string    `json:"id"`
 }

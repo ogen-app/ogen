@@ -433,7 +433,7 @@ func (s *postSink) add(ctx context.Context, post DraftPost, pos int) {
 		return
 	}
 	s.persisted[pos] = true
-	emit(s.onEvent, SSEEventPost, PostEventPayload{Post: post, Index: s.startIndex + len(s.posts), ID: id})
+	emit(s.onEvent, SSEEventIdea, IdeaEventPayload{Idea: post, Index: s.startIndex + len(s.posts), ID: id})
 	s.posts = append(s.posts, post)
 }
 
@@ -465,115 +465,84 @@ func withinCount(persisted, expectedCount int) bool {
 	return expectedCount <= 0 || persisted < expectedCount
 }
 
-// persistCited returns the generator's persist step. Posts are bound only to
+// persistCited returns the generator's persist step. Ideas are bound only to
 // the retrieved assets the model reported using, so a hallucinated id never
-// persists and a post citing none records none (and is exploratory).
+// persists and an idea citing none records none (and is exploratory).
 // Snapping stays inside the active window, so a targeted run never schedules
-// a post outside it.
+// an idea outside it.
 func persistCited(campaign *models.Campaign, scope planScope, repos ContentPlanRepos, assets []resolvedPiece, brandVoiceID *string) func(context.Context, *DraftPost) (string, error) {
 	grounded := idSet(assetIDsOf(assets))
 	return func(ctx context.Context, dp *DraftPost) (string, error) {
 		dp.BrandVoiceID = brandVoiceID
-		return persistOne(ctx, dp, campaign, &scope.start, &scope.end, repos.Posts, repos.Notes, groundedRefs(dp.AssetRefs, grounded))
+		return persistIdea(ctx, dp, campaign, &scope.start, &scope.end, repos.Ideas, groundedRefs(dp.AssetRefs, grounded))
 	}
 }
 
-// persistOne inserts a single DraftPost as a new Post row and returns the
-// generated row ID. The streaming path calls this for each
-// parsed-and-validated post immediately rather than aggregating to a final
-// CreateBatch — a client disconnect mid-stream leaves whatever was already
-// persisted in the database, and a hard *AIError from one batch never rolls
-// back the surviving batches' rows.
+// persistIdea saves one planned item as an idea and returns its id. The
+// streaming path calls this for each parsed-and-validated item immediately
+// rather than aggregating to a final batch — a client disconnect mid-stream
+// leaves whatever was already saved, and a hard *AIError from one batch never
+// rolls back the surviving batches' ideas.
 //
-// The model's bullet-point thesis (dp.Body) is not written into the post
-// body. The post is created with an empty body and the thesis is
-// stored as a draft_thesis note, so the assistant can later expand it into copy.
-func persistOne(ctx context.Context, dp *DraftPost, campaign *models.Campaign, windowStart, windowEnd *time.Time, postRepo repository.PostRepository, noteRepo repository.PostNoteRepository, usedAssetIDs []string) (string, error) {
+// The idea is the campaign's, written down for its owner: the model's
+// bullet-point thesis is its note, and the platform, post type, phase and
+// (snapped) publish date are its plan. It records the assets it drew on and
+// whether it was grounded in them; nothing is on the calendar as a post
+// until someone compiles or drafts it.
+func persistIdea(ctx context.Context, dp *DraftPost, campaign *models.Campaign, windowStart, windowEnd *time.Time, ideas repository.IdeaRepository, usedAssetIDs []string) (string, error) {
 	id, err := models.NewID()
 	if err != nil {
 		return "", err
 	}
 
-	// Compose scheduled_at from the campaign's scheduling settings —
-	// snap the model's date to an enabled publishing day, place it at the
-	// publishing time in the campaign timezone, ± deterministic spread. The
-	// (possibly snapped) date is written back onto dp so the streamed preview
-	// matches the persisted instant. Snapping is bounded by the active generation
-	// window (windowStart/windowEnd) — the campaign window, or the CON-114
-	// targeting window — so a targeted run never snaps a post outside its window.
+	// Snap the model's date to an enabled publishing day inside the active
+	// window — the campaign window, or the CON-114 targeting window — so a
+	// targeted run never plans outside it. The snapped date is written back
+	// onto dp so the streamed preview matches the saved plan.
 	loc, _ := settings.ResolveTimezone(campaign.Timezone)
-	scheduledAt, effDate, noEnabledDay := scheduling.ComposeScheduledAt(
+	_, effDate, noEnabledDay := scheduling.ComposeScheduledAt(
 		dp.PublishDate, id, loc, campaign.PublishingTime, campaign.PublishingDays,
 		campaign.SpreadMinutes, windowStart, windowEnd,
 	)
 	if noEnabledDay {
 		slog.WarnContext(ctx, "no enabled publishing day in window; kept model date",
-			logging.AttrComponent, "genkit.content_plan", "post_id", id, "date", dp.PublishDate)
+			logging.AttrComponent, "genkit.content_plan", "idea_id", id, "date", dp.PublishDate)
 	}
 	dp.PublishDate = effDate
 
-	var phaseID *string
+	note := strings.TrimSpace(dp.Body)
+	if tone := strings.TrimSpace(dp.ToneNotes); tone != "" {
+		note = strings.TrimSpace(note + "\n\nTone: " + tone)
+	}
+	idea := &models.Idea{
+		ID:            id,
+		Title:         dp.Title,
+		Note:          note,
+		CampaignID:    &campaign.ID,
+		Origin:        models.IdeaOriginContentPlan,
+		AssetIDs:      append([]string{}, usedAssetIDs...),
+		GroundingMode: models.GroundingFor(len(usedAssetIDs)),
+		CreatedBy:     &campaign.CreatedBy,
+	}
+	if len(usedAssetIDs) > 0 {
+		idea.SourceAssetID = &usedAssetIDs[0]
+	}
+	if dp.PlatformID != "" {
+		idea.Plan.PlatformID = &dp.PlatformID
+	}
+	if dp.ContentType != "" {
+		idea.Plan.PostType = &dp.ContentType
+	}
 	if dp.PhaseID != "" {
-		phaseID = &dp.PhaseID
+		idea.Plan.PhaseID = &dp.PhaseID
 	}
-
-	row := &models.Post{
-		ID:               id,
-		CampaignID:       campaign.ID,
-		PlatformID:       dp.PlatformID,
-		PlatformPostType: dp.ContentType,
-		Title:            dp.Title,
-		Content:          "",
-		MediaURLs:        models.StringSlice{},
-		// Theses without a body: planned until someone writes it.
-		Status:              models.PostStatusPlanned,
-		CTAType:             models.CTATypeNone,
-		CTAUrl:              "",
-		TargetAudienceNotes: dp.ToneNotes,
-		UsedAssetIDs:        models.StringSlice(usedAssetIDs),
-		GroundingMode:       models.GroundingFor(len(usedAssetIDs)),
-		CampaignTypePhaseID: phaseID,
-		ScheduledAt:         scheduledAt,
-		BrandVoiceID:        dp.BrandVoiceID, // Provenance of the voice it was written in
-		CreatedBy:           campaign.CreatedBy,
+	if d, err := models.ParseCalendarDate(effDate); err == nil {
+		idea.Plan.TargetDate = &d
 	}
-	if err := postRepo.Create(ctx, row); err != nil {
+	if err := ideas.Create(ctx, idea); err != nil {
 		return "", err
 	}
-
-	// Capture the thesis as a draft_thesis note. Best-effort: a
-	// note-write failure must not discard the already-persisted post,
-	// so it is logged and swallowed rather than returned. An empty thesis
-	// creates no note.
-	if noteRepo != nil {
-		if body := strings.TrimSpace(dp.Body); body != "" {
-			if err := createDraftThesisNote(ctx, noteRepo, id, campaign.CreatedBy, body); err != nil {
-				slog.ErrorContext(ctx, "draft thesis note create failed", logging.AttrComponent, "genkit.content_plan", "post_id", id, logging.AttrError, err)
-			}
-		}
-	}
 	return id, nil
-}
-
-// createDraftThesisNote persists the content-plan thesis as a draft_thesis note
-// (origin content_plan, authored by the campaign owner).
-func createDraftThesisNote(ctx context.Context, noteRepo repository.PostNoteRepository, postID, createdBy, body string) error {
-	noteID, err := models.NewID()
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	return noteRepo.Create(ctx, &models.PostNote{
-		ID:        noteID,
-		PostID:    postID,
-		Type:      models.PostNoteTypeDraftThesis,
-		Title:     "Draft thesis",
-		Body:      body,
-		Origin:    models.PostNoteOriginContentPlan,
-		CreatedBy: createdBy,
-		CreatedAt: now,
-		UpdatedAt: now,
-	})
 }
 
 // tailOf returns up to n bytes from the end of s, suitable for log output.

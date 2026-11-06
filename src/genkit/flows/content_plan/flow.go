@@ -80,11 +80,10 @@ type ContentPlanRepos struct {
 	Assets    repository.AssetRepository
 	Chunks    repository.AssetChunksRepository
 	Platforms repository.PlatformRepository
-	Posts     repository.PostRepository
-	// Notes captures each generated post's bullet-point thesis as a
-	// draft_thesis note instead of the post body. nil skips note
-	// creation (the post is still created with an empty body).
-	Notes repository.PostNoteRepository
+	// Ideas stores what the plan proposes: one idea per item, with its
+	// thesis as the note and its platform, post type, phase and date as the
+	// plan. Nothing becomes a post until someone compiles or drafts it.
+	Ideas repository.IdeaRepository
 	// Brands resolves the campaign's brand voice/audience/guardrails into the
 	// prompt. nil falls back to the legacy tone_guidelines prose.
 	Brands repository.BrandRepository
@@ -183,13 +182,13 @@ func publishContentPlanFinalised(
 		postCount := 0
 		warningCount := 0
 		if resp != nil {
-			postCount = len(resp.Posts)
+			postCount = len(resp.Ideas)
 			warningCount = len(resp.Warnings)
 		}
 		ev.Type = "content_plan.completed"
 		ev.Payload = map[string]any{
 			"campaignId":   campaignID,
-			"postCount":    postCount,
+			"ideaCount":    postCount,
 			"warningCount": warningCount,
 		}
 	}
@@ -330,13 +329,13 @@ func runContentPlan(
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateOutput", Status: "done"})
 
 	// ── Step 6: persistDraftPosts (no-op — persistence is inline) ─────────────
-	emit(onEvent, SSEEventStep, StepEventPayload{Step: "persistDraftPosts", Status: "done"})
+	emit(onEvent, SSEEventStep, StepEventPayload{Step: "persistIdeas", Status: "done"})
 
 	slog.InfoContext(ctx, "done", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), "posts", len(posts), "warnings", len(warnings))
 	return &ContentPlanResponse{
 		CampaignID:  campaign.ID,
 		GeneratedAt: time.Now().UTC(),
-		Posts:       posts,
+		Ideas:       posts,
 		Warnings:    warnings,
 		UsedAssets:  assetRefsOf(assets),
 	}, nil
@@ -429,7 +428,7 @@ func runGeneratePosts(
 	return &ContentPlanResponse{
 		CampaignID:  campaign.ID,
 		GeneratedAt: time.Now().UTC(),
-		Posts:       posts,
+		Ideas:       posts,
 		Warnings:    warnings,
 		UsedAssets:  assetRefsOf(assets),
 	}, nil

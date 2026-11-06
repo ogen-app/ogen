@@ -100,30 +100,30 @@ func turnAction(outs []outcome, writes []string) string {
 }
 
 func contentPlanOutcome(r *ContentPlanResult) outcome {
-	explanation := fmt.Sprintf("I generated a content plan with %d draft post(s) for this campaign.", r.PostCount)
-	if r.PostCount == 0 {
-		explanation = "I couldn't generate any posts for this campaign."
+	explanation := fmt.Sprintf("I planned %d idea(s) for this campaign. Pick the ones worth making and compile or draft them into posts.", r.IdeaCount)
+	if r.IdeaCount == 0 {
+		explanation = "I couldn't plan any ideas for this campaign."
 	}
 	return outcome{
 		action:      actionContentPlan,
 		explanation: explanation,
 		attach:      func(resp *CampaignAssistantResponse) { resp.ContentPlan = r },
 		event:       SSEEventContentPlanComplete,
-		payload:     ContentPlanCompleteEventPayload{PostCount: r.PostCount, Warnings: r.Warnings, Grounding: r.Grounding},
+		payload:     ContentPlanCompleteEventPayload{IdeaCount: r.IdeaCount, Warnings: r.Warnings, Grounding: r.Grounding},
 	}
 }
 
 func generatedPostsOutcome(r *GeneratedPostsResult) outcome {
-	explanation := fmt.Sprintf("I added %d draft post(s) to the campaign.", r.PostCount)
-	if r.PostCount == 0 {
-		explanation = "I couldn't add any posts for that request."
+	explanation := fmt.Sprintf("I planned %d idea(s) for the campaign.", r.IdeaCount)
+	if r.IdeaCount == 0 {
+		explanation = "I couldn't plan any ideas for that request."
 	}
 	return outcome{
 		action:      actionPostsGenerated,
 		explanation: explanation,
 		attach:      func(resp *CampaignAssistantResponse) { resp.GeneratedPosts = r },
 		event:       SSEEventGeneratePostsComplete,
-		payload:     GeneratePostsCompleteEventPayload{PostCount: r.PostCount, Warnings: r.Warnings, Grounding: r.Grounding},
+		payload:     GeneratePostsCompleteEventPayload{IdeaCount: r.IdeaCount, Warnings: r.Warnings, Grounding: r.Grounding},
 	}
 }
 
