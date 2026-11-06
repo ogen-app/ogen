@@ -217,7 +217,8 @@ type RunContentPlanInput struct {
 
 // RunContentPlanOutput is returned to the model after a content plan runs.
 type RunContentPlanOutput struct {
-	PostCount    int                    `json:"postCount"`
+	// IdeaCount is how many ideas the plan saved; nothing became a post.
+	IdeaCount    int                    `json:"ideaCount"`
 	WarningCount int                    `json:"warningCount"`
 	UsedAssets   []AssetRef             `json:"usedAssets,omitempty"` // Assets that informed the plan
 	Grounding    assistantkit.Grounding `json:"grounding"`
@@ -248,7 +249,8 @@ type GeneratePostsInput struct {
 
 // GeneratePostsOutput is returned to the model after targeted posts are created.
 type GeneratePostsOutput struct {
-	PostCount      int                    `json:"postCount"`
+	// IdeaCount is how many ideas were saved; nothing became a post.
+	IdeaCount      int                    `json:"ideaCount"`
 	RequestedCount int                    `json:"requestedCount"`
 	Clamped        bool                   `json:"clamped"` // true when requestedCount exceeded the per-call cap
 	PhaseID        string                 `json:"phaseId"`
@@ -372,8 +374,8 @@ func (t *toolSet) all() []ai.ToolRef { return t.reg.Tools() }
 // user's confirmation.
 func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
-		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+
-			"Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many posts were created.",
+		"Plans the campaign's content: a set of ideas across its platforms and phases, each with a thesis and a suggested platform, post type, phase and date, saved to the campaign's ideas. "+
+			"No post is created: the user picks ideas and compiles or drafts them. Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many ideas were saved.",
 		assistantkit.Gated("runContentPlan", contentPlanGate,
 			assistantkit.Wrap(func(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
 				return toolRunContentPlan(ctx, in)
@@ -406,9 +408,9 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	)
 
 	generatePosts := genkit.DefineTool(g, "generatePosts",
-		"Adds a few NEW draft posts to the campaign for a specific platform, phase, and timeframe — e.g. 'add a few Threads posts in the current phase for the upcoming weeks'. "+
-			"Different from runContentPlan (which regenerates the WHOLE plan across all platforms/phases). Only platforms the campaign already targets are allowed. "+
-			"Resolve the requested timeframe into windowStart/windowEnd (ISO dates) using today's date shown in the context. Returns how many posts were created.",
+		"Plans a few NEW ideas for a specific platform, phase, and timeframe — e.g. 'add a few Threads posts in the current phase for the upcoming weeks' — saved to the campaign's ideas with that plan. "+
+			"Different from runContentPlan (which plans the WHOLE campaign across all platforms/phases). Only platforms the campaign already targets are allowed. "+
+			"Resolve the requested timeframe into windowStart/windowEnd (ISO dates) using today's date shown in the context. Returns how many ideas were saved; no post is created.",
 		assistantkit.Gated("generatePosts", generatePostsGate,
 			func(ctx *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
 				return toolGeneratePosts(ctx, in)
@@ -540,8 +542,8 @@ func toolRunContentPlan(ctx context.Context, in RunContentPlanInput) (*RunConten
 		switch name {
 		case content_plan.SSEEventStep:
 			emit(st.onEvent, SSEEventContentPlanStep, data)
-		case content_plan.SSEEventPost:
-			emit(st.onEvent, SSEEventContentPlanPost, data)
+		case content_plan.SSEEventIdea:
+			emit(st.onEvent, SSEEventContentPlanIdea, data)
 		case content_plan.SSEEventWarning:
 			emit(st.onEvent, SSEEventContentPlanWarning, data)
 			// nested complete/error are handled at the tool-return level below.
@@ -559,10 +561,10 @@ func toolRunContentPlan(ctx context.Context, in RunContentPlanInput) (*RunConten
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
 	}
 
-	res := &ContentPlanResult{PostCount: len(resp.Posts), Warnings: resp.Warnings, UsedAssets: used, Grounding: groundingOf(in.Exploratory, used, resp.Posts)}
+	res := &ContentPlanResult{IdeaCount: len(resp.Ideas), Warnings: resp.Warnings, UsedAssets: used, Grounding: groundingOf(in.Exploratory, used, resp.Ideas)}
 	st.contentPlanResult = res
 	st.recordWrite(actionContentPlan)
-	return &RunContentPlanOutput{PostCount: res.PostCount, WarningCount: len(res.Warnings), UsedAssets: used, Grounding: res.Grounding}, nil
+	return &RunContentPlanOutput{IdeaCount: res.IdeaCount, WarningCount: len(res.Warnings), UsedAssets: used, Grounding: res.Grounding}, nil
 }
 
 // toAssetRefs maps the content_plan provenance list into the assistant's local
@@ -740,8 +742,8 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		switch name {
 		case content_plan.SSEEventStep:
 			emit(st.onEvent, SSEEventGeneratePostsStep, data)
-		case content_plan.SSEEventPost:
-			emit(st.onEvent, SSEEventGeneratePostsPost, data)
+		case content_plan.SSEEventIdea:
+			emit(st.onEvent, SSEEventGeneratePostsIdea, data)
 		case content_plan.SSEEventWarning:
 			emit(st.onEvent, SSEEventGeneratePostsWarning, data)
 		}
@@ -769,9 +771,9 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
 	}
 
-	grounding := groundingOf(in.Exploratory, used, resp.Posts)
+	grounding := groundingOf(in.Exploratory, used, resp.Ideas)
 	st.generatedPostsResult = &GeneratedPostsResult{
-		PostCount:   len(resp.Posts),
+		IdeaCount:   len(resp.Ideas),
 		PlatformIDs: platformIDs,
 		PhaseID:     phaseID,
 		Warnings:    resp.Warnings,
@@ -780,13 +782,13 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 	}
 	st.recordWrite(actionPostsGenerated)
 	return assistantkit.OK(GeneratePostsOutput{
-		PostCount:      len(resp.Posts),
+		IdeaCount:      len(resp.Ideas),
 		RequestedCount: requested,
 		Clamped:        clamped,
 		PhaseID:        phaseID,
 		PhaseName:      phaseName,
 		Platforms:      platformNames,
-		Dates:          publishDatesOf(resp.Posts),
+		Dates:          publishDatesOf(resp.Ideas),
 		Warnings:       resp.Warnings,
 		UsedAssets:     used,
 		Grounding:      grounding,

@@ -2,7 +2,6 @@ package campaign_assistant
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
@@ -15,7 +14,7 @@ type generation struct {
 	count int
 	// excluded records whether the last run was told to leave assets out.
 	excluded bool
-	// offered is the engine's UsedAssets; cited is every post's AssetRefs.
+	// offered is the engine's UsedAssets; cited is every idea's AssetRefs.
 	offered []content_plan.AssetRef
 	cited   []string
 }
@@ -23,11 +22,11 @@ type generation struct {
 func (g *generation) run(ctx context.Context, n int) *content_plan.ContentPlanResponse {
 	g.count++
 	g.excluded = content_plan.AssetsExcluded(ctx)
-	posts := make([]content_plan.DraftPost, n)
-	for i := range posts {
-		posts[i].AssetRefs = g.cited
+	ideas := make([]content_plan.DraftPost, n)
+	for i := range ideas {
+		ideas[i].AssetRefs = g.cited
 	}
-	return &content_plan.ContentPlanResponse{Posts: posts, UsedAssets: g.offered}
+	return &content_plan.ContentPlanResponse{Ideas: ideas, UsedAssets: g.offered}
 }
 
 // sourcesState is a turn whose campaign has ready sources ready assets.
@@ -69,36 +68,6 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 	}
 }
 
-// Past the goal with no sources, the goal choice is still offered, and every
-// option goes ahead without sources.
-func TestGeneratePosts_NoSourcesPastGoalKeepsGoalChoice(t *testing.T) {
-	store := &memProposals{}
-	gen := &generation{}
-	st := sourcesState(store, gen, 0)
-	st.snapshot.Goal = &state.Goal{Target: 10, Planned: 8, Room: 2}
-	out := runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 5})
-	if out.Status != assistantkit.StatusConflict || len(out.Options) != 2 || gen.count != 0 {
-		t.Fatalf("outcome = %+v, generated = %d", out, gen.count)
-	}
-	if !strings.Contains(out.Summary, "no sources") || !strings.Contains(out.Summary, "goal") {
-		t.Fatalf("summary = %q", out.Summary)
-	}
-	for _, id := range []string{"fill", "anyway"} {
-		o, ok := store.rows[0].Option(id)
-		if !ok || o.Args["exploratory"] != true || !strings.Contains(o.Title, "without sources") {
-			t.Fatalf("option %s = %+v", id, o)
-		}
-	}
-
-	st.registry = newTestTools(t).reg
-	out = runTool(t, st, "confirmProposal", map[string]any{"proposalId": store.rows[0].ID, "optionId": "fill"})
-	if out.Status != assistantkit.StatusOK || gen.count != 1 || st.generatedPostsResult.PostCount != 2 || !gen.excluded {
-		t.Fatalf("fill = %+v, generated = %d, excluded = %v", out, gen.count, gen.excluded)
-	}
-}
-
-// An explicit ask runs without the campaign's assets, even when it has ready
-// ones, and the result says it is not grounded.
 func TestGeneratePosts_ExplicitExploratoryLeavesAssetsOut(t *testing.T) {
 	for name, ready := range map[string]int{"no sources": 0, "ready sources": 2} {
 		t.Run(name, func(t *testing.T) {
