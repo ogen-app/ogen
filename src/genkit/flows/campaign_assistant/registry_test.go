@@ -22,7 +22,8 @@ func newTestTools(t *testing.T) *toolSet {
 // grammar for exactly this list.
 func TestToolOrder(t *testing.T) {
 	want := []string{"runContentPlan", "enrichBrief", "listCampaignPosts", "getCampaignOverview", "generatePosts",
-		"draftPost", "setCampaignDates", "redistributePosts", "checkBrief", "checkPostsConsistency", "askCampaignAssets"}
+		"draftPost", "setCampaignDates", "redistributePosts", "checkBrief", "checkPostsConsistency",
+		"confirmProposal", "dismissProposal", "askCampaignAssets"}
 	var got []string
 	for _, r := range newTestTools(t).all() {
 		got = append(got, r.Name())
