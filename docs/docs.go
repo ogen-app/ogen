@@ -7018,7 +7018,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "asset_analysis, manual",
+                        "description": "asset_analysis, content_plan, assistant, manual",
                         "name": "origin",
                         "in": "query"
                     },
@@ -7350,7 +7350,7 @@ const docTemplate = `{
                 "tags": [
                     "ideas"
                 ],
-                "summary": "Edit an idea's title, note, or campaign (presence-aware)",
+                "summary": "Edit an idea's title, note, campaign or plan (presence-aware)",
                 "parameters": [
                     {
                         "type": "string",
@@ -7360,7 +7360,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "any of title, note, campaign_id (null detaches)",
+                        "description": "any of title, note, campaign_id (null detaches), plan (replaces the whole plan; null clears it; a phase needs a campaign, and moving campaign drops the phase)",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -10130,7 +10130,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Creates a new post. The created_by field is set from the authenticated session.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when ` + "`" + `status` + "`" + ` is not ` + "`" + `draft` + "`" + `;\ndrafts can be saved without a platform chosen up front.",
+                "description": "Creates a new post. The created_by field is set from the authenticated session.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when ` + "`" + `status` + "`" + ` is not ` + "`" + `planned` + "`" + `\nor ` + "`" + `draft` + "`" + `; those can be saved without a platform chosen up front. ` + "`" + `planned` + "`" + ` is a post\nwith theses (a draft_thesis note) and no body: sent with a non-empty ` + "`" + `content` + "`" + `, it is\ncreated as a ` + "`" + `draft` + "`" + `.",
                 "consumes": [
                     "application/json"
                 ],
@@ -10361,7 +10361,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Replaces all mutable fields of an existing post.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when the new ` + "`" + `status` + "`" + ` is\nnot ` + "`" + `draft` + "`" + `; transitioning a draft to ` + "`" + `ready_for_publish` + "`" + ` (or beyond) without a\nplatform chosen returns 400.",
+                "description": "Replaces all mutable fields of an existing post.\nThe ` + "`" + `content` + "`" + ` field is a Markdown string; the frontend renders it via BlockNote.\n` + "`" + `platform_id` + "`" + ` and ` + "`" + `platform_post_type` + "`" + ` are required only when the new ` + "`" + `status` + "`" + ` is\nnot ` + "`" + `planned` + "`" + ` or ` + "`" + `draft` + "`" + `; transitioning a draft to ` + "`" + `ready_for_publish` + "`" + ` (or beyond) without a\nplatform chosen returns 400. A ` + "`" + `planned` + "`" + ` post becomes a ` + "`" + `draft` + "`" + ` as soon as an update gives\nit a non-empty ` + "`" + `content` + "`" + `, whatever status the request sends; it can't move anywhere else.",
                 "consumes": [
                     "application/json"
                 ],
@@ -17522,7 +17522,7 @@ const docTemplate = `{
                     }
                 },
                 "platform_id": {
-                    "description": "PlatformID + PlatformPostType are required only when status is not\n\"draft\" — see update.RequirePlatformIfNotDraft. Drafts can be saved\nbefore the user has picked a platform.",
+                    "description": "PlatformID + PlatformPostType are required only when status is not\n\"planned\" or \"draft\" — see update.RequirePlatformIfNotDraft. Those can be saved\nbefore the user has picked a platform.",
                     "type": "string"
                 },
                 "platform_post_type": {
@@ -18164,6 +18164,10 @@ const docTemplate = `{
                 },
                 "note": {
                     "type": "string"
+                },
+                "plan": {
+                    "description": "Plan replaces the whole plan; null clears it.",
+                    "type": "object"
                 },
                 "title": {
                     "type": "string"
@@ -20185,7 +20189,17 @@ const docTemplate = `{
                     "type": "string",
                     "enum": [
                         "",
-                        "asset_analysis"
+                        "asset_analysis",
+                        "content_plan",
+                        "assistant"
+                    ]
+                },
+                "plan": {
+                    "description": "Plan is where the idea would land as a post; every field nil for an\nidea without one. The columns are plan_platform_id, plan_post_type,\nplan_phase_id and plan_target_date.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IdeaPlan"
+                        }
                     ]
                 },
                 "rationale": {
@@ -20318,6 +20332,30 @@ const docTemplate = `{
                 },
                 "title": {
                     "type": "string"
+                }
+            }
+        },
+        "models.IdeaPlan": {
+            "type": "object",
+            "properties": {
+                "phase_id": {
+                    "description": "PhaseID is a campaign type phase of the idea's campaign.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "platform_id": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "post_type": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "target_date": {
+                    "description": "TargetDate is the day it would publish; a dated idea shows on the\ncalendar as a slot, never as a post.",
+                    "type": "string",
+                    "x-nullable": true,
+                    "example": "2026-09-01"
                 }
             }
         },
@@ -21180,6 +21218,7 @@ const docTemplate = `{
         "models.PostStatus": {
             "type": "string",
             "enum": [
+                "planned",
                 "draft",
                 "ready_for_publish",
                 "scheduled",
@@ -21189,6 +21228,7 @@ const docTemplate = `{
                 "not_published"
             ],
             "x-enum-varnames": [
+                "PostStatusPlanned",
                 "PostStatusDraft",
                 "PostStatusReadyForPublish",
                 "PostStatusScheduled",
