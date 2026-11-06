@@ -35,6 +35,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		campaignID   string
 		campaignRepo repository.CampaignRepository
 		postRepo     repository.PostRepository
+		ideaRepo     repository.IdeaRepository
 		postNoteRepo repository.PostNoteRepository
 		messageRepo  repository.CampaignAssistantMessageRepository
 		assetRepo    repository.AssetRepository
@@ -58,6 +59,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		campaignTypeRepo := repository.NewCampaignTypeRepository(db)
 		campaignRepo = repository.NewCampaignRepository(db, tagRepo, platformRepo, campaignTypeRepo)
 		postRepo = repository.NewPostRepository(db)
+		ideaRepo = repository.NewIdeaRepository(db)
 		postNoteRepo = repository.NewPostNoteRepository(db)
 		messageRepo = repository.NewCampaignAssistantMessageRepository(db)
 
@@ -123,7 +125,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			Assets:    assetRepo,
 			Chunks:    chunksRepo,
 			Platforms: platformRepo,
-			Posts:     postRepo,
+			Ideas:     ideaRepo,
 		})).To(Succeed())
 		contentPlanCb := content_plan.NewContentPlanCallback()
 
@@ -172,6 +174,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		_, _ = db.NewDelete().TableExpr("assistant_proposals").Where("scope_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_notes").Where("post_id IN (SELECT id FROM posts WHERE campaign_id = ?)", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 	})
 
 	AfterAll(func() {
@@ -182,6 +185,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		_, _ = db.NewDelete().TableExpr("assistant_proposals").Where("scope_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_notes").Where("post_id IN (SELECT id FROM posts WHERE campaign_id = ?)", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("ideas").Where("campaign_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("campaigns").Where("id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("users").Where("id = ?", userID).Exec(ctx)
 		_, err := db.NewDelete().TableExpr("accounts").Where("id = ?", userID).Exec(ctx)
@@ -256,14 +260,14 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 			Expect(resp.Action).To(Equal("content_plan_generated"))
 			Expect(resp.ContentPlan).NotTo(BeNil())
-			Expect(resp.ContentPlan.PostCount).To(BeNumerically(">", 0))
+			Expect(resp.ContentPlan.IdeaCount).To(BeNumerically(">", 0))
 			Expect(gotContentPlanComplete).To(BeTrue(), "the nested content_plan_complete event should be forwarded")
 			Expect(gotComplete).To(BeTrue(), "complete signals the canonical final response")
 
-			// The flow persists posts inline; the DB count matches the report.
-			posts, err := postRepo.ListByCampaign(ctx, campaignID)
+			// The flow saves ideas inline; the DB count matches the report.
+			ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(posts)).To(Equal(resp.ContentPlan.PostCount))
+			Expect(len(ideas)).To(Equal(resp.ContentPlan.IdeaCount))
 		})
 	})
 
@@ -324,13 +328,13 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 			Expect(resp.Action).To(Equal("posts_generated"))
 			Expect(resp.GeneratedPosts).NotTo(BeNil())
-			Expect(resp.GeneratedPosts.PostCount).To(BeNumerically(">", 0))
+			Expect(resp.GeneratedPosts.IdeaCount).To(BeNumerically(">", 0))
 
-			posts, err := postRepo.ListByCampaign(ctx, campaignID)
+			ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(posts)).To(Equal(resp.GeneratedPosts.PostCount))
-			for _, p := range posts {
-				Expect(p.PlatformID).To(Equal(platformID), "posts should be on the requested platform")
+			Expect(len(ideas)).To(Equal(resp.GeneratedPosts.IdeaCount))
+			for _, i := range ideas {
+				Expect(*i.Plan.PlatformID).To(Equal(platformID), "ideas should plan the requested platform")
 			}
 		})
 	})
