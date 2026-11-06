@@ -222,6 +222,7 @@ func (s *Service) build(in Input, ideas []models.Idea, campaign *models.Campaign
 		return nil, err
 	}
 	now := s.now().UTC()
+	sources := sourceAssets(ideas)
 	post := &models.Post{
 		ID:               id,
 		CampaignID:       campaign.ID,
@@ -232,7 +233,8 @@ func (s *Service) build(in Input, ideas []models.Idea, campaign *models.Campaign
 		MediaURLs:        models.StringSlice{},
 		Status:           models.PostStatusPlanned,
 		CTAType:          models.CTATypeNone,
-		UsedAssetIDs:     sourceAssets(ideas),
+		UsedAssetIDs:     sources,
+		GroundingMode:    models.GroundingFor(len(sources)),
 		CreatedBy:        in.Actor,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -313,12 +315,21 @@ func thesesNote(post *models.Post, ideas []models.Idea, in Input) (*models.PostN
 	}, nil
 }
 
-// sourceAssets is every idea's source asset, in order: the post's sources.
+// sourceAssets is every asset the ideas drew on, in order: an analysis
+// idea's source, then a planned idea's assets. They are the post's sources.
 func sourceAssets(ideas []models.Idea) models.StringSlice {
 	out := models.StringSlice{}
+	add := func(id string) {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
 	for _, idea := range ideas {
-		if idea.SourceAssetID != nil && !slices.Contains(out, *idea.SourceAssetID) {
-			out = append(out, *idea.SourceAssetID)
+		if idea.SourceAssetID != nil {
+			add(*idea.SourceAssetID)
+		}
+		for _, id := range idea.AssetIDs {
+			add(id)
 		}
 	}
 	return out

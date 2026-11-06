@@ -40,16 +40,16 @@ func TestRunBatchesParallelSuccessAggregatesInOrder(t *testing.T) {
 		for i := range out {
 			out[i] = DraftPost{Title: fmt.Sprintf("b%d-p%d", spec.Index, i)}
 			if emit != nil {
-				emit(SSEEventPost, PostEventPayload{Post: out[i], Index: spec.GlobalStartIndex + i})
+				emit(SSEEventIdea, IdeaEventPayload{Idea: out[i], Index: spec.GlobalStartIndex + i})
 			}
 		}
 		return out, nil
 	}
 
-	var emitted []PostEventPayload
+	var emitted []IdeaEventPayload
 	var emitMu sync.Mutex
 	emit := func(_ SSEEventKind, data any) {
-		p := data.(PostEventPayload)
+		p := data.(IdeaEventPayload)
 		emitMu.Lock()
 		emitted = append(emitted, p)
 		emitMu.Unlock()
@@ -194,7 +194,7 @@ func TestRunBatchesParallelEmitIsSerialised(t *testing.T) {
 	gen := func(_ context.Context, spec batchSpec, emit OnEventFunc) ([]DraftPost, error) {
 		out := make([]DraftPost, spec.PostCount)
 		for i := range out {
-			emit(SSEEventPost, PostEventPayload{Post: DraftPost{}, Index: spec.GlobalStartIndex + i})
+			emit(SSEEventIdea, IdeaEventPayload{Idea: DraftPost{}, Index: spec.GlobalStartIndex + i})
 			out[i] = DraftPost{}
 		}
 		return out, nil

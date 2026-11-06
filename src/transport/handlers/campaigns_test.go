@@ -899,8 +899,8 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 
 				stub := func(_ context.Context, _ string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 					onEvent(content_plan.SSEEventStep, content_plan.StepEventPayload{Step: "validateInput", Status: "done"})
-					onEvent(content_plan.SSEEventPost, content_plan.PostEventPayload{
-						Post:  content_plan.DraftPost{Title: "First Post", Body: "Body text", PlatformID: "linkedin", ContentType: "text-post", PublishDate: "2026-05-01"},
+					onEvent(content_plan.SSEEventIdea, content_plan.IdeaEventPayload{
+						Idea:  content_plan.DraftPost{Title: "First Post", Body: "Body text", PlatformID: "linkedin", ContentType: "text-post", PublishDate: "2026-05-01"},
 						Index: 0,
 					})
 					onEvent(content_plan.SSEEventStep, content_plan.StepEventPayload{Step: "generatePosts", Status: "done"})
@@ -959,16 +959,16 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 					}
 				}
 
-				Expect(events).To(HaveLen(4)) // 2 step + 1 post + 1 complete
+				Expect(events).To(HaveLen(4)) // 2 step + 1 idea + 1 complete
 				Expect(events[0].event).To(Equal("step"))
-				Expect(events[1].event).To(Equal("post"))
+				Expect(events[1].event).To(Equal("idea"))
 				Expect(events[2].event).To(Equal("step"))
 				Expect(events[3].event).To(Equal("complete"))
 
-				var postPayload content_plan.PostEventPayload
+				var postPayload content_plan.IdeaEventPayload
 				Expect(json.Unmarshal([]byte(events[1].data), &postPayload)).To(Succeed())
 				Expect(postPayload.Index).To(Equal(0))
-				Expect(postPayload.Post.Title).To(Equal("First Post"))
+				Expect(postPayload.Idea.Title).To(Equal("First Post"))
 
 				var completePayload content_plan.ContentPlanResponse
 				Expect(json.Unmarshal([]byte(events[3].data), &completePayload)).To(Succeed())
@@ -1386,12 +1386,12 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				final := &campaign_assistant.CampaignAssistantResponse{
 					Explanation: "Generated a content plan.",
 					Action:      "content_plan_generated",
-					ContentPlan: &campaign_assistant.ContentPlanResult{PostCount: 3},
+					ContentPlan: &campaign_assistant.ContentPlanResult{IdeaCount: 3},
 				}
 				stub := func(_ context.Context, _ campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
 					onEvent(campaign_assistant.SSEEventContentPlanStarted, campaign_assistant.ContentPlanStartedEventPayload{})
-					onEvent(campaign_assistant.SSEEventContentPlanPost, map[string]any{"index": 0})
-					onEvent(campaign_assistant.SSEEventContentPlanComplete, campaign_assistant.ContentPlanCompleteEventPayload{PostCount: 3})
+					onEvent(campaign_assistant.SSEEventContentPlanIdea, map[string]any{"index": 0})
+					onEvent(campaign_assistant.SSEEventContentPlanComplete, campaign_assistant.ContentPlanCompleteEventPayload{IdeaCount: 3})
 					onEvent(campaign_assistant.SSEEventComplete, final)
 					return final, nil
 				}
@@ -1414,7 +1414,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				}
 				Expect(names).To(Equal([]string{
 					"content_plan_started",
-					"content_plan_post",
+					"content_plan_idea",
 					"content_plan_complete",
 					"complete",
 				}))
@@ -1954,8 +1954,8 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 
 		okStub := func(_ context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 			onEvent(content_plan.SSEEventStep, content_plan.StepEventPayload{Step: "resolveTargets", Status: "done"})
-			onEvent(content_plan.SSEEventPost, content_plan.PostEventPayload{Post: content_plan.DraftPost{Title: "Draft"}, Index: 0, ID: "post-1"})
-			return &content_plan.ContentPlanResponse{CampaignID: req.CampaignID, Posts: []content_plan.DraftPost{{Title: "Draft"}}}, nil
+			onEvent(content_plan.SSEEventIdea, content_plan.IdeaEventPayload{Idea: content_plan.DraftPost{Title: "Draft"}, Index: 0, ID: "post-1"})
+			return &content_plan.ContentPlanResponse{CampaignID: req.CampaignID, Ideas: []content_plan.DraftPost{{Title: "Draft"}}}, nil
 		}
 
 		Context("when not authenticated", func() {
@@ -2004,7 +2004,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				Expect(resp.StatusCode).To(Equal(404))
 			})
 
-			It("streams step, post, and complete on success", func() {
+			It("streams step, idea, and complete on success", func() {
 				a := buildGenApp(okStub)
 				ck := seedCookie(a, "genok@example.com")
 				camp := createCampaignOn(a, ck, "Gen OK", "Uk")
@@ -2022,7 +2022,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				for i, e := range events {
 					names[i] = e.event
 				}
-				Expect(names).To(Equal([]string{"step", "post", "complete"}))
+				Expect(names).To(Equal([]string{"step", "idea", "complete"}))
 			})
 		})
 	})
