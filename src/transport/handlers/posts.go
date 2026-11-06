@@ -32,6 +32,7 @@ import (
 )
 
 var validPostStatuses = map[models.PostStatus]bool{
+	models.PostStatusPlanned:                   true,
 	models.PostStatusDraft:                     true,
 	models.PostStatusReadyForPublish:           true,
 	models.PostStatusScheduled:                 true,
@@ -773,7 +774,7 @@ func (h *PostsHandler) Register(app *fiber.App) {
 type postRequest struct {
 	CampaignID string `json:"campaign_id"             validate:"required"`
 	// PlatformID + PlatformPostType are required only when status is not
-	// "draft" — see update.RequirePlatformIfNotDraft. Drafts can be saved
+	// "planned" or "draft" — see update.RequirePlatformIfNotDraft. Those can be saved
 	// before the user has picked a platform.
 	PlatformID       string `json:"platform_id"`
 	PlatformPostType string `json:"platform_post_type"`
@@ -1000,7 +1001,7 @@ var firstCommentOutcomeColumns = []string{
 // and the caller may continue. New posts have no attachments yet, so
 // only the structural rules can fire.
 func (h *PostsHandler) validateForCreate(c *fiber.Ctx, post *models.Post) (done bool, err error) {
-	if post.Status == models.PostStatusDraft || post.PlatformID == "" || h.platformRepo == nil {
+	if post.Status.IsUnwritten() || post.PlatformID == "" || h.platformRepo == nil {
 		return false, nil
 	}
 	platform, err := h.platformRepo.GetByID(reqCtx(c), post.PlatformID)
@@ -1156,8 +1157,10 @@ func (h *PostsHandler) PreviewThread(c *fiber.Ctx) error {
 // @Summary      Create post
 // @Description  Creates a new post. The created_by field is set from the authenticated session.
 // @Description  The `content` field is a Markdown string; the frontend renders it via BlockNote.
-// @Description  `platform_id` and `platform_post_type` are required only when `status` is not `draft`;
-// @Description  drafts can be saved without a platform chosen up front.
+// @Description  `platform_id` and `platform_post_type` are required only when `status` is not `planned`
+// @Description  or `draft`; those can be saved without a platform chosen up front. `planned` is a post
+// @Description  with theses (a draft_thesis note) and no body: sent with a non-empty `content`, it is
+// @Description  created as a `draft`.
 // @Tags         posts
 // @Accept       json
 // @Produce      json
@@ -1179,6 +1182,8 @@ func (h *PostsHandler) Create(c *fiber.Ctx) error {
 	if !validPostStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
+	// A planned post is one without a body; given one, it starts as a draft.
+	status = status.WithBody(req.Content)
 	if err := req.validateContentFormat(); err != nil {
 		return err
 	}
@@ -1280,8 +1285,9 @@ func (h *PostsHandler) Get(c *fiber.Ctx) error {
 // @Description  Replaces all mutable fields of an existing post.
 // @Description  The `content` field is a Markdown string; the frontend renders it via BlockNote.
 // @Description  `platform_id` and `platform_post_type` are required only when the new `status` is
-// @Description  not `draft`; transitioning a draft to `ready_for_publish` (or beyond) without a
-// @Description  platform chosen returns 400.
+// @Description  not `planned` or `draft`; transitioning a draft to `ready_for_publish` (or beyond) without a
+// @Description  platform chosen returns 400. A `planned` post becomes a `draft` as soon as an update gives
+// @Description  it a non-empty `content`, whatever status the request sends; it can't move anywhere else.
 // @Tags         posts
 // @Accept       json
 // @Produce      json

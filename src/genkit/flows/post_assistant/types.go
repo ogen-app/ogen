@@ -88,6 +88,9 @@ type PostAssistantRepos struct {
 	Campaigns repository.CampaignRepository
 	Versions  repository.PostVersionRepository
 	Messages  repository.PostAssistantMessageRepository
+	// Logs records the status change when writing a planned post's body
+	// makes it a draft. nil skips the audit entry.
+	Logs repository.PostLogRepository
 	// Platforms lets the clonePost tool resolve a platform name (e.g.
 	// "Threads") to its ID and surface the available platforms to the
 	// model. nil disables cross-platform clone resolution.
