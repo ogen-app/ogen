@@ -79,14 +79,53 @@ func TestIsSubmitted(t *testing.T) {
 		PostStatusScheduled: true,
 		PostStatusPublished: true,
 	}
-	all := []PostStatus{
-		PostStatusDraft, PostStatusReadyForPublish, PostStatusScheduled,
-		PostStatusScheduledForManualPublish, PostStatusFailed,
-		PostStatusPublished, PostStatusNotPublished,
-	}
-	for _, s := range all {
+	for _, s := range allStatuses {
 		if got := s.IsSubmitted(); got != submitted[s] {
 			t.Errorf("IsSubmitted(%q) = %v, want %v", s, got, submitted[s])
+		}
+	}
+}
+
+var allStatuses = []PostStatus{
+	PostStatusPlanned, PostStatusDraft, PostStatusReadyForPublish, PostStatusScheduled,
+	PostStatusScheduledForManualPublish, PostStatusFailed,
+	PostStatusPublished, PostStatusNotPublished,
+}
+
+// A planned post only ever becomes a draft, and nothing goes back to planned.
+func TestPlannedTransitions(t *testing.T) {
+	for _, to := range allStatuses {
+		want := to == PostStatusPlanned || to == PostStatusDraft
+		if got := PostStatusPlanned.CanTransition(to); got != want {
+			t.Errorf("planned → %s = %v, want %v", to, got, want)
+		}
+	}
+	for _, from := range allStatuses {
+		if from != PostStatusPlanned && from.CanTransition(PostStatusPlanned) {
+			t.Errorf("%s → planned is allowed", from)
+		}
+	}
+}
+
+func TestWithBody(t *testing.T) {
+	cases := []struct {
+		from    PostStatus
+		content string
+		want    PostStatus
+	}{
+		{PostStatusPlanned, "Hello", PostStatusDraft},
+		{PostStatusPlanned, "  \n", PostStatusPlanned},
+		{PostStatusDraft, "", PostStatusDraft},
+		{PostStatusReadyForPublish, "Hello", PostStatusReadyForPublish},
+	}
+	for _, tc := range cases {
+		if got := tc.from.WithBody(tc.content); got != tc.want {
+			t.Errorf("%s.WithBody(%q) = %s, want %s", tc.from, tc.content, got, tc.want)
+		}
+	}
+	for _, s := range allStatuses {
+		if got, want := s.IsUnwritten(), s == PostStatusPlanned || s == PostStatusDraft; got != want {
+			t.Errorf("%s.IsUnwritten() = %v", s, got)
 		}
 	}
 }
