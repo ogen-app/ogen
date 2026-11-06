@@ -618,15 +618,46 @@ func (t *turn) commitEdit(ctx context.Context) error {
 			return err
 		}
 	}
+	prev := t.post.Status
 	t.post.Content = r.UpdatedContent
+	// Writing a planned post's body makes it a draft.
+	t.post.Status = prev.WithBody(r.UpdatedContent)
 	t.post.UpdatedAt = time.Now().UTC()
 	if err := t.repos.Posts.Update(ctx, t.post); err != nil {
 		return fmt.Errorf("update post: %w", err)
+	}
+	if t.post.Status != prev {
+		t.logTransition(ctx, prev, t.post.Status)
 	}
 	if r.SaveVersion {
 		t.cfg.QualityAuto.Schedule(ctx, t.post, models.QualityTriggerVersion)
 	}
 	return nil
+}
+
+// logTransition records a status change the edit made in the post's audit
+// log. Best-effort: the edit has committed.
+func (t *turn) logTransition(ctx context.Context, from, to models.PostStatus) {
+	if t.repos.Logs == nil {
+		return
+	}
+	id, err := models.NewID()
+	if err != nil {
+		return
+	}
+	actor, _ := logging.UserIDFrom(ctx)
+	if err := t.repos.Logs.Append(ctx, &models.PostLog{
+		ID:         id,
+		PostID:     t.post.ID,
+		EventType:  models.PostLogEventStateTransition,
+		Actor:      actor,
+		FromStatus: &from,
+		ToStatus:   &to,
+		Summary:    "status changed when the post assistant wrote the body",
+		Payload:    "{}",
+	}); err != nil {
+		slog.WarnContext(ctx, "post log append failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+	}
 }
 
 func (t *turn) createVersion(ctx context.Context) error {
