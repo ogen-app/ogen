@@ -64,7 +64,7 @@ func (h *AnalyticsHandler) Performers(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	res, reason, err := h.service().Performers(reqCtx(c), rng, scope, by, limit)
+	res, reason, err := h.Service().Performers(reqCtx(c), rng, scope, by, limit)
 	if err != nil {
 		return err
 	}
