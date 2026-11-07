@@ -195,4 +195,15 @@ func TestWorkspaceSetup(t *testing.T) {
 	if err != nil || out.Note == "" {
 		t.Fatalf("no accounts store = %+v, %v", out, err)
 	}
+	out, err = workspaceSetup(ctx, Deps{Settings: memSettings{}, SocialAccounts: memAccounts{},
+		ProfileID: func(context.Context) (string, error) { return "", nil }})
+	if err != nil || out.Note == "" {
+		t.Fatalf("no profile = %+v, %v; want a note", out, err)
+	}
+	// A failed profile read is the failure, not "no profile connected".
+	down := errors.New("settings unavailable")
+	if _, err = workspaceSetup(ctx, Deps{Settings: memSettings{}, SocialAccounts: memAccounts{},
+		ProfileID: func(context.Context) (string, error) { return "", down }}); !errors.Is(err, down) {
+		t.Fatalf("profile lookup failure = %v; want it returned", err)
+	}
 }
