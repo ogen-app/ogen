@@ -2,87 +2,100 @@ package assistantundo_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"sync"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/pgtest"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
 
-type memActions struct {
-	mu   sync.Mutex
-	rows map[string]*models.AssistantAction
+type fixture struct {
+	db        *bun.DB
+	ctx       context.Context
+	actions   repository.AssistantActionRepository
+	campaigns repository.CampaignRepository
+	svc       *assistantundo.Service
 }
 
-func (m *memActions) Create(_ context.Context, a *models.AssistantAction) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.rows == nil {
-		m.rows = map[string]*models.AssistantAction{}
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+	for _, m := range []any{
+		&models.Account{ID: "acc-1", Email: "jane@example.com", Name: "Jane"},
+		&models.User{ID: "user-1", AccountID: "acc-1", TenantID: models.DefaultTenantID, Name: "Jane", Email: "jane@example.com", Role: models.RoleOwner},
+	} {
+		if _, err := db.NewInsert().Model(m).Exec(ctx); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
 	}
-	m.rows[a.ID] = a
-	return nil
-}
-
-func (m *memActions) GetByID(_ context.Context, id string) (*models.AssistantAction, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	a, ok := m.rows[id]
-	if !ok {
-		return nil, sql.ErrNoRows
+	f := &fixture{
+		db:      db,
+		ctx:     ctx,
+		actions: repository.NewAssistantActionRepository(db),
+		campaigns: repository.NewCampaignRepository(db, repository.NewTagRepository(db),
+			repository.NewPlatformRepository(db), repository.NewCampaignTypeRepository(db)),
 	}
-	cp := *a
-	return &cp, nil
+	f.svc = assistantundo.New(db, f.actions, f.campaigns)
+	return f
 }
 
-func (m *memActions) MarkUndone(_ context.Context, id, by string, now time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	a, ok := m.rows[id]
-	if !ok || a.UndoneAt != nil {
-		return false, nil
+// seedCampaign stores a campaign of the seeded two-phase type "Uk".
+func (f *fixture) seedCampaign(t *testing.T, edit func(*models.Campaign)) *models.Campaign {
+	t.Helper()
+	c := &models.Campaign{
+		ID: "c1", Name: "Launch", AssetIDs: models.StringSlice{}, TargetPlatforms: models.CampaignPlatforms{},
+		CampaignTypeID: "Uk", Language: "en", PublishingTime: "09:00", PublishingDays: models.StringSlice{},
+		SpreadMinutes: 15, GoalCadence: "month", Status: models.StatusActive, Currency: "USD",
+		TagIDs: models.StringSlice{}, CreatedBy: "user-1",
 	}
-	a.UndoneAt, a.UndoneBy = &now, by
-	return true, nil
-}
-
-type memCampaigns struct {
-	repository.CampaignRepository
-	c *models.Campaign
-}
-
-func (m *memCampaigns) GetByID(context.Context, string) (*models.Campaign, error) {
-	if m.c == nil {
-		return nil, sql.ErrNoRows
+	if edit != nil {
+		edit(c)
 	}
-	cp := *m.c
-	return &cp, nil
+	if err := f.campaigns.Create(f.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	return f.load(t)
 }
 
-func (m *memCampaigns) Update(_ context.Context, c *models.Campaign, _ ...string) error {
-	m.c = c
-	return nil
+func (f *fixture) load(t *testing.T) *models.Campaign {
+	t.Helper()
+	c, err := f.campaigns.GetByID(f.ctx, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
-func day(s string) *time.Time {
-	t, _ := time.Parse("2006-01-02", s)
-	return &t
+// save writes the whole campaign, as an edit elsewhere does.
+func (f *fixture) save(t *testing.T, c *models.Campaign) {
+	t.Helper()
+	if err := f.campaigns.Update(f.ctx, c); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // logChange applies change to the stored campaign and logs it, as a tool does.
-func logChange(t *testing.T, actions *memActions, campaigns *memCampaigns, kind models.AssistantActionKind,
+func (f *fixture) logChange(t *testing.T, kind models.AssistantActionKind,
 	snapshot func(*models.Campaign) models.JSONMap, change func(*models.Campaign),
 ) string {
 	t.Helper()
-	before := snapshot(campaigns.c)
-	change(campaigns.c)
-	id, err := assistantundo.Record(t.Context(), actions, &models.AssistantAction{
+	c := f.load(t)
+	before := snapshot(c)
+	change(c)
+	f.save(t, c)
+	id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{
 		ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Kind: kind, EntityID: "c1",
-		Before: before, After: snapshot(campaigns.c),
+		Before: before, After: snapshot(c), CreatedBy: "user-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,70 +103,282 @@ func logChange(t *testing.T, actions *memActions, campaigns *memCampaigns, kind 
 	return id
 }
 
-func TestUndo_CampaignDates(t *testing.T) {
-	actions := &memActions{}
-	campaigns := &memCampaigns{c: &models.Campaign{ID: "c1", EndDate: day("2026-06-30")}}
-	svc := assistantundo.New(actions, campaigns)
-	id := logChange(t, actions, campaigns, models.AssistantActionCampaignDates, assistantundo.CampaignDates, func(c *models.Campaign) {
-		c.StartDate, c.EndDate = day("2026-06-01"), day("2026-07-31")
-	})
-
-	a, err := svc.Undo(t.Context(), id, "user-1")
+func (f *fixture) undone(t *testing.T, id string) bool {
+	t.Helper()
+	a, err := f.actions.GetByID(f.ctx, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if campaigns.c.StartDate != nil || !campaigns.c.EndDate.Equal(*day("2026-06-30")) {
-		t.Fatalf("restored dates = %v, %v", campaigns.c.StartDate, campaigns.c.EndDate)
+	return a.UndoneAt != nil
+}
+
+func day(s string) *time.Time {
+	t, _ := time.Parse(time.DateOnly, s)
+	return &t
+}
+
+func TestUndo_CampaignDates(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.EndDate = day("2026-06-30") })
+	id := f.logChange(t, models.AssistantActionCampaignDates, assistantundo.CampaignDates, func(c *models.Campaign) {
+		c.StartDate, c.EndDate = day("2026-06-01"), day("2026-07-31")
+	})
+
+	a, err := f.svc.Undo(f.ctx, id, "user-1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if a.UndoneBy != "user-1" || a.UndoneAt == nil {
+	c := f.load(t)
+	if c.StartDate != nil || !c.EndDate.Equal(*day("2026-06-30")) {
+		t.Fatalf("restored dates = %v, %v", c.StartDate, c.EndDate)
+	}
+	if a.UndoneBy != "user-1" || a.UndoneAt == nil || !f.undone(t, id) {
 		t.Fatalf("action = %+v", a)
 	}
-	if _, err := svc.Undo(t.Context(), id, "user-1"); !errors.Is(err, assistantundo.ErrAlreadyUndone) {
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrAlreadyUndone) {
 		t.Fatalf("second undo err = %v", err)
 	}
 }
 
 func TestUndo_CampaignBrief(t *testing.T) {
-	actions := &memActions{}
-	campaigns := &memCampaigns{c: &models.Campaign{ID: "c1", Description: "old", KeyMessages: "km"}}
-	svc := assistantundo.New(actions, campaigns)
-	id := logChange(t, actions, campaigns, models.AssistantActionCampaignBrief, assistantundo.CampaignBrief, func(c *models.Campaign) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.Description, c.KeyMessages = "old", "km" })
+	id := f.logChange(t, models.AssistantActionCampaignBrief, assistantundo.CampaignBrief, func(c *models.Campaign) {
 		c.Description, c.TargetPersona, c.KeyMessages, c.ToneGuidelines = "new", "persona", "km2", "calm"
 	})
+	// A field outside the brief changes after the assistant's edit.
+	c := f.load(t)
+	c.Name = "Renamed"
+	f.save(t, c)
 
-	if _, err := svc.Undo(t.Context(), id, "user-1"); err != nil {
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
 		t.Fatal(err)
 	}
-	c := campaigns.c
+	c = f.load(t)
 	if c.Description != "old" || c.TargetPersona != "" || c.KeyMessages != "km" || c.ToneGuidelines != "" {
 		t.Fatalf("restored brief = %+v", c)
+	}
+	if c.Name != "Renamed" {
+		t.Fatalf("name = %q, undo rewrote a field outside the brief", c.Name)
 	}
 }
 
 // An edit made after the assistant's change is never overwritten.
 func TestUndo_RefusesWhenChangedSince(t *testing.T) {
-	actions := &memActions{}
-	campaigns := &memCampaigns{c: &models.Campaign{ID: "c1", Description: "old"}}
-	svc := assistantundo.New(actions, campaigns)
-	id := logChange(t, actions, campaigns, models.AssistantActionCampaignBrief, assistantundo.CampaignBrief, func(c *models.Campaign) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.Description = "old" })
+	id := f.logChange(t, models.AssistantActionCampaignBrief, assistantundo.CampaignBrief, func(c *models.Campaign) {
 		c.Description = "assistant"
 	})
-	campaigns.c.Description = "user edit"
+	c := f.load(t)
+	c.Description = "user edit"
+	f.save(t, c)
 
-	if _, err := svc.Undo(t.Context(), id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
 		t.Fatalf("err = %v, want ErrChangedSince", err)
 	}
-	if campaigns.c.Description != "user edit" {
-		t.Fatalf("description = %q, the later edit was overwritten", campaigns.c.Description)
+	if got := f.load(t).Description; got != "user edit" {
+		t.Fatalf("description = %q, the later edit was overwritten", got)
 	}
-	if a, _ := actions.GetByID(t.Context(), id); a.UndoneAt != nil {
+	if f.undone(t, id) {
 		t.Fatal("a refused undo was recorded")
 	}
 }
 
+func TestUndo_DatesRefuseWhenChangedSince(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*models.Campaign)
+	}{
+		{"start date", func(c *models.Campaign) { c.StartDate = day("2026-06-05") }},
+		{"end date", func(c *models.Campaign) { c.EndDate = day("2026-08-15") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.seedCampaign(t, func(c *models.Campaign) { c.StartDate, c.EndDate = day("2026-06-01"), day("2026-06-30") })
+			id := f.logChange(t, models.AssistantActionCampaignDates, assistantundo.CampaignDates, func(c *models.Campaign) {
+				c.EndDate = day("2026-07-31")
+			})
+			c := f.load(t)
+			tc.edit(c)
+			f.save(t, c)
+			want := assistantundo.CampaignDates(c)
+
+			if _, err := f.svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+				t.Fatalf("err = %v, want ErrChangedSince", err)
+			}
+			if got := assistantundo.CampaignDates(f.load(t)); got["startDate"] != want["startDate"] || got["endDate"] != want["endDate"] {
+				t.Fatalf("dates = %v, want the later edit %v", got, want)
+			}
+			if f.undone(t, id) {
+				t.Fatal("a refused undo was recorded")
+			}
+		})
+	}
+}
+
+// An edit that commits while the undo is checking is seen, not overwritten.
+func TestUndo_WaitsForAConcurrentEdit(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.Description = "old" })
+	id := f.logChange(t, models.AssistantActionCampaignBrief, assistantundo.CampaignBrief, func(c *models.Campaign) {
+		c.Description = "assistant"
+	})
+
+	tx, err := f.db.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.NewUpdate().Model((*models.Campaign)(nil)).Set("description = ?", "user edit").
+		Where("id = ?", "c1").Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.svc.Undo(f.ctx, id, "user-1")
+		done <- err
+	}()
+	// Give the undo time to block on the edit's row lock, then commit it.
+	time.Sleep(300 * time.Millisecond)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := <-done; !errors.Is(err, assistantundo.ErrChangedSince) {
+		t.Fatalf("err = %v, want ErrChangedSince", err)
+	}
+	if got := f.load(t).Description; got != "user edit" {
+		t.Fatalf("description = %q, the concurrent edit was overwritten", got)
+	}
+}
+
+// failingMark records the undo, then fails, as a dropped connection would.
+type failingMark struct {
+	repository.AssistantActionRepository
+}
+
+func (m failingMark) MarkUndone(ctx context.Context, db bun.IDB, id, by string, now time.Time) (bool, error) {
+	if _, err := m.AssistantActionRepository.MarkUndone(ctx, db, id, by, now); err != nil {
+		return false, err
+	}
+	return false, errors.New("connection lost")
+}
+
+// A restore whose record fails is rolled back, so the change stays undoable.
+func TestUndo_RestoreAndRecordCommitTogether(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.Description = "old" })
+	id := f.logChange(t, models.AssistantActionCampaignBrief, assistantundo.CampaignBrief, func(c *models.Campaign) {
+		c.Description = "assistant"
+	})
+
+	svc := assistantundo.New(f.db, failingMark{f.actions}, f.campaigns)
+	if _, err := svc.Undo(f.ctx, id, "user-1"); err == nil {
+		t.Fatal("undo succeeded with a failed record")
+	}
+	if got := f.load(t).Description; got != "assistant" {
+		t.Fatalf("description = %q, the restore outlived the failed record", got)
+	}
+	if f.undone(t, id) {
+		t.Fatal("the failed undo was recorded")
+	}
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatalf("retry err = %v", err)
+	}
+}
+
+// Undoing dates moves a manual plan's outer bounds with them, keeping the
+// boundary the user set between the phases.
+func TestUndo_DatesReanchorManualPlan(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.StartDate, c.EndDate = day("2026-06-01"), day("2026-06-30") })
+	id := f.logChange(t, models.AssistantActionCampaignDates, assistantundo.CampaignDates, func(c *models.Campaign) {
+		c.EndDate = day("2026-07-31")
+	})
+	// The user plans the extended campaign by hand.
+	if err := f.campaigns.ReplacePhaseWindows(f.ctx, "c1", []models.CampaignPhaseWindow{
+		{PhaseID: "98", StartDate: *day("2026-06-01"), EndDate: *day("2026-06-20")},
+		{PhaseID: "xh", StartDate: *day("2026-06-21"), EndDate: *day("2026-07-31")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	windows, source := campaignphase.Resolve(f.load(t))
+	if source != campaignphase.SourceManual || len(windows) != 2 {
+		t.Fatalf("plan = %v %+v, want the manual plan kept", source, windows)
+	}
+	if !windows[0].End.Equal(*day("2026-06-20")) || !windows[1].End.Equal(*day("2026-06-30")) {
+		t.Fatalf("windows = %+v, want 06-01..06-20, 06-21..06-30", windows)
+	}
+}
+
+func TestUndo_CampaignPlatforms(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) {
+		c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}
+	})
+	id := f.logChange(t, models.AssistantActionCampaignPlatforms, assistantundo.CampaignPlatforms, func(c *models.Campaign) {
+		c.TargetPlatforms = append(c.TargetPlatforms, models.CampaignPlatform{ID: "pl2"})
+	})
+	// The content bank changes after the assistant's edit.
+	if _, err := f.campaigns.AddAssetIDs(f.ctx, "c1", []string{"asset-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.load(t)
+	tp := c.TargetPlatforms
+	if len(tp) != 1 || tp[0].ID != "pl1" || len(tp[0].PostTypes) != 1 || tp[0].PostTypes[0] != "article" {
+		t.Fatalf("restored platforms = %+v", tp)
+	}
+	if !c.UseAssets || len(c.AssetIDs) != 1 {
+		t.Fatalf("assets = %v (use %t), undo rewrote the content bank", c.AssetIDs, c.UseAssets)
+	}
+}
+
+// A later edit to the platforms, or to a platform's post types, is kept.
+func TestUndo_PlatformsRefuseWhenChangedSince(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*models.Campaign)
+	}{
+		{"platform", func(c *models.Campaign) { c.TargetPlatforms = c.TargetPlatforms[:1] }},
+		{"post types", func(c *models.Campaign) { c.TargetPlatforms[0].PostTypes = []string{"article", "carousel"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.seedCampaign(t, func(c *models.Campaign) {
+				c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}
+			})
+			id := f.logChange(t, models.AssistantActionCampaignPlatforms, assistantundo.CampaignPlatforms, func(c *models.Campaign) {
+				c.TargetPlatforms = append(c.TargetPlatforms, models.CampaignPlatform{ID: "pl2"})
+			})
+			c := f.load(t)
+			tc.edit(c)
+			f.save(t, c)
+			want := assistantundo.CampaignPlatforms(c)
+
+			if _, err := f.svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+				t.Fatalf("err = %v, want ErrChangedSince", err)
+			}
+			if got := assistantundo.CampaignPlatforms(f.load(t)); fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Fatalf("platforms = %v, want the later edit %v", got, want)
+			}
+			if f.undone(t, id) {
+				t.Fatal("a refused undo was recorded")
+			}
+		})
+	}
+}
+
 func TestUndo_NotFound(t *testing.T) {
-	svc := assistantundo.New(&memActions{}, &memCampaigns{})
-	if _, err := svc.Undo(t.Context(), "nope", "user-1"); !errors.Is(err, assistantundo.ErrNotFound) {
+	f := newFixture(t)
+	if _, err := f.svc.Undo(f.ctx, "nope", "user-1"); !errors.Is(err, assistantundo.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

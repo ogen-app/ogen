@@ -30,7 +30,7 @@ type CampaignAssistantRequest struct {
 // ran this turn.
 type CampaignAssistantResponse struct {
 	Explanation string `json:"explanation"          jsonschema:"description=Conversational reply to the user"`
-	Action      string `json:"action"               jsonschema:"description=answered for a grounded reply; content_plan_generated when runContentPlan ran; brief_enriched when enrichBrief ran; posts_generated when generatePosts ran; post_drafted when draftPost ran; dates_updated when setCampaignDates ran; posts_redistributed when redistributePosts ran; brief_reviewed when checkBrief ran; posts_reviewed when checkPostsConsistency ran; proposed when a requested change is waiting for the user's confirmation; declined when the request is out of scope,enum=answered,enum=proposed,enum=content_plan_generated,enum=brief_enriched,enum=posts_generated,enum=post_drafted,enum=dates_updated,enum=posts_redistributed,enum=brief_reviewed,enum=posts_reviewed,enum=declined"`
+	Action      string `json:"action"               jsonschema:"description=answered for a grounded reply; content_plan_generated when runContentPlan ran; brief_enriched when enrichBrief ran; posts_generated when generatePosts ran; post_drafted when draftPost ran; dates_updated when setCampaignDates ran; platforms_updated when updateCampaignPlatforms ran; posts_redistributed when redistributePosts ran; brief_reviewed when checkBrief ran; posts_reviewed when checkPostsConsistency ran; proposed when a requested change is waiting for the user's confirmation; declined when the request is out of scope,enum=answered,enum=proposed,enum=content_plan_generated,enum=brief_enriched,enum=posts_generated,enum=post_drafted,enum=dates_updated,enum=platforms_updated,enum=posts_redistributed,enum=brief_reviewed,enum=posts_reviewed,enum=declined"`
 	// ContentPlan is set by the server when the runContentPlan tool created
 	// draft posts this turn. Action is then "content_plan_generated".
 	ContentPlan *ContentPlanResult `json:"contentPlan,omitempty" jsonschema:"-"`
@@ -60,6 +60,9 @@ type CampaignAssistantResponse struct {
 	// user to confirm this turn. Action is then "proposed" unless something
 	// was also written.
 	Proposals []ProposalCreatedEventPayload `json:"proposals,omitempty" jsonschema:"-"`
+	// Platforms is set by the server when updateCampaignPlatforms added
+	// platforms or post types this turn. Action is then "platforms_updated".
+	Platforms *PlatformsResult `json:"platforms,omitempty" jsonschema:"-"`
 }
 
 // DatesResult summarises a setCampaignDates tool invocation.
@@ -142,6 +145,9 @@ type CampaignAssistantRepos struct {
 	// Actions logs reversible changes so they can be undone. nil makes them
 	// not undoable; the change itself still applies.
 	Actions repository.AssistantActionRepository
+	// Platforms is the platform catalog updateCampaignPlatforms checks
+	// against. nil makes that tool unavailable.
+	Platforms repository.PlatformRepository
 }
 
 // CampaignAssistantFlowConfig holds static settings for the flow.
@@ -258,6 +264,7 @@ const (
 	SSEEventAssetsUsed SSEEventKind = "assets_used"
 
 	SSEEventDatesUpdated       SSEEventKind = "dates_updated"
+	SSEEventPlatformsUpdated   SSEEventKind = "platforms_updated"
 	SSEEventPostsRedistributed SSEEventKind = "posts_redistributed"
 
 	SSEEventCheckBriefStarted  SSEEventKind = "check_brief_started"
