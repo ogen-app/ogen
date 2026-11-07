@@ -6,6 +6,7 @@ import (
 	"maps"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
@@ -41,6 +42,16 @@ func TestEntityTitles(t *testing.T) {
 	if err := ideas.Create(ctx, &models.Idea{ID: ideaID, Title: "Pricing myths"}); err != nil {
 		t.Fatal(err)
 	}
+	assetID, err := models.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	asset := &models.Asset{ID: assetID, Title: "Q3 deck", Content: "body", Status: models.AssetStatusReady,
+		TagIDs: models.StringSlice{}, CreatedBy: "user-1", CreatedAt: now, UpdatedAt: now}
+	if err := repository.NewAssetRepository(db, nil, nil).Create(ctx, asset); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := titles.Titles(ctx, viewcontext.KindCampaign, []string{live, gone, "missing"})
 	if err != nil || !maps.Equal(got, map[string]string{live: "Spring launch"}) {
@@ -54,6 +65,10 @@ func TestEntityTitles(t *testing.T) {
 	if err != nil || got[ideaID] != "Pricing myths" {
 		t.Fatalf("ideas = %v, %v", got, err)
 	}
+	got, err = titles.Titles(ctx, viewcontext.KindAsset, []string{assetID})
+	if err != nil || got[assetID] != "Q3 deck" {
+		t.Fatalf("assets = %v, %v", got, err)
+	}
 	if _, err := titles.Titles(ctx, viewcontext.KindVoice, []string{"v1"}); !errors.Is(err, repository.ErrUntitledKind) {
 		t.Fatal("an unsupported kind read titles")
 	}
@@ -61,5 +76,8 @@ func TestEntityTitles(t *testing.T) {
 	other := tenantctx.With(context.Background(), "tenant-other")
 	if got, err := titles.Titles(other, viewcontext.KindIdea, []string{ideaID}); err != nil || len(got) != 0 {
 		t.Fatalf("another tenant read %v (err %v)", got, err)
+	}
+	if got, err := titles.Titles(other, viewcontext.KindAsset, []string{assetID}); err != nil || len(got) != 0 {
+		t.Fatalf("another tenant read asset %v (err %v)", got, err)
 	}
 }
