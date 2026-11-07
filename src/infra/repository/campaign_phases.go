@@ -55,9 +55,9 @@ func (r *campaignRepository) hydrateTypeLocked(ctx context.Context, campaigns []
 // hydratePhaseWindows loads the stored manual phase plan. Only GetByID hydrates
 // it — every plan consumer (content_plan, the campaign assistant, reschedule,
 // the phases endpoint) loads the campaign that way.
-func (r *campaignRepository) hydratePhaseWindows(ctx context.Context, campaign *models.Campaign) error {
+func (r *campaignRepository) hydratePhaseWindows(ctx context.Context, db bun.IDB, campaign *models.Campaign) error {
 	var windows []models.CampaignPhaseWindow
-	if err := r.db.NewSelect().
+	if err := db.NewSelect().
 		Model(&windows).
 		Where("cpw.campaign_id = ?", campaign.ID).
 		OrderExpr("cpw.start_date ASC").
@@ -95,24 +95,29 @@ func (r *campaignRepository) PhasePostCounts(ctx context.Context, campaignID str
 // reader never sees a half-written (and therefore invalid) plan.
 func (r *campaignRepository) ReplacePhaseWindows(ctx context.Context, campaignID string, windows []models.CampaignPhaseWindow) error {
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewDelete().
-			Model((*models.CampaignPhaseWindow)(nil)).
-			Where("campaign_id = ?", campaignID).
-			Exec(ctx); err != nil {
-			return err
-		}
-		if len(windows) == 0 {
-			return nil
-		}
-		now := time.Now().UTC()
-		for i := range windows {
-			windows[i].CampaignID = campaignID
-			windows[i].CreatedAt = now
-			windows[i].UpdatedAt = now
-		}
-		_, err := tx.NewInsert().Model(&windows).Exec(ctx)
-		return err
+		return r.ReplacePhaseWindowsTx(ctx, tx, campaignID, windows)
 	})
+}
+
+// ReplacePhaseWindowsTx swaps the stored plan on db, a caller's transaction.
+func (r *campaignRepository) ReplacePhaseWindowsTx(ctx context.Context, db bun.IDB, campaignID string, windows []models.CampaignPhaseWindow) error {
+	if _, err := db.NewDelete().
+		Model((*models.CampaignPhaseWindow)(nil)).
+		Where("campaign_id = ?", campaignID).
+		Exec(ctx); err != nil {
+		return err
+	}
+	if len(windows) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	for i := range windows {
+		windows[i].CampaignID = campaignID
+		windows[i].CreatedAt = now
+		windows[i].UpdatedAt = now
+	}
+	_, err := db.NewInsert().Model(&windows).Exec(ctx)
+	return err
 }
 
 func (r *campaignRepository) DeletePhaseWindows(ctx context.Context, campaignID string) error {
