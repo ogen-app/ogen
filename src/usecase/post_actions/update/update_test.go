@@ -368,11 +368,19 @@ func TestUpdatePlannedBecomesDraftWithABody(t *testing.T) {
 		t.Fatalf("theses-only edit: status = %s, err = %v", post.Status, err)
 	}
 
+	// Asking for ready_for_publish with the first body still only drafts it.
 	post = &models.Post{ID: "p3", CampaignID: "c1", Status: models.PostStatusPlanned}
 	in = input(post, models.PostStatusReadyForPublish)
 	in.Content = "The body."
+	if _, err := svc.Update(t.Context(), in); err != nil || post.Status != models.PostStatusDraft {
+		t.Fatalf("planned → ready with a body: status = %s, err = %v, want a draft", post.Status, err)
+	}
+
+	// Without a body it can't skip drafting.
+	post = &models.Post{ID: "p4", CampaignID: "c1", Status: models.PostStatusPlanned}
+	in = input(post, models.PostStatusReadyForPublish)
 	if _, err := svc.Update(t.Context(), in); !isTransition(err) {
-		t.Fatalf("planned → ready: err = %v, want a transition error", err)
+		t.Fatalf("planned → ready without a body: err = %v, want a transition error", err)
 	}
 }
 
