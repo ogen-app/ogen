@@ -52,6 +52,7 @@ const (
 // is blocked. Failed / NotPublished are editable again per
 // the state machine, so a restore there is allowed.
 var editableStatuses = map[models.PostStatus]bool{
+	models.PostStatusPlanned:         true,
 	models.PostStatusDraft:           true,
 	models.PostStatusReadyForPublish: true,
 	models.PostStatusFailed:          true,
@@ -135,11 +136,13 @@ func (s *Service) Restore(ctx context.Context, postID string, opts Options) (*Re
 		}, nil
 	}
 
-	preRestoreContent := post.Content
+	preRestoreContent, preRestoreStatus := post.Content, post.Status
 	post.Content = target.Content
+	// Restoring a body onto a planned post makes it a draft.
+	post.Status = post.Status.WithBody(target.Content)
 	post.UpdatedAt = time.Now().UTC()
 
-	appended, err := s.appendVersions(ctx, post, preRestoreContent, opts)
+	appended, err := s.appendVersions(ctx, post, preRestoreContent, preRestoreStatus, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -190,13 +193,15 @@ type appendResult struct {
 
 // appendVersions appends the restore version (preceded by a dirty-HEAD
 // snapshot of preRestoreContent when the latest version doesn't hold
-// it), saves post and writes the audit entry in one transaction.
+// it), saves post and writes the audit entries in one transaction.
+// prevStatus is the status before the restore, logged as a transition
+// when the restore changed it.
 //
 // The post row is locked FOR UPDATE before the latest version is read,
 // so a concurrent restore of the same post blocks until this one
 // finishes and then numbers its versions after ours, avoiding a
 // duplicate version_number.
-func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRestoreContent string, opts Options) (appendResult, error) {
+func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRestoreContent string, prevStatus models.PostStatus, opts Options) (appendResult, error) {
 	var res appendResult
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		latest, err := lockAndReadLatest(ctx, tx, post)
@@ -226,7 +231,7 @@ func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRest
 		if _, err := tx.NewUpdate().Model(post).WherePK().Exec(ctx); err != nil {
 			return err
 		}
-		return s.appendLogTx(ctx, tx, post.ID, opts, res)
+		return s.appendLogTx(ctx, tx, post, prevStatus, opts, res)
 	})
 	return res, err
 }
@@ -269,11 +274,13 @@ func insertVersion(ctx context.Context, tx bun.Tx, postID string, number int, co
 	return err
 }
 
-func (s *Service) appendLogTx(ctx context.Context, tx bun.Tx, postID string, opts Options, res appendResult) error {
+// appendLogTx writes the post_restored entry and, when the restore moved
+// the post off prevStatus, a state_transition entry.
+func (s *Service) appendLogTx(ctx context.Context, tx bun.Tx, post *models.Post, prevStatus models.PostStatus, opts Options, res appendResult) error {
 	if s.logs == nil {
 		return nil
 	}
-	entry, err := postaudit.NewLog(postID, models.PostLogEventPostRestored, opts.Actor,
+	entry, err := postaudit.NewLog(post.ID, models.PostLogEventPostRestored, opts.Actor,
 		fmt.Sprintf("post restored to v%d", opts.VersionNumber),
 		map[string]any{
 			"restored_from_version": opts.VersionNumber,
@@ -284,5 +291,18 @@ func (s *Service) appendLogTx(ctx context.Context, tx bun.Tx, postID string, opt
 	if err != nil {
 		return err
 	}
-	return s.logs.AppendTx(ctx, tx, entry)
+	if err := s.logs.AppendTx(ctx, tx, entry); err != nil {
+		return err
+	}
+	if post.Status == prevStatus {
+		return nil
+	}
+	transition, err := postaudit.NewLog(post.ID, models.PostLogEventStateTransition, opts.Actor,
+		"status changed when a restore wrote the body", map[string]any{"trigger": opts.Trigger})
+	if err != nil {
+		return err
+	}
+	to := post.Status
+	transition.FromStatus, transition.ToStatus = &prevStatus, &to
+	return s.logs.AppendTx(ctx, tx, transition)
 }

@@ -345,11 +345,58 @@ func TestHasValidationErrors(t *testing.T) {
 	}
 }
 
+// Writing a planned post's body makes it a draft, whatever status the client
+// echoed back; without a body it stays planned, and it can't skip drafting.
+func TestUpdatePlannedBecomesDraftWithABody(t *testing.T) {
+	posts, logs := &fakePosts{}, &fakeLogs{}
+	svc := &Service{Posts: posts, Logs: logs}
+
+	post := &models.Post{ID: "p", CampaignID: "c1", Status: models.PostStatusPlanned}
+	in := input(post, models.PostStatusPlanned)
+	in.Content = "The body."
+	if _, err := svc.Update(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	if post.Status != models.PostStatusDraft || len(logs.entries) != 1 || *logs.entries[0].ToStatus != models.PostStatusDraft {
+		t.Fatalf("status = %s, logs = %d", post.Status, len(logs.entries))
+	}
+
+	post = &models.Post{ID: "p2", CampaignID: "c1", Status: models.PostStatusPlanned}
+	in = input(post, models.PostStatusPlanned)
+	in.PlatformID, in.PlatformPostType = "", "" // a planned post may lack a target
+	if _, err := svc.Update(t.Context(), in); err != nil || post.Status != models.PostStatusPlanned {
+		t.Fatalf("theses-only edit: status = %s, err = %v", post.Status, err)
+	}
+
+	// Asking for ready_for_publish with the first body still only drafts it.
+	post = &models.Post{ID: "p3", CampaignID: "c1", Status: models.PostStatusPlanned}
+	in = input(post, models.PostStatusReadyForPublish)
+	in.Content = "The body."
+	if _, err := svc.Update(t.Context(), in); err != nil || post.Status != models.PostStatusDraft {
+		t.Fatalf("planned → ready with a body: status = %s, err = %v, want a draft", post.Status, err)
+	}
+
+	// Without a body it can't skip drafting.
+	post = &models.Post{ID: "p4", CampaignID: "c1", Status: models.PostStatusPlanned}
+	in = input(post, models.PostStatusReadyForPublish)
+	if _, err := svc.Update(t.Context(), in); !isTransition(err) {
+		t.Fatalf("planned → ready without a body: err = %v, want a transition error", err)
+	}
+}
+
 func TestRequirePlatformIfNotDraft(t *testing.T) {
 	if err := RequirePlatformIfNotDraft(models.PostStatusDraft, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequirePlatformIfNotDraft(models.PostStatusPlanned, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := RequirePlatformIfNotDraft(models.PostStatusScheduled, "pl", ""); err == nil {
 		t.Fatal("missing post type must fail")
 	}
+}
+
+func isTransition(err error) bool {
+	_, ok := errors.AsType[*TransitionError](err)
+	return ok
 }

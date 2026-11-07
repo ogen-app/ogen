@@ -55,6 +55,29 @@ func TestPostUpdateScheduledAtBatch(t *testing.T) {
 		t.Fatalf("other columns clobbered: title=%q status=%q", got.Title, got.Status)
 	}
 
+	// A planned post is redistributable too.
+	plannedID, err := models.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned := *post
+	planned.ID, planned.Content, planned.Status = plannedID, "", models.PostStatusPlanned
+	planned.ScheduledAt = &orig
+	if err := repo.Create(ctx, &planned); err != nil {
+		t.Fatalf("create planned: %v", err)
+	}
+	planned.ScheduledAt = &newAt
+	if err := repo.UpdateScheduledAtBatch(ctx, []*models.Post{&planned}); err != nil {
+		t.Fatalf("batch update of a planned post: %v", err)
+	}
+	got, err = repo.GetByID(ctx, plannedID)
+	if err != nil {
+		t.Fatalf("get planned: %v", err)
+	}
+	if got.ScheduledAt == nil || !got.ScheduledAt.Equal(newAt) {
+		t.Fatalf("planned scheduled_at = %v, want %v", got.ScheduledAt, newAt)
+	}
+
 	// Empty batch is a no-op.
 	if err := repo.UpdateScheduledAtBatch(ctx, nil); err != nil {
 		t.Fatalf("empty batch: %v", err)
