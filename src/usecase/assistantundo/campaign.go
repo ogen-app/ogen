@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/uptrace/bun"
+
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -26,6 +29,7 @@ func CampaignBrief(c *models.Campaign) models.JSONMap {
 	}
 }
 
+// timeValue renders a date for a snapshot.
 func timeValue(t *time.Time) any {
 	if t == nil {
 		return nil
@@ -33,6 +37,7 @@ func timeValue(t *time.Time) any {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
+// parseTime reads a date back from a snapshot.
 func parseTime(v any) (*time.Time, error) {
 	if v == nil {
 		return nil, nil
@@ -62,8 +67,10 @@ func same(a, b models.JSONMap) bool {
 	return true
 }
 
-func loadCampaign(ctx context.Context, campaigns repository.CampaignRepository, id string) (*models.Campaign, error) {
-	c, err := campaigns.GetByID(ctx, id)
+// lockCampaign reads the campaign within tx and holds its row until tx ends,
+// so the snapshot comparison and the restore see no write in between.
+func lockCampaign(ctx context.Context, campaigns repository.CampaignRepository, tx bun.IDB, id string) (*models.Campaign, error) {
+	c, err := campaigns.GetForUpdate(ctx, tx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -72,8 +79,11 @@ func loadCampaign(ctx context.Context, campaigns repository.CampaignRepository, 
 
 type campaignDates struct{ campaigns repository.CampaignRepository }
 
-func (u campaignDates) Undo(ctx context.Context, a *models.AssistantAction) error {
-	c, err := loadCampaign(ctx, u.campaigns, a.EntityID)
+// Undo restores the campaign's dates. A manual phase plan that fits the
+// current dates is re-anchored to the restored ones, as a date edit does; one
+// that doesn't is left alone, since it may fit the restored dates again.
+func (u campaignDates) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	c, err := lockCampaign(ctx, u.campaigns, tx, a.EntityID)
 	if err != nil {
 		return err
 	}
@@ -88,15 +98,30 @@ func (u campaignDates) Undo(ctx context.Context, a *models.AssistantAction) erro
 	if err != nil {
 		return fmt.Errorf("restore end date: %w", err)
 	}
+	_, source := campaignphase.Resolve(c)
 	c.StartDate, c.EndDate = start, end
-	c.UpdatedAt = time.Now().UTC()
-	return u.campaigns.Update(ctx, c)
+	if err := u.campaigns.UpdateColumns(ctx, tx, c, "start_date", "end_date"); err != nil {
+		return err
+	}
+	if source != campaignphase.SourceManual {
+		return nil
+	}
+	entries, ok := campaignphase.Rebound(c, c.PhaseWindows)
+	if !ok {
+		return nil
+	}
+	rows := make([]models.CampaignPhaseWindow, len(entries))
+	for i, e := range entries {
+		rows[i] = models.CampaignPhaseWindow{PhaseID: e.PhaseID, StartDate: e.Start, EndDate: e.End}
+	}
+	return u.campaigns.ReplacePhaseWindowsTx(ctx, tx, c.ID, rows)
 }
 
 type campaignBrief struct{ campaigns repository.CampaignRepository }
 
-func (u campaignBrief) Undo(ctx context.Context, a *models.AssistantAction) error {
-	c, err := loadCampaign(ctx, u.campaigns, a.EntityID)
+// Undo restores the campaign's brief fields.
+func (u campaignBrief) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	c, err := lockCampaign(ctx, u.campaigns, tx, a.EntityID)
 	if err != nil {
 		return err
 	}
@@ -108,6 +133,5 @@ func (u campaignBrief) Undo(ctx context.Context, a *models.AssistantAction) erro
 	c.TargetPersona = text("targetPersona")
 	c.KeyMessages = text("keyMessages")
 	c.ToneGuidelines = text("toneGuidelines")
-	c.UpdatedAt = time.Now().UTC()
-	return u.campaigns.Update(ctx, c)
+	return u.campaigns.UpdateColumns(ctx, tx, c, "description", "target_persona", "key_messages", "tone_guidelines")
 }
