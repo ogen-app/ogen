@@ -2,6 +2,7 @@ package campaign_assistant
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/fakemodel"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -57,6 +59,8 @@ type runnerHarness struct {
 	proposals *memProposals
 	generated []content_plan.GeneratePostsRequest
 	turns     int
+	// last is the scripted model of the latest turn.
+	last *fakemodel.Model
 }
 
 func newRunnerHarness(t *testing.T) *runnerHarness {
@@ -90,6 +94,7 @@ func (h *runnerHarness) turn(instruction string, script ...fakemodel.Turn) (*Cam
 	h.t.Helper()
 	h.turns++
 	m := fakemodel.Define(h.g, "turn"+string(rune('a'+h.turns)), script...)
+	h.last = m
 	fakemodel.Route(h.t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowCampaignAssistant, Slot: modelconfig.SlotOrchestrator})
 	var events []SSEEventKind
 	resp, err := runCampaignAssistant(h.t.Context(), h.g, CampaignAssistantRequest{CampaignID: "c1", Instruction: instruction},
@@ -130,6 +135,17 @@ func TestRunner_ProposeThenConfirm(t *testing.T) {
 	if !has(events, SSEEventProposalResolved) || h.proposals.rows[0].Status != models.ProposalConfirmed {
 		t.Fatalf("turn 2: events = %v, proposal = %+v", events, h.proposals.rows[0])
 	}
+	// The model got the work's own outcome back from confirmProposal.
+	var confirmed map[string]any
+	for _, tr := range h.last.ToolResponses() {
+		if tr.Name == "confirmProposal" {
+			b, _ := json.Marshal(tr.Output)
+			_ = json.Unmarshal(b, &confirmed)
+		}
+	}
+	if result, _ := confirmed["result"].(map[string]any); confirmed["status"] != string(assistantkit.StatusOK) || result["postCount"] != float64(10) {
+		t.Fatalf("turn 2: confirmProposal returned %v", confirmed)
+	}
 
 	resp, _ = h.turn("yes",
 		fakemodel.Tools(fakemodel.Call{Name: "confirmProposal", Input: map[string]any{"proposalId": id}}),
@@ -155,6 +171,54 @@ func TestRunner_ProposeThenDismiss(t *testing.T) {
 }
 
 var farFuture = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// fix 3: an offer answered before the turn failed is still announced.
+func TestRunner_FailedTurnAnnouncesTheAnswer(t *testing.T) {
+	h := newRunnerHarness(t)
+	h.turn("Add 10 Threads posts",
+		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 10}}),
+		fakemodel.Answer(`{"explanation":"Prepared.","action":"proposed"}`))
+	id := h.proposals.rows[0].ID
+
+	// The model dismisses the offer, then fails before it replies.
+	m := fakemodel.Define(h.g, "failing", fakemodel.Tools(fakemodel.Call{Name: "dismissProposal", Input: map[string]any{"proposalId": id}}))
+	fakemodel.Route(h.t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowCampaignAssistant, Slot: modelconfig.SlotOrchestrator})
+	var events []SSEEventKind
+	_, err := runCampaignAssistant(t.Context(), h.g, CampaignAssistantRequest{CampaignID: "c1", Instruction: "no"},
+		h.cfg, h.repos, h.prompts, h.tools, func(kind SSEEventKind, _ any) { events = append(events, kind) })
+	if err == nil || h.proposals.rows[0].Status != models.ProposalDismissed || !has(events, SSEEventProposalResolved) {
+		t.Fatalf("err = %v, proposal = %+v, events = %v", err, h.proposals.rows[0], events)
+	}
+}
+
+// fix 1: an offer whose work can't start this turn — another heavy action
+// holds the slot — stays open, and confirming it later runs it.
+func TestConfirmProposal_HeavySlotTakenKeepsTheOfferOpen(t *testing.T) {
+	store := &memProposals{}
+	var generated int
+	_ = store.Create(t.Context(), &models.AssistantProposal{ID: "p1", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1",
+		Tool: "generatePosts", Args: models.JSONMap{"platforms": []any{"Threads"}, "count": float64(10)}, ExpiresAt: farFuture})
+
+	st := proposalState(store, &generated)
+	st.registry = newTestTools(t).reg
+	st.reserveHeavyAction()
+	out := runTool(t, st, "confirmProposal", map[string]any{"proposalId": "p1"})
+	if out.Status != assistantkit.StatusRefused || out.Reason != heavyConfirmLater || generated != 0 || store.rows[0].Status != models.ProposalPending {
+		t.Fatalf("slot taken: outcome = %+v, generated = %d, proposal = %s", out, generated, store.rows[0].Status)
+	}
+
+	st = proposalState(store, &generated)
+	st.registry = newTestTools(t).reg
+	out = runTool(t, st, "confirmProposal", map[string]any{"proposalId": "p1"})
+	if out.Status != assistantkit.StatusOK || generated != 1 || store.rows[0].Status != models.ProposalConfirmed {
+		t.Fatalf("next turn: outcome = %+v, generated = %d, proposal = %s", out, generated, store.rows[0].Status)
+	}
+	// The confirmation held the slot for the work it ran: nothing else heavy
+	// runs after it this turn.
+	if st.reserveHeavyAction() {
+		t.Fatal("the slot is free after the confirmed work ran")
+	}
+}
 
 // An offer made in one campaign cannot be confirmed from another.
 func TestConfirmProposal_OtherCampaignIsGone(t *testing.T) {

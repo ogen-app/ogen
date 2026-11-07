@@ -6,6 +6,7 @@
 package assistantkit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -69,6 +70,11 @@ type Spec struct {
 	Action *Action
 	// Tool is the genkit tool the model calls.
 	Tool ai.ToolRef
+	// Prepare claims what a confirmed run of the tool needs before its offer
+	// is marked answered — e.g. the turn's one heavy-action slot — and
+	// returns ctx carrying the claim. A Refusal means the run can't start
+	// now, so the offer stays open to be confirmed later. nil needs nothing.
+	Prepare func(ctx context.Context) (context.Context, error)
 }
 
 func (s Spec) validate() error {

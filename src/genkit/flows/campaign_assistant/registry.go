@@ -15,12 +15,21 @@ var campaignScope = []assistantkit.Scope{assistantkit.ScopeCampaign}
 
 func ran(tool string) string { return fmt.Sprintf("you called %s this turn.", tool) }
 
+// heavyTools run an expensive sub-flow; at most one runs per turn.
+var heavyTools = map[string]bool{
+	"runContentPlan": true, "enrichBrief": true, "generatePosts": true,
+	"draftPost": true, "checkBrief": true, "checkPostsConsistency": true,
+}
+
 // newToolRegistry describes the campaign tools for the prompt and the runner.
 // The order is the order the model is given the tools in, so it must not
 // change between the planner call and the prewarm.
 func newToolRegistry(t *toolSet) (*assistantkit.Registry, error) {
 	spec := func(tool ai.ToolRef, tier assistantkit.Tier, action, guide string) assistantkit.Spec {
 		s := assistantkit.Spec{Name: tool.Name(), Pack: campaignPack, Scopes: campaignScope, Tier: tier, Guide: guide, Tool: tool}
+		if heavyTools[tool.Name()] {
+			s.Prepare = holdHeavySlot
+		}
 		if action != "" {
 			s.Action = &assistantkit.Action{Name: action, Rule: ran(tool.Name())}
 		}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,7 +71,14 @@ func toolConfirmProposal(ctx context.Context, in ConfirmProposalInput) (any, err
 			tool, args = o.Tool, o.Args
 		}
 	}
+	// What the work needs is claimed before the offer is answered, so an
+	// offer whose work can't start now stays open.
+	ctx, err = st.registry.Prepare(ctx, tool)
+	if err != nil {
+		return nil, err
+	}
 	if err := resolveProposal(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
+		st.releaseHeavy(ctx)
 		return nil, err
 	}
 	return st.registry.RunConfirmed(ctx, tool, map[string]any(args))
@@ -127,9 +135,16 @@ func resolveProposal(ctx context.Context, st *requestState, id string, status mo
 	return nil
 }
 
-// resolvedOutcomes report this turn's answered offers. A confirmed offer's
-// work labels the turn through its own outcome; a dismissal alone reads as a
-// plain answer.
+// resolvedList is the offers answered this turn so far.
+func (st *requestState) resolvedList() []ProposalResolvedEventPayload {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.Clone(st.resolved)
+}
+
+// resolvedOutcomes report this turn's answered offers. They label nothing: a
+// confirmed offer's work labels the turn through its own outcome, a review
+// alongside keeps its label, and a dismissal alone reads as a plain answer.
 func resolvedOutcomes(resolved []ProposalResolvedEventPayload) []outcome {
 	out := make([]outcome, 0, len(resolved))
 	for _, r := range resolved {
@@ -138,7 +153,6 @@ func resolvedOutcomes(resolved []ProposalResolvedEventPayload) []outcome {
 			explanation = "OK, I've dropped that."
 		}
 		out = append(out, outcome{
-			action:      actionAnswered,
 			explanation: explanation,
 			event:       SSEEventProposalResolved,
 			payload:     r,
