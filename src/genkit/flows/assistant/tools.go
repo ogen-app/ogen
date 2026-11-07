@@ -47,6 +47,11 @@ type turnStateKey struct{}
 type turnState struct {
 	view *viewresolve.Resolved
 
+	// planning serializes the UI tools from reading the screen to adding
+	// their action, so a filter or selection planned while navigate runs
+	// targets one screen and campaign, in the order the actions apply.
+	planning sync.Mutex
+
 	mu sync.Mutex
 	// screen and campaign follow the turn's navigations, so a filter set
 	// after a navigate applies to the new list.
@@ -211,7 +216,8 @@ func (st *turnState) addUI(a UIAction) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.ui = append(st.ui, a)
-	if a.Type == UINavigate {
+	// Opening a saved view puts its list on screen, as navigate does.
+	if a.Type == UINavigate || a.Type == UIOpenSavedView {
 		st.screen, st.campaign = a.Screen, a.CampaignID
 	}
 }
