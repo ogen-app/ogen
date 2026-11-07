@@ -495,7 +495,13 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		if ce, ok := errors.AsType[*campaign_assistant.ProposalConflictError](err); ok {
 			return nil, &assistant.ProposalConflictError{Msg: ce.Msg}
 		}
-		return resp, err
+		if err != nil {
+			return nil, err
+		}
+		// The offer is the thread's campaign's, so the turn's campaign is the
+		// one the answer changed.
+		packs.TouchCampaignWork(ctx, assistant.CampaignID(ctx), resp)
+		return resp, nil
 	}
 	universal, err := assistant.Init(g, assistant.FlowConfig{
 		Provider: provider,
