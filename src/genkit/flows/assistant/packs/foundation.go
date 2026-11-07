@@ -140,10 +140,14 @@ func factErr(err error) error {
 	case errors.Is(err, repository.ErrFactLimit):
 		return assistantkit.Refused(fmt.Sprintf("the ledger holds at most %d facts; remove one first", repository.MaxBrandFacts))
 	case errors.Is(err, sql.ErrNoRows):
-		return assistantkit.Refused("that fact doesn't exist")
+		return assistantkit.Refused(noFact)
+	case errors.Is(err, repository.ErrFactChanged):
+		return assistantkit.Refused("that fact was changed while you were editing it; read it again with getBrand")
 	}
 	return err
 }
+
+const noFact = "that fact doesn't exist"
 
 func setDates(in FactInput, into *brandfacts.Input) error {
 	var err error
@@ -180,6 +184,9 @@ func updateFact(ctx context.Context, d Deps, facts *brandfacts.Service, in Updat
 	if err != nil {
 		return nil, factErr(err)
 	}
+	if cur == nil {
+		return nil, assistantkit.Refused(noFact)
+	}
 	fi := brandfacts.InputOf(cur)
 	if in.Statement != "" {
 		fi.Statement = in.Statement
@@ -199,7 +206,9 @@ func updateFact(ctx context.Context, d Deps, facts *brandfacts.Service, in Updat
 	if err := setDates(in.FactInput, &fi); err != nil {
 		return nil, err
 	}
-	before, after, err := facts.Update(ctx, cur.ID, fi)
+	// The fields not passed were merged from cur: write only while the fact
+	// still holds it, so a correction made since isn't reverted.
+	before, after, err := facts.UpdateIf(ctx, cur.ID, fi, cur)
 	if err != nil {
 		return nil, factErr(err)
 	}
@@ -212,6 +221,9 @@ func removeFact(ctx context.Context, d Deps, facts *brandfacts.Service, in Remov
 	gone, err := facts.Delete(ctx, strings.TrimSpace(in.FactID))
 	if err != nil {
 		return nil, factErr(err)
+	}
+	if gone == nil {
+		return nil, assistantkit.Refused(noFact)
 	}
 	assistantkit.Touch(ctx, "fact", gone.ID)
 	undo := recordUndo(ctx, d, models.AssistantActionBrandFact, gone.ID, assistantundo.BrandFact(gone), assistantundo.BrandFact(nil))
