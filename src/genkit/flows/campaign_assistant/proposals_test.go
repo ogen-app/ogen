@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -80,7 +81,7 @@ func proposalState(proposals *memProposals, generated *int) *requestState {
 			posts := make([]content_plan.DraftPost, req.Count)
 			return &content_plan.ContentPlanResponse{Ideas: posts}, nil
 		},
-		contentPlan: func(context.Context, string, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+		contentPlan: func(context.Context, content_plan.ContentPlanRequest, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 			*generated++
 			return &content_plan.ContentPlanResponse{}, nil
 		},
@@ -159,6 +160,33 @@ func TestRunContentPlan_AlwaysProposed(t *testing.T) {
 	out := runTool(t, proposalState(store, &generated), "runContentPlan", map[string]any{})
 	if out.Status != assistantkit.StatusProposed || generated != 0 || len(store.rows) != 1 || store.rows[0].Tool != "runContentPlan" {
 		t.Fatalf("outcome = %+v, generated = %d, proposals = %d", out, generated, len(store.rows))
+	}
+}
+
+// The turn's source selection rides on the proposal, so the confirmed plan
+// draws only on the selected assets even when confirmed from another turn.
+func TestRunContentPlan_ConfirmedKeepsSourceSelection(t *testing.T) {
+	store := &memProposals{}
+	var generated int
+	st := proposalState(store, &generated)
+	st.sourceAssetIDs = []string{"a2"}
+	if out := runTool(t, st, "runContentPlan", map[string]any{}); out.Status != assistantkit.StatusProposed {
+		t.Fatalf("outcome = %+v", out)
+	}
+	p := store.rows[0]
+
+	later := proposalState(store, &generated)
+	var got []string
+	later.contentPlan = func(_ context.Context, req content_plan.ContentPlanRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+		got = req.AssetIDs
+		return &content_plan.ContentPlanResponse{}, nil
+	}
+	ctx := assistantkit.WithProposalSink(withRequestState(t.Context(), later), campaignSink{st: later})
+	if _, err := newTestTools(t).reg.RunConfirmed(ctx, p.Tool, map[string]any(p.Args)); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"a2"}) {
+		t.Fatalf("plan sources = %v, want the selection", got)
 	}
 }
 
