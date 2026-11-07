@@ -24,15 +24,19 @@ type Request struct {
 type InvalidError struct {
 	Reason       string
 	Alternatives []string
+	// PostType is the type the platform doesn't have; empty when the
+	// platform itself is unknown.
+	PostType string
 }
 
+// Error returns the reason.
 func (e *InvalidError) Error() string { return e.Reason }
 
 // Added describes one change a plan makes, for the user-facing summary.
 type Added struct {
 	Name string
 	// PostTypes are the types newly allowed; empty when a whole platform was
-	// added with all its types.
+	// added with all its types, or a restricted one opened to all of them.
 	PostTypes []string
 	// NewPlatform is true when the platform was not targeted before.
 	NewPlatform bool
@@ -63,6 +67,12 @@ func Plan(current models.CampaignPlatforms, catalog []models.Platform, reqs []Re
 		if len(next[i].PostTypes) == 0 {
 			continue
 		}
+		// Omitted types ask for all of them: lift the restriction.
+		if len(types) == 0 {
+			next[i].PostTypes = nil
+			added = append(added, Added{Name: p.Name})
+			continue
+		}
 		var fresh []string
 		for _, t := range types {
 			if !slices.Contains(next[i].PostTypes, t) {
@@ -85,6 +95,8 @@ func Summary(added []Added) string {
 		switch {
 		case a.NewPlatform && len(a.PostTypes) == 0:
 			parts[i] = a.Name
+		case len(a.PostTypes) == 0:
+			parts[i] = "every post type on " + a.Name
 		case a.NewPlatform:
 			parts[i] = fmt.Sprintf("%s (%s)", a.Name, strings.Join(a.PostTypes, ", "))
 		default:
@@ -94,6 +106,7 @@ func Summary(added []Added) string {
 	return strings.Join(parts, "; ")
 }
 
+// find resolves a catalog id or name.
 func find(catalog []models.Platform, ref string) (models.Platform, error) {
 	ref = strings.TrimSpace(ref)
 	for _, p := range catalog {
@@ -108,6 +121,7 @@ func find(catalog []models.Platform, ref string) (models.Platform, error) {
 	return models.Platform{}, &InvalidError{Reason: fmt.Sprintf("%q isn't a platform Ogen publishes to.", ref), Alternatives: names}
 }
 
+// checkTypes trims and dedupes types, refusing one the platform lacks.
 func checkTypes(p models.Platform, types []string) ([]string, error) {
 	var out []string
 	for _, t := range types {
@@ -116,6 +130,7 @@ func checkTypes(p models.Platform, types []string) ([]string, error) {
 			return nil, &InvalidError{
 				Reason:       fmt.Sprintf("%s has no %q post type.", p.Name, t),
 				Alternatives: slices.Sorted(maps.Keys(p.PostTypes)),
+				PostType:     t,
 			}
 		}
 		if !slices.Contains(out, t) {
