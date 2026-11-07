@@ -80,13 +80,13 @@ func workOnCampaign(ctx context.Context, d Deps, in WorkOnCampaignInput) (*WorkO
 	if err != nil {
 		return nil, err
 	}
-	touchCampaignWork(ctx, id, resp)
+	TouchCampaignWork(ctx, id, resp)
 	return &WorkOnCampaignOutput{CampaignID: id, Explanation: resp.Explanation, Action: resp.Action, Result: resp}, nil
 }
 
-// touchCampaignWork records what the campaign assistant changed, for the
+// TouchCampaignWork records what the campaign assistant changed, for the
 // client to refresh.
-func touchCampaignWork(ctx context.Context, campaignID string, resp *campaign_assistant.CampaignAssistantResponse) {
+func TouchCampaignWork(ctx context.Context, campaignID string, resp *campaign_assistant.CampaignAssistantResponse) {
 	if resp.ContentPlan != nil || resp.GeneratedPosts != nil {
 		assistantkit.Touch(ctx, "idea", "")
 	}
