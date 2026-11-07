@@ -135,7 +135,7 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 		return nil, err
 	}
 	if !t.Owns(p.Tool) && !t.ownsOption(p) {
-		return t.foreign(ctx, AnswerRequest{ProposalID: p.ID, OptionID: in.OptionID, Confirm: true})
+		return t.foreign(ctx, st, AnswerRequest{ProposalID: p.ID, OptionID: in.OptionID, Confirm: true})
 	}
 	tool, args := p.Tool, p.Args
 	if in.OptionID == "" && len(p.Options) == 1 {
@@ -169,7 +169,7 @@ func (t *toolSet) dismissProposal(ctx context.Context, in AnswerProposalInput) (
 		return nil, err
 	}
 	if !t.Owns(p.Tool) && !t.ownsOption(p) {
-		if _, err := t.foreign(ctx, AnswerRequest{ProposalID: p.ID}); err != nil {
+		if _, err := t.foreign(ctx, st, AnswerRequest{ProposalID: p.ID}); err != nil {
 			return nil, err
 		}
 		return &DismissProposalOutput{Dismissed: true}, nil
@@ -219,8 +219,9 @@ func (t *toolSet) resolve(ctx context.Context, st *turnState, id string, status 
 }
 
 // foreign hands an offer to the assistant that made it; one it can't answer
-// any more is a refusal the model relays.
-func (t *toolSet) foreign(ctx context.Context, req AnswerRequest) (any, error) {
+// any more is a refusal the model relays. An answered offer is resolved in
+// this turn too, so its card updates; ForeignAnswer records what it touched.
+func (t *toolSet) foreign(ctx context.Context, st *turnState, req AnswerRequest) (any, error) {
 	if t.deps.ForeignAnswer == nil {
 		return nil, assistantkit.Refused(refuseOfferGone)
 	}
@@ -231,7 +232,15 @@ func (t *toolSet) foreign(ctx context.Context, req AnswerRequest) (any, error) {
 	if ce, ok := errors.AsType[*ProposalConflictError](err); ok {
 		return nil, assistantkit.Refused(ce.Msg)
 	}
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	status := models.ProposalDismissed
+	if req.Confirm {
+		status = models.ProposalConfirmed
+	}
+	st.addResolved(ProposalResolved{ID: req.ProposalID, Status: string(status), Chosen: req.OptionID})
+	return out, nil
 }
 
 func optionIDs(p *models.AssistantProposal) []string {
