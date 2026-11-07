@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -337,7 +338,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		"Adds a few NEW draft posts to the campaign for a specific platform, phase, and timeframe — e.g. 'add a few Threads posts in the current phase for the upcoming weeks'. "+
 			"Different from runContentPlan (which regenerates the WHOLE plan across all platforms/phases). Only platforms the campaign already targets are allowed. "+
 			"Resolve the requested timeframe into windowStart/windowEnd (ISO dates) using today's date shown in the context. Returns how many posts were created.",
-		func(ctx *ai.ToolContext, in GeneratePostsInput) (*GeneratePostsOutput, error) {
+		func(ctx *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
 			return toolGeneratePosts(ctx, in)
 		},
 	)
@@ -348,7 +349,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			"Different from generatePosts (which produces terse draft-thesis outlines for bulk planning) and runContentPlan (which regenerates the whole plan). Only platforms the campaign already targets are allowed. "+
 			"Resolve the publish date to ISO YYYY-MM-DD against today's date shown in the context; omit it to spread across the next two weeks. Set count to the number the user asks for. "+
 			"The research is loaded automatically from the conversation — do NOT paste it back; pass sourceMaterial only when the user supplied fresh material in this very message. Returns how many posts were drafted.",
-		func(ctx *ai.ToolContext, in DraftPostInput) (*DraftPostOutput, error) {
+		func(ctx *ai.ToolContext, in DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
 			return toolDraftPost(ctx, in)
 		},
 	)
@@ -560,13 +561,15 @@ func toolGetCampaignOverview(ctx context.Context) (*overview.Overview, error) {
 	return st.overview.Overview(ctx, st.campaignID)
 }
 
-func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePostsOutput, error) {
+func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
 	st := getRequestState(ctx)
 	if st.generatePosts == nil {
-		return nil, fmt.Errorf("targeted post generation is not available")
+		return assistantkit.Outcome[GeneratePostsOutput]{}, fmt.Errorf("targeted post generation is not available")
 	}
 	campaign := st.campaign
 	now := time.Now().UTC()
+	// The engines compare post types trimmed.
+	in.PostType = strings.TrimSpace(in.PostType)
 
 	// Resolve platform names/ids against the campaign's target platforms
 	// (CON-114 "stay in scope"). A non-target platform is user-correctable, so it
@@ -575,6 +578,9 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 	platformIDs, platformNames, err := resolveTargetPlatforms(campaign, in.Platforms)
 	if err != nil {
 		return softGenerateFailure(err)
+	}
+	if reason, alts, bad := unsupportedPostType(campaign, platformIDs, in.PostType, false); bad {
+		return assistantkit.Refuse[GeneratePostsOutput](reason, alts...), nil
 	}
 
 	// Resolve the phase — "current"/empty derives from the campaign timeline.
@@ -609,7 +615,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 	// reservation). The reservation still precedes st.generatePosts, so two heavy
 	// tools dispatched in parallel can never both generate.
 	if !st.reserveHeavyAction() {
-		return &GeneratePostsOutput{Note: heavySkipNote}, nil
+		return assistantkit.OK(GeneratePostsOutput{Note: heavySkipNote}), nil
 	}
 
 	// Generate from the campaign's attached assets when it has any. After
@@ -644,8 +650,11 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 		WindowEnd:   windowEnd,
 		PostType:    in.PostType,
 	}, nested)
+	if ve, ok := errors.AsType[*content_plan.ValidationError](err); ok {
+		return assistantkit.Refuse[GeneratePostsOutput](ve.Msg), nil
+	}
 	if err != nil {
-		return nil, err
+		return assistantkit.Outcome[GeneratePostsOutput]{}, err
 	}
 
 	// Report which attached assets informed the generated posts.
@@ -662,7 +671,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 		UsedAssets:  used,
 	}
 	st.recordWrite(actionPostsGenerated)
-	return &GeneratePostsOutput{
+	return assistantkit.OK(GeneratePostsOutput{
 		PostCount:      len(resp.Posts),
 		RequestedCount: requested,
 		Clamped:        clamped,
@@ -672,7 +681,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (*GeneratePos
 		Dates:          publishDatesOf(resp.Posts),
 		Warnings:       resp.Warnings,
 		UsedAssets:     used,
-	}, nil
+	}), nil
 }
 
 // noDraftSourceNote steers the planner to ask the user to research first when
@@ -684,13 +693,15 @@ const noDraftSourceNote = "There's no research in this chat to turn into a post 
 // (the latest assistant answer, or a paste-in override), resolves the platform /
 // phase / count / date with the same helpers as generatePosts, then runs the
 // Sonnet draft_post flow once per platform and persists each draft content-first.
-func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, error) {
+func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
 	st := getRequestState(ctx)
 	if st.draftPost == nil {
-		return nil, fmt.Errorf("post drafting is not available")
+		return assistantkit.Outcome[DraftPostOutput]{}, fmt.Errorf("post drafting is not available")
 	}
 	campaign := st.campaign
 	now := time.Now().UTC()
+	// The engines compare post types trimmed.
+	in.PostType = strings.TrimSpace(in.PostType)
 
 	// Source material: an explicit override, else the latest research answer from
 	// earlier in this chat. Resolved BEFORE the heavy-action reservation so a
@@ -698,10 +709,10 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 	// tools) leaves the turn's single heavy slot free for another heavy tool.
 	source, err := resolveDraftSource(ctx, st, in.SourceMaterial)
 	if err != nil {
-		return nil, err
+		return assistantkit.Outcome[DraftPostOutput]{}, err
 	}
 	if strings.TrimSpace(source) == "" {
-		return &DraftPostOutput{Note: noDraftSourceNote}, nil
+		return assistantkit.Refuse[DraftPostOutput](noDraftSourceNote), nil
 	}
 
 	// Reuse the generatePosts resolvers verbatim. A non-target platform,
@@ -711,6 +722,9 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 	platformIDs, platformNames, err := resolveTargetPlatforms(campaign, in.Platforms)
 	if err != nil {
 		return softDraftFailure(err)
+	}
+	if reason, alts, bad := unsupportedPostType(campaign, platformIDs, in.PostType, true); bad {
+		return assistantkit.Refuse[DraftPostOutput](reason, alts...), nil
 	}
 	// draftPost always targets the current phase — it drafts "now", from what was
 	// just discussed. (A future revision can accept an explicit phase.)
@@ -731,7 +745,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 	// precedes every st.draftPost flow call, so two heavy tools dispatched in
 	// parallel can never both generate.
 	if !st.reserveHeavyAction() {
-		return &DraftPostOutput{Note: heavySkipNote}, nil
+		return assistantkit.OK(DraftPostOutput{Note: heavySkipNote}), nil
 	}
 
 	maxN := st.maxDraftPosts
@@ -745,28 +759,16 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 		Count:       perPlatform,
 	})
 
-	// Forward the flow's nested events, namespaced, so drafts stream in live.
-	// The platform drafts run concurrently and the SSE writer behind onEvent
-	// is single-writer, so emits are serialised.
-	var emitMu sync.Mutex
-	nested := draft_post.OnEventFunc(func(name draft_post.SSEEventKind, data any) {
-		emitMu.Lock()
-		defer emitMu.Unlock()
-		switch name {
-		case draft_post.SSEEventStep:
-			emit(st.onEvent, SSEEventDraftPostStep, data)
-		case draft_post.SSEEventPost:
-			emit(st.onEvent, SSEEventDraftPostPost, data)
-		case draft_post.SSEEventWarning:
-			emit(st.onEvent, SSEEventDraftPostWarning, data)
-		}
-	})
+	nested := forwardDraftEvents(st.onEvent)
 
 	// One flow call per platform, run concurrently. The shared budget is split
 	// up front so the total across all platforms never exceeds the per-call cap.
 	counts, splitClamped := splitDraftBudget(len(platformIDs), perPlatform, maxN)
 	clamped = clamped || splitClamped
 	resps := make([]*draft_post.DraftPostResponse, len(platformIDs))
+	// A platform the engine refuses doesn't stop the others: each saves its
+	// posts as it writes them, so their work is reported with the refusal.
+	refusals := make([]string, len(platformIDs))
 	var g errgroup.Group
 	g.SetLimit(maxParallelDrafts)
 	for i, pid := range platformIDs {
@@ -790,30 +792,23 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 				// each post carries the exact source instead.
 			}, nested)
 			resps[i] = resp
+			if ve, ok := errors.AsType[*draft_post.ValidationError](err); ok {
+				refusals[i] = platformNames[i] + ": " + ve.Msg
+				return nil
+			}
 			return err
 		})
 	}
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return assistantkit.Outcome[DraftPostOutput]{}, err
 	}
 
-	var (
-		total    int
-		allDates []string
-		allWarn  []string
-	)
-	for _, resp := range resps {
-		if resp == nil {
-			continue
-		}
-		total += len(resp.Posts)
-		for _, p := range resp.Posts {
-			if p.PublishDate != "" {
-				allDates = append(allDates, p.PublishDate)
-			}
-		}
-		allWarn = append(allWarn, resp.Warnings...)
+	total, allDates, allWarn := tallyDrafts(resps)
+	refused := slices.DeleteFunc(refusals, func(r string) bool { return r == "" })
+	if total == 0 && len(refused) > 0 {
+		return assistantkit.Refuse[DraftPostOutput](strings.Join(refused, "; ")), nil
 	}
+	allWarn = append(allWarn, refused...)
 
 	st.draftPostResult = &DraftPostResult{
 		PostCount:   total,
@@ -823,7 +818,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 		Warnings:    allWarn,
 	}
 	st.recordWrite(actionPostDrafted)
-	return &DraftPostOutput{
+	return assistantkit.OK(DraftPostOutput{
 		PostCount:      total,
 		RequestedCount: requested,
 		Clamped:        clamped,
@@ -833,12 +828,31 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (*DraftPostOutput, er
 		PhaseName:      phaseName,
 		Dates:          allDates,
 		Warnings:       allWarn,
-	}, nil
+	}), nil
 }
 
 // maxParallelDrafts caps how many platform drafts one draftPost call runs at
 // once.
 const maxParallelDrafts = 3
+
+// forwardDraftEvents forwards the draft_post flow's events, namespaced, so
+// drafts stream in live. The platform drafts run concurrently and the SSE
+// writer behind onEvent is single-writer, so emits are serialised.
+func forwardDraftEvents(onEvent OnEventFunc) draft_post.OnEventFunc {
+	var mu sync.Mutex
+	return func(name draft_post.SSEEventKind, data any) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch name {
+		case draft_post.SSEEventStep:
+			emit(onEvent, SSEEventDraftPostStep, data)
+		case draft_post.SSEEventPost:
+			emit(onEvent, SSEEventDraftPostPost, data)
+		case draft_post.SSEEventWarning:
+			emit(onEvent, SSEEventDraftPostWarning, data)
+		}
+	}
+}
 
 // splitDraftBudget gives each of n platforms perPlatform drafts, in order,
 // until the shared budget runs out; clamped reports whether any platform got
@@ -899,24 +913,41 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 	return "", nil
 }
 
+// tallyDrafts adds up what the platforms' draft flows wrote: the posts, their
+// publish dates and the flows' warnings. A platform that wrote nothing has a
+// nil response.
+func tallyDrafts(resps []*draft_post.DraftPostResponse) (total int, dates, warnings []string) {
+	for _, resp := range resps {
+		if resp == nil {
+			continue
+		}
+		total += len(resp.Posts)
+		for _, p := range resp.Posts {
+			if p.PublishDate != "" {
+				dates = append(dates, p.PublishDate)
+			}
+		}
+		warnings = append(warnings, resp.Warnings...)
+	}
+	return total, dates, warnings
+}
+
 // softGenerateFailure turns a user-correctable generatePosts problem — a
 // non-target platform, an unknown phase, or a past/invalid publish window — into
-// a zero-post result the planner relays to the user, rather than a Go error.
-// Returning a Go error from a tool aborts the whole Generate turn and
-// surfaces to the user as a raw "model call failed: ..."; returning a value lets
-// the assistant recover and suggest a valid alternative (e.g. today or a later
-// date). It leaves generatedPostsResult unset, so run.go keeps the turn
-// conversational ("answered") and the model's reply carries the suggestion.
-func softGenerateFailure(err error) (*GeneratePostsOutput, error) {
-	return &GeneratePostsOutput{PostCount: 0, Warnings: []string{err.Error()}}, nil
+// a refusal the planner relays to the user, rather than a Go error. A Go error
+// from a tool aborts the whole Generate turn; a refusal lets the assistant
+// recover and suggest a valid alternative (e.g. today or a later date). It
+// leaves generatedPostsResult unset, so run.go keeps the turn conversational
+// ("answered") and the model's reply carries the suggestion.
+func softGenerateFailure(err error) (assistantkit.Outcome[GeneratePostsOutput], error) {
+	return assistantkit.Refuse[GeneratePostsOutput](err.Error()), nil
 }
 
 // softDraftFailure is the draftPost analogue of softGenerateFailure:
 // a user-correctable problem (non-target platform, unknown phase, past/invalid
-// date) becomes a zero-post warning the planner relays, not a turn-aborting Go
-// error. It leaves draftPostResult unset, so the turn stays conversational.
-func softDraftFailure(err error) (*DraftPostOutput, error) {
-	return &DraftPostOutput{PostCount: 0, Warnings: []string{err.Error()}}, nil
+// date) becomes a refusal the planner relays, not a turn-aborting Go error. It leaves draftPostResult unset, so the turn stays conversational.
+func softDraftFailure(err error) (assistantkit.Outcome[DraftPostOutput], error) {
+	return assistantkit.Refuse[DraftPostOutput](err.Error()), nil
 }
 
 // resolveGenerateCount maps the model-supplied count to the number of posts the
