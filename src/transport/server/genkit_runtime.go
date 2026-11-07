@@ -376,6 +376,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		r.enrichBriefFn = nil
 		r.campaignAssistantFn = nil
 		r.answerProposalFn = nil
+		r.assistantFn = nil
 		r.generatePostsFn = nil
 		r.checkBriefFn = nil
 		r.checkPostsFn = nil
