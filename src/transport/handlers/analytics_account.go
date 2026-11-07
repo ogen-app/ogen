@@ -18,7 +18,7 @@ func accountRef(r *models.PostAnalytics) (id, username string) { return analytic
 // loadAccounts fetches the social_accounts rows for ids, keyed by id; best
 // effort, so labels degrade to usernames.
 func (h *AnalyticsHandler) loadAccounts(ctx context.Context, ids []string) map[string]models.SocialAccount {
-	return h.service().LoadAccounts(ctx, ids)
+	return h.Service().LoadAccounts(ctx, ids)
 }
 
 // labelAccount composes the display block for one account.

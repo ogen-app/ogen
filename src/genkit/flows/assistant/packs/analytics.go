@@ -75,12 +75,15 @@ type AnalyticsQuery struct {
 	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=Defaults to the thread's campaign; 'all' for the whole workspace"`
 }
 
-// rangeAndScope resolves a query against the screen: its window and
-// platforms when the query names none, the thread's campaign unless "all".
+// rangeAndScope resolves a query against the screen: its window when the
+// query names no dates, its platforms when the query names none, and the
+// thread's campaign unless "all".
 func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity string) (timeframe.Range, *analytics.Scope, error) {
 	from, to, window, platforms := in.From, in.To, in.Window, in.Platforms
-	if w := assistant.Window(ctx); w != nil && from == "" && to == "" && window == "" {
-		from, to = w.From, w.To
+	if w := assistant.Window(ctx); w != nil {
+		if from == "" && to == "" && window == "" {
+			from, to = w.From, w.To
+		}
 		if len(platforms) == 0 {
 			platforms = w.Platforms
 		}
