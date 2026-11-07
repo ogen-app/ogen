@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"strings"
 	"text/template"
 	"time"
 
@@ -73,6 +74,9 @@ func InitCampaignAssistant(g *genkit.Genkit, cfg CampaignAssistantFlowConfig, re
 type prompts struct {
 	system  string
 	context *template.Template
+	// state renders the per-turn <campaign_state> block that opens the
+	// user's message, after the cache breakpoints.
+	state *template.Template
 }
 
 // systemTemplateData is what the system block is rendered from: the tool
@@ -82,25 +86,28 @@ type systemTemplateData struct {
 	Actions   []assistantkit.Action
 }
 
+// loadPrompts parses the assistant template, renders the system block once
+// and keeps the context and state blocks for rendering per turn.
 func loadPrompts(reg *assistantkit.Registry) (*prompts, error) {
 	raw, err := promptFS.ReadFile("prompts/campaign_assistant.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("load campaign_assistant.tmpl: %w", err)
 	}
-	tmpl, err := template.New("campaign_assistant").Parse(string(raw))
+	tmpl, err := template.New("campaign_assistant").Funcs(template.FuncMap{"join": strings.Join}).Parse(string(raw))
 	if err != nil {
 		return nil, fmt.Errorf("parse campaign_assistant.tmpl: %w", err)
 	}
 	systemTmpl := tmpl.Lookup("system")
 	contextTmpl := tmpl.Lookup("context")
-	if systemTmpl == nil || contextTmpl == nil {
-		return nil, fmt.Errorf("campaign_assistant.tmpl must define both {{define \"system\"}} and {{define \"context\"}} blocks")
+	stateTmpl := tmpl.Lookup("state")
+	if systemTmpl == nil || contextTmpl == nil || stateTmpl == nil {
+		return nil, fmt.Errorf("campaign_assistant.tmpl must define the {{define \"system\"}}, {{define \"context\"}} and {{define \"state\"}} blocks")
 	}
 	system, err := flowkit.RenderTemplate(systemTmpl, systemTemplateData{ToolGuide: reg.Guide(), Actions: reg.Actions()})
 	if err != nil {
 		return nil, fmt.Errorf("render campaign_assistant system prompt: %w", err)
 	}
-	return &prompts{system: system, context: contextTmpl}, nil
+	return &prompts{system: system, context: contextTmpl, state: stateTmpl}, nil
 }
 
 // NewCampaignAssistantCallback returns a callback suitable for passing to the

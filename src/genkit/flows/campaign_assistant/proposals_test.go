@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 )
 
 // memProposals is an in-memory AssistantProposalRepository.
@@ -177,23 +178,32 @@ func TestRunContentPlan_NoStoreFailsClosed(t *testing.T) {
 	}
 }
 
-func TestContext_ListsOpenProposals(t *testing.T) {
+func TestStateBlock_ListsOpenProposals(t *testing.T) {
 	p, err := loadPrompts(newTestTools(t).reg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	actx, err := assembleContext(timelineCampaign(), "", []openProposal{{ID: "prop-1", Summary: "Add 10 draft posts for Threads"}}, time.Now(), p)
+	snap := state.Build(timelineCampaign(), nil, -1)
+	block, err := renderState(p, snap, []openProposal{{ID: "prop-1", Summary: "Add 10 draft posts for Threads"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(actx.ContextBlock, "## Waiting for the user's answer\n- prop-1: Add 10 draft posts for Threads") {
-		t.Fatalf("context block:\n%s", actx.ContextBlock)
+	if !strings.Contains(block, "- Waiting for the user's answer:\n  - prop-1: Add 10 draft posts for Threads") {
+		t.Fatalf("state block:\n%s", block)
 	}
-	actx, err = assembleContext(timelineCampaign(), "", nil, time.Now(), p)
+	block, err = renderState(p, snap, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(actx.ContextBlock, "Waiting for the user's answer") {
+	if strings.Contains(block, "Waiting for the user's answer") {
 		t.Fatal("the section renders with no open proposals")
+	}
+	// Per-turn state stays out of the cached system and context prompts.
+	actx, err := assembleContext(timelineCampaign(), "", time.Now(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(actx.SystemPrompt+actx.ContextBlock, "prop-1") {
+		t.Fatal("open proposals leaked into the cached prompt")
 	}
 }
