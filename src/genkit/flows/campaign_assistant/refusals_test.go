@@ -15,9 +15,11 @@ func postTypeCampaign() *models.Campaign {
 	c.Platforms = []models.Platform{
 		{ID: "pl1", Name: "LinkedIn", PostTypes: models.PostTypeMap{"article": "Article", "carousel": "Carousel", "text-post": "Text post"}},
 		{ID: "pl2", Name: "Threads", PostTypes: models.PostTypeMap{"text-post": "Text post"}},
+		{ID: "pl3", Name: "Bluesky"},
 	}
-	// The campaign narrowed LinkedIn to two of the platform's types.
-	c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article", "carousel"}}, {ID: "pl2"}}
+	// The campaign narrowed LinkedIn to two of the platform's types; Bluesky
+	// has none to choose from.
+	c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article", "carousel"}}, {ID: "pl2"}, {ID: "pl3"}}
 	return c
 }
 
@@ -27,18 +29,21 @@ func TestUnsupportedPostType(t *testing.T) {
 		name      string
 		platforms []string
 		postType  string
+		anyWhen   bool
 		bad       bool
 		alts      []string
 	}{
-		{"platform default", []string{"pl1"}, "", false, nil},
-		{"campaign selection allows it", []string{"pl1"}, "article", false, nil},
-		{"campaign selection excludes it", []string{"pl1"}, "text-post", true, []string{"article", "carousel"}},
-		{"no campaign selection, platform allows it", []string{"pl2"}, "text-post", false, nil},
-		{"no campaign selection, platform lacks it", []string{"pl2"}, "article", true, []string{"text-post"}},
+		{"platform default", []string{"pl1"}, "", false, false, nil},
+		{"campaign selection allows it", []string{"pl1"}, "article", false, false, nil},
+		{"campaign selection excludes it", []string{"pl1"}, "text-post", false, true, []string{"article", "carousel"}},
+		{"no campaign selection, platform allows it", []string{"pl2"}, "text-post", false, false, nil},
+		{"no campaign selection, platform lacks it", []string{"pl2"}, "article", false, true, []string{"text-post"}},
+		{"no types at all, planning refuses", []string{"pl3"}, "article", false, true, nil},
+		{"no types at all, drafting keeps it", []string{"pl3"}, "article", true, false, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reason, alts, bad := unsupportedPostType(c, tc.platforms, tc.postType)
+			reason, alts, bad := unsupportedPostType(c, tc.platforms, tc.postType, tc.anyWhen)
 			if bad != tc.bad || !slices.Equal(alts, tc.alts) {
 				t.Fatalf("bad = %t alts = %v, want %t %v", bad, alts, tc.bad, tc.alts)
 			}
@@ -71,6 +76,40 @@ func TestGeneratePosts_RefusesUnsupportedPostType(t *testing.T) {
 	}
 	if st.heavyReserved {
 		t.Fatal("a refusal must not reserve the heavy slot")
+	}
+}
+
+// A post type with stray spaces is the type: the engines trim it.
+func TestGeneratePosts_TrimsThePostType(t *testing.T) {
+	var got content_plan.GeneratePostsRequest
+	st := &requestState{
+		campaignID: "c1", campaign: postTypeCampaign(), maxGeneratePosts: 10,
+		generatePosts: func(_ context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+			got = req
+			return &content_plan.ContentPlanResponse{}, nil
+		},
+	}
+	out, err := toolGeneratePosts(withRequestState(t.Context(), st), GeneratePostsInput{Platforms: []string{"LinkedIn"}, PostType: " article "})
+	if err != nil || out.Status != assistantkit.StatusOK || got.PostType != "article" {
+		t.Fatalf("out = %+v, err = %v, engine got %q", out, err, got.PostType)
+	}
+}
+
+// A platform with no types refuses an explicit one before the heavy slot is
+// taken, so a corrected call in the same turn still runs.
+func TestGeneratePosts_NoTypesRefusedBeforeTheSlot(t *testing.T) {
+	st := &requestState{
+		campaignID: "c1", campaign: postTypeCampaign(), maxGeneratePosts: 10,
+		generatePosts: func(context.Context, content_plan.GeneratePostsRequest, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+			return &content_plan.ContentPlanResponse{}, nil
+		},
+	}
+	out, err := toolGeneratePosts(withRequestState(t.Context(), st), GeneratePostsInput{Platforms: []string{"Bluesky"}, PostType: "article"})
+	if err != nil || out.Status != assistantkit.StatusRefused || st.heavyReserved {
+		t.Fatalf("out = %+v, err = %v, reserved = %t", out, err, st.heavyReserved)
+	}
+	if out, _ := toolGeneratePosts(withRequestState(t.Context(), st), GeneratePostsInput{Platforms: []string{"Bluesky"}}); out.Status != assistantkit.StatusOK {
+		t.Fatalf("the corrected call = %+v", out)
 	}
 }
 

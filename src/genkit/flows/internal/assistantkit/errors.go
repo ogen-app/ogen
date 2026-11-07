@@ -40,14 +40,21 @@ func FriendlyError(err error) string {
 }
 
 // busy reports a provider rate limit or overload. The genkit plugin does not
-// always keep the SDK error in the chain, so the message is checked too.
+// always keep the SDK error in the chain, so the provider's own wording is
+// checked too — but not in a tool's error, whose text (a count of 429 posts)
+// says nothing about the provider.
 func busy(err error) bool {
 	if apiErr, ok := errors.AsType[*anthropic.Error](err); ok {
 		switch apiErr.StatusCode {
 		case http.StatusTooManyRequests, http.StatusServiceUnavailable, 529:
 			return true
 		}
+		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "overloaded") || strings.Contains(msg, "rate limit") || strings.Contains(msg, "429")
+	if strings.Contains(msg, "error calling tool") || (strings.Contains(msg, `tool "`) && strings.Contains(msg, `" failed:`)) {
+		return false
+	}
+	return strings.Contains(msg, "overloaded_error") || strings.Contains(msg, "rate_limit_error") ||
+		strings.Contains(msg, "429 too many requests") || strings.Contains(msg, "529 ")
 }

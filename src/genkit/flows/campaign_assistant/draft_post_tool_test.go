@@ -3,6 +3,8 @@ package campaign_assistant
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -158,6 +160,52 @@ func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	}
 	if st.draftPostResult == nil || st.draftPostResult.PostCount != 5 {
 		t.Fatalf("draftPostResult = %+v", st.draftPostResult)
+	}
+}
+
+// One platform the engine refuses doesn't hide the drafts another saved: the
+// call succeeds with them, the refusal a warning. Only when every platform
+// is refused is the call.
+func TestToolDraftPost_PartialRefusalKeepsTheDrafts(t *testing.T) {
+	var calls []draft_post.DraftPostRequest
+	st := newDraftState([]models.CampaignAssistantMessage{
+		modelMsg(`{"action":"answered","explanation":"the research"}`),
+	}, &calls)
+	saved := st.draftPost
+	refuse := ""
+	var mu sync.Mutex
+	st.draftPost = func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if refuse == "*" || req.PlatformID == refuse {
+			return nil, &draft_post.ValidationError{Msg: "the research is too thin for this platform"}
+		}
+		return saved(ctx, req, onEvent)
+	}
+	threads := ""
+	for _, p := range st.campaign.Platforms {
+		if p.Name == "Threads" {
+			threads = p.ID
+		}
+	}
+	refuse = threads
+
+	out, err := toolDraftPost(withRequestState(t.Context(), st), DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 1})
+	if err != nil || !out.Succeeded() || out.Result.PostCount != 1 || st.draftPostResult == nil {
+		t.Fatalf("out = %+v, err = %v, result = %+v", out, err, st.draftPostResult)
+	}
+	if !slices.ContainsFunc(out.Result.Warnings, func(w string) bool { return strings.HasPrefix(w, "Threads: ") }) {
+		t.Fatalf("warnings = %v, want the Threads refusal", out.Result.Warnings)
+	}
+
+	refuse = "*"
+	st = newDraftState([]models.CampaignAssistantMessage{modelMsg(`{"action":"answered","explanation":"the research"}`)}, &calls)
+	st.draftPost = func(context.Context, draft_post.DraftPostRequest, draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
+		return nil, &draft_post.ValidationError{Msg: "the research is too thin for this platform"}
+	}
+	out, err = toolDraftPost(withRequestState(t.Context(), st), DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1})
+	if err != nil || out.Status != assistantkit.StatusRefused || st.draftPostResult != nil {
+		t.Fatalf("all refused: out = %+v, err = %v", out, err)
 	}
 }
 
