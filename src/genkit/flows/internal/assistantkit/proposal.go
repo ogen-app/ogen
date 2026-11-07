@@ -12,7 +12,8 @@ type Proposal struct {
 	Tool string
 	// Args is the tool input exactly as the model sent it; confirming runs
 	// the tool with it unchanged.
-	Args    any
+	Args any
+	// Summary describes the call on the proposal card.
 	Summary string
 	Options []Option
 }
@@ -20,6 +21,8 @@ type Proposal struct {
 // ProposalSink stores held-back calls. The runner puts one in the context of
 // every turn.
 type ProposalSink interface {
+	// Propose stores p as an offer waiting for the user's answer and returns
+	// its id, which confirming or dismissing it names.
 	Propose(ctx context.Context, p Proposal) (id string, err error)
 }
 
