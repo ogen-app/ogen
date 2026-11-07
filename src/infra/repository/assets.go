@@ -450,6 +450,16 @@ func (r *assetRepository) Delete(ctx context.Context, id string) (bool, error) {
 			Exec(ctx); err != nil {
 			return err
 		}
+		// An idea's assets are a text[]: a post compiled from it later must
+		// not name the deleted asset as a source, nor count it as grounding.
+		if _, err := tx.NewUpdate().
+			Model((*models.Idea)(nil)).
+			Set("asset_ids = array_remove(asset_ids, ?)", id).
+			Where("tenant_id = ?", tenantID).
+			Where("? = ANY(asset_ids)", id).
+			Exec(ctx); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
