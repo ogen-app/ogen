@@ -100,3 +100,29 @@ func TestResolvePlatform(t *testing.T) {
 		t.Fatal("expected error for unknown platform id")
 	}
 }
+
+// A draft is grounded by the assets it was written from. With none named,
+// it is exploratory, unless its sources aren't tracked (chat research);
+// then its grounding is left unset rather than claimed.
+func TestDraftGrounding(t *testing.T) {
+	mode := func(m *models.GroundingMode) string {
+		if m == nil {
+			return "unset"
+		}
+		return string(*m)
+	}
+	cases := []struct {
+		req  DraftPostRequest
+		want string
+	}{
+		{DraftPostRequest{UsedAssetIDs: []string{"a1"}}, "grounded"},
+		{DraftPostRequest{}, "exploratory"},
+		{DraftPostRequest{SourcesUnknown: true}, "unset"},
+		{DraftPostRequest{SourcesUnknown: true, UsedAssetIDs: []string{"a1"}}, "grounded"},
+	}
+	for _, tc := range cases {
+		if got := mode(draftGrounding(tc.req)); got != tc.want {
+			t.Errorf("%+v = %s, want %s", tc.req, got, tc.want)
+		}
+	}
+}
