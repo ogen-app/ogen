@@ -54,7 +54,37 @@ func TestEntityTitles(t *testing.T) {
 	if err != nil || got[ideaID] != "Pricing myths" {
 		t.Fatalf("ideas = %v, %v", got, err)
 	}
-	if _, err := titles.Titles(ctx, viewcontext.KindVoice, []string{"v1"}); !errors.Is(err, repository.ErrUntitledKind) {
+	brand := repository.NewBrandRepository(db)
+	voiceID, audienceID, seriesID, goneSeriesID := mustID(t), mustID(t), mustID(t), mustID(t)
+	if err := brand.CreateVoice(ctx, &models.BrandVoice{ID: voiceID, Name: "Plain"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := brand.CreateAudience(ctx, &models.BrandAudience{ID: audienceID, Name: "Founders"}); err != nil {
+		t.Fatal(err)
+	}
+	series := repository.NewSeriesRepository(db)
+	for id, name := range map[string]string{seriesID: "Monday tips", goneSeriesID: "Retired"} {
+		if err := series.Create(ctx, &models.Series{ID: id, Name: name, Supply: models.SeriesSupplySelf}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := series.SoftDelete(ctx, goneSeriesID); err != nil {
+		t.Fatal(err)
+	}
+	for kind, want := range map[viewcontext.EntityKind]map[string]string{
+		viewcontext.KindVoice:    {voiceID: "Plain"},
+		viewcontext.KindAudience: {audienceID: "Founders"},
+		viewcontext.KindSeries:   {seriesID: "Monday tips"},
+	} {
+		got, err := titles.Titles(ctx, kind, []string{voiceID, audienceID, seriesID, goneSeriesID, "missing"})
+		if err != nil || !maps.Equal(got, want) {
+			t.Fatalf("%s titles = %v, %v; want %v", kind, got, err, want)
+		}
+	}
+	if got, err := titles.Titles(tenantctx.With(context.Background(), "tenant-other"), viewcontext.KindVoice, []string{voiceID}); err != nil || len(got) != 0 {
+		t.Fatalf("another tenant read voice %v (err %v)", got, err)
+	}
+	if _, err := titles.Titles(ctx, viewcontext.KindFact, []string{"f1"}); !errors.Is(err, repository.ErrUntitledKind) {
 		t.Fatal("an unsupported kind read titles")
 	}
 
