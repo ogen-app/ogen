@@ -58,7 +58,7 @@ type requestState struct {
 	embedder ai.Embedder
 
 	// Injected sub-flow callbacks, invoked as tools.
-	contentPlan func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
+	contentPlan func(ctx context.Context, req content_plan.ContentPlanRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	enrichBrief func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	// overview backs the getCampaignOverview read tool.
 	overview *overview.Service
@@ -215,6 +215,9 @@ type EnrichBriefOutput struct {
 // RunContentPlanInput is the runContentPlan tool input.
 type RunContentPlanInput struct {
 	Exploratory bool `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants a plan without the campaign's sources (from general knowledge)."`
+	// AssetIDs is the turn's source selection, stamped in before the call is
+	// proposed so a confirmed plan keeps it.
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Leave empty: the turn's selected sources are filled in for you."`
 }
 
 // RunContentPlanOutput is returned to the model after a content plan runs.
@@ -378,10 +381,10 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Plans the campaign's content: a set of ideas across its platforms and phases, each with a thesis and a suggested platform, post type, phase and date, saved to the campaign's ideas. "+
 			"No post is created: the user picks ideas and compiles or drafts them. Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many ideas were saved.",
-		assistantkit.Gated("runContentPlan", contentPlanGate,
+		withSourceSelection(assistantkit.Gated("runContentPlan", contentPlanGate,
 			assistantkit.Wrap(func(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
 				return toolRunContentPlan(ctx, in)
-			}, contentPlanInvalid)),
+			}, contentPlanInvalid))),
 	)
 
 	enrichBrief := genkit.DefineTool(g, "enrichBrief",
@@ -519,6 +522,17 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 
 // ── Tool implementations ─────────────────────────────────────────────────────
 
+// withSourceSelection stamps the turn's source selection into a
+// runContentPlan call before it is gated, so the stored proposal carries it.
+func withSourceSelection[Out any](next ai.ToolFunc[RunContentPlanInput, Out]) ai.ToolFunc[RunContentPlanInput, Out] {
+	return func(ctx *ai.ToolContext, in RunContentPlanInput) (Out, error) {
+		if len(in.AssetIDs) == 0 {
+			in.AssetIDs = getRequestState(ctx).sourceAssetIDs
+		}
+		return next(ctx, in)
+	}
+}
+
 // toolRunContentPlan generates and saves a full content plan, from the
 // campaign's sources unless the call is exploratory.
 func toolRunContentPlan(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
@@ -552,7 +566,7 @@ func toolRunContentPlan(ctx context.Context, in RunContentPlanInput) (*RunConten
 		}
 	})
 
-	resp, err := st.contentPlan(explore(ctx, in.Exploratory), st.campaignID, nested)
+	resp, err := st.contentPlan(explore(ctx, in.Exploratory), content_plan.ContentPlanRequest{CampaignID: st.campaignID, AssetIDs: in.AssetIDs}, nested)
 	if err != nil {
 		return nil, err
 	}
@@ -1164,11 +1178,14 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 	if err != nil {
 		return nil, fmt.Errorf("resolve campaign assets: %w", err)
 	}
-	if len(st.sourceAssetIDs) > 0 {
-		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(st.sourceAssetIDs, id) })
-	}
 	if len(ids) == 0 {
 		return &AskCampaignAssetsOutput{Available: true, Note: "this campaign has no ready assets to search"}, nil
+	}
+	if len(st.sourceAssetIDs) > 0 {
+		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(st.sourceAssetIDs, id) })
+		if len(ids) == 0 {
+			return &AskCampaignAssetsOutput{Available: true, Note: "none of the selected assets are ready assets of this campaign; the campaign's other ready assets can be searched without the selection"}, nil
+		}
 	}
 
 	qResp, err := st.embedder.Embed(ctx, &ai.EmbedRequest{
