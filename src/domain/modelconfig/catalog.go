@@ -50,6 +50,7 @@ const (
 	FlowPostQuality       = "post_quality"
 	FlowPostAssistant     = "post_assistant"
 	FlowCampaignAssistant = "campaign_assistant"
+	FlowAssistant         = "assistant"
 	FlowEmbed             = "embed"
 	FlowVision            = "vision"
 	FlowTranscribe        = "transcribe"
@@ -170,6 +171,10 @@ var catalog = []Flow{
 	}},
 	{Key: FlowCampaignAssistant, Description: "Campaign orchestration assistant.", Slots: []Slot{
 		{Key: SlotOrchestrator, Description: "Cheap orchestration/routing loop (delegates to sub-flows).", Capability: CapabilityChat, Vendors: anthropicOnly,
+			Requires: Requirements{NeedsTools: true}},
+	}},
+	{Key: FlowAssistant, Description: "Universal assistant: one thread per workspace, campaign or post, aware of the screen.", Slots: []Slot{
+		{Key: SlotOrchestrator, Description: "Cheap orchestration loop over the core tools and the loaded packs.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsTools: true}},
 	}},
 	{Key: FlowAssetAnalysis, Description: "Summary, meeting notes and ideas distilled from text assets.", Slots: []Slot{

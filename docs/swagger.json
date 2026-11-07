@@ -1074,6 +1074,78 @@
                 }
             }
         },
+        "/api/assistant": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Sends a message to the assistant from any screen and streams the reply. viewContext\n(version 1) is the screen: screen, scope ({kind: workspace|campaign|post, id}), focus,\nselection ({kind, ids | allMatching}), filter, savedViewId, sort, window and visible. It holds\nreferences only; the server reloads them in the caller's workspace and drops ids that no\nlonger exist. The scope names the thread: the conversation continues across the screens of\none workspace, campaign or post. A malformed viewContext is a 400 that names the field; a\ncampaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.\nEvents: \"explanation_delta\" {\"delta\"}, \"tool_call\", \"tool_result\" (with \"ok\" false when the\ntool refused), then \"complete\" with {\"explanation\",\"action\"}, plus \"unsaved\": true when the\nturn ran but could not be stored in the thread. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "assistant"
+                ],
+                "summary": "Universal assistant turn (SSE)",
+                "parameters": [
+                    {
+                        "description": "Message and screen",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.assistantTurnRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream: explanation_delta / tool_call / tool_result / complete / error"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/assistant/actions/{id}/undo": {
             "post": {
                 "security": [
@@ -1265,6 +1337,61 @@
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/assistant/threads/{scope}/messages": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Returns a thread's latest messages, oldest first. scope is \"workspace\", \"campaign:\u003cid\u003e\" or\n\"post:\u003cid\u003e\". A user message carries the view_context it was sent from; a model message's\ncontent is the JSON of that turn's \"complete\" event.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assistant"
+                ],
+                "summary": "Universal assistant thread",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace | campaign:\u003cid\u003e | post:\u003cid\u003e",
+                        "name": "scope",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.AssistantMessage"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -15017,6 +15144,22 @@
                 }
             }
         },
+        "handlers.assistantTurnRequest": {
+            "type": "object",
+            "required": [
+                "instruction",
+                "viewContext"
+            ],
+            "properties": {
+                "instruction": {
+                    "type": "string"
+                },
+                "viewContext": {
+                    "description": "ViewContext is the screen the message is sent from; its scope names the\nthread. See domain/viewcontext for the schema.",
+                    "type": "object"
+                }
+            }
+        },
         "handlers.attachFromAssetRequest": {
             "type": "object",
             "properties": {
@@ -18827,6 +18970,53 @@
                     "x-nullable": true
                 }
             }
+        },
+        "models.AssistantMessage": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "scope_id": {
+                    "type": "string"
+                },
+                "scope_kind": {
+                    "$ref": "#/definitions/models.AssistantScopeKind"
+                },
+                "view_context": {
+                    "description": "ViewContext is nil on model turns, and on user turns sent without one.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.JSONMap"
+                        }
+                    ]
+                }
+            }
+        },
+        "models.AssistantScopeKind": {
+            "type": "string",
+            "enum": [
+                "workspace",
+                "campaign",
+                "post"
+            ],
+            "x-enum-varnames": [
+                "AssistantScopeWorkspace",
+                "AssistantScopeCampaign",
+                "AssistantScopePost"
+            ]
         },
         "models.AudioExtraction": {
             "type": "object",
