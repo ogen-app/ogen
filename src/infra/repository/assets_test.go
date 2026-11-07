@@ -11,7 +11,7 @@ import (
 )
 
 // TestAssetDelete_ScrubsDanglingReferences verifies that deleting an asset also
-// removes its id from every campaign.asset_ids and post.used_asset_ids,
+// removes its id from every campaign.asset_ids, post.used_asset_ids and idea.asset_ids,
 // so a deleted asset can never linger as a dangling reference that later
 // hard-fails content generation ("asset %q not found").
 func TestAssetDelete_ScrubsDanglingReferences(t *testing.T) {
@@ -69,6 +69,11 @@ func TestAssetDelete_ScrubsDanglingReferences(t *testing.T) {
 		t.Fatalf("seed post: %v", err)
 	}
 
+	idea := &models.Idea{ID: "idea-1", Title: "I", Origin: models.IdeaOriginContentPlan, AssetIDs: []string{delID, keepID}}
+	if _, err := db.NewInsert().Model(idea).Exec(ctx); err != nil {
+		t.Fatalf("seed idea: %v", err)
+	}
+
 	repo := repository.NewAssetRepository(db, nil, nil)
 	deleted, err := repo.Delete(ctx, delID)
 	if err != nil {
@@ -76,6 +81,14 @@ func TestAssetDelete_ScrubsDanglingReferences(t *testing.T) {
 	}
 	if !deleted {
 		t.Fatal("expected deleted=true")
+	}
+
+	gotIdea := new(models.Idea)
+	if err := db.NewSelect().Model(gotIdea).Where("i.id = ?", "idea-1").Scan(ctx); err != nil {
+		t.Fatalf("reload idea: %v", err)
+	}
+	if got := gotIdea.AssetIDs; len(got) != 1 || got[0] != keepID {
+		t.Errorf("idea.AssetIDs = %v, want [%s]", got, keepID)
 	}
 
 	// The deleted id is scrubbed from both back-references; the surviving id stays.
