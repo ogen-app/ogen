@@ -359,6 +359,8 @@ type toolSet struct {
 	reg *assistantkit.Registry
 }
 
+// defineTools registers the campaign tools on g and builds their registry,
+// in the order the model is given them.
 func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Plans the campaign's content: a set of ideas across its platforms and phases, each with a thesis and a suggested platform, post type, phase and date, saved to the campaign's ideas. "+

@@ -46,6 +46,7 @@ type prompts struct {
 	state   *template.Template
 }
 
+// loadPrompts parses the prompt template and renders the pack's rules once.
 func loadPrompts() (*prompts, error) {
 	raw, err := promptFS.ReadFile("prompts/campaign_assistant.tmpl")
 	if err != nil {
