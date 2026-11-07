@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
 
 func day(s string) time.Time {
@@ -115,14 +116,14 @@ func TestPlan_StalePhaseTreatedAsUnassigned(t *testing.T) {
 
 func TestSpread_Evenness(t *testing.T) {
 	ws, we := day("2026-02-01"), day("2026-02-11") // 10-day span
-	got := spread(ws, we, 3)
+	got := spread(ws, we, 3, scheduling.EnabledWeekdays(nil))
 	want := []string{"2026-02-01", "2026-02-06", "2026-02-11"}
 	for i, w := range want {
 		if got[i].Format("2006-01-02") != w {
 			t.Errorf("spread[%d] = %s, want %s", i, got[i].Format("2006-01-02"), w)
 		}
 	}
-	if s := spread(ws, we, 1); s[0] != ws {
+	if s := spread(ws, we, 1, scheduling.EnabledWeekdays(nil)); s[0] != ws {
 		t.Fatalf("single spread = %v, want window start", s[0])
 	}
 }
@@ -141,5 +142,26 @@ func TestPlan_HonoursManualPhasePlan(t *testing.T) {
 	})
 	if got["b1"] != "2026-01-03" || got["c1"] != "2026-01-29" {
 		t.Fatalf("plan = %v, want p2 from 01-03 and p3 from 01-29", got)
+	}
+}
+
+// Posts land only on the campaign's publishing days.
+func TestPlan_SpreadsOverPublishingDays(t *testing.T) {
+	c := threePhaseCampaign()
+	c.CampaignType = nil
+	c.PublishingDays = models.StringSlice{"mon", "wed", "fri"}
+	posts := []models.Post{
+		mkPost("a", "", models.PostStatusDraft, day("2025-01-01")),
+		mkPost("b", "", models.PostStatusDraft, day("2025-01-02")),
+		mkPost("c", "", models.PostStatusDraft, day("2025-01-03")),
+	}
+	// 2026-01-01 is a Thursday: the window's enabled days run from Fri 01-02
+	// to Fri 01-30, and the middle one of its 13 is Fri 01-16.
+	got := planMap(c, posts)
+	want := map[string]string{"a": "2026-01-02", "b": "2026-01-16", "c": "2026-01-30"}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("post %s = %s, want %s", id, got[id], w)
+		}
 	}
 }
