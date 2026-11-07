@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
@@ -83,16 +84,17 @@ type Finding struct {
 }
 
 // Check returns the campaign's calendar findings, warnings first. now is the
-// clock "soon" reads; dates are the campaign's local days.
+// clock "soon" reads; a post's date is its day in the campaign's timezone,
+// and the campaign's start and end are calendar dates already.
 func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
-	loc := location(c)
+	loc := Location(c)
 	day := func(t time.Time) time.Time {
 		y, m, d := t.In(loc).Date()
 		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 	}
 	var out []Finding
 	add := func(f Finding) {
-		f.Key = key(f.Code, f.PostIDs, f.Fixes)
+		f.Key = key(c.ID, f.Code, f.PostIDs, f.Fixes)
 		out = append(out, f)
 	}
 	redistribute := Fix{Kind: FixRedistribute, Title: "Even out the calendar"}
@@ -100,12 +102,15 @@ func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
 	var start, end time.Time
 	dated := c.StartDate != nil && c.EndDate != nil
 	if dated {
-		start, end = day(*c.StartDate), day(*c.EndDate)
+		start, end = campaignphase.Date(*c.StartDate), campaignphase.Date(*c.EndDate)
 	}
 	enabled := scheduling.EnabledWeekdays(c.PublishingDays)
 
 	var outside, offDay []string
 	crowd := map[string][]string{}
+	// movableCrowd marks the crowded days holding a post a redistribution
+	// can move.
+	movableCrowd := map[string]bool{}
 	var scheduled []time.Time
 	for _, p := range posts {
 		if p.ScheduledAt == nil || p.Status == models.PostStatusPublished {
@@ -122,6 +127,7 @@ func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
 		}
 		k := p.PlatformID + "|" + d.Format(time.DateOnly)
 		crowd[k] = append(crowd[k], p.ID)
+		movableCrowd[k] = movableCrowd[k] || movable
 
 		if f, ok := dueSoon(p, d, day(now)); ok {
 			add(f)
@@ -137,7 +143,7 @@ func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
 			Message: fmt.Sprintf("%d post(s) fall on days the campaign doesn't publish (%s)", len(offDay), scheduling.DayLabels(c.PublishingDays)),
 			Fixes:   []Fix{redistribute}})
 	}
-	for _, f := range crowded(crowd, redistribute) {
+	for _, f := range crowded(crowd, movableCrowd, redistribute) {
 		add(f)
 	}
 	if dated {
@@ -152,8 +158,9 @@ func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
 }
 
 // crowded is a finding per platform day holding more than CrowdedPerDay
-// posts, in day order; crowd is keyed "platform|YYYY-MM-DD".
-func crowded(crowd map[string][]string, fix Fix) []Finding {
+// posts, in day order; crowd and movable are keyed "platform|YYYY-MM-DD". A
+// day with no movable post gets no fix: a redistribution can't thin it.
+func crowded(crowd map[string][]string, movable map[string]bool, fix Fix) []Finding {
 	keys := make([]string, 0, len(crowd))
 	for k := range crowd {
 		keys = append(keys, k)
@@ -166,9 +173,14 @@ func crowded(crowd map[string][]string, fix Fix) []Finding {
 			continue
 		}
 		platform, date, _ := strings.Cut(k, "|")
-		out = append(out, Finding{Code: CodeCrowdedDay, Severity: SeverityWarning, PostIDs: sorted(ids),
+		f := Finding{Code: CodeCrowdedDay, Severity: SeverityWarning, PostIDs: sorted(ids),
 			Message: fmt.Sprintf("%d posts for %s on %s", len(ids), cmp.Or(platform, "no platform"), date),
-			Fixes:   []Fix{fix}})
+			Fixes:   []Fix{fix}}
+		if !movable[k] {
+			f.Message += "; they're all scheduled, so evening out the calendar can't move them: reschedule one by hand"
+			f.Fixes = []Fix{}
+		}
+		out = append(out, f)
 	}
 	return out
 }
@@ -225,7 +237,8 @@ func gaps(start, end time.Time, days []time.Time) [][2]time.Time {
 	return out
 }
 
-func location(c *models.Campaign) *time.Location {
+// Location is the campaign's timezone, UTC when it has none or an unknown one.
+func Location(c *models.Campaign) *time.Location {
 	if c.Timezone == "" {
 		return time.UTC
 	}
@@ -241,10 +254,11 @@ func sorted(ids []string) []string {
 	return out
 }
 
-// key is a finding's stable id: its code, its posts and its fixes' windows.
-func key(code string, ids []string, fixes []Fix) string {
+// key is a finding's stable id: its campaign, its code, its posts and its
+// fixes' windows.
+func key(campaignID, code string, ids []string, fixes []Fix) string {
 	h := sha256.New()
-	h.Write([]byte(code))
+	h.Write([]byte(campaignID + "|" + code))
 	for _, id := range ids {
 		h.Write([]byte("|" + id))
 	}
