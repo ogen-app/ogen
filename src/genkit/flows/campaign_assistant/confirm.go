@@ -73,12 +73,12 @@ func toolConfirmProposal(ctx context.Context, in ConfirmProposalInput) (any, err
 	}
 	// What the work needs is claimed before the offer is answered, so an
 	// offer whose work can't start now stays open.
-	ctx, err = st.registry.Prepare(ctx, tool)
+	ctx, release, err := st.registry.Prepare(ctx, tool)
 	if err != nil {
 		return nil, err
 	}
 	if err := resolveProposal(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
-		st.releaseHeavy(ctx)
+		release()
 		return nil, err
 	}
 	return st.registry.RunConfirmed(ctx, tool, map[string]any(args))
