@@ -207,6 +207,21 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 	}
 }
 
+// A confirmed offer whose answer can't be stored still completes, marked
+// unsaved: its work has run.
+func TestProposals_AnswerFromTheCardUnsaved(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	h.msgs.fail = errors.New("db down")
+	store.rows = []*models.AssistantProposal{
+		{ID: "mine", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(4)},
+			Summary: "Do 4 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "mine", Confirm: true}, nil)
+	if err != nil || *ran != 4 || !resp.Unsaved {
+		t.Fatalf("resp = %+v, err = %v, ran = %d; want the work done and the reply unsaved", resp, err, *ran)
+	}
+}
+
 func isConflict(err error) bool {
 	_, ok := errors.AsType[*ProposalConflictError](err)
 	return ok

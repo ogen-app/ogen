@@ -15,6 +15,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
@@ -103,10 +104,12 @@ func run(
 		return nil, &AIError{Msg: unusableReply(ctx, scanner)}
 	}
 
-	// Nothing a turn does depends on its own history row, so a failed write
-	// is logged, not returned.
+	// The turn's work is done by now, so a failed history write does not
+	// fail it: an error would report work that happened as lost, and a retry
+	// would redo it. The reply says it was not saved instead.
 	if err := persistTurn(ctx, repos, req, result); err != nil {
 		slog.ErrorContext(ctx, "persist conversation turn failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+		result.Unsaved = true
 	}
 	// The screen moves only once the reply is final, so a restarted call
 	// never leaves half a plan on it.
@@ -159,11 +162,14 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	}
 	maxTokens := cmp.Or(cfg.MaxOutputTokens, 4096)
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowAssistant, modelconfig.SlotOrchestrator)
-	scanner := jsonstream.New([]string{"explanation"}, func(key, delta string) {
-		if key == "explanation" {
-			emit(onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
-		}
-	})
+	reply := &replyScanner{newScanner: func() *jsonstream.Scanner {
+		return jsonstream.New([]string{"explanation"}, func(key, delta string) {
+			if key == "explanation" {
+				emit(onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
+			}
+		})
+	}}
+	reply.cur = reply.newScanner()
 	usage := flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "assistant", Component: logComponent}
 	resp, err := genkit.Generate(ctx, g,
 		ai.WithModelName(mc.Ref),
@@ -173,12 +179,13 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		ai.WithTools(tools.tools(loaded)...),
 		ai.WithMaxTurns(cmp.Or(cfg.MaxTurns, 4)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{
-			OnText: scanner.Push,
+			OnRound: reply.round,
+			OnText:  reply.push,
 			OnToolCall: func(tr *ai.ToolRequest) {
 				emit(onEvent, SSEEventToolCall, ToolCallEventPayload{Name: tr.Name, Input: tr.Input, Ref: tr.Ref})
 			},
 			OnToolResult: func(tr *ai.ToolResponse) {
-				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: true})
+				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: assistantkit.OutputOK(tr.Output)})
 			},
 		})),
 		// The system prompt, tools and history repeat every round and turn;
@@ -191,7 +198,7 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	if isMaxTurnsExceeded(err) {
 		slog.WarnContext(ctx, "tool rounds exhausted; finalising from the work done", logging.AttrComponent, logComponent)
 		usage.FinishMetered(ctx, nil, maxTokens)
-		return scanner, nil
+		return reply.cur, nil
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, logging.AttrError, err)
@@ -201,7 +208,31 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	if len(resp.Interrupts()) > 0 {
 		return nil, nil
 	}
-	return scanner, nil
+	return reply.cur, nil
+}
+
+// replyScanner reads the reply from the last model round that wrote text: a
+// round that goes on to call tools may write a preliminary envelope first.
+// A round with no text keeps the one before it.
+type replyScanner struct {
+	cur        *jsonstream.Scanner
+	newScanner func() *jsonstream.Scanner
+	newRound   bool
+}
+
+// round marks the start of a model round.
+func (r *replyScanner) round() { r.newRound = true }
+
+// push feeds text, starting a fresh scanner if a new round's text replaces
+// an earlier round's.
+func (r *replyScanner) push(text string) {
+	if r.newRound {
+		r.newRound = false
+		if r.cur.FullText() != "" {
+			r.cur = r.newScanner()
+		}
+	}
+	r.cur.Push(text)
 }
 
 // isMaxTurnsExceeded reports genkit's "exceeded maximum tool call
@@ -210,16 +241,17 @@ func isMaxTurnsExceeded(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "maximum tool call iterations")
 }
 
-// assemble reads the reply envelope. A reply in plain prose, with no JSON,
-// is taken as the answer; one with neither leaves Explanation empty for the
-// packs' fallback.
+// assemble reads the reply envelope. A reply in plain prose is taken as the
+// answer, braces and all; one that opens with "{" or yielded any key is a
+// JSON envelope. A reply with no explanation leaves Explanation empty for
+// the packs' fallback.
 func assemble(ctx context.Context, scanner *jsonstream.Scanner) *Response {
 	vals := scanner.Values()
 	r := &Response{}
 	r.Explanation, _ = vals["explanation"].(string)
 	r.Action, _ = vals["action"].(string)
 	if r.Explanation == "" {
-		if raw := strings.TrimSpace(scanner.FullText()); raw != "" && !strings.Contains(raw, "{") {
+		if raw := strings.TrimSpace(scanner.FullText()); raw != "" && len(vals) == 0 && !strings.HasPrefix(jsonstream.StripFences(raw), "{") {
 			r.Explanation = raw
 		}
 	}
@@ -240,13 +272,49 @@ func unusableReply(ctx context.Context, scanner *jsonstream.Scanner) string {
 	return "model response did not contain the expected fields"
 }
 
-// historyTurn replays a stored message: the user's as typed, a model turn
-// as its envelope.
+// historyTurn replays a stored message: the user's as typed, after a note of
+// what was selected when it was sent; a model turn as its envelope.
 func historyTurn(m models.AssistantMessage) (string, string) {
 	if m.Role == flowkit.RoleModel {
 		return m.Role, modelTurn(m.Content)
 	}
-	return m.Role, m.Content
+	return m.Role, earlierView(m.ViewContext) + m.Content
+}
+
+// earlierIDs caps the ids an <earlier-view> note lists.
+const earlierIDs = 5
+
+// earlierView is a one-line note of the focus and selection a stored user
+// message was sent with, or "" when it had neither. It is built from the
+// stored row alone, so the replayed history stays a stable cache prefix.
+func earlierView(stored models.JSONMap) string {
+	if stored == nil {
+		return ""
+	}
+	b, err := json.Marshal(stored)
+	if err != nil {
+		return ""
+	}
+	var v viewcontext.ViewContext
+	if err := json.Unmarshal(b, &v); err != nil || (v.Focus == nil && v.Selection == nil) {
+		return ""
+	}
+	parts := []string{"sent from " + string(v.Screen)}
+	if v.Focus != nil {
+		parts = append(parts, fmt.Sprintf("in focus %s %s", v.Focus.Kind, v.Focus.ID))
+	}
+	switch sel := v.Selection; {
+	case sel == nil:
+	case sel.AllMatching:
+		parts = append(parts, fmt.Sprintf("selected every %s matching %q", sel.Kind, v.Filter))
+	case len(sel.IDs) > 0:
+		ids := strings.Join(sel.IDs[:min(len(sel.IDs), earlierIDs)], ", ")
+		if more := len(sel.IDs) - earlierIDs; more > 0 {
+			ids += fmt.Sprintf(" and %d more", more)
+		}
+		parts = append(parts, fmt.Sprintf("selected %s %s", sel.Kind, ids))
+	}
+	return "<earlier-view>" + strings.Join(parts, "; ") + "</earlier-view>\n"
 }
 
 // modelTurn replays a stored model turn as its envelope, without the

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -19,6 +21,11 @@ import (
 // threadMessages is how many of a thread's latest messages the history read
 // returns.
 const threadMessages = 50
+
+// maxInstructionLen caps a turn's message, in characters. With the replayed
+// history capped by message count, it keeps a turn's input well inside the
+// model's context window.
+const maxInstructionLen = 8000
 
 // AssistantHandler serves the universal assistant: one endpoint for every
 // screen, and the thread history.
@@ -64,14 +71,15 @@ type assistantTurnRequest struct {
 // @Description  references only; the server reloads them in the caller's workspace and drops ids that no
 // @Description  longer exist. The scope names the thread: the conversation continues across the screens of
 // @Description  one workspace, campaign or post. A malformed viewContext is a 400 that names the field; a
-// @Description  campaign or post scope that doesn't exist is a 404.
+// @Description  campaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.
 // @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
-// @Description  and "tool_result" {"name","ref","ok"} for each tool; "pack_loaded" {"pack"} when the turn restarted
+// @Description  and "tool_result" {"name","ref","ok"} for each tool, "ok" false when it refused or hit a conflict; "pack_loaded" {"pack"} when the turn restarted
 // @Description  with another domain's tools (deltas before it are void); one "ui_action" per change to the screen,
 // @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view, "screen", "campaignId",
 // @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId"}, every reference already checked;
 // @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs"}, where
-// @Description  touched names what changed (no id: every entity of the kind) for the client to refresh. "error"
+// @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, plus
+// @Description  "unsaved": true when the turn ran but could not be stored in the thread. "error"
 // @Description  carries {"message":"...","code":<http_code>} and ends the stream.
 // @Description  Offers: a bulk or generative pack tool is held back as an offer; "proposal_created" {"id","tool","summary",
 // @Description  "expiresAt","options"} streams once the reply is final, and "proposal_resolved" {"id","status","chosen"} when
@@ -96,6 +104,9 @@ func (h *AssistantHandler) Turn(c *fiber.Ctx) error {
 	var req assistantTurnRequest
 	if err := bindAndValidate(c, &req); err != nil {
 		return err
+	}
+	if utf8.RuneCountInString(req.Instruction) > maxInstructionLen {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("instruction must be at most %d characters", maxInstructionLen))
 	}
 	session, err := sessionFrom(c)
 	if err != nil {

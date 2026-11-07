@@ -30,6 +30,9 @@ func TestGetSelection_Pages(t *testing.T) {
 		if len(page.Items) != tc.n || page.Next != tc.next || page.Total != 412 || page.Loaded != 120 || page.Filter != "origin=asset_analysis" {
 			t.Fatalf("%+v: page = %d items, next %d, total %d, loaded %d, filter %q", tc.in, len(page.Items), page.Next, page.Total, page.Loaded, page.Filter)
 		}
+		if page.AllMatching != tc.allMatched {
+			t.Fatalf("%+v: allMatching = %v, want %v", tc.in, page.AllMatching, tc.allMatched)
+		}
 		if tc.n > 0 && page.Items[0].ID != tc.first {
 			t.Fatalf("%+v: first = %s, want %s", tc.in, page.Items[0].ID, tc.first)
 		}

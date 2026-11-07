@@ -28,6 +28,9 @@ type Response struct {
 	Explanation string `json:"explanation"`
 	// Action is "answered", or "declined" for a request out of scope.
 	Action string `json:"action" enums:"answered,declined"`
+	// Unsaved is set when the turn ran but could not be stored in the
+	// thread, so it won't be in the history on reload.
+	Unsaved bool `json:"unsaved,omitzero"`
 	// UIActions drive the client's screen, in order. Each was also streamed
 	// as a "ui_action" event just before "complete".
 	UIActions []UIAction `json:"uiActions,omitempty"`
@@ -97,7 +100,8 @@ type ToolCallEventPayload struct {
 type ToolResultEventPayload struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref,omitempty"`
-	OK   bool   `json:"ok"`
+	// OK is false when the tool refused the call or hit a conflict.
+	OK bool `json:"ok"`
 }
 
 // PackLoadedEventPayload is a "pack_loaded" event.

@@ -24,23 +24,30 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
-// memMessages keeps every thread so later turns see earlier ones.
+// memMessages keeps every thread so later turns see earlier ones. fail, when
+// set, fails every write.
 type memMessages struct {
 	repository.AssistantMessageRepository
 	mu   sync.Mutex
 	msgs []models.AssistantMessage
+	fail error
 }
 
 func (m *memMessages) CreateBatch(_ context.Context, msgs []*models.AssistantMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.fail != nil {
+		return m.fail
+	}
 	for _, msg := range msgs {
 		m.msgs = append(m.msgs, *msg)
 	}
 	return nil
 }
 
-func (m *memMessages) ListRecent(_ context.Context, kind models.AssistantScopeKind, scopeID string, _ int) ([]models.AssistantMessage, error) {
+// ListRecent returns the thread's latest limit messages, oldest first, as
+// the repository does.
+func (m *memMessages) ListRecent(_ context.Context, kind models.AssistantScopeKind, scopeID string, limit int) ([]models.AssistantMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []models.AssistantMessage
@@ -49,7 +56,7 @@ func (m *memMessages) ListRecent(_ context.Context, kind models.AssistantScopeKi
 			out = append(out, msg)
 		}
 	}
-	return out, nil
+	return out[max(len(out)-limit, 0):], nil
 }
 
 // memViews reloads references from a fixed set of titles.
@@ -237,6 +244,10 @@ func TestRun_ThreadContinuesAcrossScreens(t *testing.T) {
 	if len(msgs) != 4 || !strings.Contains(msgs[2].Text(), "Two pricing ideas.") || !strings.HasPrefix(lastText(m.Requests()[0]), "<view>\nOn campaign.assets") {
 		t.Fatalf("messages = %d, last = %q", len(msgs), lastText(m.Requests()[0]))
 	}
+	// The earlier turn replays with a note of what it had selected.
+	if got, want := msgs[1].Text(), "<earlier-view>sent from campaign.ideas; selected every idea matching \"origin=asset_analysis\"</earlier-view>\nsummarise these"; got != want {
+		t.Fatalf("earlier user turn = %q, want %q", got, want)
+	}
 
 	// Another scope is another thread.
 	ws, _ := viewcontext.Parse([]byte(`{"version":1,"screen":"ideas","scope":{"kind":"workspace"}}`))
@@ -253,6 +264,8 @@ func TestRun_Replies(t *testing.T) {
 		wantAIFail bool
 	}{
 		"prose":    {reply: "Sure, they share a theme.", action: actionAnswered},
+		"braces":   {reply: "Use {brand_name} as the placeholder.", action: actionAnswered},
+		"fenced":   {reply: "```json\n{\"nope\": {\"a\": 1}}\n```", wantAIFail: true},
 		"declined": {reply: `{"explanation":"I can only help with your content.","action":"declined"}`, action: actionDeclined},
 		"unknown":  {reply: `{"explanation":"Done.","action":"posts_generated"}`, action: actionAnswered},
 		"broken":   {reply: `{"nope": 1}`, wantAIFail: true},
@@ -270,7 +283,110 @@ func TestRun_Replies(t *testing.T) {
 			if err != nil || resp.Action != tc.action {
 				t.Fatalf("resp = %+v, err = %v", resp, err)
 			}
+			if !strings.HasPrefix(tc.reply, "{") && resp.Explanation != tc.reply {
+				t.Fatalf("explanation = %q, want the prose reply %q", resp.Explanation, tc.reply)
+			}
 		})
+	}
+}
+
+func TestRun_UsesTheFinalRoundsReply(t *testing.T) {
+	h := newHarness(t)
+	resp, _, _, err := h.turn(ideasView(t, 1, 1), "what's selected?",
+		fakemodel.Turn{Text: `{"explanation":"Let me look.","action":"answered"}`, Calls: []fakemodel.Call{{Name: "getSelection", Input: map[string]any{}}}},
+		fakemodel.Answer(`{"explanation":"Idea 0 is selected.","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Explanation != "Idea 0 is selected." {
+		t.Fatalf("explanation = %q, want the final round's", resp.Explanation)
+	}
+	if !strings.Contains(h.msgs.msgs[1].Content, "Idea 0 is selected.") || strings.Contains(h.msgs.msgs[1].Content, "Let me look.") {
+		t.Fatalf("stored model turn = %s", h.msgs.msgs[1].Content)
+	}
+}
+
+func TestRun_ToolResultReportsRefusal(t *testing.T) {
+	h := newHarness(t)
+	ws, err := viewcontext.Parse([]byte(`{"version":1,"screen":"ideas","scope":{"kind":"workspace"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = h.turn(&viewresolve.Resolved{View: ws, Summary: "On ideas"}, "what's selected?",
+		fakemodel.Tools(fakemodel.Call{Name: "getSelection", Input: map[string]any{}}),
+		fakemodel.Answer(`{"explanation":"Nothing is selected.","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var results []ToolResultEventPayload
+	for _, d := range h.payloads {
+		if r, ok := d.(ToolResultEventPayload); ok {
+			results = append(results, r)
+		}
+	}
+	if len(results) != 1 || results[0].Name != "getSelection" || results[0].OK {
+		t.Fatalf("tool results = %+v, want one refused getSelection", results)
+	}
+}
+
+func TestRun_UnsavedTurnStillCompletes(t *testing.T) {
+	h := newHarness(t)
+	h.msgs.fail = errors.New("db down")
+	resp, events, _, err := h.turn(ideasView(t, 1, 1), "hello", fakemodel.Answer(`{"explanation":"Hi.","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Unsaved || events[len(events)-1] != SSEEventComplete {
+		t.Fatalf("resp = %+v, events = %v; want an unsaved complete", resp, events)
+	}
+	if done, ok := h.payloads[len(h.payloads)-1].(*Response); !ok || !done.Unsaved {
+		t.Fatalf("complete = %+v, want it marked unsaved", h.payloads[len(h.payloads)-1])
+	}
+}
+
+func TestRun_HistoryIsTheLatestMessages(t *testing.T) {
+	h := newHarness(t)
+	for i := range 6 {
+		if _, _, _, err := h.turn(ideasView(t, 1, 1), fmt.Sprint("q", i), fakemodel.Answer(fmt.Sprintf(`{"explanation":"a%d","action":"answered"}`, i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, m, err := h.turn(ideasView(t, 1, 1), "last", fakemodel.Answer(`{"explanation":"done","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := m.Requests()[0].Messages
+	// system, the latest ten history messages, this turn.
+	if len(msgs) != 12 {
+		t.Fatalf("messages = %d, want 12", len(msgs))
+	}
+	for i, msg := range msgs[1:11] {
+		n := i/2 + 1
+		want := fmt.Sprint("q", n)
+		if msg.Role == ai.RoleModel {
+			want = fmt.Sprintf(`"explanation":"a%d"`, n)
+		}
+		if !strings.Contains(msg.Text(), want) {
+			t.Fatalf("history[%d] = %s %q, want it to hold %s", i, msg.Role, msg.Text(), want)
+		}
+	}
+}
+
+func TestEarlierView(t *testing.T) {
+	cases := map[string]struct {
+		stored models.JSONMap
+		want   string
+	}{
+		"none":    {nil, ""},
+		"no refs": {models.JSONMap{"screen": "ideas"}, ""},
+		"ids": {models.JSONMap{"screen": "ideas", "focus": map[string]any{"kind": "post", "id": "p1"},
+			"selection": map[string]any{"kind": "idea", "ids": []any{"a", "b", "c", "d", "e", "f", "g"}}},
+			"<earlier-view>sent from ideas; in focus post p1; selected idea a, b, c, d, e and 2 more</earlier-view>\n"},
+	}
+	for name, tc := range cases {
+		if got := earlierView(tc.stored); got != tc.want {
+			t.Errorf("%s: earlierView = %q, want %q", name, got, tc.want)
+		}
 	}
 }
 

@@ -308,9 +308,12 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	}
 	t.finish(st, resp)
 	// The answer joins the thread, so the next chat turn knows it happened.
+	// The work has run, so a failed write marks the reply unsaved rather
+	// than failing it.
 	if t.deps.Messages != nil {
 		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: view}, resp); err != nil {
 			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+			resp.Unsaved = true
 		}
 	}
 	for _, r := range st.resolvedList() {
