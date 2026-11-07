@@ -55,6 +55,19 @@ func TestBuild_GoalRoom(t *testing.T) {
 	}
 }
 
+// Posts that could not be read leave the room unknown, not the whole target.
+func TestSnapshot_WithoutPosts(t *testing.T) {
+	s := Build(campaign(), nil, 2).WithoutPosts()
+	if s.Goal == nil || !s.Goal.Unknown || s.Goal.Room != 0 || s.Goal.Target != 10 || !s.PostsUnknown {
+		t.Fatalf("goal = %+v, posts unknown = %v", s.Goal, s.PostsUnknown)
+	}
+	c := campaign()
+	c.EstimatedPostCount = nil
+	if s := Build(c, nil, 2).WithoutPosts(); s.Goal != nil || !s.PostsUnknown {
+		t.Fatalf("no goal: goal = %+v, posts unknown = %v", s.Goal, s.PostsUnknown)
+	}
+}
+
 func TestBuild_NoGoal(t *testing.T) {
 	c := campaign()
 	c.EstimatedPostCount = nil
