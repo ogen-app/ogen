@@ -29,8 +29,8 @@ type Call struct {
 }
 
 // Turn is one scripted model response. A turn with Calls asks genkit to run
-// those tools; a turn without Calls ends the loop with Text. Text is streamed
-// in Chunks when they are set, otherwise in one piece.
+// those tools, after any Text; a turn without Calls ends the loop with Text.
+// Text is streamed in Chunks when they are set, otherwise in one piece.
 type Turn struct {
 	Calls  []Call
 	Text   string
@@ -119,17 +119,14 @@ func (m *Model) generate(ctx context.Context, req *ai.ModelRequest, cb ai.ModelS
 	if err != nil {
 		return nil, err
 	}
-	var parts []*ai.Part
-	for i, c := range t.Calls {
-		parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
-			Name: c.Name, Input: c.Input, Ref: fmt.Sprintf("call-%d-%d", n, i),
-		}))
+	// A turn with Calls streams Text only when it is set; a final turn always
+	// answers, even with nothing.
+	chunks := t.Chunks
+	if len(chunks) == 0 && (t.Text != "" || len(t.Calls) == 0) {
+		chunks = []string{t.Text}
 	}
-	if len(t.Calls) == 0 {
-		chunks := t.Chunks
-		if len(chunks) == 0 {
-			chunks = []string{t.Text}
-		}
+	var parts []*ai.Part
+	if len(chunks) > 0 {
 		if cb != nil {
 			for _, c := range chunks {
 				if err := cb(ctx, &ai.ModelResponseChunk{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart(c)}}); err != nil {
@@ -138,11 +135,19 @@ func (m *Model) generate(ctx context.Context, req *ai.ModelRequest, cb ai.ModelS
 			}
 		}
 		parts = append(parts, ai.NewTextPart(strings.Join(chunks, "")))
-	} else if cb != nil {
-		if err := cb(ctx, &ai.ModelResponseChunk{Role: ai.RoleModel, Content: parts}); err != nil {
+	}
+	var calls []*ai.Part
+	for i, c := range t.Calls {
+		calls = append(calls, ai.NewToolRequestPart(&ai.ToolRequest{
+			Name: c.Name, Input: c.Input, Ref: fmt.Sprintf("call-%d-%d", n, i),
+		}))
+	}
+	if len(calls) > 0 && cb != nil {
+		if err := cb(ctx, &ai.ModelResponseChunk{Role: ai.RoleModel, Content: calls}); err != nil {
 			return nil, err
 		}
 	}
+	parts = append(parts, calls...)
 	return &ai.ModelResponse{
 		Message:      ai.NewModelMessage(parts...),
 		FinishReason: ai.FinishReasonStop,

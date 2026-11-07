@@ -108,6 +108,7 @@ func TestAssistantTurn_Refusals(t *testing.T) {
 	}{
 		"no instruction":          {`{"viewContext":{"version":1,"screen":"ideas","scope":{"kind":"workspace"}}}`, nil, 400, ""},
 		"no view":                 {`{"instruction":"hi"}`, nil, 400, ""},
+		"instruction too long":    {`{"instruction":"` + strings.Repeat("é", 8001) + `","viewContext":{"version":1,"screen":"ideas","scope":{"kind":"workspace"}}}`, nil, 400, "at most 8000 characters"},
 		"bad view":                {`{"instruction":"hi","viewContext":{"version":1,"screen":"billing","scope":{"kind":"workspace"}}}`, nil, 400, "viewContext.screen"},
 		"scope gone":              {`{"instruction":"hi","viewContext":{"version":1,"screen":"post","scope":{"kind":"post","id":"p9"}}}`, viewresolve.ErrScopeNotFound, 404, "post not found"},
 		"filter the list rejects": {`{"instruction":"hi","viewContext":{"version":1,"screen":"ideas","scope":{"kind":"workspace"}}}`, &viewcontext.InvalidError{Field: "filter", Reason: "unknown pile"}, 400, "viewContext.filter"},
