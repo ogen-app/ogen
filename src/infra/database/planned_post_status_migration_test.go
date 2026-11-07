@@ -1,6 +1,7 @@
 package database
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -67,10 +68,34 @@ func TestPlannedPostStatusBackfill(t *testing.T) {
 		('n4', 'ready',   'draft_thesis', '- point', 'content_plan', 'default', 'u'),
 		('n5', 'no_theses', 'research',   'text',    'manual',       'default', 'u')`)
 
+	// Bodies with a thesis note: a body strings.TrimSpace empties is planned,
+	// anything else stays a draft, as models.PostStatus.WithBody decides.
+	bodies := map[string]string{
+		"nbsp":   "\u00a0",
+		"ff_vt":  "\f\v",
+		"wide":   "\u0085\u1680\u2000\u200a\u2028\u2029\u202f\u205f\u3000",
+		"zwsp":   "\u200b", // not white space to TrimSpace
+		"padded": "\u00a0x\u3000",
+	}
+	for id, body := range bodies {
+		if _, err := db.DB.ExecContext(ctx, `INSERT INTO posts (id, campaign_id, title, content, status, created_by, tenant_id) VALUES ($1, 'c', $1, $2, 'draft', 'u', 'default')`, id, body); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.DB.ExecContext(ctx, `INSERT INTO post_notes (id, post_id, type, body, origin, tenant_id, created_by) VALUES ('n_' || $1, $1, 'draft_thesis', '- point', 'content_plan', 'default', 'u')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	execFile(plannedUp)
 	want := map[string]string{
 		"theses": "planned", "blank": "planned",
 		"written": "draft", "no_theses": "draft", "ready": "ready_for_publish",
+	}
+	for id, body := range bodies {
+		want[id] = "draft"
+		if strings.TrimSpace(body) == "" {
+			want[id] = "planned"
+		}
 	}
 	got := statuses()
 	for id, w := range want {
