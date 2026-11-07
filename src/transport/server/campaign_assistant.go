@@ -34,7 +34,7 @@ func initCampaignAssistant(
 	hub eventhub.Hub,
 	notifier *notify.Service,
 	repos campaign_assistant.CampaignAssistantRepos,
-	contentPlanFn func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error),
+	contentPlanFn func(ctx context.Context, req content_plan.ContentPlanRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error),
 	enrichBriefFn func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error),
 	overviewSvc *overview.Service,
 	generatePostsFn func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error),
