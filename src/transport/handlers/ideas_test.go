@@ -24,19 +24,20 @@ import (
 
 // ideaWire decodes an Idea exactly as the UI sees it, keeping nulls visible.
 type ideaWire struct {
-	ID            string     `json:"id"`
-	Title         string     `json:"title"`
-	Note          string     `json:"note"`
-	CampaignID    *string    `json:"campaign_id"`
-	Verdict       *string    `json:"verdict"`
-	RemindAt      *time.Time `json:"remind_at"`
-	DecidedAt     *time.Time `json:"decided_at"`
-	DecidedBy     *string    `json:"decided_by"`
-	CreatedBy     *string    `json:"created_by"`
-	CreatedByName string     `json:"created_by_name"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	FitScore      *int       `json:"fit_score"`
+	ID            string          `json:"id"`
+	Title         string          `json:"title"`
+	Note          string          `json:"note"`
+	CampaignID    *string         `json:"campaign_id"`
+	Verdict       *string         `json:"verdict"`
+	RemindAt      *time.Time      `json:"remind_at"`
+	DecidedAt     *time.Time      `json:"decided_at"`
+	DecidedBy     *string         `json:"decided_by"`
+	CreatedBy     *string         `json:"created_by"`
+	CreatedByName string          `json:"created_by_name"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+	FitScore      *int            `json:"fit_score"`
+	Plan          models.IdeaPlan `json:"plan"`
 }
 
 var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
@@ -84,7 +85,7 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo), tenantRepo, testCookieName, false, auth, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		ideaHub = &quietHub{}
 		handlers.NewIdeasHandler(ideas.New(repository.NewIdeaRepository(db), userRepo), auth, nil).WithEventHub(ideaHub).Register(app)
 
@@ -369,6 +370,29 @@ var _ = Describe("IdeasHandler (CON-315)", Ordered, func() {
 		got := list(admin, "")[0]
 		Expect(got.Title).To(Equal("x"))
 		Expect(*got.CreatedBy).To(Equal(adminUser.ID))
+	})
+
+	It("replaces the plan, rejects unknown plan keys, and clears it on null", func() {
+		idea := capture(admin, fiber.Map{"title": "x"})
+		path := "/api/ideas/" + idea.ID
+		got := decodeIdea(doRaw(admin, "PATCH", path, `{"plan":{"platform_id":"pl","target_date":"2026-12-01"}}`), 200)
+		Expect(*got.Plan.PlatformID).To(Equal("pl"))
+		Expect(got.Plan.TargetDate).NotTo(BeNil())
+
+		for _, body := range []string{
+			`{"plan":{"targetDate":"2026-12-02"}}`,
+			`{"plan":{"platform_id":"other","extra":1}}`,
+			`{"plan":"pl"}`,
+			`{"plan":[]}`,
+		} {
+			Expect(doRaw(admin, "PATCH", path, body).StatusCode).To(Equal(400), body)
+		}
+		got = list(admin, "")[0]
+		Expect(*got.Plan.PlatformID).To(Equal("pl"), "a rejected plan leaves the stored one")
+		Expect(got.Plan.TargetDate).NotTo(BeNil())
+
+		got = decodeIdea(doRaw(admin, "PATCH", path, `{"plan":null}`), 200)
+		Expect(got.Plan.IsZero()).To(BeTrue())
 	})
 
 	// ── PUT verdict ──────────────────────────────────────────────────────────

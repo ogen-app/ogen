@@ -136,12 +136,12 @@ func (r *Resolver) Resolve(ctx context.Context, v *viewcontext.ViewContext) (*Re
 	}
 	if s := v.Selection; s != nil {
 		out.Selection = refs.items(s.Kind, selIDs)
+		out.Dropped = len(selIDs) - len(out.Selection)
 		if s.AllMatching {
 			// Matches deleted between the query and the title read are rare;
 			// they stay in the total.
 			out.Selection = out.Selection[:min(len(out.Selection), MaxSelection)]
 		} else {
-			out.Dropped = len(selIDs) - len(out.Selection)
 			out.SelectionTotal = len(out.Selection)
 		}
 	}
@@ -181,6 +181,9 @@ func (r *Resolver) matching(ctx context.Context, v *viewcontext.ViewContext) ([]
 	case models.AssetQuery:
 		q.ScopeCampaign = campaign
 		ids, err := r.assets.QueryIDs(ctx, q)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, ErrScopeNotFound
+		}
 		if err != nil {
 			return nil, 0, err
 		}
@@ -236,6 +239,7 @@ func (r *Resolver) Items(ctx context.Context, kind viewcontext.EntityKind, ids [
 	return refs.items(kind, ids), nil
 }
 
+// filterError maps a list-query parse error to an InvalidError on filter.
 func filterError(err error) error {
 	if le, ok := errors.AsType[*listquery.Error](err); ok {
 		return &viewcontext.InvalidError{Field: "filter", Reason: le.Msg}
@@ -243,6 +247,7 @@ func filterError(err error) error {
 	return err
 }
 
+// scopeKind is the entity kind a non-workspace scope names.
 func scopeKind(k models.AssistantScopeKind) viewcontext.EntityKind {
 	if k == models.AssistantScopePost {
 		return viewcontext.KindPost
@@ -258,6 +263,7 @@ type refs struct {
 	untitled map[viewcontext.EntityKind]bool
 }
 
+// newRefs returns an empty refs.
 func newRefs() *refs {
 	return &refs{
 		ids:      map[viewcontext.EntityKind][]string{},
@@ -266,10 +272,12 @@ func newRefs() *refs {
 	}
 }
 
+// add queues ids of kind for the title read.
 func (r *refs) add(kind viewcontext.EntityKind, ids ...string) {
 	r.ids[kind] = append(r.ids[kind], ids...)
 }
 
+// load reads the titles of every queued kind, one read per kind.
 func (r *refs) load(ctx context.Context, titles Titles) error {
 	for kind, ids := range r.ids {
 		got, err := titles.Titles(ctx, kind, ids)
@@ -285,6 +293,7 @@ func (r *refs) load(ctx context.Context, titles Titles) error {
 	return nil
 }
 
+// item returns the loaded entity, and false when it no longer exists.
 func (r *refs) item(kind viewcontext.EntityKind, id string) (Item, bool) {
 	if r.untitled[kind] {
 		return Item{Kind: kind, ID: id}, true
@@ -293,6 +302,8 @@ func (r *refs) item(kind viewcontext.EntityKind, id string) (Item, bool) {
 	return Item{Kind: kind, ID: id, Title: title}, ok
 }
 
+// items returns the loaded entities for ids in order, skipping those that
+// no longer exist.
 func (r *refs) items(kind viewcontext.EntityKind, ids []string) []Item {
 	out := make([]Item, 0, len(ids))
 	for _, id := range ids {
@@ -330,6 +341,7 @@ func summary(r *Resolved) string {
 	return strings.Join(parts, " · ")
 }
 
+// label names an item by its title, else by its id.
 func label(it Item) string {
 	if it.Title == "" {
 		return string(it.Kind) + " " + it.ID
@@ -337,6 +349,7 @@ func label(it Item) string {
 	return fmt.Sprintf("%s %q", it.Kind, it.Title)
 }
 
+// plural is kind's noun for n items.
 func plural(kind viewcontext.EntityKind, n int) string {
 	if n == 1 || kind == viewcontext.KindSeries {
 		return string(kind)

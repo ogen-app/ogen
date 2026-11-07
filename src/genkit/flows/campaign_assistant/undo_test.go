@@ -3,13 +3,15 @@ package campaign_assistant
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
 
 type memActions struct {
@@ -37,7 +39,7 @@ func (m *memActions) GetByID(_ context.Context, id string) (*models.AssistantAct
 	return nil, sql.ErrNoRows
 }
 
-func (m *memActions) MarkUndone(_ context.Context, id, by string, now time.Time) (bool, error) {
+func (m *memActions) MarkUndone(_ context.Context, _ bun.IDB, id, by string, now time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a, ok := m.rows[id]
@@ -48,11 +50,40 @@ func (m *memActions) MarkUndone(_ context.Context, id, by string, now time.Time)
 	return true, nil
 }
 
-// storedCampaign is a campaign repository holding one campaign that tools and
-// the undo service both write through.
+// storedCampaign is a campaign repository holding one campaign that tools
+// write through.
 type storedCampaign struct {
 	repository.CampaignRepository
 	c *models.Campaign
+	// columns lists what each UpdateColumns call wrote; failUpdate makes it
+	// fail.
+	columns    [][]string
+	failUpdate error
+}
+
+// UpdateColumns stores only the platform column, the one narrow write the
+// tools make.
+func (s *storedCampaign) UpdateColumns(_ context.Context, _ bun.IDB, c *models.Campaign, columns ...string) error {
+	s.columns = append(s.columns, columns)
+	if s.failUpdate != nil {
+		return s.failUpdate
+	}
+	cp := *s.c
+	if slices.Contains(columns, "target_platforms") {
+		cp.TargetPlatforms = c.TargetPlatforms
+	}
+	s.c = &cp
+	return nil
+}
+
+// logged returns the action the tool logged.
+func (m *memActions) logged(t *testing.T, id string) *models.AssistantAction {
+	t.Helper()
+	a, err := m.GetByID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
 func (s *storedCampaign) GetByID(context.Context, string) (*models.Campaign, error) {
@@ -87,11 +118,11 @@ func TestSetCampaignDates_IsUndoable(t *testing.T) {
 		t.Fatalf("end date = %v, the change did not apply", campaigns.c.EndDate)
 	}
 
-	if _, err := assistantundo.New(actions, campaigns).Undo(t.Context(), st.datesResult.UndoID, "user-1"); err != nil {
-		t.Fatal(err)
-	}
-	if !campaigns.c.EndDate.Equal(day("2026-01-30")) {
-		t.Fatalf("end date after undo = %v, want 2026-01-30", campaigns.c.EndDate)
+	// The undo service (tested against Postgres) restores Before while the
+	// campaign matches After.
+	a := actions.logged(t, st.datesResult.UndoID)
+	if a.Before["endDate"] != "2026-01-30T00:00:00Z" || a.After["endDate"] != "2026-03-31T00:00:00Z" {
+		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
 	}
 }
 

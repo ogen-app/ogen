@@ -64,10 +64,6 @@ func (d Defaults) For(flowKey, slotKey string) string {
 		return d.Embed
 	case flowKey == FlowPostQuality:
 		return d.Quality
-	case flowKey == FlowPostAssistant && slotKey == SlotPlanner:
-		return d.Planning
-	case flowKey == FlowCampaignAssistant && slotKey == SlotOrchestrator:
-		return d.Planning
 	case flowKey == FlowAssistant && slotKey == SlotOrchestrator:
 		return d.Planning
 	case flowKey == FlowAssetAnalysis && slotKey == SlotMap:
@@ -160,6 +156,32 @@ func Init(ctx context.Context, src Source, def Defaults, vendorOf VendorFunc, ti
 			}
 		}
 	}()
+}
+
+// State is the resolver as it is now, for a caller that installs its own —
+// a test's scripted models — and puts this one back afterwards.
+type State struct {
+	snap   *snapshot
+	src    Source
+	vendor VendorFunc
+	tier   TierFunc
+	def    Defaults
+}
+
+// Current returns the resolver's state.
+func Current() State {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+	return State{snap: active.Load(), src: cfgSource, vendor: cfgVendor, tier: cfgTier, def: cfgDefaults}
+}
+
+// Restore puts s back as the resolver's state. A refresh begun under the
+// state it replaces can't store over it, since both hold refreshMu.
+func (s State) Restore() {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+	cfgSource, cfgVendor, cfgTier, cfgDefaults = s.src, s.vendor, s.tier, s.def
+	active.Store(s.snap)
 }
 
 // reconcile inserts a global-default row for any catalog slot that lacks one,

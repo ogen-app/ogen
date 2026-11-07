@@ -1,6 +1,7 @@
 package assistantkit
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -46,6 +47,9 @@ func TestRegistry_KeepsRegistrationOrderPerPack(t *testing.T) {
 	if got := strings.Join(names(r.Tools("campaign")), ","); got != "b,c" {
 		t.Fatalf("campaign tools = %s", got)
 	}
+	if got := strings.Join(names(r.Tools("campaign", "ideas")), ","); got != "b,a,c" {
+		t.Fatalf("campaign+ideas tools = %s, want registration order", got)
+	}
 	// Repeated calls yield the identical list: the grammar cache depends on it.
 	if strings.Join(names(r.Tools("campaign", "ideas")), ",") != strings.Join(names(r.Tools("ideas", "campaign")), ",") {
 		t.Fatal("tool order depends on pack argument order")
@@ -77,6 +81,18 @@ func TestRegistry_RendersGuideAndActions(t *testing.T) {
 	if len(acts) != 1 || acts[0].Name != "generated" {
 		t.Fatalf("actions = %+v, want one deduplicated action", acts)
 	}
+
+	// A guide written over several lines stays on its tool's line, so a line
+	// of it starting with "- " can't read as another tool.
+	multi := spec(g, "multi", "ideas", TierRead, nil)
+	multi.Guide = "Call this when asked.\n- not a tool\n\twrapped   here "
+	r, err = NewRegistry(multi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.Guide(), "- multi: Call this when asked. - not a tool wrapped here\n"; got != want {
+		t.Fatalf("guide = %q, want %q", got, want)
+	}
 }
 
 func TestNewRegistry_RejectsInvalidSpecs(t *testing.T) {
@@ -92,6 +108,9 @@ func TestNewRegistry_RejectsInvalidSpecs(t *testing.T) {
 		"no scope":  {[]Spec{{Name: "z", Pack: "p", Tier: TierRead, Guide: "g", Tool: tool(g, "z")}}, "scope is required"},
 		"name mismatch": {[]Spec{{Name: "w", Pack: "p", Scopes: []Scope{ScopePost}, Tier: TierRead, Guide: "g", Tool: tool(g, "other")}},
 			`tool is named "other"`},
+		"nil tool": {[]Spec{{Name: "u", Pack: "p", Scopes: []Scope{ScopePost}, Tier: TierRead, Guide: "g"}}, "tool is required"},
+		"typed nil tool": {[]Spec{{Name: "t", Pack: "p", Scopes: []Scope{ScopePost}, Tier: TierRead, Guide: "g",
+			Tool: (*ai.ToolDef[noIn, Outcome[string]])(nil)}}, "tool is required"},
 		"half action": {[]Spec{{Name: "v", Pack: "p", Scopes: []Scope{ScopePost}, Tier: TierRead, Guide: "g", Tool: tool(g, "v"),
 			Action: &Action{Name: "v_done"}}}, "action needs a name and a rule"},
 	}
@@ -127,5 +146,41 @@ func TestOutcome_JSONShape(t *testing.T) {
 				t.Fatalf("succeeded = %t", tc.o.Succeeded())
 			}
 		})
+	}
+}
+
+// Prepare runs a tool's claim before its offer is answered; a tool without
+// one, or an unknown tool, claims nothing and releases nothing.
+func TestRegistry_Prepare(t *testing.T) {
+	g := genkit.Init(t.Context())
+	type key struct{}
+	released := false
+	held := spec(g, "held", "campaign", TierProposal, nil)
+	held.Prepare = func(ctx context.Context) (context.Context, func(), error) {
+		return context.WithValue(ctx, key{}, true), func() { released = true }, nil
+	}
+	busy := spec(g, "busy", "campaign", TierProposal, nil)
+	busy.Prepare = func(context.Context) (context.Context, func(), error) { return nil, nil, Refused("not now") }
+	r, err := NewRegistry(held, busy, spec(g, "plain", "campaign", TierRead, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, release, err := r.Prepare(t.Context(), "held")
+	if err != nil || ctx.Value(key{}) != true {
+		t.Fatalf("held: ctx claim = %v, err = %v", ctx.Value(key{}), err)
+	}
+	release()
+	if !released {
+		t.Fatal("release didn't give the claim back")
+	}
+	if _, _, err := r.Prepare(t.Context(), "busy"); err == nil || err.Error() != "not now" {
+		t.Fatalf("busy: err = %v", err)
+	}
+	for _, name := range []string{"plain", "unknown"} {
+		ctx, release, err := r.Prepare(t.Context(), name)
+		if err != nil || ctx != t.Context() || release == nil {
+			t.Fatalf("%s: %v, %v", name, ctx, err)
+		}
+		release()
 	}
 }

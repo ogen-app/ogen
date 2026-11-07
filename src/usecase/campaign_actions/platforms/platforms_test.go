@@ -76,3 +76,21 @@ func TestPlan_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// Omitting post types on a platform restricted to some of them allows all.
+func TestPlan_OmittedTypesLiftARestriction(t *testing.T) {
+	cur := models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}
+	next, added, err := Plan(cur, catalog, []Request{{Platform: "LinkedIn"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 1 || len(next[0].PostTypes) != 0 {
+		t.Fatalf("next = %+v, want LinkedIn with every type", next)
+	}
+	if Summary(added) != "every post type on LinkedIn" {
+		t.Fatalf("summary = %q", Summary(added))
+	}
+	if !slices.Equal(cur[0].PostTypes, []string{"article"}) {
+		t.Fatal("Plan modified the current post types")
+	}
+}

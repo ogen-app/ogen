@@ -7,9 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/pgtest"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/brandfacts"
 )
@@ -96,7 +99,9 @@ func TestFacts_EditAndUndo(t *testing.T) {
 	}
 
 	// Undo the edit: the statement and its expiry come back.
-	svc := assistantundo.New(actions, nil).WithBrand(brand)
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	svc := assistantundo.New(db, actions, nil).WithBrand(brand)
 	if _, err := svc.Undo(ctx, edited.UndoID, "u1"); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +153,6 @@ func (u *undoActions) GetByID(_ context.Context, id string) (*models.AssistantAc
 	return nil, sql.ErrNoRows
 }
 
-func (u *undoActions) MarkUndone(context.Context, string, string, time.Time) (bool, error) {
+func (u *undoActions) MarkUndone(context.Context, bun.IDB, string, string, time.Time) (bool, error) {
 	return true, nil
 }

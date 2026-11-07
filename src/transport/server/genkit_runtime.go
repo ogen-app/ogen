@@ -63,21 +63,18 @@ type genkitRuntime struct {
 	g      *genkit.Genkit
 	plugin *anthropic.Anthropic
 
-	contentPlanFn       func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
-	postAssistantFn     func(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error)
-	postQualityFns      postQualityFns
-	enrichBriefFn       func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
-	campaignAssistantFn func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
-	answerProposalFn    func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
-	assistantFn         assistant.Runner
-	answerAssistantFn   func(ctx context.Context, req assistant.AnswerRequest, onEvent assistant.OnEventFunc) (*assistant.Response, error)
-	generatePostsFn     func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
-	draftPostFn         func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
-	checkBriefFn        func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
-	checkPostsFn        func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
-	analyzeAssetFn      func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error)
-	distillIdeasFn      func(ctx context.Context, req asset_analysis.DistillRequest) (*asset_analysis.DistillResponse, error)
-	brandDistill        brand_distill.Callbacks
+	contentPlanFn     func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
+	postQualityFns    postQualityFns
+	enrichBriefFn     func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
+	assistantFn       assistant.Runner
+	answerAssistantFn func(ctx context.Context, req assistant.AnswerRequest, onEvent assistant.OnEventFunc) (*assistant.Response, error)
+	generatePostsFn   func(ctx context.Context, req content_plan.GeneratePostsRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
+	draftPostFn       func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
+	checkBriefFn      func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
+	checkPostsFn      func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
+	analyzeAssetFn    func(ctx context.Context, req asset_analysis.AnalyzeRequest) (*asset_analysis.AnalyzeResponse, error)
+	distillIdeasFn    func(ctx context.Context, req asset_analysis.DistillRequest) (*asset_analysis.DistillResponse, error)
+	brandDistill      brand_distill.Callbacks
 
 	cfg                 *config.Config
 	hub                 eventhub.Hub
@@ -204,7 +201,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 func (r *genkitRuntime) IsAnthropicAvailable() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.contentPlanFn != nil && r.postAssistantFn != nil && r.postQualityFns.assess != nil && r.enrichBriefFn != nil && r.campaignAssistantFn != nil && r.checkBriefFn != nil && r.checkPostsFn != nil
+	return r.contentPlanFn != nil && r.assistantFn != nil && r.postQualityFns.assess != nil && r.enrichBriefFn != nil && r.checkBriefFn != nil && r.checkPostsFn != nil
 }
 
 func (r *genkitRuntime) GenerateDraft(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
@@ -215,16 +212,6 @@ func (r *genkitRuntime) GenerateDraft(ctx context.Context, campaignID string, on
 		return nil, ErrAnthropicUnavailable
 	}
 	return fn(ctx, campaignID, onEvent)
-}
-
-func (r *genkitRuntime) RunPostAssistant(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error) {
-	r.mu.RLock()
-	fn := r.postAssistantFn
-	r.mu.RUnlock()
-	if fn == nil {
-		return nil, ErrAnthropicUnavailable
-	}
-	return fn(ctx, req, onEvent)
 }
 
 func (r *genkitRuntime) AssessPostQuality(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error) {
@@ -270,16 +257,6 @@ func (r *genkitRuntime) EnrichBrief(ctx context.Context, req enrich_brief.Enrich
 	return fn(ctx, req, onEvent)
 }
 
-func (r *genkitRuntime) RunCampaignAssistant(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
-	r.mu.RLock()
-	fn := r.campaignAssistantFn
-	r.mu.RUnlock()
-	if fn == nil {
-		return nil, ErrAnthropicUnavailable
-	}
-	return fn(ctx, req, onEvent)
-}
-
 // DraftPost writes finished posts from source material and saves them as
 // drafts.
 func (r *genkitRuntime) DraftPost(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
@@ -303,36 +280,14 @@ func (r *genkitRuntime) RunAssistant(ctx context.Context, req assistant.Request,
 	return fn(ctx, req, onEvent)
 }
 
-// AnswerProposal confirms or dismisses a campaign assistant offer from its
-// card, without a model call.
-func (r *genkitRuntime) AnswerProposal(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
+// AnswerProposal confirms or dismisses an assistant offer from its card,
+// without a model call.
+func (r *genkitRuntime) AnswerProposal(ctx context.Context, req assistant.AnswerRequest, onEvent assistant.OnEventFunc) (*assistant.Response, error) {
 	r.mu.RLock()
-	fn, universal := r.answerProposalFn, r.answerAssistantFn
+	fn := r.answerAssistantFn
 	r.mu.RUnlock()
 	if fn == nil {
 		return nil, ErrAnthropicUnavailable
-	}
-	// The universal assistant answers the offers its packs made; every
-	// other offer is the campaign assistant's.
-	if universal != nil {
-		resp, err := universal(ctx, assistant.AnswerRequest{ProposalID: req.ProposalID, OptionID: req.OptionID, Confirm: req.Confirm},
-			func(kind assistant.SSEEventKind, data any) {
-				if onEvent != nil {
-					onEvent(campaign_assistant.SSEEventKind(kind), data)
-				}
-			})
-		switch {
-		case errors.Is(err, assistant.ErrNotThisAssistant):
-		case errors.Is(err, assistant.ErrProposalNotFound):
-			return nil, campaign_assistant.ErrProposalNotFound
-		case err != nil:
-			if ce, ok := errors.AsType[*assistant.ProposalConflictError](err); ok {
-				return nil, &campaign_assistant.ProposalConflictError{Msg: ce.Msg}
-			}
-			return nil, err
-		default:
-			return &campaign_assistant.CampaignAssistantResponse{Explanation: resp.Explanation, Action: resp.Action}, nil
-		}
 	}
 	return fn(ctx, req, onEvent)
 }
@@ -411,11 +366,10 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		slog.WarnContext(ctx, "anthropic_api_key not configured; flows disabled",
 			logging.AttrComponent, "genkit")
 		r.contentPlanFn = nil
-		r.postAssistantFn = nil
 		r.postQualityFns = postQualityFns{}
 		r.enrichBriefFn = nil
-		r.campaignAssistantFn = nil
-		r.answerProposalFn = nil
+		r.assistantFn = nil
+		r.answerAssistantFn = nil
 		r.generatePostsFn = nil
 		r.checkBriefFn = nil
 		r.checkPostsFn = nil
@@ -443,10 +397,6 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	if err != nil {
 		return fmt.Errorf("init content plan: %w", err)
 	}
-	postAssistantFn, err := initPostAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.postAssistRepos, r.cloneSvc, r.restoreSvc, r.scheduleSvc, r.noteSvc, r.qualityAuto)
-	if err != nil {
-		return fmt.Errorf("init post assistant: %w", err)
-	}
 	postQualityFns, err := initPostQuality(g, r.cfg, provider, r.recorder, r.checker, r.hub, r.notifier, r.limiter, r.postQualityRepos)
 	if err != nil {
 		return fmt.Errorf("init post quality: %w", err)
@@ -468,33 +418,49 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	if err != nil {
 		return fmt.Errorf("init consistency: %w", err)
 	}
-	// The campaign assistant reuses the content_plan + enrich_brief
-	// callbacks (plus the CON-114 generatePosts, CON-207 draftPost, and CON-116
-	// consistency callbacks) as tools, so it is initialised after them.
-	campaignAssistantFn, err := initCampaignAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.campaignAssistRepos, contentPlanFn, enrichBriefFn, r.campaignOverviewSvc, generatePostsFn, draftPostFn, checkBriefFn, checkPostsFn)
+	// The campaign pack runs the planning, brief and review flows above as
+	// its tools; the post pack writes through its own writer slot.
+	campaignPack, err := campaign_assistant.NewPack(campaign_assistant.CampaignAssistantFlowConfig{
+		Embedder:          r.embedder,
+		Hub:               r.hub,
+		Notifier:          r.notifier,
+		ContentPlan:       contentPlanFn,
+		EnrichBrief:       enrichBriefFn,
+		Overview:          r.campaignOverviewSvc,
+		GeneratePosts:     generatePostsFn,
+		MaxGeneratePosts:  r.cfg.GeneratePostsMax,
+		DraftPost:         draftPostFn,
+		MaxDraftPosts:     r.cfg.DraftPostMax,
+		ProposalThreshold: r.cfg.AssistantProposalThreshold,
+		CheckBrief:        checkBriefFn,
+		CheckPosts:        checkPostsFn,
+	}, r.campaignAssistRepos)
 	if err != nil {
-		return fmt.Errorf("init campaign assistant: %w", err)
+		return fmt.Errorf("init campaign pack: %w", err)
+	}
+	postPack, err := post_assistant.NewPack(g, post_assistant.PostAssistantFlowConfig{
+		Provider:        provider,
+		Recorder:        r.recorder,
+		MaxOutputTokens: r.cfg.MaxOutputTokens,
+		Embedder:        r.embedder,
+		Hub:             r.hub,
+		CloneService:    r.cloneSvc,
+		RestoreService:  r.restoreSvc,
+		ScheduleService: r.scheduleSvc,
+		NoteService:     r.noteSvc,
+		QualityAuto:     r.qualityAuto,
+	}, r.postAssistRepos)
+	if err != nil {
+		return fmt.Errorf("init post pack: %w", err)
 	}
 
-	// The packs reach the campaign assistant and the draft writer through
-	// this rebuild's callbacks.
+	// The packs reach the review flows and the draft writer through this
+	// rebuild's callbacks.
 	pd := r.packDeps
-	pd.Campaign = campaignAssistantFn
+	pd.Campaign, pd.Post = &campaignPack, &postPack
 	pd.CheckBrief, pd.CheckPosts = checkBriefFn, checkPostsFn
 	if pd.Compose != nil {
 		pd.Compose = pd.Compose.WithDrafter(ideaDrafter(r))
-	}
-	repos := r.assistantRepos
-	answerCampaign := campaign_assistant.NewAnswerProposalCallback()
-	repos.ForeignAnswer = func(ctx context.Context, req assistant.AnswerRequest) (any, error) {
-		resp, err := answerCampaign(ctx, campaign_assistant.AnswerProposalRequest{ProposalID: req.ProposalID, OptionID: req.OptionID, Confirm: req.Confirm}, nil)
-		if errors.Is(err, campaign_assistant.ErrProposalNotFound) {
-			return nil, assistant.ErrProposalNotFound
-		}
-		if ce, ok := errors.AsType[*campaign_assistant.ProposalConflictError](err); ok {
-			return nil, &assistant.ProposalConflictError{Msg: ce.Msg}
-		}
-		return resp, err
 	}
 	universal, err := assistant.Init(g, assistant.FlowConfig{
 		Provider: provider,
@@ -503,10 +469,14 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		// The orchestrator answers in a short envelope; the cap leaves room for
 		// the thinking Claude 5.x models do by default.
 		MaxOutputTokens: 4096,
-		MaxTurns:        4,
+		// Room for a read chain before the work: retrieving a post's assets
+		// before its edit, or an overview before a plan. At most one heavy
+		// sub-flow runs per message whatever the cap: the campaign tools
+		// reserve it.
+		MaxTurns: 6,
 		// The warmed grammar key only matches with the stable tool order.
 		PrewarmTools: r.cfg.AnthropicStableToolOrder,
-	}, repos, packs.All(pd)...)
+	}, r.assistantRepos, packs.All(pd)...)
 	if err != nil {
 		return fmt.Errorf("init assistant: %w", err)
 	}
@@ -526,11 +496,8 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.distillIdeasFn = analysisFlows.distill
 	r.brandDistill = brandDistill
 	r.contentPlanFn = contentPlanFn
-	r.postAssistantFn = postAssistantFn
 	r.postQualityFns = postQualityFns
 	r.enrichBriefFn = enrichBriefFn
-	r.campaignAssistantFn = campaignAssistantFn
-	r.answerProposalFn = campaign_assistant.NewAnswerProposalCallback()
 	r.assistantFn = universal.Run
 	r.answerAssistantFn = universal.Answer
 	r.generatePostsFn = generatePostsFn

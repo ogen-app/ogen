@@ -3,7 +3,9 @@
 // endpoint (POST /api/posts/:id/clone) and the Post Assistant's
 // clonePost tool, so the two entry points can never drift.
 //
-// A clone is always a fresh draft in the source's campaign and phase.
+// A clone is a fresh draft in the source's campaign and phase; a planned
+// source's copy takes its draft_thesis notes and stays planned until it
+// has a body.
 // Content is copied verbatim unless the caller supplies an override
 // (the assistant passes AI-adapted content when cloning across
 // platforms). Attachments are deep-copied in object storage so the
@@ -214,7 +216,12 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 	if err != nil {
 		return nil, err
 	}
-	if err := s.insert(ctx, clone, newAtts, version, logEntry); err != nil {
+	// A planned post's theses are its brief; the copy needs them to be planned.
+	thesesFrom := ""
+	if src.Status == models.PostStatusPlanned {
+		thesesFrom = src.ID
+	}
+	if err := s.insert(ctx, clone, newAtts, version, logEntry, thesesFrom); err != nil {
 		return nil, err
 	}
 	committed = true
@@ -294,6 +301,11 @@ func buildClone(src *models.Post, tgt target, opts Options, newID, content strin
 		UpdatedAt:        now,
 		UsedAssets:       []models.Asset{},
 	}
+	// The copy is the source's, or an adaptation of it for another
+	// platform, so it keeps the source's grounding either way.
+	if src.GroundingMode != nil {
+		clone.GroundingMode = new(*src.GroundingMode)
+	}
 	if keepThread {
 		clone.ThreadSegments = append(models.ThreadSegments{}, src.ThreadSegments...)
 	}
@@ -320,12 +332,18 @@ func buildClone(src *models.Post, tgt target, opts Options, newID, content strin
 	return clone
 }
 
-// insert writes the clone, its attachments, its v1 version and the
-// audit entry in one transaction.
-func (s *Service) insert(ctx context.Context, clone *models.Post, atts []*models.PostAttachment, version *models.PostVersion, logEntry *models.PostLog) error {
+// insert writes the clone, its attachments, its v1 version, the
+// draft_thesis notes of post thesesFrom (none when "") and the audit entry
+// in one transaction.
+func (s *Service) insert(ctx context.Context, clone *models.Post, atts []*models.PostAttachment, version *models.PostVersion, logEntry *models.PostLog, thesesFrom string) error {
 	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.NewInsert().Model(clone).Exec(ctx); err != nil {
 			return err
+		}
+		if thesesFrom != "" {
+			if err := copyTheses(ctx, tx, thesesFrom, clone); err != nil {
+				return err
+			}
 		}
 		for _, a := range atts {
 			if _, err := tx.NewInsert().Model(a).Exec(ctx); err != nil {
@@ -340,6 +358,31 @@ func (s *Service) insert(ctx context.Context, clone *models.Post, atts []*models
 		}
 		return s.logs.AppendTx(ctx, tx, logEntry)
 	})
+}
+
+// copyTheses copies post srcID's draft_thesis notes onto clone, keeping
+// their author and origin.
+func copyTheses(ctx context.Context, tx bun.Tx, srcID string, clone *models.Post) error {
+	var notes []models.PostNote
+	if err := tx.NewSelect().Model(&notes).
+		Where("pn.post_id = ? AND pn.type = ?", srcID, models.PostNoteTypeDraftThesis).
+		OrderExpr("pn.created_at, pn.id").
+		Scan(ctx); err != nil {
+		return err
+	}
+	if len(notes) == 0 {
+		return nil
+	}
+	for i := range notes {
+		id, err := models.NewID()
+		if err != nil {
+			return err
+		}
+		notes[i].ID, notes[i].PostID = id, clone.ID
+		notes[i].CreatedAt, notes[i].UpdatedAt = clone.CreatedAt, clone.CreatedAt
+	}
+	_, err := tx.NewInsert().Model(&notes).Exec(ctx)
+	return err
 }
 
 // copyAttachments duplicates the source post's attachments to newPostID,

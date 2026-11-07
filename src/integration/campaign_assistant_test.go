@@ -15,6 +15,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
@@ -37,9 +38,9 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		postRepo     repository.PostRepository
 		ideaRepo     repository.IdeaRepository
 		postNoteRepo repository.PostNoteRepository
-		messageRepo  repository.CampaignAssistantMessageRepository
+		messageRepo  repository.AssistantMessageRepository
 		assetRepo    repository.AssetRepository
-		callback     func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
+		callback     func(ctx context.Context, req campaignTurn, onEvent campaign_assistant.OnEventFunc) (*campaignTurnResult, error)
 
 		platformID = "AXqWG7U2qnpt" // seeded LinkedIn platform (Sqid)
 	)
@@ -61,7 +62,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		postRepo = repository.NewPostRepository(db)
 		ideaRepo = repository.NewIdeaRepository(db)
 		postNoteRepo = repository.NewPostNoteRepository(db)
-		messageRepo = repository.NewCampaignAssistantMessageRepository(db)
+		messageRepo = repository.NewAssistantMessageRepository(db)
 
 		// Seed user.
 		var err error
@@ -147,8 +148,8 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 		overviewSvc := overview.New(campaignRepo, postRepo, platformRepo)
 
-		Expect(campaign_assistant.InitCampaignAssistant(g, campaign_assistant.CampaignAssistantFlowConfig{
-			Provider:         provider,
+		proposalRepo := repository.NewAssistantProposalRepository(db)
+		pack, err := campaign_assistant.NewPack(campaign_assistant.CampaignAssistantFlowConfig{
 			ContentPlan:      contentPlanCb,
 			EnrichBrief:      enrichBriefCb,
 			Overview:         overviewSvc,
@@ -162,15 +163,16 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			Posts:     postRepo,
 			Assets:    assetRepo,
 			Chunks:    chunksRepo,
-			Proposals: repository.NewAssistantProposalRepository(db),
-		})).To(Succeed())
-		callback = campaign_assistant.NewCampaignAssistantCallback()
+			Proposals: proposalRepo,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		callback = campaignCallback(newAssistant(g, assistant.Repos{Messages: messageRepo, Proposals: proposalRepo}, pack))
 	})
 
 	AfterEach(func() {
 		// Reset conversation + posts (and their notes) between specs; the campaign
 		// persists. Notes are deleted first — they FK the posts.
-		_, _ = db.NewDelete().TableExpr("campaign_assistant_messages").Where("1 = 1").Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("assistant_messages").Where("scope_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("assistant_proposals").Where("scope_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_notes").Where("post_id IN (SELECT id FROM posts WHERE campaign_id = ?)", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
@@ -181,7 +183,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		if db == nil {
 			return
 		}
-		_, _ = db.NewDelete().TableExpr("campaign_assistant_messages").Where("1 = 1").Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("assistant_messages").Where("scope_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("assistant_proposals").Where("scope_id = ?", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_notes").Where("post_id IN (SELECT id FROM posts WHERE campaign_id = ?)", campaignID).Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
@@ -194,7 +196,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	Describe("question answering", func() {
 		It("answers a question about the campaign without mutating it", func() {
-			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "In one sentence, what is this campaign about? Do not change anything.",
 			}, nil)
@@ -218,7 +220,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			before, err := campaignRepo.GetByID(ctx, campaignID)
 			Expect(err).NotTo(HaveOccurred())
 
-			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "Enrich and improve the campaign brief. Make the tone more technical and benchmark-driven.",
 			}, nil)
@@ -247,12 +249,16 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 				switch name {
 				case campaign_assistant.SSEEventContentPlanComplete:
 					gotContentPlanComplete = true
-				case campaign_assistant.SSEEventComplete:
+				case campaign_assistant.SSEEventKind(assistant.SSEEventComplete):
 					gotComplete = true
 				}
 			})
 
-			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent)
+			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent, func() {
+				ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ideas).To(BeEmpty(), "nothing is planned before the yes")
+			})
 
 			Expect(resp.Action).To(Equal("content_plan_generated"))
 			Expect(resp.ContentPlan).NotTo(BeNil())
@@ -269,13 +275,13 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	Describe("conversation history", func() {
 		It("persists user and model turns", func() {
-			_, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			_, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "Which platforms does this campaign target?",
 			}, nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			msgs, err := messageRepo.ListRecentByCampaignID(ctx, campaignID, 10)
+			msgs, err := messageRepo.ListRecent(ctx, models.AssistantScopeCampaign, campaignID, 10)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(msgs)).To(BeNumerically(">=", 2), "user instruction + model response should be persisted")
 
@@ -298,7 +304,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	Describe("campaign overview", func() {
 		It("answers an overview question grounded in the getCampaignOverview tool", func() {
-			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "Give me a quick overview of this campaign and how the content is distributed across its phases.",
 			}, nil)
@@ -315,7 +321,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	Describe("targeted generation", func() {
 		It("adds a few targeted posts in the current phase and persists them", func() {
-			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "Add 2 LinkedIn posts in the current phase for the upcoming two weeks.",
 			}, nil)
@@ -338,7 +344,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 	Describe("draft post from research", func() {
 		It("turns a prior research answer into a content-first draft with a Source research note", func() {
 			// Turn 1: a research-style answer that persists as the latest model turn.
-			_, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			_, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "In two or three sentences, summarise why Go suits production AI features for this campaign.",
 			}, nil)
@@ -350,11 +356,11 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 				switch name {
 				case campaign_assistant.SSEEventDraftPostComplete:
 					gotDraftComplete = true
-				case campaign_assistant.SSEEventComplete:
+				case campaign_assistant.SSEEventKind(assistant.SSEEventComplete):
 					gotComplete = true
 				}
 			})
-			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "Great — create a LinkedIn post with this info for next week.",
 			}, onEvent)
@@ -397,7 +403,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	Describe("change dates", func() {
 		It("moves the campaign end date and saves it", func() {
-			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "Extend the campaign end date to 2026-09-30.",
 			}, nil)
@@ -445,7 +451,16 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 				})).To(Succeed())
 			}
 
-			resp := proposeThenConfirm(ctx, callback, campaignID, "Redistribute the drafts across the campaign.", nil)
+			seeded := start.AddDate(0, 0, 1)
+			resp := proposeThenConfirm(ctx, callback, campaignID, "Redistribute the drafts across the campaign.", nil, func() {
+				posts, err := postRepo.ListByCampaign(ctx, campaignID)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(posts).To(HaveLen(3))
+				for _, p := range posts {
+					Expect(p.ScheduledAt).NotTo(BeNil())
+					Expect(p.ScheduledAt.Equal(seeded)).To(BeTrue(), "no post moves before the yes")
+				}
+			})
 
 			Expect(resp.Action).To(Equal("posts_redistributed"))
 			Expect(resp.Redistribute).NotTo(BeNil())
@@ -508,7 +523,14 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 				}
 			})
 
-			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent)
+			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent, func() {
+				ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ideas).To(BeEmpty(), "nothing is planned before the yes")
+				before, err := campaignRepo.GetByID(ctx, campaignID)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(before.UseAssets).To(BeFalse(), "asset use isn't switched on before the yes")
+			})
 			Expect(resp.Action).To(Equal("content_plan_generated"))
 
 			// Auto-use: the assistant enabled + persisted asset generation.
@@ -539,7 +561,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 		It("handles an asset question without failing the turn", func() {
 			// No embedder is wired in the harness, so askCampaignAssets degrades to
 			// unavailable — the turn must still complete cleanly.
-			resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{
+			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "What do the attached assets say about concurrency benchmarks?",
 			}, nil)
@@ -551,20 +573,23 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 })
 
 // proposeThenConfirm sends a plan-wide request, which the assistant proposes
-// instead of running, then answers "yes" and returns the turn that ran it.
+// instead of running, checks with unchanged that nothing ran yet, then
+// answers "yes" and returns the turn that ran it.
 func proposeThenConfirm(
 	ctx context.Context,
-	callback func(context.Context, campaign_assistant.CampaignAssistantRequest, campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error),
+	callback func(context.Context, campaignTurn, campaign_assistant.OnEventFunc) (*campaignTurnResult, error),
 	campaignID, instruction string,
 	onEvent campaign_assistant.OnEventFunc,
-) *campaign_assistant.CampaignAssistantResponse {
+	unchanged func(),
+) *campaignTurnResult {
 	GinkgoHelper()
-	proposed, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{CampaignID: campaignID, Instruction: instruction}, nil)
+	proposed, err := callback(ctx, campaignTurn{CampaignID: campaignID, Instruction: instruction}, nil)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(proposed.Action).To(Equal("proposed"), "a plan-wide change waits for the user's yes")
 	Expect(proposed.Proposals).To(HaveLen(1))
+	unchanged()
 
-	resp, err := callback(ctx, campaign_assistant.CampaignAssistantRequest{CampaignID: campaignID, Instruction: "Yes, go ahead."}, onEvent)
+	resp, err := callback(ctx, campaignTurn{CampaignID: campaignID, Instruction: "Yes, go ahead."}, onEvent)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(resp).NotTo(BeNil())
 	return resp

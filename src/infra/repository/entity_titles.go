@@ -44,8 +44,12 @@ var titleSources = map[viewcontext.EntityKind]struct {
 	// A post's title is optional; its opening words stand in for it.
 	viewcontext.KindPost:     {(*models.Post)(nil), "po.id", "coalesce(nullif(po.title, ''), left(po.content, 80))", ""},
 	viewcontext.KindCampaign: {(*models.Campaign)(nil), "c.id", "c.name", "c.deleted_at IS NULL"},
+	viewcontext.KindVoice:    {(*models.BrandVoice)(nil), "bv.id", "bv.name", ""},
+	viewcontext.KindAudience: {(*models.BrandAudience)(nil), "ba.id", "ba.name", ""},
+	viewcontext.KindSeries:   {(*models.Series)(nil), "bs.id", "bs.name", "bs.deleted_at IS NULL"},
 }
 
+// Titles reads the titles of ids of kind in the caller's tenant.
 func (r *entityTitleRepository) Titles(ctx context.Context, kind viewcontext.EntityKind, ids []string) (map[string]string, error) {
 	src, ok := titleSources[kind]
 	if !ok {

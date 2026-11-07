@@ -74,8 +74,7 @@ func (st *requestState) outcomes() []outcome {
 	if r := st.postsReviewResult; r != nil {
 		out = append(out, postsReviewOutcome(r))
 	}
-	out = append(out, proposalOutcomes(st.proposed)...)
-	return append(out, resolvedOutcomes(st.resolved)...)
+	return out
 }
 
 // turnAction labels a turn by its last committed write, or by its last review
@@ -88,6 +87,9 @@ func turnAction(outs []outcome, writes []string) string {
 	}
 	action, wrote := "", false
 	for _, o := range outs {
+		if o.action == "" {
+			continue
+		}
 		if !o.readOnly || !wrote {
 			action = o.action
 		}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -44,6 +47,11 @@ type turnStateKey struct{}
 type turnState struct {
 	view *viewresolve.Resolved
 
+	// planning serializes the UI tools from reading the screen to adding
+	// their action, so a filter or selection planned while navigate runs
+	// targets one screen and campaign, in the order the actions apply.
+	planning sync.Mutex
+
 	mu sync.Mutex
 	// screen and campaign follow the turn's navigations, so a filter set
 	// after a navigate applies to the new list.
@@ -60,6 +68,69 @@ type turnState struct {
 	resolved  []ProposalResolved
 	// emit streams pack events; nil outside a streamed turn.
 	emit OnEventFunc
+	// turn is what the packs begin with; begun the packs that have, in
+	// order, and notes why the others left the turn.
+	turn  Turn
+	begun []begunPack
+	notes map[string]string
+}
+
+// begunPack is a pack readied for the turn: ctx carries its state, block is
+// its part of the prompt.
+type begunPack struct {
+	name  string
+	ctx   context.Context
+	block string
+}
+
+func (st *turnState) hasBegun(name string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.ContainsFunc(st.begun, func(b begunPack) bool { return b.name == name })
+}
+
+func (st *turnState) addBegun(name string, ctx context.Context, block string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.begun = append(st.begun, begunPack{name: name, ctx: ctx, block: block})
+}
+
+func (st *turnState) begunList() []begunPack {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.Clone(st.begun)
+}
+
+// dropPack takes a pack that couldn't begin out of the turn.
+func (st *turnState) dropPack(name, note string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.loaded = slices.DeleteFunc(st.loaded, func(n string) bool { return n == name })
+	if st.notes == nil {
+		st.notes = map[string]string{}
+	}
+	st.notes[name] = note
+}
+
+func (st *turnState) noteFor(name string) string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.notes[name]
+}
+
+// packPrompt is what the begun packs add to the user's message, after the
+// <view>: their blocks, then why any pack was left out.
+func (st *turnState) packPrompt() string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var b strings.Builder
+	for _, p := range st.begun {
+		b.WriteString(p.block)
+	}
+	for _, n := range slices.Sorted(maps.Keys(st.notes)) {
+		b.WriteString(st.notes[n] + "\n\n")
+	}
+	return b.String()
 }
 
 func (st *turnState) addCard(c ProposalCard) {
@@ -91,7 +162,17 @@ func (t *toolSet) bind(ctx context.Context, st *turnState) context.Context {
 	return assistantkit.WithProposalSink(ctx, turnSink{st: st, repos: t.deps})
 }
 
-// finish copies what the turn did onto resp.
+// finish copies what the turn did onto resp: the packs' results, and the UI
+// actions, touches and offers.
+func (t *toolSet) finish(st *turnState, resp *Response) {
+	var fallback string
+	resp.Results, fallback = t.end(st)
+	if resp.Explanation == "" {
+		resp.Explanation, resp.Action = fallback, actionAnswered
+	}
+	finish(st, resp)
+}
+
 func finish(st *turnState, resp *Response) {
 	resp.UIActions = st.uiActions()
 	resp.Touched = st.touches.List()
@@ -102,7 +183,7 @@ func finish(st *turnState, resp *Response) {
 }
 
 func newTurnState(view *viewresolve.Resolved, loaded []string) *turnState {
-	st := &turnState{view: view, loaded: loaded}
+	st := &turnState{view: view, loaded: loaded, turn: Turn{View: view}}
 	st.resetScreen()
 	return st
 }
@@ -135,7 +216,8 @@ func (st *turnState) addUI(a UIAction) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.ui = append(st.ui, a)
-	if a.Type == UINavigate {
+	// Opening a saved view puts its list on screen, as navigate does.
+	if a.Type == UINavigate || a.Type == UIOpenSavedView {
 		st.screen, st.campaign = a.Screen, a.CampaignID
 	}
 }
@@ -144,6 +226,12 @@ func (st *turnState) uiActions() []UIAction {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return append([]UIAction(nil), st.ui...)
+}
+
+func (st *turnState) loadedList() []string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.Clone(st.loaded)
 }
 
 func (st *turnState) requestPack(name string) {

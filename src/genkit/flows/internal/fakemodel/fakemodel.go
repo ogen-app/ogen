@@ -7,7 +7,9 @@ package fakemodel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -29,8 +31,8 @@ type Call struct {
 }
 
 // Turn is one scripted model response. A turn with Calls asks genkit to run
-// those tools; a turn without Calls ends the loop with Text. Text is streamed
-// in Chunks when they are set, otherwise in one piece.
+// those tools, after any Text; a turn without Calls ends the loop with Text.
+// Text is streamed in Chunks when they are set, otherwise in one piece.
 type Turn struct {
 	Calls  []Call
 	Text   string
@@ -46,6 +48,9 @@ func Answer(text string) Turn { return Turn{Text: text} }
 // Model replays a script and records every request it receives.
 type Model struct {
 	name string
+	// g is the instance the model is registered on, where Route registers
+	// the unrouted model too.
+	g *genkit.Genkit
 
 	mu       sync.Mutex
 	script   []Turn
@@ -55,7 +60,7 @@ type Model struct {
 
 // Define registers a scripted model named "fake/<name>" on g.
 func Define(g *genkit.Genkit, name string, script ...Turn) *Model {
-	m := &Model{name: name, script: script}
+	m := &Model{name: name, g: g, script: script}
 	genkit.DefineModel(g, Vendor+"/"+name,
 		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
 		m.generate)
@@ -119,17 +124,14 @@ func (m *Model) generate(ctx context.Context, req *ai.ModelRequest, cb ai.ModelS
 	if err != nil {
 		return nil, err
 	}
-	var parts []*ai.Part
-	for i, c := range t.Calls {
-		parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
-			Name: c.Name, Input: c.Input, Ref: fmt.Sprintf("call-%d-%d", n, i),
-		}))
+	// A turn with Calls streams Text only when it is set; a final turn always
+	// answers, even with nothing.
+	chunks := t.Chunks
+	if len(chunks) == 0 && (t.Text != "" || len(t.Calls) == 0) {
+		chunks = []string{t.Text}
 	}
-	if len(t.Calls) == 0 {
-		chunks := t.Chunks
-		if len(chunks) == 0 {
-			chunks = []string{t.Text}
-		}
+	var parts []*ai.Part
+	if len(chunks) > 0 {
 		if cb != nil {
 			for _, c := range chunks {
 				if err := cb(ctx, &ai.ModelResponseChunk{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart(c)}}); err != nil {
@@ -138,11 +140,19 @@ func (m *Model) generate(ctx context.Context, req *ai.ModelRequest, cb ai.ModelS
 			}
 		}
 		parts = append(parts, ai.NewTextPart(strings.Join(chunks, "")))
-	} else if cb != nil {
-		if err := cb(ctx, &ai.ModelResponseChunk{Role: ai.RoleModel, Content: parts}); err != nil {
+	}
+	var calls []*ai.Part
+	for i, c := range t.Calls {
+		calls = append(calls, ai.NewToolRequestPart(&ai.ToolRequest{
+			Name: c.Name, Input: c.Input, Ref: fmt.Sprintf("call-%d-%d", n, i),
+		}))
+	}
+	if len(calls) > 0 && cb != nil {
+		if err := cb(ctx, &ai.ModelResponseChunk{Role: ai.RoleModel, Content: calls}); err != nil {
 			return nil, err
 		}
 	}
+	parts = append(parts, calls...)
 	return &ai.ModelResponse{
 		Message:      ai.NewModelMessage(parts...),
 		FinishReason: ai.FinishReasonStop,
@@ -156,21 +166,96 @@ type Slot struct {
 	Slot string
 }
 
+// unrouted is the model every slot Route was not given resolves to: a call
+// to it fails, naming the cause, rather than reaching a model that was
+// never registered.
+const unrouted = "unrouted"
+
+// ErrUnrouted is a call to a slot no test routed a script to.
+var ErrUnrouted = errors.New("fakemodel: no script is routed to this slot; pass it to Route")
+
 // Route points each slot at m in the global model-config resolver for the
-// lifetime of ctx. The resolver is process-global, so tests that call Route
-// must not run in parallel with other tests that resolve models.
+// lifetime of ctx; every other slot resolves to a model that fails with
+// ErrUnrouted. When ctx ends, the resolver Route replaced is restored. The
+// resolver is process-global, so tests that call Route must not run in
+// parallel with other tests that resolve models.
 func Route(ctx context.Context, m *Model, slots ...Slot) {
-	rows := make([]models.FlowModelConfig, 0, len(slots))
+	routes := make(map[Slot]*Model, len(slots))
 	for _, s := range slots {
+		routes[s] = m
+	}
+	RouteEach(ctx, routes)
+}
+
+// RouteEach points each slot at its own model, as Route does, for a flow
+// whose slots run different scripts — an orchestrator and its writer.
+func RouteEach(ctx context.Context, routes map[Slot]*Model) {
+	rows := make([]models.FlowModelConfig, 0, len(routes))
+	for s, m := range routes {
+		defineUnrouted(m.g)
 		rows = append(rows, models.FlowModelConfig{FlowKey: s.Flow, SlotKey: s.Slot, ModelID: m.name})
 	}
-	modelconfig.Init(ctx, &memSource{rows: rows}, modelconfig.Defaults{},
+	in := &install{prev: modelconfig.Current()}
+	installsMu.Lock()
+	installs = append(installs, in)
+	installsMu.Unlock()
+	modelconfig.Init(ctx, &memSource{rows: rows}, unroutedDefaults,
 		func(string) (string, bool) { return Vendor, true },
 		func(context.Context) (string, bool) { return "", false })
+	context.AfterFunc(ctx, in.remove)
+}
+
+// install is one Route's resolver, and the one it replaced.
+type install struct{ prev modelconfig.State }
+
+// installs are the resolvers Route put in place, oldest first; the last is
+// the one serving.
+var (
+	installsMu sync.Mutex
+	installs   []*install
+)
+
+// remove ends an install, in whatever order the contexts end: the serving
+// one gives way to what it replaced; an older one hands what it replaced to
+// the install above it, so the resolver from before the first Route is the
+// one left in the end.
+func (in *install) remove() {
+	installsMu.Lock()
+	defer installsMu.Unlock()
+	i := slices.Index(installs, in)
+	if i < 0 {
+		return
+	}
+	if i == len(installs)-1 {
+		in.prev.Restore()
+	} else {
+		installs[i+1].prev = in.prev
+	}
+	installs = slices.Delete(installs, i, i+1)
+}
+
+// unroutedDefaults seed every slot Route was not given with the unrouted
+// model.
+var unroutedDefaults = modelconfig.Defaults{
+	Generation: unrouted, Quality: unrouted, Planning: unrouted, Embed: unrouted,
+	VisionClassify: unrouted, VisionExtract: unrouted, VisionEscalate: unrouted,
+	Transcribe: unrouted, Receipts: unrouted,
+}
+
+// defineUnrouted registers the unrouted model on g once.
+func defineUnrouted(g *genkit.Genkit) {
+	if genkit.LookupModel(g, Vendor+"/"+unrouted) != nil {
+		return
+	}
+	genkit.DefineModel(g, Vendor+"/"+unrouted,
+		&ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
+		func(context.Context, *ai.ModelRequest, ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return nil, ErrUnrouted
+		})
 }
 
 // memSource is an in-memory modelconfig.Source: the scripted rows, plus the
-// seeded defaults reconcile writes for every other slot.
+// unrouted defaults reconcile writes for every other slot.
 type memSource struct {
 	mu   sync.Mutex
 	rows []models.FlowModelConfig

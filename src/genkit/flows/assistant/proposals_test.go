@@ -75,6 +75,9 @@ type bulkIn struct {
 	N int `json:"n"`
 }
 
+// brokenBulk is the count bulkThing fails on.
+const brokenBulk = 13
+
 // bulkPack has one gated tool: more than 3 items wait for a yes.
 func bulkPack(ran *int) Pack {
 	return Pack{
@@ -85,6 +88,9 @@ func bulkPack(ran *int) Pack {
 					Needs:   func(_ context.Context, in bulkIn) bool { return in.N > 3 },
 					Summary: func(in bulkIn) string { return fmt.Sprintf("Do %d things", in.N) },
 				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (int, error) {
+					if in.N == brokenBulk {
+						return 0, errors.New("bulk engine down")
+					}
 					*ran += in.N
 					assistantkit.Touch(ctx, "thing", "")
 					return in.N, nil
@@ -94,13 +100,13 @@ func bulkPack(ran *int) Pack {
 	}
 }
 
-func proposalHarness(t *testing.T, foreign func(context.Context, AnswerRequest) (any, error)) (*harness, *memProposals, *int) {
+func proposalHarness(t *testing.T) (*harness, *memProposals, *int) {
 	t.Helper()
 	ran := new(int)
 	store := &memProposals{}
 	g := genkit.Init(t.Context())
 	msgs := &memMessages{}
-	repos := Repos{Messages: msgs, Views: testViews(), SavedViews: memSavedViews{}, Proposals: store, ForeignAnswer: foreign}
+	repos := Repos{Messages: msgs, Views: testViews(), SavedViews: memSavedViews{}, Proposals: store}
 	tools, err := defineTools(g, repos, []Pack{bulkPack(ran)})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +119,7 @@ func proposalHarness(t *testing.T, foreign func(context.Context, AnswerRequest) 
 }
 
 func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
-	h, store, ran := proposalHarness(t, nil)
+	h, store, ran := proposalHarness(t)
 	home := viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`)
 
 	resp, events, _, err := h.turn(home, "do 5 things",
@@ -151,17 +157,30 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 	}
 }
 
+// An offer answered before the turn failed is still announced.
+func TestProposals_FailedTurnAnnouncesTheAnswer(t *testing.T) {
+	h, store, _ := proposalHarness(t)
+	home := viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`)
+	if _, _, _, err := h.turn(home, "do 5 things",
+		fakemodel.Tools(fakemodel.Call{Name: "bulkThing", Input: map[string]any{"n": 5}}),
+		fakemodel.Answer(`{"explanation":"Ready when you are.","action":"answered"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The model dismisses it, then fails before it replies.
+	_, events, _, err := h.turn(home, "no",
+		fakemodel.Tools(fakemodel.Call{Name: "dismissOffer", Input: map[string]any{"proposalId": store.rows[0].ID}}))
+	if err == nil || store.rows[0].Status != models.ProposalDismissed || !slices.Contains(events, SSEEventProposalResolved) {
+		t.Fatalf("err = %v, status = %s, events = %v", err, store.rows[0].Status, events)
+	}
+}
+
 func TestProposals_AnswerFromTheCard(t *testing.T) {
-	var foreignCalls []AnswerRequest
-	h, store, ran := proposalHarness(t, func(_ context.Context, req AnswerRequest) (any, error) {
-		foreignCalls = append(foreignCalls, req)
-		return "campaign work done", nil
-	})
+	h, store, ran := proposalHarness(t)
 	ctx := context.WithValue(t.Context(), logging.UserIDKey, "u1")
 	future := time.Now().Add(time.Hour)
 	store.rows = []*models.AssistantProposal{
 		{ID: "mine", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(4)}, Summary: "Do 4 things", Status: models.ProposalPending, ExpiresAt: future},
-		{ID: "theirs", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "runContentPlan", Summary: "Plan the campaign", Status: models.ProposalPending, ExpiresAt: future},
+		{ID: "gone", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "retiredTool", Summary: "Plan the campaign", Status: models.ProposalPending, ExpiresAt: future},
 	}
 
 	var events []SSEEventKind
@@ -172,27 +191,59 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "mine", Confirm: true}, nil); !isConflict(err) {
 		t.Fatalf("answering twice: %v, want a conflict", err)
 	}
-	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "theirs", Confirm: true}, nil); !errors.Is(err, ErrNotThisAssistant) {
-		t.Fatalf("another assistant's offer: %v", err)
+	// An offer for a tool no pack has any more can't run, only be dismissed.
+	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "gone", Confirm: true}, nil); !isConflict(err) {
+		t.Fatalf("an offer for a retired tool: %v, want a conflict", err)
+	}
+	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "gone"}, nil); err != nil || store.rows[1].Status != models.ProposalDismissed {
+		t.Fatalf("dismissing it: %v", err)
 	}
 	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "nope"}, nil); !errors.Is(err, ErrProposalNotFound) {
 		t.Fatalf("missing offer: %v", err)
 	}
-
-	// In the campaign's own thread, a "yes" to the campaign assistant's
-	// offer goes to it.
-	campaign := viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`)
-	if _, _, _, err := h.turn(campaign, "yes",
-		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": "theirs"}}),
-		fakemodel.Answer(`{"explanation":"Planned.","action":"answered"}`)); err != nil {
-		t.Fatal(err)
+	// The answer joins the thread.
+	if len(h.msgs.msgs) == 0 || h.msgs.msgs[0].Content != "Confirmed: Do 4 things" {
+		t.Fatalf("thread = %+v", h.msgs.msgs)
 	}
-	if len(foreignCalls) != 1 || foreignCalls[0].ProposalID != "theirs" || !foreignCalls[0].Confirm {
-		t.Fatalf("foreign answers = %+v", foreignCalls)
+}
+
+// A confirmed offer whose answer can't be stored still completes, marked
+// unsaved: its work has run.
+func TestProposals_AnswerFromTheCardUnsaved(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	h.msgs.fail = errors.New("db down")
+	store.rows = []*models.AssistantProposal{
+		{ID: "mine", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(4)},
+			Summary: "Do 4 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "mine", Confirm: true}, nil)
+	if err != nil || *ran != 4 || !resp.Unsaved {
+		t.Fatalf("resp = %+v, err = %v, ran = %d; want the work done and the reply unsaved", resp, err, *ran)
 	}
 }
 
 func isConflict(err error) bool {
 	_, ok := errors.AsType[*ProposalConflictError](err)
 	return ok
+}
+
+// Work that fails after its offer was answered from the card still leaves the
+// answer in the thread and tells the client the offer is resolved.
+func TestProposals_AnswerFromTheCardWorkFails(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	store.rows = []*models.AssistantProposal{
+		{ID: "broken", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(brokenBulk)},
+			Summary: "Do 13 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	var events []SSEEventKind
+	_, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "broken", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
+	if err == nil || *ran != 0 || store.rows[0].Status != models.ProposalConfirmed {
+		t.Fatalf("err = %v, ran = %d, status = %s", err, *ran, store.rows[0].Status)
+	}
+	if !slices.Equal(events, []SSEEventKind{SSEEventProposalResolved}) {
+		t.Fatalf("events = %v", events)
+	}
+	if len(h.msgs.msgs) != 2 || h.msgs.msgs[0].Content != "Confirmed: Do 13 things" || !strings.Contains(h.msgs.msgs[1].Content, unfinishedAnswer) {
+		t.Fatalf("thread = %+v", h.msgs.msgs)
+	}
 }

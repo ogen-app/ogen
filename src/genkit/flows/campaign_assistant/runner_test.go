@@ -2,18 +2,24 @@ package campaign_assistant
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/fakemodel"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
 // oneCampaign serves a single campaign; every other method is unused here.
@@ -26,12 +32,12 @@ func (r oneCampaign) GetByID(context.Context, string) (*models.Campaign, error) 
 
 // memMessages keeps the conversation so later turns see earlier ones.
 type memMessages struct {
-	repository.CampaignAssistantMessageRepository
+	repository.AssistantMessageRepository
 	mu   sync.Mutex
-	msgs []models.CampaignAssistantMessage
+	msgs []models.AssistantMessage
 }
 
-func (m *memMessages) CreateBatch(_ context.Context, msgs []*models.CampaignAssistantMessage) error {
+func (m *memMessages) CreateBatch(_ context.Context, msgs []*models.AssistantMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, msg := range msgs {
@@ -40,37 +46,30 @@ func (m *memMessages) CreateBatch(_ context.Context, msgs []*models.CampaignAssi
 	return nil
 }
 
-func (m *memMessages) ListRecentByCampaignID(context.Context, string, int) ([]models.CampaignAssistantMessage, error) {
+func (m *memMessages) ListRecent(context.Context, models.AssistantScopeKind, string, int) ([]models.AssistantMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]models.CampaignAssistantMessage(nil), m.msgs...), nil
+	return slices.Clone(m.msgs), nil
 }
 
-// runnerHarness runs real campaign assistant turns against scripted models.
+// runnerHarness runs real assistant turns in campaign c1's thread, with the
+// campaign pack, against scripted models.
 type runnerHarness struct {
 	t         *testing.T
 	g         *genkit.Genkit
-	tools     *toolSet
-	prompts   *prompts
 	cfg       CampaignAssistantFlowConfig
 	repos     CampaignAssistantRepos
 	proposals *memProposals
 	generated []content_plan.GeneratePostsRequest
 	turns     int
+	run       assistant.Runner
+	// last is the scripted model of the latest turn.
+	last *fakemodel.Model
 }
 
 func newRunnerHarness(t *testing.T) *runnerHarness {
 	t.Helper()
-	g := genkit.Init(t.Context())
-	tools, err := defineTools(g)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := loadPrompts(tools.reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := &runnerHarness{t: t, g: g, tools: tools, prompts: p, proposals: &memProposals{}}
+	h := &runnerHarness{t: t, g: genkit.Init(t.Context()), proposals: &memProposals{}}
 	c := timelineCampaign()
 	c.ID = "c1"
 	h.repos = CampaignAssistantRepos{Campaigns: oneCampaign{c: c}, Messages: &memMessages{}, Proposals: h.proposals}
@@ -84,22 +83,47 @@ func newRunnerHarness(t *testing.T) *runnerHarness {
 	return h
 }
 
+// init registers the assistant once the test has set the repos up; the
+// pack reads them when it begins a turn.
+func (h *runnerHarness) init() {
+	if h.run != nil {
+		return
+	}
+	pk, err := NewPack(h.cfg, h.repos)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	a, err := assistant.Init(h.g, assistant.FlowConfig{}, assistant.Repos{Messages: h.repos.Messages, Proposals: h.proposals}, pk)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.run = a.Run
+}
+
 // turn runs one user message with the model replaying script, and returns
 // the response and every SSE event kind emitted.
-func (h *runnerHarness) turn(instruction string, script ...fakemodel.Turn) (*CampaignAssistantResponse, []SSEEventKind) {
+func (h *runnerHarness) turn(instruction string, script ...fakemodel.Turn) (*assistant.Response, []assistant.SSEEventKind) {
 	h.t.Helper()
+	h.init()
 	h.turns++
-	return h.turnWith(fakemodel.Define(h.g, "turn"+string(rune('a'+h.turns)), script...), instruction)
+	return h.turnWith(fakemodel.Define(h.g, fmt.Sprint("turn", h.turns), script...), instruction)
 }
 
 // turnWith runs one user message on an already defined scripted model, so the
 // test can inspect what the model was sent.
-func (h *runnerHarness) turnWith(m *fakemodel.Model, instruction string) (*CampaignAssistantResponse, []SSEEventKind) {
+func (h *runnerHarness) turnWith(m *fakemodel.Model, instruction string) (*assistant.Response, []assistant.SSEEventKind) {
 	h.t.Helper()
-	fakemodel.Route(h.t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowCampaignAssistant, Slot: modelconfig.SlotOrchestrator})
-	var events []SSEEventKind
-	resp, err := runCampaignAssistant(h.t.Context(), h.g, CampaignAssistantRequest{CampaignID: "c1", Instruction: instruction},
-		h.cfg, h.repos, h.prompts, h.tools, func(kind SSEEventKind, _ any) { events = append(events, kind) })
+	h.init()
+	h.last = m
+	fakemodel.Route(h.t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
+	v, err := viewcontext.Parse([]byte(`{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var events []assistant.SSEEventKind
+	ctx := context.WithValue(h.t.Context(), logging.UserIDKey, "user-1")
+	resp, err := h.run(ctx, assistant.Request{Instruction: instruction, View: &viewresolve.Resolved{View: v}},
+		func(kind assistant.SSEEventKind, _ any) { events = append(events, kind) })
 	if err != nil {
 		h.t.Fatalf("turn %q: %v", instruction, err)
 	}
@@ -109,7 +133,11 @@ func (h *runnerHarness) turnWith(m *fakemodel.Model, instruction string) (*Campa
 	return resp, events
 }
 
-func has(events []SSEEventKind, kind SSEEventKind) bool { return slices.Contains(events, kind) }
+// campaignResult is what the campaign pack reported for the turn.
+func campaignResult(resp *assistant.Response) *CampaignAssistantResponse {
+	r, _ := resp.Results[PackName].(*CampaignAssistantResponse)
+	return r
+}
 
 // The beta-test loop, end to end: a big request is proposed, "yes" runs it
 // exactly as proposed, and a second "yes" does not run it again.
@@ -118,30 +146,32 @@ func TestRunner_ProposeThenConfirm(t *testing.T) {
 
 	resp, events := h.turn("Add 10 Threads posts",
 		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 10}}),
-		fakemodel.Answer(`{"explanation":"I've prepared 10 Threads posts for you to confirm.","action":"proposed"}`))
-	if resp.Action != actionProposed || len(h.generated) != 0 || !has(events, SSEEventProposalCreated) {
-		t.Fatalf("turn 1: action = %q, generated = %d, events = %v", resp.Action, len(h.generated), events)
-	}
-	if len(h.proposals.rows) != 1 {
-		t.Fatalf("turn 1 stored %d proposals, want 1", len(h.proposals.rows))
+		fakemodel.Answer(`{"explanation":"I've prepared 10 Threads ideas for you to confirm.","action":"answered"}`))
+	if len(resp.Proposals) != 1 || len(h.generated) != 0 || !slices.Contains(events, assistant.SSEEventProposalCreated) {
+		t.Fatalf("turn 1: proposals = %+v, generated = %d, events = %v", resp.Proposals, len(h.generated), events)
 	}
 	id := h.proposals.rows[0].ID
 
 	resp, events = h.turn("yes please",
-		fakemodel.Tools(fakemodel.Call{Name: "confirmProposal", Input: map[string]any{"proposalId": id}}),
-		fakemodel.Answer(`{"explanation":"Done, 10 Threads posts added.","action":"posts_generated"}`))
-	if resp.Action != actionPostsGenerated || len(h.generated) != 1 || h.generated[0].Count != 10 {
-		t.Fatalf("turn 2: action = %q, generated = %+v", resp.Action, h.generated)
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
+		fakemodel.Answer(`{"explanation":"Done, 10 Threads ideas planned.","action":"answered"}`))
+	if r := campaignResult(resp); r == nil || r.Action != actionPostsGenerated || len(h.generated) != 1 || h.generated[0].Count != 10 {
+		t.Fatalf("turn 2: result = %+v, generated = %+v", r, h.generated)
 	}
-	if !has(events, SSEEventProposalResolved) || h.proposals.rows[0].Status != models.ProposalConfirmed {
+	if !slices.Contains(events, assistant.SSEEventProposalResolved) || !slices.Contains(events, assistant.SSEEventKind(SSEEventGeneratePostsComplete)) ||
+		h.proposals.rows[0].Status != models.ProposalConfirmed {
 		t.Fatalf("turn 2: events = %v, proposal = %+v", events, h.proposals.rows[0])
 	}
+	// The model got the work's own outcome back from confirmOffer.
+	if out := toolOutput(h.last, "confirmOffer"); out["status"] != string(assistantkit.StatusOK) || resultField(out, "ideaCount") != float64(10) {
+		t.Fatalf("turn 2: confirmOffer returned %v", out)
+	}
 
-	resp, _ = h.turn("yes",
-		fakemodel.Tools(fakemodel.Call{Name: "confirmProposal", Input: map[string]any{"proposalId": id}}),
+	h.turn("yes",
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
 		fakemodel.Answer(`{"explanation":"That offer was already done.","action":"answered"}`))
-	if resp.Action != actionAnswered || len(h.generated) != 1 {
-		t.Fatalf("turn 3: action = %q, generated = %d, want the offer not to run again", resp.Action, len(h.generated))
+	if len(h.generated) != 1 {
+		t.Fatalf("turn 3: generated = %d, want the offer not to run again", len(h.generated))
 	}
 }
 
@@ -149,29 +179,60 @@ func TestRunner_ProposeThenDismiss(t *testing.T) {
 	h := newRunnerHarness(t)
 	h.turn("Add 10 Threads posts",
 		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 10}}),
-		fakemodel.Answer(`{"explanation":"Prepared for you to confirm.","action":"proposed"}`))
+		fakemodel.Answer(`{"explanation":"Prepared for you to confirm.","action":"answered"}`))
 	id := h.proposals.rows[0].ID
 
-	resp, events := h.turn("no, never mind",
-		fakemodel.Tools(fakemodel.Call{Name: "dismissProposal", Input: map[string]any{"proposalId": id}}),
+	_, events := h.turn("no, never mind",
+		fakemodel.Tools(fakemodel.Call{Name: "dismissOffer", Input: map[string]any{"proposalId": id}}),
 		fakemodel.Answer(`{"explanation":"OK, dropped.","action":"answered"}`))
-	if resp.Action != actionAnswered || len(h.generated) != 0 || h.proposals.rows[0].Status != models.ProposalDismissed || !has(events, SSEEventProposalResolved) {
-		t.Fatalf("action = %q, generated = %d, proposal = %+v, events = %v", resp.Action, len(h.generated), h.proposals.rows[0], events)
+	if len(h.generated) != 0 || h.proposals.rows[0].Status != models.ProposalDismissed || !slices.Contains(events, assistant.SSEEventProposalResolved) {
+		t.Fatalf("generated = %d, proposal = %+v, events = %v", len(h.generated), h.proposals.rows[0], events)
 	}
 }
 
-var farFuture = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+// An offer whose work can't start because another heavy action already ran
+// this message stays open, and confirming it in the next message runs it.
+func TestRunner_HeavySlotTakenKeepsTheOfferOpen(t *testing.T) {
+	h := newRunnerHarness(t)
+	h.turn("Add 10 Threads posts",
+		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 10}}),
+		fakemodel.Answer(`{"explanation":"Prepared for you to confirm.","action":"answered"}`))
+	id := h.proposals.rows[0].ID
 
-// An offer made in one campaign cannot be confirmed from another.
-func TestConfirmProposal_OtherCampaignIsGone(t *testing.T) {
-	store := &memProposals{}
-	var generated int
-	st := proposalState(store, &generated)
-	_ = store.Create(t.Context(), &models.AssistantProposal{ID: "p-other", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c2",
-		Tool: "generatePosts", Args: models.JSONMap{"platforms": []any{"Threads"}, "count": float64(10)}, ExpiresAt: farFuture})
-	st.registry = newTestTools(t).reg
-	out := runTool(t, st, "confirmProposal", map[string]any{"proposalId": "p-other"})
-	if out.Reason != refuseOfferGone || generated != 0 {
-		t.Fatalf("outcome = %+v, generated = %d", out, generated)
+	// A small plan runs first and takes the slot; the "yes" can't start.
+	h.turn("add 2 more, and yes to the 10",
+		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 2}}),
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
+		fakemodel.Answer(`{"explanation":"Added 2; confirm the 10 in your next message.","action":"answered"}`))
+	if out := toolOutput(h.last, "confirmOffer"); out["status"] != string(assistantkit.StatusRefused) || out["reason"] != heavyConfirmLater {
+		t.Fatalf("turn 2: confirmOffer returned %v", out)
 	}
+	if len(h.generated) != 1 || h.proposals.rows[0].Status != models.ProposalPending {
+		t.Fatalf("turn 2: generated = %+v, proposal = %s", h.generated, h.proposals.rows[0].Status)
+	}
+
+	h.turn("yes",
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
+		fakemodel.Answer(`{"explanation":"Done.","action":"answered"}`))
+	if len(h.generated) != 2 || h.generated[1].Count != 10 || h.proposals.rows[0].Status != models.ProposalConfirmed {
+		t.Fatalf("turn 3: generated = %+v, proposal = %s", h.generated, h.proposals.rows[0].Status)
+	}
+}
+
+// toolOutput is the last response the model got from the named tool.
+func toolOutput(m *fakemodel.Model, name string) map[string]any {
+	var out map[string]any
+	for _, tr := range m.ToolResponses() {
+		if tr.Name == name {
+			b, _ := json.Marshal(tr.Output)
+			out = nil
+			_ = json.Unmarshal(b, &out)
+		}
+	}
+	return out
+}
+
+func resultField(out map[string]any, key string) any {
+	r, _ := out["result"].(map[string]any)
+	return r[key]
 }

@@ -37,20 +37,21 @@ func TestUndo_IdeaVerdict(t *testing.T) {
 	ideas.i.Verdict = new(models.IdeaVerdictYes)
 	after := assistantundo.IdeaVerdict(ideas.i)
 
-	actions := &memActions{}
-	id, err := assistantundo.Record(t.Context(), actions, &models.AssistantAction{Kind: models.AssistantActionIdeaVerdict, EntityID: "i1", Before: before, After: after, CreatedBy: "u1"})
+	f := newFixture(t)
+	id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{ScopeKind: models.AssistantScopeWorkspace,
+		Kind: models.AssistantActionIdeaVerdict, EntityID: "i1", Before: before, After: after, CreatedBy: "u1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := assistantundo.New(actions, &memCampaigns{}).WithIdeas(ideas)
+	svc := assistantundo.New(f.db, f.actions, f.campaigns).WithIdeas(ideas)
 
 	// Changed again since: refused.
 	ideas.i.Verdict = new(models.IdeaVerdictNo)
-	if _, err := svc.Undo(t.Context(), id, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+	if _, err := svc.Undo(f.ctx, id, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
 		t.Fatalf("changed since: %v", err)
 	}
 	ideas.i.Verdict = new(models.IdeaVerdictYes)
-	if _, err := svc.Undo(t.Context(), id, "u1"); err != nil {
+	if _, err := svc.Undo(f.ctx, id, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if ideas.i.Verdict != nil || ideas.i.DecidedAt != nil {
@@ -59,20 +60,16 @@ func TestUndo_IdeaVerdict(t *testing.T) {
 }
 
 func TestUndo_CampaignAssets(t *testing.T) {
-	camps := &memCampaigns{c: &models.Campaign{ID: "c1", AssetIDs: models.StringSlice{"a1"}}}
-	before := assistantundo.CampaignAssets(camps.c)
-	camps.c.AssetIDs = models.StringSlice{"a1", "a2"}
-	after := assistantundo.CampaignAssets(camps.c)
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.AssetIDs = models.StringSlice{"a1"} })
+	id := f.logChange(t, models.AssistantActionCampaignAssets, assistantundo.CampaignAssets, func(c *models.Campaign) {
+		c.AssetIDs = models.StringSlice{"a1", "a2"}
+	})
 
-	actions := &memActions{}
-	id, err := assistantundo.Record(t.Context(), actions, &models.AssistantAction{Kind: models.AssistantActionCampaignAssets, EntityID: "c1", Before: before, After: after})
-	if err != nil {
+	if _, err := f.svc.Undo(f.ctx, id, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := assistantundo.New(actions, camps).Undo(t.Context(), id, "u1"); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(camps.c.AssetIDs, models.StringSlice{"a1"}) {
-		t.Fatalf("assets = %v", camps.c.AssetIDs)
+	if got := f.load(t).AssetIDs; !slices.Equal(got, models.StringSlice{"a1"}) {
+		t.Fatalf("assets = %v", got)
 	}
 }

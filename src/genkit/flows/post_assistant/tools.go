@@ -15,13 +15,16 @@ import (
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
 // Per-turn token budget for tool-retrieved chunks.
@@ -55,8 +58,13 @@ type requestState struct {
 	// emit a clone_started SSE event mid-generation; cloneResult is set
 	// by the tool and read by the runner after generation to finalise
 	// the response.
-	cloneSvc    *clone.Service
-	actor       string
+	cloneSvc *clone.Service
+	actor    string
+	// owner is the post's creator, whom the hub event is for.
+	owner string
+	// qualityAuto queues an assessment of an edit saved as a version.
+	qualityAuto *qualityauto.Service
+	hub         eventhub.Hub
 	platforms   []models.Platform
 	onEvent     OnEventFunc
 	cloneResult *clone.Result
@@ -102,10 +110,12 @@ type requestState struct {
 	retrieved []retrievedExcerpt
 }
 
-// editResult is the internal outcome of the editPost write-tool: the
-// full post content the Sonnet writer produced this turn.
+// editResult is what the editPost write-tool committed this turn: the full
+// content the writer produced, and whether it was saved as a version.
 type editResult struct {
-	Content string
+	Content     string
+	SaveVersion bool
+	Note        string
 }
 
 // retrievedExcerpt is a chunk the planner pulled via an asset-retrieval tool
@@ -215,6 +225,8 @@ type ClonePostInput struct {
 type EditPostInput struct {
 	Instruction string `json:"instruction" jsonschema:"description=The user's change request, forwarded verbatim (e.g. 'shorten the intro' or 'write the post from the draft thesis'). Do not paraphrase or pre-write the content."`
 	Mode        string `json:"mode,omitempty" jsonschema:"description=edit for a change to existing content; draft to write the post body from a draft_thesis outline.,enum=edit,enum=draft"`
+	SaveVersion bool   `json:"saveVersion,omitempty" jsonschema:"description=True to save the result as a version: a structural change, new information, a tone shift or a rewrite. False for a small tweak."`
+	VersionNote string `json:"versionNote,omitempty" jsonschema:"description=A short note describing the version, when saveVersion is true."`
 }
 
 // EditPostOutput is the compact receipt returned to the planner after the
@@ -286,112 +298,77 @@ type CreateNoteOutput struct {
 
 // ── Tool registration ────────────────────────────────────────────────────────
 
-type toolSet struct {
-	listAssets        ai.ToolRef
-	getAssetChunks    ai.ToolRef
-	searchAssetChunks ai.ToolRef
-	getCurrentContent ai.ToolRef
-	clonePost         ai.ToolRef
-	restoreVersion    ai.ToolRef
-	schedulePost      ai.ToolRef
-	createNote        ai.ToolRef
-	// editPost is the Sonnet write-tool used only in the hybrid
-	// planner path; the legacy single-Sonnet loop does not attach it.
-	editPost ai.ToolRef
+var postScope = []assistantkit.Scope{assistantkit.ScopePost, assistantkit.ScopeCampaign, assistantkit.ScopeWorkspace}
+
+func spec(tool ai.ToolRef, tier assistantkit.Tier, guide string) assistantkit.Spec {
+	return assistantkit.Spec{Name: tool.Name(), Pack: PackName, Scopes: postScope, Tier: tier, Guide: guide, Tool: tool}
 }
 
-func defineTools(g *genkit.Genkit) *toolSet {
-	list := genkit.DefineTool(g, "listAssets",
-		"Returns the list of assets attached to the current post with their ID, name, type, and chunk count.",
-		func(ctx *ai.ToolContext, _ struct{}) ([]AssetInfo, error) {
-			return toolListAssets(ctx)
-		},
-	)
+// scheduleGate offers every schedule for the user's yes, with the resolved
+// time on the card.
+var scheduleGate = assistantkit.Gate[SchedulePostInput]{
+	Precheck: func(_ context.Context, in SchedulePostInput) error {
+		_, err := parseScheduledAt(in.ScheduledAt)
+		return err
+	},
+	Summary: func(in SchedulePostInput) string {
+		when, _ := parseScheduledAt(in.ScheduledAt)
+		return "Schedule this post for " + when.Format("Mon Jan 2, 2006 15:04 MST")
+	},
+}
 
-	getChunks := genkit.DefineTool(g, "getAssetChunks",
-		"Retrieves text chunks from a specific asset. Omit chunkIds to get all chunks (subject to token budget). sourceLabel, when present, says where a chunk came from (e.g. \"Slide 4\", \"0:45–1:30\") — use it to cite the source.",
-		func(ctx *ai.ToolContext, in GetChunksInput) (*ChunksOutput, error) {
-			return toolGetAssetChunks(ctx, in)
-		},
-	)
-
-	searchChunks := genkit.DefineTool(g, "searchAssetChunks",
-		"Semantic search over an asset's chunks. Returns the most relevant chunks for the given query, each with a sourceLabel citation when the asset has one.",
-		func(ctx *ai.ToolContext, in SearchChunksInput) (*ChunksOutput, error) {
-			return toolSearchAssetChunks(ctx, in)
-		},
-	)
-
-	getCurrentContent := genkit.DefineTool(g, "getCurrentContent",
-		"Returns the latest post content as plain text.",
-		func(ctx *ai.ToolContext, _ struct{}) (string, error) {
-			return toolGetCurrentContent(ctx)
-		},
-	)
-
-	clonePost := genkit.DefineTool(g, "clonePost",
-		"Duplicates the current post as a new draft in the same campaign. "+
-			"For a cross-platform clone, set targetPlatform and OMIT content — the server's writer "+
-			"adapts the copy to the target platform (pass an optional instruction to steer it). "+
-			"content is an explicit override only: provide it to set the clone's body yourself; omit it "+
-			"for a verbatim same-platform copy. Returns the new draft's id.",
-		func(ctx *ai.ToolContext, in ClonePostInput) (*ClonePostOutput, error) {
-			return toolClonePost(ctx, in)
-		},
-	)
-
-	restoreVersion := genkit.DefineTool(g, "restoreVersion",
-		"Rolls the current post back to an earlier saved version. Pass versionNumber "+
-			"(e.g. 2) for an explicit version, or relative:\"previous\" to undo the last change. "+
-			"Non-destructive: it saves a new version, so nothing is lost. Returns the restored "+
-			"version number and the new HEAD version number.",
-		func(ctx *ai.ToolContext, in RestoreVersionInput) (*RestoreVersionOutput, error) {
-			return toolRestoreVersion(ctx, in)
-		},
-	)
-
-	schedulePost := genkit.DefineTool(g, "schedulePost",
-		"Schedules the current post for publishing at an absolute time. Call ONLY after the "+
-			"user has confirmed the resolved time and the auto/manual mode. Pass scheduledAt as "+
-			"ISO-8601 with a timezone offset; set allowPromote:true when the post is a draft. "+
-			"Returns the routed status (scheduled vs scheduled_for_manual_publishing) and whether "+
-			"the draft was promoted.",
-		func(ctx *ai.ToolContext, in SchedulePostInput) (*SchedulePostOutput, error) {
-			return toolSchedulePost(ctx, in)
-		},
-	)
-
-	createNote := genkit.DefineTool(g, "createNote",
-		"Saves a standalone note attached to the current post — an image-generation prompt "+
-			"(type image_prompt, e.g. a Nano Banana prompt) or a free-form side note/idea "+
-			"(type note). Use this instead of putting such artifacts in the post body. You can "+
-			"call it alongside an edit to both change the body AND capture a note in the same turn. "+
-			"Returns the new note's id.",
-		func(ctx *ai.ToolContext, in CreateNoteInput) (*CreateNoteOutput, error) {
-			return toolCreateNote(ctx, in)
-		},
-	)
-
-	editPost := genkit.DefineTool(g, "editPost",
-		"Generates or revises the current post's content — this is how ALL content changes happen. "+
-			"Pass the user's change request verbatim in instruction (e.g. 'shorten the intro', "+
-			"'make it punchier', 'write the post from the draft thesis') and a mode (edit or draft). "+
-			"The content is produced and applied by the server; you do not write it yourself.",
-		func(ctx *ai.ToolContext, in EditPostInput) (*EditPostOutput, error) {
-			return toolEditPost(ctx, in)
-		},
-	)
-
-	return &toolSet{
-		listAssets:        list,
-		getAssetChunks:    getChunks,
-		searchAssetChunks: searchChunks,
-		getCurrentContent: getCurrentContent,
-		clonePost:         clonePost,
-		restoreVersion:    restoreVersion,
-		schedulePost:      schedulePost,
-		createNote:        createNote,
-		editPost:          editPost,
+// defineTools registers the post pack's tools, in the order the model is
+// given them.
+func defineTools(g *genkit.Genkit) []assistantkit.Spec {
+	return []assistantkit.Spec{
+		spec(genkit.DefineTool(g, "editPost",
+			"Generates or revises the post's content — this is how ALL content changes happen. "+
+				"Pass the user's change request verbatim in instruction (e.g. 'shorten the intro', "+
+				"'make it punchier', 'write the post from the draft thesis') and a mode (edit or draft). "+
+				"The content is written and saved by the server; you do not write it yourself.",
+			assistantkit.Wrap(toolEditPost)), assistantkit.TierReversible,
+			`Call this for ANY change to the post's copy: rephrase, expand, shorten, change the tone, restructure, work in asset information, or write the body from a draft_thesis note (mode draft). Pass the user's instruction VERBATIM; never write or paraphrase the copy yourself. Set saveVersion for a structural change, new information, a tone shift or a rewrite, with a short versionNote; leave it off for a small tweak. For an asset-grounded edit, retrieve the material first (getAssetChunks / searchAssetChunks) in the same message: what you retrieve is handed to the writer.`),
+		spec(genkit.DefineTool(g, "listAssets",
+			"Returns the list of assets attached to the post with their ID, name, type, and chunk count.",
+			assistantkit.Wrap(func(ctx context.Context, _ struct{}) ([]AssetInfo, error) { return toolListAssets(ctx) })), assistantkit.TierRead,
+			`Call this to see which assets are attached to the post.`),
+		spec(genkit.DefineTool(g, "getAssetChunks",
+			"Retrieves text chunks from a specific asset attached to the post. Omit chunkIds to get all chunks (subject to token budget). sourceLabel, when present, says where a chunk came from (e.g. \"Slide 4\", \"0:45–1:30\") — use it to cite the source.",
+			assistantkit.Wrap(toolGetAssetChunks)), assistantkit.TierRead,
+			`Call this when the user references a specific attached asset, or an edit needs its full text.`),
+		spec(genkit.DefineTool(g, "searchAssetChunks",
+			"Semantic search over the chunks of an asset attached to the post. Returns the most relevant chunks for the query, each with a sourceLabel citation when the asset has one.",
+			assistantkit.Wrap(toolSearchAssetChunks)), assistantkit.TierRead,
+			`Call this to find a topic or keyword in an attached asset.`),
+		spec(genkit.DefineTool(g, "getCurrentContent",
+			"Returns the post's latest content as plain text.",
+			assistantkit.Wrap(func(ctx context.Context, _ struct{}) (string, error) { return toolGetCurrentContent(ctx) })), assistantkit.TierRead,
+			`Call this to re-read the post's content when it may have changed since <post> was read — e.g. after an edit earlier in this message.`),
+		spec(genkit.DefineTool(g, "clonePost",
+			"Duplicates the post as a new draft in the same campaign. "+
+				"For a cross-platform clone, set targetPlatform and OMIT content — the server's writer "+
+				"adapts the copy to the target platform (pass an optional instruction to steer it). "+
+				"content is an explicit override only. Returns the new draft's id.",
+			assistantkit.Wrap(toolClonePost)), assistantkit.TierReversible,
+			`Call this for "clone this post", "duplicate this", "clone this for <platform>". Same platform: no targetPlatform, the copy is verbatim. Another platform: set targetPlatform to its name and let the server adapt the copy (pass the user's steer as instruction). An unknown platform is refused with the available ones: ask which. Cloning never changes this post.`),
+		spec(genkit.DefineTool(g, "restoreVersion",
+			"Rolls the post back to an earlier saved version. Pass versionNumber "+
+				"(e.g. 2) for an explicit version, or relative:\"previous\" to undo the last change. "+
+				"Non-destructive: it saves a new version, so nothing is lost.",
+			assistantkit.Wrap(toolRestoreVersion)), assistantkit.TierReversible,
+			`Call this for "restore version N", "undo the last change", "go back". Use the numbers under "Version history" in <post>, or relative "previous". When there is nothing to restore it is refused: relay that, don't guess another number.`),
+		spec(genkit.DefineTool(g, "schedulePost",
+			"Schedules the post for publishing at an absolute time. Pass scheduledAt as "+
+				"ISO-8601 with a timezone offset; set allowPromote:true when the post is a draft. "+
+				"It is offered for the user to confirm before it runs.",
+			assistantkit.Gated("schedulePost", scheduleGate, assistantkit.Wrap(toolSchedulePost))), assistantkit.TierProposal,
+			`Call this for "schedule this for tomorrow at 9am", "publish next Monday". Resolve the time against the scheduling context in <post> (its timezone and defaults: morning 09:00, afternoon 14:00, evening 18:00) and pass it with its offset; set allowPromote when the post is a draft that passes validation. The schedule is offered for the user's yes: tell them the absolute time and whether it auto-publishes or waits for manual publishing. If the readiness summary says the post can't be published, don't call it; tell the user what to fix.`),
+		spec(genkit.DefineTool(g, "createNote",
+			"Saves a standalone note attached to the post — an image-generation prompt "+
+				"(type image_prompt, e.g. a Nano Banana prompt) or a free-form side note or idea "+
+				"(type note), instead of putting it in the post body. Returns the new note's id.",
+			assistantkit.Wrap(toolCreateNote)), assistantkit.TierReversible,
+			`Call this for "make an image prompt", "jot a note", "save this as a note" — anything that should NOT go into the post body. To change the copy AND capture a note, call both editPost and createNote.`),
 	}
 }
 
@@ -449,7 +426,7 @@ func toolGetAssetChunks(ctx context.Context, in GetChunksInput) (*ChunksOutput, 
 func toolSearchAssetChunks(ctx context.Context, in SearchChunksInput) (*ChunksOutput, error) {
 	st := getRequestState(ctx)
 	if !embedopts.Available(st.embedder) {
-		return nil, fmt.Errorf("semantic search is unavailable (no embedder configured); use getAssetChunks to retrieve chunks by ID instead")
+		return nil, assistantkit.Refused("semantic search is unavailable; use getAssetChunks to retrieve chunks by ID instead")
 	}
 
 	qResp, err := st.embedder.Embed(ctx, &ai.EmbedRequest{
@@ -488,7 +465,7 @@ func toolGetCurrentContent(ctx context.Context) (string, error) {
 func toolClonePost(ctx context.Context, in ClonePostInput) (*ClonePostOutput, error) {
 	st := getRequestState(ctx)
 	if st.cloneSvc == nil {
-		return nil, fmt.Errorf("cloning is not available")
+		return nil, assistantkit.Refused("cloning is not available")
 	}
 
 	opts := clone.DefaultOptions(st.actor, clone.TriggerAssistant)
@@ -551,7 +528,7 @@ func toolClonePost(ctx context.Context, in ClonePostInput) (*ClonePostOutput, er
 func toolRestoreVersion(ctx context.Context, in RestoreVersionInput) (*RestoreVersionOutput, error) {
 	st := getRequestState(ctx)
 	if st.restoreSvc == nil {
-		return nil, fmt.Errorf("restore is not available")
+		return nil, assistantkit.Refused("restore is not available")
 	}
 
 	versionNumber := in.VersionNumber
@@ -563,7 +540,7 @@ func toolRestoreVersion(ctx context.Context, in RestoreVersionInput) (*RestoreVe
 		versionNumber = resolved
 	}
 	if versionNumber <= 0 {
-		return nil, fmt.Errorf("specify which version to restore: a version number (e.g. 2) or relative:\"previous\"")
+		return nil, assistantkit.Refused("specify which version to restore: a version number (e.g. 2) or relative:\"previous\"")
 	}
 
 	emit(st.onEvent, SSEEventRestoreStarted, RestoreStartedEventPayload{TargetVersion: versionNumber})
@@ -588,7 +565,7 @@ func toolRestoreVersion(ctx context.Context, in RestoreVersionInput) (*RestoreVe
 func toolSchedulePost(ctx context.Context, in SchedulePostInput) (*SchedulePostOutput, error) {
 	st := getRequestState(ctx)
 	if st.scheduleSvc == nil {
-		return nil, fmt.Errorf("scheduling is not available")
+		return nil, assistantkit.Refused("scheduling is not available")
 	}
 
 	when, err := parseScheduledAt(in.ScheduledAt)
@@ -620,7 +597,7 @@ func toolSchedulePost(ctx context.Context, in SchedulePostInput) (*SchedulePostO
 func toolCreateNote(ctx context.Context, in CreateNoteInput) (*CreateNoteOutput, error) {
 	st := getRequestState(ctx)
 	if st.noteSvc == nil {
-		return nil, fmt.Errorf("notes are not available")
+		return nil, assistantkit.Refused("notes are not available")
 	}
 
 	// draft_thesis is reserved for the content-plan flow; the assistant may
@@ -657,11 +634,10 @@ func toolCreateNote(ctx context.Context, in CreateNoteInput) (*CreateNoteOutput,
 	return &CreateNoteOutput{ID: note.ID, Type: string(note.Type)}, nil
 }
 
-// toolEditPost is the editPost write-tool. In the hybrid path the
-// planner (Haiku) calls it for any content change, forwarding the user's
-// instruction verbatim; the Sonnet writer produces the full post, which
-// streams to the client and is stashed on requestState for the runner. Only a
-// compact receipt goes back to the planner.
+// toolEditPost is the editPost write-tool. The orchestrator calls it for any
+// content change, forwarding the user's instruction verbatim; the writer
+// produces the full post, which streams to the client and is saved here. Only
+// a compact receipt goes back to the orchestrator.
 func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error) {
 	st := getRequestState(ctx)
 	// A submitted post (scheduled or published) holds a copy outside
@@ -688,7 +664,10 @@ func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error
 	if content == "" {
 		return nil, fmt.Errorf("the writer produced no content")
 	}
-	st.editResult = &editResult{Content: content}
+	if err := commitEdit(ctx, st, content, in.SaveVersion, in.VersionNote); err != nil {
+		return nil, err
+	}
+	st.editResult = &editResult{Content: content, SaveVersion: in.SaveVersion, Note: in.VersionNote}
 	return &EditPostOutput{OK: true, Chars: len(content)}, nil
 }
 
@@ -696,9 +675,9 @@ func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error
 // content. With stream set it emits the Markdown as content_delta events for
 // the live editor (the editPost path); clone adaptation stays silent because
 // the copy lands in a new draft. Usage is metered as post_assistant_edit so
-// the writer's spend is attributable separately from the planner loop.
+// the writer's spend is attributable separately from the orchestrator.
 func runWriter(ctx context.Context, st *requestState, instruction string, stream bool) (string, error) {
-	if st.g == nil || st.provider == nil || st.writerSystem == "" {
+	if st.g == nil || st.writerSystem == "" {
 		return "", fmt.Errorf("content writing is not available")
 	}
 
@@ -710,7 +689,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		}
 	}
 
-	mc := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter)
+	mc := modelconfig.Resolve(ctx, modelconfig.FlowAssistant, modelconfig.SlotWriter)
 	record := func(ctx context.Context, resp *ai.ModelResponse) {
 		st.recorder.RecordResp(ctx, mc.Vendor, mc.Model, "post_assistant_edit", resp)
 	}
@@ -719,7 +698,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		ai.WithSystem(st.writerSystem),
 		ai.WithPrompt(composeWriterInstruction(instruction, st.retrieved)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: onText})),
-		ai.WithMiddleware(st.provider.CallMiddleware(modelconfig.FlowPostAssistant, record)),
+		ai.WithMiddleware(st.provider.CallMiddleware(modelconfig.FlowAssistant, record)),
 		st.provider.CallConfig(mc.Model, cmp.Or(st.writerMaxTokens, 64000)),
 	)
 	if err != nil {
@@ -771,12 +750,12 @@ func composeWriterInstruction(instruction string, excerpts []retrievedExcerpt) s
 func parseScheduledAt(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return time.Time{}, fmt.Errorf("scheduledAt is required (ISO-8601 with a timezone offset, e.g. 2026-06-15T09:00:00+03:00)")
+		return time.Time{}, assistantkit.Refused("scheduledAt is required (ISO-8601 with a timezone offset, e.g. 2026-06-15T09:00:00+03:00)")
 	}
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
-	return time.Time{}, fmt.Errorf("could not parse scheduledAt %q; use ISO-8601 with a timezone offset, e.g. 2026-06-15T09:00:00+03:00 or 2026-06-15T06:00:00Z", s)
+	return time.Time{}, assistantkit.Refused(fmt.Sprintf("could not parse scheduledAt %q; use ISO-8601 with a timezone offset, e.g. 2026-06-15T09:00:00+03:00 or 2026-06-15T06:00:00Z", s))
 }
 
 // scheduleToolError rewrites the shared service's errors into messages
@@ -794,17 +773,17 @@ func scheduleToolError(err error) error {
 			}
 		}
 		if len(reasons) == 0 {
-			return fmt.Errorf("the post is not ready to publish yet")
+			return assistantkit.Refused("the post is not ready to publish yet")
 		}
-		return fmt.Errorf("the post can't be scheduled until these are fixed: %s", strings.Join(reasons, "; "))
+		return assistantkit.Refused("the post can't be scheduled until these are fixed: " + strings.Join(reasons, "; "))
 	case errors.Is(err, schedule.ErrScheduledAtInPast):
-		return fmt.Errorf("that time is in the past — propose the next valid time and confirm again")
+		return assistantkit.Refused("that time is in the past — propose the next valid time")
 	case errors.Is(err, schedule.ErrNoPlatform):
-		return fmt.Errorf("this post has no platform set, so it can't be scheduled — ask the user to choose a platform first")
+		return assistantkit.Refused("this post has no platform set, so it can't be scheduled — ask the user to choose a platform first")
 	case errors.Is(err, schedule.ErrNotSchedulable):
-		return fmt.Errorf("%v — only a ready-for-publish post (or a draft you promote) can be scheduled; if it's already scheduled, it must be cancelled first", err)
+		return assistantkit.Refused(err.Error() + " — only a ready-for-publish post (or a draft you promote) can be scheduled; if it's already scheduled, it must be cancelled first")
 	case errors.Is(err, schedule.ErrPostNotFound):
-		return fmt.Errorf("post not found")
+		return assistantkit.Refused(postRemoved)
 	}
 	return err
 }
@@ -817,14 +796,14 @@ func resolvePreviousVersion(ctx context.Context, st *requestState, relative stri
 	switch strings.ToLower(strings.TrimSpace(relative)) {
 	case "previous", "prev", "undo", "back", "last", "earlier":
 	default:
-		return 0, fmt.Errorf("unrecognized version reference %q; pass a version number instead", relative)
+		return 0, assistantkit.Refused(fmt.Sprintf("unrecognized version reference %q; pass a version number instead", relative))
 	}
 	latest, err := st.repos.Versions.GetLatestByPostID(ctx, st.postID)
 	if err != nil {
 		return 0, fmt.Errorf("look up versions: %w", err)
 	}
 	if latest == nil {
-		return 0, fmt.Errorf("there are no saved versions to restore")
+		return 0, assistantkit.Refused("there are no saved versions to restore")
 	}
 	post, err := st.repos.Posts.GetByID(ctx, st.postID)
 	if err != nil {
@@ -839,7 +818,7 @@ func resolvePreviousVersion(ctx context.Context, st *requestState, relative stri
 		target = latest.VersionNumber - 1
 	}
 	if target < 1 {
-		return 0, fmt.Errorf("there is no earlier version to restore")
+		return 0, assistantkit.Refused("there is no earlier version to restore")
 	}
 	return target, nil
 }
@@ -863,7 +842,7 @@ func resolvePlatform(platforms []models.Platform, ident string) (string, error) 
 	for _, p := range platforms {
 		names = append(names, p.Name)
 	}
-	return "", fmt.Errorf("unknown platform %q; available platforms: %s", ident, strings.Join(names, ", "))
+	return "", assistantkit.Refused(fmt.Sprintf("unknown platform %q", ident), names...)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

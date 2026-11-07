@@ -3,132 +3,15 @@ package campaign_assistant
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
-	"github.com/ogen-app/ogen/src/kernel/logging"
 )
-
-// actionProposed labels a turn whose only result is work waiting for the
-// user's confirmation.
-const actionProposed = "proposed"
-
-// proposalTTL is how long an offer can be accepted. After that the state it
-// was planned against may have moved on, so the user asks again.
-const proposalTTL = 24 * time.Hour
 
 // defaultProposalThreshold is the largest batch generated without asking.
 const defaultProposalThreshold = 3
-
-// campaignSink stores held-back calls against the turn's campaign.
-type campaignSink struct{ st *requestState }
-
-func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (string, error) {
-	st := s.st
-	if st.repos.Proposals == nil {
-		return "", assistantkit.ErrNoProposalSink
-	}
-	args, err := toJSONMap(p.Args)
-	if err != nil {
-		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
-	}
-	options, choices, err := proposalOptions(p.Options)
-	if err != nil {
-		return "", fmt.Errorf("encode %s proposal options: %w", p.Tool, err)
-	}
-	id, err := models.NewID()
-	if err != nil {
-		return "", err
-	}
-	by, _ := logging.UserIDFrom(ctx)
-	now := time.Now().UTC()
-	row := &models.AssistantProposal{
-		ID: id, ScopeKind: models.AssistantScopeCampaign, ScopeID: st.campaignID,
-		Tool: p.Tool, Args: args, Summary: p.Summary, Options: options, CreatedBy: by, ExpiresAt: now.Add(proposalTTL),
-	}
-	if err := st.repos.Proposals.Create(ctx, row); err != nil {
-		return "", fmt.Errorf("store %s proposal: %w", p.Tool, err)
-	}
-	st.mu.Lock()
-	st.proposed = append(st.proposed, ProposalCreatedEventPayload{
-		ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices,
-	})
-	st.mu.Unlock()
-	return id, nil
-}
-
-// proposalOptions converts a proposal's options for storage, and for the
-// card, which shows only their ids and titles.
-func proposalOptions(opts []assistantkit.Option) ([]models.ProposalOption, []ProposalChoice, error) {
-	if len(opts) == 0 {
-		return nil, nil, nil
-	}
-	stored := make([]models.ProposalOption, len(opts))
-	choices := make([]ProposalChoice, len(opts))
-	for i, o := range opts {
-		args, err := toJSONMap(o.Args)
-		if err != nil {
-			return nil, nil, err
-		}
-		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Tool: o.Tool, Args: args}
-		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description}
-	}
-	return stored, choices, nil
-}
-
-func toJSONMap(v any) (models.JSONMap, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	m := models.JSONMap{}
-	if string(b) == "null" {
-		return m, nil
-	}
-	return m, json.Unmarshal(b, &m)
-}
-
-// proposalOutcomes reports this turn's held-back calls. They are read-only, so
-// a turn that also wrote something is labelled by the write.
-func proposalOutcomes(proposed []ProposalCreatedEventPayload) []outcome {
-	out := make([]outcome, 0, len(proposed))
-	for _, p := range proposed {
-		out = append(out, outcome{
-			action:      actionProposed,
-			explanation: fmt.Sprintf("I've prepared this for you to confirm: %s.", p.Summary),
-			attach:      func(resp *CampaignAssistantResponse) { resp.Proposals = append(resp.Proposals, p) },
-			event:       SSEEventProposalCreated,
-			payload:     p,
-			readOnly:    true,
-		})
-	}
-	return out
-}
-
-// openProposals lists the campaign's offers still waiting for an answer. A
-// failed read only costs matching a "yes" to an offer, so it is logged, not
-// fatal.
-func (t *turn) openProposals(ctx context.Context) []openProposal {
-	if t.repos.Proposals == nil {
-		return nil
-	}
-	rows, err := t.repos.Proposals.ListOpen(ctx, models.AssistantScopeCampaign, t.req.CampaignID, time.Now().UTC())
-	if err != nil {
-		slog.WarnContext(ctx, "list open proposals failed", logging.AttrComponent, logComponent,
-			"campaign_id", t.req.CampaignID, logging.AttrError, err)
-		return nil
-	}
-	out := make([]openProposal, len(rows))
-	for i, r := range rows {
-		out[i] = openProposal{ID: r.ID, Summary: r.Summary}
-	}
-	return out
-}
 
 func proposalThreshold(ctx context.Context) int {
 	return cmp.Or(getRequestState(ctx).proposalThreshold, defaultProposalThreshold)
@@ -158,7 +41,7 @@ var (
 var (
 	generatePostsGate = assistantkit.Gate[GeneratePostsInput]{
 		Precheck: func(ctx context.Context, in GeneratePostsInput) error {
-			if err := precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType); err != nil {
+			if err := precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType, false); err != nil {
 				return err
 			}
 			if err := needSources(ctx, "generatePosts", in.Exploratory, func() any { in.Exploratory = true; return in }); err != nil {
@@ -176,7 +59,7 @@ var (
 	}
 	draftPostGate = assistantkit.Gate[DraftPostInput]{
 		Precheck: func(ctx context.Context, in DraftPostInput) error {
-			if err := precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType); err != nil {
+			if err := precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType, true); err != nil {
 				return err
 			}
 			var fill func(int) any
@@ -197,9 +80,14 @@ var (
 // overGoal returns a conflict when adding count posts would take the
 // campaign past its goal. The options are to fill the goal exactly (when
 // there is room and fill can rebuild the call for fewer posts) or to add
-// them all anyway; each is the tool call picking it runs.
+// them all anyway; each is the tool call picking it runs. When the posts
+// could not be counted the room is unknown, so adding them waits for a yes.
 func overGoal(ctx context.Context, tool string, count int, args any, fill func(int) any) error {
 	g := getRequestState(ctx).snapshot.Goal
+	if g != nil && g.Unknown {
+		reason := fmt.Sprintf("The campaign's posts could not be read, so it is unclear how much room is left under its goal of %d.", g.Target)
+		return assistantkit.Conflicted(reason, assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Add %d without checking the goal", count), Tool: tool, Args: args})
+	}
 	if g == nil || count <= g.Room {
 		return nil
 	}
@@ -215,8 +103,10 @@ func overGoal(ctx context.Context, tool string, count int, args any, fill func(i
 
 // precheckPosts runs the post tools' user-correctable checks — target
 // platform, phase, publish window, post type — so a request that could never
-// run is refused instead of proposed.
-func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, windowEnd, postType string) error {
+// run is refused instead of proposed. anyWhenNone is the engine's rule for a
+// type on a platform with none to choose from: drafting keeps it.
+func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, windowEnd, postType string, anyWhenNone bool) error {
+	postType = strings.TrimSpace(postType)
 	st := getRequestState(ctx)
 	now := time.Now().UTC()
 	ids, _, err := resolveTargetPlatforms(st.campaign, platforms)
@@ -232,7 +122,7 @@ func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, 
 	if _, _, err := resolveWindow(windowStart, windowEnd, now); err != nil {
 		return assistantkit.Refused(err.Error())
 	}
-	if reason, alts, bad := unsupportedPostType(st.campaign, ids, postType); bad {
+	if reason, alts, bad := unsupportedPostType(st.campaign, ids, postType, anyWhenNone); bad {
 		return assistantkit.Refused(reason, alts...)
 	}
 	return nil

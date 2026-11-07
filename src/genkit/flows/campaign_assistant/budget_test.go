@@ -69,3 +69,16 @@ func TestOverGoal_OffersAChoice(t *testing.T) {
 		t.Fatalf("within the goal: %v", err)
 	}
 }
+
+// When the posts could not be read the room is unknown: even one post waits
+// for a yes, and nothing offers to fill the goal.
+func TestOverGoal_UnknownRoomAsks(t *testing.T) {
+	var generated int
+	st := budgetState(&memProposals{}, &generated, 5)
+	st.snapshot = st.snapshot.WithoutPosts()
+	err := overGoal(st.bind(t.Context()), "draftPost", 1, map[string]any{"count": 1}, func(n int) any { return map[string]any{"count": n} })
+	ce, ok := errors.AsType[*assistantkit.ConflictError](err)
+	if !ok || len(ce.Options) != 1 || ce.Options[0].ID != "anyway" {
+		t.Fatalf("err = %v", err)
+	}
+}

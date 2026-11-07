@@ -143,7 +143,7 @@ var _ = Describe("Figma plugin video API", Ordered, func() {
 			WithEventHub(hub).WithPendingUploads(repository.NewPendingUploadRepository(db))
 
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), platformRepo, postAttRepo, auth, handlers.PostsOptions{}).Register(app)
 		attachments.Register(app)
 		handlers.NewFigmaPluginHandler(handlers.FigmaPluginDeps{

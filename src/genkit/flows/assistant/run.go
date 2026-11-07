@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/genkit/jsonstream"
@@ -41,7 +43,7 @@ func run(
 	p *prompts,
 	tools *toolSet,
 	onEvent OnEventFunc,
-) (*Response, error) {
+) (_ *Response, retErr error) {
 	if strings.TrimSpace(req.Instruction) == "" {
 		return nil, &ValidationError{Msg: "instruction is required"}
 	}
@@ -59,49 +61,55 @@ func run(
 	if err != nil {
 		return nil, fmt.Errorf("load history: %w", err)
 	}
-	history := flowkit.History(rows, func(m models.AssistantMessage) (string, string) {
-		if m.Role == flowkit.RoleModel {
-			return m.Role, modelTurn(m.Content)
-		}
-		return m.Role, m.Content
-	})
+	history := flowkit.History(rows, historyTurn)
 	view, err := renderView(p, req.View, tools.openProposals(ctx, scope), time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("render view: %w", err)
 	}
 
 	st := newTurnState(req.View, tools.packs.defaults(req.View.View.Screen, scope.Kind))
+	st.turn.Instruction = req.Instruction
 	st.emit = onEvent
+	// An offer answered before the turn failed stays answered, so the client
+	// hears it even without a "complete".
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		for _, r := range st.resolvedList() {
+			emit(onEvent, SSEEventProposalResolved, r)
+		}
+	}()
 	ctx = tools.bind(withTurnState(ctx, st), st)
-	scanner, err := callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent)
+	if ctx, err = tools.begin(ctx, st, slices.Clone(st.loaded)); err != nil {
+		return nil, err
+	}
+	call := func(ctx context.Context) (*jsonstream.Scanner, error) {
+		return callModel(ctx, g, cfg, p, tools, st.loadedList(), history, view+st.packPrompt()+req.Instruction, onEvent)
+	}
+	scanner, err := call(ctx)
 	if err != nil {
 		return nil, err
 	}
 	// loadPack interrupts the call; the turn starts again, once, with the
 	// pack's tools.
 	if scanner == nil {
-		pack, ok := st.restart(tools.packs)
-		if !ok {
-			return nil, &AIError{Msg: "the assistant stopped without replying"}
-		}
-		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
-		if scanner, err = callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent); err != nil {
+		if ctx, scanner, err = restartWithPack(ctx, tools, st, call, onEvent); err != nil {
 			return nil, err
 		}
-		if scanner == nil {
-			return nil, &AIError{Msg: "the assistant stopped without replying"}
-		}
 	}
-	result, err := assemble(ctx, scanner)
-	if err != nil {
-		return nil, err
+	result := assemble(ctx, scanner)
+	tools.finish(st, result)
+	if result.Explanation == "" {
+		return nil, &AIError{Msg: unusableReply(ctx, scanner)}
 	}
-	finish(st, result)
 
-	// Nothing a turn does depends on its own history row, so a failed write
-	// is logged, not returned.
+	// The turn's work is done by now, so a failed history write does not
+	// fail it: an error would report work that happened as lost, and a retry
+	// would redo it. The reply says it was not saved instead.
 	if err := persistTurn(ctx, repos, req, result); err != nil {
 		slog.ErrorContext(ctx, "persist conversation turn failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+		result.Unsaved = true
 	}
 	// The screen moves only once the reply is final, so a restarted call
 	// never leaves half a plan on it.
@@ -118,6 +126,30 @@ func run(
 	return result, nil
 }
 
+// restartWithPack begins the pack loadPack asked for and makes the turn's
+// second and last model call with it.
+func restartWithPack(ctx context.Context, tools *toolSet, st *turnState, call func(context.Context) (*jsonstream.Scanner, error), onEvent OnEventFunc) (context.Context, *jsonstream.Scanner, error) {
+	pack, ok := st.restart(tools.packs)
+	if !ok {
+		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
+	}
+	ctx, err := tools.begin(ctx, st, []string{pack})
+	if err != nil {
+		return nil, nil, err
+	}
+	if st.hasBegun(pack) {
+		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
+	}
+	scanner, err := call(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if scanner == nil {
+		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
+	}
+	return ctx, scanner, nil
+}
+
 // callModel runs the orchestrator's tool loop on the core tools plus loaded,
 // streaming the explanation and the tool events. The reply is read by the
 // tolerant scanner rather than ai.WithOutputType, whose strict validator
@@ -130,11 +162,14 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	}
 	maxTokens := cmp.Or(cfg.MaxOutputTokens, 4096)
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowAssistant, modelconfig.SlotOrchestrator)
-	scanner := jsonstream.New([]string{"explanation"}, func(key, delta string) {
-		if key == "explanation" {
-			emit(onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
-		}
-	})
+	reply := &replyScanner{newScanner: func() *jsonstream.Scanner {
+		return jsonstream.New([]string{"explanation"}, func(key, delta string) {
+			if key == "explanation" {
+				emit(onEvent, SSEEventExplanationDelta, DeltaEventPayload{Delta: delta})
+			}
+		})
+	}}
+	reply.cur = reply.newScanner()
 	usage := flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "assistant", Component: logComponent}
 	resp, err := genkit.Generate(ctx, g,
 		ai.WithModelName(mc.Ref),
@@ -144,12 +179,13 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		ai.WithTools(tools.tools(loaded)...),
 		ai.WithMaxTurns(cmp.Or(cfg.MaxTurns, 4)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{
-			OnText: scanner.Push,
+			OnRound: reply.round,
+			OnText:  reply.push,
 			OnToolCall: func(tr *ai.ToolRequest) {
 				emit(onEvent, SSEEventToolCall, ToolCallEventPayload{Name: tr.Name, Input: tr.Input, Ref: tr.Ref})
 			},
 			OnToolResult: func(tr *ai.ToolResponse) {
-				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: true})
+				emit(onEvent, SSEEventToolResult, ToolResultEventPayload{Name: tr.Name, Ref: tr.Ref, OK: assistantkit.OutputOK(tr.Output)})
 			},
 		})),
 		// The system prompt, tools and history repeat every round and turn;
@@ -157,6 +193,13 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		ai.WithMiddleware(usage.Meter(), cfg.Provider.CallMiddleware(modelconfig.FlowAssistant, usage.Record, llm.CachePrompt())),
 		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
+	// Running out of tool rounds is recoverable: the tools that ran have
+	// committed, and the packs' results stand in for the missing reply.
+	if isMaxTurnsExceeded(err) {
+		slog.WarnContext(ctx, "tool rounds exhausted; finalising from the work done", logging.AttrComponent, logComponent)
+		usage.FinishMetered(ctx, nil, maxTokens)
+		return reply.cur, nil
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		return nil, &AIError{Msg: assistantkit.FriendlyError(err)}
@@ -165,28 +208,113 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	if len(resp.Interrupts()) > 0 {
 		return nil, nil
 	}
-	return scanner, nil
+	return reply.cur, nil
 }
 
-// assemble reads the reply envelope. A reply in plain prose, with no JSON,
-// is taken as the answer.
-func assemble(ctx context.Context, scanner *jsonstream.Scanner) (*Response, error) {
+// replyScanner reads the reply from the last model round that wrote text: a
+// round that goes on to call tools may write a preliminary envelope first.
+// A round with no text keeps the one before it.
+type replyScanner struct {
+	cur        *jsonstream.Scanner
+	newScanner func() *jsonstream.Scanner
+	newRound   bool
+}
+
+// round marks the start of a model round.
+func (r *replyScanner) round() { r.newRound = true }
+
+// push feeds text, starting a fresh scanner if a new round's text replaces
+// an earlier round's.
+func (r *replyScanner) push(text string) {
+	if r.newRound {
+		r.newRound = false
+		if r.cur.FullText() != "" {
+			r.cur = r.newScanner()
+		}
+	}
+	r.cur.Push(text)
+}
+
+// isMaxTurnsExceeded reports genkit's "exceeded maximum tool call
+// iterations" abort, which has no sentinel.
+func isMaxTurnsExceeded(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "maximum tool call iterations")
+}
+
+// assemble reads the reply envelope. A reply in plain prose is taken as the
+// answer, braces and all; one that opens with "{" or yielded any key is a
+// JSON envelope. A reply with no explanation leaves Explanation empty for
+// the packs' fallback.
+func assemble(ctx context.Context, scanner *jsonstream.Scanner) *Response {
 	vals := scanner.Values()
 	r := &Response{}
 	r.Explanation, _ = vals["explanation"].(string)
 	r.Action, _ = vals["action"].(string)
 	if r.Explanation == "" {
-		raw := strings.TrimSpace(scanner.FullText())
-		if raw == "" || strings.Contains(raw, "{") {
-			slog.ErrorContext(ctx, "reply had no usable fields", logging.AttrComponent, logComponent, "raw_preview", logging.Preview(raw, 500))
-			return nil, &AIError{Msg: "model response did not contain the expected fields"}
+		if raw := strings.TrimSpace(scanner.FullText()); raw != "" && len(vals) == 0 && !strings.HasPrefix(jsonstream.StripFences(raw), "{") {
+			r.Explanation = raw
 		}
-		r.Explanation, r.Action = raw, actionAnswered
 	}
 	if r.Action != actionDeclined {
 		r.Action = actionAnswered
 	}
-	return r, nil
+	return r
+}
+
+// unusableReply logs a turn that left neither a reply nor work to report,
+// and says so in words the user can act on.
+func unusableReply(ctx context.Context, scanner *jsonstream.Scanner) string {
+	raw := scanner.FullText()
+	slog.ErrorContext(ctx, "reply had no usable fields", logging.AttrComponent, logComponent, "raw_preview", logging.Preview(raw, 500))
+	if strings.TrimSpace(raw) == "" {
+		return "I couldn't complete that in a single step. Try splitting it into smaller requests, or rephrasing."
+	}
+	return "model response did not contain the expected fields"
+}
+
+// historyTurn replays a stored message: the user's as typed, after a note of
+// what was selected when it was sent; a model turn as its envelope.
+func historyTurn(m models.AssistantMessage) (string, string) {
+	if m.Role == flowkit.RoleModel {
+		return m.Role, modelTurn(m.Content)
+	}
+	return m.Role, earlierView(m.ViewContext) + m.Content
+}
+
+// earlierIDs caps the ids an <earlier-view> note lists.
+const earlierIDs = 5
+
+// earlierView is a one-line note of the focus and selection a stored user
+// message was sent with, or "" when it had neither. It is built from the
+// stored row alone, so the replayed history stays a stable cache prefix.
+func earlierView(stored models.JSONMap) string {
+	if stored == nil {
+		return ""
+	}
+	b, err := json.Marshal(stored)
+	if err != nil {
+		return ""
+	}
+	var v viewcontext.ViewContext
+	if err := json.Unmarshal(b, &v); err != nil || (v.Focus == nil && v.Selection == nil) {
+		return ""
+	}
+	parts := []string{"sent from " + string(v.Screen)}
+	if v.Focus != nil {
+		parts = append(parts, fmt.Sprintf("in focus %s %s", v.Focus.Kind, v.Focus.ID))
+	}
+	switch sel := v.Selection; {
+	case sel == nil:
+	case sel.AllMatching:
+		parts = append(parts, fmt.Sprintf("selected every %s matching %q", sel.Kind, v.Filter))
+	case len(sel.IDs) > 0:
+		ids := strings.Join(sel.IDs[:min(len(sel.IDs), earlierIDs)], ", ")
+		if more := len(sel.IDs) - earlierIDs; more > 0 {
+			ids += fmt.Sprintf(" and %d more", more)
+		}
+		parts = append(parts, fmt.Sprintf("selected %s %s", sel.Kind, ids))
+	}
+	return "<earlier-view>" + strings.Join(parts, "; ") + "</earlier-view>\n"
 }
 
 // modelTurn replays a stored model turn as its envelope, without the

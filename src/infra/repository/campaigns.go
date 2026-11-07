@@ -27,6 +27,13 @@ type CampaignRepository interface {
 	// from the write so a PUT that omits the presence-aware content-bank fields
 	// (asset_ids / use_assets) doesn't clobber a concurrent membership write.
 	Update(ctx context.Context, campaign *models.Campaign, excludeColumns ...string) error
+	// GetForUpdate is GetByID on a caller's transaction that also locks the
+	// campaign row until the transaction ends.
+	GetForUpdate(ctx context.Context, db bun.IDB, id string) (*models.Campaign, error)
+	// UpdateColumns writes only the named columns (and updated_at) on db, a
+	// caller's transaction or nil for none, so a narrow change never restates
+	// fields another write may have changed.
+	UpdateColumns(ctx context.Context, db bun.IDB, campaign *models.Campaign, columns ...string) error
 	Delete(ctx context.Context, id string) (bool, error)
 	// DeleteTx is Delete on a caller's transaction, so the delete commits
 	// together with whatever the caller unschedules alongside it.
@@ -62,6 +69,8 @@ type CampaignRepository interface {
 	// campaign's current type — false for an unknown/foreign campaign too.
 	PhasePostCounts(ctx context.Context, campaignID string) (map[string]int, error)
 	ReplacePhaseWindows(ctx context.Context, campaignID string, windows []models.CampaignPhaseWindow) error
+	// ReplacePhaseWindowsTx is ReplacePhaseWindows on a caller's transaction.
+	ReplacePhaseWindowsTx(ctx context.Context, db bun.IDB, campaignID string, windows []models.CampaignPhaseWindow) error
 	DeletePhaseWindows(ctx context.Context, campaignID string) error
 	PhaseBelongsToCampaign(ctx context.Context, campaignID, phaseID string) (bool, error)
 }
@@ -178,8 +187,23 @@ func (r *campaignRepository) Exists(ctx context.Context, id string) (bool, error
 }
 
 func (r *campaignRepository) GetByID(ctx context.Context, id string) (*models.Campaign, error) {
+	return r.get(ctx, r.db, id, false)
+}
+
+// GetForUpdate is GetByID on db, a caller's transaction, holding the
+// campaign row's lock until it ends: a compare-then-write on the result can't
+// be interleaved with another write to the row.
+func (r *campaignRepository) GetForUpdate(ctx context.Context, db bun.IDB, id string) (*models.Campaign, error) {
+	return r.get(ctx, db, id, true)
+}
+
+func (r *campaignRepository) get(ctx context.Context, db bun.IDB, id string, lock bool) (*models.Campaign, error) {
 	campaign := new(models.Campaign)
-	err := r.db.NewSelect().Model(campaign).Where("c.id = ?", id).Where("c.deleted_at IS NULL").Scan(ctx)
+	q := db.NewSelect().Model(campaign).Where("c.id = ?", id).Where("c.deleted_at IS NULL")
+	if lock {
+		q = q.For("UPDATE OF c")
+	}
+	err := q.Scan(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -199,7 +223,7 @@ func (r *campaignRepository) GetByID(ctx context.Context, id string) (*models.Ca
 	if err := r.hydrateTypeLocked(ctx, campaigns); err != nil {
 		return nil, err
 	}
-	if err := r.hydratePhaseWindows(ctx, &campaigns[0]); err != nil {
+	if err := r.hydratePhaseWindows(ctx, db, &campaigns[0]); err != nil {
 		return nil, err
 	}
 	return &campaigns[0], nil
@@ -217,6 +241,17 @@ func (r *campaignRepository) Update(ctx context.Context, campaign *models.Campai
 		q = q.ExcludeColumn(excludeColumns...)
 	}
 	_, err := q.Exec(ctx)
+	return err
+}
+
+// UpdateColumns writes only the named columns of campaign, and updated_at,
+// on db (nil uses the repository's DB).
+func (r *campaignRepository) UpdateColumns(ctx context.Context, db bun.IDB, campaign *models.Campaign, columns ...string) error {
+	if db == nil {
+		db = r.db
+	}
+	campaign.UpdatedAt = time.Now().UTC()
+	_, err := db.NewUpdate().Model(campaign).Column(columns...).Column("updated_at").WherePK().Exec(ctx)
 	return err
 }
 

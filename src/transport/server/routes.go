@@ -208,7 +208,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 	handlers.NewCampaignTypesHandler(r.campaignTypeRepo, d.auth).Register(app)
 	handlers.NewCampaignReadHandler(d.svc.campaignOverview, d.svc.campaignSummaries, d.auth).Register(app)
 	handlers.NewCampaignGenerationHandler(r.campaignRepo, gk.GeneratePosts, d.cfg.GeneratePostsMax, gk.CheckBrief, gk.CheckPosts, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
-	handlers.NewCampaignsHandler(r.campaignRepo, r.campaignTypeRepo, d.auth, gk.GenerateDraft, gk.IsAnthropicAvailable, gk.EnrichBrief, r.campaignMessageRepo, gk.RunCampaignAssistant, handlers.CampaignsOptions{
+	handlers.NewCampaignsHandler(r.campaignRepo, r.campaignTypeRepo, d.auth, gk.GenerateDraft, gk.IsAnthropicAvailable, gk.EnrichBrief, handlers.CampaignsOptions{
 		Limiter:  d.entitlements.limiter,
 		Activity: rec,
 		Brands:   r.brandRepo,
@@ -216,8 +216,8 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 		Analysis: d.analysis,
 	}).Register(app)
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, rec, d.auth).Register(app)
-	handlers.NewAssistantProposalsHandler(gk.AnswerProposal, rec, d.auth).Register(app)
-	handlers.NewAssistantActionsHandler(assistantundo.New(r.actionRepo, r.campaignRepo).WithIdeas(r.ideaRepo).WithBrand(r.brandRepo).Undo, rec, d.auth).Register(app)
+	handlers.NewAssistantProposalsHandler(gk.AnswerProposal, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
+	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).WithIdeas(r.ideaRepo).WithBrand(r.brandRepo).Undo, rec, d.auth).Register(app)
 	handlers.NewAssistantHandler(gk.RunAssistant, gk.IsAnthropicAvailable,
 		viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo).Resolve, r.assistantMessageRepo, rec, d.auth).Register(app)
 }
@@ -230,7 +230,6 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 	handlers.NewPlatformsHandler(r.platformRepo, d.publishers(), r.autoPublishAllowlistRepo, d.auth).Register(app)
 	handlers.NewTagsHandler(r.tagRepo, d.auth).Register(app)
 
-	handlers.NewPostAssistantHandler(gk.RunPostAssistant, gk.IsAnthropicAvailable, r.postMessageRepo, rec, d.auth).Register(app)
 	handlers.NewPostActionsHandler(r.postRepo, d.svc.clone, d.svc.restore, rec, d.auth).Register(app)
 	handlers.NewPostInsightsHandler(r.postRepo, gk.AssessPostQuality, r.postEvaluationRepo, r.postAnalyticsRepo, gk.IsAnthropicAvailable, rec, d.auth).
 		WithQualityStatus(gk.PostQualityStatus).
