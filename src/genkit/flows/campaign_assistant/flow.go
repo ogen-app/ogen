@@ -86,8 +86,9 @@ type systemTemplateData struct {
 	Actions   []assistantkit.Action
 }
 
-// loadPrompts parses the prompt template and renders the system prompt once
-// from reg: the tools' guides and the response actions they bind.
+// loadPrompts parses the assistant template, renders the system block once
+// from reg (the tools' guides and the response actions they bind) and keeps
+// the context and state blocks for rendering per turn.
 func loadPrompts(reg *assistantkit.Registry) (*prompts, error) {
 	raw, err := promptFS.ReadFile("prompts/campaign_assistant.tmpl")
 	if err != nil {
