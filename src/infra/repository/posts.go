@@ -55,6 +55,11 @@ type PostRepository interface {
 	// UpdateScheduledAtBatch updates only the scheduled_at (+ updated_at)
 	// column of several posts atomically (CON-115 redistribution).
 	UpdateScheduledAtBatch(ctx context.Context, posts []*models.Post) error
+	// MoveScheduledAt moves several posts in one statement, each only while
+	// it is still redistributable and its scheduled_at is still the move's
+	// From. It returns the ids it moved; the others changed since and keep
+	// their schedule.
+	MoveScheduledAt(ctx context.Context, moves []ScheduleMove, now time.Time) ([]string, error)
 	// UpdateSubmission is the publish workers' compare-and-set write; see
 	// posts_submission.go.
 	UpdateSubmission(ctx context.Context, post *models.Post, heldID string, columns ...string) (bool, error)
@@ -495,6 +500,48 @@ func (r *postRepository) UpdateScheduledAtBatch(ctx context.Context, posts []*mo
 		}
 		return nil
 	})
+}
+
+// ScheduleMove is one post's move: from the scheduled_at it had when the
+// move was planned (nil for an undated post) to its new one.
+type ScheduleMove struct {
+	PostID string
+	From   *time.Time
+	To     time.Time
+}
+
+// scheduleMoveRow is a ScheduleMove as a VALUES row.
+type scheduleMoveRow struct {
+	ID     string     `bun:"id"`
+	FromAt *time.Time `bun:"from_at,type:timestamptz"`
+	ToAt   time.Time  `bun:"to_at,type:timestamptz"`
+}
+
+func (r *postRepository) MoveScheduledAt(ctx context.Context, moves []ScheduleMove, now time.Time) ([]string, error) {
+	moved := []string{}
+	if len(moves) == 0 {
+		return moved, nil
+	}
+	rows := make([]scheduleMoveRow, len(moves))
+	for i, m := range moves {
+		rows[i] = scheduleMoveRow{ID: m.PostID, FromAt: m.From, ToAt: m.To}
+	}
+	// The TenantScoped hook adds the tenant predicate; the status and
+	// scheduled_at guards skip a post scheduled, published or moved since.
+	_, err := r.db.NewUpdate().
+		With("_data", r.db.NewValues(&rows)).
+		Model((*models.Post)(nil)).
+		TableExpr("_data").
+		Set("scheduled_at = _data.to_at").
+		Set("updated_at = ?", now).
+		Where("po.id = _data.id").
+		Where("po.scheduled_at IS NOT DISTINCT FROM _data.from_at").
+		Where("po.status IN (?)", bun.List([]models.PostStatus{
+			models.PostStatusPlanned, models.PostStatusDraft, models.PostStatusReadyForPublish,
+		})).
+		Returning("po.id").
+		Exec(ctx, &moved)
+	return moved, err
 }
 
 func (r *postRepository) Delete(ctx context.Context, id string) (bool, error) {
