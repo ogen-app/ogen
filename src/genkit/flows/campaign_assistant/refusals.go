@@ -6,6 +6,19 @@ import (
 	"slices"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
+	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
+	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+)
+
+// The sub-flows report user-correctable input with their own ValidationError.
+// These matchers turn it into a refusal the planner can relay; any other
+// sub-flow error still aborts the turn.
+var (
+	contentPlanInvalid = assistantkit.As(func(e *content_plan.ValidationError) string { return e.Msg })
+	enrichBriefInvalid = assistantkit.As(func(e *enrich_brief.ValidationError) string { return e.Msg })
+	consistencyInvalid = assistantkit.As(func(e *consistency.ValidationError) string { return e.Msg })
 )
 
 // allowedPostTypes returns the post-type slugs the campaign may publish on a
