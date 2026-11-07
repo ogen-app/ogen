@@ -210,7 +210,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 	}).Register(app)
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, rec, d.auth).Register(app)
 	handlers.NewAssistantProposalsHandler(gk.AnswerProposal, rec, d.auth).Register(app)
-	handlers.NewAssistantActionsHandler(assistantundo.New(r.actionRepo, r.campaignRepo).Undo, rec, d.auth).Register(app)
+	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).Undo, rec, d.auth).Register(app)
 }
 
 // registerPostRoutes serves the platform and tag catalogs and everything
