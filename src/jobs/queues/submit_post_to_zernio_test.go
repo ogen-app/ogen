@@ -98,6 +98,9 @@ func (r *fakePostRepo) GetCampaignPostTree(context.Context, string) (*models.Cam
 	return nil, nil
 }
 func (r *fakePostRepo) UpdateScheduledAtBatch(context.Context, []*models.Post) error { return nil }
+func (r *fakePostRepo) MoveScheduledAt(context.Context, []repository.ScheduleMove, time.Time) ([]string, error) {
+	return nil, nil
+}
 func (r *fakePostRepo) AddUsedAssetIDs(context.Context, string, []string) (*models.Post, error) {
 	return nil, nil
 }
