@@ -149,6 +149,7 @@ func (r *brandRepository) RestoreFact(ctx context.Context, f *models.BrandFact) 
 	return r.insertFact(ctx, f, true)
 }
 
+// insertFact is CreateFact; restore keeps the author snapshot f carries.
 func (r *brandRepository) insertFact(ctx context.Context, f *models.BrandFact, restore bool) error {
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := lockFacts(ctx, tx); err != nil {
@@ -201,6 +202,7 @@ func (r *brandRepository) UpdateFactIf(ctx context.Context, f, was *models.Brand
 	return r.updateFact(ctx, f, was)
 }
 
+// updateFact is UpdateFact, conditional on was when it is non-nil.
 func (r *brandRepository) updateFact(ctx context.Context, f, was *models.BrandFact) (before *models.BrandFact, err error) {
 	err = r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		existing := new(models.BrandFact)
@@ -246,6 +248,7 @@ func (r *brandRepository) DeleteFactIf(ctx context.Context, id string, was *mode
 	return r.deleteFact(ctx, id, was)
 }
 
+// deleteFact is DeleteFact, conditional on was when it is non-nil.
 func (r *brandRepository) deleteFact(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error) {
 	f := new(models.BrandFact)
 	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
