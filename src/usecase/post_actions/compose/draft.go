@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 )
@@ -28,8 +29,8 @@ type DraftRequest struct {
 	Count          int
 	SourceMaterial string
 	Instruction    string
-	// WindowStart and WindowEnd bound the publish dates (YYYY-MM-DD); empty
-	// lets the writer default them.
+	// WindowStart and WindowEnd bound the publish dates (YYYY-MM-DD); RunDraft
+	// fills an empty one, from today over the next two weeks.
 	WindowStart  string
 	WindowEnd    string
 	PhaseID      string
@@ -169,7 +170,7 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(DraftedPost)) (*DraftResult, error) {
 	res := &DraftResult{Posts: []DraftedPost{}}
 	for _, job := range plan.Jobs {
-		written, warnings, err := s.draft(ctx, job.Request)
+		written, warnings, err := s.draft(ctx, s.withWindow(job.Request))
 		res.Warnings = append(res.Warnings, warnings...)
 		for _, w := range written {
 			if err := s.links.Link(ctx, s.db, w.PostID, job.IdeaIDs); err != nil {
@@ -196,6 +197,34 @@ func (s *Service) Write(ctx context.Context, req DraftRequest, ideaIDs []string,
 		return nil, errors.New("compose: no writer")
 	}
 	return s.RunDraft(ctx, &DraftPlan{Jobs: []DraftJob{{Request: req, IdeaIDs: ideaIDs}}}, onPost)
+}
+
+// defaultWindowDays is how far past today an unbounded draft may be dated.
+const defaultWindowDays = 14
+
+// withWindow fills req's missing publish bounds, which the writer requires:
+// a missing start is today (or the end, if that is earlier), a missing end
+// the start, or two weeks on when neither was given.
+func (s *Service) withWindow(req DraftRequest) DraftRequest {
+	if req.WindowStart != "" && req.WindowEnd != "" {
+		return req
+	}
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	t := now().UTC()
+	today := t.Format(time.DateOnly)
+	switch {
+	case req.WindowStart == "" && req.WindowEnd == "":
+		req.WindowStart = today
+		req.WindowEnd = t.AddDate(0, 0, defaultWindowDays).Format(time.DateOnly)
+	case req.WindowStart == "":
+		req.WindowStart = min(today, req.WindowEnd)
+	default:
+		req.WindowEnd = req.WindowStart
+	}
+	return req
 }
 
 // WithDrafter returns s writing through d.
