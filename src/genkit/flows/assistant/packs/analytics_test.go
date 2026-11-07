@@ -10,6 +10,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -101,6 +102,44 @@ func TestAnalyticsReads_RangeAndDegrade(t *testing.T) {
 		t.Fatalf("overview = %#v, %v", out, err)
 	}
 	_, err = topPosts(ctx, d, TopPostsInput{By: "vibes"})
+	refused(t, err)
+}
+
+func TestAnalyticsLessons_RefusesAndDegrades(t *testing.T) {
+	d := Deps{Analytics: &analytics.Service{}}
+	ctx, _ := turn(t, workspace, nil)
+	for _, in := range []LessonsInput{{Metric: "vibes"}, {Since: "last spring"}, {TrendWindow: "forever"}} {
+		_, err := analyticsLessons(ctx, d, in)
+		refused(t, err)
+	}
+	out, err := analyticsLessons(ctx, d, LessonsInput{Since: "2026-01-01", TrendWindow: "12w", Metric: "saves"})
+	if u, ok := out.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
+		t.Fatalf("lessons = %#v, %v", out, err)
+	}
+}
+
+type noAnalytics struct {
+	repository.PostAnalyticsRepository
+}
+
+func TestPostStats_DefaultsToThePostThread(t *testing.T) {
+	ctx, _ := turn(t, workspace, nil)
+	// Outside a post thread the id is required.
+	_, err := postStats(ctx, Deps{Analytics: &analytics.Service{}}, PostStatsInput{})
+	refused(t, err)
+
+	postThread, _ := turn(t, viewcontext.Scope{Kind: models.AssistantScopePost, ID: "p1"}, nil)
+	out, err := postStats(postThread, Deps{Analytics: &analytics.Service{}}, PostStatsInput{})
+	if u, ok := out.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
+		t.Fatalf("post stats = %#v, %v", out, err)
+	}
+
+	d := Deps{Analytics: &analytics.Service{Repo: noAnalytics{}, Posts: examplePosts{byID: map[string]*models.Post{
+		"draft": {ID: "draft"},
+	}}}}
+	_, err = postStats(postThread, d, PostStatsInput{})
+	refused(t, err)
+	_, err = postStats(ctx, d, PostStatsInput{PostID: "draft"})
 	refused(t, err)
 }
 

@@ -1,17 +1,11 @@
 package handlers
 
 import (
-	"context"
-	"strings"
-	"time"
+	"errors"
 
 	"github.com/gofiber/fiber/v2"
-	"golang.org/x/sync/errgroup"
 
-	"github.com/ogen-app/ogen/src/analytics/learnings"
-	"github.com/ogen-app/ogen/src/analytics/poststat"
-	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/analytics"
 )
 
 // PostDetail serves the CON-250 per-post statistics drill-down: the post header,
@@ -42,209 +36,23 @@ func (h *AnalyticsHandler) PostDetail(c *fiber.Ctx) error {
 	if h.repo == nil {
 		return c.JSON(insightEnvelope{Available: false, Reason: reasonNotConfigured})
 	}
-	ctx := reqCtx(c)
-
-	post, err := h.posts.GetByID(ctx, c.Params("post_id"))
-	if err != nil {
-		return notFound(err, "post not found")
-	}
-	// Analytics is defined only for posts published through a publisher; mirror
-	// the CON-93 machine-readable 409 so the client can tell "wrong kind of post"
-	// from "not found".
-	if post.PublisherPostID == "" {
+	resp, reason, err := h.service().PostStats(reqCtx(c), c.Params("post_id"))
+	switch {
+	case errors.Is(err, analytics.ErrPostNotFound):
+		return fiber.NewError(fiber.StatusNotFound, "post not found")
+	case errors.Is(err, analytics.ErrNotPublishedViaPublisher):
+		// Analytics is defined only for posts published through a publisher;
+		// mirror the CON-93 machine-readable 409 so the client can tell "wrong
+		// kind of post" from "not found".
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
 			"code":  "not_published_via_publisher",
 			"error": "post has not been published through a publisher",
 		})
-	}
-
-	cur, err := h.repo.GetByPostID(ctx, post.ID)
-	if err != nil {
+	case err != nil:
 		return err
 	}
-
-	now := time.Now().UTC()
-
-	header := poststat.PostHeader{
-		PostID:          post.ID,
-		PublisherPostID: post.PublisherPostID,
-		Title:           post.Title,
-		MediaFormat:     mediaFormat(*post),
-		Campaign:        campaignRef(post),
+	if resp == nil {
+		return c.JSON(insightEnvelope{Available: false, Reason: reason})
 	}
-	header.Account = h.poststatAccount(ctx, post, cur)
-	published := post.PublishedAt
-	if cur != nil {
-		header.Platform = cur.Platform
-		header.OpenURL = openURL(cur)
-		if cur.PublishedAt != nil {
-			published = cur.PublishedAt
-		}
-		if cur.Title != "" {
-			header.Title = cur.Title
-		}
-	}
-	if header.Platform == "" && post.Platform != nil {
-		header.Platform = post.Platform.Name
-	}
-	var publishedAt time.Time
-	if published != nil {
-		publishedAt = *published
-	}
-	header.PublishedAt = publishedAt
-	age := max(now.Sub(publishedAt), 0)
-
-	in := poststat.Inputs{
-		Now:      now,
-		Header:   header,
-		Age:      age,
-		Platform: header.Platform,
-	}
-
-	// No current row yet → the background refresh hasn't covered this post.
-	if cur == nil {
-		in.UpdatedAt = now
-		return c.JSON(insightEnvelope{Available: true, Data: poststat.Build(in)})
-	}
-
-	in.UpdatedAt = cur.LastCheckedAt
-	in.Current = &poststat.Metrics{
-		Reach:          cur.Reach,
-		Impressions:    cur.Impressions,
-		Interactions:   cur.Likes + cur.Comments + cur.Shares,
-		Saves:          cur.Saves,
-		Clicks:         cur.Clicks,
-		EngagementRate: cur.EngagementRate,
-	}
-
-	// The workspace baselines (cached) and the post's own history are
-	// independent reads, so they run concurrently. The workspace-wide lifespan
-	// (all-time) drives the half-life narrative + the still-counting cutoff;
-	// it is shared with the CON-239 learnings board.
-	var (
-		samples     []repository.ReachAgeSample
-		snaps       []models.PostAnalyticsSnapshot
-		lifeSamples []repository.LifespanSample
-	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) { samples, err = h.reachByAgeSamples(gctx); return err })
-	g.Go(func() (err error) { snaps, err = h.repo.SnapshotsByPostID(gctx, post.ID); return err })
-	g.Go(func() (err error) { lifeSamples, err = h.lifespanSamples(gctx, time.Time{}); return err })
-	if err := g.Wait(); err != nil {
-		return err
-	}
-	in.Samples = toBandSamples(samples)
-	in.Snapshots = toPoststatSnapshots(snaps, publishedAt)
-	in.Lifespan = lifespanInfo(lifeSamples)
-
-	return c.JSON(insightEnvelope{Available: true, Data: poststat.Build(in)})
-}
-
-// mediaFormat classifies a post's format from its media + platform post type,
-// mirroring the CON-239 media_format dimension.
-func mediaFormat(p models.Post) string {
-	if isVideoPost(p.PlatformPostType) {
-		return "video"
-	}
-	switch {
-	case len(p.MediaURLs) > 1:
-		return "carousel"
-	case len(p.MediaURLs) == 1:
-		return "single_image"
-	case p.IsLinkPost():
-		return "link"
-	default:
-		return "text"
-	}
-}
-
-func campaignRef(p *models.Post) *poststat.CampaignRef {
-	if p.Campaign == nil {
-		return nil
-	}
-	return &poststat.CampaignRef{ID: p.Campaign.ID, Name: p.Campaign.Name}
-}
-
-// poststatAccount labels the post's owning account: id/username from the
-// current row's platform breakdown, falling back to the post's own
-// social_account_id when the refresh hasn't recorded one, then
-// display_name/avatar_url from social_accounts (best-effort).
-func (h *AnalyticsHandler) poststatAccount(ctx context.Context, post *models.Post, cur *models.PostAnalytics) poststat.Account {
-	var id, username string
-	if cur != nil {
-		id, username = accountRef(cur)
-	}
-	if id == "" {
-		id = post.SocialAccountID
-	}
-	var known map[string]models.SocialAccount
-	if id != "" {
-		known = h.loadAccounts(ctx, []string{id})
-	}
-	l := labelAccount(id, username, known)
-	return poststat.Account{ID: l.ID, Username: l.Username, DisplayName: l.DisplayName, AvatarURL: l.AvatarURL}
-}
-
-// openURL returns the "Open on {platform}" permalink, preferring the entry
-// matching the row's platform, then any entry that carries one.
-func openURL(a *models.PostAnalytics) string {
-	for _, pa := range a.PlatformAnalytics {
-		if strings.EqualFold(pa.Platform, a.Platform) && pa.PlatformPostURL != "" {
-			return pa.PlatformPostURL
-		}
-	}
-	for _, pa := range a.PlatformAnalytics {
-		if pa.PlatformPostURL != "" {
-			return pa.PlatformPostURL
-		}
-	}
-	return ""
-}
-
-func toBandSamples(in []repository.ReachAgeSample) []poststat.AgeSample {
-	out := make([]poststat.AgeSample, len(in))
-	for i, s := range in {
-		out[i] = poststat.AgeSample{
-			Platform:     s.Platform,
-			PostID:       s.PostID,
-			AgeDay:       s.AgeDay,
-			Reach:        s.Reach,
-			Interactions: s.Interactions,
-			Impressions:  s.Impressions,
-			Saves:        s.Saves,
-			Clicks:       s.Clicks,
-		}
-	}
-	return out
-}
-
-func toPoststatSnapshots(in []models.PostAnalyticsSnapshot, publishedAt time.Time) []poststat.Snapshot {
-	out := make([]poststat.Snapshot, 0, len(in))
-	for _, s := range in {
-		ageH := max(int(s.OccurredAt.Sub(publishedAt).Hours()), 0)
-		out = append(out, poststat.Snapshot{
-			AgeHours: ageH,
-			Metrics: poststat.Metrics{
-				Reach:          s.Reach,
-				Impressions:    s.Impressions,
-				Interactions:   s.Likes + s.Comments + s.Shares,
-				Saves:          s.Saves,
-				Clicks:         s.Clicks,
-				EngagementRate: s.EngagementRate,
-			},
-		})
-	}
-	return out
-}
-
-func lifespanInfo(samples []repository.LifespanSample) *poststat.Lifespan {
-	life := learnings.BuildLifespan(toLifespanPoints(samples))
-	if life == nil || life.InsufficientHistory {
-		return nil
-	}
-	return &poststat.Lifespan{
-		T50Hours:     life.T50Hours,
-		T95Hours:     life.T95Hours,
-		SettledPosts: life.SettledPosts,
-	}
+	return c.JSON(insightEnvelope{Available: true, Data: *resp})
 }
