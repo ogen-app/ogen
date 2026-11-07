@@ -70,6 +70,32 @@ func TestCopyAttachments_NoStorage(t *testing.T) {
 	})
 }
 
+// A clone keeps the source's grounding, verbatim or adapted for another
+// platform; a hand-written source leaves it unset.
+func TestBuildClone_KeepsGrounding(t *testing.T) {
+	grounded := models.GroundingGrounded
+	src := &models.Post{ID: "src", PlatformID: "pl1", Content: "body", GroundingMode: &grounded}
+	other := target{platformID: "pl2", platform: &models.Platform{ID: "pl2", Name: "Threads"}}
+	for name, tc := range map[string]struct {
+		tgt     target
+		content string
+	}{
+		"verbatim": {target{platformID: "pl1"}, "body"},
+		"adapted":  {other, "adapted body"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := buildClone(src, tc.tgt, DefaultOptions("u", TriggerAPI), "new", tc.content, false, time.Time{})
+			if c.GroundingMode == nil || *c.GroundingMode != grounded || c.GroundingMode == src.GroundingMode {
+				t.Fatalf("grounding = %v, want its own copy of %s", c.GroundingMode, grounded)
+			}
+		})
+	}
+	src.GroundingMode = nil
+	if c := buildClone(src, target{platformID: "pl1"}, DefaultOptions("u", TriggerAPI), "new", "body", false, time.Time{}); c.GroundingMode != nil {
+		t.Fatalf("grounding = %v, want nil", *c.GroundingMode)
+	}
+}
+
 func TestDefaultPostType(t *testing.T) {
 	tests := []struct {
 		name  string

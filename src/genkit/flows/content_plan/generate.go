@@ -173,9 +173,6 @@ func generatePosts(
 	slog.DebugContext(ctx, "system prompt", logging.AttrComponent, logComponent, "prompt", systemPrompt)
 
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowContentPlan, modelconfig.SlotMain)
-	// Posts are bound only to the retrieved assets the model reported using,
-	// so a hallucinated id never persists and a post citing none records none.
-	grounded := idSet(assetIDsOf(assets))
 	usage := flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "content_plan", Component: logComponent}
 	gen := &postGenerator{
 		g:            g,
@@ -187,12 +184,7 @@ func generatePosts(
 		},
 		usage:    usage,
 		validate: newPostValidator(platforms, phaseIDSet(scope.phases), data.StartDate, data.EndDate),
-		// Snapping stays inside the active window, so a targeted run never
-		// schedules a post outside it.
-		persist: func(ctx context.Context, dp *DraftPost) (string, error) {
-			dp.BrandVoiceID = brandVoiceID
-			return persistIdea(ctx, dp, campaign, &scope.start, &scope.end, repos.Ideas, groundedRefs(dp.AssetRefs, grounded))
-		},
+		persist:  persistCited(campaign, scope, repos, assets, brandVoiceID),
 	}
 
 	perBatch, parallel := batchLimits(cfg, scope.count)
@@ -471,6 +463,19 @@ func trimBody(body string) string {
 // count-less fallback where the generation model decides how many to produce.
 func withinCount(persisted, expectedCount int) bool {
 	return expectedCount <= 0 || persisted < expectedCount
+}
+
+// persistCited returns the generator's persist step. Ideas are bound only to
+// the retrieved assets the model reported using, so a hallucinated id never
+// persists and an idea citing none records none (and is exploratory).
+// Snapping stays inside the active window, so a targeted run never schedules
+// an idea outside it.
+func persistCited(campaign *models.Campaign, scope planScope, repos ContentPlanRepos, assets []resolvedPiece, brandVoiceID *string) func(context.Context, *DraftPost) (string, error) {
+	grounded := idSet(assetIDsOf(assets))
+	return func(ctx context.Context, dp *DraftPost) (string, error) {
+		dp.BrandVoiceID = brandVoiceID
+		return persistIdea(ctx, dp, campaign, &scope.start, &scope.end, repos.Ideas, groundedRefs(dp.AssetRefs, grounded))
+	}
 }
 
 // persistIdea saves one planned item as an idea and returns its id. The

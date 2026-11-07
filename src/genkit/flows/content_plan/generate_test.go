@@ -2,6 +2,7 @@ package content_plan
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -87,6 +88,39 @@ func TestPersistIdea_Exploratory(t *testing.T) {
 	}
 	if p := i.Plan; p.PlatformID != nil || p.PostType != nil || p.PhaseID != nil || p.TargetDate != nil {
 		t.Fatalf("plan = %+v; a malformed date and empty fields set nothing", p)
+	}
+}
+
+// Each idea records whether it drew on the campaign's sources. It goes
+// through the persist step generation uses, which binds each idea to the
+// retrieved assets it cites.
+func TestPersistCited_RecordsGrounding(t *testing.T) {
+	cases := map[string]struct {
+		cites    []string
+		wantUsed []string
+		want     models.GroundingMode
+	}{
+		"cites a retrieved asset": {[]string{"asset-1"}, []string{"asset-1"}, models.GroundingGrounded},
+		"cites none":              {nil, nil, models.GroundingExploratory},
+		"cites an unknown id":     {[]string{"made-up"}, nil, models.GroundingExploratory},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ideas := &stubIdeaRepo{}
+			campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
+			persist := persistCited(campaign, planScope{}, ContentPlanRepos{Ideas: ideas}, []resolvedPiece{{ID: "asset-1", Title: "Report"}}, nil)
+			dp := DraftPost{Title: "T", PlatformID: "linkedin", ContentType: "article", AssetRefs: tc.cites}
+			if _, err := persist(t.Context(), &dp); err != nil {
+				t.Fatal(err)
+			}
+			i := ideas.created
+			if !slices.Equal(i.AssetIDs, tc.wantUsed) {
+				t.Errorf("used assets = %v, want %v", i.AssetIDs, tc.wantUsed)
+			}
+			if g := i.GroundingMode; g == nil || *g != tc.want {
+				t.Fatalf("grounding = %v, want %s", g, tc.want)
+			}
+		})
 	}
 }
 
