@@ -2,8 +2,6 @@ package assistantundo
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -12,23 +10,58 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// IdeaVerdict is an idea's triage state, as an undo log stores it.
+// IdeaVerdict is an idea's triage state, as an undo log stores it: the
+// verdict, its reminder, and who decided it when.
 func IdeaVerdict(i *models.Idea) models.JSONMap {
-	m := models.JSONMap{"verdict": nil, "remindAt": timeValue(i.RemindAt)}
+	m := models.JSONMap{"verdict": nil, "remindAt": timeValue(i.RemindAt), "decidedAt": timeValue(i.DecidedAt), "decidedBy": nil}
 	if i.Verdict != nil {
 		m["verdict"] = string(*i.Verdict)
+	}
+	if i.DecidedBy != nil {
+		m["decidedBy"] = *i.DecidedBy
 	}
 	return m
 }
 
+// ideaTriage reads an IdeaVerdict snapshot back onto an idea.
+func ideaTriage(id string, m models.JSONMap) (*models.Idea, error) {
+	i := &models.Idea{ID: id}
+	if v, ok := m["verdict"].(string); ok && v != "" {
+		i.Verdict = new(models.IdeaVerdict(v))
+	}
+	if by, ok := m["decidedBy"].(string); ok {
+		i.DecidedBy = &by
+	}
+	var err error
+	if i.RemindAt, err = parseTime(m["remindAt"]); err != nil {
+		return nil, fmt.Errorf("remind_at: %w", err)
+	}
+	if i.DecidedAt, err = parseTime(m["decidedAt"]); err != nil {
+		return nil, fmt.Errorf("decided_at: %w", err)
+	}
+	return i, nil
+}
+
 // CampaignAssets is the assets a campaign draws on, as an undo log stores
-// them.
+// them, with whether it draws on them at all.
 func CampaignAssets(c *models.Campaign) models.JSONMap {
 	ids := make([]any, len(c.AssetIDs))
 	for i, id := range c.AssetIDs {
 		ids[i] = id
 	}
-	return models.JSONMap{"assetIds": ids}
+	return models.JSONMap{"assetIds": ids, "useAssets": c.UseAssets}
+}
+
+// assetIDs reads a CampaignAssets snapshot's ids, without repeats.
+func assetIDs(m models.JSONMap) []string {
+	raw, _ := m["assetIds"].([]any)
+	ids := []string{}
+	for _, v := range raw {
+		if s, ok := v.(string); ok && !slices.Contains(ids, s) {
+			ids = append(ids, s)
+		}
+	}
+	return ids
 }
 
 // WithIdeas lets s undo idea verdict changes.
@@ -39,28 +72,19 @@ func (s *Service) WithIdeas(ideas repository.IdeaRepository) *Service {
 
 type ideaVerdict struct{ ideas repository.IdeaRepository }
 
+// Undo restores the idea's verdict, reminder and decision in one write that
+// matches only while the idea still holds the logged after state.
 func (u ideaVerdict) Undo(ctx context.Context, a *models.AssistantAction) error {
-	i, err := u.ideas.GetByID(ctx, a.EntityID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrChangedSince
-	}
+	was, err := ideaTriage(a.EntityID, a.After)
 	if err != nil {
-		return fmt.Errorf("load idea: %w", err)
+		return fmt.Errorf("read changed triage: %w", err)
 	}
-	if !same(IdeaVerdict(i), a.After) {
-		return ErrChangedSince
+	restored, err := ideaTriage(a.EntityID, a.Before)
+	if err != nil {
+		return fmt.Errorf("restore triage: %w", err)
 	}
-	i.Verdict, i.DecidedAt, i.DecidedBy = nil, nil, nil
-	if v, ok := a.Before["verdict"].(string); ok && v != "" {
-		verdict := models.IdeaVerdict(v)
-		now := time.Now().UTC().Truncate(time.Microsecond)
-		i.Verdict, i.DecidedAt, i.DecidedBy = &verdict, &now, &a.CreatedBy
-	}
-	if i.RemindAt, err = parseTime(a.Before["remindAt"]); err != nil {
-		return fmt.Errorf("restore remind_at: %w", err)
-	}
-	i.UpdatedAt = time.Now().UTC()
-	ok, err := u.ideas.Update(ctx, i, "verdict", "remind_at", "decided_at", "decided_by")
+	restored.UpdatedAt = time.Now().UTC()
+	ok, err := u.ideas.SetTriageIf(ctx, nil, restored, was)
 	if err != nil {
 		return err
 	}
@@ -72,22 +96,21 @@ func (u ideaVerdict) Undo(ctx context.Context, a *models.AssistantAction) error 
 
 type campaignAssets struct{ campaigns repository.CampaignRepository }
 
+// Undo restores the campaign's assets and whether it draws on them, writing
+// only those columns and only while they still hold the logged after state.
 func (u campaignAssets) Undo(ctx context.Context, a *models.AssistantAction) error {
-	c, err := loadCampaign(ctx, u.campaigns, a.EntityID)
+	before := assetIDs(a.Before)
+	use, ok := a.Before["useAssets"].(bool)
+	if !ok {
+		use = len(before) > 0
+	}
+	wasUse, _ := a.After["useAssets"].(bool)
+	restored, err := u.campaigns.SetAssetIDsIf(ctx, nil, a.EntityID, assetIDs(a.After), wasUse, before, use)
 	if err != nil {
 		return err
 	}
-	if !same(CampaignAssets(c), a.After) {
+	if !restored {
 		return ErrChangedSince
 	}
-	before, _ := a.Before["assetIds"].([]any)
-	ids := models.StringSlice{}
-	for _, v := range before {
-		if s, ok := v.(string); ok && !slices.Contains(ids, s) {
-			ids = append(ids, s)
-		}
-	}
-	c.AssetIDs = ids
-	c.UpdatedAt = time.Now().UTC()
-	return u.campaigns.Update(ctx, c)
+	return nil
 }

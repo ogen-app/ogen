@@ -52,6 +52,11 @@ type CampaignRepository interface {
 	// exist (in this tenant).
 	AddAssetIDs(ctx context.Context, id string, assetIDs []string) (*models.Campaign, error)
 	RemoveAssetID(ctx context.Context, id, assetID string) (*models.Campaign, error)
+	// SetAssetIDsIf replaces asset_ids and use_assets on db (nil uses the
+	// repository's DB) only while the row still holds was and wasUse, in one
+	// statement that writes no other column. Returns false when they differ
+	// or the campaign is gone.
+	SetAssetIDsIf(ctx context.Context, db bun.IDB, id string, was []string, wasUse bool, ids []string, use bool) (bool, error)
 	// CountActive counts the tenant's live campaigns — neither soft-deleted nor
 	// archived (mirrors List) — the active_campaigns quota.
 	CountActive(ctx context.Context) (int64, error)
@@ -320,6 +325,43 @@ func (r *campaignRepository) RemoveAssetID(ctx context.Context, id, assetID stri
 		return nil, sql.ErrNoRows
 	}
 	return r.GetByID(ctx, id)
+}
+
+// SetAssetIDsIf is a compare-and-set of the campaign's membership. The stored
+// list is compared in order, as it was read; a JSON null reads as empty.
+func (r *campaignRepository) SetAssetIDsIf(ctx context.Context, db bun.IDB, id string, was []string, wasUse bool, ids []string, use bool) (bool, error) {
+	if db == nil {
+		db = r.db
+	}
+	if was == nil {
+		was = []string{}
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	wasJSON, err := json.Marshal(was)
+	if err != nil {
+		return false, err
+	}
+	idsJSON, err := json.Marshal(ids)
+	if err != nil {
+		return false, err
+	}
+	res, err := db.NewUpdate().
+		Model((*models.Campaign)(nil)).
+		Set("asset_ids = ?::jsonb", string(idsJSON)).
+		Set("use_assets = ?", use).
+		Set("updated_at = ?", time.Now().UTC()).
+		Where("id = ?", id).
+		Where("deleted_at IS NULL").
+		Where("COALESCE(NULLIF(asset_ids, 'null'::jsonb), '[]'::jsonb) = ?::jsonb", string(wasJSON)).
+		Where("use_assets = ?", wasUse).
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // Delete soft-deletes a campaign by stamping deleted_at. Returns false when the
