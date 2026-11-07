@@ -16,7 +16,12 @@ import (
 // orchestrator — a test, or a job acting for a thread. It collects touches
 // like a turn does; onEvent may be nil.
 func NewTurnContext(ctx context.Context, scope viewcontext.Scope, onEvent OnEventFunc) (context.Context, func() []assistantkit.Touched) {
-	st := newTurnState(&viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home", Scope: scope}}, nil)
+	return NewViewTurnContext(ctx, viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home", Scope: scope}, onEvent)
+}
+
+// NewViewTurnContext is NewTurnContext with the user's screen as view.
+func NewViewTurnContext(ctx context.Context, view viewcontext.ViewContext, onEvent OnEventFunc) (context.Context, func() []assistantkit.Touched) {
+	st := newTurnState(&viewresolve.Resolved{View: &view}, nil)
 	st.emit = onEvent
 	return withTurnState(ctx, st), st.touches.List
 }

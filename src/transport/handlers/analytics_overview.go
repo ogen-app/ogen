@@ -50,7 +50,7 @@ func (h *AnalyticsHandler) Overview(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	resp, reason, err := h.service().Overview(reqCtx(c), rng, scope)
+	resp, reason, err := h.Service().Overview(reqCtx(c), rng, scope)
 	if err != nil {
 		return err
 	}
