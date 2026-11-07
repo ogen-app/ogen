@@ -2,6 +2,7 @@ package content_plan
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -94,6 +95,40 @@ func TestPersistOne_DraftThesisNote(t *testing.T) {
 	}
 	if n.CreatedBy != "user1" {
 		t.Errorf("note created_by = %q, want user1", n.CreatedBy)
+	}
+}
+
+// Each post records whether it drew on the campaign's sources, so the label
+// outlives the chat turn that made it.
+// It goes through the persist step generation uses, which binds each post to
+// the retrieved assets it cites.
+func TestPersistCited_RecordsGrounding(t *testing.T) {
+	cases := map[string]struct {
+		cites    []string
+		wantUsed []string
+		want     models.GroundingMode
+	}{
+		"cites a retrieved asset": {[]string{"asset-1"}, []string{"asset-1"}, models.GroundingGrounded},
+		"cites none":              {nil, nil, models.GroundingExploratory},
+		"cites an unknown id":     {[]string{"made-up"}, nil, models.GroundingExploratory},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			postRepo := &stubPostRepo{}
+			campaign := &models.Campaign{ID: "camp1", CreatedBy: "user1"}
+			persist := persistCited(campaign, planScope{}, ContentPlanRepos{Posts: postRepo}, []resolvedPiece{{ID: "asset-1", Title: "Report"}}, nil)
+			dp := DraftPost{Title: "T", PlatformID: "linkedin", ContentType: "article", AssetRefs: tc.cites}
+			if _, err := persist(t.Context(), &dp); err != nil {
+				t.Fatal(err)
+			}
+			p := postRepo.created
+			if !slices.Equal([]string(p.UsedAssetIDs), tc.wantUsed) {
+				t.Errorf("used assets = %v, want %v", p.UsedAssetIDs, tc.wantUsed)
+			}
+			if g := p.GroundingMode; g == nil || *g != tc.want {
+				t.Fatalf("grounding = %v, want %s", g, tc.want)
+			}
+		})
 	}
 }
 
