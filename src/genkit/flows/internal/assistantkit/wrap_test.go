@@ -46,3 +46,22 @@ func TestWrap(t *testing.T) {
 		t.Fatalf("infra error = %v, want it returned", err)
 	}
 }
+
+func TestOutputOK(t *testing.T) {
+	cases := []struct {
+		output any
+		want   bool
+	}{
+		{map[string]any{"status": "ok", "result": 1}, true},
+		{map[string]any{"status": "proposed"}, true},
+		{map[string]any{"status": "refused", "reason": "x"}, false},
+		{map[string]any{"status": "conflict"}, false},
+		{"plain", true},
+		{nil, true},
+	}
+	for _, tc := range cases {
+		if got := OutputOK(tc.output); got != tc.want {
+			t.Errorf("OutputOK(%v) = %v, want %v", tc.output, got, tc.want)
+		}
+	}
+}
