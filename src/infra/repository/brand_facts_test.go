@@ -1,0 +1,84 @@
+package repository_test
+
+import (
+	"database/sql"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+)
+
+// UpdateFactIf and DeleteFactIf write only while the stored fact still holds
+// the expected editable fields.
+func TestBrandFacts_ConditionalWrites(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewBrandRepository(db)
+	ctx := tenantctx.With(t.Context(), "tenant-facts-if")
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	stored := &models.BrandFact{ID: "fact-if-1", Statement: "We serve 4,000 customers", Subject: models.FactSubjectUs,
+		Kind: models.FactKindMeasured, CreatedAt: now, UpdatedAt: now}
+	if err := repo.CreateFact(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+	stale := *stored
+	stale.Statement = "We serve 3,900 customers"
+	edit := &models.BrandFact{ID: stored.ID, Statement: "We serve 4,200 customers", Subject: models.FactSubjectUs,
+		Kind: models.FactKindMeasured, UpdatedAt: now}
+
+	if _, err := repo.UpdateFactIf(ctx, edit, &stale); !errors.Is(err, repository.ErrFactChanged) {
+		t.Fatalf("stale update: err = %v, want ErrFactChanged", err)
+	}
+	if _, err := repo.DeleteFactIf(ctx, stored.ID, &stale); !errors.Is(err, repository.ErrFactChanged) {
+		t.Fatalf("stale delete: err = %v, want ErrFactChanged", err)
+	}
+	if got, err := repo.GetFact(ctx, stored.ID); err != nil || got == nil || got.Statement != stored.Statement {
+		t.Fatalf("after stale writes = %+v, %v; want it untouched", got, err)
+	}
+
+	before, err := repo.UpdateFactIf(ctx, edit, stored)
+	if err != nil || before.Statement != stored.Statement {
+		t.Fatalf("update = %+v, %v", before, err)
+	}
+	if _, err := repo.DeleteFactIf(ctx, stored.ID, stored); !errors.Is(err, repository.ErrFactChanged) {
+		t.Fatalf("delete expecting the old statement: err = %v, want ErrFactChanged", err)
+	}
+	if _, err := repo.DeleteFactIf(ctx, stored.ID, edit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.DeleteFactIf(ctx, stored.ID, edit); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("delete a gone fact: err = %v, want sql.ErrNoRows", err)
+	}
+}
+
+// RestoreFact keeps the fact's creation time and author name; an author who
+// is no longer a user is kept by name alone.
+func TestBrandFacts_RestoreKeepsAuthor(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewBrandRepository(db)
+	ctx := tenantctx.With(t.Context(), "tenant-facts-restore")
+	seedUser(t, db, "u-restore-1", "tenant-facts-restore", "ann@example.com")
+
+	created := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for _, f := range []*models.BrandFact{
+		{ID: "fact-restore-1", Statement: "NPS is 62", CreatedBy: new("u-restore-1"), CreatedByName: "Ann at the time"},
+		{ID: "fact-restore-2", Statement: "We ship weekly", CreatedBy: new("u-deleted"), CreatedByName: "Bob"},
+	} {
+		f.Subject, f.Kind, f.CreatedAt, f.UpdatedAt = models.FactSubjectUs, models.FactKindDocumented, created, now
+		if err := repo.RestoreFact(ctx, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kept, err := repo.GetFact(ctx, "fact-restore-1")
+	if err != nil || kept.CreatedBy == nil || *kept.CreatedBy != "u-restore-1" || kept.CreatedByName != "Ann at the time" || !kept.CreatedAt.Equal(created) {
+		t.Fatalf("restored = %+v, %v", kept, err)
+	}
+	orphan, err := repo.GetFact(ctx, "fact-restore-2")
+	if err != nil || orphan.CreatedBy != nil || orphan.CreatedByName != "Bob" {
+		t.Fatalf("restored with a deleted author = %+v, %v", orphan, err)
+	}
+}
