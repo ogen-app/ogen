@@ -17,11 +17,16 @@ func (platforms) List(context.Context) ([]models.Platform, error) {
 	return []models.Platform{{ID: "p-li", ZernioID: "linkedin"}, {ID: "p-x", ZernioID: "twitter"}}, nil
 }
 
+var errDBDown = errors.New("connection refused")
+
 type campaigns struct{ repository.CampaignRepository }
 
 func (campaigns) GetByID(_ context.Context, id string) (*models.Campaign, error) {
-	if id == "c1" {
+	switch id {
+	case "c1":
 		return &models.Campaign{ID: id}, nil
+	case "c-down":
+		return nil, errDBDown
 	}
 	return nil, sql.ErrNoRows
 }
@@ -48,6 +53,10 @@ func TestScopeAndFilter(t *testing.T) {
 	}
 	if _, err := s.Scope(ctx, nil, "c9"); !errors.Is(err, ErrCampaignNotFound) {
 		t.Fatalf("unknown campaign: %v", err)
+	}
+	// A failed lookup is the failure, not a missing campaign.
+	if _, err := s.Scope(ctx, nil, "c-down"); !errors.Is(err, errDBDown) || errors.Is(err, ErrCampaignNotFound) {
+		t.Fatalf("lookup failure: %v", err)
 	}
 	sc, err := s.Scope(ctx, []string{" LinkedIn "}, "c1")
 	if err != nil || !sc.AllowsSlug("linkedin") || sc.AllowsSlug("twitter") || sc.Campaign() != "c1" {
