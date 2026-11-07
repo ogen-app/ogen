@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -56,6 +57,35 @@ func (m *memActions) MarkUndone(_ context.Context, _ bun.IDB, id, by string, now
 type storedCampaign struct {
 	repository.CampaignRepository
 	c *models.Campaign
+	// columns lists what each UpdateColumns call wrote; failUpdate makes it
+	// fail.
+	columns    [][]string
+	failUpdate error
+}
+
+// UpdateColumns stores only the platform column, the one narrow write the
+// tools make.
+func (s *storedCampaign) UpdateColumns(_ context.Context, _ bun.IDB, c *models.Campaign, columns ...string) error {
+	s.columns = append(s.columns, columns)
+	if s.failUpdate != nil {
+		return s.failUpdate
+	}
+	cp := *s.c
+	if slices.Contains(columns, "target_platforms") {
+		cp.TargetPlatforms = c.TargetPlatforms
+	}
+	s.c = &cp
+	return nil
+}
+
+// logged returns the action the tool logged.
+func (m *memActions) logged(t *testing.T, id string) *models.AssistantAction {
+	t.Helper()
+	a, err := m.GetByID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
 func (s *storedCampaign) GetByID(context.Context, string) (*models.Campaign, error) {
