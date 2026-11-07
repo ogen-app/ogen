@@ -42,7 +42,7 @@ func run(
 	p *prompts,
 	tools *toolSet,
 	onEvent OnEventFunc,
-) (*Response, error) {
+) (_ *Response, retErr error) {
 	if strings.TrimSpace(req.Instruction) == "" {
 		return nil, &ValidationError{Msg: "instruction is required"}
 	}
@@ -69,6 +69,16 @@ func run(
 	st := newTurnState(req.View, tools.packs.defaults(req.View.View.Screen, scope.Kind))
 	st.turn.Instruction = req.Instruction
 	st.emit = onEvent
+	// An offer answered before the turn failed stays answered, so the client
+	// hears it even without a "complete".
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		for _, r := range st.resolvedList() {
+			emit(onEvent, SSEEventProposalResolved, r)
+		}
+	}()
 	ctx = tools.bind(withTurnState(ctx, st), st)
 	if ctx, err = tools.begin(ctx, st, slices.Clone(st.loaded)); err != nil {
 		return nil, err
@@ -83,21 +93,8 @@ func run(
 	// loadPack interrupts the call; the turn starts again, once, with the
 	// pack's tools.
 	if scanner == nil {
-		pack, ok := st.restart(tools.packs)
-		if !ok {
-			return nil, &AIError{Msg: "the assistant stopped without replying"}
-		}
-		if ctx, err = tools.begin(ctx, st, []string{pack}); err != nil {
+		if ctx, scanner, err = restartWithPack(ctx, tools, st, call, onEvent); err != nil {
 			return nil, err
-		}
-		if st.hasBegun(pack) {
-			emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
-		}
-		if scanner, err = call(ctx); err != nil {
-			return nil, err
-		}
-		if scanner == nil {
-			return nil, &AIError{Msg: "the assistant stopped without replying"}
 		}
 	}
 	result := assemble(ctx, scanner)
@@ -124,6 +121,30 @@ func run(
 	}
 	emit(onEvent, SSEEventComplete, result)
 	return result, nil
+}
+
+// restartWithPack begins the pack loadPack asked for and makes the turn's
+// second and last model call with it.
+func restartWithPack(ctx context.Context, tools *toolSet, st *turnState, call func(context.Context) (*jsonstream.Scanner, error), onEvent OnEventFunc) (context.Context, *jsonstream.Scanner, error) {
+	pack, ok := st.restart(tools.packs)
+	if !ok {
+		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
+	}
+	ctx, err := tools.begin(ctx, st, []string{pack})
+	if err != nil {
+		return nil, nil, err
+	}
+	if st.hasBegun(pack) {
+		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
+	}
+	scanner, err := call(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if scanner == nil {
+		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
+	}
+	return ctx, scanner, nil
 }
 
 // callModel runs the orchestrator's tool loop on the core tools plus loaded,

@@ -2,6 +2,7 @@ package campaign_assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/fakemodel"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -61,6 +63,8 @@ type runnerHarness struct {
 	generated []content_plan.GeneratePostsRequest
 	turns     int
 	run       assistant.Runner
+	// last is the scripted model of the latest turn.
+	last *fakemodel.Model
 }
 
 func newRunnerHarness(t *testing.T) *runnerHarness {
@@ -110,6 +114,7 @@ func (h *runnerHarness) turn(instruction string, script ...fakemodel.Turn) (*ass
 func (h *runnerHarness) turnWith(m *fakemodel.Model, instruction string) (*assistant.Response, []assistant.SSEEventKind) {
 	h.t.Helper()
 	h.init()
+	h.last = m
 	fakemodel.Route(h.t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
 	v, err := viewcontext.Parse([]byte(`{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`))
 	if err != nil {
@@ -157,6 +162,10 @@ func TestRunner_ProposeThenConfirm(t *testing.T) {
 		h.proposals.rows[0].Status != models.ProposalConfirmed {
 		t.Fatalf("turn 2: events = %v, proposal = %+v", events, h.proposals.rows[0])
 	}
+	// The model got the work's own outcome back from confirmOffer.
+	if out := toolOutput(h.last, "confirmOffer"); out["status"] != string(assistantkit.StatusOK) || resultField(out, "ideaCount") != float64(10) {
+		t.Fatalf("turn 2: confirmOffer returned %v", out)
+	}
 
 	h.turn("yes",
 		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
@@ -179,4 +188,51 @@ func TestRunner_ProposeThenDismiss(t *testing.T) {
 	if len(h.generated) != 0 || h.proposals.rows[0].Status != models.ProposalDismissed || !slices.Contains(events, assistant.SSEEventProposalResolved) {
 		t.Fatalf("generated = %d, proposal = %+v, events = %v", len(h.generated), h.proposals.rows[0], events)
 	}
+}
+
+// An offer whose work can't start because another heavy action already ran
+// this message stays open, and confirming it in the next message runs it.
+func TestRunner_HeavySlotTakenKeepsTheOfferOpen(t *testing.T) {
+	h := newRunnerHarness(t)
+	h.turn("Add 10 Threads posts",
+		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 10}}),
+		fakemodel.Answer(`{"explanation":"Prepared for you to confirm.","action":"answered"}`))
+	id := h.proposals.rows[0].ID
+
+	// A small plan runs first and takes the slot; the "yes" can't start.
+	h.turn("add 2 more, and yes to the 10",
+		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 2}}),
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
+		fakemodel.Answer(`{"explanation":"Added 2; confirm the 10 in your next message.","action":"answered"}`))
+	if out := toolOutput(h.last, "confirmOffer"); out["status"] != string(assistantkit.StatusRefused) || out["reason"] != heavyConfirmLater {
+		t.Fatalf("turn 2: confirmOffer returned %v", out)
+	}
+	if len(h.generated) != 1 || h.proposals.rows[0].Status != models.ProposalPending {
+		t.Fatalf("turn 2: generated = %+v, proposal = %s", h.generated, h.proposals.rows[0].Status)
+	}
+
+	h.turn("yes",
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
+		fakemodel.Answer(`{"explanation":"Done.","action":"answered"}`))
+	if len(h.generated) != 2 || h.generated[1].Count != 10 || h.proposals.rows[0].Status != models.ProposalConfirmed {
+		t.Fatalf("turn 3: generated = %+v, proposal = %s", h.generated, h.proposals.rows[0].Status)
+	}
+}
+
+// toolOutput is the last response the model got from the named tool.
+func toolOutput(m *fakemodel.Model, name string) map[string]any {
+	var out map[string]any
+	for _, tr := range m.ToolResponses() {
+		if tr.Name == name {
+			b, _ := json.Marshal(tr.Output)
+			out = nil
+			_ = json.Unmarshal(b, &out)
+		}
+	}
+	return out
+}
+
+func resultField(out map[string]any, key string) any {
+	r, _ := out["result"].(map[string]any)
+	return r[key]
 }

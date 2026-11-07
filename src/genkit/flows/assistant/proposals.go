@@ -157,7 +157,14 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	if err != nil {
 		return nil, err
 	}
+	// What the work needs (the campaign's heavy slot) is claimed before the
+	// offer is answered too, so work that can't start now leaves it open.
+	ctx, release, err := t.reg.Prepare(ctx, tool)
+	if err != nil {
+		return nil, err
+	}
 	if err := t.resolve(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
+		release()
 		return nil, err
 	}
 	return t.reg.RunConfirmed(ctx, tool, map[string]any(args))

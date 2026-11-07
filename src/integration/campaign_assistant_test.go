@@ -254,7 +254,11 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 				}
 			})
 
-			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent)
+			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent, func() {
+				ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ideas).To(BeEmpty(), "nothing is planned before the yes")
+			})
 
 			Expect(resp.Action).To(Equal("content_plan_generated"))
 			Expect(resp.ContentPlan).NotTo(BeNil())
@@ -447,7 +451,16 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 				})).To(Succeed())
 			}
 
-			resp := proposeThenConfirm(ctx, callback, campaignID, "Redistribute the drafts across the campaign.", nil)
+			seeded := start.AddDate(0, 0, 1)
+			resp := proposeThenConfirm(ctx, callback, campaignID, "Redistribute the drafts across the campaign.", nil, func() {
+				posts, err := postRepo.ListByCampaign(ctx, campaignID)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(posts).To(HaveLen(3))
+				for _, p := range posts {
+					Expect(p.ScheduledAt).NotTo(BeNil())
+					Expect(p.ScheduledAt.Equal(seeded)).To(BeTrue(), "no post moves before the yes")
+				}
+			})
 
 			Expect(resp.Action).To(Equal("posts_redistributed"))
 			Expect(resp.Redistribute).NotTo(BeNil())
@@ -510,7 +523,14 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 				}
 			})
 
-			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent)
+			resp := proposeThenConfirm(ctx, callback, campaignID, "Generate a content plan for this campaign.", onEvent, func() {
+				ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ideas).To(BeEmpty(), "nothing is planned before the yes")
+				before, err := campaignRepo.GetByID(ctx, campaignID)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(before.UseAssets).To(BeFalse(), "asset use isn't switched on before the yes")
+			})
 			Expect(resp.Action).To(Equal("content_plan_generated"))
 
 			// Auto-use: the assistant enabled + persisted asset generation.
@@ -553,18 +573,21 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 })
 
 // proposeThenConfirm sends a plan-wide request, which the assistant proposes
-// instead of running, then answers "yes" and returns the turn that ran it.
+// instead of running, checks with unchanged that nothing ran yet, then
+// answers "yes" and returns the turn that ran it.
 func proposeThenConfirm(
 	ctx context.Context,
 	callback func(context.Context, campaignTurn, campaign_assistant.OnEventFunc) (*campaignTurnResult, error),
 	campaignID, instruction string,
 	onEvent campaign_assistant.OnEventFunc,
+	unchanged func(),
 ) *campaignTurnResult {
 	GinkgoHelper()
 	proposed, err := callback(ctx, campaignTurn{CampaignID: campaignID, Instruction: instruction}, nil)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(proposed.Action).To(Equal("proposed"), "a plan-wide change waits for the user's yes")
 	Expect(proposed.Proposals).To(HaveLen(1))
+	unchanged()
 
 	resp, err := callback(ctx, campaignTurn{CampaignID: campaignID, Instruction: "Yes, go ahead."}, onEvent)
 	Expect(err).NotTo(HaveOccurred())

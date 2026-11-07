@@ -151,6 +151,23 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 	}
 }
 
+// An offer answered before the turn failed is still announced.
+func TestProposals_FailedTurnAnnouncesTheAnswer(t *testing.T) {
+	h, store, _ := proposalHarness(t)
+	home := viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`)
+	if _, _, _, err := h.turn(home, "do 5 things",
+		fakemodel.Tools(fakemodel.Call{Name: "bulkThing", Input: map[string]any{"n": 5}}),
+		fakemodel.Answer(`{"explanation":"Ready when you are.","action":"answered"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The model dismisses it, then fails before it replies.
+	_, events, _, err := h.turn(home, "no",
+		fakemodel.Tools(fakemodel.Call{Name: "dismissOffer", Input: map[string]any{"proposalId": store.rows[0].ID}}))
+	if err == nil || store.rows[0].Status != models.ProposalDismissed || !slices.Contains(events, SSEEventProposalResolved) {
+		t.Fatalf("err = %v, status = %s, events = %v", err, store.rows[0].Status, events)
+	}
+}
+
 func TestProposals_AnswerFromTheCard(t *testing.T) {
 	h, store, ran := proposalHarness(t)
 	ctx := context.WithValue(t.Context(), logging.UserIDKey, "u1")
