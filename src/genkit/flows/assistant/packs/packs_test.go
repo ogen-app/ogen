@@ -7,6 +7,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
@@ -16,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
+	"github.com/ogen-app/ogen/src/usecase/urlimport"
 )
 
 // turn is a pack tool's context in a thread, as user u1.
@@ -240,6 +243,30 @@ func (r *memCampaigns) Update(_ context.Context, c *models.Campaign, _ ...string
 	return nil
 }
 
+// AddAssetIDs and RemoveAssetID keep UseAssets in step with the set, like the
+// repository's atomic membership writes.
+func (r *memCampaigns) AddAssetIDs(ctx context.Context, id string, ids []string) (*models.Campaign, error) {
+	if r.c == nil || r.c.ID != id {
+		return nil, sql.ErrNoRows
+	}
+	for _, a := range ids {
+		if !slices.Contains(r.c.AssetIDs, a) {
+			r.c.AssetIDs = append(r.c.AssetIDs, a)
+		}
+	}
+	r.c.UseAssets = len(r.c.AssetIDs) > 0
+	return r.GetByID(ctx, id)
+}
+
+func (r *memCampaigns) RemoveAssetID(ctx context.Context, id, assetID string) (*models.Campaign, error) {
+	if r.c == nil || r.c.ID != id {
+		return nil, sql.ErrNoRows
+	}
+	r.c.AssetIDs = slices.DeleteFunc(r.c.AssetIDs, func(a string) bool { return a == assetID })
+	r.c.UseAssets = len(r.c.AssetIDs) > 0
+	return r.GetByID(ctx, id)
+}
+
 type memAssets struct {
 	repository.AssetRepository
 	all []models.Asset
@@ -268,8 +295,14 @@ func TestAttachAssets(t *testing.T) {
 	if a := actions.rows[0]; a.Kind != models.AssistantActionCampaignAssets || len(a.Before["assetIds"].([]any)) != 1 {
 		t.Fatalf("action = %+v", a)
 	}
+	if !camps.c.UseAssets {
+		t.Fatal("attach left UseAssets off; planning would ignore the sources")
+	}
 	if out, err = attachAssets(ctx, d, AttachAssetsInput{AssetIDs: []string{"a1"}, Detach: true}); err != nil || !slices.Equal(out.AssetIDs, []string{"a2"}) {
 		t.Fatalf("detach = %+v, %v", out, err)
+	}
+	if out, err = attachAssets(ctx, d, AttachAssetsInput{AssetIDs: []string{"a2"}, Detach: true}); err != nil || len(out.AssetIDs) != 0 || camps.c.UseAssets {
+		t.Fatalf("detach the last = %+v, %v, UseAssets %v; want none and UseAssets off", out, err, camps.c.UseAssets)
 	}
 	if !slices.Equal(touched(), []assistantkit.Touched{{Kind: "campaign", ID: "c1"}}) {
 		t.Fatalf("touched = %v", touched())
@@ -278,6 +311,44 @@ func TestAttachAssets(t *testing.T) {
 	ctx, _ = turn(t, workspace, nil)
 	_, err = attachAssets(ctx, d, AttachAssetsInput{AssetIDs: []string{"a2"}})
 	refused(t, err)
+}
+
+type sourceURLAssets struct {
+	repository.AssetRepository
+	looked []string
+}
+
+func (r *sourceURLAssets) GetBySourceURL(_ context.Context, u string) (*models.Asset, error) {
+	r.looked = append(r.looked, u)
+	return nil, errors.New("stop here")
+}
+
+type keyGate struct{}
+
+func (keyGate) HasKey(context.Context) bool { return true }
+
+type noJobs struct{}
+
+func (noJobs) EnqueueProcessURLTx(context.Context, *sql.Tx, string, string, string, bool) error {
+	return nil
+}
+
+func TestImportPage_NormalizesURL(t *testing.T) {
+	assets := &sourceURLAssets{}
+	d := Deps{URLImport: &urlimport.Service{DB: &bun.DB{}, Assets: assets, Jobs: noJobs{}, Gate: keyGate{}}}
+	ctx, _ := turn(t, workspace, nil)
+
+	_, err := importPage(ctx, d, ImportPageInput{URL: " HTTPS://93.184.216.34/Pricing/#plans "})
+	refused(t, err)
+	if !slices.Equal(assets.looked, []string{"https://93.184.216.34/Pricing"}) {
+		t.Fatalf("looked up %q; want the canonical URL", assets.looked)
+	}
+
+	_, err = importPage(ctx, d, ImportPageInput{URL: "http://127.0.0.1/admin"})
+	refused(t, err)
+	if len(assets.looked) != 1 {
+		t.Fatal("a private host reached the import")
+	}
 }
 
 func TestAskAssets_WithoutSearch(t *testing.T) {
