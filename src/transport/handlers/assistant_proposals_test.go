@@ -4,14 +4,19 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"expvar"
 	"io"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/transport/handlers"
@@ -22,13 +27,17 @@ type answerFn = func(context.Context, assistant.AnswerRequest, assistant.OnEvent
 // proposalApp mounts the proposal endpoints behind a stand-in auth that sets
 // the tenant and user the real middleware would.
 func proposalApp(answer answerFn) *fiber.App {
+	return proposalAppWith(answer, nil, nil)
+}
+
+func proposalAppWith(answer answerFn, available func() bool, rec *activity.Recorder) *fiber.App {
 	app := fiber.New()
 	auth := func(c *fiber.Ctx) error {
 		c.Locals(tenantctx.Key, "tenant-1")
 		c.Locals(logging.UserIDKey, "user-1")
 		return c.Next()
 	}
-	handlers.NewAssistantProposalsHandler(answer, nil, auth).Register(app)
+	handlers.NewAssistantProposalsHandler(answer, available, rec, auth).Register(app)
 	return app
 }
 
@@ -152,5 +161,77 @@ func TestProposalEndpoints_UnavailableWithoutAnswer(t *testing.T) {
 		if resp.StatusCode != fiber.StatusServiceUnavailable {
 			t.Fatalf("%s = %d, want 503", path, resp.StatusCode)
 		}
+	}
+}
+
+// The runtime is wired but has no model key: the endpoints are 503, and an
+// answer that finds it gone mid-stream reports 503 too.
+func TestProposalEndpoints_UnavailableRuntime(t *testing.T) {
+	up := false
+	app := proposalAppWith(func(context.Context, assistant.AnswerRequest, assistant.OnEventFunc) (*assistant.Response, error) {
+		up = false
+		return nil, errors.New("anthropic api key not configured")
+	}, func() bool { return up }, nil)
+	for _, path := range []string{"/api/assistant/proposals/p/confirm", "/api/assistant/proposals/p/dismiss"} {
+		resp, err := app.Test(httptest.NewRequest("POST", path, nil), 5000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != fiber.StatusServiceUnavailable {
+			t.Fatalf("%s = %d, want 503", path, resp.StatusCode)
+		}
+	}
+
+	up = true
+	resp, err := app.Test(httptest.NewRequest("POST", "/api/assistant/proposals/p/confirm", nil), 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, data := sseEvents(t, resp.Body)
+	var payload struct {
+		Code int `json:"code"`
+	}
+	if len(data) != 1 || json.Unmarshal([]byte(data[0]), &payload) != nil || payload.Code != fiber.StatusServiceUnavailable {
+		t.Fatalf("error events = %v, want code 503", data)
+	}
+}
+
+// activityRows keeps the activity the recorder writes.
+type activityRows struct {
+	mu   sync.Mutex
+	rows []*models.ActivityEvent
+}
+
+func (w *activityRows) Insert(_ context.Context, events []*models.ActivityEvent) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.rows = append(w.rows, events...)
+	return nil
+}
+
+// A confirmation is recorded as activity only once the offer actually ran.
+func TestConfirmProposal_RecordsActivityOnlyOnSuccess(t *testing.T) {
+	w := &activityRows{}
+	rec := activity.NewRecorder(w, &activity.Metrics{
+		EventsRecorded: new(expvar.Int), EventsDropped: new(expvar.Int), WriteErrors: new(expvar.Int),
+	}, activity.Config{})
+	app := proposalAppWith(func(_ context.Context, req assistant.AnswerRequest, _ assistant.OnEventFunc) (*assistant.Response, error) {
+		if req.ProposalID == "gone" {
+			return nil, assistant.ErrProposalNotFound
+		}
+		return &assistant.Response{Action: "posts_generated"}, nil
+	}, nil, rec)
+	for _, id := range []string{"gone", "prop-1"} {
+		resp, err := app.Test(httptest.NewRequest("POST", "/api/assistant/proposals/"+id+"/confirm", nil), 5000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+	}
+	if err := rec.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.rows) != 1 || w.rows[0].EntityID != "prop-1" || w.rows[0].Type != "assistant_proposal_confirmed" {
+		t.Fatalf("activity = %+v, want one confirmation for prop-1", w.rows)
 	}
 }

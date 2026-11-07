@@ -75,6 +75,9 @@ type bulkIn struct {
 	N int `json:"n"`
 }
 
+// brokenBulk is the count bulkThing fails on.
+const brokenBulk = 13
+
 // bulkPack has one gated tool: more than 3 items wait for a yes.
 func bulkPack(ran *int) Pack {
 	return Pack{
@@ -85,6 +88,9 @@ func bulkPack(ran *int) Pack {
 					Needs:   func(_ context.Context, in bulkIn) bool { return in.N > 3 },
 					Summary: func(in bulkIn) string { return fmt.Sprintf("Do %d things", in.N) },
 				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (int, error) {
+					if in.N == brokenBulk {
+						return 0, errors.New("bulk engine down")
+					}
 					*ran += in.N
 					assistantkit.Touch(ctx, "thing", "")
 					return in.N, nil
@@ -204,4 +210,25 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 func isConflict(err error) bool {
 	_, ok := errors.AsType[*ProposalConflictError](err)
 	return ok
+}
+
+// Work that fails after its offer was answered from the card still leaves the
+// answer in the thread and tells the client the offer is resolved.
+func TestProposals_AnswerFromTheCardWorkFails(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	store.rows = []*models.AssistantProposal{
+		{ID: "broken", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(brokenBulk)},
+			Summary: "Do 13 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	var events []SSEEventKind
+	_, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "broken", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
+	if err == nil || *ran != 0 || store.rows[0].Status != models.ProposalConfirmed {
+		t.Fatalf("err = %v, ran = %d, status = %s", err, *ran, store.rows[0].Status)
+	}
+	if !slices.Equal(events, []SSEEventKind{SSEEventProposalResolved}) {
+		t.Fatalf("events = %v", events)
+	}
+	if len(h.msgs.msgs) != 2 || h.msgs.msgs[0].Content != "Confirmed: Do 13 things" || !strings.Contains(h.msgs.msgs[1].Content, unfinishedAnswer) {
+		t.Fatalf("thread = %+v", h.msgs.msgs)
+	}
 }

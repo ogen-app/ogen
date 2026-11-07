@@ -289,13 +289,17 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	} else {
 		_, err = t.dismissProposal(ctx, in)
 	}
+	reason, refused := refusedResult(result)
+	if err != nil || refused {
+		t.recordUnfinished(ctx, st, onEvent)
+	}
 	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
 		return nil, &ProposalConflictError{Msg: r.Reason}
 	}
 	if err != nil {
 		return nil, err
 	}
-	if reason, refused := refusedResult(result); refused {
+	if refused {
 		return nil, &ProposalConflictError{Msg: reason}
 	}
 	resp := &Response{Action: actionAnswered, Explanation: "Dismissed: " + p.Summary, Result: result}
@@ -314,6 +318,29 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	}
 	emit(onEvent, SSEEventComplete, resp)
 	return resp, nil
+}
+
+// unfinishedAnswer is the reply recorded when an offer was answered but its
+// work did not finish.
+const unfinishedAnswer = "I couldn't finish that. Ask again and I'll set it up."
+
+// recordUnfinished keeps an offer that was answered before its work failed or
+// was refused in the thread, and tells the client it was answered, so neither
+// the next turn nor the card waits on it.
+func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent OnEventFunc) {
+	resolved := st.resolvedList()
+	if len(resolved) == 0 {
+		return
+	}
+	if t.deps.Messages != nil {
+		resp := &Response{Action: actionAnswered, Explanation: unfinishedAnswer}
+		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: st.view}, resp); err != nil {
+			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+		}
+	}
+	for _, r := range resolved {
+		emit(onEvent, SSEEventProposalResolved, r)
+	}
 }
 
 // refusedResult reports whether a confirmed tool refused to run — e.g. the
