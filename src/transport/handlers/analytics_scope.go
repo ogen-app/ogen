@@ -13,9 +13,9 @@ import (
 // analytics.Scope.
 type analyticsScope = analytics.Scope
 
-// service is the analytics reads over the handler's stores, with its cached
-// baseline.
-func (h *AnalyticsHandler) service() *analytics.Service {
+// Service is the analytics reads over the handler's stores, with its cached
+// baseline. The assistant reads through it too, so both share the cache.
+func (h *AnalyticsHandler) Service() *analytics.Service {
 	return &analytics.Service{
 		Repo: h.repo, Followers: h.followerRepo, Posts: h.posts, Platforms: h.platforms,
 		Accounts: h.accounts, Campaigns: h.campaigns, ReachSamples: h.reachByAgeSamples,
@@ -44,7 +44,7 @@ func (h *AnalyticsHandler) scope(c *fiber.Ctx, campaignID string) (*analyticsSco
 			}
 		}
 	}
-	s, err := h.service().Scope(reqCtx(c), slugs, campaignID)
+	s, err := h.Service().Scope(reqCtx(c), slugs, campaignID)
 	switch {
 	case errors.Is(err, analytics.ErrInvalidPlatform):
 		return nil, fiber.NewError(fiber.StatusBadRequest, "invalid_platform")
