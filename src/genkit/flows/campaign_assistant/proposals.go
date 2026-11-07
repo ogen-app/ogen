@@ -80,9 +80,14 @@ var (
 // overGoal returns a conflict when adding count posts would take the
 // campaign past its goal. The options are to fill the goal exactly (when
 // there is room and fill can rebuild the call for fewer posts) or to add
-// them all anyway; each is the tool call picking it runs.
+// them all anyway; each is the tool call picking it runs. When the posts
+// could not be counted the room is unknown, so adding them waits for a yes.
 func overGoal(ctx context.Context, tool string, count int, args any, fill func(int) any) error {
 	g := getRequestState(ctx).snapshot.Goal
+	if g != nil && g.Unknown {
+		reason := fmt.Sprintf("The campaign's posts could not be read, so it is unclear how much room is left under its goal of %d.", g.Target)
+		return assistantkit.Conflicted(reason, assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Add %d without checking the goal", count), Tool: tool, Args: args})
+	}
 	if g == nil || count <= g.Room {
 		return nil
 	}
