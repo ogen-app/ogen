@@ -12,6 +12,9 @@ const (
 	// StatusConflict means the request clashes with the current state.
 	// Options lists the ways forward the user can pick from.
 	StatusConflict Status = "conflict"
+	// StatusProposed means the call was held back for the user to confirm.
+	// ProposalID names the stored proposal; Summary describes it.
+	StatusProposed Status = "proposed"
 )
 
 // Option is one way forward from a conflict.
@@ -31,6 +34,8 @@ type Outcome[T any] struct {
 	Reason       string   `json:"reason,omitempty"`
 	Alternatives []string `json:"alternatives,omitempty"`
 	Options      []Option `json:"options,omitempty"`
+	ProposalID   string   `json:"proposalId,omitempty"`
+	Summary      string   `json:"summary,omitempty"`
 }
 
 // OK wraps a successful result.
