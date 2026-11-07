@@ -63,7 +63,7 @@ type genkitRuntime struct {
 	g      *genkit.Genkit
 	plugin *anthropic.Anthropic
 
-	contentPlanFn       func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
+	contentPlanFn       func(ctx context.Context, req content_plan.ContentPlanRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	postAssistantFn     func(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error)
 	postQualityFns      postQualityFns
 	enrichBriefFn       func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
@@ -214,7 +214,7 @@ func (r *genkitRuntime) GenerateDraft(ctx context.Context, campaignID string, on
 	if fn == nil {
 		return nil, ErrAnthropicUnavailable
 	}
-	return fn(ctx, campaignID, onEvent)
+	return fn(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID}, onEvent)
 }
 
 func (r *genkitRuntime) RunPostAssistant(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error) {
