@@ -72,9 +72,10 @@ type Spec struct {
 	Tool ai.ToolRef
 	// Prepare claims what a confirmed run of the tool needs before its offer
 	// is marked answered — e.g. the turn's one heavy-action slot — and
-	// returns ctx carrying the claim. A Refusal means the run can't start
-	// now, so the offer stays open to be confirmed later. nil needs nothing.
-	Prepare func(ctx context.Context) (context.Context, error)
+	// returns ctx carrying the claim, and a release for when the offer turns
+	// out to be answered already. A Refusal means the run can't start now,
+	// so the offer stays open to be confirmed later. nil needs nothing.
+	Prepare func(ctx context.Context) (context.Context, func(), error)
 }
 
 func (s Spec) validate() error {
