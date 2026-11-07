@@ -197,7 +197,7 @@ type CampaignAssistantFlowConfig struct {
 	// ContentPlan and EnrichBrief are the existing flow callbacks, invoked as
 	// tools. Injected so the assistant reuses them verbatim — no duplicate LLM
 	// generation. nil disables the corresponding tool.
-	ContentPlan func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
+	ContentPlan func(ctx context.Context, req content_plan.ContentPlanRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
 	EnrichBrief func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	// Overview backs the getCampaignOverview read tool. nil disables
 	// the tool.
