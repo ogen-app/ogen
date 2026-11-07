@@ -99,6 +99,7 @@ func (s *Service) UpdateIf(ctx context.Context, id string, in Input, was *models
 	return s.update(ctx, id, in, was)
 }
 
+// update is Update, conditional on was when it is non-nil.
 func (s *Service) update(ctx context.Context, id string, in Input, was *models.BrandFact) (before, after *models.BrandFact, err error) {
 	f, err := in.fact()
 	if err != nil {
