@@ -12,7 +12,11 @@ import (
 // AssistantProposalRepository stores work the assistant offered but has not
 // done yet.
 type AssistantProposalRepository interface {
+	// Create stores a new offer, pending unless p says otherwise, with empty
+	// args and options for none.
 	Create(ctx context.Context, p *models.AssistantProposal) error
+	// GetByID returns the caller's tenant's proposal; sql.ErrNoRows when
+	// there is none.
 	GetByID(ctx context.Context, id string) (*models.AssistantProposal, error)
 	// ListOpen returns a scope's pending, unexpired proposals, newest first.
 	ListOpen(ctx context.Context, kind models.AssistantScopeKind, scopeID string, now time.Time) ([]models.AssistantProposal, error)
@@ -27,6 +31,7 @@ type assistantProposalRepository struct {
 	db *bun.DB
 }
 
+// NewAssistantProposalRepository returns the bun-backed proposal store.
 func NewAssistantProposalRepository(db *bun.DB) AssistantProposalRepository {
 	return &assistantProposalRepository{db: db}
 }
