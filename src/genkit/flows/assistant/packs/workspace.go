@@ -3,6 +3,7 @@ package packs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/firebase/genkit/go/genkit"
@@ -96,7 +97,10 @@ func workspaceSetup(ctx context.Context, d Deps) (*SetupOut, error) {
 		return out, nil
 	}
 	profile, err := d.ProfileID(ctx)
-	if err != nil || profile == "" {
+	if err != nil {
+		return nil, fmt.Errorf("read publishing profile: %w", err)
+	}
+	if profile == "" {
 		out.Note = "no publishing profile is connected yet"
 		return out, nil
 	}
