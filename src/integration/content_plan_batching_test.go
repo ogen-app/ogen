@@ -153,7 +153,7 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 	Describe("parallel batches against the real model", func() {
 		It("generates posts across multiple batches and validates them", func() {
 			cb := content_plan.NewContentPlanCallback()
-			resp, err := cb(ctx, campaignID, nil)
+			resp, err := cb(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID}, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 
@@ -229,7 +229,7 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			})
 
 			cb := content_plan.NewContentPlanCallback()
-			resp, err := cb(ctx, campaignID, onEvent)
+			resp, err := cb(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID}, onEvent)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 
@@ -284,7 +284,7 @@ var _ = Describe("Content plan flow — parallel batched generation", Ordered, f
 			})
 
 			cb := content_plan.NewContentPlanCallback()
-			resp, err := cb(ctx, campaignID, onEvent)
+			resp, err := cb(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID}, onEvent)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 

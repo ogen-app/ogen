@@ -128,9 +128,9 @@ func InitContentPlan(g *genkit.Genkit, cfg ContentPlanFlowConfig, repos ContentP
 // NewContentPlanCallback returns a callback suitable for passing to the
 // campaigns handler. onEvent is forwarded to the flow for SSE streaming;
 // pass nil for a silent, non-streaming call.
-func NewContentPlanCallback() func(ctx context.Context, campaignID string, onEvent OnEventFunc) (*ContentPlanResponse, error) {
-	return func(ctx context.Context, campaignID string, onEvent OnEventFunc) (*ContentPlanResponse, error) {
-		return contentPlanRunner(ctx, ContentPlanRequest{CampaignID: campaignID}, onEvent)
+func NewContentPlanCallback() func(ctx context.Context, req ContentPlanRequest, onEvent OnEventFunc) (*ContentPlanResponse, error) {
+	return func(ctx context.Context, req ContentPlanRequest, onEvent OnEventFunc) (*ContentPlanResponse, error) {
+		return contentPlanRunner(ctx, req, onEvent)
 	}
 }
 
@@ -268,6 +268,11 @@ func runContentPlan(
 	finaliseTenantID = campaign.TenantID
 	slog.InfoContext(ctx, "validateInput done", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "campaign", campaign.Name, "platforms", len(campaign.TargetPlatforms))
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateInput", Status: "done"})
+	if len(req.AssetIDs) > 0 {
+		if campaign, err = limitAssets(campaign, req.AssetIDs); err != nil {
+			return nil, err
+		}
+	}
 
 	// Platform resolution doesn't depend on the assets, so it runs while
 	// resolveAssets waits on its embed and vector search; step 3 collects it.
