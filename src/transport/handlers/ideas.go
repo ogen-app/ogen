@@ -151,20 +151,38 @@ type updateIdeaRequest struct {
 	Title      Optional[string] `json:"title"       swaggertype:"string"`
 	Note       Optional[string] `json:"note"        swaggertype:"string"`
 	CampaignID Optional[string] `json:"campaign_id" swaggertype:"string"`
-	// Plan replaces the whole plan; null clears it.
-	Plan Optional[models.IdeaPlan] `json:"plan" swaggertype:"object"`
-}
-
-// planOf is the plan a PATCH sets: null clears it to the zero plan.
-func planOf(o Optional[models.IdeaPlan]) models.IdeaPlan {
-	if o.Value == nil {
-		return models.IdeaPlan{}
-	}
-	return *o.Value
+	// Plan replaces the whole plan; null clears it, and an omitted plan stays.
+	Plan *models.IdeaPlan `json:"plan" extensions:"x-nullable"`
 }
 
 // updateIdeaFields is the closed set of keys PATCH accepts.
 var updateIdeaFields = []string{"title", "note", "campaign_id", "plan"}
+
+// ideaPlanFields is the closed set of keys a plan accepts.
+var ideaPlanFields = []string{"platform_id", "post_type", "phase_id", "target_date"}
+
+// checkPlanKeys rejects a plan object with a key outside ideaPlanFields, so a
+// misspelt field is a 400 rather than a replacement that clears the plan.
+func checkPlanKeys(raw json.RawMessage) error {
+	if string(raw) == "null" {
+		return nil
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil || keys == nil {
+		return fiber.NewError(fiber.StatusBadRequest, "plan must be a JSON object or null")
+	}
+	var rejected []string
+	for k := range keys {
+		if !slices.Contains(ideaPlanFields, k) {
+			rejected = append(rejected, k)
+		}
+	}
+	if len(rejected) > 0 {
+		slices.Sort(rejected)
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("plan field %q is unknown", rejected[0]))
+	}
+	return nil
+}
 
 // ideaVerdictRequest is the PUT …/verdict body. Both keys must be present;
 // verdict null returns the idea to the inbox.
@@ -441,6 +459,12 @@ func (h *IdeasHandler) Update(c *fiber.Ctx) error {
 	if len(raw) == 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "at least one of title, note, campaign_id or plan is required")
 	}
+	rawPlan, setPlan := raw["plan"]
+	if setPlan {
+		if err := checkPlanKeys(rawPlan); err != nil {
+			return err
+		}
+	}
 	var req updateIdeaRequest
 	if err := json.Unmarshal(c.Body(), &req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
@@ -448,13 +472,17 @@ func (h *IdeasHandler) Update(c *fiber.Ctx) error {
 	if (req.Title.Present && req.Title.Value == nil) || (req.Note.Present && req.Note.Value == nil) {
 		return fiber.NewError(fiber.StatusBadRequest, "title and note cannot be null")
 	}
+	var plan models.IdeaPlan
+	if req.Plan != nil {
+		plan = *req.Plan
+	}
 	idea, fields, err := h.svc.Update(reqCtx(c), c.Params("id"), ideas.UpdateInput{
 		Title:       req.Title.Value,
 		Note:        req.Note.Value,
 		SetCampaign: req.CampaignID.Present,
 		CampaignID:  req.CampaignID.Value,
-		SetPlan:     req.Plan.Present,
-		Plan:        planOf(req.Plan),
+		SetPlan:     setPlan,
+		Plan:        plan,
 	})
 	if err != nil {
 		return ideaError(c, err)
