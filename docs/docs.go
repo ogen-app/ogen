@@ -18166,8 +18166,13 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "plan": {
-                    "description": "Plan replaces the whole plan; null clears it.",
-                    "type": "object"
+                    "description": "Plan replaces the whole plan; null clears it, and an omitted plan stays.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.IdeaPlan"
+                        }
+                    ],
+                    "x-nullable": true
                 },
                 "title": {
                     "type": "string"
