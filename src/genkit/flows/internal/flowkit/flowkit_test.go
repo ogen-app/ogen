@@ -70,6 +70,29 @@ func TestStreamCallback(t *testing.T) {
 	}
 }
 
+func TestStreamCallback_Rounds(t *testing.T) {
+	var events []string
+	cb := StreamCallback(StreamHandlers{
+		OnRound: func() { events = append(events, "round") },
+		OnText:  func(s string) { events = append(events, s) },
+	})
+	chunks := []*ai.ModelResponseChunk{
+		{Index: 0, Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("a")}},
+		{Index: 0, Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("b")}},
+		{Index: 1, Role: ai.RoleTool, Content: []*ai.Part{ai.NewToolResponsePart(&ai.ToolResponse{Ref: "1"})}},
+		{Index: 2, Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("c")}},
+	}
+	for _, c := range chunks {
+		if err := cb(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"round", "a", "b", "round", "c"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
 func TestStreamCallback_NilHandlers(t *testing.T) {
 	cb := StreamCallback(StreamHandlers{})
 	chunk := &ai.ModelResponseChunk{Content: []*ai.Part{
