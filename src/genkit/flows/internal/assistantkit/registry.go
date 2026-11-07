@@ -82,6 +82,16 @@ func (r *Registry) Guide(packs ...string) string {
 	return b.String()
 }
 
+// Prepare runs the named tool's Prepare, if it has one, before a stored
+// proposal for it is confirmed.
+func (r *Registry) Prepare(ctx context.Context, name string) (context.Context, error) {
+	s, ok := r.Lookup(name)
+	if !ok || s.Prepare == nil {
+		return ctx, nil
+	}
+	return s.Prepare(ctx)
+}
+
 // RunConfirmed runs a stored proposal: the named tool with args, as a call the
 // user confirmed, so its gate lets it through. args is the tool input as
 // stored (decoded JSON is fine); genkit converts it to the tool's input type
