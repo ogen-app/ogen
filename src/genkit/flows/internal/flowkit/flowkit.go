@@ -47,6 +47,9 @@ func History[M any](rows []M, turn func(M) (role, content string)) []*ai.Message
 type StreamHandlers struct {
 	// OnChunk runs once per non-aggregated chunk, before its parts.
 	OnChunk func()
+	// OnRound runs when a model chunk opens a new model message, that is a
+	// new round of the tool loop, before its parts.
+	OnRound func()
 	// OnText receives each text part.
 	OnText func(text string)
 	// OnToolCall runs once per complete (non-partial) tool request Ref.
@@ -61,7 +64,7 @@ type StreamHandlers struct {
 // chunks. The callback is not safe for concurrent use; genkit calls it
 // serially.
 func StreamCallback(h StreamHandlers) ai.ModelStreamCallback {
-	d := &streamDispatcher{h: h, calls: map[string]bool{}, results: map[string]bool{}}
+	d := &streamDispatcher{h: h, calls: map[string]bool{}, results: map[string]bool{}, round: -1}
 	return d.chunk
 }
 
@@ -69,6 +72,8 @@ type streamDispatcher struct {
 	h       StreamHandlers
 	calls   map[string]bool
 	results map[string]bool
+	// round is the message index of the last model chunk seen.
+	round int
 }
 
 func (d *streamDispatcher) chunk(_ context.Context, chunk *ai.ModelResponseChunk) error {
@@ -77,6 +82,12 @@ func (d *streamDispatcher) chunk(_ context.Context, chunk *ai.ModelResponseChunk
 	}
 	if d.h.OnChunk != nil {
 		d.h.OnChunk()
+	}
+	if (chunk.Role == "" || chunk.Role == ai.RoleModel) && chunk.Index != d.round {
+		d.round = chunk.Index
+		if d.h.OnRound != nil {
+			d.h.OnRound()
+		}
 	}
 	for _, part := range chunk.Content {
 		switch {
