@@ -5,18 +5,22 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
+	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
 
 const repairPackName = "repair"
@@ -143,7 +147,7 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 			out.Dismissed++
 			continue
 		}
-		fo := FindingOut{Key: f.Key, Code: f.Code, Severity: string(f.Severity), Message: f.Message, PostIDs: f.PostIDs}
+		fo := FindingOut{Key: f.Key, Code: f.Code, Severity: string(f.Severity), Message: f.Message, PostIDs: f.PostIDs, Fixes: []FixOffer{}}
 		for _, fix := range f.Fixes {
 			offer, err := offerFix(ctx, d, c, posts, fix, &redistributeID)
 			if err != nil {
@@ -185,29 +189,35 @@ func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Po
 type Move struct {
 	PostID string `json:"postId"`
 	Title  string `json:"title,omitempty"`
-	// From is the post's date when offered, YYYY-MM-DD or empty; To its new one.
+	// From is the post's date when offered, YYYY-MM-DD in the campaign's
+	// timezone or empty; To its new one.
 	From string `json:"from,omitempty"`
 	To   string `json:"to"`
+	// FromAt is the post's exact scheduled_at when offered; the move applies
+	// only while the post still has it.
+	FromAt *time.Time `json:"fromAt,omitempty"`
 }
 
-// moves is how reschedule would even the campaign out, as moves.
+// moves is how reschedule would even the campaign out, as moves; dates are
+// the campaign's local days.
 func moves(c *models.Campaign, posts []models.Post) []Move {
 	byID := make(map[string]models.Post, len(posts))
 	for _, p := range posts {
 		byID[p.ID] = p
 	}
+	loc := calendarcheck.Location(c)
 	var out []Move
 	for _, a := range reschedule.Plan(c, posts) {
 		p := byID[a.PostID]
 		to := a.ScheduledAt.Format(time.DateOnly)
 		from := ""
 		if p.ScheduledAt != nil {
-			from = p.ScheduledAt.UTC().Format(time.DateOnly)
+			from = p.ScheduledAt.In(loc).Format(time.DateOnly)
 		}
 		if from == to {
 			continue
 		}
-		out = append(out, Move{PostID: p.ID, Title: p.Title, From: from, To: to})
+		out = append(out, Move{PostID: p.ID, Title: p.Title, From: from, To: to, FromAt: p.ScheduledAt})
 	}
 	return out
 }
@@ -267,6 +277,8 @@ type ApplyMovesOutput struct {
 	Skipped []string `json:"skipped,omitempty"`
 }
 
+// applyMoves moves the offered posts that still have the schedule they were
+// offered with, onto dates the campaign still allows; the rest are skipped.
 func applyMoves(ctx context.Context, d Deps, in ApplyMovesInput) (*ApplyMovesOutput, error) {
 	c, err := d.loadCampaign(ctx, CampaignRef{CampaignID: in.CampaignID})
 	if err != nil {
@@ -281,31 +293,65 @@ func applyMoves(ctx context.Context, d Deps, in ApplyMovesInput) (*ApplyMovesOut
 		byID[posts[i].ID] = &posts[i]
 	}
 	out := &ApplyMovesOutput{}
-	var changed []*models.Post
-	now := time.Now().UTC()
+	var batch []repository.ScheduleMove
 	for _, m := range in.Moves {
 		p := byID[m.PostID]
-		from := ""
-		if p != nil && p.ScheduledAt != nil {
-			from = p.ScheduledAt.UTC().Format(time.DateOnly)
-		}
-		to, perr := time.Parse(time.DateOnly, m.To)
-		// A post moved, scheduled or deleted since the offer keeps its date.
-		if p == nil || !reschedule.Eligible(p.Status) || from != m.From || perr != nil {
+		// A post moved, scheduled or deleted since the offer keeps its date,
+		// and so does one whose new date the campaign no longer allows.
+		at, ok := moveTarget(c, m)
+		if p == nil || !reschedule.Eligible(p.Status) || !sameInstant(p.ScheduledAt, m.FromAt) || !ok {
 			out.Skipped = append(out.Skipped, m.PostID)
 			continue
 		}
-		p.ScheduledAt, p.UpdatedAt = &to, now
-		changed = append(changed, p)
+		batch = append(batch, repository.ScheduleMove{PostID: p.ID, From: m.FromAt, To: at})
 	}
-	if len(changed) > 0 {
-		if err := d.Posts.UpdateScheduledAtBatch(ctx, changed); err != nil {
-			return nil, fmt.Errorf("move posts: %w", err)
+	if len(batch) == 0 {
+		return out, nil
+	}
+	// The write re-checks each post's schedule, for an edit racing this one.
+	moved, err := d.Posts.MoveScheduledAt(ctx, batch, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("move posts: %w", err)
+	}
+	for _, m := range batch {
+		if !slices.Contains(moved, m.PostID) {
+			out.Skipped = append(out.Skipped, m.PostID)
 		}
+	}
+	if len(moved) > 0 {
 		assistantkit.Touch(ctx, "post", "")
 	}
-	out.Moved = len(changed)
+	out.Moved = len(moved)
 	return out, nil
+}
+
+// moveTarget is the instant a move lands on: its date, at the campaign's
+// publishing time in its timezone. ok is false when the date doesn't parse,
+// or the campaign as it is now has it outside its dates or on a day it
+// doesn't publish.
+func moveTarget(c *models.Campaign, m Move) (time.Time, bool) {
+	date, err := time.Parse(time.DateOnly, m.To)
+	if err != nil || !scheduling.EnabledWeekdays(c.PublishingDays)[date.Weekday()] {
+		return time.Time{}, false
+	}
+	if c.StartDate != nil && date.Before(campaignphase.Date(*c.StartDate)) ||
+		c.EndDate != nil && date.After(campaignphase.Date(*c.EndDate)) {
+		return time.Time{}, false
+	}
+	at, _, _ := scheduling.ComposeScheduledAt(m.To, m.PostID, calendarcheck.Location(c),
+		c.PublishingTime, c.PublishingDays, c.SpreadMinutes, c.StartDate, c.EndDate)
+	if at == nil {
+		return time.Time{}, false
+	}
+	return *at, true
+}
+
+// sameInstant reports whether two optional instants are both unset or equal.
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 // DismissFindingInput names the finding to dismiss.
