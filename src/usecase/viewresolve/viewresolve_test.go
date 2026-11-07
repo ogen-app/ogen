@@ -2,6 +2,7 @@ package viewresolve
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -15,10 +16,16 @@ import (
 type fakeTitles struct {
 	byKind map[viewcontext.EntityKind]map[string]string
 	calls  int
+	// asked counts the ids each kind's read received.
+	asked map[viewcontext.EntityKind]int
 }
 
 func (f *fakeTitles) Titles(_ context.Context, kind viewcontext.EntityKind, ids []string) (map[string]string, error) {
 	f.calls++
+	if f.asked == nil {
+		f.asked = map[viewcontext.EntityKind]int{}
+	}
+	f.asked[kind] += len(ids)
 	known, ok := f.byKind[kind]
 	if !ok {
 		return nil, repository.ErrUntitledKind
@@ -44,10 +51,15 @@ func (f *fakeIdeas) QueryIDs(_ context.Context, q models.IdeaQuery, limit int) (
 	return f.ids[:min(len(f.ids), limit)], f.total, nil
 }
 
-type fakeAssets struct{ ids []string }
+type fakeAssets struct {
+	ids []string
+	err error
+	got models.AssetQuery
+}
 
-func (f *fakeAssets) QueryIDs(context.Context, models.AssetQuery) ([]string, error) {
-	return f.ids, nil
+func (f *fakeAssets) QueryIDs(_ context.Context, q models.AssetQuery) ([]string, error) {
+	f.got = q
+	return f.ids, f.err
 }
 
 func titles() *fakeTitles {
@@ -126,30 +138,65 @@ func TestResolve_AllMatching(t *testing.T) {
 		t.Fatalf("summary = %q", got.Summary)
 	}
 
-	// Assets cap the same way; the total is the whole match.
+	// A match deleted before the title read is dropped and stays in the total.
 	r = New(ti, ideas, &fakeAssets{ids: []string{"a1", "a2"}})
 	got, err = r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"assets","scope":{"kind":"workspace"},
 		"selection":{"kind":"asset","allMatching":true}}`))
-	if err != nil || got.SelectionTotal != 2 || len(got.Selection) != 1 {
-		t.Fatalf("assets: %+v, %v; want a1 loaded of 2", got, err)
+	if err != nil || got.SelectionTotal != 2 || len(got.Selection) != 1 || got.Dropped != 1 {
+		t.Fatalf("assets: %+v, %v; want a1 loaded of 2, a2 dropped", got, err)
+	}
+}
+
+func TestResolve_AllMatchingAssets(t *testing.T) {
+	var many []string
+	ti := titles()
+	for i := range 250 {
+		id := fmt.Sprint("a", i)
+		many = append(many, id)
+		ti.byKind[viewcontext.KindAsset][id] = id
+	}
+	assets := &fakeAssets{ids: many}
+	r := New(ti, &fakeIdeas{}, assets)
+	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"campaign.assets",
+		"scope":{"kind":"campaign","id":"c1"},
+		"selection":{"kind":"asset","allMatching":true},"filter":"text=pricing"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assets.got.ScopeCampaign != "c1" || assets.got.Text != "pricing" {
+		t.Fatalf("query = %+v; want the filter scoped to the campaign", assets.got)
+	}
+	// The match is capped before the title read, which never sees the excess.
+	if ti.asked[viewcontext.KindAsset] != MaxSelection {
+		t.Fatalf("title read got %d asset ids, want %d", ti.asked[viewcontext.KindAsset], MaxSelection)
+	}
+	if len(got.Selection) != MaxSelection || got.SelectionTotal != 250 || got.Dropped != 0 {
+		t.Fatalf("selection %d of %d, dropped %d", len(got.Selection), got.SelectionTotal, got.Dropped)
 	}
 }
 
 func TestResolve_Refusals(t *testing.T) {
 	r := New(titles(), &fakeIdeas{}, &fakeAssets{})
 	cases := map[string]struct {
-		raw   string
-		field string
-		err   error
+		raw      string
+		field    string
+		err      error
+		assetErr error
 	}{
-		"scope gone": {`{"version":1,"screen":"post","scope":{"kind":"post","id":"p9"}}`, "", ErrScopeNotFound},
+		"scope gone": {`{"version":1,"screen":"post","scope":{"kind":"post","id":"p9"}}`, "", ErrScopeNotFound, nil},
+		"asset scope gone": {`{"version":1,"screen":"campaign.assets","scope":{"kind":"campaign","id":"c9"},
+			"selection":{"kind":"asset","allMatching":true}}`, "", ErrScopeNotFound, sql.ErrNoRows},
 		"bad filter": {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},
-			"selection":{"kind":"idea","allMatching":true},"filter":"pile=nope"}`, "filter", nil},
+			"selection":{"kind":"idea","allMatching":true},"filter":"pile=nope"}`, "filter", nil, nil},
 		"no list query": {`{"version":1,"screen":"campaign.list","scope":{"kind":"campaign","id":"c1"},
-			"selection":{"kind":"post","allMatching":true}}`, "selection.allMatching", nil},
+			"selection":{"kind":"post","allMatching":true}}`, "selection.allMatching", nil, nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			r := r
+			if tc.assetErr != nil {
+				r = New(titles(), &fakeIdeas{}, &fakeAssets{err: tc.assetErr})
+			}
 			_, err := r.Resolve(t.Context(), parse(t, tc.raw))
 			if tc.err != nil {
 				if !errors.Is(err, tc.err) {
