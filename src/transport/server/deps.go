@@ -31,7 +31,6 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
-	"github.com/ogen-app/ogen/src/usecase/analytics"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 	"github.com/ogen-app/ogen/src/usecase/billing"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
@@ -85,6 +84,9 @@ type deps struct {
 	qualityAuto  *qualityauto.Service
 	svc          services
 	genkit       *genkitRuntime
+	// analytics serves /api/analytics; the assistant reads through its
+	// service, sharing the handler's baseline cache.
+	analytics *handlers.AnalyticsHandler
 }
 
 // services are the use cases shared between REST handlers and the assistant
@@ -279,6 +281,8 @@ func (d *deps) initServices(context.Context) error {
 	// transaction.
 	d.svc.withdraw = withdraw.New(d.db, r.postRepo, r.campaignRepo, r.postLogRepo, d.enqueuer)
 
+	d.analytics = handlers.NewAnalyticsHandler(r.postAnalyticsRepo, r.followerStatsRepo, r.postRepo, r.platformRepo, r.socialAccountRepo, r.campaignRepo, d.zernio.Integration.Client, d.zernioProfileID, d.auth)
+
 	d.svc.signupAccess = NewSignupAccessService(d.db, d.cfg, d.enqueuer)
 	d.svc.signup = signup.New(d.db, r.accountRepo, r.tenantRepo)
 	d.svc.signup.SetAccess(d.svc.signupAccess, signup.InviteDeps{
@@ -414,15 +418,12 @@ func (d *deps) genkitDeps() genkitDeps {
 			Posts:             r.postRepo,
 			Links:             r.postIdeaRepo,
 			Dismissals:        r.dismissalRepo,
-			Analytics: &analytics.Service{
-				Repo: r.postAnalyticsRepo, Followers: r.followerStatsRepo, Posts: r.postRepo, Platforms: r.platformRepo,
-				Accounts: r.socialAccountRepo, Campaigns: r.campaignRepo,
-			},
-			Brand:          r.brandRepo,
-			Activity:       d.svc.activityReport,
-			Settings:       r.settingRepo,
-			SocialAccounts: r.socialAccountRepo,
-			ProfileID:      d.zernioProfileID,
+			Analytics:         d.analytics.Service(),
+			Brand:             r.brandRepo,
+			Activity:          d.svc.activityReport,
+			Settings:          r.settingRepo,
+			SocialAccounts:    r.socialAccountRepo,
+			ProfileID:         d.zernioProfileID,
 		},
 		assistantRepos: assistant.Repos{
 			Proposals:  r.proposalRepo,
