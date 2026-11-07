@@ -3,13 +3,16 @@ package packs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -67,6 +70,12 @@ func TestMoreLikeThese_WritesFromTheExamplesAndKeepsProvenance(t *testing.T) {
 	if got.CampaignID != "c1" || got.PlatformID != "li" || got.Count != 5 || !slices.Equal(got.UsedAssetIDs, []string{"a1"}) {
 		t.Fatalf("request = %+v; want the examples' campaign and platform, the count capped", got)
 	}
+	// The writer requires a publish window; none was asked for, so one is set.
+	start, errS := time.Parse(time.DateOnly, got.WindowStart)
+	end, errE := time.Parse(time.DateOnly, got.WindowEnd)
+	if errS != nil || errE != nil || end.Before(start) {
+		t.Fatalf("window = %q..%q; want valid dates", got.WindowStart, got.WindowEnd)
+	}
 	if !strings.Contains(got.SourceMaterial, "Why discounts backfire") || !strings.Contains(got.SourceMaterial, "never repeat") ||
 		!strings.Contains(got.SourceMaterial, "Pricing myths") {
 		t.Fatalf("source material = %q", got.SourceMaterial)
@@ -81,6 +90,62 @@ func TestMoreLikeThese_WritesFromTheExamplesAndKeepsProvenance(t *testing.T) {
 	_, err = moreLikeThese(ctx, d, MoreLikeTheseInput{PostIDs: []string{"nope"}})
 	refused(t, err)
 	refused(t, checkExamples(MoreLikeTheseInput{}))
+}
+
+func TestMoreLikeThese_KeepsAPartialDraft(t *testing.T) {
+	links := exampleLinks{linked: map[string][]string{}}
+	svc := compose.New(nil, nil, nil, links, nil, nil).WithDrafter(func(_ context.Context, req compose.DraftRequest) ([]compose.Written, []string, error) {
+		return []compose.Written{{PostID: "new1", PlatformID: req.PlatformID}}, nil, errors.New("writer down")
+	})
+	d := Deps{Compose: svc, Links: links, DraftMax: 5, Posts: examplePosts{byID: map[string]*models.Post{
+		"top1": {ID: "top1", CampaignID: "c1", PlatformID: "li", Title: "Why discounts backfire", Content: "Most buyers…"},
+	}}}
+	ctx, touched := turn(t, workspace, nil)
+
+	out, err := moreLikeThese(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1"}, Count: 2})
+	if err != nil {
+		t.Fatalf("a partial draft is a result, not an error: %v", err)
+	}
+	if len(out.Posts) != 1 || out.Posts[0].PostID != "new1" || !slices.Equal(links.linked["new1"], []string{"idea-pricing"}) {
+		t.Fatalf("out = %+v, links = %v; want the written post and its provenance", out, links.linked)
+	}
+	if len(touched()) != 1 {
+		t.Fatalf("touched = %v", touched())
+	}
+	if !slices.ContainsFunc(out.Warnings, func(w string) bool { return strings.HasPrefix(w, "stopped early: ") }) {
+		t.Fatalf("warnings = %v; want the stopped-early warning", out.Warnings)
+	}
+}
+
+type slugPlatforms struct{ repository.PlatformRepository }
+
+func (slugPlatforms) List(context.Context) ([]models.Platform, error) {
+	return []models.Platform{{ID: "p-li", ZernioID: "linkedin"}, {ID: "p-ig", ZernioID: "instagram"}}, nil
+}
+
+func TestRangeAndScope_InheritsTheScreenWindow(t *testing.T) {
+	d := Deps{Analytics: &analytics.Service{Platforms: slugPlatforms{}}}
+	ctx := tenantctx.With(context.WithValue(t.Context(), logging.UserIDKey, "u1"), "tenant-1")
+	ctx, _ = assistant.NewViewTurnContext(ctx, viewcontext.ViewContext{
+		Version: viewcontext.Version, Screen: "analytics", Scope: workspace,
+		Window: &viewcontext.Window{From: "2026-10-01", To: "2026-10-14", Platforms: []string{"linkedin"}},
+	}, nil)
+
+	// Nothing asked: the screen's dates and platforms.
+	rng, sc, err := rangeAndScope(ctx, d, AnalyticsQuery{}, "")
+	if err != nil || rng.Days != 14 || rng.From.Format(time.DateOnly) != "2026-10-01" || !sc.AllowsSlug("linkedin") || sc.AllowsSlug("instagram") {
+		t.Fatalf("range = %+v, scope = %+v, %v; want the screen window", rng, sc, err)
+	}
+	// Other dates: those dates, still the screen's platform.
+	rng, sc, err = rangeAndScope(ctx, d, AnalyticsQuery{From: "2026-11-01", To: "2026-11-07"}, "")
+	if err != nil || rng.Days != 7 || !sc.AllowsSlug("linkedin") || sc.AllowsSlug("instagram") {
+		t.Fatalf("range = %+v, scope = %+v, %v; want the asked dates on the screen's platform", rng, sc, err)
+	}
+	// A platform asked for replaces the screen's.
+	_, sc, err = rangeAndScope(ctx, d, AnalyticsQuery{Window: "7d", Platforms: []string{"instagram"}}, "")
+	if err != nil || !sc.AllowsSlug("instagram") || sc.AllowsSlug("linkedin") {
+		t.Fatalf("scope = %+v, %v; want the asked platform", sc, err)
+	}
 }
 
 func TestAnalyticsReads_RangeAndDegrade(t *testing.T) {
