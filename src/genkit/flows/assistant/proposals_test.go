@@ -162,8 +162,9 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 
 func TestProposals_AnswerFromTheCard(t *testing.T) {
 	var foreignCalls []AnswerRequest
-	h, store, ran := proposalHarness(t, func(_ context.Context, req AnswerRequest) (any, error) {
+	h, store, ran := proposalHarness(t, func(ctx context.Context, req AnswerRequest) (any, error) {
 		foreignCalls = append(foreignCalls, req)
+		assistantkit.Touch(ctx, "idea", "")
 		return "campaign work done", nil
 	})
 	ctx := context.WithValue(t.Context(), logging.UserIDKey, "u1")
@@ -195,15 +196,19 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 	}
 
 	// In the campaign's own thread, a "yes" to the campaign assistant's
-	// offer goes to it.
+	// offer goes to it, and the turn reports it resolved and what it changed.
 	campaign := viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`)
-	if _, _, _, err := h.turn(campaign, "yes",
+	resp, events, _, err = h.turn(campaign, "yes",
 		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": "theirs"}}),
-		fakemodel.Answer(`{"explanation":"Planned.","action":"answered"}`)); err != nil {
+		fakemodel.Answer(`{"explanation":"Planned.","action":"answered"}`))
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(foreignCalls) != 1 || foreignCalls[0].ProposalID != "theirs" || !foreignCalls[0].Confirm {
 		t.Fatalf("foreign answers = %+v", foreignCalls)
+	}
+	if !slices.Contains(events, SSEEventProposalResolved) || !slices.Contains(resp.Touched, assistantkit.Touched{Kind: "idea"}) {
+		t.Fatalf("events = %v, touched = %v; want the offer resolved and the ideas touched", events, resp.Touched)
 	}
 }
 
