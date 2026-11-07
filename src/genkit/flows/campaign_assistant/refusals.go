@@ -28,15 +28,22 @@ func allowedPostTypes(c *models.Campaign, platformID string) []string {
 
 // unsupportedPostType reports the first requested platform that cannot take
 // postType, with the types it can take. An empty postType means the platform
-// default and is always fine.
-func unsupportedPostType(c *models.Campaign, platformIDs []string, postType string) (reason string, alternatives []string, bad bool) {
+// default and is always fine. A platform with no types to choose from takes
+// any type only when anyWhenNone is set: the draft engine keeps an explicit
+// type there, the planning engine refuses it.
+func unsupportedPostType(c *models.Campaign, platformIDs []string, postType string, anyWhenNone bool) (reason string, alternatives []string, bad bool) {
 	if postType == "" {
 		return "", nil, false
 	}
 	for _, id := range platformIDs {
 		allowed := allowedPostTypes(c, id)
-		if len(allowed) == 0 || slices.Contains(allowed, postType) {
+		switch {
+		case slices.Contains(allowed, postType):
 			continue
+		case len(allowed) == 0 && anyWhenNone:
+			continue
+		case len(allowed) == 0:
+			return fmt.Sprintf("%s in this campaign has no post types to choose from; leave the post type out.", platformName(c, id)), nil, true
 		}
 		return fmt.Sprintf("%s in this campaign doesn't take %q posts.", platformName(c, id), postType), allowed, true
 	}

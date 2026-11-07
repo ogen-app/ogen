@@ -16,14 +16,17 @@ func TestFriendlyError(t *testing.T) {
 		err  error
 		want string
 	}{
-		"nil":         {nil, ""},
-		"cancelled":   {fmt.Errorf("generate: %w", context.Canceled), MsgCancelled},
-		"timeout":     {fmt.Errorf("generate: %w", context.DeadlineExceeded), MsgTimeout},
-		"refused":     {fmt.Errorf("round 2: %w", llm.ErrRefused), MsgDeclined},
-		"sdk 529":     {fmt.Errorf("plugin: %w", &anthropic.Error{StatusCode: 529}), MsgBusy},
-		"sdk 429":     {fmt.Errorf("plugin: %w", &anthropic.Error{StatusCode: 429}), MsgBusy},
-		"flattened":   {errors.New(`POST "https://api.anthropic.com/v1/messages": 529 {"type":"overloaded_error"}`), MsgBusy},
-		"tool failed": {errors.New(`tool "generatePosts" failed: LinkedIn does not support post type text-post`), MsgGeneric},
+		"nil":             {nil, ""},
+		"cancelled":       {fmt.Errorf("generate: %w", context.Canceled), MsgCancelled},
+		"timeout":         {fmt.Errorf("generate: %w", context.DeadlineExceeded), MsgTimeout},
+		"refused":         {fmt.Errorf("round 2: %w", llm.ErrRefused), MsgDeclined},
+		"sdk 529":         {fmt.Errorf("plugin: %w", &anthropic.Error{StatusCode: 529}), MsgBusy},
+		"sdk 429":         {fmt.Errorf("plugin: %w", &anthropic.Error{StatusCode: 429}), MsgBusy},
+		"flattened":       {errors.New(`POST "https://api.anthropic.com/v1/messages": 529 {"type":"overloaded_error"}`), MsgBusy},
+		"tool failed":     {errors.New(`tool "generatePosts" failed: LinkedIn does not support post type text-post`), MsgGeneric},
+		"rate limited":    {errors.New(`POST "https://api.anthropic.com/v1/messages": 429 Too Many Requests {"type":"rate_limit_error"}`), MsgBusy},
+		"tool saying 429": {errors.New(`tool "redistributePosts" failed: could not move 429 posts`), MsgGeneric},
+		"sdk 400":         {fmt.Errorf("plugin: %w", &anthropic.Error{StatusCode: 400}), MsgGeneric},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
