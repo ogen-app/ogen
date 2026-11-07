@@ -158,7 +158,7 @@ var _ = Describe("Content plan flow", Ordered, func() {
 			})
 
 			cb := content_plan.NewContentPlanCallback()
-			resp, err := cb(ctx, campaignID, onEvent)
+			resp, err := cb(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID}, onEvent)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 
@@ -192,7 +192,7 @@ var _ = Describe("Content plan flow", Ordered, func() {
 			})
 
 			cb := content_plan.NewContentPlanCallback()
-			resp, err := cb(ctx, campaignID, onEvent)
+			resp, err := cb(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID}, onEvent)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 
