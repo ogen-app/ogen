@@ -60,3 +60,18 @@ func Conflict[T any](reason string, options ...Option) Outcome[T] {
 
 // Succeeded reports whether the call did what was asked.
 func (o Outcome[T]) Succeeded() bool { return o.Status == StatusOK }
+
+// OutputOK reports whether a tool response's output did not end refused or
+// in conflict. Genkit hands the output over JSON-decoded; output that is not
+// an outcome counts as ok.
+func OutputOK(output any) bool {
+	m, ok := output.(map[string]any)
+	if !ok {
+		return true
+	}
+	switch s, _ := m["status"].(string); Status(s) {
+	case StatusRefused, StatusConflict:
+		return false
+	}
+	return true
+}
