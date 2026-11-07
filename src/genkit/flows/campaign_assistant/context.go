@@ -1,7 +1,6 @@
 package campaign_assistant
 
 import (
-	"text/template"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -43,11 +42,11 @@ type phaseContext struct {
 	Purpose string
 }
 
-// assembleContext renders the system + context blocks from the campaign. The
-// brief is placed in the context block so grounded Q&A ("summarise the brief")
-// needs no tool round-trip. The rendered strings are deterministic, so an
-// unchanged brief and date produce a byte-identical system prefix across the
-// turns of a conversation. That determinism is what makes the ephemeral
+// assembleContext pairs the pre-rendered system prompt with the context block
+// rendered from the campaign. The brief is placed in the context block so
+// grounded Q&A ("summarise the brief") needs no tool round-trip. The rendered
+// strings are deterministic, so an unchanged brief and date produce a
+// byte-identical system prefix across the turns of a conversation. That determinism is what makes the ephemeral
 // cache_control breakpoint (added at the wire for the planning model — see
 // server.InstallAnthropicToolOrderStabilizer) actually hit: without an explicit
 // breakpoint Anthropic caches nothing at the token level. The dynamic context
@@ -55,7 +54,7 @@ type phaseContext struct {
 // the cached prefix rotates daily and on brief edits — fine, since consecutive
 // turns within the cache TTL share it. Note this is separate from the
 // strict-tool grammar cache the tool-order stabilizer keeps warm.
-func assembleContext(campaign *models.Campaign, brandBlock string, today time.Time, systemTmpl, contextTmpl *template.Template) (*assistantContext, error) {
+func assembleContext(campaign *models.Campaign, brandBlock string, today time.Time, p *prompts) (*assistantContext, error) {
 	campaignType := campaign.CampaignTypeID
 	var phases []phaseContext
 	if campaign.CampaignType != nil {
@@ -83,13 +82,9 @@ func assembleContext(campaign *models.Campaign, brandBlock string, today time.Ti
 		Phases:         phases,
 	}
 
-	systemPrompt, err := flowkit.RenderTemplate(systemTmpl, data)
+	contextBlock, err := flowkit.RenderTemplate(p.context, data)
 	if err != nil {
 		return nil, err
 	}
-	contextBlock, err := flowkit.RenderTemplate(contextTmpl, data)
-	if err != nil {
-		return nil, err
-	}
-	return &assistantContext{SystemPrompt: systemPrompt, ContextBlock: contextBlock}, nil
+	return &assistantContext{SystemPrompt: p.system, ContextBlock: contextBlock}, nil
 }

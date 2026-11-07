@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -53,7 +52,7 @@ func runCampaignAssistant(
 	req CampaignAssistantRequest,
 	cfg CampaignAssistantFlowConfig,
 	repos CampaignAssistantRepos,
-	systemTmpl, contextTmpl *template.Template,
+	p *prompts,
 	tools *toolSet,
 	onEvent OnEventFunc,
 ) (out *CampaignAssistantResponse, retErr error) {
@@ -81,7 +80,7 @@ func runCampaignAssistant(
 
 	// One Brand library load serves this turn and every sub-flow its tools run.
 	ctx = brandresolve.WithMemo(ctx)
-	ctx, err := t.prepare(ctx, systemTmpl, contextTmpl)
+	ctx, err := t.prepare(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +114,7 @@ func runCampaignAssistant(
 // prepare validates the request, loads the campaign (tenant-scoped, so another
 // tenant's campaign reads as not found), its context and history, and returns
 // ctx carrying the per-request tool state.
-func (t *turn) prepare(ctx context.Context, systemTmpl, contextTmpl *template.Template) (context.Context, error) {
+func (t *turn) prepare(ctx context.Context, p *prompts) (context.Context, error) {
 	if strings.TrimSpace(t.req.Instruction) == "" {
 		return ctx, &ValidationError{Msg: "instruction is required"}
 	}
@@ -146,7 +145,7 @@ func (t *turn) prepare(ctx context.Context, systemTmpl, contextTmpl *template.Te
 		slog.WarnContext(ctx, "brand resolve failed; using legacy tone",
 			logging.AttrComponent, logComponent, "error", err)
 	}
-	t.actx, err = assembleContext(campaign, brand.PromptBlock(""), time.Now().UTC(), systemTmpl, contextTmpl)
+	t.actx, err = assembleContext(campaign, brand.PromptBlock(""), time.Now().UTC(), p)
 	if err != nil {
 		return ctx, fmt.Errorf("assemble context: %w", err)
 	}
