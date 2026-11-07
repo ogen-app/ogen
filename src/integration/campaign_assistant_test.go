@@ -539,21 +539,31 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			// Provenance: the assets_used event names the attached asset.
 			Expect(assetsUsed).To(ContainElement(campaign_assistant.AssetRef{ID: assetID, Title: assetTitle}))
 
-			// Per-post grounding: a post records only the assets the
-			// model drew on for it, never an id outside the retrieved set — and
-			// since the single attached asset is highly relevant to this campaign,
-			// at least one post should cite it.
+			// Per-idea grounding: planning saves ideas, not posts. An idea
+			// records only the assets the model drew on for it, never an id
+			// outside the retrieved set, and its mode follows — and since the
+			// single attached asset is highly relevant to this campaign, at
+			// least one idea should cite it.
+			ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ideas).NotTo(BeEmpty())
 			posts, err := postRepo.ListByCampaign(ctx, campaignID)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(posts).NotTo(BeEmpty())
+			Expect(posts).To(BeEmpty(), "planning makes ideas, not posts")
 			cited := false
-			for _, p := range posts {
-				for _, id := range p.UsedAssetIDs {
-					Expect(id).To(Equal(assetID), "a post cited an asset outside the retrieved set")
+			for _, idea := range ideas {
+				for _, id := range idea.AssetIDs {
+					Expect(id).To(Equal(assetID), "an idea cited an asset outside the retrieved set")
 					cited = true
 				}
+				Expect(idea.GroundingMode).NotTo(BeNil())
+				want := models.GroundingExploratory
+				if len(idea.AssetIDs) > 0 {
+					want = models.GroundingGrounded
+				}
+				Expect(*idea.GroundingMode).To(Equal(want))
 			}
-			Expect(cited).To(BeTrue(), "at least one post should cite the attached asset")
+			Expect(cited).To(BeTrue(), "at least one idea should cite the attached asset")
 		})
 
 		It("handles an asset question without failing the turn", func() {
