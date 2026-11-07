@@ -71,6 +71,21 @@ type Spec struct {
 	Tool ai.ToolRef
 }
 
+// toolName is the tool's name, or false when there is no tool: nil, or a
+// typed nil — a nil *ai.ToolDef passes the interface nil check but panics
+// in Name. An implementation that answers on a nil receiver still counts.
+func toolName(t ai.ToolRef) (name string, ok bool) {
+	if t == nil {
+		return "", false
+	}
+	defer func() {
+		if recover() != nil {
+			name, ok = "", false
+		}
+	}()
+	return t.Name(), true
+}
+
 func (s Spec) validate() error {
 	var errs []error
 	if s.Name == "" {
@@ -88,10 +103,10 @@ func (s Spec) validate() error {
 	if strings.TrimSpace(s.Guide) == "" {
 		errs = append(errs, errors.New("guide is required"))
 	}
-	if s.Tool == nil {
+	if name, ok := toolName(s.Tool); !ok {
 		errs = append(errs, errors.New("tool is required"))
-	} else if s.Tool.Name() != s.Name {
-		errs = append(errs, fmt.Errorf("tool is named %q", s.Tool.Name()))
+	} else if name != s.Name {
+		errs = append(errs, fmt.Errorf("tool is named %q", name))
 	}
 	if s.Action != nil && (s.Action.Name == "" || s.Action.Rule == "") {
 		errs = append(errs, errors.New("action needs a name and a rule"))
