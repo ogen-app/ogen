@@ -74,6 +74,8 @@ func (t *toolSet) navigate(ctx context.Context, in NavigateInput) (*UIResult, er
 	if err != nil {
 		return nil, err
 	}
+	st.planning.Lock()
+	defer st.planning.Unlock()
 	screen := viewcontext.Screen(in.Screen)
 	if !screen.Valid() {
 		return nil, assistantkit.Refused(fmt.Sprintf("there is no %q screen; pick one from navigate's list", in.Screen))
@@ -129,6 +131,8 @@ func (t *toolSet) setFilter(ctx context.Context, in SetFilterInput) (*UIResult, 
 	if err != nil {
 		return nil, err
 	}
+	st.planning.Lock()
+	defer st.planning.Unlock()
 	screen := st.currentScreen()
 	kind, ok := screen.ListKind()
 	if !ok {
@@ -161,6 +165,8 @@ func (t *toolSet) selectItems(ctx context.Context, in SelectInput) (*UIResult, e
 	if err != nil {
 		return nil, err
 	}
+	st.planning.Lock()
+	defer st.planning.Unlock()
 	screen := st.currentScreen()
 	kind, ok := screen.ListKind()
 	if !ok {
@@ -201,6 +207,8 @@ func (t *toolSet) openSavedView(ctx context.Context, in OpenSavedViewInput) (*UI
 	if err != nil {
 		return nil, err
 	}
+	st.planning.Lock()
+	defer st.planning.Unlock()
 	view, err := t.deps.SavedViews.GetByID(ctx, in.SavedViewID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, assistantkit.Refused(fmt.Sprintf("there is no saved view %q", in.SavedViewID))
