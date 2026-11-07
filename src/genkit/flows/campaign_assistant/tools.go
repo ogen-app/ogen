@@ -894,6 +894,9 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 				WindowStart:    windowStart,
 				WindowEnd:      windowEnd,
 				PhaseID:        phaseID,
+				// Which assets the research cited isn't tracked, so its
+				// grounding isn't claimed either way.
+				SourcesUnknown: true,
 				// UsedAssetIDs is intentionally left empty in v1: which assets the prior
 				// research cited isn't tracked, and over-stamping would pollute
 				// asset-usage provenance. The "Source research" note on
