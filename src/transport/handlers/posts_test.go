@@ -700,6 +700,28 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				Expect(resp.StatusCode).To(Equal(400))
 			})
 
+			It("saves the body of a planned post and makes it a draft", func() {
+				p := createPost("Planned Post", fiber.Map{"status": "planned", "content": ""})
+				Expect(p.Status).To(Equal(models.PostStatusPlanned))
+
+				body, _ := json.Marshal(fiber.Map{
+					"campaign_id": campaignID, "platform_id": "AXqWG7U2qnpt",
+					"platform_post_type": "text-post", "title": "Planned Post",
+					"content": "The body.", "status": "ready_for_publish",
+				})
+				req := httptest.NewRequest("PUT", "/api/posts/"+p.ID, bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(200))
+
+				stored, err := repository.NewPostRepository(db).GetByID(tenantCtx(), p.ID)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stored.Content).To(Equal("The body."))
+				Expect(stored.Status).To(Equal(models.PostStatusDraft))
+			})
+
 			It("allows a valid status transition chain", func() {
 				p := createPost("Lifecycle Post", nil) // draft
 
