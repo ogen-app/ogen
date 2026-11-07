@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -19,6 +21,11 @@ import (
 // threadMessages is how many of a thread's latest messages the history read
 // returns.
 const threadMessages = 50
+
+// maxInstructionLen caps a turn's message, in characters. With the replayed
+// history capped by message count, it keeps a turn's input well inside the
+// model's context window.
+const maxInstructionLen = 8000
 
 // AssistantHandler serves the universal assistant: one endpoint for every
 // screen, and the thread history.
@@ -64,9 +71,10 @@ type assistantTurnRequest struct {
 // @Description  references only; the server reloads them in the caller's workspace and drops ids that no
 // @Description  longer exist. The scope names the thread: the conversation continues across the screens of
 // @Description  one workspace, campaign or post. A malformed viewContext is a 400 that names the field; a
-// @Description  campaign or post scope that doesn't exist is a 404. Events: "explanation_delta" {"delta"},
-// @Description  "tool_call", "tool_result", then "complete" with {"explanation","action"}. "error" carries
-// @Description  {"message":"...","code":<http_code>}.
+// @Description  campaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.
+// @Description  Events: "explanation_delta" {"delta"}, "tool_call", "tool_result" (with "ok" false when the
+// @Description  tool refused), then "complete" with {"explanation","action"}, plus "unsaved": true when the
+// @Description  turn ran but could not be stored in the thread. "error" carries {"message":"...","code":<http_code>}.
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream
@@ -85,6 +93,9 @@ func (h *AssistantHandler) Turn(c *fiber.Ctx) error {
 	var req assistantTurnRequest
 	if err := bindAndValidate(c, &req); err != nil {
 		return err
+	}
+	if utf8.RuneCountInString(req.Instruction) > maxInstructionLen {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("instruction must be at most %d characters", maxInstructionLen))
 	}
 	session, err := sessionFrom(c)
 	if err != nil {
