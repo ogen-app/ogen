@@ -46,6 +46,7 @@ var titleSources = map[viewcontext.EntityKind]struct {
 	viewcontext.KindCampaign: {(*models.Campaign)(nil), "c.id", "c.name", "c.deleted_at IS NULL"},
 }
 
+// Titles reads the titles of ids of kind in the caller's tenant.
 func (r *entityTitleRepository) Titles(ctx context.Context, kind viewcontext.EntityKind, ids []string) (map[string]string, error) {
 	src, ok := titleSources[kind]
 	if !ok {
