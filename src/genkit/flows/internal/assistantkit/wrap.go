@@ -14,6 +14,7 @@ type Refusal struct {
 	Alternatives []string
 }
 
+// Error is the reason, which the model relays to the user.
 func (r *Refusal) Error() string { return r.Reason }
 
 // Refused returns a Refusal error for a request the tool cannot do as asked.
