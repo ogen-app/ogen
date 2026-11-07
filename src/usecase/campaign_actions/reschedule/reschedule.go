@@ -3,7 +3,7 @@
 // without a database or model. It reassigns the ScheduledAt of draft and
 // ready-for-publish posts, spreading each phase's eligible posts evenly across
 // that phase's slice of the campaign timeline (posts with no phase spread
-// across the whole range). Already-scheduled and published posts are never
+// across the whole range), on the campaign's publishing days. Already-scheduled and published posts are never
 // moved (they carry committed publish jobs — see CON-78).
 package reschedule
 
@@ -14,9 +14,11 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
 
-// Assignment is a post's newly-computed publish date (00:00 UTC).
+// Assignment is a post's newly-computed publish date: the campaign-local
+// calendar day, as 00:00 UTC.
 type Assignment struct {
 	PostID      string
 	ScheduledAt time.Time
@@ -39,6 +41,7 @@ func Plan(campaign *models.Campaign, posts []models.Post) []Assignment {
 		return nil
 	}
 	start, end := campaignphase.Date(*campaign.StartDate), campaignphase.Date(*campaign.EndDate)
+	enabled := scheduling.EnabledWeekdays(campaign.PublishingDays)
 
 	// Each phase's slice is the campaign's effective phase plan — its
 	// manual plan when set, else the even split of the dates.
@@ -84,7 +87,7 @@ func Plan(campaign *models.Campaign, posts []models.Post) []Assignment {
 		if key != "" {
 			win = windowByPhase[key]
 		}
-		dates := spread(win[0], win[1], len(grp))
+		dates := spread(win[0], win[1], len(grp), enabled)
 		for i, p := range grp {
 			out = append(out, Assignment{PostID: p.ID, ScheduledAt: dates[i]})
 		}
@@ -113,21 +116,33 @@ func sortPosts(posts []models.Post) {
 }
 
 // spread returns n evenly-spaced dates across the inclusive window [ws, we],
-// earliest first. n==1 → the window start.
-func spread(ws, we time.Time, n int) []time.Time {
+// earliest first, on the enabled weekdays only (every day when the window has
+// none of them). n==1 → the window's first enabled day.
+func spread(ws, we time.Time, n int, enabled map[time.Weekday]bool) []time.Time {
 	out := make([]time.Time, n)
 	if n <= 0 {
 		return out
 	}
+	var days, all []time.Time
+	for d := ws; !d.After(we); d = d.AddDate(0, 0, 1) {
+		all = append(all, d)
+		if enabled[d.Weekday()] {
+			days = append(days, d)
+		}
+	}
+	if len(days) == 0 {
+		days = all
+	}
+	if len(days) == 0 {
+		days = []time.Time{ws}
+	}
 	if n == 1 {
-		out[0] = ws
+		out[0] = days[0]
 		return out
 	}
-	days := int(we.Sub(ws).Hours() / 24) // window span in days (0 for a 1-day window)
 	for i := range n {
-		// Evenly distribute i across [0, days].
-		offset := (i * days) / (n - 1)
-		out[i] = ws.AddDate(0, 0, offset)
+		// Evenly distribute i across the window's days.
+		out[i] = days[(i*(len(days)-1))/(n-1)]
 	}
 	return out
 }
