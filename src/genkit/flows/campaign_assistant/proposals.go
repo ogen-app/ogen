@@ -41,7 +41,7 @@ var (
 var (
 	generatePostsGate = assistantkit.Gate[GeneratePostsInput]{
 		Precheck: func(ctx context.Context, in GeneratePostsInput) error {
-			if err := precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType); err != nil {
+			if err := precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType, false); err != nil {
 				return err
 			}
 			if err := needSources(ctx, "generatePosts", in.Exploratory, func() any { in.Exploratory = true; return in }); err != nil {
@@ -59,7 +59,7 @@ var (
 	}
 	draftPostGate = assistantkit.Gate[DraftPostInput]{
 		Precheck: func(ctx context.Context, in DraftPostInput) error {
-			if err := precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType); err != nil {
+			if err := precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType, true); err != nil {
 				return err
 			}
 			var fill func(int) any
@@ -98,8 +98,10 @@ func overGoal(ctx context.Context, tool string, count int, args any, fill func(i
 
 // precheckPosts runs the post tools' user-correctable checks — target
 // platform, phase, publish window, post type — so a request that could never
-// run is refused instead of proposed.
-func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, windowEnd, postType string) error {
+// run is refused instead of proposed. anyWhenNone is the engine's rule for a
+// type on a platform with none to choose from: drafting keeps it.
+func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, windowEnd, postType string, anyWhenNone bool) error {
+	postType = strings.TrimSpace(postType)
 	st := getRequestState(ctx)
 	now := time.Now().UTC()
 	ids, _, err := resolveTargetPlatforms(st.campaign, platforms)
@@ -115,7 +117,7 @@ func precheckPosts(ctx context.Context, platforms []string, phase, windowStart, 
 	if _, _, err := resolveWindow(windowStart, windowEnd, now); err != nil {
 		return assistantkit.Refused(err.Error())
 	}
-	if reason, alts, bad := unsupportedPostType(st.campaign, ids, postType); bad {
+	if reason, alts, bad := unsupportedPostType(st.campaign, ids, postType, anyWhenNone); bad {
 		return assistantkit.Refused(reason, alts...)
 	}
 	return nil

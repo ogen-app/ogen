@@ -647,6 +647,8 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 	}
 	campaign := st.campaign
 	now := time.Now().UTC()
+	// The engines compare post types trimmed.
+	in.PostType = strings.TrimSpace(in.PostType)
 
 	// Resolve platform names/ids against the campaign's target platforms
 	// (CON-114 "stay in scope"). A non-target platform is user-correctable, so it
@@ -656,7 +658,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 	if err != nil {
 		return softGenerateFailure(err)
 	}
-	if reason, alts, bad := unsupportedPostType(campaign, platformIDs, in.PostType); bad {
+	if reason, alts, bad := unsupportedPostType(campaign, platformIDs, in.PostType, false); bad {
 		return assistantkit.Refuse[GeneratePostsOutput](reason, alts...), nil
 	}
 
@@ -780,6 +782,8 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 	}
 	campaign := st.campaign
 	now := time.Now().UTC()
+	// The engines compare post types trimmed.
+	in.PostType = strings.TrimSpace(in.PostType)
 
 	// Source material: an explicit override, else the latest research answer from
 	// earlier in this chat. Resolved BEFORE the heavy-action reservation so a
@@ -801,7 +805,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 	if err != nil {
 		return softDraftFailure(err)
 	}
-	if reason, alts, bad := unsupportedPostType(campaign, platformIDs, in.PostType); bad {
+	if reason, alts, bad := unsupportedPostType(campaign, platformIDs, in.PostType, true); bad {
 		return assistantkit.Refuse[DraftPostOutput](reason, alts...), nil
 	}
 	// draftPost always targets the current phase — it drafts "now", from what was
@@ -844,6 +848,9 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 	counts, splitClamped := splitDraftBudget(len(platformIDs), perPlatform, maxN)
 	clamped = clamped || splitClamped
 	resps := make([]*draft_post.DraftPostResponse, len(platformIDs))
+	// A platform the engine refuses doesn't stop the others: each saves its
+	// posts as it writes them, so their work is reported with the refusal.
+	refusals := make([]string, len(platformIDs))
 	var g errgroup.Group
 	g.SetLimit(maxParallelDrafts)
 	for i, pid := range platformIDs {
@@ -867,33 +874,23 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 				// each post carries the exact source instead.
 			}, nested)
 			resps[i] = resp
+			if ve, ok := errors.AsType[*draft_post.ValidationError](err); ok {
+				refusals[i] = platformNames[i] + ": " + ve.Msg
+				return nil
+			}
 			return err
 		})
 	}
 	if err := g.Wait(); err != nil {
-		if ve, ok := errors.AsType[*draft_post.ValidationError](err); ok {
-			return assistantkit.Refuse[DraftPostOutput](ve.Msg), nil
-		}
 		return assistantkit.Outcome[DraftPostOutput]{}, err
 	}
 
-	var (
-		total    int
-		allDates []string
-		allWarn  []string
-	)
-	for _, resp := range resps {
-		if resp == nil {
-			continue
-		}
-		total += len(resp.Posts)
-		for _, p := range resp.Posts {
-			if p.PublishDate != "" {
-				allDates = append(allDates, p.PublishDate)
-			}
-		}
-		allWarn = append(allWarn, resp.Warnings...)
+	total, allDates, allWarn := tallyDrafts(resps)
+	refused := slices.DeleteFunc(refusals, func(r string) bool { return r == "" })
+	if total == 0 && len(refused) > 0 {
+		return assistantkit.Refuse[DraftPostOutput](strings.Join(refused, "; ")), nil
 	}
+	allWarn = append(allWarn, refused...)
 
 	st.draftPostResult = &DraftPostResult{
 		PostCount:   total,
@@ -1002,6 +999,25 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 		}
 	}
 	return "", nil
+}
+
+// tallyDrafts adds up what the platforms' draft flows wrote: the posts, their
+// publish dates and the flows' warnings. A platform that wrote nothing has a
+// nil response.
+func tallyDrafts(resps []*draft_post.DraftPostResponse) (total int, dates, warnings []string) {
+	for _, resp := range resps {
+		if resp == nil {
+			continue
+		}
+		total += len(resp.Posts)
+		for _, p := range resp.Posts {
+			if p.PublishDate != "" {
+				dates = append(dates, p.PublishDate)
+			}
+		}
+		warnings = append(warnings, resp.Warnings...)
+	}
+	return total, dates, warnings
 }
 
 // softGenerateFailure turns a user-correctable generatePosts problem — a
