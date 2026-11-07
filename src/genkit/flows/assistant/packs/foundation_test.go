@@ -3,6 +3,7 @@ package packs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ import (
 type memBrand struct {
 	repository.BrandRepository
 	facts map[string]*models.BrandFact
+	// beforeWrite runs as a conditional update starts, to land a concurrent
+	// edit between the tool's read and its write.
+	beforeWrite func()
 }
 
 func (b *memBrand) GetAll(context.Context) (*models.BrandData, error) {
@@ -32,12 +36,13 @@ func (b *memBrand) ListFacts(context.Context) ([]models.BrandFact, error) {
 	return out, nil
 }
 
+// GetFact returns nil for a missing fact, as the repository does.
 func (b *memBrand) GetFact(_ context.Context, id string) (*models.BrandFact, error) {
 	if f, ok := b.facts[id]; ok {
 		cp := *f
 		return &cp, nil
 	}
-	return nil, sql.ErrNoRows
+	return nil, nil
 }
 
 func (b *memBrand) CreateFact(_ context.Context, f *models.BrandFact) error {
@@ -61,13 +66,55 @@ func (b *memBrand) UpdateFact(_ context.Context, f *models.BrandFact) (*models.B
 	return before, nil
 }
 
+// DeleteFact returns nil for a missing fact, as the repository does.
 func (b *memBrand) DeleteFact(_ context.Context, id string) (*models.BrandFact, error) {
 	f, ok := b.facts[id]
 	if !ok {
-		return nil, sql.ErrNoRows
+		return nil, nil
 	}
 	delete(b.facts, id)
 	return f, nil
+}
+
+func (b *memBrand) UpdateFactIf(ctx context.Context, f, was *models.BrandFact) (*models.BrandFact, error) {
+	if b.beforeWrite != nil {
+		b.beforeWrite()
+	}
+	cur, ok := b.facts[f.ID]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	if !sameFact(cur, was) {
+		return nil, repository.ErrFactChanged
+	}
+	return b.UpdateFact(ctx, f)
+}
+
+func (b *memBrand) DeleteFactIf(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error) {
+	cur, ok := b.facts[id]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	if !sameFact(cur, was) {
+		return nil, repository.ErrFactChanged
+	}
+	return b.DeleteFact(ctx, id)
+}
+
+func (b *memBrand) RestoreFact(ctx context.Context, f *models.BrandFact) error {
+	return b.CreateFact(ctx, f)
+}
+
+// sameFact compares the editable fields, as the repository does.
+func sameFact(a, b *models.BrandFact) bool {
+	day := func(d *models.CalendarDate) string {
+		if d == nil {
+			return ""
+		}
+		return d.String()
+	}
+	return a.Statement == b.Statement && a.Subject == b.Subject && a.Kind == b.Kind && a.Source == b.Source &&
+		day(a.AddedAt) == day(b.AddedAt) && day(a.CheckedAt) == day(b.CheckedAt) && day(a.ExpiresAt) == day(b.ExpiresAt)
 }
 
 func TestFacts_EditAndUndo(t *testing.T) {
@@ -148,6 +195,105 @@ func (u *undoActions) GetByID(_ context.Context, id string) (*models.AssistantAc
 	return nil, sql.ErrNoRows
 }
 
-func (u *undoActions) MarkUndone(context.Context, string, string, time.Time) (bool, error) {
+func (u *undoActions) MarkUndone(_ context.Context, id, by string, now time.Time) (bool, error) {
+	a, ok := u.rows[id]
+	if !ok || a.UndoneAt != nil {
+		return false, nil
+	}
+	a.UndoneAt, a.UndoneBy = &now, by
 	return true, nil
+}
+
+// A missing fact is refused, not dereferenced.
+func TestFacts_MissingFactRefused(t *testing.T) {
+	brand := &memBrand{facts: map[string]*models.BrandFact{}}
+	d := Deps{Brand: brand, Actions: &undoActions{}}
+	facts := brandfacts.New(brand)
+	ctx, _ := turn(t, workspace, nil)
+
+	_, err := updateFact(ctx, d, facts, UpdateFactInput{FactID: "nope", FactInput: FactInput{Statement: "x"}})
+	refused(t, err)
+	_, err = removeFact(ctx, d, facts, RemoveFactInput{FactID: "nope"})
+	refused(t, err)
+}
+
+// A partial update merged onto a stale read is refused, so it can't put back
+// a statement corrected since.
+func TestFacts_StaleUpdateRefused(t *testing.T) {
+	brand := &memBrand{facts: map[string]*models.BrandFact{}}
+	d := Deps{Brand: brand, Actions: &undoActions{}}
+	facts := brandfacts.New(brand)
+	ctx, _ := turn(t, workspace, nil)
+	added, err := addFact(ctx, d, facts, FactInput{Statement: "We serve 4,000 customers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := added.Fact.ID
+	brand.beforeWrite = func() { brand.facts[id].Statement = "We serve 4,200 customers" }
+
+	_, err = updateFact(ctx, d, facts, UpdateFactInput{FactID: id, FactInput: FactInput{CheckedAt: "2026-11-01"}})
+	refused(t, err)
+	if got := brand.facts[id]; got.Statement != "We serve 4,200 customers" || got.CheckedAt != nil {
+		t.Fatalf("fact = %+v, want the concurrent correction kept", got)
+	}
+}
+
+// Undoing an add or a correction after a later edit is refused: the later
+// edit stays and the change stays undoable.
+func TestFacts_UndoRefusedAfterLaterEdit(t *testing.T) {
+	brand := &memBrand{facts: map[string]*models.BrandFact{}}
+	actions := &undoActions{}
+	d := Deps{Brand: brand, Actions: actions}
+	facts := brandfacts.New(brand)
+	ctx, _ := turn(t, workspace, nil)
+	svc := assistantundo.New(actions, nil).WithBrand(brand)
+
+	added, err := addFact(ctx, d, facts, FactInput{Statement: "We serve 4,000 customers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := added.Fact.ID
+	edited, err := updateFact(ctx, d, facts, UpdateFactInput{FactID: id, FactInput: FactInput{Statement: "We serve 4,100 customers"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A later edit, made outside the assistant.
+	brand.facts[id].Statement = "We serve 4,200 customers"
+
+	for name, undoID := range map[string]string{"add": added.UndoID, "update": edited.UndoID} {
+		if _, err := svc.Undo(ctx, undoID, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+			t.Fatalf("undo %s: err = %v, want ErrChangedSince", name, err)
+		}
+		if got := brand.facts[id]; got == nil || got.Statement != "We serve 4,200 customers" {
+			t.Fatalf("undo %s: fact = %+v, want the later edit kept", name, got)
+		}
+		if actions.rows[undoID].UndoneAt != nil {
+			t.Fatalf("undo %s: marked undone", name)
+		}
+	}
+}
+
+// Undoing a removal puts the fact back with its author and creation time,
+// not the remover's.
+func TestFacts_UndoRemoveKeepsAuthor(t *testing.T) {
+	created := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	brand := &memBrand{facts: map[string]*models.BrandFact{
+		"f1": {ID: "f1", Statement: "NPS is 62", Subject: models.FactSubjectUs, Kind: models.FactKindMeasured,
+			CreatedBy: new("u2"), CreatedByName: "Ann", CreatedAt: created, UpdatedAt: created},
+	}}
+	actions := &undoActions{}
+	d := Deps{Brand: brand, Actions: actions}
+	ctx, _ := turn(t, workspace, nil)
+
+	removed, err := removeFact(ctx, d, brandfacts.New(brand), RemoveFactInput{FactID: "f1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assistantundo.New(actions, nil).WithBrand(brand).Undo(ctx, removed.UndoID, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	got := brand.facts["f1"]
+	if got == nil || got.CreatedBy == nil || *got.CreatedBy != "u2" || got.CreatedByName != "Ann" || !got.CreatedAt.Equal(created) {
+		t.Fatalf("restored = %+v, want u2/Ann at %v", got, created)
+	}
 }
