@@ -297,6 +297,8 @@ type toolSet struct {
 // per exact tool set, so a prewarm over any other set warms nothing.
 func (t *toolSet) all() []ai.ToolRef { return t.reg.Tools() }
 
+// defineTools registers the campaign tools on g and builds their registry,
+// in the order the model is given them.
 func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+

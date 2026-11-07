@@ -13,6 +13,8 @@ const campaignPack = "campaign"
 
 var campaignScope = []assistantkit.Scope{assistantkit.ScopeCampaign}
 
+// ran is the rule for an action bound to tool: the model answers with it
+// when it called that tool this turn.
 func ran(tool string) string { return fmt.Sprintf("you called %s this turn.", tool) }
 
 // newToolRegistry describes the campaign tools for the prompt and the runner.
