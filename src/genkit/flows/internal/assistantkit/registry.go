@@ -71,11 +71,12 @@ func (r *Registry) Tools(packs ...string) []ai.ToolRef {
 }
 
 // Guide renders the "## Tools" section of the prompt for the given packs: one
-// "- name: guide" line per tool.
+// "- name: guide" line per tool. A guide's line breaks are folded into spaces,
+// so a line of it can't read as another tool.
 func (r *Registry) Guide(packs ...string) string {
 	var b strings.Builder
 	for _, s := range r.Specs(packs...) {
-		fmt.Fprintf(&b, "- %s: %s\n", s.Name, strings.TrimSpace(s.Guide))
+		fmt.Fprintf(&b, "- %s: %s\n", s.Name, strings.Join(strings.Fields(s.Guide), " "))
 	}
 	return b.String()
 }
