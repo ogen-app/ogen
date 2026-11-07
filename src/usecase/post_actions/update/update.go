@@ -133,7 +133,10 @@ type Result struct {
 // repository failure.
 func (s *Service) Update(ctx context.Context, in Input) (Result, error) {
 	// A planned post that gets a body is a draft from this edit on, whatever
-	// status the client echoed back.
+	// status the client sent: drafting is the only way out of planned.
+	if promoted := in.Post.Status.WithBody(in.Content); promoted != in.Post.Status {
+		in.Status = promoted
+	}
 	in.Status = in.Status.WithBody(in.Content)
 	if err := s.check(ctx, in); err != nil {
 		return Result{}, err

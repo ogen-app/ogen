@@ -62,11 +62,20 @@ func TestPostUpdateScheduledAtBatch(t *testing.T) {
 	}
 	planned := *post
 	planned.ID, planned.Content, planned.Status = plannedID, "", models.PostStatusPlanned
+	planned.ScheduledAt = &orig
 	if err := repo.Create(ctx, &planned); err != nil {
 		t.Fatalf("create planned: %v", err)
 	}
+	planned.ScheduledAt = &newAt
 	if err := repo.UpdateScheduledAtBatch(ctx, []*models.Post{&planned}); err != nil {
 		t.Fatalf("batch update of a planned post: %v", err)
+	}
+	got, err = repo.GetByID(ctx, plannedID)
+	if err != nil {
+		t.Fatalf("get planned: %v", err)
+	}
+	if got.ScheduledAt == nil || !got.ScheduledAt.Equal(newAt) {
+		t.Fatalf("planned scheduled_at = %v, want %v", got.ScheduledAt, newAt)
 	}
 
 	// Empty batch is a no-op.
