@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 	"github.com/ogen-app/ogen/src/usecase/assets"
@@ -409,8 +411,15 @@ func attachAssets(ctx context.Context, d Deps, in AttachAssetsInput) (*AttachAss
 	}
 	before := assistantundo.CampaignAssets(c)
 	ids := dedupe(in.AssetIDs)
+	// The membership writes are single atomic UPDATEs that also keep
+	// use_assets in step with the set: a concurrent attach survives, and an
+	// emptied set never reads as "every workspace asset".
 	if in.Detach {
-		c.AssetIDs = slices.DeleteFunc(c.AssetIDs, func(a string) bool { return slices.Contains(ids, a) })
+		for _, a := range ids {
+			if c, err = d.Campaigns.RemoveAssetID(ctx, c.ID, a); err != nil {
+				return nil, err
+			}
+		}
 	} else {
 		// Only the tenant's own assets attach.
 		metas, err := d.Assets.ListMeta(ctx, ids)
@@ -420,15 +429,13 @@ func attachAssets(ctx context.Context, d Deps, in AttachAssetsInput) (*AttachAss
 		if len(metas) == 0 {
 			return nil, assistantkit.Refused("none of those assets exist")
 		}
-		for _, a := range metas {
-			if !slices.Contains(c.AssetIDs, a.ID) {
-				c.AssetIDs = append(c.AssetIDs, a.ID)
-			}
+		known := make([]string, len(metas))
+		for i, a := range metas {
+			known[i] = a.ID
 		}
-	}
-	c.UpdatedAt = time.Now().UTC()
-	if err := d.Campaigns.Update(ctx, c); err != nil {
-		return nil, err
+		if c, err = d.Campaigns.AddAssetIDs(ctx, c.ID, known); err != nil {
+			return nil, err
+		}
 	}
 	if d.Analysis != nil && !in.Detach {
 		tenant, _ := tenantctx.From(ctx)
@@ -450,22 +457,41 @@ type ImportPageOutput struct {
 	Title    string `json:"title"`
 	Created  bool   `json:"created"`
 	Attached bool   `json:"attached"`
+	// AttachError says why the page was imported but not attached to the
+	// thread's campaign.
+	AttachError string `json:"attachError,omitempty"`
 }
 
 func importPage(ctx context.Context, d Deps, in ImportPageInput) (*ImportPageOutput, error) {
 	if d.URLImport == nil || !d.URLImport.Configured(ctx) {
 		return nil, assistantkit.Refused("importing web pages is not available")
 	}
+	// The same page with a fragment or other host casing finds the asset
+	// already holding it instead of importing a duplicate.
+	pageURL, err := urlimport.Normalize(ctx, in.URL)
+	if invalid, ok := errors.AsType[*urlimport.InvalidURLError](err); ok {
+		return nil, assistantkit.Refused("couldn't import that page: " + invalid.Msg)
+	}
+	if err != nil {
+		return nil, err
+	}
 	tenant, _ := tenantctx.From(ctx)
-	res, err := d.URLImport.Import(ctx, urlimport.Input{TenantID: tenant, UserID: actor(ctx), URL: strings.TrimSpace(in.URL)})
+	res, err := d.URLImport.Import(ctx, urlimport.Input{TenantID: tenant, UserID: actor(ctx), URL: pageURL})
 	if err != nil {
 		return nil, assistantkit.Refused("couldn't import that page: " + err.Error())
 	}
 	out := &ImportPageOutput{AssetID: res.Asset.ID, Title: res.Asset.Title, Created: res.Created}
 	assistantkit.Touch(ctx, "asset", res.Asset.ID)
 	if assistant.CampaignID(ctx) != "" {
-		if _, err := attachAssets(ctx, d, AttachAssetsInput{AssetIDs: []string{res.Asset.ID}}); err == nil {
+		_, err := attachAssets(ctx, d, AttachAssetsInput{AssetIDs: []string{res.Asset.ID}})
+		switch r, refused := errors.AsType[*assistantkit.Refusal](err); {
+		case err == nil:
 			out.Attached = true
+		case refused:
+			out.AttachError = "imported, but not attached to the campaign: " + r.Reason
+		default:
+			slog.WarnContext(ctx, "attach imported page failed", logging.AttrComponent, "assistant.packs", "asset_id", res.Asset.ID, logging.AttrError, err)
+			out.AttachError = "imported, but attaching it to the campaign failed; retry with attachAssets and this assetId"
 		}
 	}
 	return out, nil
