@@ -1,6 +1,7 @@
 package campaign_assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -128,6 +129,43 @@ func (st *requestState) reserveHeavyAction() bool {
 	return true
 }
 
+// heavyHeldKey marks a ctx whose confirmation already holds the turn's heavy
+// slot for the tool it runs.
+type heavyHeldKey struct{}
+
+// reserveHeavy claims the heavy slot for a tool call, or finds it already
+// held for this call by the offer being confirmed.
+func (st *requestState) reserveHeavy(ctx context.Context) bool {
+	if held, _ := ctx.Value(heavyHeldKey{}).(bool); held {
+		return true
+	}
+	return st.reserveHeavyAction()
+}
+
+// releaseHeavy gives the slot back when the confirmation holding it lost the
+// race to answer its offer, so the turn's other work can still run.
+func (st *requestState) releaseHeavy(ctx context.Context) {
+	if held, _ := ctx.Value(heavyHeldKey{}).(bool); held {
+		st.mu.Lock()
+		st.heavyReserved = false
+		st.mu.Unlock()
+	}
+}
+
+// holdHeavySlot is a heavy tool's Prepare: confirming its offer claims the
+// turn's heavy slot first, so an offer whose work couldn't start this turn
+// stays open instead of being answered and skipped.
+func holdHeavySlot(ctx context.Context) (context.Context, error) {
+	if !getRequestState(ctx).reserveHeavyAction() {
+		return nil, assistantkit.Refused(heavyConfirmLater)
+	}
+	return context.WithValue(ctx, heavyHeldKey{}, true), nil
+}
+
+// heavyConfirmLater is the refusal when an offer's work can't start because
+// another heavy action already ran this turn.
+const heavyConfirmLater = "Another campaign action already ran in this message, so that offer is still waiting. Confirm it again in your next message."
+
 // heavySkipNote steers the planner to stop and reply after a heavy action has
 // already run this turn, rather than chaining a second expensive sub-flow. It is
 // surfaced to the model as an ordinary (non-error) tool result so the turn is
@@ -222,6 +260,9 @@ type DraftPostInput struct {
 	PublishDate    string   `json:"publishDate,omitempty"    jsonschema:"description=Publish date (ISO YYYY-MM-DD) resolved from the requested timeframe against today; omit to spread across the next two weeks. Must be today or later."`
 	PostType       string   `json:"postType,omitempty"       jsonschema:"description=Optional post-type slug (e.g. text-post, article); omit for the platform default."`
 	SourceMaterial string   `json:"sourceMaterial,omitempty" jsonschema:"description=Optional override source text to turn into posts. Omit to use the research already discussed earlier in this chat (the normal case)."`
+	// Instruction is the user's steering for the writer. An offer stores it
+	// with the research, so confirming later drafts what was offered.
+	Instruction string `json:"instruction,omitempty" jsonschema:"description=Leave empty: the writer is steered by the user's message. Set by the server when it holds the call for the user's yes."`
 }
 
 // DraftPostOutput is returned to the model after drafts are created.
@@ -367,10 +408,10 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			"Different from generatePosts (which produces terse draft-thesis outlines for bulk planning) and runContentPlan (which regenerates the whole plan). Only platforms the campaign already targets are allowed. "+
 			"Resolve the publish date to ISO YYYY-MM-DD against today's date shown in the context; omit it to spread across the next two weeks. Set count to the number the user asks for. "+
 			"The research is loaded automatically from the conversation — do NOT paste it back; pass sourceMaterial only when the user supplied fresh material in this very message. Returns how many posts were drafted.",
-		assistantkit.Gated("draftPost", draftPostGate,
+		snapshotDraft(assistantkit.Gated("draftPost", draftPostGate,
 			func(ctx *ai.ToolContext, in DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
 				return toolDraftPost(ctx, in)
-			}),
+			})),
 	)
 
 	setCampaignDates := genkit.DefineTool(g, "setCampaignDates",
@@ -456,7 +497,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 
 func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 	st := getRequestState(ctx)
-	if !st.reserveHeavyAction() {
+	if !st.reserveHeavy(ctx) {
 		return &RunContentPlanOutput{Note: heavySkipNote}, nil
 	}
 	if st.contentPlan == nil {
@@ -514,7 +555,7 @@ func toAssetRefs(in []content_plan.AssetRef) []AssetRef {
 
 func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutput, error) {
 	st := getRequestState(ctx)
-	if !st.reserveHeavyAction() {
+	if !st.reserveHeavy(ctx) {
 		return &EnrichBriefOutput{Applied: false, Note: heavySkipNote}, nil
 	}
 	if st.enrichBrief == nil {
@@ -650,7 +691,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 	// heavy tool in the same turn (CON-216, mirroring draftPost's late
 	// reservation). The reservation still precedes st.generatePosts, so two heavy
 	// tools dispatched in parallel can never both generate.
-	if !st.reserveHeavyAction() {
+	if !st.reserveHeavy(ctx) {
 		return assistantkit.OK(GeneratePostsOutput{Note: heavySkipNote}), nil
 	}
 
@@ -780,7 +821,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 	// never burns the slot for a later heavy tool. The reservation still
 	// precedes every st.draftPost flow call, so two heavy tools dispatched in
 	// parallel can never both generate.
-	if !st.reserveHeavyAction() {
+	if !st.reserveHeavy(ctx) {
 		return assistantkit.OK(DraftPostOutput{Note: heavySkipNote}), nil
 	}
 
@@ -815,7 +856,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 				PostType:       in.PostType,
 				Count:          counts[i],
 				SourceMaterial: source,
-				Instruction:    st.instruction,
+				Instruction:    cmp.Or(in.Instruction, st.instruction),
 				WindowStart:    windowStart,
 				WindowEnd:      windowEnd,
 				PhaseID:        phaseID,
@@ -908,6 +949,25 @@ func splitDraftBudget(n, perPlatform, budget int) (counts []int, clamped bool) {
 		budget -= counts[i]
 	}
 	return counts, clamped
+}
+
+// snapshotDraft fills a draftPost call with the research and the steering it
+// is made from, before its gate may hold it back: confirming the offer later
+// drafts exactly that, not research discussed since or the "yes" message. A
+// confirmed call already carries them.
+func snapshotDraft(next ai.ToolFunc[DraftPostInput, assistantkit.Outcome[DraftPostOutput]]) ai.ToolFunc[DraftPostInput, assistantkit.Outcome[DraftPostOutput]] {
+	return func(ctx *ai.ToolContext, in DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
+		if !assistantkit.Confirmed(ctx) {
+			st := getRequestState(ctx)
+			source, err := resolveDraftSource(ctx, st, in.SourceMaterial)
+			if err != nil {
+				return assistantkit.Outcome[DraftPostOutput]{}, err
+			}
+			in.SourceMaterial = source
+			in.Instruction = cmp.Or(in.Instruction, st.instruction)
+		}
+		return next(ctx, in)
+	}
 }
 
 // resolveDraftSource returns the source text to draft from: an explicit override
@@ -1409,7 +1469,7 @@ func dateOnly(t time.Time) time.Time {
 
 func toolCheckBrief(ctx context.Context) (*consistency.BriefReview, error) {
 	st := getRequestState(ctx)
-	if !st.reserveHeavyAction() {
+	if !st.reserveHeavy(ctx) {
 		return &consistency.BriefReview{Summary: heavySkipNote}, nil
 	}
 	if st.checkBrief == nil {
@@ -1427,7 +1487,7 @@ func toolCheckBrief(ctx context.Context) (*consistency.BriefReview, error) {
 
 func toolCheckPostsConsistency(ctx context.Context, in CheckPostsInput) (*consistency.PostsReview, error) {
 	st := getRequestState(ctx)
-	if !st.reserveHeavyAction() {
+	if !st.reserveHeavy(ctx) {
 		return &consistency.PostsReview{Summary: heavySkipNote}, nil
 	}
 	if st.checkPosts == nil {

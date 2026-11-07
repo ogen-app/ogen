@@ -79,6 +79,17 @@ func runCampaignAssistant(
 		notifyAssistantFinalised(cfg.Notifier, c.TenantID, c.CreatedBy, req.CampaignID, out, retErr)
 	}()
 
+	// An offer answered before the turn failed stays answered, so the client
+	// hears it even without a "complete".
+	defer func() {
+		if retErr == nil || t.st == nil {
+			return
+		}
+		for _, r := range t.st.resolvedList() {
+			emit(onEvent, SSEEventProposalResolved, r)
+		}
+	}()
+
 	// One Brand library load serves this turn and every sub-flow its tools run.
 	ctx = brandresolve.WithMemo(ctx)
 	ctx, err := t.prepare(ctx, p)
