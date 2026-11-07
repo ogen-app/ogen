@@ -103,6 +103,38 @@ func newDraftState(msgs []models.AssistantMessage, calls *[]draft_post.DraftPost
 	}
 }
 
+// fix 2: a held-back draft stores the research and the steering it was made
+// from, so confirming it after newer research, from a "yes", drafts what was
+// offered.
+func TestToolDraftPost_OfferKeepsItsResearch(t *testing.T) {
+	var calls []draft_post.DraftPostRequest
+	store := &memProposals{}
+	st := newDraftState([]models.AssistantMessage{
+		modelMsg(`{"action":"answered","explanation":"research A"}`),
+	}, &calls)
+	st.repos.Proposals = store
+	out := runTool(t, st, "draftPost", map[string]any{"platforms": []string{"LinkedIn"}, "count": 5})
+	if out.Status != assistantkit.StatusProposed || len(calls) != 0 {
+		t.Fatalf("outcome = %+v, calls = %d", out, len(calls))
+	}
+	if args := store.rows[0].Args; args["sourceMaterial"] != "research A" || args["instruction"] != "make it punchy" {
+		t.Fatalf("stored args = %v", args)
+	}
+
+	// Newer research, and the confirming turn's own message.
+	later := newDraftState([]models.AssistantMessage{
+		modelMsg(`{"action":"answered","explanation":"research A"}`),
+		modelMsg(`{"action":"answered","explanation":"research B"}`),
+	}, &calls)
+	later.instruction = "yes"
+	if _, err := newTestTools(t).reg.RunConfirmed(later.bind(t.Context()), "draftPost", map[string]any(store.rows[0].Args)); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) == 0 || calls[0].SourceMaterial != "research A" || calls[0].Instruction != "make it punchy" {
+		t.Fatalf("drafted from %+v", calls)
+	}
+}
+
 // No research in the chat and no override → the tool declines without running
 // the flow.
 func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {

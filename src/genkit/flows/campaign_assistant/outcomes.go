@@ -87,6 +87,9 @@ func turnAction(outs []outcome, writes []string) string {
 	}
 	action, wrote := "", false
 	for _, o := range outs {
+		if o.action == "" {
+			continue
+		}
 		if !o.readOnly || !wrote {
 			action = o.action
 		}

@@ -34,6 +34,8 @@ func TestTurnAction(t *testing.T) {
 		{"write then review", []outcome{enrich, review}, []string{actionBriefEnriched}, actionBriefEnriched},
 		{"review then write", []outcome{postsReview, generate}, []string{actionPostsGenerated}, actionPostsGenerated},
 		{"two reviews", []outcome{review, postsReview}, nil, actionPostsReviewed},
+		{"review with a dismissal", []outcome{review, {readOnly: true}}, nil, actionBriefReviewed},
+		{"dismissal alone", []outcome{{readOnly: true}}, nil, ""},
 		{"writes without a recorded order", []outcome{enrich, generate}, nil, actionPostsGenerated},
 		// outcomes() always lists dates before redistribute; the commit order decides.
 		{"dates committed last", []outcome{dates, redistribute}, []string{actionPostsRedistributed, actionDatesUpdated}, actionDatesUpdated},
