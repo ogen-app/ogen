@@ -27,7 +27,7 @@ func initContentPlan(
 	hub eventhub.Hub,
 	notifier *notify.Service,
 	repos content_plan.ContentPlanRepos,
-) (func(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error), error) {
+) (func(ctx context.Context, req content_plan.ContentPlanRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error), error) {
 	flowCfg := content_plan.ContentPlanFlowConfig{
 		Provider:           provider,
 		Recorder:           recorder,
