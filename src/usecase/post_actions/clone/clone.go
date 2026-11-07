@@ -293,6 +293,11 @@ func buildClone(src *models.Post, tgt target, opts Options, newID, content strin
 		UpdatedAt:        now,
 		UsedAssets:       []models.Asset{},
 	}
+	// The copy is the source's, or an adaptation of it for another
+	// platform, so it keeps the source's grounding either way.
+	if src.GroundingMode != nil {
+		clone.GroundingMode = new(*src.GroundingMode)
+	}
 	if keepThread {
 		clone.ThreadSegments = append(models.ThreadSegments{}, src.ThreadSegments...)
 	}
