@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -39,7 +41,9 @@ func (s *Service) WithIdeas(ideas repository.IdeaRepository) *Service {
 
 type ideaVerdict struct{ ideas repository.IdeaRepository }
 
-func (u ideaVerdict) Undo(ctx context.Context, a *models.AssistantAction) error {
+// Undo restores the idea's verdict. The idea repository takes no
+// transaction, so its write commits on its own, ahead of the undo record.
+func (u ideaVerdict) Undo(ctx context.Context, _ bun.IDB, a *models.AssistantAction) error {
 	i, err := u.ideas.GetByID(ctx, a.EntityID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrChangedSince
@@ -72,8 +76,9 @@ func (u ideaVerdict) Undo(ctx context.Context, a *models.AssistantAction) error 
 
 type campaignAssets struct{ campaigns repository.CampaignRepository }
 
-func (u campaignAssets) Undo(ctx context.Context, a *models.AssistantAction) error {
-	c, err := loadCampaign(ctx, u.campaigns, a.EntityID)
+// Undo restores the assets the campaign draws on.
+func (u campaignAssets) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	c, err := lockCampaign(ctx, u.campaigns, tx, a.EntityID)
 	if err != nil {
 		return err
 	}
@@ -88,6 +93,5 @@ func (u campaignAssets) Undo(ctx context.Context, a *models.AssistantAction) err
 		}
 	}
 	c.AssetIDs = ids
-	c.UpdatedAt = time.Now().UTC()
-	return u.campaigns.Update(ctx, c)
+	return u.campaigns.UpdateColumns(ctx, tx, c, "asset_ids")
 }

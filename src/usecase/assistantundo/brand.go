@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -37,7 +39,9 @@ func (s *Service) WithBrand(brand repository.BrandRepository) *Service {
 
 type brandFact struct{ brand repository.BrandRepository }
 
-func (u brandFact) Undo(ctx context.Context, a *models.AssistantAction) error {
+// Undo restores a fact as it was. The brand repository takes no
+// transaction, so its write commits on its own, ahead of the undo record.
+func (u brandFact) Undo(ctx context.Context, _ bun.IDB, a *models.AssistantAction) error {
 	cur, err := u.brand.GetFact(ctx, a.EntityID)
 	if errors.Is(err, sql.ErrNoRows) {
 		cur, err = nil, nil
