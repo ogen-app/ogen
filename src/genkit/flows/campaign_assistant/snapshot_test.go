@@ -2,6 +2,7 @@ package campaign_assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -57,5 +58,37 @@ func TestRunner_StateOpensTheUserMessage(t *testing.T) {
 		if msg.Role == "system" && strings.Contains(msg.Text(), "Room left under the goal") {
 			t.Error("the per-turn state is in the cached system prompt")
 		}
+	}
+}
+
+type failingRows struct{ repository.PostRepository }
+
+func (failingRows) ListRowsByCampaign(context.Context, string, ...string) ([]models.Post, error) {
+	return nil, errors.New("db down")
+}
+
+// A failed post read keeps the turn going but says the room is unknown,
+// instead of reporting an empty campaign with the whole goal free.
+func TestRunner_StateUnreadPostsLeaveRoomUnknown(t *testing.T) {
+	h := newRunnerHarness(t)
+	perPeriod := 5
+	c := timelineCampaign()
+	c.ID = "c1"
+	c.EstimatedPostCount, c.GoalCadence = &perPeriod, "month"
+	h.repos.Campaigns = oneCampaign{c: c}
+	h.repos.Posts = failingRows{}
+
+	m := fakemodel.Define(h.g, "state-unread", fakemodel.Answer(`{"explanation":"ok","action":"answered"}`))
+	h.turnWith(m, "Add five posts")
+
+	req := m.Requests()[0]
+	text := req.Messages[len(req.Messages)-1].Text()
+	for _, want := range []string{"the room left under the goal is unknown", "- Posts: unknown"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("user message lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Room left under the goal:") {
+		t.Errorf("unread posts reported as room:\n%s", text)
 	}
 }

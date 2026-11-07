@@ -62,9 +62,9 @@ Key messages: {{.KeyMessages}}
 {{range .Phases}}- {{.Name}}: {{.Purpose}}
 {{end}}{{end}}{{end}}
 {{define "state"}}<campaign_state>
-{{if .Goal}}- Goal: {{.Goal.Target}} posts ({{.Goal.PerPeriod}} per {{.Goal.Cadence}} over {{.Goal.Periods}}). Already in the campaign: {{.Goal.Planned}}. Room left under the goal: {{.Goal.Room}}.
+{{if .Goal}}- Goal: {{.Goal.Target}} posts ({{.Goal.PerPeriod}} per {{.Goal.Cadence}} over {{.Goal.Periods}}). {{if .Goal.Unknown}}The campaign's posts could not be read, so the room left under the goal is unknown: do not add posts without telling the user it can't be checked right now.{{else}}Already in the campaign: {{.Goal.Planned}}. Room left under the goal: {{.Goal.Room}}.{{end}}
 {{else}}- Goal: none set.
-{{end}}- Posts: {{.Posts}}{{if .ByStatus}} ({{range $i, $s := .ByStatus}}{{if $i}}, {{end}}{{$s.Count}} {{$s.Status}}{{end}}){{end}}
+{{end}}- Posts: {{if .PostsUnknown}}unknown, they could not be read{{else}}{{.Posts}}{{end}}{{if .ByStatus}} ({{range $i, $s := .ByStatus}}{{if $i}}, {{end}}{{$s.Count}} {{$s.Status}}{{end}}){{end}}
 {{if .Platforms}}- Platforms, with the post types allowed on each:
 {{range .Platforms}}  - {{.Name}}: {{join .PostTypes ", "}}
 {{end}}{{end}}{{if .Sources}}- Ready source assets attached: {{.Sources.Ready}}
