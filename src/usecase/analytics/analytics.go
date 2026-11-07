@@ -6,7 +6,9 @@ package analytics
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -89,8 +91,12 @@ func (s *Service) Scope(ctx context.Context, slugs []string, campaignID string) 
 	if s.Campaigns == nil {
 		return nil, ErrCampaignNotFound
 	}
-	if _, err := s.Campaigns.GetByID(ctx, campaignID); err != nil {
+	_, err := s.Campaigns.GetByID(ctx, campaignID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrCampaignNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load campaign: %w", err)
 	}
 	if sc == nil {
 		sc = &Scope{}
