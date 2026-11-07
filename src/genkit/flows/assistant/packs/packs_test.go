@@ -179,6 +179,47 @@ func TestBulkIdeaChanges(t *testing.T) {
 	}
 }
 
+// failingIdeaRepo fails every write to the idea failID.
+type failingIdeaRepo struct {
+	*memIdeaRepo
+	failID string
+}
+
+func (r failingIdeaRepo) Update(ctx context.Context, i *models.Idea, cols ...string) (bool, error) {
+	if i.ID == r.failID {
+		return false, errors.New("connection reset")
+	}
+	return r.memIdeaRepo.Update(ctx, i, cols...)
+}
+
+// A bulk change that fails part way reports and touches what it changed; one
+// that changed nothing fails.
+func TestBulkIdeaChanges_StoppedEarly(t *testing.T) {
+	d, repo, _ := ideaDeps()
+	d.Ideas = ideas.New(failingIdeaRepo{repo, "i2"}, nil)
+	ctx, touched := turn(t, workspace, nil)
+
+	out, err := moveIdeas(ctx, d, MoveIdeasInput{IdeaIDs: []string{"i1", "i2"}, CampaignID: "c1"})
+	if err != nil || out.Done != 1 || out.Stopped != "stopped early: connection reset" || *repo.byID["i1"].CampaignID != "c1" {
+		t.Fatalf("move = %+v, %v", out, err)
+	}
+	if !slices.Equal(touched(), []assistantkit.Touched{{Kind: "idea"}}) {
+		t.Fatalf("touched = %v", touched())
+	}
+	out, err = setIdeaVerdicts(ctx, d, SetIdeaVerdictsInput{IdeaIDs: []string{"i1", "i2"}, Verdict: "yes"})
+	if err != nil || out.Done != 1 || out.Stopped == "" {
+		t.Fatalf("verdicts = %+v, %v", out, err)
+	}
+
+	ctx, touched = turn(t, workspace, nil)
+	if _, err := moveIdeas(ctx, d, MoveIdeasInput{IdeaIDs: []string{"i2", "i1"}}); err == nil {
+		t.Fatal("a move that changed nothing must fail")
+	}
+	if len(touched()) != 0 {
+		t.Fatalf("touched = %v; want nothing", touched())
+	}
+}
+
 type memCampaigns struct {
 	repository.CampaignRepository
 	c *models.Campaign
