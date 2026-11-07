@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
@@ -117,5 +119,78 @@ func TestOpenSavedView(t *testing.T) {
 	got := st.uiActions()
 	if len(got) != 2 || got[0].Screen != "campaign.ideas" || got[1].Screen != "campaign.assets" || got[1].CampaignID != "c1" {
 		t.Fatalf("actions = %+v; want each opened on the campaign's own list", got)
+	}
+}
+
+func TestOpenSavedViewSetsTheScreen(t *testing.T) {
+	h := newHarness(t)
+	// From home, the opened view's list takes filters and selections.
+	ctx, st := onScreen(t, workspaceHome)
+	if _, err := h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "sv1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.tools.setFilter(ctx, SetFilterInput{Filter: "origin=manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.tools.selectItems(ctx, SelectInput{IDs: []string{"i1"}}); err != nil {
+		t.Fatal(err)
+	}
+	// From another list, follow-ups target the opened one.
+	if _, err := h.tools.openSavedView(ctx, OpenSavedViewInput{SavedViewID: "private"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.tools.selectItems(ctx, SelectInput{IDs: []string{"a1"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := st.uiActions()
+	if len(got) != 5 || got[1].Screen != "ideas" || got[2].Screen != "ideas" ||
+		got[4].Screen != "assets" || got[4].Selection.Kind != viewcontext.KindAsset {
+		t.Fatalf("actions = %+v; want each follow-up on the opened list", got)
+	}
+}
+
+// gatedViews holds the first idea lookup until release closes.
+type gatedViews struct {
+	memViews
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (v *gatedViews) Items(ctx context.Context, kind viewcontext.EntityKind, ids []string) ([]viewresolve.Item, error) {
+	if kind == viewcontext.KindIdea {
+		v.once.Do(func() { close(v.entered) })
+		<-v.release
+	}
+	return v.memViews.Items(ctx, kind, ids)
+}
+
+func TestSelectIsPlannedApartFromNavigate(t *testing.T) {
+	views := &gatedViews{memViews: testViews(), entered: make(chan struct{}), release: make(chan struct{})}
+	tools := &toolSet{deps: Repos{Views: views}}
+	ctx, st := onScreen(t, campaignIdeas)
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if _, err := tools.selectItems(ctx, SelectInput{IDs: []string{"i1"}}); err != nil {
+			t.Error(err)
+		}
+	})
+	<-views.entered
+	// The model's next tool in the same round navigates elsewhere while the
+	// selection is still being checked.
+	wg.Go(func() {
+		if _, err := tools.navigate(ctx, NavigateInput{Screen: "campaign.calendar", CampaignID: "c2"}); err != nil {
+			t.Error(err)
+		}
+	})
+	time.Sleep(50 * time.Millisecond)
+	close(views.release)
+	wg.Wait()
+
+	got := st.uiActions()
+	if len(got) != 2 || got[0].Type != UISelect || got[0].Screen != "campaign.ideas" || got[0].CampaignID != "c1" ||
+		got[1].Type != UINavigate || got[1].CampaignID != "c2" {
+		t.Fatalf("actions = %+v; want the selection on c1's ideas, then the navigation", got)
 	}
 }
