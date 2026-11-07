@@ -212,6 +212,14 @@ func TestIdeaSlots(t *testing.T) {
 			t.Errorf("%s = %d, want 400", q, status)
 		}
 	}
+
+	// The span counts both ends: 93 days is the most one read covers.
+	if status, body := call(t, app, "GET", "/api/ideas/slots?from=2026-12-01&to=2027-03-03", ""); status != 200 {
+		t.Errorf("93 days = %d %s, want 200", status, body)
+	}
+	if status, _ := call(t, app, "GET", "/api/ideas/slots?from=2026-12-01&to=2027-03-04", ""); status != 400 {
+		t.Errorf("94 days = %d, want 400", status)
+	}
 }
 
 func TestIdeaPostLinks(t *testing.T) {
