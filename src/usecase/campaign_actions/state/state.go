@@ -17,10 +17,13 @@ import (
 // Snapshot is a campaign's state at the start of an assistant turn.
 type Snapshot struct {
 	// Goal is nil when the campaign has no post goal.
-	Goal      *Goal
-	Posts     int
-	ByStatus  []StatusCount
-	Platforms []Platform
+	Goal     *Goal
+	Posts    int
+	ByStatus []StatusCount
+	// PostsUnknown is set when the posts could not be read, so Posts and
+	// ByStatus are empty without meaning the campaign has none.
+	PostsUnknown bool
+	Platforms    []Platform
 	// Sources is nil when the attached assets could not be counted.
 	Sources *Sources
 }
@@ -37,6 +40,9 @@ type Goal struct {
 	Planned int
 	// Room is how many more posts fit under the target; 0 once it is met.
 	Room int
+	// Unknown is set when the posts could not be read: Planned and Room
+	// are then 0 and say nothing about the room left.
+	Unknown bool
 }
 
 // StatusCount is how many posts are in one status.
@@ -90,6 +96,20 @@ func Build(c *models.Campaign, posts []models.Post, readyAssets int) Snapshot {
 	return s
 }
 
+// WithoutPosts marks the post counts unknown, for when the posts could not
+// be read. The goal stays, with its room unknown rather than the whole target.
+func (s Snapshot) WithoutPosts() Snapshot {
+	s.Posts, s.ByStatus, s.PostsUnknown = 0, nil, true
+	if s.Goal != nil {
+		g := *s.Goal
+		g.Planned, g.Room, g.Unknown = 0, 0, true
+		s.Goal = &g
+	}
+	return s
+}
+
+// buildGoal measures planned posts against the campaign's goal; nil when
+// the campaign has no goal.
 func buildGoal(c *models.Campaign, planned int) *Goal {
 	if c.EstimatedPostCount == nil || *c.EstimatedPostCount <= 0 {
 		return nil
@@ -127,6 +147,8 @@ func AllowedPostTypes(c *models.Campaign, platformID string) []string {
 	return nil
 }
 
+// platformName returns the platform's display name, or its id when the
+// campaign does not carry it.
 func platformName(c *models.Campaign, id string) string {
 	for _, p := range c.Platforms {
 		if p.ID == id {
