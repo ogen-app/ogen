@@ -288,6 +288,26 @@ type SetIdeaVerdictsInput struct {
 type BulkIdeasOutput struct {
 	Done   int      `json:"done"`
 	Failed []string `json:"failed,omitempty"`
+	// Stopped is why the change stopped part way; the ideas after it were
+	// not changed.
+	Stopped string `json:"stopped,omitempty"`
+}
+
+// stoppedEarly ends a bulk change that failed part way. What it changed
+// before stays changed, so it is reported and touched for the client to
+// refresh rather than lost in the error; with nothing changed the error
+// stands.
+func stoppedEarly(ctx context.Context, out *BulkIdeasOutput, err error) (*BulkIdeasOutput, error) {
+	if out.Done == 0 {
+		return out, err
+	}
+	assistantkit.Touch(ctx, "idea", "")
+	reason := err.Error()
+	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
+		reason = r.Reason
+	}
+	out.Stopped = "stopped early: " + reason
+	return out, nil
 }
 
 func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*BulkIdeasOutput, error) {
@@ -299,7 +319,7 @@ func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*Bul
 	for _, id := range dedupe(in.IdeaIDs) {
 		if _, _, err := d.Ideas.SetVerdict(ctx, id, verdict, remindAt, actor(ctx)); err != nil {
 			if !errors.Is(err, ideas.ErrNotFound) && !ideas.IsValidation(err) {
-				return out, err
+				return stoppedEarly(ctx, out, err)
 			}
 			out.Failed = append(out.Failed, id)
 			continue
@@ -325,10 +345,10 @@ func moveIdeas(ctx context.Context, d Deps, in MoveIdeasInput) (*BulkIdeasOutput
 	for _, id := range dedupe(in.IdeaIDs) {
 		if _, _, err := d.Ideas.Update(ctx, id, ideas.UpdateInput{SetCampaign: true, CampaignID: campaign}); err != nil {
 			if errors.Is(err, ideas.ErrCampaignNotFound) {
-				return out, assistantkit.Refused("that campaign doesn't exist")
+				return stoppedEarly(ctx, out, assistantkit.Refused("that campaign doesn't exist"))
 			}
 			if !errors.Is(err, ideas.ErrNotFound) {
-				return out, err
+				return stoppedEarly(ctx, out, err)
 			}
 			out.Failed = append(out.Failed, id)
 			continue
