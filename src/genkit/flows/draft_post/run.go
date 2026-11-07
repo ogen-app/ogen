@@ -185,14 +185,25 @@ type draftSink struct {
 	dates    []string // one publish date per requested post
 	loc      *time.Location
 	assetIDs []string
-	author   string
-	source   string
-	brand    *brandresolve.Resolved
-	repos    DraftPostRepos
-	onEvent  OnEventFunc
+	// grounding is the drafts' grounding mode; nil when it can't be told.
+	grounding *models.GroundingMode
+	author    string
+	source    string
+	brand     *brandresolve.Resolved
+	repos     DraftPostRepos
+	onEvent   OnEventFunc
 
 	out      []DraftedPost
 	warnings []string
+}
+
+// draftGrounding is the drafts' grounding: from the assets they were written
+// from, or unset when those aren't known and none were named.
+func draftGrounding(req DraftPostRequest) *models.GroundingMode {
+	if req.SourcesUnknown && len(req.UsedAssetIDs) == 0 {
+		return nil
+	}
+	return models.GroundingFor(len(req.UsedAssetIDs))
 }
 
 // newDraftSink resolves the per-post dates, timezone and brand voice (once
@@ -209,18 +220,19 @@ func newDraftSink(ctx context.Context, req DraftPostRequest, campaign *models.Ca
 	}
 	loc, _ := settings.ResolveTimezone(campaign.Timezone)
 	return &draftSink{
-		campaign: campaign,
-		platform: platform,
-		phaseID:  req.PhaseID,
-		window:   window,
-		dates:    spreadDates(window.start, window.end, count),
-		loc:      loc,
-		assetIDs: req.UsedAssetIDs,
-		author:   cmp.Or(req.CreatedBy, campaign.CreatedBy),
-		source:   strings.TrimSpace(req.SourceMaterial),
-		brand:    brand,
-		repos:    repos,
-		onEvent:  onEvent,
+		campaign:  campaign,
+		platform:  platform,
+		phaseID:   req.PhaseID,
+		window:    window,
+		dates:     spreadDates(window.start, window.end, count),
+		loc:       loc,
+		assetIDs:  req.UsedAssetIDs,
+		grounding: draftGrounding(req),
+		author:    cmp.Or(req.CreatedBy, campaign.CreatedBy),
+		source:    strings.TrimSpace(req.SourceMaterial),
+		brand:     brand,
+		repos:     repos,
+		onEvent:   onEvent,
 	}
 }
 
@@ -365,7 +377,7 @@ func (s *draftSink) persist(ctx context.Context, publishDate, title, content str
 		CTAType:             models.CTATypeNone,
 		CTAUrl:              "",
 		UsedAssetIDs:        models.StringSlice(s.assetIDs),
-		GroundingMode:       models.GroundingFor(len(s.assetIDs)),
+		GroundingMode:       s.grounding,
 		CampaignTypePhaseID: s.phaseIDFor(ctx, id),
 		ScheduledAt:         scheduledAt,
 		BrandVoiceID:        s.brand.VoiceID(),
