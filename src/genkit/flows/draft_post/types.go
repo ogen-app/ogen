@@ -24,6 +24,10 @@ type DraftPostRequest struct {
 	WindowEnd      string   `json:"windowEnd"`      // ISO YYYY-MM-DD (inclusive)
 	PhaseID        string   `json:"phaseId"`        // a single campaign phase id
 	UsedAssetIDs   []string `json:"usedAssetIds"`   // asset ids stamped on each created post for provenance (may be empty)
+	// SourcesUnknown says the source material's assets aren't tracked — chat
+	// research — so an empty UsedAssetIDs proves nothing: the posts' grounding
+	// is left unset instead of claimed exploratory.
+	SourcesUnknown bool `json:"sourcesUnknown,omitempty"`
 	// CreatedBy is the user the posts and source notes are attributed to;
 	// empty attributes them to the campaign's creator.
 	CreatedBy string `json:"createdBy,omitempty"`
