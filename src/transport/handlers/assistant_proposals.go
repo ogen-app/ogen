@@ -15,21 +15,25 @@ import (
 // AssistantProposalsHandler answers assistant offers from their cards: the
 // same work as a "yes" or "no" in the chat, without a model call.
 type AssistantProposalsHandler struct {
-	answer   func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
-	activity *activity.Recorder
-	auth     fiber.Handler
+	answer func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
+	// available reports whether the assistant can answer right now.
+	available func() bool
+	activity  *activity.Recorder
+	auth      fiber.Handler
 }
 
-// NewAssistantProposalsHandler wires the proposal endpoints. answer nil leaves
-// them at 503; activity nil is a no-op.
+// NewAssistantProposalsHandler wires the proposal endpoints. answer nil, or
+// available reporting false, leaves them at 503; activity nil is a no-op.
 func NewAssistantProposalsHandler(
 	answer func(ctx context.Context, req campaign_assistant.AnswerProposalRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error),
+	available func() bool,
 	activityRec *activity.Recorder,
 	auth fiber.Handler,
 ) *AssistantProposalsHandler {
-	return &AssistantProposalsHandler{answer: answer, activity: activityRec, auth: auth}
+	return &AssistantProposalsHandler{answer: answer, available: available, activity: activityRec, auth: auth}
 }
 
+// Register mounts the confirm and dismiss endpoints.
 func (h *AssistantProposalsHandler) Register(app *fiber.App) {
 	g := app.Group("/api/assistant/proposals")
 	g.Post("/:id/confirm", h.auth, h.Confirm)
@@ -59,8 +63,8 @@ type confirmProposalRequest struct {
 // @Failure      503  {object}  map[string]string
 // @Router       /api/assistant/proposals/{id}/confirm [post]
 func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
-	if h.answer == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "assistant is not available")
+	if !h.ready() {
+		return fiber.NewError(fiber.StatusServiceUnavailable, errAssistantUnavailable)
 	}
 	var req confirmProposalRequest
 	if len(c.Body()) > 0 {
@@ -68,11 +72,6 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
 	}
-	h.activity.Record(reqCtx(c), activity.CategoryAIFlow, "assistant_proposal_confirmed",
-		activity.WithEntity("assistant_proposal", c.Params("id")),
-		activity.WithSource(activity.SourceAssistant),
-	)
-
 	// The stream writer outlives the request buffer; copy what it reads.
 	answerReq := campaign_assistant.AnswerProposalRequest{
 		ProposalID: strings.Clone(c.Params("id")),
@@ -87,8 +86,13 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 			emit(string(name), data)
 		})
 		if err != nil {
-			emit(string(campaign_assistant.SSEEventError), proposalError(err))
+			emit(string(campaign_assistant.SSEEventError), h.proposalError(err))
+			return
 		}
+		h.activity.Record(flowCtx, activity.CategoryAIFlow, "assistant_proposal_confirmed",
+			activity.WithEntity("assistant_proposal", answerReq.ProposalID),
+			activity.WithSource(activity.SourceAssistant),
+		)
 	})
 	return nil
 }
@@ -108,19 +112,30 @@ func (h *AssistantProposalsHandler) Confirm(c *fiber.Ctx) error {
 // @Failure      503  {object}  map[string]string
 // @Router       /api/assistant/proposals/{id}/dismiss [post]
 func (h *AssistantProposalsHandler) Dismiss(c *fiber.Ctx) error {
-	if h.answer == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "assistant is not available")
+	if !h.ready() {
+		return fiber.NewError(fiber.StatusServiceUnavailable, errAssistantUnavailable)
 	}
 	resp, err := h.answer(reqCtx(c), campaign_assistant.AnswerProposalRequest{ProposalID: c.Params("id")}, nil)
 	if err != nil {
-		p := proposalError(err)
+		p := h.proposalError(err)
 		return fiber.NewError(p.Code, p.Message)
 	}
 	return c.JSON(resp)
 }
 
-// proposalError maps an answer failure to the error a client can act on.
-func proposalError(err error) flowErrorPayload {
+const errAssistantUnavailable = "assistant is not available"
+
+// ready reports whether the endpoints can answer an offer now.
+func (h *AssistantProposalsHandler) ready() bool {
+	return h.answer != nil && (h.available == nil || h.available())
+}
+
+// proposalError maps an answer failure to the error a client can act on. An
+// assistant that went away while answering is 503, not a server fault.
+func (h *AssistantProposalsHandler) proposalError(err error) flowErrorPayload {
+	if !h.ready() {
+		return flowErrorPayload{Message: errAssistantUnavailable, Code: fiber.StatusServiceUnavailable}
+	}
 	if errors.Is(err, campaign_assistant.ErrProposalNotFound) {
 		return flowErrorPayload{Message: "This offer no longer exists.", Code: fiber.StatusNotFound}
 	}
