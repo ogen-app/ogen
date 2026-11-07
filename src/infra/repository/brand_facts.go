@@ -27,6 +27,9 @@ var (
 	ErrFactDuplicate = errors.New("a fact with this statement already exists")
 	// ErrFactLimit: the workspace already holds MaxBrandFacts facts.
 	ErrFactLimit = errors.New("fact limit reached")
+	// ErrFactChanged: the fact no longer holds the state a conditional write
+	// expected.
+	ErrFactChanged = errors.New("the fact was changed since it was read")
 	// ErrGuardrailsExist: the stance cannot be set while guardrails exist.
 	ErrGuardrailsExist = errors.New("guardrails exist")
 )
@@ -135,6 +138,18 @@ func (r *brandRepository) GetFact(ctx context.Context, id string) (*models.Brand
 // CreateFact inserts f, stamping CreatedByName from f.CreatedBy. It returns
 // ErrFactDuplicate or ErrFactLimit.
 func (r *brandRepository) CreateFact(ctx context.Context, f *models.BrandFact) error {
+	return r.insertFact(ctx, f, false)
+}
+
+// RestoreFact inserts a removed fact as it was: its created_at and author
+// name snapshot are kept, the name filled from CreatedBy only when blank, and
+// an author who is no longer a user is kept by name alone. It returns
+// ErrFactDuplicate or ErrFactLimit.
+func (r *brandRepository) RestoreFact(ctx context.Context, f *models.BrandFact) error {
+	return r.insertFact(ctx, f, true)
+}
+
+func (r *brandRepository) insertFact(ctx context.Context, f *models.BrandFact, restore bool) error {
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := lockFacts(ctx, tx); err != nil {
 			return err
@@ -146,11 +161,22 @@ func (r *brandRepository) CreateFact(ctx context.Context, f *models.BrandFact) e
 		if n >= MaxBrandFacts {
 			return ErrFactLimit
 		}
-		name, err := authorName(ctx, tx, f.CreatedBy)
-		if err != nil {
-			return err
+		if restore && f.CreatedBy != nil {
+			var known bool
+			if err := tx.NewRaw("SELECT EXISTS (SELECT 1 FROM users WHERE id = ?)", *f.CreatedBy).Scan(ctx, &known); err != nil {
+				return err
+			}
+			if !known {
+				f.CreatedBy = nil
+			}
 		}
-		f.CreatedByName = name
+		if !restore || f.CreatedByName == "" {
+			name, err := authorName(ctx, tx, f.CreatedBy)
+			if err != nil {
+				return err
+			}
+			f.CreatedByName = name
+		}
 		if _, err := tx.NewInsert().Model(f).Exec(ctx); err != nil {
 			if isFactDuplicate(err) {
 				return ErrFactDuplicate
@@ -166,10 +192,23 @@ func (r *brandRepository) CreateFact(ctx context.Context, f *models.BrandFact) e
 // filled with them. When nothing editable changed the row is left alone and f
 // carries the stored updated_at. It returns sql.ErrNoRows or ErrFactDuplicate.
 func (r *brandRepository) UpdateFact(ctx context.Context, f *models.BrandFact) (before *models.BrandFact, err error) {
+	return r.updateFact(ctx, f, nil)
+}
+
+// UpdateFactIf is UpdateFact, applied only while the stored fact's editable
+// fields equal was's; otherwise it returns ErrFactChanged and writes nothing.
+func (r *brandRepository) UpdateFactIf(ctx context.Context, f, was *models.BrandFact) (*models.BrandFact, error) {
+	return r.updateFact(ctx, f, was)
+}
+
+func (r *brandRepository) updateFact(ctx context.Context, f, was *models.BrandFact) (before *models.BrandFact, err error) {
 	err = r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		existing := new(models.BrandFact)
 		if err := tx.NewSelect().Model(existing).Where("bf.id = ?", f.ID).For("UPDATE").Scan(ctx); err != nil {
 			return err // sql.ErrNoRows → 404
+		}
+		if was != nil && !factsEqual(existing, was) {
+			return ErrFactChanged
 		}
 		before = existing
 		f.TenantID = existing.TenantID
@@ -193,17 +232,32 @@ func (r *brandRepository) UpdateFact(ctx context.Context, f *models.BrandFact) (
 
 // DeleteFact hard-deletes the fact and returns it, or nil when absent.
 func (r *brandRepository) DeleteFact(ctx context.Context, id string) (*models.BrandFact, error) {
+	f, err := r.deleteFact(ctx, id, nil)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return f, err
+}
+
+// DeleteFactIf is DeleteFact, applied only while the stored fact's editable
+// fields equal was's; otherwise it returns ErrFactChanged and deletes nothing.
+// A fact that is gone is sql.ErrNoRows.
+func (r *brandRepository) DeleteFactIf(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error) {
+	return r.deleteFact(ctx, id, was)
+}
+
+func (r *brandRepository) deleteFact(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error) {
 	f := new(models.BrandFact)
 	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := tx.NewSelect().Model(f).Where("bf.id = ?", id).For("UPDATE").Scan(ctx); err != nil {
 			return err
 		}
+		if was != nil && !factsEqual(f, was) {
+			return ErrFactChanged
+		}
 		_, err := tx.NewDelete().Model((*models.BrandFact)(nil)).Where("id = ?", id).Exec(ctx)
 		return err
 	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
 	}
