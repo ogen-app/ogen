@@ -145,24 +145,22 @@ func (st *requestState) reserveHeavy(ctx context.Context) bool {
 	return st.reserveHeavyAction()
 }
 
-// releaseHeavy gives the slot back when the confirmation holding it lost the
-// race to answer its offer, so the turn's other work can still run.
-func (st *requestState) releaseHeavy(ctx context.Context) {
-	if held, _ := ctx.Value(heavyHeldKey{}).(bool); held {
+// holdHeavySlot is a heavy tool's Prepare: confirming its offer claims the
+// turn's heavy slot first, so an offer whose work couldn't start this turn
+// stays open instead of being answered and skipped. The release gives the
+// slot back when the confirmation lost the race to answer the offer, so the
+// turn's other work can still run.
+func holdHeavySlot(ctx context.Context) (context.Context, func(), error) {
+	st := getRequestState(ctx)
+	if !st.reserveHeavyAction() {
+		return nil, nil, assistantkit.Refused(heavyConfirmLater)
+	}
+	release := func() {
 		st.mu.Lock()
 		st.heavyReserved = false
 		st.mu.Unlock()
 	}
-}
-
-// holdHeavySlot is a heavy tool's Prepare: confirming its offer claims the
-// turn's heavy slot first, so an offer whose work couldn't start this turn
-// stays open instead of being answered and skipped.
-func holdHeavySlot(ctx context.Context) (context.Context, error) {
-	if !getRequestState(ctx).reserveHeavyAction() {
-		return nil, assistantkit.Refused(heavyConfirmLater)
-	}
-	return context.WithValue(ctx, heavyHeldKey{}, true), nil
+	return context.WithValue(ctx, heavyHeldKey{}, true), release, nil
 }
 
 // heavyConfirmLater is the refusal when an offer's work can't start because
