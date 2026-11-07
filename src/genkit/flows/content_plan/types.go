@@ -5,6 +5,9 @@ import "time"
 // ContentPlanRequest is the input to the generateContentPlan flow.
 type ContentPlanRequest struct {
 	CampaignID string `json:"campaignId"`
+	// AssetIDs limits the plan's sources to these of the campaign's assets;
+	// empty uses all of them.
+	AssetIDs []string `json:"assetIds,omitempty"`
 }
 
 // GeneratePostsRequest is the input to the targeted generation entry point:

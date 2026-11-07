@@ -3,13 +3,18 @@ package campaign_assistant
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
 func day(s string) time.Time {
@@ -426,5 +431,42 @@ func TestSinglePostWindowEnd(t *testing.T) {
 			t.Errorf("%s: singlePostWindowEnd(%q, %q, %q, %d) = %q, want %q",
 				c.name, c.start, c.end, c.rawEnd, c.count, got, c.want)
 		}
+	}
+}
+
+type readyAssets struct {
+	repository.AssetRepository
+	all []models.Asset
+}
+
+func (r readyAssets) ListMeta(_ context.Context, ids []string) ([]models.Asset, error) {
+	var out []models.Asset
+	for _, a := range r.all {
+		if ids == nil || slices.Contains(ids, a.ID) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+type stubEmbedder struct{ ai.Embedder }
+
+// A selection outside the campaign's ready assets is reported as such, not as
+// a campaign without assets.
+func TestAskCampaignAssets_SelectionOutsideCampaign(t *testing.T) {
+	st := &requestState{
+		campaign:       &models.Campaign{ID: "c1", AssetIDs: models.StringSlice{"a1"}},
+		sourceAssetIDs: []string{"a9"},
+		repos: CampaignAssistantRepos{
+			Assets: readyAssets{all: []models.Asset{{ID: "a1", Status: "ready"}, {ID: "a9", Status: "ready"}}},
+			Chunks: struct {
+				repository.AssetChunksRepository
+			}{},
+		},
+		embedder: stubEmbedder{},
+	}
+	out, err := toolAskCampaignAssets(withRequestState(t.Context(), st), AskCampaignAssetsInput{Query: "pricing?"})
+	if err != nil || !strings.Contains(out.Note, "selected") {
+		t.Fatalf("out = %+v, %v; want a note about the selection", out, err)
 	}
 }
