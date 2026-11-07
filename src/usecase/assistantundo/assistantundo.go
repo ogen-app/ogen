@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -27,20 +29,23 @@ var (
 
 // Undoer restores one kind of change.
 type Undoer interface {
-	// Undo restores a.Before on the entity, or returns ErrChangedSince when
-	// the entity no longer matches a.After.
-	Undo(ctx context.Context, a *models.AssistantAction) error
+	// Undo restores a.Before on the entity within tx, or returns
+	// ErrChangedSince when the entity no longer matches a.After. It locks
+	// the entity before comparing, so no write lands between the two.
+	Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error
 }
 
 // Service undoes logged assistant changes.
 type Service struct {
+	db      *bun.DB
 	actions repository.AssistantActionRepository
 	undoers map[models.AssistantActionKind]Undoer
 }
 
 // New returns a service that can undo campaign date and brief changes.
-func New(actions repository.AssistantActionRepository, campaigns repository.CampaignRepository) *Service {
+func New(db *bun.DB, actions repository.AssistantActionRepository, campaigns repository.CampaignRepository) *Service {
 	return &Service{
+		db:      db,
 		actions: actions,
 		undoers: map[models.AssistantActionKind]Undoer{
 			models.AssistantActionCampaignDates: campaignDates{campaigns},
@@ -65,19 +70,22 @@ func (s *Service) Undo(ctx context.Context, id, by string) (*models.AssistantAct
 	if !ok {
 		return nil, fmt.Errorf("no undo for %q changes", a.Kind)
 	}
-	// Restore first, then record: a failed restore leaves the change
-	// undoable. Two concurrent undos restore the same state; only one is
-	// recorded.
-	if err := u.Undo(ctx, a); err != nil {
-		return nil, err
-	}
+	// The record and the restore commit together, so a failure in either
+	// leaves the change undoable. Recording first locks the action row: a
+	// concurrent undo of the same change waits, then finds it undone.
 	now := time.Now().UTC()
-	recorded, err := s.actions.MarkUndone(ctx, a.ID, by, now)
+	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		recorded, err := s.actions.MarkUndone(ctx, tx, a.ID, by, now)
+		if err != nil {
+			return fmt.Errorf("record undo: %w", err)
+		}
+		if !recorded {
+			return ErrAlreadyUndone
+		}
+		return u.Undo(ctx, tx, a)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("record undo: %w", err)
-	}
-	if !recorded {
-		return nil, ErrAlreadyUndone
+		return nil, err
 	}
 	a.UndoneAt, a.UndoneBy = &now, by
 	return a, nil

@@ -40,10 +40,15 @@ func TestAssistantActions_UndoOnce(t *testing.T) {
 		t.Fatalf("stored action = %+v", got)
 	}
 
-	if ok, err := repo.MarkUndone(ctx, id, "user-1", now); err != nil || !ok {
+	// Another tenant can neither read nor undo it.
+	other := tenantctx.With(context.Background(), "tenant-other")
+	if ok, err := repo.MarkUndone(other, nil, id, "user-x", now); err != nil || ok {
+		t.Fatalf("other tenant's undo = %t, %v, want false", ok, err)
+	}
+	if ok, err := repo.MarkUndone(ctx, nil, id, "user-1", now); err != nil || !ok {
 		t.Fatalf("first undo = %t, %v", ok, err)
 	}
-	if ok, err := repo.MarkUndone(ctx, id, "user-2", now); err != nil || ok {
+	if ok, err := repo.MarkUndone(ctx, nil, id, "user-2", now); err != nil || ok {
 		t.Fatalf("second undo = %t, %v, want false", ok, err)
 	}
 	got, err = repo.GetByID(ctx, id)
@@ -54,8 +59,6 @@ func TestAssistantActions_UndoOnce(t *testing.T) {
 		t.Fatalf("undone action = %+v", got)
 	}
 
-	// Another tenant can neither read nor undo it.
-	other := tenantctx.With(context.Background(), "tenant-other")
 	if _, err := repo.GetByID(other, id); err == nil {
 		t.Fatal("another tenant read the action")
 	}
