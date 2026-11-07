@@ -75,7 +75,12 @@ type bulkIn struct {
 	N int `json:"n"`
 }
 
-// bulkPack has one gated tool: more than 3 items wait for a yes.
+// bulkN13 is a count bulkThing refuses once confirmed, as work whose
+// subject went away while it waited.
+const bulkN13 = 13
+
+// bulkPack has one gated tool: more than 3 items wait for a yes. It streams
+// a bulk_progress event as it runs.
 func bulkPack(ran *int) Pack {
 	return Pack{
 		Name: "bulk", Summary: "bulk things", Scopes: []models.AssistantScopeKind{models.AssistantScopeWorkspace},
@@ -85,6 +90,10 @@ func bulkPack(ran *int) Pack {
 					Needs:   func(_ context.Context, in bulkIn) bool { return in.N > 3 },
 					Summary: func(in bulkIn) string { return fmt.Sprintf("Do %d things", in.N) },
 				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (int, error) {
+					if in.N == bulkN13 {
+						return 0, assistantkit.Refused("those things are gone")
+					}
+					Emit(ctx, "bulk_progress", in.N)
 					*ran += in.N
 					assistantkit.Touch(ctx, "thing", "")
 					return in.N, nil
@@ -166,8 +175,14 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 
 	var events []SSEEventKind
 	resp, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "mine", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
-	if err != nil || *ran != 4 || resp.Explanation != "Done: Do 4 things" || !slices.Equal(events, []SSEEventKind{SSEEventProposalResolved, SSEEventComplete}) {
+	if err != nil || *ran != 4 || resp.Explanation != "Done: Do 4 things" ||
+		!slices.Equal(events, []SSEEventKind{"bulk_progress", SSEEventProposalResolved, SSEEventComplete}) {
 		t.Fatalf("resp = %+v, err = %v, ran = %d, events = %v", resp, err, *ran, events)
+	}
+	// The answer and its result are in the offer's thread.
+	thread, _ := h.msgs.ListRecent(ctx, models.AssistantScopeWorkspace, "", 10)
+	if len(thread) != 2 || thread[0].Content != "Confirmed: Do 4 things" || !strings.Contains(thread[1].Content, "Done: Do 4 things") {
+		t.Fatalf("thread = %+v", thread)
 	}
 	if _, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "mine", Confirm: true}, nil); !isConflict(err) {
 		t.Fatalf("answering twice: %v, want a conflict", err)
@@ -195,4 +210,51 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 func isConflict(err error) bool {
 	_, ok := errors.AsType[*ProposalConflictError](err)
 	return ok
+}
+
+// Confirmed work that refuses to run is a conflict, not "Done"; the offer is
+// recorded as answered so the card and the thread don't wait on it.
+func TestProposals_CardConfirmRefusedIsConflict(t *testing.T) {
+	h, store, ran := proposalHarness(t, nil)
+	ctx := context.WithValue(t.Context(), logging.UserIDKey, "u1")
+	store.rows = []*models.AssistantProposal{{
+		ID: "gone", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(bulkN13)},
+		Summary: "Do 13 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour),
+	}}
+
+	var events []SSEEventKind
+	resp, err := h.tools.answer(ctx, AnswerRequest{ProposalID: "gone", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
+	if !isConflict(err) || resp != nil || *ran != 0 {
+		t.Fatalf("resp = %+v, err = %v, ran = %d; want a conflict", resp, err, *ran)
+	}
+	if !slices.Equal(events, []SSEEventKind{SSEEventProposalResolved}) {
+		t.Fatalf("events = %v; want only proposal_resolved", events)
+	}
+	thread, _ := h.msgs.ListRecent(ctx, models.AssistantScopeWorkspace, "", 10)
+	if len(thread) != 2 || thread[0].Content != "Confirmed: Do 13 things" || !strings.Contains(thread[1].Content, unfinishedAnswer) {
+		t.Fatalf("thread = %+v", thread)
+	}
+}
+
+// An offer is answered only from its own thread: a "yes" in another
+// campaign's thread or in the workspace leaves it pending and unrun.
+func TestProposals_ConfirmFromAnotherThreadIsRefused(t *testing.T) {
+	h, store, ran := proposalHarness(t, nil)
+	store.rows = []*models.AssistantProposal{{
+		ID: "c1-offer", ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "bulkThing", Args: models.JSONMap{"n": float64(5)},
+		Summary: "Do 5 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	for _, view := range []string{
+		`{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c2"}}`,
+		`{"version":1,"screen":"home","scope":{"kind":"workspace"}}`,
+	} {
+		if _, _, _, err := h.turn(viewOf(t, view), "yes",
+			fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": "c1-offer"}}),
+			fakemodel.Answer(`{"explanation":"That offer is gone.","action":"answered"}`)); err != nil {
+			t.Fatal(err)
+		}
+		if *ran != 0 || store.rows[0].Status != models.ProposalPending {
+			t.Fatalf("from %s: ran = %d, status = %s; want pending, unrun", view, *ran, store.rows[0].Status)
+		}
+	}
 }
