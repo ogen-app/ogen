@@ -65,16 +65,17 @@ func initCampaignAssistant(
 		Notifier:        notifier,
 		// Pre-warm the strict-tool grammar cache at boot when we're also
 		// stabilizing tool order (otherwise the warmed key wouldn't match).
-		PrewarmTools:     cfg.AnthropicStableToolOrder,
-		ContentPlan:      contentPlanFn,
-		EnrichBrief:      enrichBriefFn,
-		Overview:         overviewSvc,
-		GeneratePosts:    generatePostsFn,
-		MaxGeneratePosts: cfg.GeneratePostsMax,
-		DraftPost:        draftPostFn,
-		MaxDraftPosts:    cfg.DraftPostMax,
-		CheckBrief:       checkBriefFn,
-		CheckPosts:       checkPostsFn,
+		PrewarmTools:      cfg.AnthropicStableToolOrder,
+		ContentPlan:       contentPlanFn,
+		EnrichBrief:       enrichBriefFn,
+		Overview:          overviewSvc,
+		GeneratePosts:     generatePostsFn,
+		MaxGeneratePosts:  cfg.GeneratePostsMax,
+		DraftPost:         draftPostFn,
+		MaxDraftPosts:     cfg.DraftPostMax,
+		ProposalThreshold: cfg.AssistantProposalThreshold,
+		CheckBrief:        checkBriefFn,
+		CheckPosts:        checkPostsFn,
 	}
 	if err := campaign_assistant.InitCampaignAssistant(g, flowCfg, repos); err != nil {
 		return nil, fmt.Errorf("init campaign assistant flow: %w", err)

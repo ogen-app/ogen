@@ -49,7 +49,7 @@ func TestSystemPromptMatchesRegistry(t *testing.T) {
 		}
 	}
 
-	actions := []string{actionAnswered}
+	actions := []string{actionAnswered, actionProposed}
 	for _, a := range tools.reg.Actions() {
 		actions = append(actions, a.Name)
 		if !strings.Contains(p.system, `- "`+a.Name+`" — `+a.Rule) {

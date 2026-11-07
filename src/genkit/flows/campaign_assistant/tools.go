@@ -65,6 +65,9 @@ type requestState struct {
 	// extended, content-first post drafts; maxDraftPosts caps a single call.
 	draftPost     func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
 	maxDraftPosts int
+	// proposalThreshold is the largest generatePosts / draftPost batch run
+	// without asking; 0 means the default.
+	proposalThreshold int
 	// checkBrief / checkPosts back the read-only consistency review tools.
 	checkBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	checkPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
@@ -80,6 +83,8 @@ type requestState struct {
 	// cheap date tools skip the heavy reservation and may run in parallel, so
 	// the order they finish in is only known here.
 	writes []string
+	// proposed lists the calls held back for the user to confirm this turn.
+	proposed []ProposalCreatedEventPayload
 
 	// Results set by tools, read by the runner after generation. Only the tool
 	// that won the heavy-action reservation writes a heavy result, so these need
@@ -302,9 +307,10 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+
 			"Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many posts were created.",
-		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RunContentPlanOutput, error) {
-			return toolRunContentPlan(ctx)
-		}, contentPlanInvalid),
+		assistantkit.Gated("runContentPlan", contentPlanGate,
+			assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RunContentPlanOutput, error) {
+				return toolRunContentPlan(ctx)
+			}, contentPlanInvalid)),
 	)
 
 	enrichBrief := genkit.DefineTool(g, "enrichBrief",
@@ -336,9 +342,10 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		"Adds a few NEW draft posts to the campaign for a specific platform, phase, and timeframe — e.g. 'add a few Threads posts in the current phase for the upcoming weeks'. "+
 			"Different from runContentPlan (which regenerates the WHOLE plan across all platforms/phases). Only platforms the campaign already targets are allowed. "+
 			"Resolve the requested timeframe into windowStart/windowEnd (ISO dates) using today's date shown in the context. Returns how many posts were created.",
-		func(ctx *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
-			return toolGeneratePosts(ctx, in)
-		},
+		assistantkit.Gated("generatePosts", generatePostsGate,
+			func(ctx *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
+				return toolGeneratePosts(ctx, in)
+			}),
 	)
 
 	draftPost := genkit.DefineTool(g, "draftPost",
@@ -347,9 +354,10 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			"Different from generatePosts (which produces terse draft-thesis outlines for bulk planning) and runContentPlan (which regenerates the whole plan). Only platforms the campaign already targets are allowed. "+
 			"Resolve the publish date to ISO YYYY-MM-DD against today's date shown in the context; omit it to spread across the next two weeks. Set count to the number the user asks for. "+
 			"The research is loaded automatically from the conversation — do NOT paste it back; pass sourceMaterial only when the user supplied fresh material in this very message. Returns how many posts were drafted.",
-		func(ctx *ai.ToolContext, in DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
-			return toolDraftPost(ctx, in)
-		},
+		assistantkit.Gated("draftPost", draftPostGate,
+			func(ctx *ai.ToolContext, in DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
+				return toolDraftPost(ctx, in)
+			}),
 	)
 
 	setCampaignDates := genkit.DefineTool(g, "setCampaignDates",
@@ -364,9 +372,10 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	redistributePosts := genkit.DefineTool(g, "redistributePosts",
 		"Redistributes the publish dates of the campaign's non-published posts (drafts and ready-for-publish) evenly across the campaign timeline, phase by phase. "+
 			"Call this when the user asks to redistribute, re-spread, rebalance, or re-schedule the drafts / unpublished posts. It never moves already-scheduled or published posts. Takes no arguments.",
-		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RedistributePostsOutput, error) {
-			return toolRedistributePosts(ctx)
-		}),
+		assistantkit.Gated("redistributePosts", redistributeGate,
+			assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RedistributePostsOutput, error) {
+				return toolRedistributePosts(ctx)
+			})),
 	)
 
 	checkBrief := genkit.DefineTool(g, "checkBrief",
@@ -1282,11 +1291,20 @@ func toolSetCampaignDates(ctx context.Context, in SetCampaignDatesInput) (*SetCa
 	return &SetCampaignDatesOutput{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside}, nil
 }
 
+// checkCampaignDated refuses redistribution until the campaign has a
+// timeline to spread posts across.
+func checkCampaignDated(c *models.Campaign) error {
+	if c.StartDate == nil || c.EndDate == nil {
+		return assistantkit.Refused("set the campaign's start and end dates first, then I can redistribute the posts")
+	}
+	return nil
+}
+
 func toolRedistributePosts(ctx context.Context) (*RedistributePostsOutput, error) {
 	st := getRequestState(ctx)
 	c := st.campaign
-	if c.StartDate == nil || c.EndDate == nil {
-		return nil, assistantkit.Refused("set the campaign's start and end dates first, then I can redistribute the posts")
+	if err := checkCampaignDated(c); err != nil {
+		return nil, err
 	}
 
 	posts, err := st.repos.Posts.ListByCampaign(ctx, st.campaignID)

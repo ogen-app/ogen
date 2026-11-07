@@ -386,6 +386,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Assets:    r.pieceRepo,
 			Chunks:    r.chunksRepo,
 			Brands:    r.brandRepo,
+			Proposals: r.proposalRepo,
 		},
 		draftPostRepos: draft_post.DraftPostRepos{
 			Campaigns: r.campaignRepo,
