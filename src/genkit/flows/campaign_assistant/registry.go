@@ -15,12 +15,21 @@ var campaignScope = []assistantkit.Scope{assistantkit.ScopeCampaign}
 
 func ran(tool string) string { return fmt.Sprintf("you called %s this turn.", tool) }
 
+// heavyTools run an expensive sub-flow; at most one runs per turn.
+var heavyTools = map[string]bool{
+	"runContentPlan": true, "enrichBrief": true, "generatePosts": true,
+	"draftPost": true, "checkBrief": true, "checkPostsConsistency": true,
+}
+
 // newToolRegistry describes the campaign tools for the prompt and the runner.
 // The order is the order the model is given the tools in, so it must not
 // change between the planner call and the prewarm.
 func newToolRegistry(t *toolSet) (*assistantkit.Registry, error) {
 	spec := func(tool ai.ToolRef, tier assistantkit.Tier, action, guide string) assistantkit.Spec {
 		s := assistantkit.Spec{Name: tool.Name(), Pack: campaignPack, Scopes: campaignScope, Tier: tier, Guide: guide, Tool: tool}
+		if heavyTools[tool.Name()] {
+			s.Prepare = holdHeavySlot
+		}
 		if action != "" {
 			s.Action = &assistantkit.Action{Name: action, Rule: ran(tool.Name())}
 		}
@@ -45,6 +54,10 @@ func newToolRegistry(t *toolSet) (*assistantkit.Registry, error) {
 			`Call this when the user asks to check, review, or critique the brief, or whether the brief is consistent/complete — e.g. "is the brief consistent?", "review the brief". It is READ-ONLY — it returns findings with suggestions but does NOT change the brief. Takes no arguments. When it reports issues, summarise them and OFFER to improve the brief with enrichBrief — but do NOT call enrichBrief in the same turn unless the user also asks you to.`),
 		spec(t.checkPostsConsistency, assistantkit.TierRead, actionPostsReviewed,
 			"Call this when the user asks whether the posts match, follow, or are consistent with the brief — e.g. \"do the posts follow the brief?\", \"check the posts against the brief\". It is READ-ONLY — it returns per-post findings but does NOT change any post. It reviews only non-published posts and is capped; when the result reports a cap, MENTION that only the first N were checked. Pass `max` only if the user asks for a specific number."),
+		spec(t.confirmProposal, assistantkit.TierRead, "",
+			`Call this when the user accepts an offer listed under "Waiting for the user's answer" — e.g. "yes", "go ahead", "do it", or by picking one of its options. Pass the offer's id as proposalId, and optionId when they picked an option. It runs exactly what was proposed and returns that work's result: report it as you would that tool's own result. Never call the original tool again yourself for an offer that is waiting — confirm it instead. If the user answers "yes" while several offers are waiting and it isn't clear which one they mean, ask.`),
+		spec(t.dismissProposal, assistantkit.TierRead, "",
+			`Call this when the user turns down an offer listed under "Waiting for the user's answer" — e.g. "no", "never mind", "don't". Pass the offer's id as proposalId. Nothing runs.`),
 		spec(t.askCampaignAssets, assistantkit.TierRead, "",
 			"Call this when the user asks a question about the campaign's attached assets (uploaded PDFs, markdown, etc.) — e.g. \"what does the pricing PDF say about enterprise tiers?\", \"summarise the attached brief\". It is READ-ONLY: it returns the most relevant asset excerpts (with title + page) for you to answer from; it does NOT generate posts. Answer from the returned excerpts and cite the asset title(s) you used. If the result reports `available:false` or has no excerpts, tell the user you couldn't search or find matching asset content — do not invent an answer."),
 	)

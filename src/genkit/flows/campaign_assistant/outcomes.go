@@ -25,9 +25,11 @@ type outcome struct {
 	action string
 	// explanation is used when the model gave none.
 	explanation string
-	attach      func(*CampaignAssistantResponse)
-	event       SSEEventKind
-	payload     any
+	// attach copies the result onto the response; nil when the event is the
+	// only place the result goes.
+	attach  func(*CampaignAssistantResponse)
+	event   SSEEventKind
+	payload any
 	// readOnly marks a review that changed nothing. A turn that also wrote is
 	// labelled by the write, since the action is how a destructive change on a
 	// campaign (which has no version history) is recognised later.
@@ -69,7 +71,8 @@ func (st *requestState) outcomes() []outcome {
 	if r := st.postsReviewResult; r != nil {
 		out = append(out, postsReviewOutcome(r))
 	}
-	return append(out, proposalOutcomes(st.proposed)...)
+	out = append(out, proposalOutcomes(st.proposed)...)
+	return append(out, resolvedOutcomes(st.resolved)...)
 }
 
 // turnAction labels a turn by its last committed write, or by its last review
@@ -82,6 +85,9 @@ func turnAction(outs []outcome, writes []string) string {
 	}
 	action, wrote := "", false
 	for _, o := range outs {
+		if o.action == "" {
+			continue
+		}
 		if !o.readOnly || !wrote {
 			action = o.action
 		}

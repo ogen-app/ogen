@@ -1,6 +1,7 @@
 package assistantkit
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -127,5 +128,41 @@ func TestOutcome_JSONShape(t *testing.T) {
 				t.Fatalf("succeeded = %t", tc.o.Succeeded())
 			}
 		})
+	}
+}
+
+// Prepare runs a tool's claim before its offer is answered; a tool without
+// one, or an unknown tool, claims nothing and releases nothing.
+func TestRegistry_Prepare(t *testing.T) {
+	g := genkit.Init(t.Context())
+	type key struct{}
+	released := false
+	held := spec(g, "held", "campaign", TierProposal, nil)
+	held.Prepare = func(ctx context.Context) (context.Context, func(), error) {
+		return context.WithValue(ctx, key{}, true), func() { released = true }, nil
+	}
+	busy := spec(g, "busy", "campaign", TierProposal, nil)
+	busy.Prepare = func(context.Context) (context.Context, func(), error) { return nil, nil, Refused("not now") }
+	r, err := NewRegistry(held, busy, spec(g, "plain", "campaign", TierRead, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, release, err := r.Prepare(t.Context(), "held")
+	if err != nil || ctx.Value(key{}) != true {
+		t.Fatalf("held: ctx claim = %v, err = %v", ctx.Value(key{}), err)
+	}
+	release()
+	if !released {
+		t.Fatal("release didn't give the claim back")
+	}
+	if _, _, err := r.Prepare(t.Context(), "busy"); err == nil || err.Error() != "not now" {
+		t.Fatalf("busy: err = %v", err)
+	}
+	for _, name := range []string{"plain", "unknown"} {
+		ctx, release, err := r.Prepare(t.Context(), name)
+		if err != nil || ctx != t.Context() || release == nil {
+			t.Fatalf("%s: %v, %v", name, ctx, err)
+		}
+		release()
 	}
 }

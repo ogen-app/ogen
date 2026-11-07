@@ -79,12 +79,24 @@ func runCampaignAssistant(
 		notifyAssistantFinalised(cfg.Notifier, c.TenantID, c.CreatedBy, req.CampaignID, out, retErr)
 	}()
 
+	// An offer answered before the turn failed stays answered, so the client
+	// hears it even without a "complete".
+	defer func() {
+		if retErr == nil || t.st == nil {
+			return
+		}
+		for _, r := range t.st.resolvedList() {
+			emit(onEvent, SSEEventProposalResolved, r)
+		}
+	}()
+
 	// One Brand library load serves this turn and every sub-flow its tools run.
 	ctx = brandresolve.WithMemo(ctx)
 	ctx, err := t.prepare(ctx, p)
 	if err != nil {
 		return nil, err
 	}
+	t.st.registry = tools.reg
 	if err := t.callModel(ctx, tools); err != nil {
 		return nil, err
 	}
@@ -270,7 +282,9 @@ func (t *turn) assembleResult(ctx context.Context) error {
 		r.Action = action
 	}
 	for _, o := range t.outcomes {
-		o.attach(r)
+		if o.attach != nil {
+			o.attach(r)
+		}
 		if r.Explanation == "" {
 			r.Explanation = o.explanation
 		}
