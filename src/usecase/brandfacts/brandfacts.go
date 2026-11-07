@@ -89,19 +89,34 @@ func (s *Service) Create(ctx context.Context, in Input, userID *string) (*models
 // Update replaces a fact's editable fields and returns it before and after.
 // sql.ErrNoRows is an unknown fact.
 func (s *Service) Update(ctx context.Context, id string, in Input) (before, after *models.BrandFact, err error) {
+	return s.update(ctx, id, in, nil)
+}
+
+// UpdateIf is Update, applied only while the fact still holds was's editable
+// fields: an edit merged onto was can't overwrite a change made since.
+// repository.ErrFactChanged is a fact changed since was was read.
+func (s *Service) UpdateIf(ctx context.Context, id string, in Input, was *models.BrandFact) (before, after *models.BrandFact, err error) {
+	return s.update(ctx, id, in, was)
+}
+
+func (s *Service) update(ctx context.Context, id string, in Input, was *models.BrandFact) (before, after *models.BrandFact, err error) {
 	f, err := in.fact()
 	if err != nil {
 		return nil, nil, err
 	}
 	f.ID, f.UpdatedAt = id, s.now()
-	before, err = s.repo.UpdateFact(ctx, f)
+	if was != nil {
+		before, err = s.repo.UpdateFactIf(ctx, f, was)
+	} else {
+		before, err = s.repo.UpdateFact(ctx, f)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	return before, f, nil
 }
 
-// Delete removes a fact and returns it. sql.ErrNoRows is an unknown fact.
+// Delete removes a fact and returns it, or nil for an unknown fact.
 func (s *Service) Delete(ctx context.Context, id string) (*models.BrandFact, error) {
 	return s.repo.DeleteFact(ctx, id)
 }
