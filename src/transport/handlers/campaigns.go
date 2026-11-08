@@ -959,6 +959,10 @@ func (h *CampaignsHandler) EnrichBrief(c *fiber.Ctx) error {
 	return nil
 }
 
+type assistantRequest struct {
+	Instruction string `json:"instruction" validate:"required"`
+}
+
 // Assistant godoc
 // @Summary      Campaign assistant (SSE)
 // @Description  Sends an instruction to the Campaign Assistant and streams progress via Server-Sent Events.
