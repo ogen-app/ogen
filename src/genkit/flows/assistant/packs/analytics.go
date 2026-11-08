@@ -234,7 +234,7 @@ func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*DraftId
 	}
 	res, err := d.Compose.Write(ctx, compose.DraftRequest{
 		CampaignID: campaign, PlatformID: platform, Count: count, SourceMaterial: b.String(),
-		Instruction: in.Instruction, UsedAssetIDs: assetIDs,
+		Instruction: in.Instruction, UsedAssetIDs: assetIDs, CreatedBy: actor(ctx),
 	}, ideaIDs, func(p compose.DraftedPost) {
 		assistantkit.Touch(ctx, "post", p.PostID)
 		assistant.Emit(ctx, "idea_draft_post", p)
