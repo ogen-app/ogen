@@ -2,6 +2,9 @@ package repository_test
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -168,5 +171,30 @@ func TestSetDates_OnlyWhileUnchanged(t *testing.T) {
 	}
 	if _, end := readDates(); !end.Equal(mar31) {
 		t.Fatalf("end = %v after a set on a deleted campaign, want %v", end, mar31)
+	}
+}
+
+// ChangeAssetIDs reports the set as it was and as it is, keeping use_assets
+// derived from it.
+func TestChangeAssetIDs(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewCampaignRepository(db, nil, nil, nil)
+	id := seedCampaign(t, repo, ctx, "Sources")
+
+	before, after, err := repo.ChangeAssetIDs(ctx, id, []string{"a1", "a2", "a1"}, nil)
+	if err != nil || len(before.AssetIDs) != 0 || before.UseAssets || !slices.Equal(after.AssetIDs, models.StringSlice{"a1", "a2"}) || !after.UseAssets {
+		t.Fatalf("attach: before %+v, after %+v, err %v", before, after, err)
+	}
+	before, after, err = repo.ChangeAssetIDs(ctx, id, nil, []string{"a1", "a2", "a9"})
+	if err != nil || !slices.Equal(before.AssetIDs, models.StringSlice{"a1", "a2"}) || len(after.AssetIDs) != 0 || after.UseAssets {
+		t.Fatalf("detach: before %+v, after %+v, err %v", before, after, err)
+	}
+	stored, err := repo.GetByID(ctx, id)
+	if err != nil || stored.AssetIDs == nil || len(stored.AssetIDs) != 0 || stored.UseAssets {
+		t.Fatalf("stored = %+v, %v; want an empty set, off", stored, err)
+	}
+	if _, _, err := repo.ChangeAssetIDs(ctx, "missing", []string{"a1"}, nil); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing campaign: err = %v, want sql.ErrNoRows", err)
 	}
 }
