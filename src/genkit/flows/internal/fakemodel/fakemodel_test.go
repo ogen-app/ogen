@@ -95,16 +95,16 @@ func TestModel_ExhaustedScriptFails(t *testing.T) {
 func TestRoute_UnroutedSlotsFailAndTheResolverIsRestored(t *testing.T) {
 	g := genkit.Init(t.Context())
 	// The resolver in place before: the test's own routing of the writer.
-	Route(t.Context(), Define(g, "outer", Answer("ok")), Slot{Flow: modelconfig.FlowPostAssistant, Slot: modelconfig.SlotWriter})
-	before := modelconfig.Resolve(t.Context(), modelconfig.FlowPostAssistant, modelconfig.SlotWriter)
+	Route(t.Context(), Define(g, "outer", Answer("ok")), Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotWriter})
+	before := modelconfig.Resolve(t.Context(), modelconfig.FlowAssistant, modelconfig.SlotWriter)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	m := Define(g, "planner", Answer("ok"))
-	Route(ctx, m, Slot{Flow: modelconfig.FlowPostAssistant, Slot: modelconfig.SlotPlanner})
+	Route(ctx, m, Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
 	// Routing twice on one instance registers the unrouted model once.
-	Route(ctx, m, Slot{Flow: modelconfig.FlowPostAssistant, Slot: modelconfig.SlotPlanner})
+	Route(ctx, m, Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
 
-	writer := modelconfig.Resolve(ctx, modelconfig.FlowPostAssistant, modelconfig.SlotWriter)
+	writer := modelconfig.Resolve(ctx, modelconfig.FlowAssistant, modelconfig.SlotWriter)
 	if writer.Ref != Vendor+"/"+unrouted {
 		t.Fatalf("unrouted writer = %+v", writer)
 	}
@@ -114,10 +114,10 @@ func TestRoute_UnroutedSlotsFailAndTheResolverIsRestored(t *testing.T) {
 
 	cancel()
 	deadline := time.Now().Add(time.Second)
-	for modelconfig.Resolve(t.Context(), modelconfig.FlowPostAssistant, modelconfig.SlotWriter) != before {
+	for modelconfig.Resolve(t.Context(), modelconfig.FlowAssistant, modelconfig.SlotWriter) != before {
 		if time.Now().After(deadline) {
 			t.Fatalf("after the context ended the writer resolves to %+v, want %+v",
-				modelconfig.Resolve(t.Context(), modelconfig.FlowPostAssistant, modelconfig.SlotWriter), before)
+				modelconfig.Resolve(t.Context(), modelconfig.FlowAssistant, modelconfig.SlotWriter), before)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -126,9 +126,9 @@ func TestRoute_UnroutedSlotsFailAndTheResolverIsRestored(t *testing.T) {
 func TestRoute_ResolvesSlotToModel(t *testing.T) {
 	g := genkit.Init(t.Context())
 	m := Define(g, "routed", Answer("ok"))
-	Route(t.Context(), m, Slot{Flow: modelconfig.FlowCampaignAssistant, Slot: modelconfig.SlotOrchestrator})
+	Route(t.Context(), m, Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
 
-	mc := modelconfig.Resolve(t.Context(), modelconfig.FlowCampaignAssistant, modelconfig.SlotOrchestrator)
+	mc := modelconfig.Resolve(t.Context(), modelconfig.FlowAssistant, modelconfig.SlotOrchestrator)
 	if mc.Ref != m.Ref() || mc.Vendor != Vendor {
 		t.Fatalf("resolved = %+v, want ref %q", mc, m.Ref())
 	}
