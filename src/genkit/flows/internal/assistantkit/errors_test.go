@@ -19,6 +19,7 @@ func TestFriendlyError(t *testing.T) {
 		"nil":             {nil, ""},
 		"cancelled":       {fmt.Errorf("generate: %w", context.Canceled), MsgCancelled},
 		"timeout":         {fmt.Errorf("generate: %w", context.DeadlineExceeded), MsgTimeout},
+		"timeout first":   {fmt.Errorf("529 overloaded_error: %w", context.DeadlineExceeded), MsgTimeout},
 		"refused":         {fmt.Errorf("round 2: %w", llm.ErrRefused), MsgDeclined},
 		"sdk 529":         {fmt.Errorf("plugin: %w", &anthropic.Error{StatusCode: 529}), MsgBusy},
 		"sdk 429":         {fmt.Errorf("plugin: %w", &anthropic.Error{StatusCode: 429}), MsgBusy},

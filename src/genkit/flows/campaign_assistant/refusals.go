@@ -50,6 +50,8 @@ func unsupportedPostType(c *models.Campaign, platformIDs []string, postType stri
 	return "", nil, false
 }
 
+// platformName is the campaign platform's display name, or its id when the
+// campaign has no such platform.
 func platformName(c *models.Campaign, id string) string {
 	for _, p := range c.Platforms {
 		if p.ID == id {
