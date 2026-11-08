@@ -109,3 +109,43 @@ func TestArchivePreservesTimestampOnReArchive(t *testing.T) {
 		t.Fatalf("unarchive did not clear archived_at: %s", got)
 	}
 }
+
+// SetDates writes only while the dates are still the ones the caller read.
+func TestSetDates_OnlyWhileUnchanged(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	repo := repository.NewCampaignRepository(db, nil, nil, nil)
+	id := seedCampaign(t, repo, ctx, "Dated")
+
+	readDates := func() (start, end *time.Time) {
+		t.Helper()
+		c := new(models.Campaign)
+		if err := db.NewSelect().Model(c).Where("c.id = ?", id).Scan(ctx); err != nil {
+			t.Fatalf("read dates: %v", err)
+		}
+		return c.StartDate, c.EndDate
+	}
+	jan1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	jan31 := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+	mar31 := time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC)
+
+	// From no dates to a range.
+	if ok, err := repo.SetDates(ctx, id, nil, nil, &jan1, &jan31); err != nil || !ok {
+		t.Fatalf("set from empty: ok=%v err=%v", ok, err)
+	}
+	// Stale expectations write nothing.
+	if ok, err := repo.SetDates(ctx, id, nil, nil, &jan1, &mar31); err != nil || ok {
+		t.Fatalf("stale set: ok=%v err=%v, want no write", ok, err)
+	}
+	if _, end := readDates(); !end.Equal(jan31) {
+		t.Fatalf("end = %v after a stale set, want %v", end, jan31)
+	}
+	// Current expectations write.
+	start, end := readDates()
+	if ok, err := repo.SetDates(ctx, id, start, end, &jan1, &mar31); err != nil || !ok {
+		t.Fatalf("current set: ok=%v err=%v", ok, err)
+	}
+	if _, end := readDates(); !end.Equal(mar31) {
+		t.Fatalf("end = %v, want %v", end, mar31)
+	}
+}

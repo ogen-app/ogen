@@ -1389,13 +1389,19 @@ func toolSetCampaignDates(ctx context.Context, in SetCampaignDatesInput) (*SetCa
 		}
 	}
 
+	// The dates are written only if they are still the ones this turn read,
+	// so the logged before is what the change replaced.
 	before := assistantundo.CampaignDates(c)
+	ok, err := st.repos.Campaigns.SetDates(ctx, st.campaignID, c.StartDate, c.EndDate, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("update campaign dates: %w", err)
+	}
+	if !ok {
+		return nil, assistantkit.Refused("the campaign's dates were changed while I was working on this, so I left them as they are; check them and ask again if you still want the change")
+	}
 	c.StartDate = start
 	c.EndDate = end
 	c.UpdatedAt = time.Now().UTC()
-	if err := st.repos.Campaigns.Update(ctx, c); err != nil {
-		return nil, fmt.Errorf("update campaign dates: %w", err)
-	}
 
 	st.datesResult = &DatesResult{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside,
 		UndoID: st.logChange(ctx, models.AssistantActionCampaignDates, before, assistantundo.CampaignDates(c))}
