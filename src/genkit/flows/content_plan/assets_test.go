@@ -3,7 +3,19 @@ package content_plan
 import (
 	"strings"
 	"testing"
+
+	"github.com/ogen-app/ogen/src/domain/models"
 )
+
+// A run told to leave assets out retrieves none, even from a campaign that
+// uses them; the zero repos would fail any lookup.
+func TestResolveAssets_WithoutAssets(t *testing.T) {
+	campaign := &models.Campaign{UseAssets: true, AssetIDs: []string{"a1"}}
+	got, warnings, err := resolveAssets(WithoutAssets(t.Context()), campaign, ContentPlanFlowConfig{}, ContentPlanRepos{})
+	if err != nil || got != nil || warnings != nil {
+		t.Fatalf("got %v, %v, %v", got, warnings, err)
+	}
+}
 
 //go:fix inline
 
