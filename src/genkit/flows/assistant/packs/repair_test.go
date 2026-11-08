@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -74,7 +76,7 @@ func repairDeps() (Deps, *memPosts, *memDismissals) {
 	}}
 	dismissals := &memDismissals{keys: map[string]bool{}}
 	d := Deps{Campaigns: &memCampaigns{c: camp}, Posts: posts, Dismissals: dismissals,
-		Campaign: func(context.Context, campaignRequest, campaignEvents) (*campaignResponse, error) { return nil, nil }}
+		Campaign: &assistant.Pack{Name: "campaign"}}
 	return d, posts, dismissals
 }
 
@@ -108,7 +110,10 @@ func TestCheckCalendar_OffersFixes(t *testing.T) {
 	if sink.got[0].Tool != "applyCalendarMoves" || moves.CampaignID != "c1" || len(moves.Moves) == 0 {
 		t.Fatalf("moves offer = %+v", sink.got[0])
 	}
-	if sink.got[1].Tool != "workOnCampaign" {
+	// Filling a silence plans ideas for its dates, through the campaign's
+	// own tool, naming the campaign so it can run from any screen.
+	plan, _ := sink.got[1].Args.(campaign_assistant.GeneratePostsInput)
+	if sink.got[1].Tool != "generatePosts" || plan.CampaignID != "c1" || plan.WindowStart != gap.Fixes[0].From || plan.WindowEnd != gap.Fixes[0].To {
 		t.Fatalf("gap offer = %+v", sink.got[1])
 	}
 
