@@ -65,18 +65,17 @@ func TestResolverReconcileAndPrecedence(t *testing.T) {
 
 	base := context.Background()
 	cases := map[[2]string]string{
-		{FlowContentPlan, SlotMain}:               "anthropic/sonnet",
-		{FlowPostQuality, SlotMain}:               "anthropic/qual",
-		{FlowAssistant, SlotOrchestrator}:         "anthropic/haiku",
-		{FlowAssistant, SlotWriter}:               "anthropic/sonnet",
-		{FlowCampaignAssistant, SlotOrchestrator}: "anthropic/haiku",
-		{FlowEmbed, SlotMain}:                     "gemini/emb",
-		{FlowVision, SlotClassify}:                "gemini/flash",
-		{FlowVision, SlotExtract}:                 "gemini/pro",
-		{FlowVision, SlotEscalate}:                "gemini/pro",
-		{FlowVision, SlotAltText}:                 "gemini/flash",
-		{FlowTranscribe, SlotMain}:                "gemini/asr",
-		{FlowReceiptExtraction, SlotMain}:         "anthropic/haiku",
+		{FlowContentPlan, SlotMain}:       "anthropic/sonnet",
+		{FlowPostQuality, SlotMain}:       "anthropic/qual",
+		{FlowAssistant, SlotOrchestrator}: "anthropic/haiku",
+		{FlowAssistant, SlotWriter}:       "anthropic/sonnet",
+		{FlowEmbed, SlotMain}:             "gemini/emb",
+		{FlowVision, SlotClassify}:        "gemini/flash",
+		{FlowVision, SlotExtract}:         "gemini/pro",
+		{FlowVision, SlotEscalate}:        "gemini/pro",
+		{FlowVision, SlotAltText}:         "gemini/flash",
+		{FlowTranscribe, SlotMain}:        "gemini/asr",
+		{FlowReceiptExtraction, SlotMain}: "anthropic/haiku",
 	}
 	for k, want := range cases {
 		if got := Ref(base, k[0], k[1]); got != want {
@@ -135,22 +134,21 @@ func TestDefaultsFor(t *testing.T) {
 		VisionClassify: "cls", VisionExtract: "ext", VisionEscalate: "esc", Transcribe: "asr",
 	}
 	cases := map[[2]string]string{
-		{FlowVision, SlotClassify}:                "cls",
-		{FlowVision, SlotAltText}:                 "cls",
-		{FlowVision, SlotExtract}:                 "ext",
-		{FlowVision, SlotEscalate}:                "esc",
-		{FlowTranscribe, SlotMain}:                "asr",
-		{FlowContentPlan, SlotMain}:               "gen",
-		{FlowAssistant, SlotWriter}:               "gen",
-		{FlowPostQuality, SlotMain}:               "qual",
-		{FlowAssistant, SlotOrchestrator}:         "plan",
-		{FlowCampaignAssistant, SlotOrchestrator}: "plan",
-		{FlowEmbed, SlotMain}:                     "emb",
-		{FlowAssetAnalysis, SlotAnalyze}:          "gen",
-		{FlowAssetAnalysis, SlotMap}:              "plan",
-		{FlowIdeaDistill, SlotDistill}:            "gen",
-		{FlowBrandDistill, SlotExtract}:           "plan",
-		{FlowBrandDistill, SlotCompose}:           "gen",
+		{FlowVision, SlotClassify}:        "cls",
+		{FlowVision, SlotAltText}:         "cls",
+		{FlowVision, SlotExtract}:         "ext",
+		{FlowVision, SlotEscalate}:        "esc",
+		{FlowTranscribe, SlotMain}:        "asr",
+		{FlowContentPlan, SlotMain}:       "gen",
+		{FlowAssistant, SlotWriter}:       "gen",
+		{FlowPostQuality, SlotMain}:       "qual",
+		{FlowAssistant, SlotOrchestrator}: "plan",
+		{FlowEmbed, SlotMain}:             "emb",
+		{FlowAssetAnalysis, SlotAnalyze}:  "gen",
+		{FlowAssetAnalysis, SlotMap}:      "plan",
+		{FlowIdeaDistill, SlotDistill}:    "gen",
+		{FlowBrandDistill, SlotExtract}:   "plan",
+		{FlowBrandDistill, SlotCompose}:   "gen",
 	}
 	for k, want := range cases {
 		if got := d.For(k[0], k[1]); got != want {
