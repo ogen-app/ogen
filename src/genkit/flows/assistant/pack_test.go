@@ -272,6 +272,69 @@ func TestTurn_Subject(t *testing.T) {
 	}
 }
 
+// The call restarted by loadPack continues from the tool rounds the first
+// call ran, those of loadPack's own round included, so it doesn't redo them;
+// the screen they planned stands.
+func TestRun_RestartKeepsTheToolRoundsDone(t *testing.T) {
+	h := newHarness(t, ideasPack(), campaignPack())
+	resp, _, m, err := h.turn(viewOf(t, `{"version":1,"screen":"ideas","scope":{"kind":"workspace"}}`), "mark it, then plan",
+		fakemodel.Tools(fakemodel.Call{Name: "triageIdea", Input: map[string]any{}}),
+		fakemodel.Tools(fakemodel.Call{Name: "navigate", Input: map[string]any{"screen": "assets"}}, fakemodel.Call{Name: "loadPack", Input: map[string]any{"pack": "campaign"}}),
+		fakemodel.Answer(`{"explanation":"Marked it and opened your assets.","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs := m.Requests()
+	restarted := reqs[len(reqs)-1]
+	var responded []string
+	for _, msg := range restarted.Messages {
+		for _, part := range msg.Content {
+			if part.IsToolResponse() {
+				responded = append(responded, part.ToolResponse.Name)
+			}
+			if part.IsToolRequest() && part.ToolRequest.Name == "loadPack" {
+				t.Fatal("the interrupted loadPack call was replayed")
+			}
+		}
+	}
+	if !slices.Equal(responded, []string{"triageIdea", "navigate"}) || !slices.Contains(toolNames(restarted), "planCampaign") {
+		t.Fatalf("restarted call: tool results %v, tools %v", responded, toolNames(restarted))
+	}
+	if !strings.Contains(lastText(restarted), "mark it, then plan") || restarted.Messages[len(restarted.Messages)-1].Role != ai.RoleTool {
+		t.Fatal("the user's message doesn't precede the rounds")
+	}
+	if len(resp.UIActions) != 1 || resp.UIActions[0].Screen != "assets" {
+		t.Fatalf("ui actions = %+v; want the first call's navigate", resp.UIActions)
+	}
+}
+
+// Out of tool rounds, the packs' account of the work replaces what the
+// model wrote before its last tool calls; with no text at all it stands in
+// as the reply.
+func TestRun_ToolRoundsExhausted(t *testing.T) {
+	for name, first := range map[string]fakemodel.Turn{
+		"preliminary text": {Text: `{"explanation":"I'll get started."}`, Calls: []fakemodel.Call{{Name: "workOnSubject", Input: map[string]any{}}}},
+		"no text":          fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{}}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var ran []string
+			h := newHarness(t, subjectPack(&ran))
+			script := []fakemodel.Turn{first}
+			for range 4 {
+				script = append(script, fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{}}))
+			}
+			resp, _, _, err := h.turn(viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`), "work on it", script...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := resp.Results["subject"].(map[string]any)
+			if resp.Explanation != "Worked on the campaign." || got["ran"] != 4 {
+				t.Fatalf("explanation = %q, results = %v", resp.Explanation, resp.Results)
+			}
+		})
+	}
+}
+
 // proposalsHarness is newHarness with offers stored in store, so the
 // confirmOffer and dismissOffer tools are defined.
 func proposalsHarness(t *testing.T, store *memProposals, packs ...Pack) *harness {
