@@ -65,6 +65,17 @@ func TestResolveDraftSource(t *testing.T) {
 		t.Fatalf("skip-confirmation = %q, want research A", got)
 	}
 
+	// The assistant stores the pack's action under results: an "answered"
+	// turn that drafted is still a confirmation.
+	got, err = resolveDraftSource(t.Context(), st([]models.AssistantMessage{
+		modelMsg(`{"action":"answered","explanation":"research A"}`),
+		userMsg("draft it"),
+		modelMsg(`{"action":"answered","explanation":"I drafted 1 post.","results":{"campaign":{"action":"post_drafted"}}}`),
+	}), "")
+	if err != nil || got != "research A" {
+		t.Fatalf("skip-pack-confirmation = %q err=%v, want research A", got, err)
+	}
+
 	// No prior research → empty (the tool then declines).
 	if got, _ := resolveDraftSource(t.Context(), st([]models.AssistantMessage{userMsg("hi")}), ""); got != "" {
 		t.Fatalf("no-research = %q, want empty", got)
