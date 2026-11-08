@@ -3,6 +3,7 @@ package ideas
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -33,25 +34,19 @@ func (r *mergeRepo) MergeSet(_ context.Context, ids []string) (repository.IdeaMe
 	return set, nil
 }
 
-func (r *mergeRepo) MergeIdeas(ctx context.Context, ids []string, plan func(repository.IdeaMergeSet) (repository.IdeaMerge, error)) error {
+func (r *mergeRepo) MergeIdeas(ctx context.Context, ids []string, plan func(repository.IdeaMergeSet) (repository.IdeaMerge, error)) (*models.Idea, error) {
 	set, _ := r.MergeSet(ctx, ids)
 	m, err := plan(set)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	r.byID[m.Keep.ID] = *m.Keep
 	r.columns = m.Columns
 	for _, id := range m.Delete {
 		delete(r.byID, id)
 	}
-	return nil
-}
-
-func (r *mergeRepo) GetByID(_ context.Context, id string) (*models.Idea, error) {
-	if i, ok := r.byID[id]; ok {
-		return &i, nil
-	}
-	return nil, errNoRows
+	kept := r.byID[m.Keep.ID]
+	return &kept, nil
 }
 
 func TestMerge(t *testing.T) {
@@ -66,6 +61,10 @@ func TestMerge(t *testing.T) {
 	}}
 	svc := New(repo, nil)
 	ctx := t.Context()
+	tooMany := make([]string, MaxMergeIDs+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("dup%d", i)
+	}
 
 	for _, tc := range []struct {
 		keep  string
@@ -73,7 +72,9 @@ func TestMerge(t *testing.T) {
 		want  error
 	}{
 		{"keep", nil, ErrMergeSize},
-		{"keep", make([]string, MaxMergeIDs+1), ErrMergeSize},
+		{"keep", []string{" ", ""}, ErrMergeSize},
+		{"keep", tooMany, ErrMergeSize},
+		{"keep", tooMany[:MaxMergeIDs], ErrNotFound},
 		{"keep", []string{"dup1", "keep"}, ErrMergeSelf},
 		{"keep", []string{"dup1", "gone"}, ErrNotFound},
 		{"gone", []string{"dup1"}, ErrNotFound},
@@ -94,8 +95,10 @@ func TestMerge(t *testing.T) {
 		t.Fatalf("compiled = %v", err)
 	}
 	repo.compiled = nil
-	if keep, err := svc.CheckMerge(ctx, "keep", []string{"dup1", "dup2"}); err != nil || keep.Title != "Pricing myths" || len(repo.byID) != 5 {
-		t.Fatalf("check = %+v, %v; want the keep, nothing merged", keep, err)
+	// The keep as it is now, not as the merge would leave it.
+	if keep, err := svc.CheckMerge(ctx, "keep", []string{"dup1", "dup2"}); err != nil || keep.Title != "Pricing myths" ||
+		keep.Note != "Bust three myths." || !slices.Equal(keep.AssetIDs, []string{"a1"}) || *keep.GroundingMode != exploratory || len(repo.byID) != 5 {
+		t.Fatalf("check = %+v, %v; want the keep unchanged, nothing merged", keep, err)
 	}
 
 	res, err := svc.Merge(ctx, " keep ", []string{"dup1", "dup2", "dup1"})
@@ -113,8 +116,22 @@ func TestMerge(t *testing.T) {
 	if got.Note != "Bust three myths.\n\nUse the CFO survey." {
 		t.Fatalf("note = %q", got.Note)
 	}
-	if !slices.Equal(repo.columns, []string{"asset_ids", "grounding_mode", "note"}) {
-		t.Fatalf("columns = %v", repo.columns)
+	if !slices.Equal(repo.columns, []string{"asset_ids", "grounding_mode", "note", "merged_at"}) || got.MergedAt == nil {
+		t.Fatalf("columns = %v, merged at %v", repo.columns, got.MergedAt)
+	}
+}
+
+// An analysis idea merged away hands its source to the kept idea's assets,
+// unless the kept idea came from the same source.
+func TestFoldInto_SourceAssets(t *testing.T) {
+	keep := models.Idea{ID: "k", Origin: models.IdeaOriginAssetAnalysis, SourceAssetID: new("src-k")}
+	cols := foldInto(&keep, []models.Idea{
+		{ID: "same", Origin: models.IdeaOriginAssetAnalysis, SourceAssetID: new("src-k")},
+		{ID: "other", Origin: models.IdeaOriginAssetAnalysis, SourceAssetID: new("src-o")},
+		{ID: "planned", AssetIDs: []string{"a1", "src-o"}},
+	})
+	if !slices.Equal(keep.AssetIDs, []string{"src-o", "a1"}) || !slices.Equal(cols, []string{"asset_ids"}) {
+		t.Fatalf("assets = %v, columns = %v", keep.AssetIDs, cols)
 	}
 }
 
