@@ -353,6 +353,9 @@ func (s *Service) insert(ctx context.Context, clone *models.Post, atts []*models
 		if _, err := tx.NewInsert().Model(version).Exec(ctx); err != nil {
 			return err
 		}
+		if err := copyIdeaLinks(ctx, tx, clone); err != nil {
+			return err
+		}
 		if s.logs == nil {
 			return nil
 		}
