@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -176,9 +177,10 @@ func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Po
 	case calendarcheck.FixPlanWindow:
 		if d.Campaign != nil {
 			offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{
-				Tool:    "workOnCampaign",
-				Args:    WorkOnCampaignInput{CampaignID: c.ID, Instruction: fmt.Sprintf("Plan a few ideas for %s to %s.", fix.From, fix.To)},
-				Summary: fmt.Sprintf("Plan ideas for %s to %s", fix.From, fix.To),
+				Tool: "generatePosts",
+				Args: campaign_assistant.GeneratePostsInput{CampaignID: c.ID, Platforms: platformNames(c),
+					Count: gapIdeas, WindowStart: fix.From, WindowEnd: fix.To},
+				Summary: fmt.Sprintf("Plan %d ideas for %s to %s", gapIdeas, fix.From, fix.To),
 			})
 		}
 	}
@@ -420,8 +422,8 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 		// One brief edit takes every brief finding.
 		if briefFix == "" && d.Campaign != nil {
 			if briefFix, err = assistantkit.Offer(ctx, assistantkit.Proposal{
-				Tool:    "workOnCampaign",
-				Args:    WorkOnCampaignInput{CampaignID: c.ID, Instruction: "Improve the brief to fix these review findings: " + briefIssues(brief.Findings)},
+				Tool:    "enrichBrief",
+				Args:    campaign_assistant.EnrichBriefInput{CampaignID: c.ID, Instruction: "Fix these review findings: " + briefIssues(brief.Findings)},
 				Summary: "Improve the brief to fix the review's findings",
 			}); err != nil {
 				return nil, err
@@ -435,6 +437,18 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 			Issue: f.Issue, Suggestion: f.Suggestion, Fix: FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixOpenPost, Title: "Open the post", PostID: f.PostID}}})
 	}
 	return out, nil
+}
+
+// gapIdeas is how many ideas a silence's fix plans.
+const gapIdeas = 3
+
+// platformNames are the platforms the campaign targets, by name.
+func platformNames(c *models.Campaign) []string {
+	out := make([]string, len(c.Platforms))
+	for i, p := range c.Platforms {
+		out[i] = p.Name
+	}
+	return out
 }
 
 func briefIssues(fs []consistency.Finding) string {
