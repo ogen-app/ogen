@@ -4,8 +4,13 @@
 -- turns were stored as the JSON of their "complete" event, which the
 -- assistant replays by its explanation and action, the fields both shapes
 -- share. The old tables go.
+--
+-- A campaign turn's two messages were written in one transaction, so they
+-- share created_at; the model's moves a microsecond later, as the assistant
+-- writes its own, so it replays after the user's.
 INSERT INTO assistant_messages (id, tenant_id, scope_kind, scope_id, role, content, created_at)
-SELECT id, tenant_id, 'campaign', campaign_id, role, content, created_at
+SELECT id, tenant_id, 'campaign', campaign_id, role, content,
+       CASE WHEN role = 'model' THEN created_at + interval '1 microsecond' ELSE created_at END
 FROM campaign_assistant_messages
 ON CONFLICT (id) DO NOTHING;
 
