@@ -10,10 +10,12 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/fakemodel"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
@@ -150,6 +152,114 @@ func TestRun_LoadPackRestartsOnce(t *testing.T) {
 	}
 	if !refused {
 		t.Fatal("a second loadPack in the turn was not refused")
+	}
+}
+
+type subjectKey struct{}
+
+// subjectPack acts on the thread's campaign: Begin binds it, its tool reads
+// it and can hold work back, End reports what ran.
+func subjectPack(ran *[]string) Pack {
+	return Pack{
+		Name:         "subject",
+		Summary:      "work on the campaign",
+		Scopes:       []models.AssistantScopeKind{models.AssistantScopeCampaign},
+		Instructions: "Always name the campaign.",
+		Begin: func(ctx context.Context, t Turn) (context.Context, string, error) {
+			id := t.Subject(models.AssistantScopeCampaign)
+			if id == "" {
+				return nil, "", assistantkit.Refused("open a campaign first")
+			}
+			return context.WithValue(ctx, subjectKey{}, id), "<campaign>" + id + "</campaign>\n\n", nil
+		},
+		End: func(ctx context.Context) (*PackResult, error) {
+			return &PackResult{Value: map[string]any{"campaign": ctx.Value(subjectKey{}), "ran": len(*ran)}, Fallback: "Worked on the campaign."}, nil
+		},
+		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
+			tool := genkit.DefineTool(g, "workOnSubject", "Works on the campaign.",
+				assistantkit.Gated("workOnSubject", assistantkit.Gate[struct {
+					Big bool `json:"big,omitempty"`
+				}]{Needs: func(_ context.Context, in struct {
+					Big bool `json:"big,omitempty"`
+				}) bool {
+					return in.Big
+				}}, assistantkit.Wrap(func(ctx context.Context, _ struct {
+					Big bool `json:"big,omitempty"`
+				}) (string, error) {
+					id, _ := ctx.Value(subjectKey{}).(string)
+					*ran = append(*ran, id)
+					return "done", nil
+				})))
+			return []assistantkit.Spec{{Name: tool.Name(), Pack: "subject", Scopes: allScopes, Tier: assistantkit.TierProposal, Guide: "Works on the campaign.", Tool: tool}}, nil
+		},
+	}
+}
+
+func TestRun_PackBeginsAndEnds(t *testing.T) {
+	var ran []string
+	h := newHarness(t, subjectPack(&ran))
+	h.repos.Proposals = &memProposals{}
+	h.tools.deps.Proposals = h.repos.Proposals
+	campaign := viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`)
+
+	// The model gives no reply after the work: the pack's fallback stands in.
+	resp, _, m, err := h.turn(campaign, "work on it",
+		fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{}}),
+		fakemodel.Answer(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := m.Requests()[0]
+	if !strings.Contains(lastText(req), "<campaign>c1</campaign>") || !strings.Contains(req.Messages[0].Text(), "Always name the campaign.") {
+		t.Fatalf("prompt: system %q, user %q", req.Messages[0].Text(), lastText(req))
+	}
+	got, _ := resp.Results["subject"].(map[string]any)
+	if !slices.Equal(ran, []string{"c1"}) || got["campaign"] != "c1" || resp.Explanation != "Worked on the campaign." {
+		t.Fatalf("ran = %v, results = %v, explanation = %q", ran, resp.Results, resp.Explanation)
+	}
+
+	// Off a campaign, loading the pack is refused with its reason.
+	resp, _, m, err = h.turn(viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`), "work on the campaign",
+		fakemodel.Tools(fakemodel.Call{Name: "loadPack", Input: map[string]any{"pack": "subject"}}),
+		fakemodel.Answer(`{"explanation":"Open a campaign first.","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Packs) != 0 || slices.Contains(toolNames(m.Requests()[1]), "workOnSubject") || !strings.Contains(lastText(m.Requests()[1]), "open a campaign first") {
+		t.Fatalf("packs = %v, tools = %v, prompt = %q", resp.Packs, toolNames(m.Requests()[1]), lastText(m.Requests()[1]))
+	}
+
+	// An offer made in the thread is confirmed from its card: the pack
+	// begins for it with the offer's campaign.
+	if _, _, _, err := h.turn(campaign, "do the big one",
+		fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{"big": true}}),
+		fakemodel.Answer(`{"explanation":"Ready when you are.","action":"answered"}`)); err != nil {
+		t.Fatal(err)
+	}
+	store := h.repos.Proposals.(*memProposals)
+	ctx := context.WithValue(t.Context(), logging.UserIDKey, "u1")
+	resp, err = h.tools.answer(ctx, AnswerRequest{ProposalID: store.rows[0].ID, Confirm: true}, nil)
+	if err != nil || !slices.Equal(ran, []string{"c1", "c1"}) || resp.Results["subject"] == nil {
+		t.Fatalf("resp = %+v, err = %v, ran = %v", resp, err, ran)
+	}
+}
+
+// Route returns what the model asked for without running it.
+func TestRoute_ReturnsCallsUnrun(t *testing.T) {
+	var ran []string
+	h := newHarness(t, subjectPack(&ran))
+	m := fakemodel.Define(h.g, "route", fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{"big": true}}))
+	fakemodel.Route(t.Context(), m, fakemodel.Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
+	got, err := route(t.Context(), h.g, Request{Instruction: "work on it", View: viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`)},
+		FlowConfig{}, h.repos, h.p, h.tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Calls) != 1 || got.Calls[0].Name != "workOnSubject" || len(ran) != 0 || !slices.Equal(got.Packs, []string{"subject"}) {
+		t.Fatalf("routing = %+v, ran = %v", got, ran)
+	}
+	if !strings.Contains(lastText(m.Requests()[0]), "<campaign>c1</campaign>") {
+		t.Fatal("the pack's block isn't in the routed message")
 	}
 }
 

@@ -42,7 +42,18 @@ func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (*Assist
 		Run: func(ctx context.Context, req Request, onEvent OnEventFunc) (*Response, error) {
 			return run(ctx, g, req, cfg, repos, p, tools, onEvent)
 		},
-		Answer: tools.answer,
+		Answer: func(ctx context.Context, req AnswerRequest, onEvent OnEventFunc) (*Response, error) {
+			// A confirmed offer runs the work it held back, so it spends.
+			if req.Confirm {
+				if err := cfg.Checker.Enforce(ctx); err != nil {
+					return nil, err
+				}
+			}
+			return tools.answer(ctx, req, onEvent)
+		},
+		Route: func(ctx context.Context, req Request) (*Routing, error) {
+			return route(ctx, g, req, cfg, repos, p, tools)
+		},
 	}, nil
 }
 
@@ -56,6 +67,18 @@ type prompts struct {
 	systemByPack map[string]string
 }
 
+// systemData is what the system prompt renders from: the guide of the
+// turn's tools, and the rules of its packs.
+type systemData struct {
+	ToolGuide string
+	Packs     []packRules
+}
+
+type packRules struct {
+	Name         string
+	Instructions string
+}
+
 // system returns the system prompt for the core tools plus loaded, which
 // must be normalized.
 func (p *prompts) system(loaded []string) (string, error) {
@@ -65,7 +88,13 @@ func (p *prompts) system(loaded []string) (string, error) {
 	if s, ok := p.systemByPack[key]; ok {
 		return s, nil
 	}
-	s, err := flowkit.RenderTemplate(p.systemTmpl, struct{ ToolGuide string }{p.tools.reg.Guide(append([]string{corePack}, loaded...)...)})
+	data := systemData{ToolGuide: p.tools.reg.Guide(append([]string{corePack}, loaded...)...)}
+	for _, name := range loaded {
+		if pk, ok := p.tools.packs.get(name); ok && pk.Instructions != "" {
+			data.Packs = append(data.Packs, packRules{Name: name, Instructions: strings.TrimSpace(pk.Instructions)})
+		}
+	}
+	s, err := flowkit.RenderTemplate(p.systemTmpl, data)
 	if err != nil {
 		return "", fmt.Errorf("render assistant system prompt: %w", err)
 	}
