@@ -2,7 +2,9 @@ package compose_test
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -68,6 +70,15 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 		t.Fatalf("notes = %+v, %v", ns, err)
 	}
 
+	entries, err := logs.ListByPostID(ctx, post.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].EventType != models.PostLogEventPostCompiled || entries[0].Actor != "u1" ||
+		!strings.Contains(entries[0].Payload, `"idea_ids":["idc-2","idc-1"]`) {
+		t.Fatalf("audit log = %+v; want one post_compiled by u1 over idc-2, idc-1", entries)
+	}
+
 	srcs, err := links.IdeasOfPost(ctx, post.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -95,5 +106,58 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 	other := tenantctx.With(context.Background(), "tenant-other")
 	if got, err := links.IdeasOfPost(other, post.ID); err != nil || len(got) != 0 {
 		t.Fatalf("another tenant read %v (%v)", got, err)
+	}
+}
+
+// With the database's constraints on, a phase of the campaign's type compiles
+// and a phase of another type is ErrInvalidPhase, with nothing written.
+func TestCompile_PhaseMustBeTheCampaignTypes(t *testing.T) {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+
+	// The seeded system types: phase 98 is the awareness type's (Uk), M2
+	// another type's.
+	const awareness, ownPhase, otherPhase = "Uk", "98", "M2"
+	for _, q := range []string{
+		"INSERT INTO accounts (id, email, name) VALUES ('acc-phase', 'phase@example.com', 'Phase')",
+		"INSERT INTO users (id, name, email, tenant_id, account_id) VALUES ('u-phase', 'Phase', 'phase@example.com', 'default', 'acc-phase')",
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	campaigns := repository.NewCampaignRepository(db, repository.NewTagRepository(db), repository.NewPlatformRepository(db), repository.NewCampaignTypeRepository(db))
+	ideas := repository.NewIdeaRepository(db)
+	if _, err := db.NewInsert().Model(&models.Campaign{
+		ID: "cmp-phase", Name: "Spring", CampaignTypeID: awareness, CreatedBy: "u-phase",
+		AssetIDs: models.StringSlice{}, PublishingDays: models.StringSlice{}, TargetPlatforms: models.CampaignPlatforms{},
+	}).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	campaign := "cmp-phase"
+	if err := ideas.Create(ctx, &models.Idea{ID: "idp-1", Title: "Pricing myths", CampaignID: &campaign}); err != nil {
+		t.Fatal(err)
+	}
+	logs := repository.NewPostLogRepository(db)
+	svc := compose.New(db, ideas, campaigns, repository.NewPostIdeaRepository(db), logs, nil)
+
+	if _, err := svc.Compile(ctx, compose.Input{IdeaIDs: []string{"idp-1"}, PhaseID: otherPhase, Actor: "u-phase"}); !errors.Is(err, compose.ErrInvalidPhase) {
+		t.Fatalf("other type's phase: err = %v, want ErrInvalidPhase", err)
+	}
+	var count int
+	if err := db.NewRaw("SELECT count(*) FROM posts").Scan(ctx, &count); err != nil || count != 0 {
+		t.Fatalf("posts after a refused compile = %d (%v), want 0", count, err)
+	}
+
+	res, err := svc.Compile(ctx, compose.Input{IdeaIDs: []string{"idp-1"}, PhaseID: ownPhase, Actor: "u-phase"})
+	if err != nil {
+		t.Fatalf("own type's phase: %v", err)
+	}
+	if res.Post.CampaignTypePhaseID == nil || *res.Post.CampaignTypePhaseID != ownPhase {
+		t.Fatalf("phase = %v, want %s", res.Post.CampaignTypePhaseID, ownPhase)
+	}
+	if entries, err := logs.ListByPostID(ctx, res.Post.ID, 10); err != nil || len(entries) != 1 {
+		t.Fatalf("audit log = %+v (%v), want the compile", entries, err)
 	}
 }
