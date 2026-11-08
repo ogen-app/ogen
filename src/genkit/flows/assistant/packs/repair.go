@@ -18,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
@@ -175,16 +176,67 @@ func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Po
 		}
 		offer.ProposalID = *redistributeID
 	case calendarcheck.FixPlanWindow:
-		if d.Campaign != nil {
-			offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{
-				Tool: "generatePosts",
-				Args: campaign_assistant.GeneratePostsInput{CampaignID: c.ID, Platforms: platformNames(c),
-					Count: gapIdeas, WindowStart: fix.From, WindowEnd: fix.To},
-				Summary: fmt.Sprintf("Plan %d ideas for %s to %s", gapIdeas, fix.From, fix.To),
-			})
+		switch {
+		case d.Campaign == nil:
+		case len(c.Platforms) == 0:
+			// Ideas are planned for a platform, and the campaign has none.
+			offer.Title = "Add a target platform to the campaign, then plan ideas for these dates"
+		default:
+			offer.ProposalID, err = offerGapIdeas(ctx, d, c, fix)
 		}
 	}
 	return offer, err
+}
+
+// offerGapIdeas offers planning ideas for a silence, in the phase the
+// silence starts in and ending with that phase. A campaign with no ready
+// sources gets the choice the campaign's own tool offers: add a source
+// first, or go ahead from general knowledge.
+func offerGapIdeas(ctx context.Context, d Deps, c *models.Campaign, fix calendarcheck.Fix) (string, error) {
+	phase, end := gapPhase(c, fix.From, fix.To)
+	in := campaign_assistant.GeneratePostsInput{CampaignID: c.ID, Platforms: platformNames(c), Phase: phase,
+		Count: gapIdeas, WindowStart: fix.From, WindowEnd: end}
+	p := assistantkit.Proposal{Tool: "generatePosts", Args: in,
+		Summary: fmt.Sprintf("Plan %d ideas for %s to %s", gapIdeas, fix.From, end)}
+	if d.Assets != nil {
+		ready, _, err := flowkit.ReadyCampaignAssetIDs(ctx, d.Assets, c)
+		if err != nil {
+			return "", fmt.Errorf("count campaign sources: %w", err)
+		}
+		if len(ready) == 0 {
+			exploratory := in
+			exploratory.Exploratory = true
+			p.Summary = "This campaign has no sources yet, so these ideas would come from general knowledge, not your material. " +
+				"Add a document or a link on the campaign's Assets tab, or go ahead without them."
+			p.Options = []assistantkit.Option{{ID: "exploratory", Title: "Go ahead without sources (marked not grounded)", Tool: "generatePosts", Args: exploratory}}
+		}
+	}
+	return assistantkit.Offer(ctx, p)
+}
+
+// gapPhase is the phase a silence from..to starts in, by id, and the
+// silence's end cut at that phase's end, so no idea is dated into the next
+// phase. An unparsable date or a campaign without phases leaves both to the
+// tool.
+func gapPhase(c *models.Campaign, from, to string) (phaseID, end string) {
+	start, err := time.Parse(time.DateOnly, from)
+	if err != nil {
+		return "", to
+	}
+	windows, _ := campaignphase.Resolve(c)
+	for _, w := range windows {
+		if !w.Contains(start) {
+			continue
+		}
+		if last, err := time.Parse(time.DateOnly, to); err == nil && last.After(w.End) {
+			to = w.End.Format(time.DateOnly)
+		}
+		return w.Phase.ID, to
+	}
+	if ph, ok := campaignphase.PhaseAt(c, start); ok {
+		return ph.ID, to
+	}
+	return "", to
 }
 
 // Move is one post's new date.
