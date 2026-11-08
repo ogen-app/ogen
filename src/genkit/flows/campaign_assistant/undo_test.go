@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"database/sql"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -67,6 +69,23 @@ func (s *storedCampaign) Update(_ context.Context, c *models.Campaign, _ ...stri
 	return nil
 }
 
+func (s *storedCampaign) SetDates(_ context.Context, _ string, oldStart, oldEnd, start, end *time.Time) (bool, error) {
+	if !sameDay(s.c.StartDate, oldStart) || !sameDay(s.c.EndDate, oldEnd) {
+		return false, nil
+	}
+	cp := *s.c
+	cp.StartDate, cp.EndDate = start, end
+	s.c = &cp
+	return true, nil
+}
+
+func sameDay(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
 type noPosts struct{ repository.PostRepository }
 
 func (noPosts) ListByCampaign(context.Context, string) ([]models.Post, error) { return nil, nil }
@@ -95,6 +114,56 @@ func TestSetCampaignDates_IsUndoable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.Before["endDate"] != "2026-01-30T00:00:00Z" || a.After["endDate"] != "2026-03-31T00:00:00Z" {
+		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
+	}
+}
+
+// Dates the user changed during the turn are left alone: the write is
+// refused, so undo can never restore the turn's stale dates over them.
+func TestSetCampaignDates_RefusedWhenChangedDuringTurn(t *testing.T) {
+	c := timelineCampaign()
+	c.ID = "c1"
+	stored := *c
+	stored.EndDate = new(day("2026-02-15"))
+	campaigns := &storedCampaign{c: &stored}
+	actions := &memActions{}
+	st := &requestState{campaignID: "c1", campaign: c,
+		repos: CampaignAssistantRepos{Campaigns: campaigns, Posts: noPosts{}, Actions: actions}}
+
+	out := runTool(t, st, "setCampaignDates", map[string]any{"endDate": "2026-03-31"})
+	if out.Status != "refused" || st.datesResult != nil || len(actions.rows) != 0 {
+		t.Fatalf("outcome = %+v, result = %+v, logged = %d", out, st.datesResult, len(actions.rows))
+	}
+	if !campaigns.c.EndDate.Equal(day("2026-02-15")) {
+		t.Fatalf("end date = %v, want the user's 2026-02-15", campaigns.c.EndDate)
+	}
+}
+
+// An enriched brief logs all four fields it replaced, so undo can put them
+// back.
+func TestEnrichBrief_IsUndoable(t *testing.T) {
+	c := timelineCampaign()
+	c.ID = "c1"
+	c.Description, c.TargetPersona, c.KeyMessages, c.ToneGuidelines = "desc", "persona", "messages", "tone"
+	campaigns := &storedCampaign{c: c}
+	actions := &memActions{}
+	st := &requestState{campaignID: "c1", campaign: c,
+		repos: CampaignAssistantRepos{Campaigns: campaigns, Actions: actions},
+		enrichBrief: func(context.Context, enrich_brief.EnrichBriefRequest, enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error) {
+			return &enrich_brief.EnrichBriefResponse{Description: "new desc", TargetPersona: "new persona", KeyMessages: "new messages", ToneGuidelines: "new tone"}, nil
+		}}
+
+	runTool(t, st, "enrichBrief", map[string]any{"instruction": "sharper"})
+	if st.briefResult == nil || st.briefResult.UndoID == "" || campaigns.c.Description != "new desc" {
+		t.Fatalf("result = %+v, description = %q", st.briefResult, campaigns.c.Description)
+	}
+
+	a, err := actions.GetByID(t.Context(), st.briefResult.UndoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := models.JSONMap{"description": "desc", "targetPersona": "persona", "keyMessages": "messages", "toneGuidelines": "tone"}
+	if !maps.Equal(a.Before, want) || a.After["toneGuidelines"] != "new tone" {
 		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
 	}
 }
