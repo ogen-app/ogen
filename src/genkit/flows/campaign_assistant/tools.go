@@ -319,7 +319,7 @@ type GeneratePostsOutput struct {
 type DraftPostInput struct {
 	Platforms      []string `json:"platforms"                jsonschema:"description=Platform names or ids to draft for, e.g. [\"LinkedIn\"]. Must be platforms the campaign already targets."`
 	Count          int      `json:"count,omitempty"          jsonschema:"description=Number of posts to draft per platform: the exact number the user names (\"draft 1 post\"->1, \"3 LinkedIn posts\"->3). Omit for 1. Capped per call."`
-	PublishDate    string   `json:"publishDate,omitempty"    jsonschema:"description=Publish date (ISO YYYY-MM-DD) resolved from the requested timeframe against today; omit to spread across the next two weeks. Must be today or later."`
+	PublishDate    string   `json:"publishDate,omitempty"    jsonschema:"description=Publish date (ISO YYYY-MM-DD) resolved from the requested timeframe against today: a range such as next week is its first day; omit to spread across the next two weeks. Must be today or later. Never ask the user for an exact day."`
 	PostType       string   `json:"postType,omitempty"       jsonschema:"description=Optional post-type slug (e.g. text-post, article); omit for the platform default."`
 	SourceMaterial string   `json:"sourceMaterial,omitempty" jsonschema:"description=Optional override source text to turn into posts. Omit to use the research already discussed earlier in this chat (the normal case)."`
 	// Instruction is the user's steering for the writer. An offer stores it
@@ -465,8 +465,8 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	)
 
 	draftPost := genkit.DefineTool(g, "draftPost",
-		"Turns research already discussed in THIS chat (typically an askCampaignAssets answer) into one or more finished, ready-to-publish post drafts — full copy, not a bullet outline — for a specific platform. "+
-			"Call this when the user asks to 'create/write/draft a post with this info / from this research / based on that' after you've answered a question about the campaign's assets. "+
+		"Turns research or an answer already given in THIS chat (an askCampaignAssets answer, or your own explanation of the topic) into one or more finished, ready-to-publish post drafts — full copy, not a bullet outline — for a specific platform. "+
+			"Call this when the user asks to 'create/write/draft a post with this info / from this research / based on that' after you've answered a question about the campaign or its topic. "+
 			"Different from generatePosts (which produces terse draft-thesis outlines for bulk planning) and runContentPlan (which regenerates the whole plan). Only platforms the campaign already targets are allowed. "+
 			"Resolve the publish date to ISO YYYY-MM-DD against today's date shown in the context; omit it to spread across the next two weeks. Set count to the number the user asks for. "+
 			"The research is loaded automatically from the conversation — do NOT paste it back; pass sourceMaterial only when the user supplied fresh material in this very message. Returns how many posts were drafted.",
