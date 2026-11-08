@@ -133,12 +133,23 @@ func TestSetDates_OnlyWhileUnchanged(t *testing.T) {
 	if ok, err := repo.SetDates(ctx, id, nil, nil, &jan1, &jan31); err != nil || !ok {
 		t.Fatalf("set from empty: ok=%v err=%v", ok, err)
 	}
-	// Stale expectations write nothing.
-	if ok, err := repo.SetDates(ctx, id, nil, nil, &jan1, &mar31); err != nil || ok {
-		t.Fatalf("stale set: ok=%v err=%v, want no write", ok, err)
-	}
-	if _, end := readDates(); !end.Equal(jan31) {
-		t.Fatalf("end = %v after a stale set, want %v", end, jan31)
+	// Stale expectations write nothing: both dates, the start alone, or the
+	// end alone.
+	feb1 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	for _, stale := range []struct {
+		name       string
+		start, end *time.Time
+	}{
+		{"both", nil, nil},
+		{"start", &feb1, &jan31},
+		{"end", &jan1, &feb1},
+	} {
+		if ok, err := repo.SetDates(ctx, id, stale.start, stale.end, &jan1, &mar31); err != nil || ok {
+			t.Fatalf("stale %s: ok=%v err=%v, want no write", stale.name, ok, err)
+		}
+		if start, end := readDates(); !start.Equal(jan1) || !end.Equal(jan31) {
+			t.Fatalf("dates = %v..%v after a stale %s, want %v..%v", start, end, stale.name, jan1, jan31)
+		}
 	}
 	// Current expectations write.
 	start, end := readDates()
@@ -147,5 +158,15 @@ func TestSetDates_OnlyWhileUnchanged(t *testing.T) {
 	}
 	if _, end := readDates(); !end.Equal(mar31) {
 		t.Fatalf("end = %v, want %v", end, mar31)
+	}
+	// A deleted campaign is gone, even while its dates still match.
+	if ok, err := repo.Delete(ctx, id); err != nil || !ok {
+		t.Fatalf("delete: ok=%v err=%v", ok, err)
+	}
+	if ok, err := repo.SetDates(ctx, id, &jan1, &mar31, &jan1, &jan31); err != nil || ok {
+		t.Fatalf("set on a deleted campaign: ok=%v err=%v, want no write", ok, err)
+	}
+	if _, end := readDates(); !end.Equal(mar31) {
+		t.Fatalf("end = %v after a set on a deleted campaign, want %v", end, mar31)
 	}
 }
