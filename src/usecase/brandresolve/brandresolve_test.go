@@ -73,13 +73,13 @@ func (f *fakeBrandRepo) UpdateFact(context.Context, *models.BrandFact) (*models.
 func (f *fakeBrandRepo) DeleteFact(context.Context, string) (*models.BrandFact, error) {
 	return nil, nil
 }
-func (f *fakeBrandRepo) UpdateFactIf(context.Context, *models.BrandFact, *models.BrandFact) (*models.BrandFact, error) {
+func (f *fakeBrandRepo) UpdateFactIf(context.Context, bun.IDB, *models.BrandFact, *models.BrandFact) (*models.BrandFact, error) {
 	return nil, nil
 }
-func (f *fakeBrandRepo) DeleteFactIf(context.Context, string, *models.BrandFact) (*models.BrandFact, error) {
+func (f *fakeBrandRepo) DeleteFactIf(context.Context, bun.IDB, string, *models.BrandFact) (*models.BrandFact, error) {
 	return nil, nil
 }
-func (f *fakeBrandRepo) RestoreFact(context.Context, *models.BrandFact) error { return nil }
+func (f *fakeBrandRepo) RestoreFact(context.Context, bun.IDB, *models.BrandFact) error { return nil }
 func (f *fakeBrandRepo) GetGuardrailsStance(context.Context) (*models.BrandGuardrailsStanceRecord, error) {
 	return nil, nil
 }
