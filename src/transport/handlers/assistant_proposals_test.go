@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"expvar"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
+	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
+	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -99,6 +103,11 @@ func TestConfirmProposal_ErrorCodes(t *testing.T) {
 		"not found": {assistant.ErrProposalNotFound, fiber.StatusNotFound},
 		"conflict":  {&assistant.ProposalConflictError{Msg: "already answered"}, fiber.StatusConflict},
 		"ai error":  {&assistant.AIError{Msg: "busy"}, fiber.StatusBadGateway},
+		// The confirmed work's own flow failed at the model.
+		"plan ai error":  {fmt.Errorf("generate: %w", &content_plan.AIError{Msg: "overloaded"}), fiber.StatusBadGateway},
+		"draft ai error": {&draft_post.AIError{Msg: "overloaded"}, fiber.StatusBadGateway},
+		"brief ai error": {&enrich_brief.AIError{Msg: "overloaded"}, fiber.StatusBadGateway},
+		"other error":    {errors.New("db down"), fiber.StatusInternalServerError},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
