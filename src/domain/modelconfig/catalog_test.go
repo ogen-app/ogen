@@ -48,11 +48,11 @@ func TestCatalogIntegrity(t *testing.T) {
 		t.Fatalf("embed slot = %+v ok=%v, want global-only embed dims 3072", embed, ok)
 	}
 
-	if _, ok := LookupSlot(FlowPostAssistant, SlotPlanner); !ok {
-		t.Fatal("missing post_assistant/planner")
+	if _, ok := LookupSlot(FlowAssistant, SlotOrchestrator); !ok {
+		t.Fatal("missing assistant/orchestrator")
 	}
-	if _, ok := LookupSlot(FlowPostAssistant, SlotWriter); !ok {
-		t.Fatal("missing post_assistant/writer")
+	if _, ok := LookupSlot(FlowAssistant, SlotWriter); !ok {
+		t.Fatal("missing assistant/writer")
 	}
 	for _, s := range []string{SlotClassify, SlotExtract, SlotEscalate, SlotAltText} {
 		if sl, ok := LookupSlot(FlowVision, s); !ok || sl.Capability != CapabilityVision || sl.GlobalOnly {
