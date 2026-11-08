@@ -113,6 +113,8 @@ func mergeIdeas(ctx context.Context, d Deps, in MergeIdeasInput) (*MergeIdeasOut
 		return nil, mergeErr(err)
 	}
 	assistantkit.Touch(ctx, "idea", "")
+	// Other sessions showing a merged idea learn it is gone.
+	ideas.PublishDeleted(ctx, d.Hub, res.Deleted)
 	return &MergeIdeasOutput{Idea: ideaRef(*res.Idea), Deleted: res.Deleted}, nil
 }
 
