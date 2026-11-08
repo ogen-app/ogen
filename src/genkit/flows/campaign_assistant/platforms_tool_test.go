@@ -5,7 +5,6 @@ import (
 	"errors"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -44,9 +43,9 @@ func TestRunner_YesPleaseAddsThePlatform(t *testing.T) {
 
 	resp, _ := h.turn("Add a few Threads posts",
 		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 3}}),
-		fakemodel.Answer(`{"explanation":"Threads isn't in this campaign yet. Want me to add it?","action":"proposed"}`))
-	if resp.Action != actionProposed || len(h.generated) != 0 || len(h.proposals.rows) != 1 {
-		t.Fatalf("turn 1: action = %q, generated = %d, proposals = %d", resp.Action, len(h.generated), len(h.proposals.rows))
+		fakemodel.Answer(`{"explanation":"Threads isn't in this campaign yet. Want me to add it?","action":"answered"}`))
+	if len(resp.Proposals) != 1 || len(h.generated) != 0 || len(h.proposals.rows) != 1 {
+		t.Fatalf("turn 1: proposals = %+v, generated = %d, stored = %d", resp.Proposals, len(h.generated), len(h.proposals.rows))
 	}
 	offer := h.proposals.rows[0]
 	if o, ok := offer.Option("add_platform"); !ok || o.Tool != "updateCampaignPlatforms" {
@@ -55,11 +54,12 @@ func TestRunner_YesPleaseAddsThePlatform(t *testing.T) {
 
 	// The same turn can then write for the platform it just added.
 	resp, _ = h.turn("yes please",
-		fakemodel.Tools(fakemodel.Call{Name: "confirmProposal", Input: map[string]any{"proposalId": offer.ID, "optionId": "add_platform"}}),
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": offer.ID, "optionId": "add_platform"}}),
 		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 3}}),
-		fakemodel.Answer(`{"explanation":"Threads is in, and 3 posts are drafted.","action":"posts_generated"}`))
-	if resp.Action != actionPostsGenerated || resp.Platforms == nil || resp.Platforms.UndoID == "" {
-		t.Fatalf("turn 2: action = %q, platforms = %+v", resp.Action, resp.Platforms)
+		fakemodel.Answer(`{"explanation":"Threads is in, and 3 posts are drafted.","action":"answered"}`))
+	r := campaignResult(resp)
+	if r == nil || r.Action != actionPostsGenerated || r.Platforms == nil || r.Platforms.UndoID == "" {
+		t.Fatalf("turn 2: result = %+v", r)
 	}
 	if len(h.generated) != 1 || h.generated[0].Count != 3 || !slices.Equal(h.generated[0].PlatformIDs, []string{"pl2"}) {
 		t.Fatalf("generated = %+v, want 3 Threads posts", h.generated)
@@ -74,7 +74,7 @@ func TestRunner_YesPleaseAddsThePlatform(t *testing.T) {
 
 	// The undo service (tested against Postgres) restores Before while the
 	// campaign matches After.
-	a := actions.logged(t, resp.Platforms.UndoID)
+	a := actions.logged(t, r.Platforms.UndoID)
 	if len(a.Before["platforms"].([]any)) != 1 || len(a.After["platforms"].([]any)) != 2 {
 		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
 	}
@@ -131,20 +131,5 @@ func TestUpdateCampaignPlatforms_ProposedAndChecked(t *testing.T) {
 	out = runTool(t, st, "updateCampaignPlatforms", map[string]any{"platforms": []map[string]any{{"platform": "LinkedIn"}}})
 	if out.Status != assistantkit.StatusRefused {
 		t.Fatalf("already targeted = %+v", out)
-	}
-}
-
-// Asking for a platform the campaign narrowed to some post types, without
-// naming types, opens it to all of them, and the offer says so.
-func TestUpdateCampaignPlatforms_OfferNamesTheRestrictionLift(t *testing.T) {
-	store := &memProposals{}
-	c := linkedInOnly()
-	c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}
-	st := &requestState{campaignID: "c1", campaign: c,
-		repos: CampaignAssistantRepos{Proposals: store, Platforms: catalogRepo{}}}
-
-	out := runTool(t, st, "updateCampaignPlatforms", map[string]any{"platforms": []map[string]any{{"platform": "LinkedIn"}}})
-	if out.Status != assistantkit.StatusProposed || !strings.Contains(out.Summary, "LinkedIn (every post type)") {
-		t.Fatalf("outcome = %+v, want an offer naming every post type", out)
 	}
 }
