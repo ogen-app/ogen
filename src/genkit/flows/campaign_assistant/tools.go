@@ -422,6 +422,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			assistantkit.Wrap(func(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
 				return toolRunContentPlan(ctx, in)
 			}, contentPlanInvalid)),
+		ai.WithStrictSchema(false),
 	)
 
 	enrichBrief := genkit.DefineTool(g, "enrichBrief",
@@ -432,6 +433,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Wrap(func(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutput, error) {
 			return toolEnrichBrief(ctx, in)
 		}, enrichBriefInvalid),
+		ai.WithStrictSchema(false),
 	)
 
 	listCampaignPosts := genkit.DefineTool(g, "listCampaignPosts",
@@ -439,6 +441,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Wrap(func(ctx context.Context, _ struct{}) ([]CampaignPostInfo, error) {
 			return toolListCampaignPosts(ctx)
 		}),
+		ai.WithStrictSchema(false),
 	)
 
 	getCampaignOverview := genkit.DefineTool(g, "getCampaignOverview",
@@ -447,6 +450,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*overview.Overview, error) {
 			return toolGetCampaignOverview(ctx)
 		}),
+		ai.WithStrictSchema(false),
 	)
 
 	generatePosts := genkit.DefineTool(g, "generatePosts",
@@ -457,6 +461,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			func(ctx *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
 				return toolGeneratePosts(ctx, in)
 			}),
+		ai.WithStrictSchema(false),
 	)
 
 	draftPost := genkit.DefineTool(g, "draftPost",
@@ -469,6 +474,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			func(ctx *ai.ToolContext, in DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
 				return toolDraftPost(ctx, in)
 			})),
+		ai.WithStrictSchema(false),
 	)
 
 	setCampaignDates := genkit.DefineTool(g, "setCampaignDates",
@@ -478,6 +484,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Wrap(func(ctx context.Context, in SetCampaignDatesInput) (*SetCampaignDatesOutput, error) {
 			return toolSetCampaignDates(ctx, in)
 		}),
+		ai.WithStrictSchema(false),
 	)
 
 	redistributePosts := genkit.DefineTool(g, "redistributePosts",
@@ -487,6 +494,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 			assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*RedistributePostsOutput, error) {
 				return toolRedistributePosts(ctx)
 			})),
+		ai.WithStrictSchema(false),
 	)
 
 	checkBrief := genkit.DefineTool(g, "checkBrief",
@@ -496,6 +504,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*consistency.BriefReview, error) {
 			return toolCheckBrief(ctx)
 		}, consistencyInvalid),
+		ai.WithStrictSchema(false),
 	)
 
 	checkPostsConsistency := genkit.DefineTool(g, "checkPostsConsistency",
@@ -504,6 +513,7 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Wrap(func(ctx context.Context, in CheckPostsInput) (*consistency.PostsReview, error) {
 			return toolCheckPostsConsistency(ctx, in)
 		}, consistencyInvalid),
+		ai.WithStrictSchema(false),
 	)
 
 	askCampaignAssets := genkit.DefineTool(g, "askCampaignAssets",
@@ -514,12 +524,14 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Wrap(func(ctx context.Context, in AskCampaignAssetsInput) (*AskCampaignAssetsOutput, error) {
 			return toolAskCampaignAssets(ctx, in)
 		}),
+		ai.WithStrictSchema(false),
 	)
 
 	updateCampaignPlatforms := genkit.DefineTool(g, "updateCampaignPlatforms",
 		"Adds platforms to the campaign, or post types to a platform it already targets, checked against the platforms Ogen publishes to. "+
 			"It is proposed for the user to confirm before anything changes.",
 		assistantkit.Gated("updateCampaignPlatforms", updatePlatformsGate, assistantkit.Wrap(toolUpdateCampaignPlatforms)),
+		ai.WithStrictSchema(false),
 	)
 
 	t := &toolSet{
