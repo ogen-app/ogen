@@ -49,7 +49,7 @@ func isFactDuplicate(err error) bool {
 
 // lockFacts serialises ledger writes within a tenant for the rest of the tx, so
 // the MaxBrandFacts count and the duplicate check cannot race.
-func lockFacts(ctx context.Context, tx bun.Tx) error {
+func lockFacts(ctx context.Context, tx bun.IDB) error {
 	return tenantLock(ctx, tx, "brand_facts")
 }
 
@@ -58,7 +58,7 @@ func lockGuardrails(ctx context.Context, tx bun.Tx) error {
 	return tenantLock(ctx, tx, "brand_guardrails")
 }
 
-func tenantLock(ctx context.Context, tx bun.Tx, name string) error {
+func tenantLock(ctx context.Context, tx bun.IDB, name string) error {
 	tid, ok := tenantctx.From(ctx)
 	if !ok {
 		return tenantctx.ErrNoTenant
@@ -138,20 +138,21 @@ func (r *brandRepository) GetFact(ctx context.Context, id string) (*models.Brand
 // CreateFact inserts f, stamping CreatedByName from f.CreatedBy. It returns
 // ErrFactDuplicate or ErrFactLimit.
 func (r *brandRepository) CreateFact(ctx context.Context, f *models.BrandFact) error {
-	return r.insertFact(ctx, f, false)
+	return r.insertFact(ctx, nil, f, false)
 }
 
-// RestoreFact inserts a removed fact as it was: its created_at and author
-// name snapshot are kept, the name filled from CreatedBy only when blank, and
-// an author who is no longer a user is kept by name alone. It returns
-// ErrFactDuplicate or ErrFactLimit.
-func (r *brandRepository) RestoreFact(ctx context.Context, f *models.BrandFact) error {
-	return r.insertFact(ctx, f, true)
+// RestoreFact inserts a removed fact as it was, on db (nil runs its own
+// transaction): its created_at and author name snapshot are kept, the name
+// filled from CreatedBy only when blank, and an author who is no longer a
+// user is kept by name alone. A fact with f's id already stored is
+// ErrFactChanged; it also returns ErrFactDuplicate or ErrFactLimit.
+func (r *brandRepository) RestoreFact(ctx context.Context, db bun.IDB, f *models.BrandFact) error {
+	return r.insertFact(ctx, db, f, true)
 }
 
 // insertFact is CreateFact; restore keeps the author snapshot f carries.
-func (r *brandRepository) insertFact(ctx context.Context, f *models.BrandFact, restore bool) error {
-	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+func (r *brandRepository) insertFact(ctx context.Context, db bun.IDB, f *models.BrandFact, restore bool) error {
+	return r.inTx(ctx, db, func(ctx context.Context, tx bun.IDB) error {
 		if err := lockFacts(ctx, tx); err != nil {
 			return err
 		}
@@ -162,30 +163,57 @@ func (r *brandRepository) insertFact(ctx context.Context, f *models.BrandFact, r
 		if n >= MaxBrandFacts {
 			return ErrFactLimit
 		}
-		if restore && f.CreatedBy != nil {
-			var known bool
-			if err := tx.NewRaw("SELECT EXISTS (SELECT 1 FROM users WHERE id = ?)", *f.CreatedBy).Scan(ctx, &known); err != nil {
-				return err
-			}
-			if !known {
-				f.CreatedBy = nil
-			}
+		if err := stampAuthor(ctx, tx, f, restore); err != nil {
+			return err
 		}
-		if !restore || f.CreatedByName == "" {
-			name, err := authorName(ctx, tx, f.CreatedBy)
-			if err != nil {
-				return err
-			}
-			f.CreatedByName = name
+		q := tx.NewInsert().Model(f)
+		if restore {
+			q = q.On("CONFLICT (id) DO NOTHING")
 		}
-		if _, err := tx.NewInsert().Model(f).Exec(ctx); err != nil {
+		res, err := q.Exec(ctx)
+		if err != nil {
 			if isFactDuplicate(err) {
 				return ErrFactDuplicate
 			}
 			return err
 		}
+		if n, _ := res.RowsAffected(); restore && n == 0 {
+			return ErrFactChanged
+		}
 		return nil
 	})
+}
+
+// stampAuthor fills f's author name snapshot from CreatedBy. A restore keeps
+// the snapshot f carries, and drops a CreatedBy that is no longer a user.
+func stampAuthor(ctx context.Context, tx bun.IDB, f *models.BrandFact, restore bool) error {
+	if restore && f.CreatedBy != nil {
+		var known bool
+		if err := tx.NewRaw("SELECT EXISTS (SELECT 1 FROM users WHERE id = ?)", *f.CreatedBy).Scan(ctx, &known); err != nil {
+			return err
+		}
+		if !known {
+			f.CreatedBy = nil
+		}
+	}
+	if restore && f.CreatedByName != "" {
+		return nil
+	}
+	name, err := authorName(ctx, tx, f.CreatedBy)
+	if err != nil {
+		return err
+	}
+	f.CreatedByName = name
+	return nil
+}
+
+// inTx runs fn on db, a caller's transaction, or in a transaction of its own
+// when db is nil.
+func (r *brandRepository) inTx(ctx context.Context, db bun.IDB, fn func(ctx context.Context, tx bun.IDB) error) error {
+	if db != nil {
+		return fn(ctx, db)
+	}
+	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error { return fn(ctx, tx) })
 }
 
 // UpdateFact replaces the editable fields of fact f.ID and returns the row as
@@ -193,18 +221,19 @@ func (r *brandRepository) insertFact(ctx context.Context, f *models.BrandFact, r
 // filled with them. When nothing editable changed the row is left alone and f
 // carries the stored updated_at. It returns sql.ErrNoRows or ErrFactDuplicate.
 func (r *brandRepository) UpdateFact(ctx context.Context, f *models.BrandFact) (before *models.BrandFact, err error) {
-	return r.updateFact(ctx, f, nil)
+	return r.updateFact(ctx, nil, f, nil)
 }
 
-// UpdateFactIf is UpdateFact, applied only while the stored fact's editable
-// fields equal was's; otherwise it returns ErrFactChanged and writes nothing.
-func (r *brandRepository) UpdateFactIf(ctx context.Context, f, was *models.BrandFact) (*models.BrandFact, error) {
-	return r.updateFact(ctx, f, was)
+// UpdateFactIf is UpdateFact on db (nil runs its own transaction), applied
+// only while the stored fact's editable fields equal was's; otherwise it
+// returns ErrFactChanged and writes nothing.
+func (r *brandRepository) UpdateFactIf(ctx context.Context, db bun.IDB, f, was *models.BrandFact) (*models.BrandFact, error) {
+	return r.updateFact(ctx, db, f, was)
 }
 
 // updateFact is UpdateFact, conditional on was when it is non-nil.
-func (r *brandRepository) updateFact(ctx context.Context, f, was *models.BrandFact) (before *models.BrandFact, err error) {
-	err = r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+func (r *brandRepository) updateFact(ctx context.Context, db bun.IDB, f, was *models.BrandFact) (before *models.BrandFact, err error) {
+	err = r.inTx(ctx, db, func(ctx context.Context, tx bun.IDB) error {
 		existing := new(models.BrandFact)
 		if err := tx.NewSelect().Model(existing).Where("bf.id = ?", f.ID).For("UPDATE").Scan(ctx); err != nil {
 			return err // sql.ErrNoRows → 404
@@ -234,24 +263,25 @@ func (r *brandRepository) updateFact(ctx context.Context, f, was *models.BrandFa
 
 // DeleteFact hard-deletes the fact and returns it, or nil when absent.
 func (r *brandRepository) DeleteFact(ctx context.Context, id string) (*models.BrandFact, error) {
-	f, err := r.deleteFact(ctx, id, nil)
+	f, err := r.deleteFact(ctx, nil, id, nil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return f, err
 }
 
-// DeleteFactIf is DeleteFact, applied only while the stored fact's editable
-// fields equal was's; otherwise it returns ErrFactChanged and deletes nothing.
-// A fact that is gone is sql.ErrNoRows.
-func (r *brandRepository) DeleteFactIf(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error) {
-	return r.deleteFact(ctx, id, was)
+// DeleteFactIf is DeleteFact on db (nil runs its own transaction), applied
+// only while the stored fact's editable fields equal was's; otherwise it
+// returns ErrFactChanged and deletes nothing. A fact that is gone is
+// sql.ErrNoRows.
+func (r *brandRepository) DeleteFactIf(ctx context.Context, db bun.IDB, id string, was *models.BrandFact) (*models.BrandFact, error) {
+	return r.deleteFact(ctx, db, id, was)
 }
 
 // deleteFact is DeleteFact, conditional on was when it is non-nil.
-func (r *brandRepository) deleteFact(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error) {
+func (r *brandRepository) deleteFact(ctx context.Context, db bun.IDB, id string, was *models.BrandFact) (*models.BrandFact, error) {
 	f := new(models.BrandFact)
-	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+	err := r.inTx(ctx, db, func(ctx context.Context, tx bun.IDB) error {
 		if err := tx.NewSelect().Model(f).Where("bf.id = ?", id).For("UPDATE").Scan(ctx); err != nil {
 			return err
 		}
