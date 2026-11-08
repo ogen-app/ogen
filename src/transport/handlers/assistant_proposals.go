@@ -8,6 +8,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
+	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
+	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
@@ -142,5 +145,24 @@ func (h *AssistantProposalsHandler) proposalError(err error) flowErrorPayload {
 	if ce, ok := errors.AsType[*assistant.ProposalConflictError](err); ok {
 		return flowErrorPayload{Message: ce.Msg, Code: fiber.StatusConflict}
 	}
+	if msg, ok := workModelFailure(err); ok {
+		return flowErrorPayload{Message: msg, Code: fiber.StatusBadGateway}
+	}
 	return flowError[*assistant.ValidationError, *assistant.AIError](err)
+}
+
+// workModelFailure reports a confirmed offer's work that failed at the model
+// provider: the generation flows an offer runs return their own AIError,
+// which reaches the answer unwrapped.
+func workModelFailure(err error) (string, bool) {
+	if e, ok := errors.AsType[*content_plan.AIError](err); ok {
+		return e.Msg, true
+	}
+	if e, ok := errors.AsType[*draft_post.AIError](err); ok {
+		return e.Msg, true
+	}
+	if e, ok := errors.AsType[*enrich_brief.AIError](err); ok {
+		return e.Msg, true
+	}
+	return "", false
 }
