@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/analytics/performers"
@@ -36,10 +37,10 @@ func analyticsPack(d Deps) assistant.Pack {
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			overview := genkit.DefineTool(g, "analyticsOverview",
 				"Returns the analytics overview for a window: reach, interactions, posts published and followers, against the previous window, with trends and insights.",
-				assistantkit.Wrap(func(ctx context.Context, in AnalyticsQuery) (any, error) { return analyticsOverview(ctx, d, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in AnalyticsQuery) (any, error) { return analyticsOverview(ctx, d, in) }), ai.WithStrictSchema(false))
 			top := genkit.DefineTool(g, "topPosts",
 				"Returns a window's best and worst posts, scored against the workspace's typical post at the same age, with insights.",
-				assistantkit.Wrap(func(ctx context.Context, in TopPostsInput) (any, error) { return topPosts(ctx, d, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in TopPostsInput) (any, error) { return topPosts(ctx, d, in) }), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(analyticsPackName, overview, assistantkit.TierRead,
 					`Call this when the user asks how things are going — "how did we do this month?", "is reach up?". The window defaults to the one on screen, else the last 28 days; the campaign to the thread's. Quote numbers as given; don't compute your own.`),
@@ -57,7 +58,7 @@ func analyticsPack(d Deps) assistant.Pack {
 						},
 					}, assistantkit.Wrap(func(ctx context.Context, in MoreLikeTheseInput) (*DraftIdeasOutput, error) {
 						return moreLikeThese(ctx, d, in)
-					})))
+					})), ai.WithStrictSchema(false))
 				specs = append(specs, spec(analyticsPackName, more, assistantkit.TierProposal,
 					`Call this when the user asks for more like the posts that worked — "make three more like the top performers". Pass postIds from topPosts (at most 5) and count. The new posts are drafts on the examples' platform and campaign unless you pass others.`))
 			}
