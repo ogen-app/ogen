@@ -1034,6 +1034,11 @@ func snapshotDraft(next ai.ToolFunc[DraftPostInput, assistantkit.Outcome[DraftPo
 			if err != nil {
 				return assistantkit.Outcome[DraftPostOutput]{}, err
 			}
+			// No research is refused here, before any offer: one confirmed
+			// later would draft from whatever was discussed since.
+			if strings.TrimSpace(source) == "" {
+				return assistantkit.Refuse[DraftPostOutput](noDraftSourceNote), nil
+			}
 			in.SourceMaterial = source
 			in.Instruction = cmp.Or(in.Instruction, st.instruction)
 		}
