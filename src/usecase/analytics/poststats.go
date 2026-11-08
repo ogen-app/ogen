@@ -49,6 +49,11 @@ func (s *Service) PostStats(ctx context.Context, postID string) (*poststat.Respo
 	if err != nil {
 		return nil, "", err
 	}
+	// A scheduled or failed post has a publisher id too; without a row it
+	// is not awaiting the platform, it is not out.
+	if cur == nil && post.Status != models.PostStatusPublished {
+		return nil, "", ErrNotPublishedViaPublisher
+	}
 	now := time.Now().UTC()
 	header := s.postHeader(ctx, post, cur)
 	in := poststat.Inputs{
@@ -103,7 +108,8 @@ func (s *Service) postHistory(ctx context.Context, postID string, publishedAt ti
 }
 
 // postHeader is the post's identity block, preferring what the refresh last
-// recorded (platform, permalink, publish time, title) over the post's own.
+// recorded (platform, permalink, publish time, title) over the post's own,
+// and falling back to the post's own where the refresh has none.
 func (s *Service) postHeader(ctx context.Context, post *models.Post, cur *models.PostAnalytics) poststat.PostHeader {
 	header := poststat.PostHeader{
 		PostID:          post.ID,
@@ -123,6 +129,9 @@ func (s *Service) postHeader(ctx context.Context, post *models.Post, cur *models
 		if cur.Title != "" {
 			header.Title = cur.Title
 		}
+	}
+	if header.OpenURL == "" {
+		header.OpenURL = post.PublishedURL
 	}
 	if header.Platform == "" && post.Platform != nil {
 		header.Platform = post.Platform.Name
