@@ -363,15 +363,17 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 const unfinishedAnswer = "I couldn't finish that. Ask again and I'll set it up."
 
 // recordUnfinished keeps an offer that was answered before its work failed or
-// was refused in the thread, and tells the client it was answered, so neither
-// the next turn nor the card waits on it.
+// was refused in the thread, with what the work changed before it stopped,
+// and tells the client it was answered, so neither the next turn nor the card
+// waits on it. The offer stays answered: work that failed part way must not
+// run twice from the same card.
 func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent OnEventFunc) {
 	resolved := st.resolvedList()
 	if len(resolved) == 0 {
 		return
 	}
 	if t.deps.Messages != nil {
-		resp := &Response{Action: actionAnswered, Explanation: unfinishedAnswer}
+		resp := &Response{Action: actionAnswered, Explanation: unfinishedAnswer, Touched: st.touches.List()}
 		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: st.view}, resp); err != nil {
 			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		}
