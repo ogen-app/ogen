@@ -22,6 +22,7 @@ func ideaDrafter(gk *genkitRuntime) compose.Drafter {
 			WindowEnd:      req.WindowEnd,
 			PhaseID:        req.PhaseID,
 			UsedAssetIDs:   req.UsedAssetIDs,
+			CreatedBy:      req.CreatedBy,
 		}, nil)
 		if err != nil {
 			return nil, nil, err
