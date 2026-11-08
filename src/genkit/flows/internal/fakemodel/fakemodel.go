@@ -107,6 +107,8 @@ func (m *Model) ToolResponses() []*ai.ToolResponse {
 	return out
 }
 
+// take records req and returns the next scripted turn with its 1-based
+// number, or an error once the script is used up.
 func (m *Model) take(req *ai.ModelRequest) (Turn, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -119,6 +121,8 @@ func (m *Model) take(req *ai.ModelRequest) (Turn, int, error) {
 	return t, m.next, nil
 }
 
+// generate answers req with the next scripted turn: its tool requests, or its
+// text, streamed chunk by chunk when cb is set.
 func (m *Model) generate(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
 	t, n, err := m.take(req)
 	if err != nil {
@@ -246,12 +250,14 @@ type memSource struct {
 	rows []models.FlowModelConfig
 }
 
+// List returns a copy of the stored rows.
 func (s *memSource) List(context.Context) ([]models.FlowModelConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]models.FlowModelConfig(nil), s.rows...), nil
 }
 
+// Upsert appends cfg; reconcile only writes slots that have no row yet.
 func (s *memSource) Upsert(_ context.Context, cfg *models.FlowModelConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
