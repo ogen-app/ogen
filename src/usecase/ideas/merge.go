@@ -39,37 +39,38 @@ func (s *Service) CheckMerge(ctx context.Context, keepID string, mergeIDs []stri
 	if err != nil {
 		return nil, err
 	}
-	m, err := planMerge(set, keepID, mergeIDs)
-	if err != nil {
+	if _, err := planMerge(set, keepID, mergeIDs); err != nil {
 		return nil, err
 	}
-	return m.Keep, nil
+	// planMerge folds a copy; the kept idea as it is now is the set's.
+	i := slices.IndexFunc(set.Ideas, func(idea models.Idea) bool { return idea.ID == keepID })
+	return &set.Ideas[i], nil
 }
 
 // Merge folds the ideas of mergeIDs into keepID's in one transaction and
 // deletes them. The kept idea keeps its title, verdict, plan and campaign;
-// it gains every asset they drew on (its own first, then theirs in order),
-// grounded when any of them was, and each of their notes its own note does
-// not already hold, appended in order while they fit. An analysis idea's
-// note is its analysis's, so it gains no notes. Every idea must be in the
-// kept one's campaign scope, and none may have had a post made from it.
+// it gains every asset they drew on, an analysis idea's source included
+// (its own first, then theirs in order), grounded when any of them was, and
+// each of their notes its own note does not already hold, appended in order
+// while they fit. An analysis idea's note is its analysis's, so it gains no
+// notes. Every idea must be in the kept one's campaign scope, and none may
+// have had a post made from it. The kept idea is stamped merged, which keeps
+// it out of the clean-ups of untriaged analysis ideas.
 func (s *Service) Merge(ctx context.Context, keepID string, mergeIDs []string) (*MergeResult, error) {
 	keepID, mergeIDs, err := mergeArgs(keepID, mergeIDs)
 	if err != nil {
 		return nil, err
 	}
 	now := s.stamp()
-	err = s.repo.MergeIdeas(ctx, append([]string{keepID}, mergeIDs...), func(set repository.IdeaMergeSet) (repository.IdeaMerge, error) {
+	idea, err := s.repo.MergeIdeas(ctx, append([]string{keepID}, mergeIDs...), func(set repository.IdeaMergeSet) (repository.IdeaMerge, error) {
 		m, err := planMerge(set, keepID, mergeIDs)
 		if err == nil {
 			m.Keep.UpdatedAt = now
+			m.Keep.MergedAt = &now
+			m.Columns = append(m.Columns, "merged_at")
 		}
 		return m, err
 	})
-	if err != nil {
-		return nil, err
-	}
-	idea, err := s.Get(ctx, keepID)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +132,12 @@ func foldInto(keep *models.Idea, merged []models.Idea) []string {
 	grounded := keep.GroundingMode != nil && *keep.GroundingMode == models.GroundingGrounded
 	note := keep.Note
 	for _, idea := range merged {
-		for _, a := range idea.AssetIDs {
+		// An analysis idea's source is an asset it drew on too.
+		drew := idea.AssetIDs
+		if src := idea.SourceAssetID; src != nil && (keep.SourceAssetID == nil || *src != *keep.SourceAssetID) {
+			drew = append([]string{*src}, drew...)
+		}
+		for _, a := range drew {
 			if !slices.Contains(assets, a) {
 				assets = append(assets, a)
 			}
