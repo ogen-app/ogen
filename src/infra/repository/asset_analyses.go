@@ -430,12 +430,14 @@ func (r *assetAnalysisRepository) ListMissingLenses(ctx context.Context, perTena
 	return out, err
 }
 
-// deleteUntriagedIdeas deletes the inbox (verdict NULL) ideas matching where.
+// deleteUntriagedIdeas deletes the inbox (verdict NULL) ideas matching where,
+// except those other ideas were merged into: a merge is a decision too.
 func deleteUntriagedIdeas(ctx context.Context, db bun.IDB, where string, args ...any) error {
 	_, err := db.NewDelete().
 		Model((*models.Idea)(nil)).
 		Where(where, args...).
 		Where("verdict IS NULL").
+		Where("merged_at IS NULL").
 		Exec(ctx)
 	return err
 }
