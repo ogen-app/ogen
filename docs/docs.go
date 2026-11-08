@@ -1229,7 +1229,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Runs an offer the assistant proposed, exactly as proposed, and streams the work's events\nlike a chat turn: the work's own events, \"proposal_resolved\", then \"complete\" with a\nCampaignAssistantResponse. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}: 404 when the\noffer does not exist, 409 when it was already answered, expired, names an unknown option, or\nthe work itself was refused.",
+                "description": "Runs an offer the assistant proposed, exactly as proposed, and streams the work's events\nlike a chat turn: the work's own events, \"proposal_resolved\", then \"complete\" with a\nassistant.Response. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}: 404 when the\noffer does not exist, 409 when it was already answered, expired, names an unknown option, or\nthe work itself was refused.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1289,7 +1289,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Withdraws an offer the assistant proposed. Nothing runs. Returns the turn's\nCampaignAssistantResponse (action \"answered\").",
+                "description": "Withdraws an offer the assistant proposed. Nothing runs. Returns the turn's\nassistant.Response (action \"answered\").",
                 "produces": [
                     "application/json"
                 ],
@@ -3702,76 +3702,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/campaigns/{id}/assistant": {
-            "post": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "description": "Sends an instruction to the Campaign Assistant and streams progress via Server-Sent Events.\n\"explanation_delta\" carries {\"delta\":\"...\"} fragments as the reply streams. \"tool_call\"/\"tool_result\"\nsignal tool invocations. When a content plan runs, \"content_plan_started\", \"content_plan_idea\"\n(etc.) and \"content_plan_complete\" are forwarded; when the brief is enriched, \"enrich_brief_started\",\nthe per-field \"enrich_brief_*_delta\" events and \"enrich_brief_complete\" are forwarded. A final\n\"complete\" event carries the CampaignAssistantResponse. \"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}.\nAvailable to any user in the campaign's tenant.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "text/event-stream"
-                ],
-                "tags": [
-                    "campaigns"
-                ],
-                "summary": "Campaign assistant (SSE)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Campaign Sqid",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Instruction payload",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.assistantRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "SSE stream: delta / tool_call / tool_result / *_complete / complete / error events"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/api/campaigns/{id}/brief-review": {
             "post": {
                 "security": [
@@ -4044,52 +3974,6 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/campaigns/{id}/messages": {
-            "get": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "description": "Returns the most recent Campaign Assistant conversation messages for a campaign.\nA \"model\" message's content is the JSON of that turn's \"complete\" event: action,\nexplanation and the tool results (brief, briefReview with findings, contentPlan,\ngeneratedPosts, draftedPosts, dates, redistribute, postsReview).",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "campaigns"
-                ],
-                "summary": "List campaign assistant messages",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Campaign Sqid",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/models.CampaignAssistantMessage"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -15292,17 +15176,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.assistantRequest": {
-            "type": "object",
-            "required": [
-                "instruction"
-            ],
-            "properties": {
-                "instruction": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.assistantTurnRequest": {
             "type": "object",
             "required": [
@@ -19945,26 +19818,6 @@ const docTemplate = `{
                 },
                 "use_assets": {
                     "type": "boolean"
-                }
-            }
-        },
-        "models.CampaignAssistantMessage": {
-            "type": "object",
-            "properties": {
-                "campaign_id": {
-                    "type": "string"
-                },
-                "content": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "role": {
-                    "type": "string"
                 }
             }
         },

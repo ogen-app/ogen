@@ -12,7 +12,6 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
-	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -48,38 +47,6 @@ type memActions struct {
 func (m *memActions) Create(_ context.Context, a *models.AssistantAction) error {
 	m.rows = append(m.rows, a)
 	return nil
-}
-
-func TestWorkOnCampaign(t *testing.T) {
-	var got campaign_assistant.CampaignAssistantRequest
-	d := Deps{Campaign: func(_ context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
-		got = req
-		onEvent("content_plan_idea", map[string]any{"index": 0})
-		onEvent("explanation_delta", map[string]any{"delta": "x"})
-		onEvent("complete", map[string]any{})
-		return &campaign_assistant.CampaignAssistantResponse{Explanation: "Planned 6 ideas.", Action: "content_plan_generated",
-			ContentPlan: &campaign_assistant.ContentPlanResult{IdeaCount: 6}}, nil
-	}}
-	var events []assistant.SSEEventKind
-	ctx, touched := turn(t, campaign1, func(k assistant.SSEEventKind, _ any) { events = append(events, k) })
-	out, err := workOnCampaign(ctx, d, WorkOnCampaignInput{Instruction: "plan it", AssetIDs: []string{"a1"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.CampaignID != "c1" || !slices.Equal(got.SourceAssetIDs, []string{"a1"}) || out.Action != "content_plan_generated" {
-		t.Fatalf("request = %+v, out = %+v", got, out)
-	}
-	// Its progress reaches the client; its own reply doesn't.
-	if !slices.Equal(events, []assistant.SSEEventKind{"content_plan_idea"}) {
-		t.Fatalf("forwarded = %v", events)
-	}
-	if !slices.Equal(touched(), []assistantkit.Touched{{Kind: "idea"}}) {
-		t.Fatalf("touched = %v", touched())
-	}
-
-	ctx, _ = turn(t, workspace, nil)
-	_, err = workOnCampaign(ctx, d, WorkOnCampaignInput{Instruction: "plan it"})
-	refused(t, err)
 }
 
 // memIdeaRepo keeps ideas for the ideas service.
@@ -394,10 +361,8 @@ func TestAll(t *testing.T) {
 		t.Fatalf("no services = %d packs", n)
 	}
 	d, _, _ := ideaDeps()
-	d.Campaign = func(context.Context, campaign_assistant.CampaignAssistantRequest, campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
-		return nil, nil
-	}
-	if n := len(All(d)); n != 1 {
-		t.Fatalf("campaign only = %d packs (ideas needs compose)", n)
+	d.Campaign = &assistant.Pack{Name: "campaign"}
+	if all := All(d); len(all) != 1 || all[0].Name != "campaign" {
+		t.Fatalf("campaign only = %d packs (ideas needs compose)", len(all))
 	}
 }
