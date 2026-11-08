@@ -1,4 +1,4 @@
-.PHONY: build run lint test test-integration coverage _ginkgo _air _pg-test-up tidy docker docker-genkit clean openapi genkit proto
+.PHONY: build run lint test test-integration evals coverage _ginkgo _air _pg-test-up tidy docker docker-genkit clean openapi genkit proto
 
 GINKGO_FLAGS = --github-output -r -randomize-all -randomize-suites -race -trace -procs=4 -poll-progress-after=10s -poll-progress-interval=10s
 
@@ -65,6 +65,12 @@ test-integration:
 	EXIT=$$?; \
 	docker compose -f docker-compose.integration.yml down; \
 	exit $$EXIT
+
+# The assistant's per-pack evals: does a message from a screen reach the tool it
+# should? One live orchestrator call per case, no tool runs, no database. Needs
+# ANTHROPIC_API_KEY; EVAL_MODEL_ID overrides the orchestrator model.
+evals:
+	go test -tags evals -count=1 -v -run TestPackEvals ./src/genkit/flows/assistant/packs/
 
 tidy:
 	go mod tidy
