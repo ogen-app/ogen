@@ -210,7 +210,7 @@ var _ = Describe("PostAttachmentsHandler", Ordered, func() {
 
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		postVersionRepo := repository.NewPostVersionRepository(db)
 		handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), postAttRepo, auth, handlers.PostsOptions{Storage: stub}).Register(app)
 		assetRepo := repository.NewAssetRepository(db, tagRepo, repository.NewAssetFileRepository(db))

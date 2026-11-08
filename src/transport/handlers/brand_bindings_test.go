@@ -50,7 +50,7 @@ var _ = Describe("Brand bindings (CON-245)", Ordered, func() {
 		postRepo := repository.NewPostRepository(db)
 
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		ch := handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{Brands: brandRepo})
+		ch := handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{Brands: brandRepo})
 		ch.Register(app)
 		ph := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{Brands: brandRepo})
 		ph.Register(app)
