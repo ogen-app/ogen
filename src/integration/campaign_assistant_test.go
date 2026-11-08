@@ -321,11 +321,20 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	Describe("targeted generation", func() {
 		It("adds a few targeted posts in the current phase and persists them", func() {
+			// The campaign has no sources: the model either offers "go ahead
+			// without them" or plans exploratory posts straight away.
 			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
 				Instruction: "Add 2 LinkedIn posts in the current phase for the upcoming two weeks.",
 			}, nil)
 			Expect(err).NotTo(HaveOccurred())
+			if resp.Action == "proposed" {
+				ideas, err := ideaRepo.List(ctx, repository.IdeaListFilter{CampaignID: campaignID})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ideas).To(BeEmpty(), "nothing is planned before the offer is confirmed")
+				resp, err = callback(ctx, campaignTurn{CampaignID: campaignID, Instruction: "Yes, go ahead."}, nil)
+				Expect(err).NotTo(HaveOccurred())
+			}
 			Expect(resp).NotTo(BeNil())
 
 			Expect(resp.Action).To(Equal("posts_generated"))
