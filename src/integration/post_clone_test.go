@@ -77,7 +77,7 @@ var _ = Describe("Post clone — CON-59 (real S3/MinIO)", Ordered, func() {
 
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 
 		// POST /:id/clone now lives on the actions handler.
 		handlers.NewPostActionsHandler(postRepo, clone.New(db, postRepo, versionRepo, postAttRepo, platformRepo, logRepo, store, nil), nil, nil, auth).Register(app)

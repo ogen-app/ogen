@@ -44,7 +44,7 @@ var _ = Describe("Campaign type workspace isolation (CON-314)", Ordered, func() 
 		campaignRepo := repository.NewCampaignRepository(db, tagRepo, repository.NewPlatformRepository(db), campaignTypeRepo)
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		handlers.NewTenantsHandler(signup.New(db, repository.NewAccountRepository(db), tenantRepo), tenantRepo, testCookieName, false, auth, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		handlers.NewCampaignTypesHandler(campaignTypeRepo, auth).Register(app)
 	})
 
