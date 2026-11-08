@@ -390,7 +390,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Brands:        r.brandRepo,
 		},
 		campaignAssistRepos: campaign_assistant.CampaignAssistantRepos{
-			Messages:  r.campaignMessageRepo,
+			Messages:  r.assistantMessageRepo,
 			Campaigns: r.campaignRepo,
 			Posts:     r.postRepo,
 			Assets:    r.pieceRepo,
