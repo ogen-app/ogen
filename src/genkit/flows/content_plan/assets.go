@@ -102,8 +102,25 @@ func assetRefsOf(assets []resolvedPiece) []AssetRef {
 	return out
 }
 
+type withoutAssetsKey struct{}
+
+// WithoutAssets returns ctx for a run that must not draw on the campaign's
+// assets, whatever its UseAssets setting: the caller asked for content from
+// general knowledge.
+func WithoutAssets(ctx context.Context) context.Context {
+	return context.WithValue(ctx, withoutAssetsKey{}, true)
+}
+
+// AssetsExcluded reports whether ctx came from WithoutAssets.
+func AssetsExcluded(ctx context.Context) bool {
+	v, _ := ctx.Value(withoutAssetsKey{}).(bool)
+	return v
+}
+
+// resolveAssets retrieves the campaign's ready asset context for generation,
+// or nothing when the campaign does not use assets or ctx excludes them.
 func resolveAssets(ctx context.Context, campaign *models.Campaign, cfg ContentPlanFlowConfig, repos ContentPlanRepos) ([]resolvedPiece, []string, error) {
-	if !campaign.UseAssets {
+	if !campaign.UseAssets || AssetsExcluded(ctx) {
 		return nil, nil, nil
 	}
 
