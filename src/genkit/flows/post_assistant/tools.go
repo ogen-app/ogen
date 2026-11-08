@@ -368,48 +368,48 @@ func defineTools(g *genkit.Genkit) []assistantkit.Spec {
 				"Pass the user's change request verbatim in instruction (e.g. 'shorten the intro', "+
 				"'make it punchier', 'write the post from the draft thesis') and a mode (edit or draft). "+
 				"The content is written and saved by the server; you do not write it yourself.",
-			assistantkit.Wrap(toolEditPost)), assistantkit.TierReversible,
+			assistantkit.Wrap(toolEditPost), ai.WithStrictSchema(false)), assistantkit.TierReversible,
 			`Call this for ANY change to the post's copy: rephrase, expand, shorten, change the tone, restructure, work in asset information, or write the body from a draft_thesis note (mode draft). Pass the user's instruction VERBATIM; never write or paraphrase the copy yourself. Set saveVersion for a structural change, new information, a tone shift or a rewrite, with a short versionNote; leave it off for a small tweak. For an asset-grounded edit, retrieve the material first (getAssetChunks / searchAssetChunks) in the same message: what you retrieve is handed to the writer.`),
 		spec(genkit.DefineTool(g, "listAssets",
 			"Returns the list of assets attached to the post with their ID, name, type, and chunk count.",
-			assistantkit.Wrap(func(ctx context.Context, _ struct{}) ([]AssetInfo, error) { return toolListAssets(ctx) })), assistantkit.TierRead,
+			assistantkit.Wrap(func(ctx context.Context, _ struct{}) ([]AssetInfo, error) { return toolListAssets(ctx) }), ai.WithStrictSchema(false)), assistantkit.TierRead,
 			`Call this to see which assets are attached to the post.`),
 		spec(genkit.DefineTool(g, "getAssetChunks",
 			"Retrieves text chunks from a specific asset attached to the post. Omit chunkIds to get all chunks (subject to token budget). sourceLabel, when present, says where a chunk came from (e.g. \"Slide 4\", \"0:45–1:30\") — use it to cite the source.",
-			assistantkit.Wrap(toolGetAssetChunks)), assistantkit.TierRead,
+			assistantkit.Wrap(toolGetAssetChunks), ai.WithStrictSchema(false)), assistantkit.TierRead,
 			`Call this when the user references a specific attached asset, or an edit needs its full text.`),
 		spec(genkit.DefineTool(g, "searchAssetChunks",
 			"Semantic search over the chunks of an asset attached to the post. Returns the most relevant chunks for the query, each with a sourceLabel citation when the asset has one.",
-			assistantkit.Wrap(toolSearchAssetChunks)), assistantkit.TierRead,
+			assistantkit.Wrap(toolSearchAssetChunks), ai.WithStrictSchema(false)), assistantkit.TierRead,
 			`Call this to find a topic or keyword in an attached asset.`),
 		spec(genkit.DefineTool(g, "getCurrentContent",
 			"Returns the post's latest content as plain text.",
-			assistantkit.Wrap(func(ctx context.Context, _ struct{}) (string, error) { return toolGetCurrentContent(ctx) })), assistantkit.TierRead,
+			assistantkit.Wrap(func(ctx context.Context, _ struct{}) (string, error) { return toolGetCurrentContent(ctx) }), ai.WithStrictSchema(false)), assistantkit.TierRead,
 			`Call this to re-read the post's content when it may have changed since <post> was read — e.g. after an edit earlier in this message.`),
 		spec(genkit.DefineTool(g, "clonePost",
 			"Duplicates the post as a new draft in the same campaign. "+
 				"For a cross-platform clone, set targetPlatform and OMIT content — the server's writer "+
 				"adapts the copy to the target platform (pass an optional instruction to steer it). "+
 				"content is an explicit override only. Returns the new draft's id.",
-			assistantkit.Wrap(toolClonePost)), assistantkit.TierReversible,
+			assistantkit.Wrap(toolClonePost), ai.WithStrictSchema(false)), assistantkit.TierReversible,
 			`Call this for "clone this post", "duplicate this", "clone this for <platform>". Same platform: no targetPlatform, the copy is verbatim. Another platform: set targetPlatform to its name and let the server adapt the copy (pass the user's steer as instruction). An unknown platform is refused with the available ones: ask which. Cloning never changes this post.`),
 		spec(genkit.DefineTool(g, "restoreVersion",
 			"Rolls the post back to an earlier saved version. Pass versionNumber "+
 				"(e.g. 2) for an explicit version, or relative:\"previous\" to undo the last change. "+
 				"Non-destructive: it saves a new version, so nothing is lost.",
-			assistantkit.Wrap(toolRestoreVersion)), assistantkit.TierReversible,
+			assistantkit.Wrap(toolRestoreVersion), ai.WithStrictSchema(false)), assistantkit.TierReversible,
 			`Call this for "restore version N", "undo the last change", "go back". Use the numbers under "Version history" in <post>, or relative "previous". When there is nothing to restore it is refused: relay that, don't guess another number.`),
 		free(spec(genkit.DefineTool(g, "schedulePost",
 			"Schedules the post for publishing at an absolute time. Pass scheduledAt as "+
 				"ISO-8601 with a timezone offset; set allowPromote:true when the post is a draft. "+
 				"It is offered for the user to confirm before it runs.",
-			bindScheduledPost(assistantkit.Gated("schedulePost", scheduleGate, assistantkit.Wrap(toolSchedulePost)))), assistantkit.TierProposal,
+			bindScheduledPost(assistantkit.Gated("schedulePost", scheduleGate, assistantkit.Wrap(toolSchedulePost))), ai.WithStrictSchema(false)), assistantkit.TierProposal,
 			`Call this for "schedule this for tomorrow at 9am", "publish next Monday". Resolve the time against the scheduling context in <post> (its timezone and defaults: morning 09:00, afternoon 14:00, evening 18:00) and pass it with its offset; set allowPromote when the post is a draft that passes validation. The schedule is offered for the user's yes: tell them the absolute time and whether it auto-publishes or waits for manual publishing. If the readiness summary says the post can't be published, don't call it; tell the user what to fix.`)),
 		spec(genkit.DefineTool(g, "createNote",
 			"Saves a standalone note attached to the post — an image-generation prompt "+
 				"(type image_prompt, e.g. a Nano Banana prompt) or a free-form side note or idea "+
 				"(type note), instead of putting it in the post body. Returns the new note's id.",
-			assistantkit.Wrap(toolCreateNote)), assistantkit.TierReversible,
+			assistantkit.Wrap(toolCreateNote), ai.WithStrictSchema(false)), assistantkit.TierReversible,
 			`Call this for "make an image prompt", "jot a note", "save this as a note" — anything that should NOT go into the post body. To change the copy AND capture a note, call both editPost and createNote.`),
 	}
 }

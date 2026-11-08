@@ -34,6 +34,12 @@ linters:
         linters:
           - gocyclo
           - gocognit
+      # genkit v1.9 deprecates model middleware in favour of WithUse. The
+      # usage metering, prompt caching and effort hooks still run through it;
+      # moving them to the new hooks is its own change.
+      - linters:
+          - staticcheck
+        text: "SA1019: github.com/firebase/genkit/go/ai.(WithMiddleware|ModelMiddleware) is deprecated"
 
 issues:
   # The whole repo is lint-clean: report every issue, not a sample.
