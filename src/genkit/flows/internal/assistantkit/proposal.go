@@ -34,6 +34,7 @@ type ConflictError struct {
 	Options []Option
 }
 
+// Error returns the conflict's reason.
 func (e *ConflictError) Error() string { return e.Reason }
 
 // Conflicted returns a ConflictError offering options. Each option's Tool and

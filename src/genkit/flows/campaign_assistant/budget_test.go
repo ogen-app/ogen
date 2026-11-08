@@ -1,6 +1,7 @@
 package campaign_assistant
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -55,6 +56,26 @@ func TestGeneratePosts_NoRoomOffersOnlyAnyway(t *testing.T) {
 	out := runTool(t, budgetState(store, &generated, 0), "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 1})
 	if out.Status != assistantkit.StatusConflict || len(out.Options) != 1 || out.Options[0].ID != "anyway" || generated != 0 {
 		t.Fatalf("outcome = %+v, generated = %d", out, generated)
+	}
+}
+
+// A platform named twice is drafted once, so it counts once against the goal.
+func TestDraftPostGate_CountsDistinctPlatforms(t *testing.T) {
+	var generated int
+	st := budgetState(&memProposals{}, &generated, 1)
+	ctx := withRequestState(t.Context(), st)
+	in := DraftPostInput{Platforms: []string{"Threads", "Threads"}, Count: 1}
+	if err := draftPostGate.Precheck(ctx, in); err != nil {
+		t.Fatalf("precheck = %v, want one post to fit the room of 1", err)
+	}
+	if draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"Threads", "threads"}, Count: 3}) {
+		t.Fatal("3 posts on one platform are within the threshold")
+	}
+	// Over the goal, one distinct platform can still fill it exactly.
+	in.Count = 2
+	ce, ok := errors.AsType[*assistantkit.ConflictError](draftPostGate.Precheck(ctx, in))
+	if !ok || len(ce.Options) != 2 || ce.Options[0].ID != "fill" {
+		t.Fatalf("precheck conflict = %+v", ce)
 	}
 }
 
