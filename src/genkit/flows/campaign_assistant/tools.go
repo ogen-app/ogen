@@ -32,10 +32,12 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 	"github.com/ogen-app/ogen/src/usecase/notify"
+	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
 
 // ── Context key for per-request state ────────────────────────────────────────
@@ -1564,41 +1566,88 @@ func toolRedistributePosts(ctx context.Context) (*RedistributePostsOutput, error
 		return nil, fmt.Errorf("list posts: %w", err)
 	}
 
+	batch, phaseOf := redistributeMoves(c, posts)
+	moved := []string{}
+	if len(batch) > 0 {
+		// The write re-checks each post's schedule, so a post edited since
+		// the list keeps the user's change.
+		if moved, err = st.repos.Posts.MoveScheduledAt(ctx, batch, time.Now().UTC()); err != nil {
+			return nil, fmt.Errorf("persist redistributed posts: %w", err)
+		}
+	}
+	phasesTouched := make(map[string]bool)
+	for _, id := range moved {
+		phasesTouched[phaseOf[id]] = true
+	}
+
+	st.redistributeResult = &RedistributeResult{PostsUpdated: len(moved), PhaseCount: len(phasesTouched)}
+	st.recordWrite(actionPostsRedistributed)
+	return &RedistributePostsOutput{PostsUpdated: len(moved), PhaseCount: len(phasesTouched)}, nil
+}
+
+// redistributeMoves is the redistribution plan as schedule moves: each post
+// lands on its planned date at the campaign's publishing time in its
+// timezone, a minute later per post already holding that instant. phaseOf
+// maps each moving post to its phase id ("" for none).
+func redistributeMoves(c *models.Campaign, posts []models.Post) ([]repository.ScheduleMove, map[string]string) {
+	loc := calendarcheck.Location(c)
 	byID := make(map[string]*models.Post, len(posts))
 	for i := range posts {
 		byID[posts[i].ID] = &posts[i]
 	}
-
-	phasesTouched := make(map[string]bool)
-	var changed []*models.Post
+	type target struct {
+		p    *models.Post
+		date string
+	}
+	var targets []target
+	moving := map[string]bool{}
 	for _, a := range reschedule.Plan(c, posts) {
 		p := byID[a.PostID]
-		if p == nil {
-			continue
-		}
-		if p.ScheduledAt != nil && dateOnly(*p.ScheduledAt).Equal(a.ScheduledAt) {
+		date := a.ScheduledAt.Format(time.DateOnly)
+		if p == nil || p.ScheduledAt != nil && p.ScheduledAt.In(loc).Format(time.DateOnly) == date {
 			continue // already on the target date
 		}
-		at := a.ScheduledAt
-		p.ScheduledAt = &at
-		p.UpdatedAt = time.Now().UTC()
-		changed = append(changed, p)
-		key := ""
-		if p.CampaignTypePhaseID != nil {
-			key = *p.CampaignTypePhaseID
-		}
-		phasesTouched[key] = true
+		targets = append(targets, target{p, date})
+		moving[p.ID] = true
 	}
-
-	if len(changed) > 0 {
-		if err := st.repos.Posts.UpdateScheduledAtBatch(ctx, changed); err != nil {
-			return nil, fmt.Errorf("persist redistributed posts: %w", err)
+	taken := map[time.Time]bool{}
+	for _, p := range posts {
+		if p.ScheduledAt != nil && !moving[p.ID] {
+			taken[p.ScheduledAt.UTC()] = true
 		}
 	}
+	var batch []repository.ScheduleMove
+	phaseOf := map[string]string{}
+	for _, t := range targets {
+		at, _, _ := scheduling.ComposeScheduledAt(t.date, t.p.ID, loc,
+			c.PublishingTime, c.PublishingDays, c.SpreadMinutes, c.StartDate, c.EndDate)
+		if at == nil {
+			continue
+		}
+		to := freeInstant(at.UTC(), taken)
+		taken[to] = true
+		batch = append(batch, repository.ScheduleMove{PostID: t.p.ID, From: t.p.ScheduledAt, To: to})
+		phaseOf[t.p.ID] = ""
+		if t.p.CampaignTypePhaseID != nil {
+			phaseOf[t.p.ID] = *t.p.CampaignTypePhaseID
+		}
+	}
+	return batch, phaseOf
+}
 
-	st.redistributeResult = &RedistributeResult{PostsUpdated: len(changed), PhaseCount: len(phasesTouched)}
-	st.recordWrite(actionPostsRedistributed)
-	return &RedistributePostsOutput{PostsUpdated: len(changed), PhaseCount: len(phasesTouched)}, nil
+// maxSameTimeNudge bounds how far freeInstant moves a post off a taken
+// instant.
+const maxSameTimeNudge = 60
+
+// freeInstant is at, or the first minute after it no other post holds; at
+// itself once maxSameTimeNudge minutes are all taken.
+func freeInstant(at time.Time, taken map[time.Time]bool) time.Time {
+	for i := range maxSameTimeNudge {
+		if t := at.Add(time.Duration(i) * time.Minute); !taken[t] {
+			return t
+		}
+	}
+	return at
 }
 
 // dateOnly truncates a time to its calendar date at 00:00 UTC.
