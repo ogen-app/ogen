@@ -176,8 +176,8 @@ func (ps packList) get(name string) (Pack, bool) {
 }
 
 // begin runs Begin for each pack in names the turn hasn't begun, in order,
-// and returns ctx carrying them. A pack that refuses leaves the turn, its
-// reason noted for the model.
+// and returns ctx carrying them; a pack already begun is bound to ctx again.
+// A pack that refuses leaves the turn, its reason noted for the model.
 func (t *toolSet) begin(ctx context.Context, st *turnState, names []string) (context.Context, error) {
 	return t.beginWith(ctx, st, names, st.turn)
 }
@@ -185,7 +185,11 @@ func (t *toolSet) begin(ctx context.Context, st *turnState, names []string) (con
 func (t *toolSet) beginWith(ctx context.Context, st *turnState, names []string, turn Turn) (context.Context, error) {
 	for _, name := range names {
 		p, ok := t.packs.get(name)
-		if !ok || st.hasBegun(name) {
+		if !ok {
+			continue
+		}
+		if b, ok := st.begunPack(name); ok {
+			ctx = withBegun(ctx, b.ctx)
 			continue
 		}
 		next, block := ctx, ""
@@ -207,10 +211,11 @@ func (t *toolSet) beginWith(ctx context.Context, st *turnState, names []string, 
 }
 
 // beginFor readies the pack of tool when the turn hasn't, for an offer made
-// in an earlier turn or on another screen; args are the offer's input.
+// in an earlier turn or on another screen; args are the offer's input. A pack
+// the turn has begun is bound to ctx again.
 func (t *toolSet) beginFor(ctx context.Context, st *turnState, tool string, args map[string]any) (context.Context, error) {
 	s, ok := t.reg.Lookup(tool)
-	if !ok || s.Pack == corePack || st.hasBegun(s.Pack) {
+	if !ok || s.Pack == corePack {
 		return ctx, nil
 	}
 	turn := st.turn
@@ -223,6 +228,28 @@ func (t *toolSet) beginFor(ctx context.Context, st *turnState, tool string, args
 		return nil, assistantkit.Refused(st.noteFor(s.Pack))
 	}
 	return ctx, nil
+}
+
+// begunCtx is ctx with the values of a pack begun on another context as a
+// fallback. A pack begun inside a tool call — for an offer confirmed there —
+// holds its state on that call's context, which the turn's later calls and
+// the restarted model call don't derive from. ctx's own values come first,
+// and its deadline and cancellation stand.
+type begunCtx struct {
+	context.Context
+	begun context.Context
+}
+
+func (c *begunCtx) Value(key any) any {
+	if v := c.Context.Value(key); v != nil {
+		return v
+	}
+	return c.begun.Value(key)
+}
+
+// withBegun binds the pack state begun carries to ctx.
+func withBegun(ctx, begun context.Context) context.Context {
+	return &begunCtx{Context: ctx, begun: begun}
 }
 
 // end collects the results of the packs the turn began, by pack, and the
