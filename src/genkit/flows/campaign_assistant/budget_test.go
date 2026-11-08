@@ -34,26 +34,6 @@ func TestGeneratePosts_IdeasFillNoGoal(t *testing.T) {
 	}
 }
 
-// A platform named twice is drafted once, so it counts once against the goal.
-func TestDraftPostGate_CountsDistinctPlatforms(t *testing.T) {
-	var generated int
-	st := budgetState(&memProposals{}, &generated, 1)
-	ctx := withRequestState(t.Context(), st)
-	in := DraftPostInput{Platforms: []string{"Threads", "Threads"}, Count: 1}
-	if err := draftPostGate.Precheck(ctx, in); err != nil {
-		t.Fatalf("precheck = %v, want one post to fit the room of 1", err)
-	}
-	if draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"Threads", "threads"}, Count: 3}) {
-		t.Fatal("3 posts on one platform are within the threshold")
-	}
-	// Over the goal, one distinct platform can still fill it exactly.
-	in.Count = 2
-	ce, ok := errors.AsType[*assistantkit.ConflictError](draftPostGate.Precheck(ctx, in))
-	if !ok || len(ce.Options) != 2 || ce.Options[0].ID != "fill" {
-		t.Fatalf("precheck conflict = %+v", ce)
-	}
-}
-
 func TestGeneratePosts_WithinGoalRuns(t *testing.T) {
 	store := &memProposals{}
 	var generated int
@@ -87,5 +67,54 @@ func TestOverGoal_OffersAChoice(t *testing.T) {
 	st = budgetState(&memProposals{}, &generated, 5)
 	if err := overGoal(st.bind(t.Context()), "draftPost", 2, args, nil); err != nil {
 		t.Fatalf("within the goal: %v", err)
+	}
+}
+
+// When the posts could not be read the room is unknown: even one post waits
+// for a yes, and nothing offers to fill the goal.
+func TestOverGoal_UnknownRoomAsks(t *testing.T) {
+	var generated int
+	st := budgetState(&memProposals{}, &generated, 5)
+	st.snapshot = st.snapshot.WithoutPosts()
+	err := overGoal(st.bind(t.Context()), "draftPost", 1, map[string]any{"count": 1}, func(n int) any { return map[string]any{"count": n} })
+	ce, ok := errors.AsType[*assistantkit.ConflictError](err)
+	if !ok || len(ce.Options) != 1 || ce.Options[0].ID != "anyway" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A platform named twice is drafted once, so it counts once against the goal.
+func TestDraftPostGate_CountsDistinctPlatforms(t *testing.T) {
+	var generated int
+	ctx := budgetState(&memProposals{}, &generated, 1).bind(t.Context())
+	in := DraftPostInput{Platforms: []string{"Threads", "Threads"}, Count: 1}
+	if err := draftPostGate.Precheck(ctx, in); err != nil {
+		t.Fatalf("precheck = %v, want one post to fit the room of 1", err)
+	}
+	if draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"Threads", "threads"}, Count: 3}) {
+		t.Fatal("3 posts on one platform are within the threshold")
+	}
+	// Over the goal, one distinct platform can still fill it exactly.
+	in.Count = 2
+	ce, ok := errors.AsType[*assistantkit.ConflictError](draftPostGate.Precheck(ctx, in))
+	if !ok || len(ce.Options) != 2 || ce.Options[0].ID != "fill" {
+		t.Fatalf("precheck conflict = %+v", ce)
+	}
+}
+
+// The gates compare the threshold with what the tool would create, which is
+// capped per call.
+func TestPostGates_ThresholdUsesCappedCount(t *testing.T) {
+	st := &requestState{campaign: timelineCampaign(), proposalThreshold: 5, maxDraftPosts: 5, maxGeneratePosts: 5}
+	ctx := st.bind(t.Context())
+	if draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 10}) {
+		t.Fatal("draftPost: 10 on two platforms creates 5, within the threshold")
+	}
+	if generatePostsGate.Needs(ctx, GeneratePostsInput{Platforms: []string{"Threads"}, Count: 20}) {
+		t.Fatal("generatePosts: 20 creates 5, within the threshold")
+	}
+	st.proposalThreshold = 4
+	if !draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 10}) {
+		t.Fatal("draftPost: 5 posts are above a threshold of 4")
 	}
 }
