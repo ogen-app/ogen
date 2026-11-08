@@ -34,6 +34,8 @@ type DraftRequest struct {
 	WindowEnd    string
 	PhaseID      string
 	UsedAssetIDs []string
+	// CreatedBy is who the posts and their source notes are attributed to.
+	CreatedBy string
 }
 
 // Written is a post the writer created.
@@ -88,8 +90,8 @@ type DraftResult struct {
 }
 
 // PlanDraft checks a draft request without writing anything: the ideas, the
-// campaign, the platforms (a named one must be the campaign's), and at most
-// maxPosts posts.
+// campaign, the platforms (a named one must be the campaign's), a named phase
+// (one of the campaign type's), and at most maxPosts posts.
 func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*DraftPlan, error) {
 	ideas, err := s.loadIdeas(ctx, in.IdeaIDs)
 	if err != nil {
@@ -100,13 +102,8 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 		return nil, err
 	}
 	platforms := dedupe(in.PlatformIDs)
-	if in.PostType != "" && len(platforms) != 1 {
-		return nil, ErrPostTypeOneFor
-	}
-	for _, p := range platforms {
-		if err := checkTarget(campaign, p, in.PostType, true); err != nil {
-			return nil, err
-		}
+	if err := checkAsked(campaign, platforms, in.PostType, in.PhaseID); err != nil {
+		return nil, err
 	}
 	plan := firstPlan(ideas, campaign.ID)
 	postType := in.PostType
@@ -163,6 +160,7 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 				WindowEnd:      window,
 				PhaseID:        phase,
 				UsedAssetIDs:   sourceAssets(group),
+				CreatedBy:      in.Actor,
 			}})
 		}
 	}
@@ -198,6 +196,29 @@ func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(Dra
 func (s *Service) WithDrafter(d Drafter) *Service {
 	s.draft = d
 	return s
+}
+
+// checkAsked checks the platforms, post type and phase a request names
+// against the campaign.
+func checkAsked(campaign *models.Campaign, platforms []string, postType, phaseID string) error {
+	if postType != "" && len(platforms) != 1 {
+		return ErrPostTypeOneFor
+	}
+	for _, p := range platforms {
+		if err := checkTarget(campaign, p, postType, true); err != nil {
+			return err
+		}
+	}
+	if phaseID != "" && !hasPhase(campaign, phaseID) {
+		return ErrInvalidPhase
+	}
+	return nil
+}
+
+// hasPhase reports whether phaseID is a phase of the campaign's type.
+func hasPhase(campaign *models.Campaign, phaseID string) bool {
+	return campaign.CampaignType != nil && slices.ContainsFunc(campaign.CampaignType.Phases,
+		func(p models.CampaignTypePhase) bool { return p.ID == phaseID })
 }
 
 // firstPlan is the first idea plan that sets each field; a phase only from
