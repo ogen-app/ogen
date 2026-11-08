@@ -48,7 +48,6 @@ const (
 	FlowEnrichBrief       = "enrich_brief"
 	FlowConsistency       = "consistency"
 	FlowPostQuality       = "post_quality"
-	FlowCampaignAssistant = "campaign_assistant"
 	FlowAssistant         = "assistant"
 	FlowEmbed             = "embed"
 	FlowVision            = "vision"
@@ -162,11 +161,7 @@ var catalog = []Flow{
 		{Key: SlotMain, Description: "Scores quality dimensions.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true}},
 	}},
-	{Key: FlowCampaignAssistant, Description: "Campaign orchestration assistant.", Slots: []Slot{
-		{Key: SlotOrchestrator, Description: "Cheap orchestration/routing loop (delegates to sub-flows).", Capability: CapabilityChat, Vendors: anthropicOnly,
-			Requires: Requirements{NeedsTools: true}},
-	}},
-	{Key: FlowAssistant, Description: "Universal assistant: one thread per workspace, campaign or post, aware of the screen.", Slots: []Slot{
+	{Key: FlowAssistant, Description: "The assistant: one thread per workspace, campaign or post, aware of the screen.", Slots: []Slot{
 		{Key: SlotOrchestrator, Description: "Cheap orchestration loop over the core tools and the loaded packs.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsTools: true}},
 		{Key: SlotWriter, Description: "Capable copywriter behind the post pack's editPost and clonePost.", Capability: CapabilityChat, Vendors: anthropicOnly},

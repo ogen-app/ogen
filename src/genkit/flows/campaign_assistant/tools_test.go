@@ -2,7 +2,6 @@ package campaign_assistant
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -223,17 +222,16 @@ func TestGeneratePosts_HeavySlotOnlyBurnedOnSuccess(t *testing.T) {
 		}
 	})
 
-	t.Run("the turn's source limit reaches the plan", func(t *testing.T) {
+	t.Run("the source limit reaches the plan", func(t *testing.T) {
 		var got content_plan.GeneratePostsRequest
 		st := &requestState{
 			campaignID: "c1", campaign: timelineCampaign(), maxGeneratePosts: 10,
-			sourceAssetIDs: []string{"a2"},
 			generatePosts: func(_ context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 				got = req
 				return &content_plan.ContentPlanResponse{}, nil
 			},
 		}
-		if _, err := toolGeneratePosts(withRequestState(t.Context(), st), GeneratePostsInput{Platforms: []string{"Threads"}}); err != nil {
+		if _, err := toolGeneratePosts(withRequestState(t.Context(), st), GeneratePostsInput{Platforms: []string{"Threads"}, AssetIDs: []string{"a2"}}); err != nil {
 			t.Fatal(err)
 		}
 		if len(got.AssetIDs) != 1 || got.AssetIDs[0] != "a2" {
@@ -392,26 +390,6 @@ func TestReserveHeavyAction_Concurrent(t *testing.T) {
 	}
 }
 
-// The max-tool-iterations abort is detected by its stable message
-// substring so the turn degrades gracefully instead of 502ing.
-func TestIsMaxTurnsExceeded(t *testing.T) {
-	if isMaxTurnsExceeded(nil) {
-		t.Fatal("nil error is not a max-turns abort")
-	}
-	if isMaxTurnsExceeded(errors.New("some other failure")) {
-		t.Fatal("unrelated error must not match")
-	}
-	// The genkit message form (ai/generate.go), verbatim and wrapped.
-	if !isMaxTurnsExceeded(errors.New("exceeded maximum tool call iterations (2)")) {
-		t.Fatal("genkit abort message must match")
-	}
-	if !isMaxTurnsExceeded(fmtWrap(errors.New("exceeded maximum tool call iterations (4)"))) {
-		t.Fatal("wrapped genkit abort message must match")
-	}
-}
-
-func fmtWrap(err error) error { return errors.Join(errors.New("model call failed"), err) }
-
 // A single post with only a start date is pinned to that day, so
 // "generate 1 for Jul 22" lands on Jul 22 instead of the midpoint of the
 // derived 14-day window. Explicit ends and multi-post requests keep their range.
@@ -455,8 +433,7 @@ type stubEmbedder struct{ ai.Embedder }
 // a campaign without assets.
 func TestAskCampaignAssets_SelectionOutsideCampaign(t *testing.T) {
 	st := &requestState{
-		campaign:       &models.Campaign{ID: "c1", AssetIDs: models.StringSlice{"a1"}},
-		sourceAssetIDs: []string{"a9"},
+		campaign: &models.Campaign{ID: "c1", AssetIDs: models.StringSlice{"a1"}},
 		repos: CampaignAssistantRepos{
 			Assets: readyAssets{all: []models.Asset{{ID: "a1", Status: "ready"}, {ID: "a9", Status: "ready"}}},
 			Chunks: struct {
@@ -465,7 +442,7 @@ func TestAskCampaignAssets_SelectionOutsideCampaign(t *testing.T) {
 		},
 		embedder: stubEmbedder{},
 	}
-	out, err := toolAskCampaignAssets(withRequestState(t.Context(), st), AskCampaignAssetsInput{Query: "pricing?"})
+	out, err := toolAskCampaignAssets(withRequestState(t.Context(), st), AskCampaignAssetsInput{Query: "pricing?", AssetIDs: []string{"a9"}})
 	if err != nil || !strings.Contains(out.Note, "selected") {
 		t.Fatalf("out = %+v, %v; want a note about the selection", out, err)
 	}

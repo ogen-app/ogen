@@ -14,22 +14,22 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
-// fakeMessagesRepo is a minimal CampaignAssistantMessageRepository that returns
+// fakeMessagesRepo is a minimal AssistantMessageRepository that returns
 // a preset conversation history (oldest-first, as the real repo does).
 type fakeMessagesRepo struct {
-	repository.CampaignAssistantMessageRepository
-	msgs []models.CampaignAssistantMessage
+	repository.AssistantMessageRepository
+	msgs []models.AssistantMessage
 }
 
-func (f *fakeMessagesRepo) ListRecentByCampaignID(context.Context, string, int) ([]models.CampaignAssistantMessage, error) {
+func (f *fakeMessagesRepo) ListRecent(context.Context, models.AssistantScopeKind, string, int) ([]models.AssistantMessage, error) {
 	return f.msgs, nil
 }
 
-func modelMsg(content string) models.CampaignAssistantMessage {
-	return models.CampaignAssistantMessage{Role: "model", Content: content}
+func modelMsg(content string) models.AssistantMessage {
+	return models.AssistantMessage{Role: "model", Content: content}
 }
-func userMsg(content string) models.CampaignAssistantMessage {
-	return models.CampaignAssistantMessage{Role: "user", Content: content}
+func userMsg(content string) models.AssistantMessage {
+	return models.AssistantMessage{Role: "user", Content: content}
 }
 
 // The source material is the latest *answer* in the chat, pulled
@@ -37,7 +37,7 @@ func userMsg(content string) models.CampaignAssistantMessage {
 // action-confirmation turn (e.g. post_drafted) is skipped, and legacy plain-text
 // model messages are used as-is.
 func TestResolveDraftSource(t *testing.T) {
-	st := func(msgs []models.CampaignAssistantMessage) *requestState {
+	st := func(msgs []models.AssistantMessage) *requestState {
 		return &requestState{campaignID: "c1", repos: CampaignAssistantRepos{Messages: &fakeMessagesRepo{msgs: msgs}}}
 	}
 
@@ -47,7 +47,7 @@ func TestResolveDraftSource(t *testing.T) {
 	}
 
 	// Latest answered explanation is used.
-	got, err := resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{
+	got, err := resolveDraftSource(t.Context(), st([]models.AssistantMessage{
 		userMsg("what do the assets say?"),
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}), "")
@@ -56,7 +56,7 @@ func TestResolveDraftSource(t *testing.T) {
 	}
 
 	// A post_drafted confirmation is skipped in favour of the earlier answer.
-	got, _ = resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{
+	got, _ = resolveDraftSource(t.Context(), st([]models.AssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"research A"}`),
 		userMsg("draft it"),
 		modelMsg(`{"action":"post_drafted","explanation":"I drafted 1 post."}`),
@@ -66,12 +66,12 @@ func TestResolveDraftSource(t *testing.T) {
 	}
 
 	// No prior research → empty (the tool then declines).
-	if got, _ := resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{userMsg("hi")}), ""); got != "" {
+	if got, _ := resolveDraftSource(t.Context(), st([]models.AssistantMessage{userMsg("hi")}), ""); got != "" {
 		t.Fatalf("no-research = %q, want empty", got)
 	}
 
 	// Legacy plain-text model message (not JSON-wrapped) is used directly.
-	if got, _ := resolveDraftSource(t.Context(), st([]models.CampaignAssistantMessage{modelMsg("plain answer")}), ""); got != "plain answer" {
+	if got, _ := resolveDraftSource(t.Context(), st([]models.AssistantMessage{modelMsg("plain answer")}), ""); got != "plain answer" {
 		t.Fatalf("legacy = %q, want plain answer", got)
 	}
 }
@@ -92,7 +92,7 @@ func stubDraftPost(calls *[]draft_post.DraftPostRequest) func(context.Context, d
 	}
 }
 
-func newDraftState(msgs []models.CampaignAssistantMessage, calls *[]draft_post.DraftPostRequest) *requestState {
+func newDraftState(msgs []models.AssistantMessage, calls *[]draft_post.DraftPostRequest) *requestState {
 	return &requestState{
 		campaignID:    "c1",
 		campaign:      timelineCampaign(),
@@ -109,7 +109,7 @@ func newDraftState(msgs []models.CampaignAssistantMessage, calls *[]draft_post.D
 func TestToolDraftPost_OfferKeepsItsResearch(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
 	store := &memProposals{}
-	st := newDraftState([]models.CampaignAssistantMessage{
+	st := newDraftState([]models.AssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"research A"}`),
 	}, &calls)
 	st.repos.Proposals = store
@@ -122,12 +122,12 @@ func TestToolDraftPost_OfferKeepsItsResearch(t *testing.T) {
 	}
 
 	// Newer research, and the confirming turn's own message.
-	later := newDraftState([]models.CampaignAssistantMessage{
+	later := newDraftState([]models.AssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"research A"}`),
 		modelMsg(`{"action":"answered","explanation":"research B"}`),
 	}, &calls)
 	later.instruction = "yes"
-	if _, err := newTestTools(t).reg.RunConfirmed(assistantkit.WithProposalSink(withRequestState(t.Context(), later), campaignSink{st: later}), "draftPost", map[string]any(store.rows[0].Args)); err != nil {
+	if _, err := newTestTools(t).reg.RunConfirmed(later.bind(t.Context()), "draftPost", map[string]any(store.rows[0].Args)); err != nil {
 		t.Fatal(err)
 	}
 	if len(calls) == 0 || calls[0].SourceMaterial != "research A" || calls[0].Instruction != "make it punchy" {
@@ -139,7 +139,7 @@ func TestToolDraftPost_OfferKeepsItsResearch(t *testing.T) {
 // the flow.
 func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
-	st := newDraftState([]models.CampaignAssistantMessage{userMsg("hi")}, &calls)
+	st := newDraftState([]models.AssistantMessage{userMsg("hi")}, &calls)
 	ctx := withRequestState(t.Context(), st)
 
 	out, err := toolDraftPost(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 1})
@@ -166,7 +166,7 @@ func TestToolDraftPost_DeclinesWithoutSource(t *testing.T) {
 // platforms with max 5 yields 3 + 2 and reports clamped.
 func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
-	st := newDraftState([]models.CampaignAssistantMessage{
+	st := newDraftState([]models.AssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}, &calls)
 	ctx := withRequestState(t.Context(), st)
@@ -200,7 +200,7 @@ func TestToolDraftPost_BudgetAcrossPlatforms(t *testing.T) {
 // is refused is the call.
 func TestToolDraftPost_PartialRefusalKeepsTheDrafts(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
-	st := newDraftState([]models.CampaignAssistantMessage{
+	st := newDraftState([]models.AssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}, &calls)
 	saved := st.draftPost
@@ -231,7 +231,7 @@ func TestToolDraftPost_PartialRefusalKeepsTheDrafts(t *testing.T) {
 	}
 
 	refuse = "*"
-	st = newDraftState([]models.CampaignAssistantMessage{modelMsg(`{"action":"answered","explanation":"the research"}`)}, &calls)
+	st = newDraftState([]models.AssistantMessage{modelMsg(`{"action":"answered","explanation":"the research"}`)}, &calls)
 	st.draftPost = func(context.Context, draft_post.DraftPostRequest, draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error) {
 		return nil, &draft_post.ValidationError{Msg: "the research is too thin for this platform"}
 	}
@@ -246,7 +246,7 @@ func TestToolDraftPost_PartialRefusalKeepsTheDrafts(t *testing.T) {
 // the heavy-action slot left free — so the turn stays conversational instead of
 // aborting with a raw "model call failed".
 func TestToolDraftPost_SoftFailsUserInput(t *testing.T) {
-	research := []models.CampaignAssistantMessage{
+	research := []models.AssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}
 
@@ -299,7 +299,7 @@ func TestToolDraftPost_SourceOverride(t *testing.T) {
 // never runs the flow.
 func TestToolDraftPost_HeavyLatch(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
-	st := newDraftState([]models.CampaignAssistantMessage{
+	st := newDraftState([]models.AssistantMessage{
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}, &calls)
 	if !st.reserveHeavyAction() {

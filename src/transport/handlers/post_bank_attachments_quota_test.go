@@ -98,7 +98,7 @@ var _ = Describe("PostAttachmentsHandler from-asset quota", Ordered, func() {
 			Register("media_storage_bytes", entitlements.CounterFunc(func(context.Context, string) (int64, error) { return mediaBytes, nil }))
 
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), platformRepo, postAttRepo, auth, handlers.PostsOptions{}).Register(app)
 		handlers.NewPostAttachmentsHandler(postAttRepo, postRepo, store, fakePDFRenderer{}, nil, &fakeImagePreparer{store: store}, nil, 280, auth, lim).
 			WithContentBank(assetRepo).Register(app)
