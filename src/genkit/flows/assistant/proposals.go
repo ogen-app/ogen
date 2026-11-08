@@ -172,6 +172,13 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 			tool, args = o.Tool, o.Args
 		}
 	}
+	// Confirmed work that spends is held to the spend cap; a schedule,
+	// which makes no model call, is not. The offer stays open.
+	if s, ok := t.reg.Lookup(tool); st.enforce != nil && (!ok || !s.Free) {
+		if err := st.enforce(ctx); err != nil {
+			return nil, err
+		}
+	}
 	// The pack begins before the offer is resolved, so an offer whose
 	// subject is gone stays open rather than answered and not run.
 	ctx, err = t.beginFor(ctx, st, tool, args)
@@ -332,6 +339,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	}}
 	st := newTurnState(view, nil)
 	st.emit = onEvent
+	st.enforce = t.enforce
 	st.turn.Instruction = "Confirmed: " + p.Summary
 	if !req.Confirm {
 		st.turn.Instruction = "Dismissed: " + p.Summary
