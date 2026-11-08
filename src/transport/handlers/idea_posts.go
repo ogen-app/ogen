@@ -46,7 +46,8 @@ func (h *IdeaPostsHandler) Register(app *fiber.App) {
 
 type compileIdeasRequest struct {
 	IdeaIDs []string `json:"idea_ids" validate:"required,min=1"`
-	// CampaignID defaults to the campaign the ideas share.
+	// CampaignID defaults to the campaign the ideas share; an idea in no
+	// campaign goes along with it.
 	CampaignID string `json:"campaign_id"`
 	// Title defaults to the first idea's title.
 	Title string `json:"title"`
@@ -68,7 +69,8 @@ type compileIdeasResponse struct {
 // @Summary      Compile ideas into a planned post
 // @Description  Makes one `planned` post from 1–10 ideas: a draft_thesis note with a thesis per idea (its
 // @Description  title, then its angle or note), the ideas' source assets as its sources, and a link to each
-// @Description  idea (GET /api/posts/{id}/ideas). The campaign defaults to the one every idea is in; the title
+// @Description  idea (GET /api/posts/{id}/ideas). The campaign defaults to the one the ideas share (an idea in no
+// @Description  campaign goes along with it); the title
 // @Description  to the first idea's; platform, post type, phase and target date to the first idea plan that sets
 // @Description  each. A target date is placed at the campaign's publishing time. A platform or post type you name
 // @Description  must be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as
