@@ -30,6 +30,8 @@ import (
 type Deps struct {
 	// Campaign runs a campaign assistant turn: the campaign pack.
 	Campaign func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
+	// Post is the post pack, built with its own services; nil leaves it out.
+	Post *assistant.Pack
 
 	Ideas    *ideas.Service
 	IdeaRepo repository.IdeaRepository
@@ -75,6 +77,9 @@ func All(d Deps) []assistant.Pack {
 	var out []assistant.Pack
 	if d.Campaign != nil {
 		out = append(out, campaignPack(d))
+	}
+	if d.Post != nil {
+		out = append(out, *d.Post)
 	}
 	if d.Ideas != nil && d.IdeaRepo != nil && d.Compose != nil {
 		out = append(out, ideasPack(d))
