@@ -206,8 +206,8 @@ func TestPackEvals(t *testing.T) {
 	}
 }
 
-// judge checks the first call: one of want (or none when want is empty),
-// and no call at all among not.
+// judge checks the first call: one of want (or only reads when want is
+// empty), and no call at all among not.
 func (c evalCase) judge(r *assistant.Routing) (bool, string) {
 	got := names(r.Calls)
 	for _, n := range got {
@@ -216,7 +216,7 @@ func (c evalCase) judge(r *assistant.Routing) (bool, string) {
 		}
 	}
 	switch {
-	case len(c.want) == 0 && len(got) > 0 && !slices.ContainsFunc(got, func(n string) bool { return strings.HasPrefix(n, "get") || n == "listCampaignPosts" }):
+	case len(c.want) == 0 && slices.ContainsFunc(got, func(n string) bool { return !strings.HasPrefix(n, "get") && n != "listCampaignPosts" }):
 		return false, "called a tool for a plain answer"
 	case len(c.want) > 0 && (len(got) == 0 || !slices.Contains(c.want, got[0])):
 		return false, fmt.Sprintf("first call isn't one of %v", c.want)
