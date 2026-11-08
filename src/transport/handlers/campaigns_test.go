@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
-	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
@@ -70,7 +68,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 		// handler. Nil deps so the routes exist (401 unauthenticated) for the
 		// default-app route-level specs.
 		handlers.NewCampaignGenerationHandler(campaignRepo, nil, 0, nil, nil, nil, nil, auth).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		handlers.NewTagsHandler(tagRepo, auth).Register(app)
 
 		// Seed an auth user and log in
@@ -813,7 +811,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				noop := func(_ context.Context, _ string, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 					return &content_plan.ContentPlanResponse{}, nil
 				}
-				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, noop, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
+				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, noop, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
 
 				req := httptest.NewRequest("POST", "/api/campaigns/nonexistent/generate-draft", nil)
 				req.AddCookie(authCookie)
@@ -844,7 +842,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				noop := func(_ context.Context, _ string, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 					return &content_plan.ContentPlanResponse{}, nil
 				}
-				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, noop, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
+				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, noop, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
 
 				// Register and log in as a second user.
 				seedTenantUser(db, "Other", "other@example.com", "other-password")
@@ -906,7 +904,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 					onEvent(content_plan.SSEEventStep, content_plan.StepEventPayload{Step: "generatePosts", Status: "done"})
 					return &content_plan.ContentPlanResponse{CampaignID: "test"}, nil
 				}
-				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, stub, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
+				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, stub, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
 
 				// Seed user/session for appWithDraft.
 				seedTenantUser(db, "SSE User", "sse@example.com", "sse-password")
@@ -997,7 +995,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 				stub := func(_ context.Context, _ string, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 					return nil, &content_plan.ValidationError{Msg: "missing required fields"}
 				}
-				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, stub, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
+				handlers.NewCampaignsHandler(campaignRepo2, campaignTypeRepo2, auth2, stub, nil, nil, handlers.CampaignsOptions{}).Register(appWithDraft)
 
 				// Seed user/session.
 				seedTenantUser(db, "Err User", "err@example.com", "err-password")
@@ -1070,7 +1068,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 			a2 := handlers.RequireAuth(sRepo, uRepo, testCookieName)
 			handlers.NewUsersHandler(db, uRepo, repository.NewAccountRepository(db), setRepo, a2, nil, nil).Register(a)
 			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
-			handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, brief, nil, nil, handlers.CampaignsOptions{}).Register(a)
+			handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, brief, handlers.CampaignsOptions{}).Register(a)
 			return a
 		}
 
@@ -1233,357 +1231,6 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 
 	// ── Campaign Assistant ───────────────────────────────────────────
 
-	Describe("POST /api/campaigns/:id/assistant", func() {
-		errorHandler := func(c *fiber.Ctx, err error) error {
-			code := fiber.StatusInternalServerError
-			if e, ok := err.(*fiber.Error); ok {
-				code = e.Code
-			}
-			return c.Status(code).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		// buildAssistantApp wires a fresh app whose campaigns handler uses the
-		// given assistant stub (nil exercises the 503 path).
-		buildAssistantApp := func(assistant func(context.Context, campaign_assistant.CampaignAssistantRequest, campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)) *fiber.App {
-			a := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-			ctRepo := repository.NewCampaignTypeRepository(db)
-			cRepo := repository.NewCampaignRepository(db, repository.NewTagRepository(db), repository.NewPlatformRepository(db), ctRepo)
-			sRepo := repository.NewSessionRepository(db)
-			setRepo := repository.NewSettingRepository(db)
-			uRepo := repository.NewUserRepository(db)
-			msgRepo := repository.NewCampaignAssistantMessageRepository(db)
-			a2 := handlers.RequireAuth(sRepo, uRepo, testCookieName)
-			handlers.NewUsersHandler(db, uRepo, repository.NewAccountRepository(db), setRepo, a2, nil, nil).Register(a)
-			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
-			handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, msgRepo, assistant, handlers.CampaignsOptions{}).Register(a)
-			return a
-		}
-
-		seedCookie := func(a *fiber.App, email string) *http.Cookie {
-			seedTenantUser(db, "Assistant User", email, "assistant-password")
-			loginBody, _ := json.Marshal(fiber.Map{"email": email, "password": "assistant-password"})
-			loginReq := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(loginBody))
-			loginReq.Header.Set("Content-Type", "application/json")
-			loginResp, err := a.Test(loginReq)
-			Expect(err).NotTo(HaveOccurred())
-			var ck *http.Cookie
-			for _, c := range loginResp.Cookies() {
-				ck = c
-			}
-			return ck
-		}
-
-		createCampaignOn := func(a *fiber.App, ck *http.Cookie, name, typeID string) models.Campaign {
-			body, _ := json.Marshal(fiber.Map{"name": name, "campaign_type_id": typeID})
-			req := httptest.NewRequest("POST", "/api/campaigns", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(ck)
-			resp, err := a.Test(req)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
-			var c models.Campaign
-			Expect(json.NewDecoder(resp.Body).Decode(&c)).To(Succeed())
-			return c
-		}
-
-		type sseEvent struct{ event, data string }
-		parseSSE := func(r *bufio.Scanner) []sseEvent {
-			var events []sseEvent
-			var curEvent, curData string
-			for r.Scan() {
-				line := r.Text()
-				switch {
-				case strings.HasPrefix(line, "event: "):
-					curEvent = strings.TrimPrefix(line, "event: ")
-				case strings.HasPrefix(line, "data: "):
-					curData = strings.TrimPrefix(line, "data: ")
-				case line == "":
-					if curEvent != "" {
-						events = append(events, sseEvent{curEvent, curData})
-					}
-					curEvent, curData = "", ""
-				}
-			}
-			return events
-		}
-
-		Context("when not authenticated", func() {
-			It("returns 401", func() {
-				req := httptest.NewRequest("POST", "/api/campaigns/someid/assistant", nil)
-				resp, err := app.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(401))
-			})
-		})
-
-		Context("when authenticated", func() {
-			It("returns 503 when the assistant is nil", func() {
-				// The default app is wired with assistant=nil.
-				c := createCampaign("Assistant Campaign", "Uk")
-				body, _ := json.Marshal(fiber.Map{"instruction": "hi"})
-				req := httptest.NewRequest("POST", "/api/campaigns/"+c.ID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(authCookie)
-				resp, err := app.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(503))
-			})
-
-			It("returns 400 when the instruction is missing", func() {
-				noop := func(_ context.Context, _ campaign_assistant.CampaignAssistantRequest, _ campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
-					return &campaign_assistant.CampaignAssistantResponse{}, nil
-				}
-				a := buildAssistantApp(noop)
-				ck := seedCookie(a, "assist400@example.com")
-				camp := createCampaignOn(a, ck, "Needs Instruction", "Uk")
-
-				body, _ := json.Marshal(fiber.Map{}) // no instruction
-				req := httptest.NewRequest("POST", "/api/campaigns/"+camp.ID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(ck)
-				resp, err := a.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(400))
-			})
-
-			It("streams explanation_delta then complete on success", func() {
-				final := &campaign_assistant.CampaignAssistantResponse{
-					Explanation: "Here's a summary of the brief.",
-					Action:      "answered",
-				}
-				stub := func(_ context.Context, _ campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
-					onEvent(campaign_assistant.SSEEventExplanationDelta, campaign_assistant.DeltaEventPayload{Delta: "Here's "})
-					onEvent(campaign_assistant.SSEEventExplanationDelta, campaign_assistant.DeltaEventPayload{Delta: "a summary."})
-					onEvent(campaign_assistant.SSEEventComplete, final)
-					return final, nil
-				}
-				a := buildAssistantApp(stub)
-				ck := seedCookie(a, "assistok@example.com")
-				camp := createCampaignOn(a, ck, "Ask Me", "Uk")
-
-				body, _ := json.Marshal(fiber.Map{"instruction": "summarise the brief"})
-				req := httptest.NewRequest("POST", "/api/campaigns/"+camp.ID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(ck)
-				resp, err := a.Test(req, 10000)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-				Expect(resp.Header.Get("Content-Type")).To(ContainSubstring("text/event-stream"))
-
-				events := parseSSE(bufio.NewScanner(resp.Body))
-				Expect(events).To(HaveLen(3))
-				Expect(events[0].event).To(Equal("explanation_delta"))
-				Expect(events[1].event).To(Equal("explanation_delta"))
-				Expect(events[2].event).To(Equal("complete"))
-
-				var completePayload campaign_assistant.CampaignAssistantResponse
-				Expect(json.Unmarshal([]byte(events[2].data), &completePayload)).To(Succeed())
-				Expect(completePayload.Action).To(Equal("answered"))
-				Expect(completePayload.Explanation).To(Equal("Here's a summary of the brief."))
-			})
-
-			It("forwards namespaced sub-flow events when a tool runs", func() {
-				final := &campaign_assistant.CampaignAssistantResponse{
-					Explanation: "Generated a content plan.",
-					Action:      "content_plan_generated",
-					ContentPlan: &campaign_assistant.ContentPlanResult{IdeaCount: 3},
-				}
-				stub := func(_ context.Context, _ campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
-					onEvent(campaign_assistant.SSEEventContentPlanStarted, campaign_assistant.ContentPlanStartedEventPayload{})
-					onEvent(campaign_assistant.SSEEventContentPlanIdea, map[string]any{"index": 0})
-					onEvent(campaign_assistant.SSEEventContentPlanComplete, campaign_assistant.ContentPlanCompleteEventPayload{IdeaCount: 3})
-					onEvent(campaign_assistant.SSEEventComplete, final)
-					return final, nil
-				}
-				a := buildAssistantApp(stub)
-				ck := seedCookie(a, "assisttool@example.com")
-				camp := createCampaignOn(a, ck, "Plan Me", "Uk")
-
-				body, _ := json.Marshal(fiber.Map{"instruction": "generate a content plan"})
-				req := httptest.NewRequest("POST", "/api/campaigns/"+camp.ID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(ck)
-				resp, err := a.Test(req, 10000)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-
-				events := parseSSE(bufio.NewScanner(resp.Body))
-				names := make([]string, len(events))
-				for i, e := range events {
-					names[i] = e.event
-				}
-				Expect(names).To(Equal([]string{
-					"content_plan_started",
-					"content_plan_idea",
-					"content_plan_complete",
-					"complete",
-				}))
-			})
-
-			It("streams an error SSE event with code 502 on an AI error", func() {
-				stub := func(_ context.Context, _ campaign_assistant.CampaignAssistantRequest, _ campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error) {
-					return nil, &campaign_assistant.AIError{Msg: "model call failed"}
-				}
-				a := buildAssistantApp(stub)
-				ck := seedCookie(a, "assisterr@example.com")
-				camp := createCampaignOn(a, ck, "Boom", "Uk")
-
-				body, _ := json.Marshal(fiber.Map{"instruction": "do something"})
-				req := httptest.NewRequest("POST", "/api/campaigns/"+camp.ID+"/assistant", bytes.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(ck)
-				resp, err := a.Test(req, 10000)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-
-				events := parseSSE(bufio.NewScanner(resp.Body))
-				Expect(events).To(HaveLen(1))
-				Expect(events[0].event).To(Equal("error"))
-				var errPayload campaign_assistant.ErrorEventPayload
-				Expect(json.Unmarshal([]byte(events[0].data), &errPayload)).To(Succeed())
-				Expect(errPayload.Code).To(Equal(502))
-				Expect(errPayload.Message).To(Equal("model call failed"))
-			})
-		})
-	})
-
-	Describe("GET /api/campaigns/:id/messages", func() {
-		errorHandler := func(c *fiber.Ctx, err error) error {
-			code := fiber.StatusInternalServerError
-			if e, ok := err.(*fiber.Error); ok {
-				code = e.Code
-			}
-			return c.Status(code).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		buildMessagesApp := func() (*fiber.App, repository.CampaignAssistantMessageRepository) {
-			a := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-			ctRepo := repository.NewCampaignTypeRepository(db)
-			cRepo := repository.NewCampaignRepository(db, repository.NewTagRepository(db), repository.NewPlatformRepository(db), ctRepo)
-			sRepo := repository.NewSessionRepository(db)
-			setRepo := repository.NewSettingRepository(db)
-			uRepo := repository.NewUserRepository(db)
-			msgRepo := repository.NewCampaignAssistantMessageRepository(db)
-			a2 := handlers.RequireAuth(sRepo, uRepo, testCookieName)
-			handlers.NewUsersHandler(db, uRepo, repository.NewAccountRepository(db), setRepo, a2, nil, nil).Register(a)
-			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
-			handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, msgRepo, nil, handlers.CampaignsOptions{}).Register(a)
-			return a, msgRepo
-		}
-
-		seedCookie := func(a *fiber.App, email string) *http.Cookie {
-			seedTenantUser(db, "Messages User", email, "messages-password")
-			loginBody, _ := json.Marshal(fiber.Map{"email": email, "password": "messages-password"})
-			loginReq := httptest.NewRequest("POST", "/api/sessions", bytes.NewReader(loginBody))
-			loginReq.Header.Set("Content-Type", "application/json")
-			loginResp, err := a.Test(loginReq)
-			Expect(err).NotTo(HaveOccurred())
-			var ck *http.Cookie
-			for _, c := range loginResp.Cookies() {
-				ck = c
-			}
-			return ck
-		}
-
-		createCampaignOn := func(a *fiber.App, ck *http.Cookie, name, typeID string) models.Campaign {
-			body, _ := json.Marshal(fiber.Map{"name": name, "campaign_type_id": typeID})
-			req := httptest.NewRequest("POST", "/api/campaigns", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(ck)
-			resp, err := a.Test(req)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(resp.StatusCode).To(Equal(fiber.StatusCreated))
-			var c models.Campaign
-			Expect(json.NewDecoder(resp.Body).Decode(&c)).To(Succeed())
-			return c
-		}
-
-		Context("when not authenticated", func() {
-			It("returns 401", func() {
-				req := httptest.NewRequest("GET", "/api/campaigns/someid/messages", nil)
-				resp, err := app.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(401))
-			})
-		})
-
-		Context("when authenticated", func() {
-			It("returns an empty array when there are no messages", func() {
-				a, _ := buildMessagesApp()
-				ck := seedCookie(a, "msgempty@example.com")
-				req := httptest.NewRequest("GET", "/api/campaigns/whatever/messages", nil)
-				req.AddCookie(ck)
-				resp, err := a.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-				// Must be a JSON array, not null (decoding null also yields an
-				// empty slice, so assert the raw body to guard the contract).
-				body, err := io.ReadAll(resp.Body)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(strings.TrimSpace(string(body))).To(Equal("[]"))
-				var msgs []models.CampaignAssistantMessage
-				Expect(json.Unmarshal(body, &msgs)).To(Succeed())
-				Expect(msgs).To(BeEmpty())
-			})
-
-			It("returns the campaign's messages oldest-first", func() {
-				a, msgRepo := buildMessagesApp()
-				ck := seedCookie(a, "msgok@example.com")
-				camp := createCampaignOn(a, ck, "Msgs Campaign", "Uk")
-
-				// Persist a user + model turn directly, in the default tenant
-				// that the seeded session carries.
-				tctx := tenantctx.With(context.Background(), models.DefaultTenantID)
-				base := time.Now().UTC().Truncate(time.Second)
-				uID, _ := models.NewID()
-				Expect(msgRepo.Create(tctx, &models.CampaignAssistantMessage{
-					ID: uID, CampaignID: camp.ID, Role: "user", Content: "generate a plan", CreatedAt: base,
-				})).To(Succeed())
-				mID, _ := models.NewID()
-				Expect(msgRepo.Create(tctx, &models.CampaignAssistantMessage{
-					ID: mID, CampaignID: camp.ID, Role: "model", Content: `{"action":"content_plan_generated"}`, CreatedAt: base.Add(time.Second),
-				})).To(Succeed())
-
-				req := httptest.NewRequest("GET", "/api/campaigns/"+camp.ID+"/messages", nil)
-				req.AddCookie(ck)
-				resp, err := a.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-				var msgs []models.CampaignAssistantMessage
-				Expect(json.NewDecoder(resp.Body).Decode(&msgs)).To(Succeed())
-				Expect(msgs).To(HaveLen(2))
-				Expect(msgs[0].Role).To(Equal("user"))
-				Expect(msgs[0].Content).To(Equal("generate a plan"))
-				Expect(msgs[1].Role).To(Equal("model"))
-			})
-
-			It("serves legacy flat model turns in the nested complete-event shape", func() {
-				a, msgRepo := buildMessagesApp()
-				ck := seedCookie(a, "msglegacy@example.com")
-				camp := createCampaignOn(a, ck, "Legacy Msgs Campaign", "Uk")
-
-				tctx := tenantctx.With(context.Background(), models.DefaultTenantID)
-				mID, _ := models.NewID()
-				Expect(msgRepo.Create(tctx, &models.CampaignAssistantMessage{
-					ID: mID, CampaignID: camp.ID, Role: "model",
-					Content: `{"action":"brief_enriched","explanation":"Done.","briefApplied":true}`,
-				})).To(Succeed())
-
-				req := httptest.NewRequest("GET", "/api/campaigns/"+camp.ID+"/messages", nil)
-				req.AddCookie(ck)
-				resp, err := a.Test(req)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp.StatusCode).To(Equal(200))
-				var msgs []models.CampaignAssistantMessage
-				Expect(json.NewDecoder(resp.Body).Decode(&msgs)).To(Succeed())
-				Expect(msgs).To(HaveLen(1))
-				Expect(msgs[0].Content).To(MatchJSON(`{"action":"brief_enriched","explanation":"Done.","brief":{"applied":true}}`))
-			})
-		})
-	})
-
-	// ── Campaign overview ────────────────────────────────────────────
-
 	Describe("GET /api/campaigns/:id/overview", func() {
 		errorHandler := func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
@@ -1607,7 +1254,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 			a2 := handlers.RequireAuth(sRepo, uRepo, testCookieName)
 			handlers.NewUsersHandler(db, uRepo, repository.NewAccountRepository(db), setRepo, a2, nil, nil).Register(a)
 			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
-			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, nil, nil, handlers.CampaignsOptions{})
+			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, handlers.CampaignsOptions{})
 			ch.Register(a)
 			handlers.NewCampaignReadHandler(overview.New(cRepo, postRepo, pRepo), nil, a2).Register(a)
 			return a, postRepo
@@ -1762,7 +1409,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 			a2 := handlers.RequireAuth(sRepo, uRepo, testCookieName)
 			handlers.NewUsersHandler(db, uRepo, repository.NewAccountRepository(db), setRepo, a2, nil, nil).Register(a)
 			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
-			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, nil, nil, handlers.CampaignsOptions{})
+			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, handlers.CampaignsOptions{})
 			// Read handler before ch so the static /summaries route wins over /:id.
 			handlers.NewCampaignReadHandler(nil, summaries.New(postRepo), a2).Register(a)
 			ch.Register(a)
@@ -1898,7 +1545,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 			a2 := handlers.RequireAuth(sRepo, uRepo, testCookieName)
 			handlers.NewUsersHandler(db, uRepo, repository.NewAccountRepository(db), setRepo, a2, nil, nil).Register(a)
 			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
-			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, nil, nil, handlers.CampaignsOptions{})
+			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, handlers.CampaignsOptions{})
 			ch.Register(a)
 			handlers.NewCampaignGenerationHandler(cRepo, stub, 10, nil, nil, nil, nil, a2).Register(a)
 			return a
@@ -2051,7 +1698,7 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 			a2 := handlers.RequireAuth(sRepo, uRepo, testCookieName)
 			handlers.NewUsersHandler(db, uRepo, repository.NewAccountRepository(db), setRepo, a2, nil, nil).Register(a)
 			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
-			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, nil, nil, handlers.CampaignsOptions{})
+			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, handlers.CampaignsOptions{})
 			ch.Register(a)
 			handlers.NewCampaignGenerationHandler(cRepo, nil, 0, checkBrief, checkPosts, nil, nil, a2).Register(a)
 			return a
