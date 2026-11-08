@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
@@ -327,5 +329,20 @@ func TestToolDraftPost_HeavyLatch(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Fatal("flow must not run once a heavy action was reserved")
+	}
+}
+
+// A draft request with no research is refused before its gate, so no offer
+// is made that a later confirmation would fill with research discussed since.
+func TestSnapshotDraft_RefusesWithoutResearch(t *testing.T) {
+	st := &requestState{campaignID: "c1", repos: CampaignAssistantRepos{Messages: &fakeMessagesRepo{msgs: []models.AssistantMessage{userMsg("hi")}}}}
+	reached := false
+	tool := snapshotDraft(func(*ai.ToolContext, DraftPostInput) (assistantkit.Outcome[DraftPostOutput], error) {
+		reached = true
+		return assistantkit.OK(DraftPostOutput{}), nil
+	})
+	out, err := tool(&ai.ToolContext{Context: withRequestState(t.Context(), st)}, DraftPostInput{Platforms: []string{"LinkedIn"}, Count: 10})
+	if err != nil || out.Status != assistantkit.StatusRefused || out.Reason != noDraftSourceNote || reached {
+		t.Fatalf("out = %+v, err = %v, reached the gate = %t", out, err, reached)
 	}
 }
