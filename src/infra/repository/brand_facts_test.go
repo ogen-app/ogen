@@ -29,27 +29,27 @@ func TestBrandFacts_ConditionalWrites(t *testing.T) {
 	edit := &models.BrandFact{ID: stored.ID, Statement: "We serve 4,200 customers", Subject: models.FactSubjectUs,
 		Kind: models.FactKindMeasured, UpdatedAt: now}
 
-	if _, err := repo.UpdateFactIf(ctx, edit, &stale); !errors.Is(err, repository.ErrFactChanged) {
+	if _, err := repo.UpdateFactIf(ctx, nil, edit, &stale); !errors.Is(err, repository.ErrFactChanged) {
 		t.Fatalf("stale update: err = %v, want ErrFactChanged", err)
 	}
-	if _, err := repo.DeleteFactIf(ctx, stored.ID, &stale); !errors.Is(err, repository.ErrFactChanged) {
+	if _, err := repo.DeleteFactIf(ctx, nil, stored.ID, &stale); !errors.Is(err, repository.ErrFactChanged) {
 		t.Fatalf("stale delete: err = %v, want ErrFactChanged", err)
 	}
 	if got, err := repo.GetFact(ctx, stored.ID); err != nil || got == nil || got.Statement != stored.Statement {
 		t.Fatalf("after stale writes = %+v, %v; want it untouched", got, err)
 	}
 
-	before, err := repo.UpdateFactIf(ctx, edit, stored)
+	before, err := repo.UpdateFactIf(ctx, nil, edit, stored)
 	if err != nil || before.Statement != stored.Statement {
 		t.Fatalf("update = %+v, %v", before, err)
 	}
-	if _, err := repo.DeleteFactIf(ctx, stored.ID, stored); !errors.Is(err, repository.ErrFactChanged) {
+	if _, err := repo.DeleteFactIf(ctx, nil, stored.ID, stored); !errors.Is(err, repository.ErrFactChanged) {
 		t.Fatalf("delete expecting the old statement: err = %v, want ErrFactChanged", err)
 	}
-	if _, err := repo.DeleteFactIf(ctx, stored.ID, edit); err != nil {
+	if _, err := repo.DeleteFactIf(ctx, nil, stored.ID, edit); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.DeleteFactIf(ctx, stored.ID, edit); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := repo.DeleteFactIf(ctx, nil, stored.ID, edit); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("delete a gone fact: err = %v, want sql.ErrNoRows", err)
 	}
 }
@@ -69,7 +69,7 @@ func TestBrandFacts_RestoreKeepsAuthor(t *testing.T) {
 		{ID: "fact-restore-2", Statement: "We ship weekly", CreatedBy: new("u-deleted"), CreatedByName: "Bob"},
 	} {
 		f.Subject, f.Kind, f.CreatedAt, f.UpdatedAt = models.FactSubjectUs, models.FactKindDocumented, created, now
-		if err := repo.RestoreFact(ctx, f); err != nil {
+		if err := repo.RestoreFact(ctx, nil, f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -80,5 +80,11 @@ func TestBrandFacts_RestoreKeepsAuthor(t *testing.T) {
 	orphan, err := repo.GetFact(ctx, "fact-restore-2")
 	if err != nil || orphan.CreatedBy != nil || orphan.CreatedByName != "Bob" {
 		t.Fatalf("restored with a deleted author = %+v, %v", orphan, err)
+	}
+	// A fact whose id is back already is not restored over.
+	again := *kept
+	again.Statement = "NPS is 70"
+	if err := repo.RestoreFact(ctx, nil, &again); !errors.Is(err, repository.ErrFactChanged) {
+		t.Fatalf("restore over a stored fact: err = %v, want ErrFactChanged", err)
 	}
 }
