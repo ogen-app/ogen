@@ -35,6 +35,7 @@ func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (*Assist
 	if err != nil {
 		return nil, err
 	}
+	tools.enforce = cfg.Checker.Enforce
 	if cfg.PrewarmTools {
 		go prewarm(g, cfg, tools)
 	}
@@ -43,12 +44,6 @@ func Init(g *genkit.Genkit, cfg FlowConfig, repos Repos, packs ...Pack) (*Assist
 			return run(ctx, g, req, cfg, repos, p, tools, onEvent)
 		},
 		Answer: func(ctx context.Context, req AnswerRequest, onEvent OnEventFunc) (*Response, error) {
-			// A confirmed offer runs the work it held back, so it spends.
-			if req.Confirm {
-				if err := cfg.Checker.Enforce(ctx); err != nil {
-					return nil, err
-				}
-			}
 			return tools.answer(ctx, req, onEvent)
 		},
 		Route: func(ctx context.Context, req Request) (*Routing, error) {
