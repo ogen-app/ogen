@@ -71,10 +71,15 @@ func run(
 	st.turn.Instruction = req.Instruction
 	st.emit = onEvent
 	// An offer answered before the turn failed stays answered, so the client
-	// hears it even without a "complete".
+	// hears it even without a "complete". Work the packs' tools committed
+	// before a failed model call is reported too, so the client refreshes.
+	finished := false
 	defer func() {
 		if retErr == nil {
 			return
+		}
+		if !finished {
+			tools.end(st)
 		}
 		for _, r := range st.resolvedList() {
 			emit(onEvent, SSEEventProposalResolved, r)
@@ -107,6 +112,7 @@ func run(
 		result.Explanation = ""
 	}
 	tools.finish(st, result)
+	finished = true
 	if result.Explanation == "" {
 		result.Explanation, result.Action = preliminary.Explanation, preliminary.Action
 	}
