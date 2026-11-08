@@ -28,6 +28,9 @@ const defaultProposalThreshold = 3
 // campaignSink stores held-back calls against the turn's campaign.
 type campaignSink struct{ st *requestState }
 
+// Propose stores p as an offer on the turn's campaign and returns its id. A
+// call identical to one already proposed this turn gets that offer's id, so
+// the user sees one card for it.
 func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (string, error) {
 	st := s.st
 	if st.repos.Proposals == nil {
@@ -36,6 +39,18 @@ func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (str
 	args, err := toJSONMap(p.Args)
 	if err != nil {
 		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
+	}
+	// Map keys marshal sorted, so equal args give equal keys.
+	key, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
+	}
+	dedupKey := p.Tool + "\x00" + string(key)
+	// Held across the store so parallel identical calls can't both create one.
+	st.proposeMu.Lock()
+	defer st.proposeMu.Unlock()
+	if id, ok := st.proposedKeys[dedupKey]; ok {
+		return id, nil
 	}
 	id, err := models.NewID()
 	if err != nil {
@@ -55,9 +70,14 @@ func (s campaignSink) Propose(ctx context.Context, p assistantkit.Proposal) (str
 		ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339),
 	})
 	st.mu.Unlock()
+	if st.proposedKeys == nil {
+		st.proposedKeys = map[string]string{}
+	}
+	st.proposedKeys[dedupKey] = id
 	return id, nil
 }
 
+// toJSONMap converts a tool input into the JSON object stored with a proposal.
 func toJSONMap(v any) (models.JSONMap, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -107,6 +127,7 @@ func (t *turn) openProposals(ctx context.Context) []openProposal {
 	return out
 }
 
+// proposalThreshold is the turn's largest batch run without asking.
 func proposalThreshold(ctx context.Context) int {
 	return cmp.Or(getRequestState(ctx).proposalThreshold, defaultProposalThreshold)
 }
@@ -130,7 +151,7 @@ var (
 			return precheckPosts(ctx, in.Platforms, in.Phase, in.WindowStart, in.WindowEnd, in.PostType, false)
 		},
 		Needs: func(ctx context.Context, in GeneratePostsInput) bool {
-			return max(in.Count, 1) > proposalThreshold(ctx)
+			return generateTotal(ctx, in) > proposalThreshold(ctx)
 		},
 		Summary: func(in GeneratePostsInput) string {
 			return fmt.Sprintf("Add %d draft posts for %s", max(in.Count, 1), strings.Join(in.Platforms, ", "))
@@ -141,13 +162,28 @@ var (
 			return precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType, true)
 		},
 		Needs: func(ctx context.Context, in DraftPostInput) bool {
-			return max(in.Count, 1)*len(in.Platforms) > proposalThreshold(ctx)
+			return draftTotal(ctx, in) > proposalThreshold(ctx)
 		},
 		Summary: func(in DraftPostInput) string {
 			return fmt.Sprintf("Write %d finished posts for %s from the research in this chat", max(in.Count, 1)*len(in.Platforms), strings.Join(in.Platforms, ", "))
 		},
 	}
 )
+
+// generateTotal is how many posts a generatePosts call creates: the count,
+// capped per call as the tool caps it.
+func generateTotal(ctx context.Context, in GeneratePostsInput) int {
+	n, _, _ := resolveGenerateCount(in.Count, getRequestState(ctx).maxGeneratePosts)
+	return n
+}
+
+// draftTotal is how many posts a draftPost call creates: the count on each
+// platform, with the total capped per call as the tool caps it.
+func draftTotal(ctx context.Context, in DraftPostInput) int {
+	maxN := getRequestState(ctx).draftCap()
+	perPlatform, _, _ := resolveGenerateCount(in.Count, maxN)
+	return min(perPlatform*len(in.Platforms), maxN)
+}
 
 // precheckPosts runs the post tools' user-correctable checks — target
 // platform, phase, publish window, post type — so a request that could never

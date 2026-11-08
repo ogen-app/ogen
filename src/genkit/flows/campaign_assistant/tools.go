@@ -85,6 +85,10 @@ type requestState struct {
 	writes []string
 	// proposed lists the calls held back for the user to confirm this turn.
 	proposed []ProposalCreatedEventPayload
+	// proposeMu serialises proposing; proposedKeys maps each call proposed
+	// this turn (tool and args) to its offer's id.
+	proposeMu    sync.Mutex
+	proposedKeys map[string]string
 
 	// Results set by tools, read by the runner after generation. Only the tool
 	// that won the heavy-action reservation writes a heavy result, so these need
@@ -304,7 +308,8 @@ type toolSet struct {
 func (t *toolSet) all() []ai.ToolRef { return t.reg.Tools() }
 
 // defineTools registers the campaign tools on g and builds their registry,
-// in the order the model is given them.
+// in the order the model is given them, gating the heavy ones behind the
+// user's confirmation.
 func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+
@@ -760,10 +765,7 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		return assistantkit.OK(DraftPostOutput{Note: heavySkipNote}), nil
 	}
 
-	maxN := st.maxDraftPosts
-	if maxN <= 0 {
-		maxN = 5
-	}
+	maxN := st.draftCap()
 	perPlatform, requested, clamped := resolveGenerateCount(in.Count, maxN)
 
 	emit(st.onEvent, SSEEventDraftPostStarted, DraftPostStartedEventPayload{
@@ -864,6 +866,14 @@ func forwardDraftEvents(onEvent OnEventFunc) draft_post.OnEventFunc {
 			emit(onEvent, SSEEventDraftPostWarning, data)
 		}
 	}
+}
+
+// draftCap is the most posts one draftPost call creates, across platforms.
+func (st *requestState) draftCap() int {
+	if st.maxDraftPosts <= 0 {
+		return 5
+	}
+	return st.maxDraftPosts
 }
 
 // splitDraftBudget gives each of n platforms perPlatform drafts, in order,
@@ -1321,6 +1331,8 @@ func checkCampaignDated(c *models.Campaign) error {
 	return nil
 }
 
+// toolRedistributePosts re-dates the campaign's unpublished drafts evenly
+// across its timeline, phase by phase.
 func toolRedistributePosts(ctx context.Context) (*RedistributePostsOutput, error) {
 	st := getRequestState(ctx)
 	c := st.campaign
