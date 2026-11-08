@@ -42,7 +42,9 @@ func draftService(ideas ...models.Idea) (*Service, *memLinks) {
 		byID[i.ID] = i
 	}
 	links := &memLinks{links: map[string][]string{}}
-	s := New(nil, memIdeas{byID: byID}, oneCampaign{byID: map[string]*models.Campaign{"c1": spring()}}, links, nil, nil)
+	c := spring()
+	c.CampaignType = &models.CampaignType{Phases: []models.CampaignTypePhase{{ID: "ph1"}}}
+	s := New(nil, memIdeas{byID: byID}, oneCampaign{byID: map[string]*models.Campaign{"c1": c}}, links, nil, nil)
 	return s, links
 }
 
@@ -58,7 +60,7 @@ func TestPlanDraft(t *testing.T) {
 	s, _ := draftService(a, b)
 
 	// One post per idea on the suggested platform, at the suggested date.
-	plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"a", "b"}}, 5)
+	plan, err := s.PlanDraft(t.Context(), DraftInput{IdeaIDs: []string{"a", "b"}, PhaseID: "ph1", Actor: "user-2"}, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +69,7 @@ func TestPlanDraft(t *testing.T) {
 	}
 	r := plan.Jobs[0].Request
 	if r.PlatformID != "linkedin" || r.PostType != "carousel" || r.WindowStart != "2026-11-20" || r.Count != 1 ||
-		!slices.Equal(r.UsedAssetIDs, []string{"asset-1"}) {
+		r.PhaseID != "ph1" || r.CreatedBy != "user-2" || !slices.Equal(r.UsedAssetIDs, []string{"asset-1"}) {
 		t.Fatalf("request = %+v", r)
 	}
 	want := "Idea: Idea a\nAngle: Most buyers overpay\nWhy it works: It's counter-intuitive\nFrom the source: p. 3"
@@ -96,6 +98,7 @@ func TestPlanDraft(t *testing.T) {
 		"type for two":          {DraftInput{IdeaIDs: []string{"a"}, PlatformIDs: []string{"linkedin", "threads"}, PostType: "carousel"}, 5, ErrPostTypeOneFor},
 		"over the cap":          {DraftInput{IdeaIDs: []string{"a", "b"}, PlatformIDs: []string{"linkedin", "threads"}}, 3, ErrTooManyDrafts},
 		"unknown idea":          {DraftInput{IdeaIDs: []string{"zz"}}, 5, ErrIdeaNotFound},
+		"not a phase":           {DraftInput{IdeaIDs: []string{"a"}, PhaseID: "elsewhere"}, 5, ErrInvalidPhase},
 	} {
 		if _, err := s.PlanDraft(t.Context(), tc.in, tc.max); !errors.Is(err, tc.want) || !IsValidation(err) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
