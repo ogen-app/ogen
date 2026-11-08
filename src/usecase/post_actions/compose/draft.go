@@ -101,7 +101,9 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 	if err != nil {
 		return nil, err
 	}
-	platforms := dedupe(in.PlatformIDs)
+	// One more platform than the campaign has is enough to find one that
+	// isn't its own.
+	platforms := dedupe(in.PlatformIDs, len(campaign.TargetPlatforms))
 	if err := checkAsked(campaign, platforms, in.PostType, in.PhaseID); err != nil {
 		return nil, err
 	}
@@ -109,13 +111,7 @@ func (s *Service) PlanDraft(ctx context.Context, in DraftInput, maxPosts int) (*
 	postType := in.PostType
 	if len(platforms) == 0 {
 		// The suggested platform and its post type, if they still fit.
-		suggested, suggestedType := deref(plan.PlatformID), deref(plan.PostType)
-		if checkTarget(campaign, suggested, suggestedType, false) != nil {
-			suggestedType = ""
-			if checkTarget(campaign, suggested, "", false) != nil {
-				suggested = ""
-			}
-		}
+		suggested, suggestedType, _ := fitTarget(campaign, deref(plan.PlatformID), deref(plan.PostType), false, false)
 		if suggested == "" {
 			return nil, ErrNoPlatform
 		}
@@ -205,7 +201,7 @@ func checkAsked(campaign *models.Campaign, platforms []string, postType, phaseID
 		return ErrPostTypeOneFor
 	}
 	for _, p := range platforms {
-		if err := checkTarget(campaign, p, postType, true); err != nil {
+		if _, _, err := fitTarget(campaign, p, postType, true, postType != ""); err != nil {
 			return err
 		}
 	}
