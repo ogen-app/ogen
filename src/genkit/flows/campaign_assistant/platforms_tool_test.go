@@ -3,6 +3,7 @@ package campaign_assistant
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/fakemodel"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/platforms"
 )
 
@@ -75,6 +77,11 @@ func TestRunner_YesPleaseAddsThePlatform(t *testing.T) {
 	a := actions.logged(t, resp.Platforms.UndoID)
 	if len(a.Before["platforms"].([]any)) != 1 || len(a.After["platforms"].([]any)) != 2 {
 		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
+	}
+	// After is what undo compares the campaign with: it must match the
+	// stored one whole.
+	if want := assistantundo.CampaignPlatforms(campaigns.c); !reflect.DeepEqual(a.After, want) {
+		t.Fatalf("logged after = %v, want the stored campaign's %v", a.After, want)
 	}
 }
 

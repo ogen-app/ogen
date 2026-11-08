@@ -159,16 +159,7 @@ func (r *campaignRepository) listFiltered(ctx context.Context, extra func(*bun.S
 	if err := q.OrderExpr("created_at ASC").Scan(ctx); err != nil {
 		return nil, err
 	}
-	if err := r.hydrateTags(ctx, campaigns); err != nil {
-		return nil, err
-	}
-	if err := r.hydratePlatforms(ctx, campaigns); err != nil {
-		return nil, err
-	}
-	if err := r.hydrateCampaignTypes(ctx, campaigns); err != nil {
-		return nil, err
-	}
-	if err := r.hydrateTypeLocked(ctx, campaigns); err != nil {
+	if err := hydrateCampaigns(ctx, r.db, campaigns); err != nil {
 		return nil, err
 	}
 	return campaigns, nil
@@ -220,16 +211,7 @@ func (r *campaignRepository) get(ctx context.Context, db bun.IDB, id string, loc
 		return nil, err
 	}
 	campaigns := []models.Campaign{*campaign}
-	if err := r.hydrateTags(ctx, campaigns); err != nil {
-		return nil, err
-	}
-	if err := r.hydratePlatforms(ctx, campaigns); err != nil {
-		return nil, err
-	}
-	if err := r.hydrateCampaignTypes(ctx, campaigns); err != nil {
-		return nil, err
-	}
-	if err := r.hydrateTypeLocked(ctx, campaigns); err != nil {
+	if err := hydrateCampaigns(ctx, db, campaigns); err != nil {
 		return nil, err
 	}
 	if err := r.hydratePhaseWindows(ctx, db, &campaigns[0]); err != nil {
@@ -415,6 +397,7 @@ func (r *campaignRepository) SetDates(ctx context.Context, id string, oldStart, 
 		Set("end_date = ?", end).
 		Set("updated_at = ?", time.Now().UTC()).
 		Where("id = ?", id).
+		Where("deleted_at IS NULL").
 		Where("start_date IS NOT DISTINCT FROM ?", oldStart).
 		Where("end_date IS NOT DISTINCT FROM ?", oldEnd).
 		Exec(ctx)
@@ -462,7 +445,22 @@ func (r *campaignRepository) setArchivedAt(ctx context.Context, id string, at *t
 	return n > 0, nil
 }
 
-func (r *campaignRepository) hydratePlatforms(ctx context.Context, campaigns []models.Campaign) error {
+// hydrateCampaigns fills the campaigns' tags, platforms, types and type
+// lock, reading on db so a caller's transaction needs no second connection.
+func hydrateCampaigns(ctx context.Context, db bun.IDB, campaigns []models.Campaign) error {
+	if err := hydrateCampaignTags(ctx, db, campaigns); err != nil {
+		return err
+	}
+	if err := hydratePlatforms(ctx, db, campaigns); err != nil {
+		return err
+	}
+	if err := hydrateCampaignTypes(ctx, db, campaigns); err != nil {
+		return err
+	}
+	return hydrateTypeLocked(ctx, db, campaigns)
+}
+
+func hydratePlatforms(ctx context.Context, db bun.IDB, campaigns []models.Campaign) error {
 	for i := range campaigns {
 		campaigns[i].Platforms = []models.Platform{}
 	}
@@ -473,7 +471,7 @@ func (r *campaignRepository) hydratePlatforms(ctx context.Context, campaigns []m
 		}
 		return out
 	})
-	byID, err := fetchByIDs(ctx, r.db, ids, func(p *models.Platform) string { return p.ID })
+	byID, err := fetchByIDs(ctx, db, ids, func(p *models.Platform) string { return p.ID })
 	if err != nil {
 		return err
 	}
@@ -487,12 +485,12 @@ func (r *campaignRepository) hydratePlatforms(ctx context.Context, campaigns []m
 	return nil
 }
 
-func (r *campaignRepository) hydrateCampaignTypes(ctx context.Context, campaigns []models.Campaign) error {
+func hydrateCampaignTypes(ctx context.Context, db bun.IDB, campaigns []models.Campaign) error {
 	ids := make([]string, 0, len(campaigns))
 	for _, c := range campaigns {
 		ids = append(ids, c.CampaignTypeID)
 	}
-	byID, err := r.campaignTypeRepo.GetByIDs(ctx, ids)
+	byID, err := campaignTypesByIDs(ctx, db, ids)
 	if err != nil {
 		return err
 	}
@@ -504,9 +502,21 @@ func (r *campaignRepository) hydrateCampaignTypes(ctx context.Context, campaigns
 	return nil
 }
 
-func (r *campaignRepository) hydrateTags(ctx context.Context, campaigns []models.Campaign) error {
-	return HydrateTags(ctx, r.tagRepo, campaigns,
-		func(c models.Campaign) []string { return c.TagIDs },
-		func(c *models.Campaign) *[]models.Tag { return &c.Tags },
-	)
+func hydrateCampaignTags(ctx context.Context, db bun.IDB, campaigns []models.Campaign) error {
+	for i := range campaigns {
+		campaigns[i].Tags = []models.Tag{}
+	}
+	ids := collectIDsFlat(campaigns, func(c models.Campaign) []string { return c.TagIDs })
+	byID, err := fetchByIDs(ctx, db, ids, func(t *models.Tag) string { return t.ID })
+	if err != nil {
+		return err
+	}
+	for i, c := range campaigns {
+		for _, id := range c.TagIDs {
+			if t, ok := byID[id]; ok {
+				campaigns[i].Tags = append(campaigns[i].Tags, *t)
+			}
+		}
+	}
+	return nil
 }
