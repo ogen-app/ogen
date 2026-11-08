@@ -59,7 +59,7 @@ func runToolRaw(t *testing.T, ctx context.Context, name string, input map[string
 func TestToolRefusals_SubFlowValidationErrors(t *testing.T) {
 	plan := func(err error) *requestState {
 		return &requestState{campaignID: "c1", campaign: timelineCampaign(),
-			contentPlan: func(context.Context, string, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+			contentPlan: func(context.Context, content_plan.ContentPlanRequest, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 				return nil, err
 			}}
 	}
