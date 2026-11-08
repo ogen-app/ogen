@@ -10,7 +10,9 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
 
 func (r *memIdeaRepo) OpenIdeas(_ context.Context, campaignID string, limit int) ([]models.Idea, bool, error) {
@@ -34,17 +36,17 @@ func (r *memIdeaRepo) MergeSet(_ context.Context, ids []string) (repository.Idea
 	return set, nil
 }
 
-func (r *memIdeaRepo) MergeIdeas(ctx context.Context, ids []string, plan func(repository.IdeaMergeSet) (repository.IdeaMerge, error)) error {
+func (r *memIdeaRepo) MergeIdeas(ctx context.Context, ids []string, plan func(repository.IdeaMergeSet) (repository.IdeaMerge, error)) (*models.Idea, error) {
 	set, _ := r.MergeSet(ctx, ids)
 	m, err := plan(set)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	r.byID[m.Keep.ID] = m.Keep
 	for _, id := range m.Delete {
 		delete(r.byID, id)
 	}
-	return nil
+	return m.Keep, nil
 }
 
 func duplicateDeps() (Deps, *memIdeaRepo) {
@@ -70,8 +72,21 @@ func TestFindDuplicateIdeas_ThreadScope(t *testing.T) {
 	}
 }
 
+type recordingHub struct{ got []eventhub.Event }
+
+func (h *recordingHub) Publish(_ context.Context, ev eventhub.Event) error {
+	h.got = append(h.got, ev)
+	return nil
+}
+
+func (h *recordingHub) Subscribe(context.Context, eventhub.SubscribeOpts) (<-chan eventhub.Event, func(), error) {
+	return nil, func() {}, nil
+}
+
 func TestMergeIdeas(t *testing.T) {
 	d, repo := duplicateDeps()
+	hub := &recordingHub{}
+	d.Hub = hub
 	ctx, touched := turn(t, workspace, nil)
 	_, err := mergeIdeas(ctx, d, MergeIdeasInput{KeepID: "i3", MergeIDs: []string{"i4"}})
 	refused(t, err)
@@ -86,6 +101,11 @@ func TestMergeIdeas(t *testing.T) {
 	}
 	if !slices.Equal(touched(), []assistantkit.Touched{{Kind: "idea"}}) {
 		t.Fatalf("touched = %v", touched())
+	}
+	// Other sessions hear of the deleted idea, as after a merge over HTTP.
+	if len(hub.got) != 1 || hub.got[0].Type != ideas.EventDeleted || hub.got[0].TenantID != "tenant-1" ||
+		!slices.Equal(hub.got[0].Payload.(map[string][]string)["ids"], []string{"i1"}) {
+		t.Fatalf("events = %+v", hub.got)
 	}
 }
 

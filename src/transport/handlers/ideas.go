@@ -14,7 +14,6 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/kernel/activity"
-	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
 
@@ -45,30 +44,14 @@ func (h *IdeasHandler) WithEventHub(hub eventhub.Hub) *IdeasHandler {
 // delete, carrying {ids}. A refetch hint for every Ideas list and the asset
 // counts that read ideas.
 const (
-	IdeasTopic        = "entity:ideas:list"
-	EventIdeasDeleted = "ideas.deleted"
+	IdeasTopic        = ideas.Topic
+	EventIdeasDeleted = ideas.EventDeleted
 )
 
 // publishIdeasDeleted announces committed deletes to every member of the
-// workspace. It fails closed without a tenant in ctx, because an event with
-// neither filter set would reach every tenant. Best-effort.
+// workspace; see ideas.PublishDeleted.
 func (h *IdeasHandler) publishIdeasDeleted(c *fiber.Ctx, ids []string) {
-	ctx := reqCtx(c)
-	if h.hub == nil || len(ids) == 0 {
-		return
-	}
-	tenantID, ok := tenantctx.From(ctx)
-	if !ok {
-		return
-	}
-	evID, err := models.NewID()
-	if err != nil {
-		return
-	}
-	_ = h.hub.Publish(ctx, eventhub.Event{
-		ID: evID, Topic: IdeasTopic, Type: EventIdeasDeleted, TenantID: tenantID,
-		Payload: map[string][]string{"ids": ids},
-	})
+	ideas.PublishDeleted(reqCtx(c), h.hub, ids)
 }
 
 func (h *IdeasHandler) recordActivity(c *fiber.Ctx, typ, ideaID string, payload map[string]any) {
