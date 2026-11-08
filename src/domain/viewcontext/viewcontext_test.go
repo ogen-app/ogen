@@ -43,10 +43,15 @@ func TestParse_AllMatching(t *testing.T) {
 }
 
 func TestParse_Invalid(t *testing.T) {
-	many := make([]string, MaxSelectionIDs+1)
-	for i := range many {
-		many[i] = fmt.Sprintf("%q", fmt.Sprint("i", i))
+	ids := func(n int) string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("%q", fmt.Sprint("i", i))
+		}
+		return strings.Join(out, ",")
 	}
+	long := strings.Repeat("x", MaxIDLen+1)
+	const base = `{"version":1,"screen":"ideas","scope":{"kind":"workspace"},`
 	cases := map[string]struct {
 		raw   string
 		field string
@@ -60,12 +65,27 @@ func TestParse_Invalid(t *testing.T) {
 		"focus without id":    {`{"version":1,"screen":"asset","scope":{"kind":"workspace"},"focus":{"kind":"asset"}}`, "focus.id"},
 		"empty selection":     {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},"selection":{"kind":"idea"}}`, "selection"},
 		"ids and all":         {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},"selection":{"kind":"idea","ids":["a"],"allMatching":true}}`, "selection"},
-		"too many ids": {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},"selection":{"kind":"idea","ids":[` + strings.Join(many, ",") + `]}}`,
+		"too many ids": {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},"selection":{"kind":"idea","ids":[` + ids(MaxSelectionIDs+1) + `]}}`,
 			"selection.ids"},
 		"blank id":       {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},"selection":{"kind":"idea","ids":[""]}}`, "selection.ids[0]"},
 		"bad date":       {`{"version":1,"screen":"analytics","scope":{"kind":"workspace"},"window":{"from":"April"}}`, "window.from"},
 		"window reverse": {`{"version":1,"screen":"analytics","scope":{"kind":"workspace"},"window":{"from":"2026-05-01","to":"2026-04-01"}}`, "window"},
 		"long filter":    {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},"filter":"` + strings.Repeat("x", MaxFilterLen+1) + `"}`, "filter"},
+
+		"long scope id":          {`{"version":1,"screen":"campaign.list","scope":{"kind":"campaign","id":"` + long + `"}}`, "scope.id"},
+		"unknown focus kind":     {base + `"focus":{"kind":"task","id":"t1"}}`, "focus.kind"},
+		"long focus id":          {base + `"focus":{"kind":"idea","id":"` + long + `"}}`, "focus.id"},
+		"unknown selection kind": {base + `"selection":{"kind":"task","ids":["t1"]}}`, "selection.kind"},
+		"long selection id":      {base + `"selection":{"kind":"idea","ids":["a","` + long + `"]}}`, "selection.ids[1]"},
+		"long saved view":        {base + `"savedViewId":"` + long + `"}`, "savedViewId"},
+		"long sort":              {base + `"sort":"` + long + `"}`, "sort"},
+		"bad to date":            {base + `"window":{"to":"2026-13-01"}}`, "window.to"},
+		"too many platforms":     {base + `"window":{"platforms":[` + ids(MaxPlatforms+1) + `]}}`, "window.platforms"},
+		"blank platform":         {base + `"window":{"platforms":["pl1",""]}}`, "window.platforms[1]"},
+		"unknown visible kind":   {base + `"visible":{"kind":"task","ids":["t1"]}}`, "visible.kind"},
+		"too many visible ids":   {base + `"visible":{"kind":"idea","ids":[` + ids(MaxVisibleIDs+1) + `]}}`, "visible.ids"},
+		"blank visible id":       {base + `"visible":{"kind":"idea","ids":[""]}}`, "visible.ids[0]"},
+		"long visible id":        {base + `"visible":{"kind":"idea","ids":["` + long + `"]}}`, "visible.ids[0]"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
