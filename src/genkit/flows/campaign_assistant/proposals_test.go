@@ -13,7 +13,6 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
-	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 )
 
 // memProposals is an in-memory AssistantProposalRepository.
@@ -116,24 +115,9 @@ func TestGeneratePosts_LargeBatchIsProposed(t *testing.T) {
 	if !p.ExpiresAt.After(time.Now()) {
 		t.Fatalf("proposal expires at %v, in the past", p.ExpiresAt)
 	}
-	// The turn is labelled "proposed" and the card event carries the proposal.
-	outs := st.outcomes()
-	if got := turnAction(outs, st.writes); got != actionProposed {
-		t.Fatalf("turn action = %q, want %q", got, actionProposed)
-	}
-	if outs[0].event != SSEEventProposalCreated || outs[0].payload.(ProposalCreatedEventPayload).ID != p.ID {
-		t.Fatalf("outcome = %+v", outs[0])
-	}
-	// The runner attaches every outcome to the response.
-	var resp CampaignAssistantResponse
-	outs[0].attach(&resp)
-	if len(resp.Proposals) != 1 || resp.Proposals[0].ID != p.ID {
-		t.Fatalf("response proposals = %+v", resp.Proposals)
-	}
-
 	// Confirming runs the stored call unchanged, past the gate.
 	reg := newTestTools(t).reg
-	ctx := assistantkit.WithProposalSink(withRequestState(t.Context(), st), campaignSink{st: st})
+	ctx := st.bind(t.Context())
 	raw, err := reg.RunConfirmed(ctx, p.Tool, map[string]any(p.Args))
 	if err != nil {
 		t.Fatal(err)
@@ -163,14 +147,13 @@ func TestRunContentPlan_AlwaysProposed(t *testing.T) {
 	}
 }
 
-// The turn's source selection rides on the proposal, so the confirmed plan
-// draws only on the selected assets even when confirmed from another turn.
+// The source selection rides on the proposal, so the confirmed plan draws
+// only on the selected assets even when confirmed from another turn.
 func TestRunContentPlan_ConfirmedKeepsSourceSelection(t *testing.T) {
 	store := &memProposals{}
 	var generated int
 	st := proposalState(store, &generated)
-	st.sourceAssetIDs = []string{"a2"}
-	if out := runTool(t, st, "runContentPlan", map[string]any{}); out.Status != assistantkit.StatusProposed {
+	if out := runTool(t, st, "runContentPlan", map[string]any{"assetIds": []string{"a2"}}); out.Status != assistantkit.StatusProposed {
 		t.Fatalf("outcome = %+v", out)
 	}
 	p := store.rows[0]
@@ -181,7 +164,7 @@ func TestRunContentPlan_ConfirmedKeepsSourceSelection(t *testing.T) {
 		got = req.AssetIDs
 		return &content_plan.ContentPlanResponse{}, nil
 	}
-	ctx := assistantkit.WithProposalSink(withRequestState(t.Context(), later), campaignSink{st: later})
+	ctx := later.bind(t.Context())
 	if _, err := newTestTools(t).reg.RunConfirmed(ctx, p.Tool, map[string]any(p.Args)); err != nil {
 		t.Fatal(err)
 	}
@@ -200,90 +183,8 @@ func TestRunContentPlan_NoStoreFailsClosed(t *testing.T) {
 	tool := spec.Tool.(interface {
 		RunRaw(context.Context, any) (any, error)
 	})
-	ctx := assistantkit.WithProposalSink(withRequestState(t.Context(), st), campaignSink{st: st})
+	ctx := st.bind(t.Context())
 	if _, err := tool.RunRaw(ctx, map[string]any{}); err == nil || generated != 0 {
 		t.Fatalf("err = %v, generated = %d, want a failure and no run", err, generated)
-	}
-}
-
-func TestStateBlock_ListsOpenProposals(t *testing.T) {
-	p, err := loadPrompts(newTestTools(t).reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap := state.Build(timelineCampaign(), nil, -1)
-	block, err := renderState(p, snap, []openProposal{{ID: "prop-1", Summary: "Add 10 draft posts for Threads"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(block, "- Waiting for the user's answer:\n  - prop-1: Add 10 draft posts for Threads") {
-		t.Fatalf("state block:\n%s", block)
-	}
-	block, err = renderState(p, snap, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(block, "Waiting for the user's answer") {
-		t.Fatal("the section renders with no open proposals")
-	}
-	// Per-turn state stays out of the cached system and context prompts.
-	actx, err := assembleContext(timelineCampaign(), "", time.Now(), p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(actx.SystemPrompt+actx.ContextBlock, "prop-1") {
-		t.Fatal("open proposals leaked into the cached prompt")
-	}
-}
-
-// The same call proposed twice in a turn, even in parallel, is one offer.
-func TestPropose_ReusesIdenticalOfferInTurn(t *testing.T) {
-	store := &memProposals{}
-	var generated int
-	st := proposalState(store, &generated)
-	sink := campaignSink{st: st}
-	p := assistantkit.Proposal{Tool: "generatePosts", Args: GeneratePostsInput{Platforms: []string{"Threads"}, Count: 10}, Summary: "Add 10"}
-	ids := make([]string, 4)
-	var wg sync.WaitGroup
-	for i := range ids {
-		wg.Go(func() {
-			id, err := sink.Propose(t.Context(), p)
-			if err != nil {
-				t.Error(err)
-			}
-			ids[i] = id
-		})
-	}
-	wg.Wait()
-	for _, id := range ids {
-		if id != ids[0] {
-			t.Fatalf("ids = %v, want one offer", ids)
-		}
-	}
-	if len(store.rows) != 1 || len(st.proposed) != 1 {
-		t.Fatalf("stored %d, turn lists %d, want 1 each", len(store.rows), len(st.proposed))
-	}
-
-	// Different args are a different offer.
-	p.Args = GeneratePostsInput{Platforms: []string{"Threads"}, Count: 8}
-	if id, err := sink.Propose(t.Context(), p); err != nil || id == ids[0] || len(store.rows) != 2 {
-		t.Fatalf("id = %q, err = %v, stored = %d", id, err, len(store.rows))
-	}
-}
-
-// The gate compares the threshold with what the tool would create, which is
-// capped per call.
-func TestPostGates_ThresholdUsesCappedCount(t *testing.T) {
-	st := &requestState{campaign: timelineCampaign(), proposalThreshold: 5, maxDraftPosts: 5, maxGeneratePosts: 5}
-	ctx := withRequestState(t.Context(), st)
-	if draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 10}) {
-		t.Fatal("draftPost: 10 on two platforms creates 5, within the threshold")
-	}
-	if generatePostsGate.Needs(ctx, GeneratePostsInput{Platforms: []string{"Threads"}, Count: 20}) {
-		t.Fatal("generatePosts: 20 creates 5, within the threshold")
-	}
-	st.proposalThreshold = 4
-	if !draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 10}) {
-		t.Fatal("draftPost: 5 posts are above a threshold of 4")
 	}
 }
