@@ -85,7 +85,7 @@ func collectIDsFlat[T any](items []T, getIDs func(T) []string) []string {
 // empty map (no error) when ids is empty.
 func fetchByIDs[T any](
 	ctx context.Context,
-	db *bun.DB,
+	db bun.IDB,
 	ids []string,
 	getID func(*T) string,
 	exclude ...string,
