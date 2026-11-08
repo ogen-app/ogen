@@ -99,6 +99,7 @@ func TestPlanDraft(t *testing.T) {
 		"over the cap":          {DraftInput{IdeaIDs: []string{"a", "b"}, PlatformIDs: []string{"linkedin", "threads"}}, 3, ErrTooManyDrafts},
 		"unknown idea":          {DraftInput{IdeaIDs: []string{"zz"}}, 5, ErrIdeaNotFound},
 		"not a phase":           {DraftInput{IdeaIDs: []string{"a"}, PhaseID: "elsewhere"}, 5, ErrInvalidPhase},
+		"targets and one more":  {DraftInput{IdeaIDs: []string{"a"}, PlatformIDs: []string{"linkedin", "threads", "linkedin", "myspace"}}, 5, ErrNotTarget},
 	} {
 		if _, err := s.PlanDraft(t.Context(), tc.in, tc.max); !errors.Is(err, tc.want) || !IsValidation(err) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
