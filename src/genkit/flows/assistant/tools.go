@@ -93,6 +93,17 @@ func (st *turnState) hasBegun(name string) bool {
 	return slices.ContainsFunc(st.begun, func(b begunPack) bool { return b.name == name })
 }
 
+// begunPack returns the pack name the turn has begun.
+func (st *turnState) begunPack(name string) (begunPack, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	i := slices.IndexFunc(st.begun, func(b begunPack) bool { return b.name == name })
+	if i < 0 {
+		return begunPack{}, false
+	}
+	return st.begun[i], true
+}
+
 func (st *turnState) addBegun(name string, ctx context.Context, block string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
