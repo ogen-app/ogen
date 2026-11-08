@@ -65,6 +65,9 @@ type turnSink struct {
 	repos Repos
 }
 
+// Propose stores p as an offer in the turn's scope and returns its id. A call
+// identical to one already proposed this turn gets that offer's id, so the
+// user sees one card for it.
 func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string, error) {
 	if s.repos.Proposals == nil {
 		return "", assistantkit.ErrNoProposalSink
@@ -72,6 +75,18 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 	args, err := toJSONMap(p.Args)
 	if err != nil {
 		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
+	}
+	// Map keys marshal sorted, so equal args give equal keys.
+	key, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("encode %s proposal args: %w", p.Tool, err)
+	}
+	dedupKey := p.Tool + "\x00" + string(key)
+	// Held across the store so parallel identical calls can't both create one.
+	s.st.proposing.Lock()
+	defer s.st.proposing.Unlock()
+	if id, ok := s.st.proposedKeys[dedupKey]; ok {
+		return id, nil
 	}
 	stored := make([]models.ProposalOption, len(p.Options))
 	choices := make([]ProposalChoice, len(p.Options))
@@ -97,6 +112,10 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 		return "", fmt.Errorf("store %s proposal: %w", p.Tool, err)
 	}
 	s.st.addCard(ProposalCard{ID: id, Tool: p.Tool, Summary: p.Summary, ExpiresAt: row.ExpiresAt.Format(time.RFC3339), Options: choices})
+	if s.st.proposedKeys == nil {
+		s.st.proposedKeys = map[string]string{}
+	}
+	s.st.proposedKeys[dedupKey] = id
 	return id, nil
 }
 
@@ -153,7 +172,20 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 			tool, args = o.Tool, o.Args
 		}
 	}
+	// The pack begins before the offer is resolved, so an offer whose
+	// subject is gone stays open rather than answered and not run.
+	ctx, err = t.beginFor(ctx, st, tool, args)
+	if err != nil {
+		return nil, err
+	}
+	// What the work needs (the campaign's heavy slot) is claimed before the
+	// offer is answered too, so work that can't start now leaves it open.
+	ctx, release, err := t.reg.Prepare(ctx, tool)
+	if err != nil {
+		return nil, err
+	}
 	if err := t.resolve(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
+		release()
 		return nil, err
 	}
 	return t.reg.RunConfirmed(ctx, tool, map[string]any(args))
@@ -299,13 +331,12 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 		Version: viewcontext.Version, Screen: "home", Scope: viewcontext.Scope{Kind: p.ScopeKind, ID: p.ScopeID},
 	}}
 	st := newTurnState(view, nil)
-	// The work's own progress events (a draft per post) stream as in a turn.
 	st.emit = onEvent
-	ctx = t.bind(withTurnState(ctx, st), st)
-	answered := Request{Instruction: "Confirmed: " + p.Summary, View: view}
+	st.turn.Instruction = "Confirmed: " + p.Summary
 	if !req.Confirm {
-		answered.Instruction = "Dismissed: " + p.Summary
+		st.turn.Instruction = "Dismissed: " + p.Summary
 	}
+	ctx = t.bind(withTurnState(ctx, st), st)
 
 	in := AnswerProposalInput{ProposalID: p.ID, OptionID: req.OptionID}
 	var result any
@@ -316,7 +347,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	}
 	reason, refused := refusedResult(result)
 	if err != nil || refused {
-		t.recordUnfinished(ctx, st, answered, onEvent)
+		t.recordUnfinished(ctx, st, onEvent)
 	}
 	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
 		return nil, &ProposalConflictError{Msg: r.Reason}
@@ -331,12 +362,14 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	if req.Confirm {
 		resp.Explanation = "Done: " + p.Summary
 	}
-	finish(st, resp)
-	// The answer joins the thread, so its history and the next turn know it
-	// happened. The work has run, so a failed write is logged, not returned.
+	t.finish(st, resp)
+	// The answer joins the thread, so the next chat turn knows it happened.
+	// The work has run, so a failed write marks the reply unsaved rather
+	// than failing it.
 	if t.deps.Messages != nil {
-		if err := persistTurn(ctx, t.deps, answered, resp); err != nil {
+		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: view}, resp); err != nil {
 			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
+			resp.Unsaved = true
 		}
 	}
 	for _, r := range st.resolvedList() {
@@ -354,14 +387,14 @@ const unfinishedAnswer = "I couldn't finish that. Ask again and I'll set it up."
 // was refused in the thread, and tells the client it was answered, so neither
 // the next turn nor the card waits on it. The offer stays answered: work that
 // failed part way must not run twice from the same card.
-func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, answered Request, onEvent OnEventFunc) {
+func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent OnEventFunc) {
 	resolved := st.resolvedList()
 	if len(resolved) == 0 {
 		return
 	}
 	if t.deps.Messages != nil {
 		resp := &Response{Action: actionAnswered, Explanation: unfinishedAnswer, Touched: st.touches.List()}
-		if err := persistTurn(ctx, t.deps, answered, resp); err != nil {
+		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: st.view}, resp); err != nil {
 			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		}
 	}
