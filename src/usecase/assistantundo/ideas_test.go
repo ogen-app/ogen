@@ -119,6 +119,30 @@ func TestUndo_IdeaVerdictRestoresEarlierTriage(t *testing.T) {
 	}
 }
 
+// An earlier decider who has left the workspace is restored as no one.
+func TestUndo_IdeaVerdictWithADeletedDecider(t *testing.T) {
+	f := newFixture(t)
+	decided := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	ideas, svc := ideaFixture(t, f, &models.Idea{
+		ID: "i1", Title: "Pricing myths", Verdict: new(models.IdeaVerdictNo), DecidedAt: &decided, DecidedBy: new("user-2"),
+	})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	id := logVerdict(t, f, ideas, func(i *models.Idea) {
+		i.Verdict, i.DecidedAt, i.DecidedBy = new(models.IdeaVerdictYes), &now, new("user-1")
+	})
+	if _, err := f.db.NewDelete().Model((*models.User)(nil)).Where("id = ?", "user-2").Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	i := loadIdea(t, f, ideas)
+	if i.Verdict == nil || *i.Verdict != models.IdeaVerdictNo || i.DecidedAt == nil || !i.DecidedAt.Equal(decided) || i.DecidedBy != nil {
+		t.Fatalf("idea = %+v; want no, decided then by no one", i)
+	}
+}
+
 func TestUndo_CampaignAssets(t *testing.T) {
 	f := newFixture(t)
 	f.seedCampaign(t, func(c *models.Campaign) { c.AssetIDs, c.UseAssets = models.StringSlice{"a1"}, true })
