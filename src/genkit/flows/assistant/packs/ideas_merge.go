@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
@@ -21,7 +22,7 @@ func defineMergeTools(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		"Finds groups of open ideas that read as the same idea, in this thread's campaign or among the workspace-wide ideas, each with a suggested idea to keep.",
 		assistantkit.Wrap(func(ctx context.Context, in FindDuplicateIdeasInput) (*FindDuplicateIdeasOutput, error) {
 			return findDuplicateIdeas(ctx, d, in)
-		}))
+		}), ai.WithStrictSchema(false))
 	merge := genkit.DefineTool(g, "mergeIdeas",
 		"Merges ideas into one kept idea: it gains their assets and notes, and they are deleted. Always offered for the user to confirm first.",
 		assistantkit.Gated("mergeIdeas", assistantkit.Gate[MergeIdeasInput]{
@@ -38,7 +39,7 @@ func defineMergeTools(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			},
 		}, assistantkit.Wrap(func(ctx context.Context, in MergeIdeasInput) (*MergeIdeasOutput, error) {
 			return mergeIdeas(ctx, d, in)
-		})))
+		})), ai.WithStrictSchema(false))
 	return []assistantkit.Spec{
 		spec(ideasPackName, find, assistantkit.TierRead,
 			`Call this when the user asks about duplicate, repeated or overlapping ideas — "do I have the same idea twice?", "clean up my ideas". It compares open ideas (not turned down, not made into a post) of this thread's campaign, or the workspace-wide ideas outside a campaign. Each group's keepId is the suggested idea to keep; offer mergeIdeas for the groups the user wants merged.`),
