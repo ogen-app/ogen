@@ -1509,14 +1509,38 @@ func toolSetCampaignDates(ctx context.Context, in SetCampaignDatesInput) (*SetCa
 	if !ok {
 		return nil, assistantkit.Refused("the campaign's dates were changed while I was working on this, so I left them as they are; check them and ask again if you still want the change")
 	}
+	_, source := campaignphase.Resolve(c)
 	c.StartDate = start
 	c.EndDate = end
 	c.UpdatedAt = time.Now().UTC()
+	if source == campaignphase.SourceManual {
+		reboundPhasePlan(ctx, st, c)
+	}
 
 	st.datesResult = &DatesResult{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside,
 		UndoID: st.logChange(ctx, models.AssistantActionCampaignDates, before, assistantundo.CampaignDates(c))}
 	st.recordWrite(actionDatesUpdated)
 	return &SetCampaignDatesOutput{StartDate: start.Format(iso), EndDate: end.Format(iso), PostsOutsideRange: outside}, nil
+}
+
+// reboundPhasePlan re-anchors the campaign's manual phase plan to its new
+// dates, as a date edit does, so later reads keep its inner boundaries. A
+// plan that no longer fits is left stored, so undoing the dates can bring it
+// back; until then the phases are derived from the dates.
+func reboundPhasePlan(ctx context.Context, st *requestState, c *models.Campaign) {
+	entries, ok := campaignphase.Rebound(c, c.PhaseWindows)
+	if !ok {
+		return
+	}
+	rows := make([]models.CampaignPhaseWindow, len(entries))
+	for i, e := range entries {
+		rows[i] = models.CampaignPhaseWindow{PhaseID: e.PhaseID, StartDate: e.Start, EndDate: e.End}
+	}
+	if err := st.repos.Campaigns.ReplacePhaseWindows(ctx, c.ID, rows); err != nil {
+		slog.WarnContext(ctx, "re-anchoring campaign phase plan failed", logging.AttrComponent, logComponent, "campaign_id", c.ID, logging.AttrError, err)
+		return
+	}
+	c.PhaseWindows = rows
 }
 
 // checkCampaignDated refuses redistribution until the campaign has a
