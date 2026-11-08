@@ -8,45 +8,34 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
-	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 )
 
-// PostAssistantRequest is the input to the postAssistant flow.
-type PostAssistantRequest struct {
-	PostID      string `json:"postId"`
-	Instruction string `json:"instruction"`
-}
-
-// PostAssistantResponse is the structured output from the assistant.
-// Fields are ordered so that Explanation and UpdatedContent appear first
-// in the model's JSON output — this lets them start streaming to the
-// client before the smaller metadata fields are generated.
+// PostAssistantResponse is what the post pack's tools did in a turn, under
+// "post" in the assistant's results: the action that labels the turn, the
+// fallback reply, the content the edit or restore left, and each committed
+// tool result.
 type PostAssistantResponse struct {
-	Explanation    string `json:"explanation"                  jsonschema:"description=Human-readable explanation of what was changed or why the request was declined"`
-	UpdatedContent string `json:"updatedContent"               jsonschema:"description=The full updated post content as Markdown; empty when action is declined"`
-	Action         string `json:"action"                       jsonschema:"description=edited when content was changed; declined when the request is out of scope or you are asking the user to confirm; cloned when a clone was created; restored when the post was rolled back to an earlier version; scheduled when the post was scheduled for publishing; noted when one or more notes were created without changing the post body,enum=edited,enum=declined,enum=cloned,enum=restored,enum=scheduled,enum=noted"`
-	SaveVersion    bool   `json:"saveVersion"                  jsonschema:"description=True when a new version snapshot should be created"`
-	VersionNote    string `json:"versionNote,omitempty"        jsonschema:"description=Short note describing the version; only present when saveVersion is true"`
-	// CloneResult is populated by the server (not the model) when the
-	// clonePost tool created a clone during this turn. Action is then
-	// "cloned" and UpdatedContent is empty — the source post is untouched.
-	CloneResult *CloneResultPayload `json:"cloneResult,omitempty" jsonschema:"-"`
-	// RestoreResult is populated by the server (not the model) when the
-	// restoreVersion tool ran this turn. Action is then "restored" and
-	// UpdatedContent holds the restored content.
-	RestoreResult *RestoreResultPayload `json:"restoreResult,omitempty" jsonschema:"-"`
-	// ScheduleResult is populated by the server (not the model) when the
-	// schedulePost tool ran this turn. Action is then "scheduled" and
-	// UpdatedContent is empty — scheduling doesn't change content.
-	ScheduleResult *ScheduleResultPayload `json:"scheduleResult,omitempty" jsonschema:"-"`
-	// NotesCreated is populated by the server (not the model) with the notes
-	// the createNote tool persisted this turn. Notes are additive:
-	// they may accompany an "edited" turn or stand alone as a "noted" turn.
-	NotesCreated []NotePayload `json:"notesCreated,omitempty" jsonschema:"-"`
+	Explanation string `json:"explanation"`
+	// Action is edited, cloned, restored, scheduled or noted.
+	Action string `json:"action" enums:"edited,cloned,restored,scheduled,noted"`
+	// UpdatedContent is the post's content after an edit or a restore.
+	UpdatedContent string `json:"updatedContent,omitempty"`
+	// SaveVersion is set when the edit was saved as a version, with its note.
+	SaveVersion bool   `json:"saveVersion,omitempty"`
+	VersionNote string `json:"versionNote,omitempty"`
+	// CloneResult is the clone clonePost created; the post is untouched.
+	CloneResult *CloneResultPayload `json:"cloneResult,omitempty"`
+	// RestoreResult is the version restoreVersion rolled back to.
+	RestoreResult *RestoreResultPayload `json:"restoreResult,omitempty"`
+	// ScheduleResult is the schedule schedulePost committed.
+	ScheduleResult *ScheduleResultPayload `json:"scheduleResult,omitempty"`
+	// NotesCreated are the notes createNote saved. Notes are additive: they
+	// may accompany an edit or stand alone as a "noted" turn.
+	NotesCreated []NotePayload `json:"notesCreated,omitempty"`
 }
 
 // NotePayload describes a note created by the createNote tool this turn.
@@ -80,14 +69,13 @@ type ScheduleResultPayload struct {
 	Promoted    bool   `json:"promoted"`
 }
 
-// PostAssistantRepos bundles all repository dependencies for the flow.
+// PostAssistantRepos bundles the stores the post pack reads and writes.
 type PostAssistantRepos struct {
 	Posts     repository.PostRepository
 	Assets    repository.AssetRepository
 	Chunks    repository.AssetChunksRepository
 	Campaigns repository.CampaignRepository
 	Versions  repository.PostVersionRepository
-	Messages  repository.PostAssistantMessageRepository
 	// Logs records the status change when writing a planned post's body
 	// makes it a draft. nil skips the audit entry.
 	Logs repository.PostLogRepository
@@ -95,117 +83,58 @@ type PostAssistantRepos struct {
 	// "Threads") to its ID and surface the available platforms to the
 	// model. nil disables cross-platform clone resolution.
 	Platforms repository.PlatformRepository
-	// Settings backs the workspace-timezone lookup the schedulePost flow
+	// Settings backs the workspace-timezone lookup the schedulePost tool
 	// uses to resolve and echo times. nil → UTC.
 	Settings repository.SettingRepository
-	// Allowlist lets the scheduling context tell the model whether the
-	// post's platform auto-publishes or is manual (CON-65/78). nil →
-	// everything reads as manual.
+	// Allowlist tells the scheduling context whether the post's platform
+	// auto-publishes or is manual. nil → everything reads as manual.
 	Allowlist repository.AutoPublishAllowlistRepository
-	// Attachments backs the CON-74 readiness summary surfaced to the model
-	// so it can pre-empt a promote-time validation failure. nil → the
-	// readiness summary omits attachment-based rules.
+	// Attachments backs the readiness summary, so the model can pre-empt a
+	// promote-time validation failure. nil omits attachment-based rules.
 	Attachments repository.PostAttachmentRepository
-	// Notes surfaces the post's existing notes (draft theses, image prompts,
-	// side notes) to the model as context. nil omits the notes
-	// section. Writes go through the shared NoteService, not this repo.
+	// Notes surfaces the post's notes (draft theses, image prompts, side
+	// notes) as context. nil omits them. Writes go through NoteService.
 	Notes repository.PostNoteRepository
 	// Brands resolves the post's brand voice/audience/guardrails into the
-	// editing context. nil falls back to the legacy tone prose.
+	// editing context. nil falls back to the campaign's own tone.
 	Brands repository.BrandRepository
 }
 
-// PostAssistantFlowConfig holds settings for the post assistant flow.
+// PostAssistantFlowConfig holds the post pack's services and limits.
 type PostAssistantFlowConfig struct {
-	// Provider resolves the model reference + call config by role.
+	// Provider resolves the writer's model and call config.
 	Provider *llm.Provider
-	// Recorder captures usage events; nil disables recording.
+	// Recorder captures the writer's usage; nil disables recording.
 	Recorder *usage.Recorder
-	// Checker gates the flow against the tenant's spend caps; nil = no gate.
-	Checker *usage.Checker
-	// MaxOutputTokens caps the model's output for a single call. 0 falls
-	// back to 64000 — Claude 4.x Haiku/Sonnet's max output. Anthropic
-	// charges only for tokens actually emitted, so a generous cap costs
-	// nothing on short responses but prevents truncation when the
-	// explanation + full updated content + tool inputs combined exceed
-	// a smaller cap. When Anthropic stops at the cap, the response's
-	// FinishReason is FinishReasonLength and we log "TRUNCATED" loudly.
+	// MaxOutputTokens caps the writer's output. 0 falls back to 64000, so
+	// a long post is never cut off; only emitted tokens are billed.
 	MaxOutputTokens int64
-	// MaxTurns caps tool-use round-trips. The model needs one extra turn
-	// for the final answer after its last tool call, so MaxTurns=N allows
-	// up to N-1 tool calls. 0 falls back to a sensible default (8) that
-	// covers realistic asset-incorporation scenarios (browse + search a
-	// few assets + read chunks + respond).
-	MaxTurns int
-	// PlannerEnabled turns on the CON-128 hybrid split: the orchestration
-	// loop runs on the planning model (Haiku) and the actual copywriting is
-	// delegated to the Sonnet editPost write-tool. False = the legacy
-	// single-Sonnet path (loop on the generation model, no editPost tool,
-	// content written inline) — the instant-rollback fallback.
-	PlannerEnabled bool
-	// PlannerMaxOutputTokens caps the planner turn's output when
-	// PlannerEnabled. The planner only emits a short envelope + tool inputs,
-	// so a small cap is plenty; the writer sub-call uses MaxOutputTokens.
-	// 0 falls back to 8192.
-	PlannerMaxOutputTokens int64
-	Embedder               ai.Embedder // nil = semantic search unavailable
-	// Hub is the event broker used to publish "operation finalised"
-	// events on success/failure. nil = silent (no events emitted).
+	Embedder        ai.Embedder // nil = semantic search unavailable
+	// Hub announces committed work on the post, so its other open tabs
+	// refresh. nil = silent.
 	Hub eventhub.Hub
-	// PrewarmTools, when true, fires one throwaway generation carrying the full
-	// tool set at init so Anthropic compiles + caches the strict-tool grammar
-	// off the user path. Only worth it alongside a stable tool order,
-	// so the server sets this from cfg.AnthropicStableToolOrder.
-	PrewarmTools bool
-	// CloneService backs the clonePost tool. nil disables the
-	// tool — the assistant then has no clone capability.
-	CloneService *clone.Service
-	// RestoreService backs the restoreVersion tool. nil disables
-	// the tool — the assistant then has no restore capability.
-	RestoreService *restore.Service
-	// ScheduleService backs the schedulePost tool. nil disables
-	// the tool — the assistant then has no scheduling capability.
+	// CloneService, RestoreService, ScheduleService and NoteService back
+	// clonePost, restoreVersion, schedulePost and createNote; nil makes
+	// that tool refuse.
+	CloneService    *clone.Service
+	RestoreService  *restore.Service
 	ScheduleService *schedule.Service
-	// NoteService backs the createNote tool. nil disables the
-	// tool — the assistant then cannot capture notes.
-	NoteService *notes.Service
-	// QualityAuto queues an automatic quality assessment when the assistant
-	// saves a version. nil queues none.
+	NoteService     *notes.Service
+	// QualityAuto queues an automatic quality assessment when an edit is
+	// saved as a version. nil queues none.
 	QualityAuto *qualityauto.Service
-	// Notifier drops a durable "assistant finished / failed" notification to the
-	// post owner. nil is a no-op.
-	Notifier *notify.Service
 }
 
-// ValidationError is returned when preconditions are not met (HTTP 400).
-type ValidationError struct{ Msg string }
+// postRemoved is the refusal when the post is deleted while a tool works
+// on it: the write then finds no row, or trips the post_id foreign key.
+const postRemoved = "This post was deleted while I was working on it, so nothing was saved."
 
-func (e *ValidationError) Error() string { return e.Msg }
-
-// ErrPostRemovedDuringTurn is returned when the post is deleted — directly via
-// DELETE /api/posts/:id, or by a campaign/owner cascade — while the assistant
-// is mid-turn. The flow loads the post up front without a lock and only writes
-// the conversation turn after a potentially long (tens of seconds) model call,
-// so the row can disappear in between; the write then trips the post_id foreign
-// key (SQLSTATE 23503). Surfacing this precondition error keeps the client from
-// seeing a raw database error, and it is treated like "post not found" (400).
-var ErrPostRemovedDuringTurn = &ValidationError{Msg: "This post was deleted while the assistant was working, so nothing was saved."}
-
-// AIError is returned when the model call fails (HTTP 502).
-type AIError struct{ Msg string }
-
-func (e *AIError) Error() string { return e.Msg }
-
-// ── SSE types ─────────────────────────────────────────────────────────────────
-
-// SSEEventKind identifies the SSE event types emitted by the assistant flow.
+// SSEEventKind names an event the post pack streams through the turn.
 type SSEEventKind string
 
 const (
-	SSEEventExplanationDelta SSEEventKind = "explanation_delta"
+	// SSEEventContentDelta is a fragment of the post the writer is writing.
 	SSEEventContentDelta     SSEEventKind = "content_delta"
-	SSEEventToolCall         SSEEventKind = "tool_call"
-	SSEEventToolResult       SSEEventKind = "tool_result"
 	SSEEventCloneStarted     SSEEventKind = "clone_started"
 	SSEEventCloneComplete    SSEEventKind = "clone_complete"
 	SSEEventRestoreStarted   SSEEventKind = "restore_started"
@@ -213,12 +142,10 @@ const (
 	SSEEventScheduleStarted  SSEEventKind = "schedule_started"
 	SSEEventScheduleComplete SSEEventKind = "schedule_complete"
 	SSEEventNoteCreated      SSEEventKind = "note_created"
-	SSEEventComplete         SSEEventKind = "complete"
-	SSEEventError            SSEEventKind = "error"
 )
 
 // NoteCreatedEventPayload is emitted each time the createNote tool persists a
-// note during a turn, so the UI can surface it live.
+// note, so the UI can surface it live.
 type NoteCreatedEventPayload struct {
 	ID    string `json:"id"`
 	Type  string `json:"type"`
@@ -274,30 +201,5 @@ type DeltaEventPayload struct {
 	Delta string `json:"delta"`
 }
 
-// ToolCallEventPayload is emitted once per fully-formed tool request from
-// the model. Partial streaming fragments of the tool input are suppressed
-// to avoid noisy per-character events.
-type ToolCallEventPayload struct {
-	Name  string `json:"name"`
-	Input any    `json:"input,omitempty"`
-	Ref   string `json:"ref,omitempty"`
-}
-
-// ToolResultEventPayload is emitted once a tool invocation returns.
-// Output bytes are intentionally omitted — the client only needs a "done"
-// signal to resolve the matching tool_call chip.
-type ToolResultEventPayload struct {
-	Name string `json:"name"`
-	Ref  string `json:"ref,omitempty"`
-	OK   bool   `json:"ok"`
-}
-
-// ErrorEventPayload is emitted when the flow fails.
-type ErrorEventPayload struct {
-	Message string `json:"message"`
-	Code    int    `json:"code"` // HTTP semantic: 400, 502, 500
-}
-
-// OnEventFunc is an optional callback invoked as SSE events are produced.
-// A nil OnEventFunc is valid — the flow runs silently.
+// OnEventFunc receives the pack's events; nil streams nothing.
 type OnEventFunc func(name SSEEventKind, data any)
