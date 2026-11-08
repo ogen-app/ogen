@@ -49,12 +49,16 @@ var updatePlatformsGate = assistantkit.Gate[UpdateCampaignPlatformsInput]{
 		_, _, _, err := planPlatforms(ctx, in)
 		return err
 	},
+	// A request without post types allows all of them, which also lifts the
+	// restriction on a platform the campaign already narrowed, so the card
+	// says so rather than reading as a plain add.
 	Summary: func(in UpdateCampaignPlatformsInput) string {
 		names := make([]string, len(in.Platforms))
 		for i, r := range in.Platforms {
-			names[i] = r.Platform
 			if len(r.PostTypes) > 0 {
-				names[i] += " (" + strings.Join(r.PostTypes, ", ") + ")"
+				names[i] = r.Platform + " (" + strings.Join(r.PostTypes, ", ") + ")"
+			} else {
+				names[i] = r.Platform + " (every post type)"
 			}
 		}
 		return "Add " + strings.Join(names, ", ") + " to the campaign's platforms"

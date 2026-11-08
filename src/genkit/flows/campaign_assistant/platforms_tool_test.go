@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -123,5 +124,20 @@ func TestUpdateCampaignPlatforms_ProposedAndChecked(t *testing.T) {
 	out = runTool(t, st, "updateCampaignPlatforms", map[string]any{"platforms": []map[string]any{{"platform": "LinkedIn"}}})
 	if out.Status != assistantkit.StatusRefused {
 		t.Fatalf("already targeted = %+v", out)
+	}
+}
+
+// Asking for a platform the campaign narrowed to some post types, without
+// naming types, opens it to all of them, and the offer says so.
+func TestUpdateCampaignPlatforms_OfferNamesTheRestrictionLift(t *testing.T) {
+	store := &memProposals{}
+	c := linkedInOnly()
+	c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}
+	st := &requestState{campaignID: "c1", campaign: c,
+		repos: CampaignAssistantRepos{Proposals: store, Platforms: catalogRepo{}}}
+
+	out := runTool(t, st, "updateCampaignPlatforms", map[string]any{"platforms": []map[string]any{{"platform": "LinkedIn"}}})
+	if out.Status != assistantkit.StatusProposed || !strings.Contains(out.Summary, "LinkedIn (every post type)") {
+		t.Fatalf("outcome = %+v, want an offer naming every post type", out)
 	}
 }
