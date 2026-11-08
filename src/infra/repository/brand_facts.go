@@ -156,6 +156,17 @@ func (r *brandRepository) insertFact(ctx context.Context, db bun.IDB, f *models.
 		if err := lockFacts(ctx, tx); err != nil {
 			return err
 		}
+		// A restore over a stored id is a change since, even on a full ledger.
+		if restore {
+			var ids []string
+			if err := tx.NewSelect().Model((*models.BrandFact)(nil)).Column("bf.id").
+				Where("bf.id = ?", f.ID).Limit(1).Scan(ctx, &ids); err != nil {
+				return err
+			}
+			if len(ids) > 0 {
+				return ErrFactChanged
+			}
+		}
 		n, err := countFacts(ctx, tx)
 		if err != nil {
 			return err
