@@ -561,6 +561,9 @@ func toolGetCampaignOverview(ctx context.Context) (*overview.Overview, error) {
 	return st.overview.Overview(ctx, st.campaignID)
 }
 
+// toolGeneratePosts adds targeted draft posts for the requested platforms,
+// phase and window. Problems the user can correct come back as refusals, not
+// errors, so the planner can relay them.
 func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
 	st := getRequestState(ctx)
 	if st.generatePosts == nil {
