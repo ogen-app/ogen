@@ -19,19 +19,23 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/embedopts"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
+	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
 // ── Context key for per-request state ────────────────────────────────────────
@@ -46,10 +50,8 @@ const requestStateKey ctxKey = iota
 type requestState struct {
 	campaignID string
 	campaign   *models.Campaign
-	// sourceAssetIDs limits the turn's sources; empty is all of them.
-	sourceAssetIDs []string
-	repos          CampaignAssistantRepos
-	onEvent        OnEventFunc
+	repos      CampaignAssistantRepos
+	onEvent    OnEventFunc
 	// instruction is the current user turn, passed to draftPost as steering for
 	// the Sonnet drafter.
 	instruction string
@@ -88,19 +90,12 @@ type requestState struct {
 	// cheap date tools skip the heavy reservation and may run in parallel, so
 	// the order they finish in is only known here.
 	writes []string
-	// proposed lists the calls held back for the user to confirm this turn.
-	proposed []ProposalCreatedEventPayload
-	// proposeMu serialises proposing; proposedKeys maps each call proposed
-	// this turn (tool and args) to its offer's id.
-	proposeMu    sync.Mutex
-	proposedKeys map[string]string
-	// resolved lists the offers the user answered this turn.
-	resolved []ProposalResolvedEventPayload
 	// snapshot is the campaign's state at the start of the turn; the budget
 	// guard reads its goal.
 	snapshot state.Snapshot
-	// registry runs an accepted offer's tool by name.
-	registry *assistantkit.Registry
+	// hub and notifier announce committed work to the campaign's owner.
+	hub      eventhub.Hub
+	notifier *notify.Service
 
 	// Results set by tools, read by the runner after generation. Only the tool
 	// that won the heavy-action reservation writes a heavy result, so these need
@@ -193,11 +188,44 @@ func getRequestState(ctx context.Context) *requestState {
 	return ctx.Value(requestStateKey).(*requestState)
 }
 
+// sameCampaign refuses a call for another campaign than the turn's: an
+// offer for one campaign confirmed in another's thread.
+func (st *requestState) sameCampaign(id string) error {
+	if id == "" || id == st.campaignID {
+		return nil
+	}
+	return assistantkit.Refused("that offer is for another campaign; open that campaign to run it")
+}
+
+// newRequestState builds the state the tools of one turn share.
+func newRequestState(cfg CampaignAssistantFlowConfig, repos CampaignAssistantRepos, campaign *models.Campaign, instruction string, onEvent OnEventFunc) *requestState {
+	return &requestState{
+		campaignID:        campaign.ID,
+		campaign:          campaign,
+		repos:             repos,
+		onEvent:           onEvent,
+		instruction:       instruction,
+		embedder:          cfg.Embedder,
+		contentPlan:       cfg.ContentPlan,
+		enrichBrief:       cfg.EnrichBrief,
+		overview:          cfg.Overview,
+		generatePosts:     cfg.GeneratePosts,
+		maxGeneratePosts:  cfg.MaxGeneratePosts,
+		draftPost:         cfg.DraftPost,
+		maxDraftPosts:     cfg.MaxDraftPosts,
+		proposalThreshold: cfg.ProposalThreshold,
+		checkBrief:        cfg.CheckBrief,
+		checkPosts:        cfg.CheckPosts,
+	}
+}
+
 // ── Tool input/output types ──────────────────────────────────────────────────
 
 // EnrichBriefInput is the input for the enrichBrief tool.
 type EnrichBriefInput struct {
 	Instruction string `json:"instruction,omitempty" jsonschema:"description=Optional freeform steering for the brief (e.g. make it more B2B and technical). Omit to tighten the current brief as it stands."`
+	// CampaignID names the campaign of an offer made on another screen.
+	CampaignID string `json:"campaignId,omitempty" jsonschema:"description=Leave empty: the campaign is this thread's. Set only by offers made on other screens."`
 }
 
 // EnrichBriefOutput is returned to the model after the brief is applied.
@@ -215,9 +243,9 @@ type EnrichBriefOutput struct {
 // RunContentPlanInput is the runContentPlan tool input.
 type RunContentPlanInput struct {
 	Exploratory bool `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants a plan without the campaign's sources (from general knowledge)."`
-	// AssetIDs is the turn's source selection, stamped in before the call is
-	// proposed so a confirmed plan keeps it.
-	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Leave empty: the turn's selected sources are filled in for you."`
+	// AssetIDs limit the sources ("use only these"). They are part of the
+	// stored offer, so a confirmed plan keeps them.
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Only these of the campaign's assets are used as sources; ids from getSelection. Omit to use all of them."`
 }
 
 // RunContentPlanOutput is returned to the model after a content plan runs.
@@ -250,6 +278,10 @@ type GeneratePostsInput struct {
 	WindowEnd   string   `json:"windowEnd,omitempty"   jsonschema:"description=Last publish date (ISO YYYY-MM-DD). For a single specific date, set this equal to windowStart."`
 	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Optional post-type slug (e.g. text-post, article); omit for the platform default."`
 	Exploratory bool     `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants posts without the campaign's sources (from general knowledge)."`
+	// AssetIDs limit the sources ("use only these").
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Only these of the campaign's assets are used as sources; ids from getSelection. Omit to use all of them."`
+	// CampaignID names the campaign of an offer made on another screen.
+	CampaignID string `json:"campaignId,omitempty" jsonschema:"description=Leave empty: the campaign is this thread's. Set only by offers made on other screens."`
 }
 
 // GeneratePostsOutput is returned to the model after targeted posts are created.
@@ -330,6 +362,8 @@ type CheckPostsInput struct {
 // AskCampaignAssetsInput is the input for the askCampaignAssets read tool.
 type AskCampaignAssetsInput struct {
 	Query string `json:"query" jsonschema:"description=The question to answer from the campaign's attached assets, e.g. 'what does the pricing PDF say about enterprise tiers?'"`
+	// AssetIDs limit the search ("in these").
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Search only these of the campaign's assets; ids from getSelection. Omit to search all of them."`
 }
 
 // AskCampaignAssetsOutput returns the asset excerpts most relevant to the query
@@ -363,28 +397,20 @@ type toolSet struct {
 	checkPostsConsistency   ai.ToolRef
 	askCampaignAssets       ai.ToolRef
 	updateCampaignPlatforms ai.ToolRef
-	confirmProposal         ai.ToolRef
-	dismissProposal         ai.ToolRef
 
 	reg *assistantkit.Registry
 }
 
-// all lists every tool in the registry's fixed order. The planner call and the
-// boot prewarm both use it: Anthropic caches the compiled strict-tool grammar
-// per exact tool set, so a prewarm over any other set warms nothing.
-func (t *toolSet) all() []ai.ToolRef { return t.reg.Tools() }
-
 // defineTools registers the campaign tools on g and builds their registry,
-// in the order the model is given them, gating the heavy ones behind the
-// user's confirmation.
+// in the order the model is given them.
 func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Plans the campaign's content: a set of ideas across its platforms and phases, each with a thesis and a suggested platform, post type, phase and date, saved to the campaign's ideas. "+
-			"No post is created: the user picks ideas and compiles or drafts them. Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many ideas were saved.",
-		withSourceSelection(assistantkit.Gated("runContentPlan", contentPlanGate,
+			"No post is created: the user picks ideas and compiles or drafts them. Call this when the user asks to generate, create, or regenerate a content plan. Returns how many ideas were saved.",
+		assistantkit.Gated("runContentPlan", contentPlanGate,
 			assistantkit.Wrap(func(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
 				return toolRunContentPlan(ctx, in)
-			}, contentPlanInvalid))),
+			}, contentPlanInvalid)),
 	)
 
 	enrichBrief := genkit.DefineTool(g, "enrichBrief",
@@ -485,17 +511,6 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		assistantkit.Gated("updateCampaignPlatforms", updatePlatformsGate, assistantkit.Wrap(toolUpdateCampaignPlatforms)),
 	)
 
-	confirmProposal := genkit.DefineTool(g, "confirmProposal",
-		"Runs an offer the user accepted, exactly as it was proposed, and returns that work's result. "+
-			"Pass the offer's id from \"Waiting for the user's answer\", and optionId when the user picked one of its options.",
-		confirmProposalTool,
-	)
-
-	dismissProposal := genkit.DefineTool(g, "dismissProposal",
-		"Withdraws an offer the user turned down. Pass the offer's id from \"Waiting for the user's answer\".",
-		assistantkit.Wrap(toolDismissProposal),
-	)
-
 	t := &toolSet{
 		runContentPlan:          runContentPlan,
 		enrichBrief:             enrichBrief,
@@ -509,8 +524,6 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		checkPostsConsistency:   checkPostsConsistency,
 		askCampaignAssets:       askCampaignAssets,
 		updateCampaignPlatforms: updateCampaignPlatforms,
-		confirmProposal:         confirmProposal,
-		dismissProposal:         dismissProposal,
 	}
 	reg, err := newToolRegistry(t)
 	if err != nil {
@@ -521,17 +534,6 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 }
 
 // ── Tool implementations ─────────────────────────────────────────────────────
-
-// withSourceSelection stamps the turn's source selection into a
-// runContentPlan call before it is gated, so the stored proposal carries it.
-func withSourceSelection[Out any](next ai.ToolFunc[RunContentPlanInput, Out]) ai.ToolFunc[RunContentPlanInput, Out] {
-	return func(ctx *ai.ToolContext, in RunContentPlanInput) (Out, error) {
-		if len(in.AssetIDs) == 0 {
-			in.AssetIDs = getRequestState(ctx).sourceAssetIDs
-		}
-		return next(ctx, in)
-	}
-}
 
 // toolRunContentPlan generates and saves a full content plan, from the
 // campaign's sources unless the call is exploratory.
@@ -598,6 +600,9 @@ func toAssetRefs(in []content_plan.AssetRef) []AssetRef {
 
 func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutput, error) {
 	st := getRequestState(ctx)
+	if err := st.sameCampaign(in.CampaignID); err != nil {
+		return nil, err
+	}
 	if !st.reserveHeavy(ctx) {
 		return &EnrichBriefOutput{Applied: false, Note: heavySkipNote}, nil
 	}
@@ -687,6 +692,9 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 	if st.generatePosts == nil {
 		return assistantkit.Outcome[GeneratePostsOutput]{}, fmt.Errorf("targeted post generation is not available")
 	}
+	if err := st.sameCampaign(in.CampaignID); err != nil {
+		return softGenerateFailure(err)
+	}
 	campaign := st.campaign
 	now := time.Now().UTC()
 	// The engines compare post types trimmed.
@@ -773,7 +781,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		WindowStart: windowStart,
 		WindowEnd:   windowEnd,
 		PostType:    in.PostType,
-		AssetIDs:    st.sourceAssetIDs,
+		AssetIDs:    in.AssetIDs,
 	}, nested)
 	if ve, ok := errors.AsType[*content_plan.ValidationError](err); ok {
 		return assistantkit.Refuse[GeneratePostsOutput](ve.Msg), nil
@@ -1038,7 +1046,13 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 	if st.repos.Messages == nil {
 		return "", nil
 	}
-	msgs, err := st.repos.Messages.ListRecentByCampaignID(ctx, st.campaignID, 10)
+	// The research is in the thread the turn is in; outside one, the
+	// campaign's.
+	scope, ok := assistant.Scope(ctx)
+	if !ok {
+		scope = viewcontext.Scope{Kind: models.AssistantScopeCampaign, ID: st.campaignID}
+	}
+	msgs, err := st.repos.Messages.ListRecent(ctx, scope.Kind, scope.ID, 10)
 	if err != nil {
 		return "", fmt.Errorf("load conversation history: %w", err)
 	}
@@ -1181,8 +1195,8 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 	if len(ids) == 0 {
 		return &AskCampaignAssetsOutput{Available: true, Note: "this campaign has no ready assets to search"}, nil
 	}
-	if len(st.sourceAssetIDs) > 0 {
-		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(st.sourceAssetIDs, id) })
+	if len(in.AssetIDs) > 0 {
+		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(in.AssetIDs, id) })
 		if len(ids) == 0 {
 			return &AskCampaignAssetsOutput{Available: true, Note: "none of the selected assets are ready assets of this campaign; the campaign's other ready assets can be searched without the selection"}, nil
 		}
@@ -1478,8 +1492,6 @@ func checkCampaignDated(c *models.Campaign) error {
 	return nil
 }
 
-// toolRedistributePosts re-dates the campaign's unpublished drafts evenly
-// across its timeline, phase by phase.
 func toolRedistributePosts(ctx context.Context) (*RedistributePostsOutput, error) {
 	st := getRequestState(ctx)
 	c := st.campaign

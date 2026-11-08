@@ -64,8 +64,6 @@ func (d Defaults) For(flowKey, slotKey string) string {
 		return d.Embed
 	case flowKey == FlowPostQuality:
 		return d.Quality
-	case flowKey == FlowCampaignAssistant && slotKey == SlotOrchestrator:
-		return d.Planning
 	case flowKey == FlowAssistant && slotKey == SlotOrchestrator:
 		return d.Planning
 	case flowKey == FlowAssetAnalysis && slotKey == SlotMap:
