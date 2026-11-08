@@ -185,6 +185,7 @@ type draftSink struct {
 	dates    []string // one publish date per requested post
 	loc      *time.Location
 	assetIDs []string
+	author   string
 	source   string
 	brand    *brandresolve.Resolved
 	repos    DraftPostRepos
@@ -215,6 +216,7 @@ func newDraftSink(ctx context.Context, req DraftPostRequest, campaign *models.Ca
 		dates:    spreadDates(window.start, window.end, count),
 		loc:      loc,
 		assetIDs: req.UsedAssetIDs,
+		author:   cmp.Or(req.CreatedBy, campaign.CreatedBy),
 		source:   strings.TrimSpace(req.SourceMaterial),
 		brand:    brand,
 		repos:    repos,
@@ -264,7 +266,12 @@ func (s *draftSink) generate(ctx context.Context, g *genkit.Genkit, u flowkit.Us
 		return nil
 	}
 	if errors.Is(streamErr, llm.ErrRefused) {
-		// The blocking retry would be refused (and billed) again.
+		// The blocking retry would be refused (and billed) again. Drafts
+		// already saved are kept, so the caller still links and reports them.
+		if len(s.out) > 0 {
+			s.warn("the model stopped before writing every draft")
+			return nil
+		}
 		return &AIError{Msg: fmt.Sprintf("model call failed: %v", streamErr)}
 	}
 	return s.fallback(ctx, g, u, res.Objects, streamErr, opts)
@@ -361,7 +368,7 @@ func (s *draftSink) persist(ctx context.Context, publishDate, title, content str
 		CampaignTypePhaseID: s.phaseIDFor(ctx, id),
 		ScheduledAt:         scheduledAt,
 		BrandVoiceID:        s.brand.VoiceID(),
-		CreatedBy:           s.campaign.CreatedBy,
+		CreatedBy:           s.author,
 	}
 	if err := s.repos.Posts.Create(ctx, row); err != nil {
 		return DraftedPost{}, err
@@ -369,7 +376,7 @@ func (s *draftSink) persist(ctx context.Context, publishDate, title, content str
 
 	// Best-effort: a note-write failure must never discard the persisted post.
 	if s.repos.Notes != nil && s.source != "" {
-		if err := createSourceNote(ctx, s.repos.Notes, id, s.campaign.CreatedBy, s.source); err != nil {
+		if err := createSourceNote(ctx, s.repos.Notes, id, s.author, s.source); err != nil {
 			slog.ErrorContext(ctx, "source research note create failed", logging.AttrComponent, logComponent, "post_id", id, logging.AttrError, err)
 		}
 	}
