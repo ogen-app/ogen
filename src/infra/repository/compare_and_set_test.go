@@ -25,10 +25,12 @@ func TestIdeas_SetTriageIf(t *testing.T) {
 	}
 	inbox := &models.Idea{ID: "cas-1", UpdatedAt: time.Now().UTC()}
 
-	// A stale expectation (another verdict, or another decider) matches nothing.
+	// A stale expectation (another verdict, an earlier decision, or another
+	// decider) matches nothing.
 	for _, was := range []*models.Idea{
 		{Verdict: new(models.IdeaVerdictYes), RemindAt: &remind, DecidedAt: &decided, DecidedBy: new("u1")},
 		{Verdict: new(models.IdeaVerdictLater), DecidedAt: &decided, DecidedBy: new("u1")},
+		{Verdict: new(models.IdeaVerdictLater), RemindAt: &remind, DecidedAt: new(decided.Add(-time.Hour)), DecidedBy: new("u1")},
 		{Verdict: new(models.IdeaVerdictLater), RemindAt: &remind, DecidedAt: &decided, DecidedBy: new("u2")},
 	} {
 		ok, err := repo.SetTriageIf(ctx, nil, inbox, was)
