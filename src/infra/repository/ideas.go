@@ -80,9 +80,9 @@ type IdeaRepository interface {
 	// from, without locking them.
 	MergeSet(ctx context.Context, ids []string) (IdeaMergeSet, error)
 	// MergeIdeas locks the ideas of ids, hands their merge set to plan, and
-	// in the same transaction writes the merge plan returns. An error from
-	// plan rolls back and is returned as it is.
-	MergeIdeas(ctx context.Context, ids []string, plan func(IdeaMergeSet) (IdeaMerge, error)) error
+	// in the same transaction writes the merge plan returns and reads the
+	// kept idea back. An error from plan rolls back and is returned as it is.
+	MergeIdeas(ctx context.Context, ids []string, plan func(IdeaMergeSet) (IdeaMerge, error)) (*models.Idea, error)
 }
 
 type ideaRepository struct {
@@ -140,6 +140,11 @@ func (r *ideaRepository) List(ctx context.Context, filter IdeaListFilter) ([]mod
 // hydrate fills the derived fields of ideas read back: the author, and the
 // source asset while it exists, with the campaign lens the idea was read in.
 func (r *ideaRepository) hydrate(ctx context.Context, ideas []models.Idea) error {
+	return hydrateOn(ctx, r.db, ideas)
+}
+
+// hydrateOn is hydrate on db, a transaction or the pool.
+func hydrateOn(ctx context.Context, db bun.IDB, ideas []models.Idea) error {
 	var assetIDs []string
 	for i := range ideas {
 		ideas[i].DeriveAuthor()
@@ -150,11 +155,11 @@ func (r *ideaRepository) hydrate(ctx context.Context, ideas []models.Idea) error
 	if len(assetIDs) == 0 {
 		return nil
 	}
-	assets, err := r.sourceAssets(ctx, assetIDs)
+	assets, err := sourceAssets(ctx, db, assetIDs)
 	if err != nil {
 		return err
 	}
-	readings, err := r.readings(ctx, ideas)
+	readings, err := lensReadings(ctx, db, ideas)
 	if err != nil {
 		return err
 	}
@@ -172,7 +177,7 @@ func (r *ideaRepository) hydrate(ctx context.Context, ideas []models.Idea) error
 }
 
 // sourceAssets reads the source line of each asset, keyed by id.
-func (r *ideaRepository) sourceAssets(ctx context.Context, ids []string) (map[string]models.IdeaSourceAsset, error) {
+func sourceAssets(ctx context.Context, db bun.IDB, ids []string) (map[string]models.IdeaSourceAsset, error) {
 	slices.Sort(ids)
 	var rows []struct {
 		ID         string           `bun:"id"`
@@ -182,7 +187,7 @@ func (r *ideaRepository) sourceAssets(ctx context.Context, ids []string) (map[st
 		DurationMS *int64           `bun:"duration_ms"`
 		SourceURL  *string          `bun:"source_url"`
 	}
-	if err := r.db.NewSelect().
+	if err := db.NewSelect().
 		Model((*models.Asset)(nil)).
 		ColumnExpr("a.id, a.title, a.source_url, af.page_count, nullif(af.duration_ms, 0) AS duration_ms").
 		ColumnExpr(assetKindSQL+" AS kind").
@@ -211,10 +216,10 @@ func webDomain(raw string) *string {
 	return new(strings.TrimPrefix(strings.ToLower(u.Hostname()), "www."))
 }
 
-// readings resolves the campaign lens each analysis idea was read in, keyed by
-// idea id: the campaign of its analysis, or once the analysis is gone the
-// campaign its fit breakdown names. Workspace-lens ideas have none.
-func (r *ideaRepository) readings(ctx context.Context, ideas []models.Idea) (map[string]*models.IdeaReading, error) {
+// lensReadings resolves the campaign lens each analysis idea was read in,
+// keyed by idea id: the campaign of its analysis, or once the analysis is
+// gone the campaign its fit breakdown names. Workspace-lens ideas have none.
+func lensReadings(ctx context.Context, db bun.IDB, ideas []models.Idea) (map[string]*models.IdeaReading, error) {
 	var analysisIDs []string
 	for _, idea := range ideas {
 		if idea.AssetAnalysisID != nil {
@@ -227,7 +232,7 @@ func (r *ideaRepository) readings(ctx context.Context, ideas []models.Idea) (map
 			ID         string `bun:"id"`
 			CampaignID string `bun:"campaign_id"`
 		}
-		if err := r.db.NewSelect().
+		if err := db.NewSelect().
 			Model((*models.AssetAnalysis)(nil)).
 			Column("aa.id", "aa.campaign_id").
 			Where("aa.id IN (?)", bun.List(analysisIDs)).
@@ -262,7 +267,7 @@ func (r *ideaRepository) readings(ctx context.Context, ideas []models.Idea) (map
 		ID   string `bun:"id"`
 		Name string `bun:"name"`
 	}
-	if err := r.db.NewSelect().
+	if err := db.NewSelect().
 		Model((*models.Campaign)(nil)).
 		Column("c.id", "c.name").
 		Where("c.id IN (?)", bun.List(slices.Compact(campaignIDs))).
