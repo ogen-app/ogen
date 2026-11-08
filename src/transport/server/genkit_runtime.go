@@ -64,7 +64,6 @@ type genkitRuntime struct {
 	plugin *anthropic.Anthropic
 
 	contentPlanFn       func(ctx context.Context, req content_plan.ContentPlanRequest, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error)
-	postAssistantFn     func(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error)
 	postQualityFns      postQualityFns
 	enrichBriefFn       func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error)
 	campaignAssistantFn func(ctx context.Context, req campaign_assistant.CampaignAssistantRequest, onEvent campaign_assistant.OnEventFunc) (*campaign_assistant.CampaignAssistantResponse, error)
@@ -204,7 +203,7 @@ func newGenkitRuntime(ctx context.Context, deps genkitDeps, store secrets.Store)
 func (r *genkitRuntime) IsAnthropicAvailable() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.contentPlanFn != nil && r.postAssistantFn != nil && r.postQualityFns.assess != nil && r.enrichBriefFn != nil && r.campaignAssistantFn != nil && r.checkBriefFn != nil && r.checkPostsFn != nil
+	return r.contentPlanFn != nil && r.assistantFn != nil && r.postQualityFns.assess != nil && r.enrichBriefFn != nil && r.campaignAssistantFn != nil && r.checkBriefFn != nil && r.checkPostsFn != nil
 }
 
 func (r *genkitRuntime) GenerateDraft(ctx context.Context, campaignID string, onEvent content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
@@ -215,16 +214,6 @@ func (r *genkitRuntime) GenerateDraft(ctx context.Context, campaignID string, on
 		return nil, ErrAnthropicUnavailable
 	}
 	return fn(ctx, content_plan.ContentPlanRequest{CampaignID: campaignID}, onEvent)
-}
-
-func (r *genkitRuntime) RunPostAssistant(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error) {
-	r.mu.RLock()
-	fn := r.postAssistantFn
-	r.mu.RUnlock()
-	if fn == nil {
-		return nil, ErrAnthropicUnavailable
-	}
-	return fn(ctx, req, onEvent)
 }
 
 func (r *genkitRuntime) AssessPostQuality(ctx context.Context, postID string, onEvent post_quality.OnEventFunc) (*post_quality.PostQualityResponse, error) {
@@ -411,12 +400,12 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		slog.WarnContext(ctx, "anthropic_api_key not configured; flows disabled",
 			logging.AttrComponent, "genkit")
 		r.contentPlanFn = nil
-		r.postAssistantFn = nil
 		r.postQualityFns = postQualityFns{}
 		r.enrichBriefFn = nil
 		r.campaignAssistantFn = nil
 		r.answerProposalFn = nil
 		r.assistantFn = nil
+		r.answerAssistantFn = nil
 		r.generatePostsFn = nil
 		r.draftPostFn = nil
 		r.checkBriefFn = nil
@@ -444,10 +433,6 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	contentPlanFn, err := initContentPlan(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.contentPlanRepos)
 	if err != nil {
 		return fmt.Errorf("init content plan: %w", err)
-	}
-	postAssistantFn, err := initPostAssistant(g, r.cfg, provider, r.recorder, r.checker, r.embedder, r.hub, r.notifier, r.postAssistRepos, r.cloneSvc, r.restoreSvc, r.scheduleSvc, r.noteSvc, r.qualityAuto)
-	if err != nil {
-		return fmt.Errorf("init post assistant: %w", err)
 	}
 	postQualityFns, err := initPostQuality(g, r.cfg, provider, r.recorder, r.checker, r.hub, r.notifier, r.limiter, r.postQualityRepos)
 	if err != nil {
@@ -481,7 +466,23 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	// The packs reach the campaign assistant and the draft writer through
 	// this rebuild's callbacks.
 	pd := r.packDeps
-	pd.Campaign = campaignAssistantFn
+	// The post pack writes through its own writer slot.
+	postPack, err := post_assistant.NewPack(g, post_assistant.PostAssistantFlowConfig{
+		Provider:        provider,
+		Recorder:        r.recorder,
+		MaxOutputTokens: r.cfg.MaxOutputTokens,
+		Embedder:        r.embedder,
+		Hub:             r.hub,
+		CloneService:    r.cloneSvc,
+		RestoreService:  r.restoreSvc,
+		ScheduleService: r.scheduleSvc,
+		NoteService:     r.noteSvc,
+		QualityAuto:     r.qualityAuto,
+	}, r.postAssistRepos)
+	if err != nil {
+		return fmt.Errorf("init post pack: %w", err)
+	}
+	pd.Campaign, pd.Post = campaignAssistantFn, &postPack
 	pd.CheckBrief, pd.CheckPosts = checkBriefFn, checkPostsFn
 	if pd.Compose != nil {
 		pd.Compose = pd.Compose.WithDrafter(ideaDrafter(r))
@@ -511,7 +512,11 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		// The orchestrator answers in a short envelope; the cap leaves room for
 		// the thinking Claude 5.x models do by default.
 		MaxOutputTokens: 4096,
-		MaxTurns:        4,
+		// Room for a read chain before the work: retrieving a post's assets
+		// before its edit, or an overview before a plan. At most one heavy
+		// sub-flow runs per message whatever the cap: the campaign tools
+		// reserve it.
+		MaxTurns: 6,
 		// The warmed grammar key only matches with the stable tool order.
 		PrewarmTools: r.cfg.AnthropicStableToolOrder,
 	}, repos, packs.All(pd)...)
@@ -534,7 +539,6 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	r.distillIdeasFn = analysisFlows.distill
 	r.brandDistill = brandDistill
 	r.contentPlanFn = contentPlanFn
-	r.postAssistantFn = postAssistantFn
 	r.postQualityFns = postQualityFns
 	r.enrichBriefFn = enrichBriefFn
 	r.campaignAssistantFn = campaignAssistantFn

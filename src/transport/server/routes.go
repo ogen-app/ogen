@@ -230,7 +230,6 @@ func registerPostRoutes(app *fiber.App, d *deps) {
 	handlers.NewPlatformsHandler(r.platformRepo, d.publishers(), r.autoPublishAllowlistRepo, d.auth).Register(app)
 	handlers.NewTagsHandler(r.tagRepo, d.auth).Register(app)
 
-	handlers.NewPostAssistantHandler(gk.RunPostAssistant, gk.IsAnthropicAvailable, r.postMessageRepo, rec, d.auth).Register(app)
 	handlers.NewPostActionsHandler(r.postRepo, d.svc.clone, d.svc.restore, rec, d.auth).Register(app)
 	handlers.NewPostInsightsHandler(r.postRepo, gk.AssessPostQuality, r.postEvaluationRepo, r.postAnalyticsRepo, gk.IsAnthropicAvailable, rec, d.auth).
 		WithQualityStatus(gk.PostQualityStatus).

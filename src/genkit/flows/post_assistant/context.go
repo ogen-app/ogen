@@ -37,10 +37,10 @@ type assetSummary struct {
 	Preview    string
 }
 
-// assistantContext holds the rendered prompts ready for the model call.
+// assistantContext holds the rendered post block: its campaign, phase,
+// content, notes, versions and assets.
 type assistantContext struct {
-	SystemPrompt string // system instructions (stable across turns)
-	ContextBlock string // campaign + phase + assets (stable across turns)
+	ContextBlock string
 }
 
 // contextCacheEntry is a cached assistantContext keyed by post ID.
@@ -162,7 +162,7 @@ func assembleContextCached(
 	ctx context.Context,
 	post *models.Post,
 	repos PostAssistantRepos,
-	systemTmpl, contextTmpl *template.Template,
+	contextTmpl *template.Template,
 ) (*assistantContext, error) {
 	// Load the campaign once — both the brand fingerprint and the rendered
 	// context need it.
@@ -192,7 +192,7 @@ func assembleContextCached(
 	contextCacheInflight[post.ID]++
 	contextCacheMu.Unlock()
 
-	actx, err := assembleContext(ctx, post, campaign, resolved, repos, systemTmpl, contextTmpl)
+	actx, err := assembleContext(ctx, post, campaign, resolved, repos, contextTmpl)
 
 	// Only cache the result if no invalidation raced this assembly. If the
 	// generation moved, the underlying data changed (e.g. a note was added)
@@ -242,7 +242,7 @@ func assembleContext(
 	campaign *models.Campaign,
 	resolved *brandresolve.Resolved,
 	repos PostAssistantRepos,
-	systemTmpl, contextTmpl *template.Template,
+	contextTmpl *template.Template,
 ) (*assistantContext, error) {
 	var phaseName, phaseDescription string
 	if post.CampaignTypePhase != nil {
@@ -293,19 +293,11 @@ func assembleContext(
 		Notes:               noteSummaries,
 	}
 
-	systemPrompt, err := flowkit.RenderTemplate(systemTmpl, data)
-	if err != nil {
-		return nil, fmt.Errorf("render system prompt: %w", err)
-	}
 	contextBlock, err := flowkit.RenderTemplate(contextTmpl, data)
 	if err != nil {
 		return nil, fmt.Errorf("render context block: %w", err)
 	}
-
-	return &assistantContext{
-		SystemPrompt: systemPrompt,
-		ContextBlock: contextBlock,
-	}, nil
+	return &assistantContext{ContextBlock: contextBlock}, nil
 }
 
 type contextTemplateData struct {
@@ -592,13 +584,13 @@ func buildSchedulingContext(ctx context.Context, post *models.Post, repos PostAs
 		case len(reasons) == 0:
 			b.WriteString("draft, but it passes pre-publish validation — call schedulePost with allowPromote:true to promote and schedule in one step.\n")
 		default:
-			b.WriteString("draft that is NOT yet publishable. Problems: " + strings.Join(reasons, "; ") + ". Decline and tell the user exactly what to fix; do NOT schedule.\n")
+			b.WriteString("draft that is NOT yet publishable. Problems: " + strings.Join(reasons, "; ") + ". Tell the user exactly what to fix; do NOT schedule.\n")
 		}
 	default:
 		fmt.Fprintf(&b, "status %q is not schedulable (only ready_for_publish, or a draft you promote). If it's already scheduled, it must be cancelled first to reschedule.\n", post.Status)
 	}
 
-	b.WriteString("\nTo schedule: resolve the time, then CONFIRM the absolute time + the auto/manual mode and WAIT for the user's \"yes\" before calling schedulePost. Never call schedulePost on the first turn.\n")
+	b.WriteString("\nTo schedule: resolve the time and call schedulePost; it is offered to the user with the absolute time, and runs once they say yes.\n")
 	return b.String()
 }
 
