@@ -37,6 +37,7 @@ func TestSimilarity_Threshold(t *testing.T) {
 		{tok("Customer story: Acme cut churn by 30%", "Interview the Acme team about churn"), tok("Acme customer story: churn down 30%", "Interview Acme about the churn drop")},
 		{tok("Founder story", "Why we started the company"), tok("The founder's story", "Why we started the company and what we learned")},
 		{tok("Launch week recap", ""), tok("Recap of launch week", "")},
+		{tok("The", "Interview the Acme team about churn"), tok("The", "Interview the Acme team about churn")},
 	}
 	for _, p := range same {
 		if s := similarity(p[0], p[1]); s < DuplicateThreshold {
