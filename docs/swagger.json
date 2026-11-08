@@ -7301,7 +7301,7 @@
                         "CookieAuth": []
                     }
                 ],
-                "description": "Makes one `planned` post from 1–10 ideas: a draft_thesis note with a thesis per idea (its\ntitle, then its angle or note), the ideas' source assets as its sources, and a link to each\nidea (GET /api/posts/{id}/ideas). The campaign defaults to the one every idea is in; the title\nto the first idea's; platform, post type, phase and target date to the first idea plan that sets\neach. A target date is placed at the campaign's publishing time. A platform or post type you name\nmust be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as\nthey are, so one idea can feed several posts.",
+                "description": "Makes one `planned` post from 1–10 ideas: a draft_thesis note with a thesis per idea (its\ntitle, then its angle or note), the ideas' source assets as its sources, and a link to each\nidea (GET /api/posts/{id}/ideas). The campaign defaults to the one the ideas share (an idea in no\ncampaign goes along with it); the title\nto the first idea's; platform, post type, phase and target date to the first idea plan that sets\neach. A target date is placed at the campaign's publishing time. A platform or post type you name\nmust be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as\nthey are, so one idea can feed several posts.",
                 "consumes": [
                     "application/json"
                 ],
@@ -16175,7 +16175,7 @@
             ],
             "properties": {
                 "campaign_id": {
-                    "description": "CampaignID defaults to the campaign the ideas share.",
+                    "description": "CampaignID defaults to the campaign the ideas share; an idea in no\ncampaign goes along with it.",
                     "type": "string"
                 },
                 "idea_ids": {
