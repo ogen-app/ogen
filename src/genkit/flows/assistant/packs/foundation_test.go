@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/pgtest"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/brandfacts"
 )
@@ -76,7 +79,7 @@ func (b *memBrand) DeleteFact(_ context.Context, id string) (*models.BrandFact, 
 	return f, nil
 }
 
-func (b *memBrand) UpdateFactIf(ctx context.Context, f, was *models.BrandFact) (*models.BrandFact, error) {
+func (b *memBrand) UpdateFactIf(ctx context.Context, _ bun.IDB, f, was *models.BrandFact) (*models.BrandFact, error) {
 	if b.beforeWrite != nil {
 		b.beforeWrite()
 	}
@@ -90,7 +93,7 @@ func (b *memBrand) UpdateFactIf(ctx context.Context, f, was *models.BrandFact) (
 	return b.UpdateFact(ctx, f)
 }
 
-func (b *memBrand) DeleteFactIf(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error) {
+func (b *memBrand) DeleteFactIf(ctx context.Context, _ bun.IDB, id string, was *models.BrandFact) (*models.BrandFact, error) {
 	cur, ok := b.facts[id]
 	if !ok {
 		return nil, sql.ErrNoRows
@@ -101,7 +104,10 @@ func (b *memBrand) DeleteFactIf(ctx context.Context, id string, was *models.Bran
 	return b.DeleteFact(ctx, id)
 }
 
-func (b *memBrand) RestoreFact(ctx context.Context, f *models.BrandFact) error {
+func (b *memBrand) RestoreFact(ctx context.Context, _ bun.IDB, f *models.BrandFact) error {
+	if _, ok := b.facts[f.ID]; ok {
+		return repository.ErrFactChanged
+	}
 	return b.CreateFact(ctx, f)
 }
 
@@ -143,7 +149,9 @@ func TestFacts_EditAndUndo(t *testing.T) {
 	}
 
 	// Undo the edit: the statement and its expiry come back.
-	svc := assistantundo.New(actions, nil).WithBrand(brand)
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	svc := assistantundo.New(db, actions, nil).WithBrand(brand)
 	if _, err := svc.Undo(ctx, edited.UndoID, "u1"); err != nil {
 		t.Fatal(err)
 	}
@@ -195,12 +203,7 @@ func (u *undoActions) GetByID(_ context.Context, id string) (*models.AssistantAc
 	return nil, sql.ErrNoRows
 }
 
-func (u *undoActions) MarkUndone(_ context.Context, id, by string, now time.Time) (bool, error) {
-	a, ok := u.rows[id]
-	if !ok || a.UndoneAt != nil {
-		return false, nil
-	}
-	a.UndoneAt, a.UndoneBy = &now, by
+func (u *undoActions) MarkUndone(context.Context, bun.IDB, string, string, time.Time) (bool, error) {
 	return true, nil
 }
 
@@ -238,15 +241,17 @@ func TestFacts_StaleUpdateRefused(t *testing.T) {
 	}
 }
 
-// Undoing an add or a correction after a later edit is refused: the later
-// edit stays and the change stays undoable.
+// Undoing an add or a correction after a later edit is refused, and the
+// later edit stays.
 func TestFacts_UndoRefusedAfterLaterEdit(t *testing.T) {
 	brand := &memBrand{facts: map[string]*models.BrandFact{}}
 	actions := &undoActions{}
 	d := Deps{Brand: brand, Actions: actions}
 	facts := brandfacts.New(brand)
 	ctx, _ := turn(t, workspace, nil)
-	svc := assistantundo.New(actions, nil).WithBrand(brand)
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	svc := assistantundo.New(db, actions, nil).WithBrand(brand)
 
 	added, err := addFact(ctx, d, facts, FactInput{Statement: "We serve 4,000 customers"})
 	if err != nil {
@@ -267,9 +272,6 @@ func TestFacts_UndoRefusedAfterLaterEdit(t *testing.T) {
 		if got := brand.facts[id]; got == nil || got.Statement != "We serve 4,200 customers" {
 			t.Fatalf("undo %s: fact = %+v, want the later edit kept", name, got)
 		}
-		if actions.rows[undoID].UndoneAt != nil {
-			t.Fatalf("undo %s: marked undone", name)
-		}
 	}
 }
 
@@ -289,7 +291,9 @@ func TestFacts_UndoRemoveKeepsAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := assistantundo.New(actions, nil).WithBrand(brand).Undo(ctx, removed.UndoID, "u1"); err != nil {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := assistantundo.New(db, actions, nil).WithBrand(brand).Undo(ctx, removed.UndoID, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	got := brand.facts["f1"]

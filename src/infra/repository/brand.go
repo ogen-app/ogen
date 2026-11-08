@@ -46,13 +46,15 @@ type BrandRepository interface {
 	CreateFact(ctx context.Context, f *models.BrandFact) error         // ErrFactDuplicate, ErrFactLimit
 	UpdateFact(ctx context.Context, f *models.BrandFact) (*models.BrandFact, error)
 	DeleteFact(ctx context.Context, id string) (*models.BrandFact, error) // nil when not in tenant
-	// UpdateFactIf and DeleteFactIf write only while the stored fact's
-	// editable fields still equal was's, compared under the row lock;
-	// otherwise ErrFactChanged. sql.ErrNoRows is a fact that is gone.
-	UpdateFactIf(ctx context.Context, f, was *models.BrandFact) (*models.BrandFact, error)
-	DeleteFactIf(ctx context.Context, id string, was *models.BrandFact) (*models.BrandFact, error)
-	// RestoreFact puts back a removed fact with its author and created_at.
-	RestoreFact(ctx context.Context, f *models.BrandFact) error // ErrFactDuplicate, ErrFactLimit
+	// UpdateFactIf and DeleteFactIf write on db (nil runs their own
+	// transaction) only while the stored fact's editable fields still equal
+	// was's, compared under the row lock; otherwise ErrFactChanged.
+	// sql.ErrNoRows is a fact that is gone.
+	UpdateFactIf(ctx context.Context, db bun.IDB, f, was *models.BrandFact) (*models.BrandFact, error)
+	DeleteFactIf(ctx context.Context, db bun.IDB, id string, was *models.BrandFact) (*models.BrandFact, error)
+	// RestoreFact puts back a removed fact with its author and created_at, on
+	// db (nil runs its own transaction). ErrFactChanged when its id is taken.
+	RestoreFact(ctx context.Context, db bun.IDB, f *models.BrandFact) error // ErrFactDuplicate, ErrFactLimit
 
 	// Guardrails stance. nil = undecided.
 	GetGuardrailsStance(ctx context.Context) (*models.BrandGuardrailsStanceRecord, error)
