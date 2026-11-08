@@ -376,7 +376,7 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 
-			Expect(resp.Action).To(Equal("post_drafted"))
+			Expect(resp.Action).To(Equal("post_drafted"), "reply: %s", resp.Explanation)
 			Expect(resp.DraftedPosts).NotTo(BeNil())
 			Expect(resp.DraftedPosts.PostCount).To(BeNumerically(">", 0))
 			Expect(gotDraftComplete).To(BeTrue(), "the draft_post_complete event should be forwarded")
