@@ -83,6 +83,7 @@ func toolConfirmProposal(ctx context.Context, in ConfirmProposalInput) (any, err
 	return st.registry.RunConfirmed(ctx, tool, map[string]any(args))
 }
 
+// optionIDs lists the ids of the proposal's options.
 func optionIDs(p *models.AssistantProposal) []string {
 	ids := make([]string, len(p.Options))
 	for i, o := range p.Options {
