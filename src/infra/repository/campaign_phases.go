@@ -100,7 +100,17 @@ func (r *campaignRepository) ReplacePhaseWindows(ctx context.Context, campaignID
 }
 
 // ReplacePhaseWindowsTx swaps the stored plan on db, a caller's transaction.
+// It locks the campaign row before the windows, the order a date undo takes
+// them in, so the two wait for each other instead of deadlocking.
 func (r *campaignRepository) ReplacePhaseWindowsTx(ctx context.Context, db bun.IDB, campaignID string, windows []models.CampaignPhaseWindow) error {
+	var locked []string
+	if err := db.NewSelect().Model((*models.Campaign)(nil)).
+		Column("c.id").
+		Where("c.id = ?", campaignID).
+		For("UPDATE OF c").
+		Scan(ctx, &locked); err != nil {
+		return err
+	}
 	if _, err := db.NewDelete().
 		Model((*models.CampaignPhaseWindow)(nil)).
 		Where("campaign_id = ?", campaignID).
