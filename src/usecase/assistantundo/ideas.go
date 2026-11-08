@@ -6,6 +6,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -72,9 +74,9 @@ func (s *Service) WithIdeas(ideas repository.IdeaRepository) *Service {
 
 type ideaVerdict struct{ ideas repository.IdeaRepository }
 
-// Undo restores the idea's verdict, reminder and decision in one write that
-// matches only while the idea still holds the logged after state.
-func (u ideaVerdict) Undo(ctx context.Context, a *models.AssistantAction) error {
+// Undo restores the idea's verdict, reminder and decision within tx, in one
+// write that matches only while the idea still holds the logged after state.
+func (u ideaVerdict) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
 	was, err := ideaTriage(a.EntityID, a.After)
 	if err != nil {
 		return fmt.Errorf("read changed triage: %w", err)
@@ -84,7 +86,7 @@ func (u ideaVerdict) Undo(ctx context.Context, a *models.AssistantAction) error 
 		return fmt.Errorf("restore triage: %w", err)
 	}
 	restored.UpdatedAt = time.Now().UTC()
-	ok, err := u.ideas.SetTriageIf(ctx, nil, restored, was)
+	ok, err := u.ideas.SetTriageIf(ctx, tx, restored, was)
 	if err != nil {
 		return err
 	}
@@ -96,16 +98,17 @@ func (u ideaVerdict) Undo(ctx context.Context, a *models.AssistantAction) error 
 
 type campaignAssets struct{ campaigns repository.CampaignRepository }
 
-// Undo restores the campaign's assets and whether it draws on them, writing
-// only those columns and only while they still hold the logged after state.
-func (u campaignAssets) Undo(ctx context.Context, a *models.AssistantAction) error {
+// Undo restores the campaign's assets and whether it draws on them within
+// tx, writing only those columns and only while they still hold the logged
+// after state.
+func (u campaignAssets) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
 	before := assetIDs(a.Before)
 	use, ok := a.Before["useAssets"].(bool)
 	if !ok {
 		use = len(before) > 0
 	}
 	wasUse, _ := a.After["useAssets"].(bool)
-	restored, err := u.campaigns.SetAssetIDsIf(ctx, nil, a.EntityID, assetIDs(a.After), wasUse, before, use)
+	restored, err := u.campaigns.SetAssetIDsIf(ctx, tx, a.EntityID, assetIDs(a.After), wasUse, before, use)
 	if err != nil {
 		return err
 	}
