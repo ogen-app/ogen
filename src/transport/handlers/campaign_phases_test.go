@@ -61,7 +61,7 @@ var _ = Describe("Campaign phases (CON-166)", Ordered, func() {
 		auth := handlers.RequireAuth(sRepo, uRepo, testCookieName)
 		handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(app)
 		handlers.NewCampaignTypesHandler(ctRepo, auth).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, ctRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, ctRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 		handlers.NewCampaignPhasesHandler(campaignRepo, nil, auth).Register(app)
 		ph := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{Campaigns: campaignRepo})
 		ph.Register(app)
