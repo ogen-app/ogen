@@ -96,14 +96,44 @@ func TestIdeas_MergeIdeas(t *testing.T) {
 	}
 
 	refused := errors.New("refused")
-	err = repo.MergeIdeas(ctx, []string{"m-keep", "m-dup"}, func(repository.IdeaMergeSet) (repository.IdeaMerge, error) {
+	_, err = repo.MergeIdeas(ctx, []string{"m-keep", "m-dup"}, func(repository.IdeaMergeSet) (repository.IdeaMerge, error) {
 		return repository.IdeaMerge{}, refused
 	})
 	if !errors.Is(err, refused) {
 		t.Fatalf("refused plan = %v", err)
 	}
 
-	err = repo.MergeIdeas(ctx, []string{"m-keep", "m-dup"}, func(set repository.IdeaMergeSet) (repository.IdeaMerge, error) {
+	// The kept idea is written, then the delete fails on a row that still
+	// references the duplicate: nothing changes. openMigratedDB seeds with FK
+	// triggers off; the single pooled connection keeps them back on.
+	for _, q := range []string{
+		"SET session_replication_role = origin",
+		"CREATE TABLE merge_blocker (idea_id TEXT REFERENCES ideas (id))",
+		"INSERT INTO merge_blocker VALUES ('m-dup')",
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = repo.MergeIdeas(ctx, []string{"m-keep", "m-dup"}, func(set repository.IdeaMergeSet) (repository.IdeaMerge, error) {
+		keep := set.Ideas[0]
+		keep.Note = "half merged"
+		return repository.IdeaMerge{Keep: &keep, Columns: []string{"note"}, Delete: []string{"m-dup"}}, nil
+	})
+	if err == nil {
+		t.Fatal("a failed delete reported a merge")
+	}
+	if _, err := db.Exec("DROP TABLE merge_blocker"); err != nil {
+		t.Fatal(err)
+	}
+	if keep, err := repo.GetByID(ctx, "m-keep"); err != nil || keep.Note != "" {
+		t.Fatalf("keep after a failed merge = %+v, %v", keep, err)
+	}
+	if _, err := repo.GetByID(ctx, "m-dup"); err != nil {
+		t.Fatalf("dup after a failed merge: %v", err)
+	}
+
+	kept, err := repo.MergeIdeas(ctx, []string{"m-keep", "m-dup"}, func(set repository.IdeaMergeSet) (repository.IdeaMerge, error) {
 		if len(set.Ideas) != 2 || len(set.Compiled) != 0 {
 			t.Errorf("locked set = %+v", set)
 		}
@@ -112,8 +142,8 @@ func TestIdeas_MergeIdeas(t *testing.T) {
 		keep.Note = "merged"
 		return repository.IdeaMerge{Keep: &keep, Columns: []string{"asset_ids", "note"}, Delete: []string{"m-dup"}}, nil
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || kept.ID != "m-keep" || kept.Note != "merged" {
+		t.Fatalf("kept = %+v, %v; want it read back", kept, err)
 	}
 	keep, err := repo.GetByID(ctx, "m-keep")
 	if err != nil || keep.Note != "merged" || !slices.Equal(keep.AssetIDs, []string{"a1", "a2"}) {
@@ -121,5 +151,47 @@ func TestIdeas_MergeIdeas(t *testing.T) {
 	}
 	if _, err := repo.GetByID(ctx, "m-dup"); err == nil {
 		t.Fatal("the merged idea is still there")
+	}
+}
+
+// An untriaged analysis idea other ideas were merged into outlives the
+// clean-ups of its asset's inbox: a re-run, and the asset's delete.
+func TestIdeas_MergedAnalysisIdeaSurvivesCleanup(t *testing.T) {
+	f := newAnalysisFixture(t)
+	f.seedAsset(t, "asset-m")
+	a, err := f.analyses.Ensure(f.ctx, f.db, "asset-m", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.save(t, a, 0, "kept", "merged away", "inbox")
+	byTitle := map[string]string{}
+	ideas, err := f.ideas.List(f.ctx, repository.IdeaListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range ideas {
+		byTitle[i.Title] = i.ID
+	}
+	_, err = f.ideas.MergeIdeas(f.ctx, []string{byTitle["kept"], byTitle["merged away"]}, func(set repository.IdeaMergeSet) (repository.IdeaMerge, error) {
+		keep := set.Ideas[slices.IndexFunc(set.Ideas, func(i models.Idea) bool { return i.Title == "kept" })]
+		keep.MergedAt = new(time.Now().UTC())
+		return repository.IdeaMerge{Keep: &keep, Columns: []string{"merged_at"}, Delete: []string{byTitle["merged away"]}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.save(t, a, 0, "fresh")
+	if got := f.ideaTitles(t, repository.IdeaListFilter{}); !slices.Equal(got, []string{"kept", "fresh"}) {
+		t.Fatalf("after a re-run = %v, want the merged idea kept", got)
+	}
+	if _, err := f.db.Exec("SET session_replication_role = origin"); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := f.assets.Delete(f.ctx, "asset-m"); err != nil || !deleted {
+		t.Fatalf("asset delete = %v, %v", deleted, err)
+	}
+	if got := f.ideaTitles(t, repository.IdeaListFilter{}); !slices.Equal(got, []string{"kept"}) {
+		t.Fatalf("after the asset's delete = %v, want the merged idea kept", got)
 	}
 }
