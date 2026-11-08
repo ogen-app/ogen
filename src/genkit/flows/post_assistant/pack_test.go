@@ -94,6 +94,16 @@ func (m *memProposals) ListOpen(context.Context, models.AssistantScopeKind, stri
 	return nil, nil
 }
 
+// Only schedulePost of the post pack's offers makes no model call once
+// confirmed, so it alone is confirmable past the spend cap.
+func TestDefineTools_ScheduleIsFree(t *testing.T) {
+	for _, s := range defineTools(genkit.Init(t.Context())) {
+		if s.Free != (s.Name == "schedulePost") {
+			t.Errorf("%s: Free = %v", s.Name, s.Free)
+		}
+	}
+}
+
 // A turn in a post's thread, end to end: the orchestrator forwards the
 // change to editPost, the writer's copy streams and is saved as a version,
 // and the post pack reports the edit; a schedule waits for the user's yes.
