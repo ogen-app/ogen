@@ -37,7 +37,7 @@ func sourcesState(store *memProposals, gen *generation, ready int) *requestState
 	st.generatePosts = func(ctx context.Context, req content_plan.GeneratePostsRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 		return gen.run(ctx, req.Count), nil
 	}
-	st.contentPlan = func(ctx context.Context, _ string, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+	st.contentPlan = func(ctx context.Context, _ content_plan.ContentPlanRequest, _ content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
 		return gen.run(ctx, 2), nil
 	}
 	return st
