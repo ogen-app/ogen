@@ -32,6 +32,8 @@ type toolSet struct {
 	reg   *assistantkit.Registry
 	packs packList
 	deps  Repos
+	// enforce checks the tenant's spend cap; nil checks nothing.
+	enforce func(context.Context) error
 }
 
 // tools returns the core tools and those of the loaded packs, in registration
@@ -72,6 +74,10 @@ type turnState struct {
 	proposedKeys map[string]string
 	// emit streams pack events; nil outside a streamed turn.
 	emit OnEventFunc
+	// enforce checks the spend cap before a confirmed call that spends. It
+	// is set for an offer answered from its card, which no model call
+	// checked; nil checks nothing.
+	enforce func(context.Context) error
 	// turn is what the packs begin with; begun the packs that have, in
 	// order, and notes why the others left the turn.
 	turn  Turn
