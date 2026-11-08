@@ -176,11 +176,8 @@ func oldestFirst(a, b models.Idea) int {
 
 // similarity is the better of the two ideas' title and title-and-note
 // Jaccard indexes: a duplicate often shares its headline but words its note
-// afresh.
+// afresh. A title of stopwords alone leaves the note to decide.
 func similarity(a, b ideaTokens) float64 {
-	if len(a.title) == 0 || len(b.title) == 0 {
-		return 0
-	}
 	return math.Max(jaccard(a.title, b.title), jaccard(a.all, b.all))
 }
 
