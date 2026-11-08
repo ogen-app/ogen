@@ -86,6 +86,9 @@ type requestState struct {
 	// reserveHeavyAction.
 	mu            sync.Mutex
 	heavyReserved bool
+	// heavyUsed is set once a confirmed call holding the slot reached its
+	// work, so the slot stays taken after the call returns.
+	heavyUsed bool
 	// writes lists the actions of committed write tools in commit order. The
 	// cheap date tools skip the heavy reservation and may run in parallel, so
 	// the order they finish in is only known here.
@@ -140,6 +143,9 @@ type heavyHeldKey struct{}
 // held for this call by the offer being confirmed.
 func (st *requestState) reserveHeavy(ctx context.Context) bool {
 	if held, _ := ctx.Value(heavyHeldKey{}).(bool); held {
+		st.mu.Lock()
+		st.heavyUsed = true
+		st.mu.Unlock()
 		return true
 	}
 	return st.reserveHeavyAction()
@@ -148,8 +154,9 @@ func (st *requestState) reserveHeavy(ctx context.Context) bool {
 // holdHeavySlot is a heavy tool's Prepare: confirming its offer claims the
 // turn's heavy slot first, so an offer whose work couldn't start this turn
 // stays open instead of being answered and skipped. The release gives the
-// slot back when the confirmation lost the race to answer the offer, so the
-// turn's other work can still run.
+// slot back unless the confirmed call reached its work: when the
+// confirmation lost the race to answer the offer, or the call refused
+// first, the turn's other work can still run.
 func holdHeavySlot(ctx context.Context) (context.Context, func(), error) {
 	st := getRequestState(ctx)
 	if !st.reserveHeavyAction() {
@@ -157,8 +164,10 @@ func holdHeavySlot(ctx context.Context) (context.Context, func(), error) {
 	}
 	release := func() {
 		st.mu.Lock()
-		st.heavyReserved = false
-		st.mu.Unlock()
+		defer st.mu.Unlock()
+		if !st.heavyUsed {
+			st.heavyReserved = false
+		}
 	}
 	return context.WithValue(ctx, heavyHeldKey{}, true), release, nil
 }
