@@ -364,7 +364,8 @@ func (s *Service) insert(ctx context.Context, clone *models.Post, atts []*models
 }
 
 // copyTheses copies post srcID's draft_thesis notes onto clone, keeping
-// their author and origin.
+// their author, origin and order: notes are read oldest first, so each copy
+// is stamped a microsecond after the one before it.
 func copyTheses(ctx context.Context, tx bun.Tx, srcID string, clone *models.Post) error {
 	var notes []models.PostNote
 	if err := tx.NewSelect().Model(&notes).
@@ -382,7 +383,8 @@ func copyTheses(ctx context.Context, tx bun.Tx, srcID string, clone *models.Post
 			return err
 		}
 		notes[i].ID, notes[i].PostID = id, clone.ID
-		notes[i].CreatedAt, notes[i].UpdatedAt = clone.CreatedAt, clone.CreatedAt
+		at := clone.CreatedAt.Add(time.Duration(i) * time.Microsecond)
+		notes[i].CreatedAt, notes[i].UpdatedAt = at, at
 	}
 	_, err := tx.NewInsert().Model(&notes).Exec(ctx)
 	return err
