@@ -403,21 +403,28 @@ var _ = Describe("Campaign assistant flow", Ordered, func() {
 
 	Describe("change dates", func() {
 		It("moves the campaign end date and saves it", func() {
+			// A month past the seeded end, which starts today, so the new end
+			// always follows the start.
+			before, err := campaignRepo.GetByID(ctx, campaignID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(before.EndDate).NotTo(BeNil())
+			want := before.EndDate.AddDate(0, 1, 0).Format("2006-01-02")
+
 			resp, err := callback(ctx, campaignTurn{
 				CampaignID:  campaignID,
-				Instruction: "Extend the campaign end date to 2026-09-30.",
+				Instruction: "Extend the campaign end date to " + want + ".",
 			}, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 
 			Expect(resp.Action).To(Equal("dates_updated"))
 			Expect(resp.Dates).NotTo(BeNil())
-			Expect(resp.Dates.EndDate).To(Equal("2026-09-30"))
+			Expect(resp.Dates.EndDate).To(Equal(want))
 
 			after, err := campaignRepo.GetByID(ctx, campaignID)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(after.EndDate).NotTo(BeNil())
-			Expect(after.EndDate.Format("2006-01-02")).To(Equal("2026-09-30"))
+			Expect(after.EndDate.Format("2006-01-02")).To(Equal(want))
 		})
 	})
 
