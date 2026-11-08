@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -241,6 +242,53 @@ func TestRun_PackBeginsAndEnds(t *testing.T) {
 	resp, err = h.tools.answer(ctx, AnswerRequest{ProposalID: store.rows[0].ID, Confirm: true}, nil)
 	if err != nil || !slices.Equal(ran, []string{"c1", "c1"}) || resp.Results["subject"] == nil {
 		t.Fatalf("resp = %+v, err = %v, ran = %v", resp, err, ran)
+	}
+}
+
+// proposalsHarness is newHarness with offers stored in store, so the
+// confirmOffer and dismissOffer tools are defined.
+func proposalsHarness(t *testing.T, store *memProposals, packs ...Pack) *harness {
+	t.Helper()
+	g := genkit.Init(t.Context())
+	msgs := &memMessages{}
+	repos := Repos{Messages: msgs, Views: testViews(), SavedViews: memSavedViews{}, Proposals: store}
+	tools, err := defineTools(g, repos, packs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadPrompts(tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &harness{t: t, g: g, tools: tools, p: p, repos: repos, msgs: msgs}
+}
+
+// A pack begun for an offer confirmed in chat holds its state on that tool
+// call's context; a second confirmation, and the restarted call that loads
+// the pack, still see that state.
+func TestRun_PackBegunForAnOfferStaysBound(t *testing.T) {
+	var ran []string
+	pack := subjectPack(&ran)
+	pack.Scopes = nil
+	store := &memProposals{}
+	h := proposalsHarness(t, store, pack)
+	for _, id := range []string{"o1", "o2"} {
+		store.rows = append(store.rows, &models.AssistantProposal{
+			ID: id, ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1", Tool: "workOnSubject", Args: models.JSONMap{"big": true},
+			Summary: "Do the big one", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour),
+		})
+	}
+	_, _, _, err := h.turn(viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`), "yes to both, then once more",
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": "o1"}}),
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": "o2"}}),
+		fakemodel.Tools(fakemodel.Call{Name: "loadPack", Input: map[string]any{"pack": "subject"}}),
+		fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{}}),
+		fakemodel.Answer(`{"explanation":"Done.","action":"answered"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ran, []string{"c1", "c1", "c1"}) {
+		t.Fatalf("ran = %q; want every call to see the begun pack's campaign", ran)
 	}
 }
 
