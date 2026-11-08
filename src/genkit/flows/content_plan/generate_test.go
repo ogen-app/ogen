@@ -117,6 +117,10 @@ func TestPersistCited_RecordsGrounding(t *testing.T) {
 			if !slices.Equal(i.AssetIDs, tc.wantUsed) {
 				t.Errorf("used assets = %v, want %v", i.AssetIDs, tc.wantUsed)
 			}
+			// The idea streamed after persisting cites what was saved.
+			if len(dp.AssetRefs) != len(tc.wantUsed) || !slices.Equal(dp.AssetRefs, i.AssetIDs) {
+				t.Errorf("streamed refs = %v, want %v", dp.AssetRefs, tc.wantUsed)
+			}
 			if g := i.GroundingMode; g == nil || *g != tc.want {
 				t.Fatalf("grounding = %v, want %s", g, tc.want)
 			}
@@ -166,7 +170,7 @@ func TestPersistIdea_SnapsWithinWindow(t *testing.T) {
 // holds, and on assets at all, even when the campaign doesn't by default.
 func TestLimitAssets(t *testing.T) {
 	c := &models.Campaign{ID: "c", AssetIDs: models.StringSlice{"a1", "a2", "a3"}}
-	got, err := limitAssets(c, []string{"a3", "a1", "elsewhere"})
+	got, err := limitAssets(t.Context(), c, []string{"a3", "a1", "elsewhere"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +180,12 @@ func TestLimitAssets(t *testing.T) {
 	if len(c.AssetIDs) != 3 || c.UseAssets {
 		t.Fatal("the campaign itself changed")
 	}
-	if _, err := limitAssets(c, []string{"elsewhere"}); err == nil {
+	if _, err := limitAssets(t.Context(), c, []string{"elsewhere"}); err == nil {
 		t.Fatal("assets the campaign doesn't hold passed")
+	}
+	// A run that leaves the assets out has nothing to choose from, so a
+	// stale choice doesn't refuse it.
+	if got, err := limitAssets(WithoutAssets(t.Context()), c, []string{"elsewhere"}); err != nil || got != c {
+		t.Fatalf("without assets = %+v, %v; want the campaign as it is", got, err)
 	}
 }
