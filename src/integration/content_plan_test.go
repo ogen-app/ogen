@@ -3,8 +3,10 @@
 package integration_test
 
 import (
+	"cmp"
 	"context"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/firebase/genkit/go/genkit"
@@ -199,7 +201,9 @@ var _ = Describe("Content plan flow", Ordered, func() {
 			// Every post in the final response must have been streamed as a post event.
 			Expect(postEvents).To(HaveLen(len(resp.Ideas)))
 
-			// Indices must be sequential starting from 0.
+			// Batches stream concurrently, so events arrive in any order; their
+			// indices cover 0..n-1 exactly once.
+			slices.SortFunc(postEvents, func(a, b content_plan.IdeaEventPayload) int { return cmp.Compare(a.Index, b.Index) })
 			for i, pe := range postEvents {
 				Expect(pe.Index).To(Equal(i))
 				Expect(pe.Idea.Title).NotTo(BeEmpty())
