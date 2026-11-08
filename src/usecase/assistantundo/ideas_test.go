@@ -1,163 +1,160 @@
 package assistantundo_test
 
 import (
-	"context"
 	"errors"
 	"slices"
 	"testing"
 	"time"
-
-	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
 
-// memIdeas holds one idea and compares-and-sets its triage as the
-// repository does.
-type memIdeas struct {
-	repository.IdeaRepository
-	i *models.Idea
-}
-
-func eq[T comparable](a, b *T) bool {
-	return a == nil && b == nil || a != nil && b != nil && *a == *b
-}
-
-func eqTime(a, b *time.Time) bool {
-	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
-}
-
-func (m *memIdeas) SetTriageIf(_ context.Context, _ bun.IDB, i, was *models.Idea) (bool, error) {
-	c := m.i
-	if c == nil || c.ID != i.ID || !eq(c.Verdict, was.Verdict) || !eqTime(c.RemindAt, was.RemindAt) ||
-		!eqTime(c.DecidedAt, was.DecidedAt) || !eq(c.DecidedBy, was.DecidedBy) {
-		return false, nil
-	}
-	c.Verdict, c.RemindAt, c.DecidedAt, c.DecidedBy = i.Verdict, i.RemindAt, i.DecidedAt, i.DecidedBy
-	return true, nil
-}
-
-// logVerdict logs a verdict change on ideas' idea, as setIdeaVerdict does.
-func logVerdict(t *testing.T, actions *memActions, ideas *memIdeas, change func(*models.Idea)) string {
+// ideaFixture stores a second user, user-2, and idea, and returns the idea
+// repository and the service that undoes its verdicts.
+func ideaFixture(t *testing.T, f *fixture, idea *models.Idea) (repository.IdeaRepository, *assistantundo.Service) {
 	t.Helper()
-	before := assistantundo.IdeaVerdict(ideas.i)
-	change(ideas.i)
-	id, err := assistantundo.Record(t.Context(), actions, &models.AssistantAction{
-		Kind: models.AssistantActionIdeaVerdict, EntityID: ideas.i.ID,
-		Before: before, After: assistantundo.IdeaVerdict(ideas.i), CreatedBy: "u2",
-	})
+	for _, m := range []any{
+		&models.Account{ID: "acc-2", Email: "sam@example.com", Name: "Sam"},
+		&models.User{ID: "user-2", AccountID: "acc-2", TenantID: models.DefaultTenantID, Name: "Sam", Email: "sam@example.com", Role: models.RoleMember},
+	} {
+		if _, err := f.db.NewInsert().Model(m).Exec(f.ctx); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	ideas := repository.NewIdeaRepository(f.db)
+	if err := ideas.Create(f.ctx, idea); err != nil {
+		t.Fatal(err)
+	}
+	return ideas, assistantundo.New(f.db, f.actions, f.campaigns).WithIdeas(ideas)
+}
+
+// logVerdict applies change to the stored idea and logs it, as
+// setIdeaVerdict does.
+func logVerdict(t *testing.T, f *fixture, ideas repository.IdeaRepository, change func(*models.Idea)) string {
+	t.Helper()
+	i := loadIdea(t, f, ideas)
+	before := assistantundo.IdeaVerdict(i)
+	change(i)
+	setTriage(t, f, ideas, i)
+	id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{ScopeKind: models.AssistantScopeWorkspace,
+		Kind: models.AssistantActionIdeaVerdict, EntityID: i.ID, Before: before, After: assistantundo.IdeaVerdict(i), CreatedBy: "user-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func TestUndo_IdeaVerdict(t *testing.T) {
-	ideas := &memIdeas{i: &models.Idea{ID: "i1"}}
-	actions := &memActions{}
-	decided := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
-	id := logVerdict(t, actions, ideas, func(i *models.Idea) {
-		i.Verdict, i.DecidedAt, i.DecidedBy = new(models.IdeaVerdictYes), &decided, new("u2")
-	})
-	svc := assistantundo.New(actions, &memCampaigns{}).WithIdeas(ideas)
+func loadIdea(t *testing.T, f *fixture, ideas repository.IdeaRepository) *models.Idea {
+	t.Helper()
+	i, err := ideas.GetByID(f.ctx, "i1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return i
+}
 
-	// Changed again since: refused.
-	ideas.i.Verdict = new(models.IdeaVerdictNo)
-	if _, err := svc.Undo(t.Context(), id, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+func setTriage(t *testing.T, f *fixture, ideas repository.IdeaRepository, i *models.Idea) {
+	t.Helper()
+	if _, err := ideas.Update(f.ctx, i, "verdict", "remind_at", "decided_at", "decided_by"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUndo_IdeaVerdict(t *testing.T) {
+	f := newFixture(t)
+	ideas, svc := ideaFixture(t, f, &models.Idea{ID: "i1", Title: "Pricing myths"})
+	decided := time.Now().UTC().Truncate(time.Microsecond)
+	id := logVerdict(t, f, ideas, func(i *models.Idea) {
+		i.Verdict, i.DecidedAt, i.DecidedBy = new(models.IdeaVerdictYes), &decided, new("user-1")
+	})
+
+	// Changed again since: refused, and not recorded.
+	i := loadIdea(t, f, ideas)
+	i.Verdict = new(models.IdeaVerdictNo)
+	setTriage(t, f, ideas, i)
+	if _, err := svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) || f.undone(t, id) {
 		t.Fatalf("changed since: %v", err)
 	}
 	// The same verdict decided again by someone else is a change too.
-	ideas.i.Verdict, ideas.i.DecidedBy = new(models.IdeaVerdictYes), new("u3")
-	if _, err := svc.Undo(t.Context(), id, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+	i.Verdict, i.DecidedBy = new(models.IdeaVerdictYes), new("user-2")
+	setTriage(t, f, ideas, i)
+	if _, err := svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
 		t.Fatalf("decided again: %v", err)
 	}
-	ideas.i.DecidedBy = new("u2")
-	if _, err := svc.Undo(t.Context(), id, "u1"); err != nil {
+	i.DecidedBy = new("user-1")
+	setTriage(t, f, ideas, i)
+	if _, err := svc.Undo(f.ctx, id, "user-1"); err != nil {
 		t.Fatal(err)
 	}
-	if ideas.i.Verdict != nil || ideas.i.DecidedAt != nil || ideas.i.DecidedBy != nil {
-		t.Fatalf("idea = %+v; want back in the inbox", ideas.i)
+	if i := loadIdea(t, f, ideas); i.Verdict != nil || i.DecidedAt != nil || i.DecidedBy != nil || !f.undone(t, id) {
+		t.Fatalf("idea = %+v; want back in the inbox", i)
 	}
 }
 
 // Undo puts back the verdict, the reminder and the decision it replaced, not
 // just clears them.
 func TestUndo_IdeaVerdictRestoresEarlierTriage(t *testing.T) {
-	remind := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
-	decided := time.Date(2026, 10, 20, 8, 30, 0, 0, time.UTC)
-	ideas := &memIdeas{i: &models.Idea{
-		ID: "i1", Verdict: new(models.IdeaVerdictLater), RemindAt: &remind, DecidedAt: &decided, DecidedBy: new("u1"),
-	}}
-	actions := &memActions{}
-	now := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
-	id := logVerdict(t, actions, ideas, func(i *models.Idea) {
-		i.Verdict, i.RemindAt, i.DecidedAt, i.DecidedBy = new(models.IdeaVerdictYes), nil, &now, new("u2")
+	f := newFixture(t)
+	remind := time.Now().UTC().Add(72 * time.Hour).Truncate(time.Microsecond)
+	decided := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	ideas, svc := ideaFixture(t, f, &models.Idea{
+		ID: "i1", Title: "Pricing myths", Verdict: new(models.IdeaVerdictLater), RemindAt: &remind, DecidedAt: &decided, DecidedBy: new("user-1"),
+	})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	id := logVerdict(t, f, ideas, func(i *models.Idea) {
+		i.Verdict, i.RemindAt, i.DecidedAt, i.DecidedBy = new(models.IdeaVerdictYes), nil, &now, new("user-2")
 	})
 
-	if _, err := assistantundo.New(actions, &memCampaigns{}).WithIdeas(ideas).Undo(t.Context(), id, "u2"); err != nil {
+	if _, err := svc.Undo(f.ctx, id, "user-2"); err != nil {
 		t.Fatal(err)
 	}
-	i := ideas.i
-	if !eq(i.Verdict, new(models.IdeaVerdictLater)) || !eqTime(i.RemindAt, &remind) {
+	i := loadIdea(t, f, ideas)
+	if i.Verdict == nil || *i.Verdict != models.IdeaVerdictLater || i.RemindAt == nil || !i.RemindAt.Equal(remind) {
 		t.Fatalf("verdict = %v, remind_at = %v; want later until %v", i.Verdict, i.RemindAt, remind)
 	}
-	if !eqTime(i.DecidedAt, &decided) || !eq(i.DecidedBy, new("u1")) {
+	if i.DecidedAt == nil || !i.DecidedAt.Equal(decided) || i.DecidedBy == nil || *i.DecidedBy != "user-1" {
 		t.Fatalf("decided = %v by %v; want the original decision", i.DecidedAt, i.DecidedBy)
 	}
 }
 
-func (m *memCampaigns) SetAssetIDsIf(_ context.Context, _ bun.IDB, id string, was []string, wasUse bool, ids []string, use bool) (bool, error) {
-	if m.c == nil || m.c.ID != id || !slices.Equal([]string(m.c.AssetIDs), was) || m.c.UseAssets != wasUse {
-		return false, nil
-	}
-	m.c.AssetIDs, m.c.UseAssets = ids, use
-	return true, nil
-}
-
 func TestUndo_CampaignAssets(t *testing.T) {
-	camps := &memCampaigns{c: &models.Campaign{ID: "c1", AssetIDs: models.StringSlice{"a1"}, UseAssets: true}}
-	before := assistantundo.CampaignAssets(camps.c)
-	camps.c.AssetIDs = models.StringSlice{"a1", "a2"}
-	after := assistantundo.CampaignAssets(camps.c)
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.AssetIDs, c.UseAssets = models.StringSlice{"a1"}, true })
+	id := f.logChange(t, models.AssistantActionCampaignAssets, assistantundo.CampaignAssets, func(c *models.Campaign) {
+		c.AssetIDs = models.StringSlice{"a1", "a2"}
+	})
 
-	actions := &memActions{}
-	id, err := assistantundo.Record(t.Context(), actions, &models.AssistantAction{Kind: models.AssistantActionCampaignAssets, EntityID: "c1", Before: before, After: after})
-	if err != nil {
+	if _, err := f.svc.Undo(f.ctx, id, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := assistantundo.New(actions, camps).Undo(t.Context(), id, "u1"); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(camps.c.AssetIDs, models.StringSlice{"a1"}) || !camps.c.UseAssets {
-		t.Fatalf("assets = %v, use = %v", camps.c.AssetIDs, camps.c.UseAssets)
+	if got := f.load(t); !slices.Equal(got.AssetIDs, models.StringSlice{"a1"}) || !got.UseAssets {
+		t.Fatalf("assets = %v, use = %v", got.AssetIDs, got.UseAssets)
 	}
 }
 
 // Undoing a first attach turns the campaign's assets off again, and a flag
 // flipped since the change counts as an edit.
 func TestUndo_CampaignAssetsUseAssets(t *testing.T) {
-	camps := &memCampaigns{c: &models.Campaign{ID: "c1", AssetIDs: models.StringSlice{}}}
-	before := assistantundo.CampaignAssets(camps.c)
-	camps.c.AssetIDs, camps.c.UseAssets = models.StringSlice{"a1"}, true
-	after := assistantundo.CampaignAssets(camps.c)
+	f := newFixture(t)
+	f.seedCampaign(t, nil)
+	id := f.logChange(t, models.AssistantActionCampaignAssets, assistantundo.CampaignAssets, func(c *models.Campaign) {
+		c.AssetIDs, c.UseAssets = models.StringSlice{"a1"}, true
+	})
 
-	actions := &memActions{}
-	id, err := assistantundo.Record(t.Context(), actions, &models.AssistantAction{Kind: models.AssistantActionCampaignAssets, EntityID: "c1", Before: before, After: after})
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc := assistantundo.New(actions, camps)
-	camps.c.UseAssets = false
-	if _, err := svc.Undo(t.Context(), id, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+	c := f.load(t)
+	c.UseAssets = false
+	f.save(t, c)
+	if _, err := f.svc.Undo(f.ctx, id, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
 		t.Fatalf("flag changed since: %v", err)
 	}
-	camps.c.UseAssets = true
-	if _, err := svc.Undo(t.Context(), id, "u1"); err != nil {
+	c.UseAssets = true
+	f.save(t, c)
+	if _, err := f.svc.Undo(f.ctx, id, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(camps.c.AssetIDs) != 0 || camps.c.UseAssets {
-		t.Fatalf("assets = %v, use = %v; want none, off", camps.c.AssetIDs, camps.c.UseAssets)
+	if got := f.load(t); len(got.AssetIDs) != 0 || got.UseAssets {
+		t.Fatalf("assets = %v, use = %v; want none, off", got.AssetIDs, got.UseAssets)
 	}
 }
