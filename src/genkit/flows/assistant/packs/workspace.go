@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
@@ -27,10 +28,10 @@ func workspacePack(d Deps) assistant.Pack {
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			day := genkit.DefineTool(g, "activityReport",
 				"Returns what happened on a day in the workspace's timezone: posts published and failed, and posts and campaigns created.",
-				assistantkit.Wrap(func(ctx context.Context, in ActivityInput) (*report.Report, error) { return activityReport(ctx, d, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in ActivityInput) (*report.Report, error) { return activityReport(ctx, d, in) }), ai.WithStrictSchema(false))
 			setup := genkit.DefineTool(g, "workspaceSetup",
 				"Returns the workspace's timezone and its connected social accounts with their health: valid, expiring, or needing a reconnect.",
-				assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*SetupOut, error) { return workspaceSetup(ctx, d) }))
+				assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*SetupOut, error) { return workspaceSetup(ctx, d) }), ai.WithStrictSchema(false))
 			return []assistantkit.Spec{
 				spec(workspacePackName, day, assistantkit.TierRead,
 					`Call this when the user asks what happened — "what went out yesterday?", "did anything fail today?". date is YYYY-MM-DD, default today; campaignId narrows to one campaign (default the thread's).`),
