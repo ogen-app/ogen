@@ -376,6 +376,28 @@ func TestUndo_PlatformsRefuseWhenChangedSince(t *testing.T) {
 	}
 }
 
+// An undo holds one connection: on a pool of one it still completes.
+func TestUndo_RunsOnItsTransactionAlone(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) {
+		c.EndDate, c.TagIDs = day("2026-06-30"), models.StringSlice{"tag-1"}
+		c.TargetPlatforms = models.CampaignPlatforms{{ID: "linkedin"}}
+	})
+	id := f.logChange(t, models.AssistantActionCampaignDates, assistantundo.CampaignDates, func(c *models.Campaign) {
+		c.EndDate = day("2026-07-31")
+	})
+	f.db.SetMaxOpenConns(1)
+
+	ctx, cancel := context.WithTimeout(f.ctx, 5*time.Second)
+	defer cancel()
+	if _, err := f.svc.Undo(ctx, id, "user-1"); err != nil {
+		t.Fatalf("undo on a one-connection pool: %v", err)
+	}
+	if got := f.load(t).EndDate; !got.Equal(*day("2026-06-30")) {
+		t.Fatalf("end = %v, want 2026-06-30", got)
+	}
+}
+
 func TestUndo_NotFound(t *testing.T) {
 	f := newFixture(t)
 	if _, err := f.svc.Undo(f.ctx, "nope", "user-1"); !errors.Is(err, assistantundo.ErrNotFound) {
