@@ -404,3 +404,23 @@ func isValidation(err error) bool {
 	_, ok := errors.AsType[*ValidationError](err)
 	return ok
 }
+
+// The max-tool-iterations abort is detected by its stable message
+// substring so the turn finalises from the work done instead of failing.
+func TestIsMaxTurnsExceeded(t *testing.T) {
+	if isMaxTurnsExceeded(nil) {
+		t.Fatal("nil error is not a max-turns abort")
+	}
+	if isMaxTurnsExceeded(errors.New("some other failure")) {
+		t.Fatal("unrelated error must not match")
+	}
+	// The genkit message form (ai/generate.go), verbatim and wrapped.
+	if !isMaxTurnsExceeded(errors.New("exceeded maximum tool call iterations (2)")) {
+		t.Fatal("genkit abort message must match")
+	}
+	if !isMaxTurnsExceeded(fmtWrap(errors.New("exceeded maximum tool call iterations (4)"))) {
+		t.Fatal("wrapped genkit abort message must match")
+	}
+}
+
+func fmtWrap(err error) error { return errors.Join(errors.New("model call failed"), err) }

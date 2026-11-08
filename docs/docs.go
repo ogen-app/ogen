@@ -11064,85 +11064,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/posts/{id}/assistant": {
-            "post": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "description": "Sends an instruction to the AI assistant and streams progress via Server-Sent Events.\nEvents: \"explanation_delta\" and \"content_delta\" carry {\"delta\":\"...\"} fragments (Markdown)\nas the model generates the explanation and updated content. \"tool_call\" and \"tool_result\"\nsignal asset-retrieval tool invocations. \"complete\" carries the final PostAssistantResponse\nwhose updatedContent is a Markdown string.\n\"error\" carries {\"message\":\"...\",\"code\":\u003chttp_code\u003e}.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "text/event-stream"
-                ],
-                "tags": [
-                    "posts"
-                ],
-                "summary": "Post assistant (SSE)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Post Sqid",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Instruction payload",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.assistantRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "SSE stream: delta / tool_call / tool_result / complete / error events"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/api/posts/{id}/cancel": {
             "post": {
                 "security": [
@@ -11352,52 +11273,6 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/posts/{id}/messages": {
-            "get": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "description": "Returns the most recent assistant conversation messages for a post.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "posts"
-                ],
-                "summary": "List assistant messages",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Post Sqid",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/models.PostAssistantMessage"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -21490,26 +21365,6 @@ const docTemplate = `{
                 },
                 "views": {
                     "type": "integer"
-                }
-            }
-        },
-        "models.PostAssistantMessage": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "post_id": {
-                    "type": "string"
-                },
-                "role": {
-                    "type": "string"
                 }
             }
         },

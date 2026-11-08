@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func run(
 	p *prompts,
 	tools *toolSet,
 	onEvent OnEventFunc,
-) (*Response, error) {
+) (_ *Response, retErr error) {
 	if strings.TrimSpace(req.Instruction) == "" {
 		return nil, &ValidationError{Msg: "instruction is required"}
 	}
@@ -67,32 +68,41 @@ func run(
 	}
 
 	st := newTurnState(req.View, tools.packs.defaults(req.View.View.Screen, scope.Kind))
+	st.turn.Instruction = req.Instruction
 	st.emit = onEvent
+	// An offer answered before the turn failed stays answered, so the client
+	// hears it even without a "complete".
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		for _, r := range st.resolvedList() {
+			emit(onEvent, SSEEventProposalResolved, r)
+		}
+	}()
 	ctx = tools.bind(withTurnState(ctx, st), st)
-	scanner, err := callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent)
+	if ctx, err = tools.begin(ctx, st, slices.Clone(st.loaded)); err != nil {
+		return nil, err
+	}
+	call := func(ctx context.Context) (*jsonstream.Scanner, error) {
+		return callModel(ctx, g, cfg, p, tools, st.loadedList(), history, view+st.packPrompt()+req.Instruction, onEvent)
+	}
+	scanner, err := call(ctx)
 	if err != nil {
 		return nil, err
 	}
 	// loadPack interrupts the call; the turn starts again, once, with the
 	// pack's tools.
 	if scanner == nil {
-		pack, ok := st.restart(tools.packs)
-		if !ok {
-			return nil, &AIError{Msg: "the assistant stopped without replying"}
-		}
-		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
-		if scanner, err = callModel(ctx, g, cfg, p, tools, st.loaded, history, view+req.Instruction, onEvent); err != nil {
+		if ctx, scanner, err = restartWithPack(ctx, tools, st, call, onEvent); err != nil {
 			return nil, err
 		}
-		if scanner == nil {
-			return nil, &AIError{Msg: "the assistant stopped without replying"}
-		}
 	}
-	result, err := assemble(ctx, scanner)
-	if err != nil {
-		return nil, err
+	result := assemble(ctx, scanner)
+	tools.finish(st, result)
+	if result.Explanation == "" {
+		return nil, &AIError{Msg: unusableReply(ctx, scanner)}
 	}
-	finish(st, result)
 
 	// The turn's work is done by now, so a failed history write does not
 	// fail it: an error would report work that happened as lost, and a retry
@@ -114,6 +124,30 @@ func run(
 	}
 	emit(onEvent, SSEEventComplete, result)
 	return result, nil
+}
+
+// restartWithPack begins the pack loadPack asked for and makes the turn's
+// second and last model call with it.
+func restartWithPack(ctx context.Context, tools *toolSet, st *turnState, call func(context.Context) (*jsonstream.Scanner, error), onEvent OnEventFunc) (context.Context, *jsonstream.Scanner, error) {
+	pack, ok := st.restart(tools.packs)
+	if !ok {
+		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
+	}
+	ctx, err := tools.begin(ctx, st, []string{pack})
+	if err != nil {
+		return nil, nil, err
+	}
+	if st.hasBegun(pack) {
+		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
+	}
+	scanner, err := call(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if scanner == nil {
+		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
+	}
+	return ctx, scanner, nil
 }
 
 // callModel runs the orchestrator's tool loop on the core tools plus loaded,
@@ -159,6 +193,13 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		ai.WithMiddleware(usage.Meter(), cfg.Provider.CallMiddleware(modelconfig.FlowAssistant, usage.Record, llm.CachePrompt())),
 		cfg.Provider.CallConfig(mc.Model, maxTokens),
 	)
+	// Running out of tool rounds is recoverable: the tools that ran have
+	// committed, and the packs' results stand in for the missing reply.
+	if isMaxTurnsExceeded(err) {
+		slog.WarnContext(ctx, "tool rounds exhausted; finalising from the work done", logging.AttrComponent, logComponent)
+		usage.FinishMetered(ctx, nil, maxTokens)
+		return reply.cur, nil
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		return nil, &AIError{Msg: assistantkit.FriendlyError(err)}
@@ -194,26 +235,41 @@ func (r *replyScanner) push(text string) {
 	r.cur.Push(text)
 }
 
+// isMaxTurnsExceeded reports genkit's "exceeded maximum tool call
+// iterations" abort, which has no sentinel.
+func isMaxTurnsExceeded(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "maximum tool call iterations")
+}
+
 // assemble reads the reply envelope. A reply in plain prose is taken as the
 // answer, braces and all; one that opens with "{" or yielded any key is a
-// JSON envelope, and without an explanation it is unusable.
-func assemble(ctx context.Context, scanner *jsonstream.Scanner) (*Response, error) {
+// JSON envelope. A reply with no explanation leaves Explanation empty for
+// the packs' fallback.
+func assemble(ctx context.Context, scanner *jsonstream.Scanner) *Response {
 	vals := scanner.Values()
 	r := &Response{}
 	r.Explanation, _ = vals["explanation"].(string)
 	r.Action, _ = vals["action"].(string)
 	if r.Explanation == "" {
-		raw := strings.TrimSpace(scanner.FullText())
-		if raw == "" || len(vals) > 0 || strings.HasPrefix(jsonstream.StripFences(raw), "{") {
-			slog.ErrorContext(ctx, "reply had no usable fields", logging.AttrComponent, logComponent, "raw_preview", logging.Preview(raw, 500))
-			return nil, &AIError{Msg: "model response did not contain the expected fields"}
+		if raw := strings.TrimSpace(scanner.FullText()); raw != "" && len(vals) == 0 && !strings.HasPrefix(jsonstream.StripFences(raw), "{") {
+			r.Explanation = raw
 		}
-		r.Explanation, r.Action = raw, actionAnswered
 	}
 	if r.Action != actionDeclined {
 		r.Action = actionAnswered
 	}
-	return r, nil
+	return r
+}
+
+// unusableReply logs a turn that left neither a reply nor work to report,
+// and says so in words the user can act on.
+func unusableReply(ctx context.Context, scanner *jsonstream.Scanner) string {
+	raw := scanner.FullText()
+	slog.ErrorContext(ctx, "reply had no usable fields", logging.AttrComponent, logComponent, "raw_preview", logging.Preview(raw, 500))
+	if strings.TrimSpace(raw) == "" {
+		return "I couldn't complete that in a single step. Try splitting it into smaller requests, or rephrasing."
+	}
+	return "model response did not contain the expected fields"
 }
 
 // historyTurn replays a stored message: the user's as typed, after a note of
