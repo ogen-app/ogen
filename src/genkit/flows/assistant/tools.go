@@ -262,8 +262,8 @@ func (st *turnState) requestPack(name string) {
 }
 
 // restart takes the requested pack for the turn's second and last model
-// call. What the first call planned for the screen is dropped: the second
-// plans again from the user's message.
+// call. What the first call did, the screen it planned included, stands:
+// the second continues from its tool rounds.
 func (st *turnState) restart(packs packList) (string, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -272,8 +272,7 @@ func (st *turnState) restart(packs packList) (string, bool) {
 	}
 	name := st.requested
 	st.loaded = packs.normalize(append(st.loaded, name))
-	st.restarted, st.requested, st.ui = true, "", nil
-	st.resetScreen()
+	st.restarted, st.requested = true, ""
 	return name, true
 }
 
