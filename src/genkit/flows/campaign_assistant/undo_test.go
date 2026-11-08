@@ -110,6 +110,13 @@ func (s *storedCampaign) SetDates(_ context.Context, _ string, oldStart, oldEnd,
 	return true, nil
 }
 
+func (s *storedCampaign) ReplacePhaseWindows(_ context.Context, _ string, windows []models.CampaignPhaseWindow) error {
+	cp := *s.c
+	cp.PhaseWindows = slices.Clone(windows)
+	s.c = &cp
+	return nil
+}
+
 func sameDay(a, b *time.Time) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -146,6 +153,27 @@ func TestSetCampaignDates_IsUndoable(t *testing.T) {
 	}
 	if want := assistantundo.CampaignDates(campaigns.c); !maps.Equal(a.After, want) {
 		t.Fatalf("logged after = %v, want the stored campaign's %v", a.After, want)
+	}
+}
+
+// A manual phase plan follows a date change: its outer bounds move to the
+// new dates and its inner boundaries stay.
+func TestSetCampaignDates_ReanchorsAManualPlan(t *testing.T) {
+	c := timelineCampaign()
+	c.ID = "c1"
+	c.PhaseWindows = []models.CampaignPhaseWindow{
+		{PhaseID: "p1", StartDate: day("2026-01-01"), EndDate: day("2026-01-05")},
+		{PhaseID: "p2", StartDate: day("2026-01-06"), EndDate: day("2026-01-25")},
+		{PhaseID: "p3", StartDate: day("2026-01-26"), EndDate: day("2026-01-30")},
+	}
+	campaigns := &storedCampaign{c: c}
+	st := &requestState{campaignID: "c1", campaign: c, repos: CampaignAssistantRepos{Campaigns: campaigns, Posts: noPosts{}}}
+	if out := runTool(t, st, "setCampaignDates", map[string]any{"endDate": "2026-03-31"}); out.Status != "ok" {
+		t.Fatalf("outcome = %+v", out)
+	}
+	w := campaigns.c.PhaseWindows
+	if len(w) != 3 || !w[1].StartDate.Equal(day("2026-01-06")) || !w[1].EndDate.Equal(day("2026-01-25")) || !w[2].EndDate.Equal(day("2026-03-31")) {
+		t.Fatalf("phase windows = %+v; want the manual plan re-anchored to the new end", w)
 	}
 }
 
