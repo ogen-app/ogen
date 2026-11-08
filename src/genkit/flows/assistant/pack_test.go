@@ -400,6 +400,27 @@ func TestRun_PackBegunForAnOfferStaysBound(t *testing.T) {
 	}
 }
 
+// A model call that fails after a pack's tool committed still reports the
+// pack's work, so the client hears what changed.
+func TestRun_FailedCallReportsCommittedWork(t *testing.T) {
+	var ran []string
+	pack := subjectPack(&ran)
+	pack.End = func(ctx context.Context) (*PackResult, error) {
+		Emit(ctx, "subject_done", map[string]any{"ran": len(ran)})
+		return &PackResult{Fallback: "Worked on the campaign."}, nil
+	}
+	h := newHarness(t, pack)
+	// The script runs out after the tool round, so the second call fails.
+	_, events, _, err := h.turn(viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`), "work on it",
+		fakemodel.Tools(fakemodel.Call{Name: "workOnSubject", Input: map[string]any{}}))
+	if err == nil {
+		t.Fatal("the failed model call returned no error")
+	}
+	if !slices.Equal(ran, []string{"c1"}) || !slices.Contains(events, SSEEventKind("subject_done")) {
+		t.Fatalf("ran = %v, events = %v; want the committed work reported", ran, events)
+	}
+}
+
 // Route returns what the model asked for without running it.
 func TestRoute_ReturnsCallsUnrun(t *testing.T) {
 	var ran []string
