@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -57,6 +58,11 @@ type CampaignRepository interface {
 	// statement that writes no other column. Returns false when they differ
 	// or the campaign is gone.
 	SetAssetIDsIf(ctx context.Context, db bun.IDB, id string, was []string, wasUse bool, ids []string, use bool) (bool, error)
+	// ChangeAssetIDs adds and removes assets in one transaction that holds
+	// the campaign row, keeping use_assets derived from the set, and returns
+	// the campaign as it was and as it is now, so a snapshot of either
+	// includes no other write. It returns sql.ErrNoRows like AddAssetIDs.
+	ChangeAssetIDs(ctx context.Context, id string, add, remove []string) (before, after *models.Campaign, err error)
 	// CountActive counts the tenant's live campaigns — neither soft-deleted nor
 	// archived (mirrors List) — the active_campaigns quota.
 	CountActive(ctx context.Context) (int64, error)
@@ -344,6 +350,35 @@ func (r *campaignRepository) SetAssetIDsIf(ctx context.Context, db bun.IDB, id s
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// ChangeAssetIDs locks the campaign, applies add and remove to its asset
+// set, and writes the set and use_assets on the same transaction.
+func (r *campaignRepository) ChangeAssetIDs(ctx context.Context, id string, add, remove []string) (before, after *models.Campaign, err error) {
+	err = r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		c, err := r.get(ctx, tx, id, true)
+		if err != nil {
+			return err
+		}
+		was := *c
+		was.AssetIDs = slices.Clone(c.AssetIDs)
+		ids := slices.DeleteFunc(append(models.StringSlice{}, c.AssetIDs...), func(a string) bool { return slices.Contains(remove, a) })
+		for _, a := range add {
+			if !slices.Contains(ids, a) {
+				ids = append(ids, a)
+			}
+		}
+		c.AssetIDs, c.UseAssets = ids, len(ids) > 0
+		if err := r.UpdateColumns(ctx, tx, c, "asset_ids", "use_assets"); err != nil {
+			return err
+		}
+		before, after = &was, c
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return before, after, nil
 }
 
 // Delete soft-deletes a campaign by stamping deleted_at. Returns false when the

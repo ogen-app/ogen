@@ -243,28 +243,21 @@ func (r *memCampaigns) Update(_ context.Context, c *models.Campaign, _ ...string
 	return nil
 }
 
-// AddAssetIDs and RemoveAssetID keep UseAssets in step with the set, like the
-// repository's atomic membership writes.
-func (r *memCampaigns) AddAssetIDs(ctx context.Context, id string, ids []string) (*models.Campaign, error) {
-	if r.c == nil || r.c.ID != id {
-		return nil, sql.ErrNoRows
+// ChangeAssetIDs keeps UseAssets in step with the set, like the repository's
+// membership write.
+func (r *memCampaigns) ChangeAssetIDs(ctx context.Context, id string, add, remove []string) (before, after *models.Campaign, err error) {
+	if before, err = r.GetByID(ctx, id); err != nil {
+		return nil, nil, err
 	}
-	for _, a := range ids {
+	r.c.AssetIDs = slices.DeleteFunc(r.c.AssetIDs, func(a string) bool { return slices.Contains(remove, a) })
+	for _, a := range add {
 		if !slices.Contains(r.c.AssetIDs, a) {
 			r.c.AssetIDs = append(r.c.AssetIDs, a)
 		}
 	}
 	r.c.UseAssets = len(r.c.AssetIDs) > 0
-	return r.GetByID(ctx, id)
-}
-
-func (r *memCampaigns) RemoveAssetID(ctx context.Context, id, assetID string) (*models.Campaign, error) {
-	if r.c == nil || r.c.ID != id {
-		return nil, sql.ErrNoRows
-	}
-	r.c.AssetIDs = slices.DeleteFunc(r.c.AssetIDs, func(a string) bool { return a == assetID })
-	r.c.UseAssets = len(r.c.AssetIDs) > 0
-	return r.GetByID(ctx, id)
+	after, err = r.GetByID(ctx, id)
+	return before, after, err
 }
 
 type memAssets struct {
