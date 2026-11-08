@@ -125,7 +125,7 @@ func sameFact(a, b *models.BrandFact) bool {
 
 func TestFacts_EditAndUndo(t *testing.T) {
 	brand := &memBrand{facts: map[string]*models.BrandFact{}}
-	actions := &undoActions{}
+	db, actions := undoStore(t)
 	d := Deps{Brand: brand, Actions: actions}
 	facts := brandfacts.New(brand)
 	ctx, touched := turn(t, workspace, nil)
@@ -148,15 +148,19 @@ func TestFacts_EditAndUndo(t *testing.T) {
 		t.Fatalf("edited = %+v, %v; want the other fields kept", edited, err)
 	}
 
-	// Undo the edit: the statement and its expiry come back.
-	db := pgtest.MustDB()
-	t.Cleanup(func() { _ = db.Close() })
+	// Undo the edit: the statement and its expiry come back, once.
 	svc := assistantundo.New(db, actions, nil).WithBrand(brand)
 	if _, err := svc.Undo(ctx, edited.UndoID, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	if got := brand.facts[f.ID]; got.Statement != "We serve 4,000 customers" || got.ExpiresAt.String() != "2027-06-30" {
 		t.Fatalf("after undo = %+v", got)
+	}
+	if by := undone(t, ctx, actions, edited.UndoID); by != "u1" {
+		t.Fatalf("undone by %q, want u1", by)
+	}
+	if _, err := svc.Undo(ctx, edited.UndoID, "u1"); !errors.Is(err, assistantundo.ErrAlreadyUndone) {
+		t.Fatalf("second undo: err = %v, want ErrAlreadyUndone", err)
 	}
 
 	removed, err := removeFact(ctx, d, facts, RemoveFactInput{FactID: f.ID})
@@ -181,36 +185,37 @@ func TestFacts_EditAndUndo(t *testing.T) {
 	}
 }
 
-// undoActions keeps logged changes for the undo service.
-type undoActions struct {
-	repository.AssistantActionRepository
-	rows map[string]*models.AssistantAction
-}
-
-func (u *undoActions) Create(_ context.Context, a *models.AssistantAction) error {
-	if u.rows == nil {
-		u.rows = map[string]*models.AssistantAction{}
+// undoStore is a database with turn's tenant and the action store on it, so
+// an undo's record commits or rolls back with its restore.
+func undoStore(t *testing.T) (*bun.DB, repository.AssistantActionRepository) {
+	t.Helper()
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC()
+	if _, err := db.NewInsert().Model(&models.Tenant{ID: "tenant-1", Name: "tenant-1", Slug: "tenant-1",
+		TierID: models.DefaultTierID, CreatedAt: now, UpdatedAt: now}).Exec(t.Context()); err != nil {
+		t.Fatalf("seed tenant: %v", err)
 	}
-	u.rows[a.ID] = a
-	return nil
+	return db, repository.NewAssistantActionRepository(db)
 }
 
-func (u *undoActions) GetByID(_ context.Context, id string) (*models.AssistantAction, error) {
-	if a, ok := u.rows[id]; ok {
-		cp := *a
-		return &cp, nil
+// undone reports who undid the action, or "" while it is still undoable.
+func undone(t *testing.T, ctx context.Context, actions repository.AssistantActionRepository, id string) string {
+	t.Helper()
+	a, err := actions.GetByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return nil, sql.ErrNoRows
-}
-
-func (u *undoActions) MarkUndone(context.Context, bun.IDB, string, string, time.Time) (bool, error) {
-	return true, nil
+	if a.UndoneAt == nil {
+		return ""
+	}
+	return a.UndoneBy
 }
 
 // A missing fact is refused, not dereferenced.
 func TestFacts_MissingFactRefused(t *testing.T) {
 	brand := &memBrand{facts: map[string]*models.BrandFact{}}
-	d := Deps{Brand: brand, Actions: &undoActions{}}
+	d := Deps{Brand: brand, Actions: &memActions{}}
 	facts := brandfacts.New(brand)
 	ctx, _ := turn(t, workspace, nil)
 
@@ -224,7 +229,7 @@ func TestFacts_MissingFactRefused(t *testing.T) {
 // a statement corrected since.
 func TestFacts_StaleUpdateRefused(t *testing.T) {
 	brand := &memBrand{facts: map[string]*models.BrandFact{}}
-	d := Deps{Brand: brand, Actions: &undoActions{}}
+	d := Deps{Brand: brand, Actions: &memActions{}}
 	facts := brandfacts.New(brand)
 	ctx, _ := turn(t, workspace, nil)
 	added, err := addFact(ctx, d, facts, FactInput{Statement: "We serve 4,000 customers"})
@@ -245,12 +250,10 @@ func TestFacts_StaleUpdateRefused(t *testing.T) {
 // later edit stays.
 func TestFacts_UndoRefusedAfterLaterEdit(t *testing.T) {
 	brand := &memBrand{facts: map[string]*models.BrandFact{}}
-	actions := &undoActions{}
+	db, actions := undoStore(t)
 	d := Deps{Brand: brand, Actions: actions}
 	facts := brandfacts.New(brand)
 	ctx, _ := turn(t, workspace, nil)
-	db := pgtest.MustDB()
-	t.Cleanup(func() { _ = db.Close() })
 	svc := assistantundo.New(db, actions, nil).WithBrand(brand)
 
 	added, err := addFact(ctx, d, facts, FactInput{Statement: "We serve 4,000 customers"})
@@ -272,6 +275,9 @@ func TestFacts_UndoRefusedAfterLaterEdit(t *testing.T) {
 		if got := brand.facts[id]; got == nil || got.Statement != "We serve 4,200 customers" {
 			t.Fatalf("undo %s: fact = %+v, want the later edit kept", name, got)
 		}
+		if by := undone(t, ctx, actions, undoID); by != "" {
+			t.Fatalf("undo %s: a refused undo was recorded by %q", name, by)
+		}
 	}
 }
 
@@ -283,7 +289,7 @@ func TestFacts_UndoRemoveKeepsAuthor(t *testing.T) {
 		"f1": {ID: "f1", Statement: "NPS is 62", Subject: models.FactSubjectUs, Kind: models.FactKindMeasured,
 			CreatedBy: new("u2"), CreatedByName: "Ann", CreatedAt: created, UpdatedAt: created},
 	}}
-	actions := &undoActions{}
+	db, actions := undoStore(t)
 	d := Deps{Brand: brand, Actions: actions}
 	ctx, _ := turn(t, workspace, nil)
 
@@ -291,8 +297,6 @@ func TestFacts_UndoRemoveKeepsAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := pgtest.MustDB()
-	t.Cleanup(func() { _ = db.Close() })
 	if _, err := assistantundo.New(db, actions, nil).WithBrand(brand).Undo(ctx, removed.UndoID, "u1"); err != nil {
 		t.Fatal(err)
 	}
