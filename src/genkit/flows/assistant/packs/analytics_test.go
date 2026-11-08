@@ -205,6 +205,24 @@ func TestPostStats_DefaultsToThePostThread(t *testing.T) {
 	refused(t, err)
 	_, err = postStats(ctx, d, PostStatsInput{PostID: "draft"})
 	refused(t, err)
+
+	// With analytics configured, the post read is the thread's.
+	posts := &recordingPosts{}
+	_, err = postStats(postThread, Deps{Analytics: &analytics.Service{Repo: noAnalytics{}, Posts: posts}}, PostStatsInput{})
+	refused(t, err)
+	if !slices.Equal(posts.asked, []string{"p1"}) {
+		t.Fatalf("posts read = %v, want the thread's p1", posts.asked)
+	}
+}
+
+type recordingPosts struct {
+	repository.PostRepository
+	asked []string
+}
+
+func (r *recordingPosts) GetByID(_ context.Context, id string) (*models.Post, error) {
+	r.asked = append(r.asked, id)
+	return nil, sql.ErrNoRows
 }
 
 type memSettings struct{ repository.SettingRepository }
