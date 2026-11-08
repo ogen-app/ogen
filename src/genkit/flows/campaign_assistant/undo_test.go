@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
 
 type memActions struct {
@@ -145,6 +146,9 @@ func TestSetCampaignDates_IsUndoable(t *testing.T) {
 	}
 	if a.Before["endDate"] != "2026-01-30T00:00:00Z" || a.After["endDate"] != "2026-03-31T00:00:00Z" {
 		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
+	}
+	if want := assistantundo.CampaignDates(campaigns.c); !maps.Equal(a.After, want) {
+		t.Fatalf("logged after = %v, want the stored campaign's %v", a.After, want)
 	}
 }
 

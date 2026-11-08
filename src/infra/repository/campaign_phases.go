@@ -18,7 +18,7 @@ import (
 // hydrateTypeLocked sets PhasedPostCount / TypeLocked with one grouped query
 // over the batch: a campaign's type is locked once any of its posts is planned
 // against a phase.
-func (r *campaignRepository) hydrateTypeLocked(ctx context.Context, campaigns []models.Campaign) error {
+func hydrateTypeLocked(ctx context.Context, db bun.IDB, campaigns []models.Campaign) error {
 	if len(campaigns) == 0 {
 		return nil
 	}
@@ -30,7 +30,7 @@ func (r *campaignRepository) hydrateTypeLocked(ctx context.Context, campaigns []
 		CampaignID string `bun:"campaign_id"`
 		N          int    `bun:"n"`
 	}
-	err := r.db.NewSelect().
+	err := db.NewSelect().
 		Model((*models.Post)(nil)).
 		ColumnExpr("po.campaign_id AS campaign_id").
 		ColumnExpr("count(*) AS n").
