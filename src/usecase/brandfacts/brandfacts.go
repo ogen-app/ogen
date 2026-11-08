@@ -107,7 +107,7 @@ func (s *Service) update(ctx context.Context, id string, in Input, was *models.B
 	}
 	f.ID, f.UpdatedAt = id, s.now()
 	if was != nil {
-		before, err = s.repo.UpdateFactIf(ctx, f, was)
+		before, err = s.repo.UpdateFactIf(ctx, nil, f, was)
 	} else {
 		before, err = s.repo.UpdateFact(ctx, f)
 	}
