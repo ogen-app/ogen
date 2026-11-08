@@ -31,17 +31,16 @@ const maxTitle = 300
 
 // Input errors, all a 400.
 var (
-	ErrIdeaCount       = fmt.Errorf("pick between 1 and %d ideas", MaxIdeas)
-	ErrIdeaNotFound    = errors.New("one of the ideas does not exist")
-	ErrNoCampaign      = errors.New("the ideas are not in a campaign; pick the campaign for the post")
-	ErrMixedCampaigns  = errors.New("the ideas are in different campaigns; pick the campaign for the post")
-	ErrCampaignGone    = errors.New("campaign not found")
-	ErrNotTarget       = errors.New("that platform is not one of the campaign's platforms")
-	ErrPostType        = errors.New("the campaign doesn't use that post type on that platform")
-	ErrPostTypeAlone   = errors.New("a post type needs its platform")
-	ErrInvalidPhase    = errors.New("that phase is not one of the campaign's")
-	ErrTitleTooLong    = fmt.Errorf("the title is longer than %d characters", maxTitle)
-	errUnknownTargetID = errors.New("unknown platform")
+	ErrIdeaCount      = fmt.Errorf("pick between 1 and %d ideas", MaxIdeas)
+	ErrIdeaNotFound   = errors.New("one of the ideas does not exist")
+	ErrNoCampaign     = errors.New("the ideas are not in a campaign; pick the campaign for the post")
+	ErrMixedCampaigns = errors.New("the ideas are in different campaigns; pick the campaign for the post")
+	ErrCampaignGone   = errors.New("campaign not found")
+	ErrNotTarget      = errors.New("that platform is not one of the campaign's platforms")
+	ErrPostType       = errors.New("the campaign doesn't use that post type on that platform")
+	ErrPostTypeAlone  = errors.New("a post type needs its platform")
+	ErrInvalidPhase   = errors.New("that phase is not one of the campaign's")
+	ErrTitleTooLong   = fmt.Errorf("the title is longer than %d characters", maxTitle)
 )
 
 // IsValidation reports whether err is a 400-worthy input error.
@@ -102,7 +101,7 @@ func New(db *bun.DB, ideas repository.IdeaRepository, campaigns repository.Campa
 // ideas' source assets as its sources, and a link to each idea. The ideas are
 // left as they are; one idea can feed several posts.
 func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
-	ids := dedupe(in.IdeaIDs)
+	ids := dedupe(in.IdeaIDs, MaxIdeas)
 	if len(ids) == 0 || len(ids) > MaxIdeas {
 		return nil, ErrIdeaCount
 	}
@@ -164,7 +163,7 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 }
 
 // campaign resolves the post's campaign: the one asked for, else the one
-// every idea is in.
+// every idea in a campaign is in; an idea in no campaign goes along.
 func (s *Service) campaign(ctx context.Context, id string, ideas []models.Idea) (*models.Campaign, error) {
 	if id == "" {
 		for _, idea := range ideas {
@@ -203,17 +202,14 @@ func (s *Service) build(in Input, ideas []models.Idea, campaign *models.Campaign
 		}
 	}
 	platformID := cmp.Or(in.PlatformID, deref(plan.PlatformID))
-	postType := cmp.Or(in.PostType, deref(plan.PostType))
+	postType := in.PostType
 	// A suggested post type belongs to its suggested platform.
-	if in.PlatformID != "" && in.PostType == "" && in.PlatformID != deref(plan.PlatformID) {
-		postType = ""
+	if postType == "" && (in.PlatformID == "" || in.PlatformID == deref(plan.PlatformID)) {
+		postType = deref(plan.PostType)
 	}
-	if err := checkTarget(campaign, platformID, postType, in.PlatformID != "" || in.PostType != ""); err != nil {
-		if !errors.Is(err, errUnknownTargetID) {
-			return nil, err
-		}
-		// A stale suggestion is dropped, not refused.
-		platformID, postType = "", ""
+	platformID, postType, err := fitTarget(campaign, platformID, postType, in.PlatformID != "", in.PostType != "")
+	if err != nil {
+		return nil, err
 	}
 
 	id, err := models.NewID()
@@ -251,29 +247,32 @@ func (s *Service) build(in Input, ideas []models.Idea, campaign *models.Campaign
 	return post, nil
 }
 
-// checkTarget checks a platform and post type against the campaign's
-// targets. asked says the caller named them: a mismatch is then refused;
-// for a suggestion it is errUnknownTargetID, and the suggestion is dropped.
-func checkTarget(c *models.Campaign, platformID, postType string, asked bool) error {
-	if platformID == "" {
-		if postType != "" && asked {
-			return ErrPostTypeAlone
+// fitTarget checks a platform and post type against the campaign's targets,
+// each by whether the caller named it: a named one that doesn't fit is
+// refused, a suggested one is dropped. A post type left without a platform
+// is refused when named and dropped when suggested.
+func fitTarget(c *models.Campaign, platformID, postType string, askedPlatform, askedType bool) (string, string, error) {
+	if platformID != "" {
+		i := slices.IndexFunc(c.TargetPlatforms, func(p models.CampaignPlatform) bool { return p.ID == platformID })
+		switch {
+		case i < 0 && askedPlatform:
+			return "", "", ErrNotTarget
+		case i < 0:
+			platformID = ""
+		case postType != "" && len(c.TargetPlatforms[i].PostTypes) > 0 && !slices.Contains(c.TargetPlatforms[i].PostTypes, postType):
+			if askedType {
+				return "", "", ErrPostType
+			}
+			postType = ""
 		}
-		return nil
 	}
-	i := slices.IndexFunc(c.TargetPlatforms, func(p models.CampaignPlatform) bool { return p.ID == platformID })
-	switch {
-	case i < 0 && asked:
-		return ErrNotTarget
-	case i < 0:
-		return errUnknownTargetID
-	case postType != "" && len(c.TargetPlatforms[i].PostTypes) > 0 && !slices.Contains(c.TargetPlatforms[i].PostTypes, postType):
-		if asked {
-			return ErrPostType
+	if platformID == "" && postType != "" {
+		if askedType {
+			return "", "", ErrPostTypeAlone
 		}
-		return errUnknownTargetID
+		postType = ""
 	}
-	return nil
+	return platformID, postType, nil
 }
 
 // thesesNote writes each idea as one thesis: its title, then its angle (or
@@ -285,7 +284,7 @@ func thesesNote(post *models.Post, ideas []models.Idea, in Input) (*models.PostN
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "- **%s**", strings.TrimSpace(idea.Title))
-		body := strings.TrimSpace(cmp.Or(deref(idea.Angle), idea.Note))
+		body := cmp.Or(strings.TrimSpace(deref(idea.Angle)), strings.TrimSpace(idea.Note))
 		for line := range strings.SplitSeq(body, "\n") {
 			if line = strings.TrimSpace(line); line != "" {
 				fmt.Fprintf(&b, "\n  - %s", strings.TrimLeft(line, "-* "))
@@ -320,11 +319,15 @@ func sourceAssets(ideas []models.Idea) models.StringSlice {
 	return out
 }
 
-func dedupe(ids []string) []string {
+// dedupe trims ids and drops blanks and repeats, keeping the first of each.
+// It stops at limit+1 distinct ids: enough to tell the list is too long.
+func dedupe(ids []string, limit int) []string {
 	var out []string
 	for _, id := range ids {
 		if id = strings.TrimSpace(id); id != "" && !slices.Contains(out, id) {
-			out = append(out, id)
+			if out = append(out, id); len(out) > limit {
+				break
+			}
 		}
 	}
 	return out

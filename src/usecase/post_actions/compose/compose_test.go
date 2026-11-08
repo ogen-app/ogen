@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,18 @@ func TestBuild_PlanDefaultsAndOverrides(t *testing.T) {
 	if post, err = s.build(Input{}, []models.Idea{stale}, spring()); err != nil || post.PlatformID != "" {
 		t.Fatalf("stale suggestion: %+v, %v", post, err)
 	}
+	// A stale suggested type goes on its own: the platform stays, named or not.
+	staleType := idea("t", "c1", models.IdeaPlan{PlatformID: new("linkedin"), PostType: new("reel")})
+	for _, in := range []Input{{}, {PlatformID: "linkedin"}} {
+		if post, err = s.build(in, []models.Idea{staleType}, spring()); err != nil || post.PlatformID != "linkedin" || post.PlatformPostType != "" {
+			t.Fatalf("stale type, platform %q: %+v, %v", in.PlatformID, post, err)
+		}
+	}
+	// A suggested type without a platform is dropped.
+	typeOnly := idea("o", "c1", models.IdeaPlan{PostType: new("carousel")})
+	if post, err = s.build(Input{}, []models.Idea{typeOnly}, spring()); err != nil || post.PlatformID != "" || post.PlatformPostType != "" {
+		t.Fatalf("type-only suggestion: %+v, %v", post, err)
+	}
 	for name, tc := range map[string]struct {
 		in   Input
 		want error
@@ -119,10 +132,10 @@ func TestBuild_PlanDefaultsAndOverrides(t *testing.T) {
 }
 
 func TestThesesNote(t *testing.T) {
-	angle := "Most buyers overpay\n- by a third"
+	angle, blank := "Most buyers overpay\n- by a third", " \n "
 	ideas := []models.Idea{
 		{ID: "a", Title: "Pricing myths", Angle: &angle, Note: "ignored"},
-		{ID: "b", Title: "Founder story", Note: "How it started"},
+		{ID: "b", Title: "Founder story", Angle: &blank, Note: "How it started"},
 		{ID: "c", Title: "Bare"},
 	}
 	post := &models.Post{ID: "p1", CreatedAt: time.Now()}
@@ -149,5 +162,19 @@ func TestCompile_RefusesBeforeWriting(t *testing.T) {
 		if _, err := s.Compile(t.Context(), Input{IdeaIDs: ids}); !errors.Is(err, ErrIdeaCount) {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+// dedupe stops one past the limit, however long the list.
+func TestDedupe_StopsPastTheLimit(t *testing.T) {
+	ids := make([]string, 1000)
+	for i := range ids {
+		ids[i] = strconv.Itoa(i)
+	}
+	if got := dedupe(ids, MaxIdeas); len(got) != MaxIdeas+1 {
+		t.Fatalf("dedupe kept %d ids, want %d", len(got), MaxIdeas+1)
+	}
+	if got := dedupe([]string{" a", "b", "a ", "", "b"}, MaxIdeas); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("dedupe = %v", got)
 	}
 }
