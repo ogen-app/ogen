@@ -141,7 +141,7 @@ var _ = Describe("AssetAnalysesHandler", Ordered, func() {
 		auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 		handlers.NewSessionsHandler(userRepo, accountRepo, sessionRepo, testCookieName, false, nil).Register(app)
 		handlers.NewTenantsHandler(signup.New(db, accountRepo, tenantRepo), tenantRepo, testCookieName, false, auth, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{Analysis: triggers}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{Analysis: triggers}).Register(app)
 		handlers.NewIdeasHandler(ideas.New(ideaRepo, userRepo), auth, nil).Register(app)
 		handlers.NewAssetAnalysesHandler(analyses, ideaRepo, assetRepo, campaignRepo, retries, auth).Register(app)
 		handlers.NewAssetsHandler(assetRepo, fileRepo, repository.NewAssetImageRepository(db), nil, db, nil, nil, nil, nil, nil, auth, nil,

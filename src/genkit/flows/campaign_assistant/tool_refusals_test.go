@@ -20,7 +20,7 @@ import (
 // decodes its outcome.
 func runTool(t *testing.T, st *requestState, name string, input map[string]any) assistantkit.Outcome[json.RawMessage] {
 	t.Helper()
-	raw, err := runToolRaw(t, toolCtx(t, st), name, input)
+	raw, err := runToolRaw(t, st.bind(t.Context()), name, input)
 	if err != nil {
 		t.Fatalf("%s returned an error, want an outcome: %v", name, err)
 	}
@@ -30,12 +30,6 @@ func runTool(t *testing.T, st *requestState, name string, input map[string]any) 
 		t.Fatalf("decode %s outcome %s: %v", name, b, err)
 	}
 	return out
-}
-
-// toolCtx is a turn's context for st, with the campaign assistant's
-// proposal sink.
-func toolCtx(t *testing.T, st *requestState) context.Context {
-	return assistantkit.WithProposalSink(withRequestState(t.Context(), st), campaignSink{st: st})
 }
 
 // runToolRaw calls a registered tool as genkit does, with ctx, and returns
@@ -93,7 +87,7 @@ func TestToolRefusals_SubFlowValidationErrors(t *testing.T) {
 			// Run as a confirmed call, so runContentPlan, always offered first,
 			// reaches its flow.
 			run := func(st *requestState) (any, error) {
-				return runToolRaw(t, assistantkit.WithConfirmed(toolCtx(t, st)), tc.tool, map[string]any{})
+				return runToolRaw(t, assistantkit.WithConfirmed(st.bind(t.Context())), tc.tool, map[string]any{})
 			}
 			raw, err := run(tc.state(fmt.Errorf("flow: %w", tc.err)))
 			if err != nil {

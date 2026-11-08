@@ -126,7 +126,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 		postLogRepo := repository.NewPostLogRepository(db)
 		withdrawals = &recordedWithdrawals{}
 		withdrawSvc := withdraw.New(db, postRepo, campaignRepo, postLogRepo, withdrawals)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{Withdraw: withdrawSvc}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{Withdraw: withdrawSvc}).Register(app)
 		handlers.NewAssetsHandler(pieceRepo, repository.NewAssetFileRepository(db), nil, nil, nil, nil, nil, nil, nil, nil, auth, nil, handlers.AssetsOptions{}).Register(app)
 		// Wire the audit log so transition tests can read it back.
 		ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{PostLogs: postLogRepo, Withdraw: withdrawSvc})
@@ -1607,7 +1607,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 				handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(stubApp)
 				handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(stubApp)
-				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(stubApp)
+				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(stubApp)
 				ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{})
 				ph.Register(stubApp)
 				// POST /:id/assess now lives on the insights handler.
@@ -1813,7 +1813,7 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				auth := handlers.RequireAuth(sessionRepo, userRepo, testCookieName)
 				handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(readApp)
 				handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, testCookieName, false, nil).Register(readApp)
-				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(readApp)
+				handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(readApp)
 				ph := handlers.NewPostsHandler(postRepo, postVersionRepo, repository.NewPlatformRepository(db), repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{})
 				ph.Register(readApp)
 				// GET /:id/assessment now lives on the insights handler.
