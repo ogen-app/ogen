@@ -28,6 +28,7 @@ const (
 	TierProposal Tier = "proposal"
 )
 
+// valid reports whether t is one of the declared tiers.
 func (t Tier) valid() bool {
 	switch t {
 	case TierRead, TierReversible, TierProposal:
@@ -86,6 +87,8 @@ func toolName(t ai.ToolRef) (name string, ok bool) {
 	return t.Name(), true
 }
 
+// validate reports every missing or inconsistent field of the spec at once,
+// prefixed with the tool's name.
 func (s Spec) validate() error {
 	var errs []error
 	if s.Name == "" {
