@@ -245,6 +245,33 @@ func TestRun_PackBeginsAndEnds(t *testing.T) {
 	}
 }
 
+func TestTurn_Subject(t *testing.T) {
+	post := models.AssistantScopePost
+	thread := viewOf(t, `{"version":1,"screen":"post","scope":{"kind":"post","id":"p1"}}`)
+	focused := func(id string) *viewresolve.Resolved {
+		v := viewOf(t, `{"version":1,"screen":"post","scope":{"kind":"post","id":"p1"}}`)
+		v.Focus = &viewresolve.Item{Kind: viewcontext.KindPost, ID: id}
+		return v
+	}
+	workspace := viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`)
+	workspace.Focus = &viewresolve.Item{Kind: viewcontext.KindPost, ID: "p2"}
+	for _, tc := range []struct {
+		name string
+		turn Turn
+		want string
+	}{
+		{"the thread's", Turn{View: thread}, "p1"},
+		{"the thread's, in focus", Turn{View: focused("p1")}, "p1"},
+		{"another in focus is ambiguous", Turn{View: focused("p2")}, ""},
+		{"an offer names its own", Turn{View: focused("p2"), Args: map[string]any{"postId": "p3"}}, "p3"},
+		{"the focus off its thread", Turn{View: workspace}, "p2"},
+	} {
+		if got := tc.turn.Subject(post); got != tc.want {
+			t.Errorf("%s: Subject = %q; want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // proposalsHarness is newHarness with offers stored in store, so the
 // confirmOffer and dismissOffer tools are defined.
 func proposalsHarness(t *testing.T, store *memProposals, packs ...Pack) *harness {
