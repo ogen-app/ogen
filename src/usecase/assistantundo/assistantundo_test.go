@@ -376,6 +376,39 @@ func TestUndo_PlatformsRefuseWhenChangedSince(t *testing.T) {
 	}
 }
 
+// failingUpdate writes the columns, then fails, as a dropped connection would.
+type failingUpdate struct {
+	repository.CampaignRepository
+}
+
+func (r failingUpdate) UpdateColumns(ctx context.Context, db bun.IDB, c *models.Campaign, columns ...string) error {
+	if err := r.CampaignRepository.UpdateColumns(ctx, db, c, columns...); err != nil {
+		return err
+	}
+	return errors.New("connection lost")
+}
+
+// A restore that fails after its write is rolled back with the record.
+func TestUndo_FailedRestoreRollsBack(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.Description = "old" })
+	id := f.logChange(t, models.AssistantActionCampaignBrief, assistantundo.CampaignBrief, func(c *models.Campaign) {
+		c.Description = "assistant"
+	})
+
+	svc := assistantundo.New(f.db, f.actions, failingUpdate{f.campaigns})
+	if _, err := svc.Undo(f.ctx, id, "user-1"); err == nil {
+		t.Fatal("undo succeeded with a failed restore")
+	}
+	if got := f.load(t).Description; got != "assistant" {
+		t.Fatalf("description = %q, the failed restore was kept", got)
+	}
+	a, err := f.actions.GetByID(f.ctx, id)
+	if err != nil || a.UndoneAt != nil || a.UndoneBy != "" {
+		t.Fatalf("action = %+v, %v; want it still undoable", a, err)
+	}
+}
+
 // An undo holds one connection: on a pool of one it still completes.
 func TestUndo_RunsOnItsTransactionAlone(t *testing.T) {
 	f := newFixture(t)
@@ -395,6 +428,68 @@ func TestUndo_RunsOnItsTransactionAlone(t *testing.T) {
 	}
 	if got := f.load(t).EndDate; !got.Equal(*day("2026-06-30")) {
 		t.Fatalf("end = %v, want 2026-06-30", got)
+	}
+}
+
+// A manual-plan edit takes the campaign's row lock before the plan's rows,
+// as a date undo does, so the two queue instead of deadlocking.
+func TestReplacePhaseWindows_LocksTheCampaignFirst(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.StartDate, c.EndDate = day("2026-06-01"), day("2026-06-30") })
+	plan := func() []models.CampaignPhaseWindow {
+		return []models.CampaignPhaseWindow{
+			{PhaseID: "98", StartDate: *day("2026-06-01"), EndDate: *day("2026-06-15")},
+			{PhaseID: "xh", StartDate: *day("2026-06-16"), EndDate: *day("2026-06-30")},
+		}
+	}
+	if err := f.campaigns.ReplacePhaseWindows(f.ctx, "c1", plan()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The undo's lock.
+	undo, err := f.db.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = undo.Rollback() }()
+	if _, err := f.campaigns.GetForUpdate(f.ctx, undo, "c1"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.campaigns.ReplacePhaseWindows(f.ctx, "c1", plan()) }()
+
+	// Wait for the edit to block on a lock.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := f.db.NewRaw("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'").
+			Scan(f.ctx, &waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("the edit ran while the campaign was locked: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the edit never waited for the campaign's lock")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// It holds none of the plan's rows while it waits.
+	var ids []string
+	if err := f.db.NewRaw("SELECT phase_id FROM campaign_phase_windows WHERE campaign_id = ? FOR UPDATE NOWAIT", "c1").
+		Scan(f.ctx, &ids); err != nil {
+		t.Fatalf("the waiting edit holds the plan's rows: %v", err)
+	}
+	if err := undo.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
