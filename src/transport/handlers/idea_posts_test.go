@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,9 +151,17 @@ func TestDraftIdeas(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	names := eventNames(body)
-	if strings.Join(names, ",") != "post,complete" {
-		t.Fatalf("events = %v", names)
+	frames := parseSSEStream(strings.NewReader(body))
+	if len(frames) != 2 || frames[0].event != "post" || frames[1].event != "complete" {
+		t.Fatalf("events = %+v", frames)
+	}
+	var post compose.DraftedPost
+	if err := json.Unmarshal([]byte(frames[0].data), &post); err != nil || post.PostID != "p1" || !slices.Equal(post.IdeaIDs, []string{"i1"}) {
+		t.Fatalf("post event = %s (%v)", frames[0].data, err)
+	}
+	var done compose.DraftResult
+	if err := json.Unmarshal([]byte(frames[1].data), &done); err != nil || len(done.Posts) != 1 || done.Posts[0].PostID != "p1" {
+		t.Fatalf("complete event = %s (%v)", frames[1].data, err)
 	}
 	if !drafts.got.Together || drafts.got.Instruction != "punchier" || drafts.got.Actor != "user-1" || drafts.max != 5 {
 		t.Fatalf("input = %+v, max %d", drafts.got, drafts.max)
@@ -166,8 +175,16 @@ func TestDraftIdeas(t *testing.T) {
 	// A writer failure ends the stream with an error, after what was written.
 	drafts.planErr, drafts.runErr = nil, errors.New("writer down")
 	_, body = call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`)
-	if names := eventNames(body); strings.Join(names, ",") != "post,error" {
-		t.Fatalf("events = %v", names)
+	frames = parseSSEStream(strings.NewReader(body))
+	if len(frames) != 2 || frames[0].event != "post" || frames[1].event != "error" {
+		t.Fatalf("events = %+v", frames)
+	}
+	var failed struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(frames[1].data), &failed); err != nil || failed.Code != 500 || failed.Message != "writer down" {
+		t.Fatalf("error event = %s (%v)", frames[1].data, err)
 	}
 	up = false
 	if status, _ := call(t, app, "POST", "/api/ideas/draft", `{"idea_ids":["i1"]}`); status != 503 {
@@ -189,15 +206,4 @@ func TestIdeaPostLinks(t *testing.T) {
 	if status, _ := call(t, app, "GET", "/api/posts/nope/ideas", ""); status != 404 {
 		t.Fatalf("unknown post = %d", status)
 	}
-}
-
-// eventNames lists the "event:" names of an SSE body, in order.
-func eventNames(body string) []string {
-	var out []string
-	for line := range strings.SplitSeq(body, "\n") {
-		if v, ok := strings.CutPrefix(line, "event: "); ok {
-			out = append(out, v)
-		}
-	}
-	return out
 }

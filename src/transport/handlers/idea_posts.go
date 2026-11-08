@@ -217,15 +217,33 @@ func (h *IdeaPostsHandler) Draft(c *fiber.Ctx) error {
 		}
 		return err
 	}
-	h.activity.Record(reqCtx(c), activity.CategoryIdea, "ideas_drafted",
-		activity.WithSource(activity.SourceAPI),
-		activity.WithPayload(map[string]any{"idea_ids": req.IdeaIDs, "posts": len(plan.Jobs)}),
-	)
-
-	drafts := h.drafts
+	drafts, rec := h.drafts, h.activity
 	flowCtx := detachedContext(c, session.TenantID)
+	// Captured now: the stream writer runs after the request context is
+	// recycled, so the activity record can't read the actor from it.
+	actor := session.UserID
+	ideaIDs := make([]string, len(plan.Ideas))
+	for i, idea := range plan.Ideas {
+		ideaIDs[i] = idea.ID
+	}
 	streamFlow(c, func(emit sseEmit) {
 		res, err := drafts.RunDraft(flowCtx, plan, func(p compose.DraftedPost) { emit(ideaDraftEventPost, p) })
+		// What was written, which a writer failure or a dropped draft leaves
+		// short of the plan.
+		var written int
+		if res != nil {
+			written = len(res.Posts)
+		}
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
+		rec.Record(flowCtx, activity.CategoryIdea, "ideas_drafted",
+			activity.WithUser(actor),
+			activity.WithSource(activity.SourceAPI),
+			activity.WithStatus(status),
+			activity.WithPayload(map[string]any{"idea_ids": ideaIDs, "planned": len(plan.Jobs), "posts": written}),
+		)
 		if err != nil {
 			emit(ideaDraftEventError, flowError[*draft_post.ValidationError, *draft_post.AIError](err))
 			return
