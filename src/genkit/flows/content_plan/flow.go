@@ -268,10 +268,8 @@ func runContentPlan(
 	finaliseTenantID = campaign.TenantID
 	slog.InfoContext(ctx, "validateInput done", logging.AttrComponent, "genkit.content_plan", "campaign_id", req.CampaignID, "campaign", campaign.Name, "platforms", len(campaign.TargetPlatforms))
 	emit(onEvent, SSEEventStep, StepEventPayload{Step: "validateInput", Status: "done"})
-	if len(req.AssetIDs) > 0 {
-		if campaign, err = limitAssets(campaign, req.AssetIDs); err != nil {
-			return nil, err
-		}
+	if campaign, err = limitAssets(ctx, campaign, req.AssetIDs); err != nil {
+		return nil, err
 	}
 
 	// Platform resolution doesn't depend on the assets, so it runs while
@@ -402,12 +400,8 @@ func runGeneratePosts(
 		return nil, &ValidationError{Msg: "windowEnd must be on or after windowStart"}
 	}
 
-	if len(req.AssetIDs) > 0 {
-		limited, err := limitAssets(campaign, req.AssetIDs)
-		if err != nil {
-			return nil, err
-		}
-		campaign = limited
+	if campaign, err = limitAssets(ctx, campaign, req.AssetIDs); err != nil {
+		return nil, err
 	}
 	assets, assetWarnings, err := resolveAssets(ctx, campaign, cfg, repos)
 	if err != nil {
@@ -449,8 +443,12 @@ func runGeneratePosts(
 
 // limitAssets returns a copy of campaign drawing only on ids of its assets:
 // the user's "use only these". Asking for sources means using them, so the
-// copy uses assets even when the campaign doesn't by default.
-func limitAssets(campaign *models.Campaign, ids []string) (*models.Campaign, error) {
+// copy uses assets even when the campaign doesn't by default. No ids, or a
+// run that leaves the assets out, keeps the campaign as it is.
+func limitAssets(ctx context.Context, campaign *models.Campaign, ids []string) (*models.Campaign, error) {
+	if len(ids) == 0 || AssetsExcluded(ctx) {
+		return campaign, nil
+	}
 	keep := models.StringSlice{}
 	for _, id := range campaign.AssetIDs {
 		if slices.Contains(ids, id) {
