@@ -3,6 +3,7 @@ package repository_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -86,5 +87,32 @@ func TestBrandFacts_RestoreKeepsAuthor(t *testing.T) {
 	again.Statement = "NPS is 70"
 	if err := repo.RestoreFact(ctx, nil, &again); !errors.Is(err, repository.ErrFactChanged) {
 		t.Fatalf("restore over a stored fact: err = %v, want ErrFactChanged", err)
+	}
+}
+
+// On a full ledger, a restore over a stored id is still a change since, and
+// a restore of a new one is the limit.
+func TestBrandFacts_RestoreOnAFullLedger(t *testing.T) {
+	db := openMigratedDB(t)
+	repo := repository.NewBrandRepository(db)
+	ctx := tenantctx.With(t.Context(), "tenant-facts-full")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	facts := make([]models.BrandFact, repository.MaxBrandFacts)
+	for i := range facts {
+		facts[i] = models.BrandFact{ID: fmt.Sprintf("fact-full-%d", i), Statement: fmt.Sprintf("Fact %d", i),
+			Subject: models.FactSubjectUs, Kind: models.FactKindDocumented, CreatedAt: now, UpdatedAt: now}
+	}
+	if _, err := db.NewInsert().Model(&facts).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	again := facts[0]
+	if err := repo.RestoreFact(ctx, nil, &again); !errors.Is(err, repository.ErrFactChanged) {
+		t.Fatalf("restore over a stored fact: err = %v, want ErrFactChanged", err)
+	}
+	fresh := models.BrandFact{ID: "fact-full-new", Statement: "One more", Subject: models.FactSubjectUs,
+		Kind: models.FactKindDocumented, CreatedAt: now, UpdatedAt: now}
+	if err := repo.RestoreFact(ctx, nil, &fresh); !errors.Is(err, repository.ErrFactLimit) {
+		t.Fatalf("restore a new fact: err = %v, want ErrFactLimit", err)
 	}
 }
