@@ -145,25 +145,9 @@ type Config struct {
 	// Each call clamps this to its model's max output (64K on Claude 4.x,
 	// 128K on 5.x), so tiers on either family share one setting. Anthropic
 	// charges only for tokens actually emitted, so a generous cap costs nothing
-	// on short responses but prevents truncation on long rewrites (assistant
-	// flow with explanation + full post content + tool inputs combined).
+	// on short responses but prevents truncation on long rewrites (the post
+	// pack's writer returns the full post).
 	MaxOutputTokens int64 `envconfig:"MAX_OUTPUT_TOKENS"     default:"64000"`
-
-	// PostAssistantPlanner enables the hybrid model split for the
-	// Post Assistant: the orchestration/routing loop runs on the cheap planner
-	// slot while the actual copywriting is delegated to the writer slot's
-	// editPost write-tool. Default on. Set to false to force the whole
-	// assistant back onto the proven single-model path (loop on the writer
-	// slot, no editPost tool, inline content) — the instant rollback lever if
-	// planner routing regresses.
-	PostAssistantPlanner bool `envconfig:"POST_ASSISTANT_PLANNER" default:"true"`
-
-	// PostAssistantPlannerMaxOutputTokens caps the planner turn's output.
-	// The planner only emits a short envelope (explanation + action
-	// + saveVersion + versionNote) plus tool inputs, so a small cap is plenty;
-	// the full post is produced by the writer sub-call under MaxOutputTokens.
-	// 0 falls back to a sensible default (8192).
-	PostAssistantPlannerMaxOutputTokens int64 `envconfig:"POST_ASSISTANT_PLANNER_MAX_OUTPUT_TOKENS" default:"8192"`
 
 	// Content-plan batching. The flow generates posts in K-sized batches in
 	// parallel; the defaults are sized so a 64K-output Sonnet call comfortably
