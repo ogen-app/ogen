@@ -197,8 +197,8 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	if err := t.resolve(ctx, st, p.ID, models.ProposalConfirmed, in.OptionID); err != nil {
-		release()
 		return nil, err
 	}
 	return t.reg.RunConfirmed(ctx, tool, map[string]any(args))
