@@ -24,6 +24,9 @@ type DraftPostRequest struct {
 	WindowEnd      string   `json:"windowEnd"`      // ISO YYYY-MM-DD (inclusive)
 	PhaseID        string   `json:"phaseId"`        // a single campaign phase id
 	UsedAssetIDs   []string `json:"usedAssetIds"`   // asset ids stamped on each created post for provenance (may be empty)
+	// CreatedBy is the user the posts and source notes are attributed to;
+	// empty attributes them to the campaign's creator.
+	CreatedBy string `json:"createdBy,omitempty"`
 }
 
 // DraftedPost is one finished post draft produced + persisted by the flow.
