@@ -83,7 +83,7 @@ func (r *campaignTypeRepository) List(ctx context.Context) ([]models.CampaignTyp
 	if err := q.OrderExpr("ct.name ASC").Scan(ctx); err != nil {
 		return nil, err
 	}
-	if err := r.hydratePhases(ctx, types); err != nil {
+	if err := hydratePhases(ctx, r.db, types); err != nil {
 		return nil, err
 	}
 	return types, nil
@@ -102,25 +102,30 @@ func (r *campaignTypeRepository) GetByID(ctx context.Context, id string) (*model
 		return nil, err
 	}
 	types := []models.CampaignType{*ct}
-	if err := r.hydratePhases(ctx, types); err != nil {
+	if err := hydratePhases(ctx, r.db, types); err != nil {
 		return nil, err
 	}
 	return &types[0], nil
 }
 
 func (r *campaignTypeRepository) GetByIDs(ctx context.Context, ids []string) (map[string]*models.CampaignType, error) {
+	return campaignTypesByIDs(ctx, r.db, ids)
+}
+
+// campaignTypesByIDs is GetByIDs on db.
+func campaignTypesByIDs(ctx context.Context, db bun.IDB, ids []string) (map[string]*models.CampaignType, error) {
 	if len(ids) == 0 {
 		return map[string]*models.CampaignType{}, nil
 	}
 	var types []models.CampaignType
-	q, err := visibleTypes(ctx, r.db.NewSelect().Model(&types).Where("ct.id IN (?)", bun.List(ids)), "ct.tenant_id")
+	q, err := visibleTypes(ctx, db.NewSelect().Model(&types).Where("ct.id IN (?)", bun.List(ids)), "ct.tenant_id")
 	if err != nil {
 		return nil, err
 	}
 	if err := q.Scan(ctx); err != nil {
 		return nil, err
 	}
-	if err := r.hydratePhases(ctx, types); err != nil {
+	if err := hydratePhases(ctx, db, types); err != nil {
 		return nil, err
 	}
 	byID := make(map[string]*models.CampaignType, len(types))
@@ -245,7 +250,7 @@ func (r *campaignTypeRepository) DeletePhase(ctx context.Context, id string) (bo
 	return n > 0, nil
 }
 
-func (r *campaignTypeRepository) hydratePhases(ctx context.Context, types []models.CampaignType) error {
+func hydratePhases(ctx context.Context, db bun.IDB, types []models.CampaignType) error {
 	for i := range types {
 		types[i].Phases = []models.CampaignTypePhase{}
 	}
@@ -259,7 +264,7 @@ func (r *campaignTypeRepository) hydratePhases(ctx context.Context, types []mode
 	}
 
 	var phases []models.CampaignTypePhase
-	if err := r.db.NewSelect().
+	if err := db.NewSelect().
 		Model(&phases).
 		Where("ctp.campaign_type_id IN (?)", bun.List(ids)).
 		OrderExpr("ctp.sequence ASC").
