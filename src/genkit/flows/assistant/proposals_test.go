@@ -236,6 +236,41 @@ func TestProposals_AnswerFromTheCard(t *testing.T) {
 	}
 }
 
+// Past the spend cap, a card's yes is refused for work that spends and the
+// offer stays open; work that makes no model call still runs.
+func TestProposals_AnswerFromTheCardPastTheSpendCap(t *testing.T) {
+	ran, freeRan := new(int), 0
+	free := Pack{
+		Name: "free", Summary: "free things", Scopes: []models.AssistantScopeKind{models.AssistantScopeWorkspace},
+		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
+			tool := genkit.DefineTool(g, "freeThing", "Does a free thing.",
+				assistantkit.Gated("freeThing", assistantkit.Gate[struct{}]{}, assistantkit.Wrap(func(context.Context, struct{}) (string, error) {
+					freeRan++
+					return "done", nil
+				})))
+			return []assistantkit.Spec{{Name: tool.Name(), Pack: "free", Scopes: allScopes, Tier: assistantkit.TierProposal, Guide: "Does a free thing.", Tool: tool, Free: true}}, nil
+		},
+	}
+	store := &memProposals{}
+	h := proposalsHarness(t, store, bulkPack(ran), free)
+	capped := errors.New("spend cap reached")
+	h.tools.enforce = func(context.Context) error { return capped }
+	future := time.Now().Add(time.Hour)
+	store.rows = []*models.AssistantProposal{
+		{ID: "spends", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(4)}, Summary: "Do 4 things", Status: models.ProposalPending, ExpiresAt: future},
+		{ID: "free", ScopeKind: models.AssistantScopeWorkspace, Tool: "freeThing", Args: models.JSONMap{}, Summary: "Do a free thing", Status: models.ProposalPending, ExpiresAt: future},
+	}
+	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "spends", Confirm: true}, nil); !errors.Is(err, capped) || *ran != 0 || store.rows[0].Status != models.ProposalPending {
+		t.Fatalf("err = %v, ran = %d, status = %s; want the cap, unrun and open", err, *ran, store.rows[0].Status)
+	}
+	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "free", Confirm: true}, nil); err != nil || freeRan != 1 {
+		t.Fatalf("err = %v, ran = %d; want the free offer run", err, freeRan)
+	}
+	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "spends"}, nil); err != nil || store.rows[0].Status != models.ProposalDismissed {
+		t.Fatalf("dismiss: err = %v, status = %s", err, store.rows[0].Status)
+	}
+}
+
 // A confirmed offer whose answer can't be stored still completes, marked
 // unsaved: its work has run.
 func TestProposals_AnswerFromTheCardUnsaved(t *testing.T) {
