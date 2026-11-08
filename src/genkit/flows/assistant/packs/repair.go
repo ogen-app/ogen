@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/campaignphase"
@@ -39,24 +40,24 @@ func repairPack(d Deps) assistant.Pack {
 				"Checks a campaign's calendar: posts outside its dates or on days it doesn't publish, crowded days, long silences, and posts due soon that aren't written or ready. Each finding comes with its fixes, offered for the user to confirm.",
 				assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*CheckCalendarOutput, error) {
 					return checkCalendar(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			optimise := genkit.DefineTool(g, "optimiseCalendar",
 				"Works out how to even a campaign's movable posts (planned, draft, ready) out over its dates, phase by phase, and offers the moves for the user to confirm, with each post's old and new date.",
 				assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*OptimiseOutput, error) {
 					return optimiseCalendar(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			apply := genkit.DefineTool(g, "applyCalendarMoves",
 				"Moves posts to new dates exactly as offered. Only runs once the user confirmed the offer.",
 				assistantkit.Gated("applyCalendarMoves", assistantkit.Gate[ApplyMovesInput]{
 					Summary: func(in ApplyMovesInput) string { return fmt.Sprintf("Move %s", plural(len(in.Moves), "post", "posts")) },
 				}, assistantkit.Wrap(func(ctx context.Context, in ApplyMovesInput) (*ApplyMovesOutput, error) {
 					return applyMoves(ctx, d, in)
-				})))
+				})), ai.WithStrictSchema(false))
 			dismiss := genkit.DefineTool(g, "dismissFinding",
 				"Dismisses a finding the user is fine with, so checks of this thread stop raising it while its posts stay the same.",
 				assistantkit.Wrap(func(ctx context.Context, in DismissFindingInput) (*DismissFindingOutput, error) {
 					return dismissFinding(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(repairPackName, check, assistantkit.TierRead,
 					`Call this when the user asks what's wrong with the calendar or plan, or to check it — "anything I should fix?", "is the calendar ok?". Relay the findings in order and offer their fixes, which are already offered (proposalId) or are a post to open (navigate to it). Don't fix anything they didn't pick.`),
@@ -70,7 +71,7 @@ func repairPack(d Deps) assistant.Pack {
 			if d.CheckBrief != nil && d.CheckPosts != nil {
 				review := genkit.DefineTool(g, "reviewCampaign",
 					"Reviews a campaign's brief for consistency and completeness, and its unpublished posts against the brief, and offers a fix for each finding.",
-					assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*ReviewOutput, error) { return reviewCampaign(ctx, d, in) }))
+					assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*ReviewOutput, error) { return reviewCampaign(ctx, d, in) }), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, review, assistantkit.TierRead,
 					`Call this when the user asks whether the brief holds up or the posts follow it, or for a full review. Relay the findings with their fixes: a brief finding's fix improves the brief (offered), a post's opens the post.`))
 			}
