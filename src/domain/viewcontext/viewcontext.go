@@ -120,8 +120,10 @@ type InvalidError struct {
 	Reason string
 }
 
+// Error names the field and why it was rejected.
 func (e *InvalidError) Error() string { return fmt.Sprintf("viewContext.%s: %s", e.Field, e.Reason) }
 
+// invalid returns an InvalidError for field with a formatted reason.
 func invalid(field, format string, args ...any) error {
 	return &InvalidError{Field: field, Reason: fmt.Sprintf(format, args...)}
 }
@@ -178,6 +180,8 @@ func (v *ViewContext) Validate() error {
 	return v.Visible.validate()
 }
 
+// validate checks the scope kind, and that the id is set exactly when the
+// scope needs one.
 func (s Scope) validate() error {
 	switch s.Kind {
 	case models.AssistantScopeWorkspace:
@@ -191,6 +195,8 @@ func (s Scope) validate() error {
 	return invalid("scope.kind", "unknown scope %q", s.Kind)
 }
 
+// validate checks a selection, when there is one: a known kind and either
+// ids within the limit or allMatching.
 func (s *Selection) validate() error {
 	if s == nil {
 		return nil
@@ -210,6 +216,8 @@ func (s *Selection) validate() error {
 	return checkIDs("selection.ids", s.IDs)
 }
 
+// validate checks a window, when there is one: ISO dates in order and a
+// bounded platform list.
 func (w *Window) validate() error {
 	if w == nil {
 		return nil
@@ -235,6 +243,8 @@ func (w *Window) validate() error {
 	return checkIDs("window.platforms", w.Platforms)
 }
 
+// validate checks the visible items, when there are any: a known kind and
+// ids within the limit.
 func (v *Visible) validate() error {
 	if v == nil {
 		return nil
@@ -248,6 +258,7 @@ func (v *Visible) validate() error {
 	return checkIDs("visible.ids", v.IDs)
 }
 
+// checkKind rejects an entity kind this server does not know.
 func checkKind(field string, k EntityKind) error {
 	if !slices.Contains(kinds, k) {
 		return invalid(field, "unknown kind %q", k)
@@ -255,6 +266,7 @@ func checkKind(field string, k EntityKind) error {
 	return nil
 }
 
+// checkID rejects a blank or oversized id.
 func checkID(field, id string) error {
 	if id == "" {
 		return invalid(field, "is required")
@@ -265,6 +277,7 @@ func checkID(field, id string) error {
 	return nil
 }
 
+// checkIDs runs checkID on each id, naming the bad one by its index.
 func checkIDs(field string, ids []string) error {
 	for i, id := range ids {
 		if err := checkID(fmt.Sprintf("%s[%d]", field, i), id); err != nil {
@@ -284,6 +297,7 @@ func (v *ViewContext) normalize() {
 	}
 }
 
+// dedupe drops repeated ids in place, keeping the first of each.
 func dedupe(ids []string) []string {
 	seen := make(map[string]bool, len(ids))
 	out := ids[:0]
