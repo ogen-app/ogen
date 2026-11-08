@@ -304,6 +304,12 @@ func spec(tool ai.ToolRef, tier assistantkit.Tier, guide string) assistantkit.Sp
 	return assistantkit.Spec{Name: tool.Name(), Pack: PackName, Scopes: postScope, Tier: tier, Guide: guide, Tool: tool}
 }
 
+// free marks a proposal-tier spec as making no model call once confirmed.
+func free(s assistantkit.Spec) assistantkit.Spec {
+	s.Free = true
+	return s
+}
+
 // scheduleGate offers every schedule for the user's yes, with the resolved
 // time on the card.
 var scheduleGate = assistantkit.Gate[SchedulePostInput]{
@@ -357,12 +363,12 @@ func defineTools(g *genkit.Genkit) []assistantkit.Spec {
 				"Non-destructive: it saves a new version, so nothing is lost.",
 			assistantkit.Wrap(toolRestoreVersion)), assistantkit.TierReversible,
 			`Call this for "restore version N", "undo the last change", "go back". Use the numbers under "Version history" in <post>, or relative "previous". When there is nothing to restore it is refused: relay that, don't guess another number.`),
-		spec(genkit.DefineTool(g, "schedulePost",
+		free(spec(genkit.DefineTool(g, "schedulePost",
 			"Schedules the post for publishing at an absolute time. Pass scheduledAt as "+
 				"ISO-8601 with a timezone offset; set allowPromote:true when the post is a draft. "+
 				"It is offered for the user to confirm before it runs.",
 			assistantkit.Gated("schedulePost", scheduleGate, assistantkit.Wrap(toolSchedulePost))), assistantkit.TierProposal,
-			`Call this for "schedule this for tomorrow at 9am", "publish next Monday". Resolve the time against the scheduling context in <post> (its timezone and defaults: morning 09:00, afternoon 14:00, evening 18:00) and pass it with its offset; set allowPromote when the post is a draft that passes validation. The schedule is offered for the user's yes: tell them the absolute time and whether it auto-publishes or waits for manual publishing. If the readiness summary says the post can't be published, don't call it; tell the user what to fix.`),
+			`Call this for "schedule this for tomorrow at 9am", "publish next Monday". Resolve the time against the scheduling context in <post> (its timezone and defaults: morning 09:00, afternoon 14:00, evening 18:00) and pass it with its offset; set allowPromote when the post is a draft that passes validation. The schedule is offered for the user's yes: tell them the absolute time and whether it auto-publishes or waits for manual publishing. If the readiness summary says the post can't be published, don't call it; tell the user what to fix.`)),
 		spec(genkit.DefineTool(g, "createNote",
 			"Saves a standalone note attached to the post — an image-generation prompt "+
 				"(type image_prompt, e.g. a Nano Banana prompt) or a free-form side note or idea "+
