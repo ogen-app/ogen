@@ -1046,8 +1046,8 @@ func snapshotDraft(next ai.ToolFunc[DraftPostInput, assistantkit.Outcome[DraftPo
 // FR2). The stored model message is the compact JSON envelope persistTurn writes
 // (action + explanation), so the research lives in the "explanation" field —
 // parse it rather than using the raw content. Only answers (action "answered" or
-// empty) qualify, so an action-confirmation turn (e.g. a prior post_drafted) is
-// never mistaken for research.
+// empty, with no pack reporting an action) qualify, so an action-confirmation
+// turn (e.g. a prior post_drafted) is never mistaken for research.
 func resolveDraftSource(ctx context.Context, st *requestState, override string) (string, error) {
 	if s := strings.TrimSpace(override); s != "" {
 		return s, nil
@@ -1073,6 +1073,9 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 		var env struct {
 			Action      string `json:"action"`
 			Explanation string `json:"explanation"`
+			// Results is what each pack did; the turn's own action stays
+			// "answered" when a tool did the work.
+			Results map[string]json.RawMessage `json:"results"`
 		}
 		if err := json.Unmarshal([]byte(msg.Content), &env); err != nil {
 			// Legacy/plain-text model message (not JSON-wrapped) — use it directly.
@@ -1081,7 +1084,7 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 			}
 			continue
 		}
-		if env.Action != "" && env.Action != actionAnswered {
+		if !answeredOnly(env.Action, env.Results) {
 			continue // an action confirmation, not research
 		}
 		if s := strings.TrimSpace(env.Explanation); s != "" {
@@ -1089,6 +1092,25 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 		}
 	}
 	return "", nil
+}
+
+// answeredOnly reports whether a stored model turn only answered: neither
+// it nor any pack's result names another action. A result that isn't an
+// object names none.
+func answeredOnly(action string, results map[string]json.RawMessage) bool {
+	isAnswer := func(a string) bool { return a == "" || a == actionAnswered }
+	if !isAnswer(action) {
+		return false
+	}
+	for _, raw := range results {
+		var r struct {
+			Action string `json:"action"`
+		}
+		if json.Unmarshal(raw, &r) == nil && !isAnswer(r.Action) {
+			return false
+		}
+	}
+	return true
 }
 
 // tallyDrafts adds up what the platforms' draft flows wrote: the posts, their
