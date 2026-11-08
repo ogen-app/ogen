@@ -219,6 +219,29 @@ func TestRunner_HeavySlotTakenKeepsTheOfferOpen(t *testing.T) {
 	}
 }
 
+// A confirmed offer that refuses before generating gives the heavy slot
+// back, so a corrected request in the same message still runs.
+func TestRunner_RefusedConfirmationFreesTheSlot(t *testing.T) {
+	h := newRunnerHarness(t)
+	h.turn("Add 10 Threads posts",
+		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 10}}),
+		fakemodel.Answer(`{"explanation":"Prepared for you to confirm.","action":"answered"}`))
+	id := h.proposals.rows[0].ID
+	// The campaign changed since the offer: its platform is gone.
+	h.proposals.rows[0].Args["platforms"] = []any{"Nowhere"}
+
+	h.turn("yes, or just 2 if that can't run",
+		fakemodel.Tools(fakemodel.Call{Name: "confirmOffer", Input: map[string]any{"proposalId": id}}),
+		fakemodel.Tools(fakemodel.Call{Name: "generatePosts", Input: map[string]any{"platforms": []string{"Threads"}, "count": 2}}),
+		fakemodel.Answer(`{"explanation":"Added 2.","action":"answered"}`))
+	if out := toolOutput(h.last, "confirmOffer"); out["status"] != string(assistantkit.StatusRefused) {
+		t.Fatalf("confirmOffer returned %v", out)
+	}
+	if len(h.generated) != 1 || h.generated[0].Count != 2 {
+		t.Fatalf("generated = %+v; want the corrected request to run", h.generated)
+	}
+}
+
 // toolOutput is the last response the model got from the named tool.
 func toolOutput(m *fakemodel.Model, name string) map[string]any {
 	var out map[string]any
