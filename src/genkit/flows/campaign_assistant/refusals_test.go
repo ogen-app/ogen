@@ -132,3 +132,42 @@ func TestGeneratePosts_EngineValidationErrorIsRefusal(t *testing.T) {
 		t.Fatalf("out = %+v", out)
 	}
 }
+
+// A confirmed call that refuses before generating gives the held slot back,
+// so a corrected call in the same message runs; one that generated keeps it.
+func TestHoldHeavySlot_ReleasedUnlessUsed(t *testing.T) {
+	ran := 0
+	st := &requestState{
+		campaignID: "c1", campaign: postTypeCampaign(), maxGeneratePosts: 10,
+		generatePosts: func(context.Context, content_plan.GeneratePostsRequest, content_plan.OnEventFunc) (*content_plan.ContentPlanResponse, error) {
+			ran++
+			return &content_plan.ContentPlanResponse{}, nil
+		},
+	}
+	ctx := withRequestState(t.Context(), st)
+	held, release, err := holdHeavySlot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := toolGeneratePosts(held, GeneratePostsInput{Platforms: []string{"LinkedIn"}, PostType: "text-post"})
+	release()
+	if err != nil || out.Status != assistantkit.StatusRefused || st.heavyReserved {
+		t.Fatalf("out = %+v, err = %v, reserved = %t; want a refusal that frees the slot", out, err, st.heavyReserved)
+	}
+	if out, _ := toolGeneratePosts(ctx, GeneratePostsInput{Platforms: []string{"LinkedIn"}}); out.Status != assistantkit.StatusOK || ran != 1 {
+		t.Fatalf("the corrected call = %+v, ran = %d", out, ran)
+	}
+
+	st.heavyReserved = false
+	held, release, err = holdHeavySlot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := toolGeneratePosts(held, GeneratePostsInput{Platforms: []string{"LinkedIn"}}); out.Status != assistantkit.StatusOK {
+		t.Fatalf("the confirmed call = %+v", out)
+	}
+	release()
+	if !st.heavyReserved {
+		t.Fatal("a confirmed call that generated gave the slot back")
+	}
+}
