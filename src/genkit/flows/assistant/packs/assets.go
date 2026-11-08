@@ -402,24 +402,10 @@ func attachAssets(ctx context.Context, d Deps, in AttachAssetsInput) (*AttachAss
 	if id == "" {
 		return nil, assistantkit.Refused("which campaign? pass campaignId")
 	}
-	c, err := d.Campaigns.GetByID(ctx, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, assistantkit.Refused("that campaign doesn't exist")
-	}
-	if err != nil {
-		return nil, err
-	}
-	before := assistantundo.CampaignAssets(c)
 	ids := dedupe(in.AssetIDs)
-	// The membership writes are single atomic UPDATEs that also keep
-	// use_assets in step with the set: a concurrent attach survives, and an
-	// emptied set never reads as "every workspace asset".
+	var add, remove []string
 	if in.Detach {
-		for _, a := range ids {
-			if c, err = d.Campaigns.RemoveAssetID(ctx, c.ID, a); err != nil {
-				return nil, err
-			}
-		}
+		remove = ids
 	} else {
 		// Only the tenant's own assets attach.
 		metas, err := d.Assets.ListMeta(ctx, ids)
@@ -429,20 +415,27 @@ func attachAssets(ctx context.Context, d Deps, in AttachAssetsInput) (*AttachAss
 		if len(metas) == 0 {
 			return nil, assistantkit.Refused("none of those assets exist")
 		}
-		known := make([]string, len(metas))
+		add = make([]string, len(metas))
 		for i, a := range metas {
-			known[i] = a.ID
+			add[i] = a.ID
 		}
-		if c, err = d.Campaigns.AddAssetIDs(ctx, c.ID, known); err != nil {
-			return nil, err
-		}
+	}
+	// One write under the campaign's row lock, which also keeps use_assets in
+	// step with the set: the batch lands whole or not at all, and the undo
+	// snapshots hold no concurrent attach.
+	was, c, err := d.Campaigns.ChangeAssetIDs(ctx, id, add, remove)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, assistantkit.Refused("that campaign doesn't exist")
+	}
+	if err != nil {
+		return nil, err
 	}
 	if d.Analysis != nil && !in.Detach {
 		tenant, _ := tenantctx.From(ctx)
 		d.Analysis.ScheduleAttached(ctx, tenant, c.ID, ids)
 	}
 	assistantkit.Touch(ctx, "campaign", c.ID)
-	undo := recordUndo(ctx, d, models.AssistantActionCampaignAssets, c.ID, before, assistantundo.CampaignAssets(c))
+	undo := recordUndo(ctx, d, models.AssistantActionCampaignAssets, c.ID, assistantundo.CampaignAssets(was), assistantundo.CampaignAssets(c))
 	return &AttachAssetsOutput{CampaignID: c.ID, AssetIDs: c.AssetIDs, UndoID: undo}, nil
 }
 
