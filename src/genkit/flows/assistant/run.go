@@ -84,22 +84,32 @@ func run(
 	if ctx, err = tools.begin(ctx, st, slices.Clone(st.loaded)); err != nil {
 		return nil, err
 	}
-	call := func(ctx context.Context) (*jsonstream.Scanner, error) {
-		return callModel(ctx, g, cfg, p, tools, st.loadedList(), history, view+st.packPrompt()+req.Instruction, onEvent)
+	call := func(ctx context.Context, done []*ai.Message) (*modelReply, error) {
+		return callModel(ctx, g, cfg, p, tools, st.loadedList(), history, view+st.packPrompt()+req.Instruction, done, onEvent)
 	}
-	scanner, err := call(ctx)
+	reply, err := call(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	// loadPack interrupts the call; the turn starts again, once, with the
 	// pack's tools.
-	if scanner == nil {
-		if ctx, scanner, err = restartWithPack(ctx, tools, st, call, onEvent); err != nil {
+	if reply.scanner == nil {
+		if ctx, reply, err = restartWithPack(ctx, tools, st, call, reply.done, onEvent); err != nil {
 			return nil, err
 		}
 	}
+	scanner := reply.scanner
 	result := assemble(ctx, scanner)
+	// Out of tool rounds, what the model wrote was written before more
+	// tool calls: the packs' account of the work done stands in for it.
+	preliminary := *result
+	if reply.exhausted {
+		result.Explanation = ""
+	}
 	tools.finish(st, result)
+	if result.Explanation == "" {
+		result.Explanation, result.Action = preliminary.Explanation, preliminary.Action
+	}
 	if result.Explanation == "" {
 		return nil, &AIError{Msg: unusableReply(ctx, scanner)}
 	}
@@ -127,8 +137,9 @@ func run(
 }
 
 // restartWithPack begins the pack loadPack asked for and makes the turn's
-// second and last model call with it.
-func restartWithPack(ctx context.Context, tools *toolSet, st *turnState, call func(context.Context) (*jsonstream.Scanner, error), onEvent OnEventFunc) (context.Context, *jsonstream.Scanner, error) {
+// second and last model call with it, continuing from the tool rounds done
+// ran so their work isn't done again.
+func restartWithPack(ctx context.Context, tools *toolSet, st *turnState, call func(context.Context, []*ai.Message) (*modelReply, error), done []*ai.Message, onEvent OnEventFunc) (context.Context, *modelReply, error) {
 	pack, ok := st.restart(tools.packs)
 	if !ok {
 		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
@@ -140,25 +151,51 @@ func restartWithPack(ctx context.Context, tools *toolSet, st *turnState, call fu
 	if st.hasBegun(pack) {
 		emit(onEvent, SSEEventPackLoaded, PackLoadedEventPayload{Pack: pack})
 	}
-	scanner, err := call(ctx)
+	reply, err := call(ctx, done)
 	if err != nil {
 		return nil, nil, err
 	}
-	if scanner == nil {
+	if reply.scanner == nil {
 		return nil, nil, &AIError{Msg: "the assistant stopped without replying"}
 	}
-	return ctx, scanner, nil
+	return ctx, reply, nil
+}
+
+// modelReply is what one model call left.
+type modelReply struct {
+	// scanner reads the reply; nil when a tool interrupted the call
+	// (loadPack).
+	scanner *jsonstream.Scanner
+	// done is the tool rounds an interrupted call ran, for the restarted
+	// call to continue from.
+	done []*ai.Message
+	// exhausted is set when the call ran out of tool rounds, so whatever
+	// it wrote came before more tool calls.
+	exhausted bool
 }
 
 // callModel runs the orchestrator's tool loop on the core tools plus loaded,
 // streaming the explanation and the tool events. The reply is read by the
 // tolerant scanner rather than ai.WithOutputType, whose strict validator
-// drops a reply on common drift. A nil scanner means a tool interrupted the
-// call (loadPack).
-func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts, tools *toolSet, loaded []string, history []*ai.Message, prompt string, onEvent OnEventFunc) (*jsonstream.Scanner, error) {
+// drops a reply on common drift. done is the tool rounds a call that was
+// interrupted ran, replayed after the prompt.
+func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts, tools *toolSet, loaded []string, history []*ai.Message, prompt string, done []*ai.Message, onEvent OnEventFunc) (*modelReply, error) {
 	system, err := p.system(loaded)
 	if err != nil {
 		return nil, err
+	}
+	messages := []ai.GenerateOption{ai.WithMessages(history...), ai.WithPrompt(prompt)}
+	if len(done) > 0 {
+		msgs := append(slices.Clone(history), ai.NewUserTextMessage(prompt))
+		messages = []ai.GenerateOption{ai.WithMessages(append(msgs, done...)...)}
+	}
+	// The last request the model got holds the rounds run so far.
+	var last *ai.ModelRequest
+	lastRequest := func(next ai.ModelFunc) ai.ModelFunc {
+		return func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			last = req
+			return next(ctx, req, cb)
+		}
 	}
 	maxTokens := cmp.Or(cfg.MaxOutputTokens, 4096)
 	mc := modelconfig.Resolve(ctx, modelconfig.FlowAssistant, modelconfig.SlotOrchestrator)
@@ -171,11 +208,9 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	}}
 	reply.cur = reply.newScanner()
 	usage := flowkit.Usage{Recorder: cfg.Recorder, Model: mc, Feature: "assistant", Component: logComponent}
-	resp, err := genkit.Generate(ctx, g,
+	resp, err := genkit.Generate(ctx, g, append(messages,
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(system),
-		ai.WithMessages(history...),
-		ai.WithPrompt(prompt),
 		ai.WithTools(tools.tools(loaded)...),
 		ai.WithMaxTurns(cmp.Or(cfg.MaxTurns, 4)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{
@@ -190,15 +225,15 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		})),
 		// The system prompt, tools and history repeat every round and turn;
 		// the per-turn <view> rides in the last message, after the breakpoints.
-		ai.WithMiddleware(usage.Meter(), cfg.Provider.CallMiddleware(modelconfig.FlowAssistant, usage.Record, llm.CachePrompt())),
+		ai.WithMiddleware(lastRequest, usage.Meter(), cfg.Provider.CallMiddleware(modelconfig.FlowAssistant, usage.Record, llm.CachePrompt())),
 		cfg.Provider.CallConfig(mc.Model, maxTokens),
-	)
+	)...)
 	// Running out of tool rounds is recoverable: the tools that ran have
 	// committed, and the packs' results stand in for the missing reply.
 	if isMaxTurnsExceeded(err) {
 		slog.WarnContext(ctx, "tool rounds exhausted; finalising from the work done", logging.AttrComponent, logComponent)
 		usage.FinishMetered(ctx, nil, maxTokens)
-		return reply.cur, nil
+		return &modelReply{scanner: reply.cur, exhausted: true}, nil
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "model call failed", logging.AttrComponent, logComponent, logging.AttrError, err)
@@ -206,9 +241,42 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 	}
 	usage.FinishMetered(ctx, resp, maxTokens)
 	if len(resp.Interrupts()) > 0 {
-		return nil, nil
+		return &modelReply{done: doneRounds(last, resp.Message)}, nil
 	}
-	return reply.cur, nil
+	return &modelReply{scanner: reply.cur}, nil
+}
+
+// doneRounds is the tool rounds a call interrupted by loadPack ran: the
+// rounds after the user's message in last, the call's last request, and
+// the calls of the interrupted round that finished, with their results. The
+// interrupted calls and the round's text are left out.
+func doneRounds(last *ai.ModelRequest, interrupted *ai.Message) []*ai.Message {
+	var out []*ai.Message
+	if last != nil {
+		for i, m := range slices.Backward(last.Messages) {
+			if m.Role == ai.RoleUser {
+				out = append(out, last.Messages[i+1:]...)
+				break
+			}
+		}
+	}
+	if interrupted == nil {
+		return out
+	}
+	var calls, results []*ai.Part
+	for _, part := range interrupted.Content {
+		output, ok := part.Metadata["pendingOutput"]
+		if !part.IsToolRequest() || !ok {
+			continue
+		}
+		tr := part.ToolRequest
+		calls = append(calls, ai.NewToolRequestPart(&ai.ToolRequest{Name: tr.Name, Ref: tr.Ref, Input: tr.Input}))
+		results = append(results, ai.NewToolResponsePart(&ai.ToolResponse{Name: tr.Name, Ref: tr.Ref, Output: output}))
+	}
+	if len(calls) > 0 {
+		out = append(out, ai.NewModelMessage(calls...), ai.NewMessage(ai.RoleTool, nil, results...))
+	}
+	return out
 }
 
 // replyScanner reads the reply from the last model round that wrote text: a
