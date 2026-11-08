@@ -136,13 +136,11 @@ func (s *Service) Restore(ctx context.Context, postID string, opts Options) (*Re
 		}, nil
 	}
 
-	preRestoreContent, preRestoreStatus := post.Content, post.Status
+	preRestoreContent := post.Content
 	post.Content = target.Content
-	// Restoring a body onto a planned post makes it a draft.
-	post.Status = post.Status.WithBody(target.Content)
 	post.UpdatedAt = time.Now().UTC()
 
-	appended, err := s.appendVersions(ctx, post, preRestoreContent, preRestoreStatus, opts)
+	appended, err := s.appendVersions(ctx, post, preRestoreContent, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -194,20 +192,24 @@ type appendResult struct {
 // appendVersions appends the restore version (preceded by a dirty-HEAD
 // snapshot of preRestoreContent when the latest version doesn't hold
 // it), saves post and writes the audit entries in one transaction.
-// prevStatus is the status before the restore, logged as a transition
-// when the restore changed it.
+// The post's status is read under the row lock: restoring a body onto a
+// planned post makes it a draft, logged as a transition.
 //
 // The post row is locked FOR UPDATE before the latest version is read,
 // so a concurrent restore of the same post blocks until this one
 // finishes and then numbers its versions after ours, avoiding a
 // duplicate version_number.
-func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRestoreContent string, prevStatus models.PostStatus, opts Options) (appendResult, error) {
+func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRestoreContent string, opts Options) (appendResult, error) {
 	var res appendResult
 	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		latest, err := lockAndReadLatest(ctx, tx, post)
+		prevStatus, latest, err := lockAndReadLatest(ctx, tx, post)
 		if err != nil {
 			return err
 		}
+		if !editableStatuses[prevStatus] {
+			return fmt.Errorf("%w: %s", ErrNotEditable, prevStatus)
+		}
+		post.Status = prevStatus.WithBody(post.Content)
 
 		nextNum := 1
 		if latest != nil {
@@ -236,11 +238,12 @@ func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRest
 	return res, err
 }
 
-// lockAndReadLatest locks the post row and returns its latest version,
-// or nil when it has none.
-func lockAndReadLatest(ctx context.Context, tx bun.Tx, post *models.Post) (*models.PostVersion, error) {
-	if _, err := tx.NewRaw(`SELECT 1 FROM posts WHERE id = ? AND tenant_id = ? FOR UPDATE`, post.ID, post.TenantID).Exec(ctx); err != nil {
-		return nil, err
+// lockAndReadLatest locks the post row and returns its current status and
+// its latest version, or nil when it has none.
+func lockAndReadLatest(ctx context.Context, tx bun.Tx, post *models.Post) (models.PostStatus, *models.PostVersion, error) {
+	var status models.PostStatus
+	if err := tx.NewRaw(`SELECT status FROM posts WHERE id = ? AND tenant_id = ? FOR UPDATE`, post.ID, post.TenantID).Scan(ctx, &status); err != nil {
+		return "", nil, postaudit.NotFound(err, ErrPostNotFound)
 	}
 	latest := new(models.PostVersion)
 	err := tx.NewSelect().
@@ -251,11 +254,11 @@ func lockAndReadLatest(ctx context.Context, tx bun.Tx, post *models.Post) (*mode
 		Scan(ctx)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return nil, nil
+		return status, nil, nil
 	case err != nil:
-		return nil, err
+		return "", nil, err
 	}
-	return latest, nil
+	return status, latest, nil
 }
 
 func insertVersion(ctx context.Context, tx bun.Tx, postID string, number int, content, note, creator string) error {
