@@ -197,3 +197,55 @@ func TestContext_ListsOpenProposals(t *testing.T) {
 		t.Fatal("the section renders with no open proposals")
 	}
 }
+
+// The same call proposed twice in a turn, even in parallel, is one offer.
+func TestPropose_ReusesIdenticalOfferInTurn(t *testing.T) {
+	store := &memProposals{}
+	var generated int
+	st := proposalState(store, &generated)
+	sink := campaignSink{st: st}
+	p := assistantkit.Proposal{Tool: "generatePosts", Args: GeneratePostsInput{Platforms: []string{"Threads"}, Count: 10}, Summary: "Add 10"}
+	ids := make([]string, 4)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Go(func() {
+			id, err := sink.Propose(t.Context(), p)
+			if err != nil {
+				t.Error(err)
+			}
+			ids[i] = id
+		})
+	}
+	wg.Wait()
+	for _, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("ids = %v, want one offer", ids)
+		}
+	}
+	if len(store.rows) != 1 || len(st.proposed) != 1 {
+		t.Fatalf("stored %d, turn lists %d, want 1 each", len(store.rows), len(st.proposed))
+	}
+
+	// Different args are a different offer.
+	p.Args = GeneratePostsInput{Platforms: []string{"Threads"}, Count: 8}
+	if id, err := sink.Propose(t.Context(), p); err != nil || id == ids[0] || len(store.rows) != 2 {
+		t.Fatalf("id = %q, err = %v, stored = %d", id, err, len(store.rows))
+	}
+}
+
+// The gate compares the threshold with what the tool would create, which is
+// capped per call.
+func TestPostGates_ThresholdUsesCappedCount(t *testing.T) {
+	st := &requestState{proposalThreshold: 5, maxDraftPosts: 5, maxGeneratePosts: 5}
+	ctx := withRequestState(t.Context(), st)
+	if draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 10}) {
+		t.Fatal("draftPost: 10 on two platforms creates 5, within the threshold")
+	}
+	if generatePostsGate.Needs(ctx, GeneratePostsInput{Platforms: []string{"Threads"}, Count: 20}) {
+		t.Fatal("generatePosts: 20 creates 5, within the threshold")
+	}
+	st.proposalThreshold = 4
+	if !draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 10}) {
+		t.Fatal("draftPost: 5 posts are above a threshold of 4")
+	}
+}

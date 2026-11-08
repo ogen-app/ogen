@@ -335,6 +335,7 @@ func (d *deps) initGenkit(ctx context.Context) error {
 	return nil
 }
 
+// genkitDeps collects the repositories and config the genkit flows need.
 func (d *deps) genkitDeps() genkitDeps {
 	r := d.r
 	return genkitDeps{
