@@ -77,6 +77,9 @@ type Spec struct {
 	// out to be answered already. A Refusal means the run can't start now,
 	// so the offer stays open to be confirmed later. nil needs nothing.
 	Prepare func(ctx context.Context) (context.Context, func(), error)
+	// Free marks a proposal-tier tool whose confirmed run makes no model
+	// call, so an offer of it can be confirmed past the tenant's spend cap.
+	Free bool
 }
 
 // toolName is the tool's name, or false when there is no tool: nil, or a
