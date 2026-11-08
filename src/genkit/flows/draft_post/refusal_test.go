@@ -52,9 +52,11 @@ func (r *savedPosts) Create(_ context.Context, p *models.Post) error {
 // A refusal after a draft was saved keeps that draft in the result, with a
 // warning, so the caller still links and reports it.
 func TestGenerate_RefusalKeepsSavedDrafts(t *testing.T) {
+	calls := 0
 	g := genkit.Init(t.Context())
 	genkit.DefineModel(g, "test/half-refuser", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
 		func(_ context.Context, _ *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			calls++
 			if cb != nil {
 				if err := cb(t.Context(), &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(`[{"title":"T","content":"Body"},`)}}); err != nil {
 					return nil, err
@@ -78,6 +80,9 @@ func TestGenerate_RefusalKeepsSavedDrafts(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("err = %v, want the saved draft kept", err)
+	}
+	if calls != 1 {
+		t.Fatalf("model called %d times, want 1", calls)
 	}
 	if len(sink.out) != 1 || len(sink.warnings) != 1 || len(posts.rows) != 1 {
 		t.Fatalf("out = %+v, warnings = %v, rows = %d", sink.out, sink.warnings, len(posts.rows))
