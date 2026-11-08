@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,8 @@ func day(s string) *time.Time {
 
 func repairDeps() (Deps, *memPosts, *memDismissals) {
 	start, end := day("2027-03-01"), day("2027-03-31")
-	camp := &models.Campaign{ID: "c1", Name: "Spring", StartDate: start, EndDate: end, PublishingDays: models.StringSlice{"mon", "tue", "wed", "thu", "fri"}}
+	camp := &models.Campaign{ID: "c1", Name: "Spring", StartDate: start, EndDate: end, PublishingDays: models.StringSlice{"mon", "tue", "wed", "thu", "fri"},
+		Platforms: []models.Platform{{ID: "li", Name: "LinkedIn"}}}
 	posts := &memPosts{posts: []models.Post{
 		{ID: "p1", Title: "Early", Status: models.PostStatusDraft, PlatformID: "li", ScheduledAt: day("2027-02-20")},
 		{ID: "p2", Title: "Mid", Status: models.PostStatusReadyForPublish, PlatformID: "li", ScheduledAt: day("2027-03-03")},
@@ -113,7 +115,8 @@ func TestCheckCalendar_OffersFixes(t *testing.T) {
 	// Filling a silence plans ideas for its dates, through the campaign's
 	// own tool, naming the campaign so it can run from any screen.
 	plan, _ := sink.got[1].Args.(campaign_assistant.GeneratePostsInput)
-	if sink.got[1].Tool != "generatePosts" || plan.CampaignID != "c1" || plan.WindowStart != gap.Fixes[0].From || plan.WindowEnd != gap.Fixes[0].To {
+	if sink.got[1].Tool != "generatePosts" || plan.CampaignID != "c1" || plan.WindowStart != gap.Fixes[0].From || plan.WindowEnd != gap.Fixes[0].To ||
+		!slices.Equal(plan.Platforms, []string{"LinkedIn"}) || plan.Exploratory || len(sink.got[1].Options) != 0 {
 		t.Fatalf("gap offer = %+v", sink.got[1])
 	}
 
@@ -127,6 +130,92 @@ func TestCheckCalendar_OffersFixes(t *testing.T) {
 	out, _ = checkCalendar(ctx, d, CampaignRef{})
 	if out.Dismissed != 1 || slices.ContainsFunc(out.Findings, func(f FindingOut) bool { return f.Code == "gap" }) {
 		t.Fatalf("after dismissing: %+v", out)
+	}
+}
+
+// gapOffers runs a check and returns the ideas each silence's fix offers.
+func gapOffers(t *testing.T, d Deps) ([]FindingOut, []assistantkit.Proposal) {
+	t.Helper()
+	sink := &offers{}
+	ctx, _ := turn(t, campaign1, nil)
+	out, err := checkCalendar(assistantkit.WithProposalSink(ctx, sink), d, CampaignRef{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gaps []FindingOut
+	for _, f := range out.Findings {
+		if f.Code == "gap" {
+			gaps = append(gaps, f)
+		}
+	}
+	var plans []assistantkit.Proposal
+	for _, p := range sink.got {
+		if p.Tool == "generatePosts" {
+			plans = append(plans, p)
+		}
+	}
+	return gaps, plans
+}
+
+// A silence's ideas belong to the phase it starts in, and stop where that
+// phase ends.
+func TestCheckCalendar_GapOfferPhase(t *testing.T) {
+	d, posts, _ := repairDeps()
+	d.Campaigns.(*memCampaigns).c.CampaignType = &models.CampaignType{Phases: []models.CampaignTypePhase{
+		{ID: "ph1", Name: "Tease", Sequence: 1}, {ID: "ph2", Name: "Launch", Sequence: 2}}}
+	// Phases split March at the 16th; this post leaves a silence on each side.
+	posts.posts = append(posts.posts, models.Post{ID: "p4", Status: models.PostStatusScheduled, PlatformID: "li", ScheduledAt: day("2027-03-18")})
+
+	_, plans := gapOffers(t, d)
+	if len(plans) != 2 {
+		t.Fatalf("plans = %+v", plans)
+	}
+	type window struct{ phase, from, to string }
+	var got []window
+	for _, p := range plans {
+		in := p.Args.(campaign_assistant.GeneratePostsInput)
+		got = append(got, window{in.Phase, in.WindowStart, in.WindowEnd})
+	}
+	want := []window{{"ph1", "2027-03-05", "2027-03-16"}, {"ph2", "2027-03-19", "2027-03-31"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("plans = %+v, want %+v", got, want)
+	}
+}
+
+// With no sources, a silence's fix is the choice to go ahead from general
+// knowledge, not a plan that runs without asking.
+func TestCheckCalendar_GapOfferWithoutSources(t *testing.T) {
+	d, _, _ := repairDeps()
+	d.Assets = memAssets{}
+	_, plans := gapOffers(t, d)
+	if len(plans) != 1 || len(plans[0].Options) != 1 {
+		t.Fatalf("plans = %+v", plans)
+	}
+	if base := plans[0].Args.(campaign_assistant.GeneratePostsInput); base.Exploratory {
+		t.Fatal("the offer itself plans without sources")
+	}
+	if o := plans[0].Options[0]; o.Tool != "generatePosts" || !o.Args.(campaign_assistant.GeneratePostsInput).Exploratory {
+		t.Fatalf("option = %+v", o)
+	}
+
+	// A ready source makes it a plain offer.
+	d.Assets = memAssets{all: []models.Asset{{ID: "a1", Status: "ready"}}}
+	if _, plans = gapOffers(t, d); len(plans) != 1 || len(plans[0].Options) != 0 {
+		t.Fatalf("plans = %+v", plans)
+	}
+}
+
+// A campaign without a target platform can't have ideas planned, so its
+// silence's fix asks for one instead of offering a plan that would refuse.
+func TestCheckCalendar_GapOfferNeedsPlatform(t *testing.T) {
+	d, _, _ := repairDeps()
+	d.Campaigns.(*memCampaigns).c.Platforms = nil
+	gaps, plans := gapOffers(t, d)
+	if len(plans) != 0 || len(gaps) != 1 {
+		t.Fatalf("gaps = %+v, plans = %+v", gaps, plans)
+	}
+	if fix := gaps[0].Fixes[0]; fix.ProposalID != "" || !strings.Contains(fix.Title, "target platform") {
+		t.Fatalf("fix = %+v", fix)
 	}
 }
 
