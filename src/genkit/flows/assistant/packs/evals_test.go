@@ -118,6 +118,15 @@ func (evalPosts) GetByID(context.Context, string) (*models.Post, error) {
 		Status:  models.PostStatusDraft}, nil
 }
 
+// evalNotes gives the post its draft theses, for "write the post from its
+// theses".
+type evalNotes struct{ repository.PostNoteRepository }
+
+func (evalNotes) ListByPostID(context.Context, string) ([]models.PostNote, error) {
+	return []models.PostNote{{ID: "n1", PostID: "p1", Type: models.PostNoteTypeDraftThesis, Title: "Draft thesis",
+		Body: "- Static types catch schema drift before production\n- Goroutines fit token streaming\n- One binary ships the model client"}}, nil
+}
+
 type evalVersions struct {
 	repository.PostVersionRepository
 }
@@ -158,7 +167,7 @@ func TestPackEvals(t *testing.T) {
 		t.Fatal(err)
 	}
 	post, err := post_assistant.NewPack(g, post_assistant.PostAssistantFlowConfig{}, post_assistant.PostAssistantRepos{
-		Posts: evalPosts{}, Campaigns: evalCampaigns{}, Versions: evalVersions{}})
+		Posts: evalPosts{}, Campaigns: evalCampaigns{}, Versions: evalVersions{}, Notes: evalNotes{}})
 	if err != nil {
 		t.Fatal(err)
 	}
