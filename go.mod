@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
 	github.com/aws/smithy-go v1.25.1
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/firebase/genkit/go v1.6.1
+	github.com/firebase/genkit/go v1.9.0
 	github.com/getsentry/sentry-go v0.49.0
 	github.com/getsentry/sentry-go/otel v0.49.0
 	github.com/getsentry/sentry-go/otel/otlp v0.49.0
@@ -69,6 +69,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/coder/websocket v1.8.14 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect

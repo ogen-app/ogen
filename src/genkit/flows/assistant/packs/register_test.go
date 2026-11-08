@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
@@ -61,5 +62,34 @@ func TestEveryPackRegistersTogether(t *testing.T) {
 	}
 	if _, err := assistant.Init(g, assistant.FlowConfig{}, assistant.Repos{Proposals: proposals{}}, all...); err != nil {
 		t.Fatal(err)
+	}
+	checkNotStrict(t, all)
+}
+
+// Anthropic refuses a request with more than 20 strict tools, and a turn's
+// packs carry more than that between them; only the core tools stay strict.
+func checkNotStrict(t *testing.T, all []assistant.Pack) {
+	t.Helper()
+	n := 0
+	defer func() {
+		if n <= 20 {
+			t.Errorf("checked %d pack tools; want them all (more than 20)", n)
+		}
+	}()
+	for _, p := range all {
+		specs, err := p.Define(genkit.Init(t.Context()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += len(specs)
+		for _, s := range specs {
+			tool, ok := s.Tool.(ai.Tool)
+			if !ok {
+				t.Fatalf("%s/%s: not a genkit tool", p.Name, s.Name)
+			}
+			if strict, _ := tool.Definition().Metadata["strict"].(bool); strict || tool.Definition().Metadata["strict"] == nil {
+				t.Errorf("%s/%s is strict; pack tools must use ai.WithStrictSchema(false)", p.Name, s.Name)
+			}
+		}
 	}
 }
