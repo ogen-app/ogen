@@ -73,17 +73,18 @@ type assistantTurnRequest struct {
 // @Description  one workspace, campaign or post. A malformed viewContext is a 400 that names the field; a
 // @Description  campaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.
 // @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
-// @Description  and "tool_result" {"name","ref","ok"} for each tool, "ok" false when the tool refused; "pack_loaded"
-// @Description  {"pack"} when the turn restarted with another domain's tools (deltas before it are void); one
-// @Description  "ui_action" per change to the screen, once the reply is final: {"type": navigate|set_filter|select|
-// @Description  open_saved_view, "screen", "campaignId", "focus" {kind,id}, "filter", "selection" {kind,ids},
-// @Description  "savedViewId"}, every reference already checked; then "complete" with {"explanation","action",
-// @Description  "uiActions","touched":[{"kind","id"}],"packs"}, where touched names what changed (no id: every entity
-// @Description  of the kind) for the client to refresh, plus "unsaved": true when the turn ran but could not be
-// @Description  stored in the thread. "error" carries {"message":"...","code":<http_code>} and ends the stream.
-// @Description  Offers: moveIdeas and deleteIdeas, and setIdeaVerdicts, tagAssets and draftIdeas above a few items, are held
-// @Description  back as an offer; smaller batches and other tools (distillMoreIdeas among them) run straight away, so a
-// @Description  client can't rely on an offer before every write. "proposal_created" {"id","tool","summary",
+// @Description  and "tool_result" {"name","ref","ok"} for each tool, "ok" false when it refused or hit a conflict; "pack_loaded" {"pack"} when the turn restarted
+// @Description  with another domain's tools (deltas before it are void); one "ui_action" per change to the screen,
+// @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view, "screen", "campaignId",
+// @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId"}, every reference already checked;
+// @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs"}, where
+// @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, plus
+// @Description  "unsaved": true when the turn ran but could not be stored in the thread. "error"
+// @Description  carries {"message":"...","code":<http_code>} and ends the stream.
+// @Description  Offers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost and
+// @Description  applyCalendarMoves are always held back as an offer; generatePosts, draftPost, draftIdeas, moreLikeThese,
+// @Description  setIdeaVerdicts and tagAssets only above a few items. Smaller batches and other tools (distillMoreIdeas
+// @Description  among them) run straight away, so a client can't rely on an offer before every write. "proposal_created" {"id","tool","summary",
 // @Description  "expiresAt","options"} streams once the reply is final, and "proposal_resolved" {"id","status","chosen"} when
 // @Description  one is answered in chat. Cards answer through POST /api/assistant/proposals/{id}/confirm or /dismiss.
 // @Description  Packs stream their own progress between: the campaign pack forwards the campaign assistant's events
