@@ -34,6 +34,10 @@ type CampaignRepository interface {
 	// caller's transaction or nil for none, so a narrow change never restates
 	// fields another write may have changed.
 	UpdateColumns(ctx context.Context, db bun.IDB, campaign *models.Campaign, columns ...string) error
+	// SetDates writes the campaign's dates only while they still are oldStart
+	// and oldEnd. It reports false, writing nothing, when they changed since
+	// or the campaign is gone.
+	SetDates(ctx context.Context, id string, oldStart, oldEnd, start, end *time.Time) (bool, error)
 	Delete(ctx context.Context, id string) (bool, error)
 	// DeleteTx is Delete on a caller's transaction, so the delete commits
 	// together with whatever the caller unschedules alongside it.
@@ -358,6 +362,25 @@ func (r *campaignRepository) DeleteTx(ctx context.Context, db bun.IDB, id string
 		Where("deleted_at IS NULL").
 		Exec(ctx)
 	return err == nil, err
+}
+
+// SetDates writes the dates in one conditional UPDATE, so a change made
+// since the caller read them is never overwritten.
+func (r *campaignRepository) SetDates(ctx context.Context, id string, oldStart, oldEnd, start, end *time.Time) (bool, error) {
+	res, err := r.db.NewUpdate().
+		Model((*models.Campaign)(nil)).
+		Set("start_date = ?", start).
+		Set("end_date = ?", end).
+		Set("updated_at = ?", time.Now().UTC()).
+		Where("id = ?", id).
+		Where("start_date IS NOT DISTINCT FROM ?", oldStart).
+		Where("end_date IS NOT DISTINCT FROM ?", oldEnd).
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // Archive stamps archived_at, removing the campaign from the default active
