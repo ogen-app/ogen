@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/uptrace/bun"
 
@@ -46,8 +47,9 @@ func (r *ideaRepository) MergeSet(ctx context.Context, ids []string) (IdeaMergeS
 	return mergeSetOn(ctx, r.db, ids, false)
 }
 
-func (r *ideaRepository) MergeIdeas(ctx context.Context, ids []string, plan func(IdeaMergeSet) (IdeaMerge, error)) error {
-	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+func (r *ideaRepository) MergeIdeas(ctx context.Context, ids []string, plan func(IdeaMergeSet) (IdeaMerge, error)) (*models.Idea, error) {
+	kept := []models.Idea{}
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		set, err := mergeSetOn(ctx, tx, ids, true)
 		if err != nil {
 			return err
@@ -59,12 +61,25 @@ func (r *ideaRepository) MergeIdeas(ctx context.Context, ids []string, plan func
 		if _, err := tx.NewUpdate().Model(m.Keep).Column(append(m.Columns, "updated_at")...).WherePK().Exec(ctx); err != nil {
 			return err
 		}
-		if len(m.Delete) == 0 {
-			return nil
+		if len(m.Delete) > 0 {
+			if _, err := tx.NewDelete().Model((*models.Idea)(nil)).Where("id IN (?)", bun.List(m.Delete)).Exec(ctx); err != nil {
+				return err
+			}
 		}
-		_, err = tx.NewDelete().Model((*models.Idea)(nil)).Where("id IN (?)", bun.List(m.Delete)).Exec(ctx)
-		return err
+		// Read back in the transaction, so a failed read undoes the merge
+		// rather than reporting an error for one that happened.
+		if err := selectIdeasOn(tx, &kept).Where("i.id = ?", m.Keep.ID).Scan(ctx); err != nil {
+			return err
+		}
+		if len(kept) == 0 {
+			return sql.ErrNoRows
+		}
+		return hydrateOn(ctx, tx, kept)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &kept[0], nil
 }
 
 // mergeSetOn reads a merge set on db. Locked takes the ideas' rows FOR

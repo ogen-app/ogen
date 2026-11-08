@@ -133,6 +133,9 @@ type Idea struct {
 	// SourceAssetID is the asset an analysis idea came from. It outlives the
 	// analysis and goes nil only when the asset is deleted.
 	SourceAssetID *string `bun:"source_asset_id" json:"-"`
+	// MergedAt is when other ideas were last merged into this one. A merged
+	// idea is kept by the clean-ups that delete untriaged analysis ideas.
+	MergedAt *time.Time `bun:"merged_at" json:"-"`
 	// Angle, Rationale and Sources are the parts of an analysis idea that Note
 	// also carries as text: nil on manual ideas, and on older analysis ideas
 	// whose note did not split cleanly.

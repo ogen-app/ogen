@@ -404,6 +404,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Ideas:             ideas.New(r.ideaRepo, r.userRepo),
 			IdeaRepo:          r.ideaRepo,
 			Compose:           compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub),
+			Hub:               d.hub,
 			Assets:            r.pieceRepo,
 			Campaigns:         r.campaignRepo,
 			Tags:              r.tagRepo,
