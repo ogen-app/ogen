@@ -210,12 +210,12 @@ type EnrichBriefOutput struct {
 	Note string `json:"note,omitempty"`
 }
 
-// RunContentPlanOutput is returned to the model after a content plan runs.
 // RunContentPlanInput is the runContentPlan tool input.
 type RunContentPlanInput struct {
 	Exploratory bool `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants a plan without the campaign's sources (from general knowledge)."`
 }
 
+// RunContentPlanOutput is returned to the model after a content plan runs.
 type RunContentPlanOutput struct {
 	PostCount    int                    `json:"postCount"`
 	WarningCount int                    `json:"warningCount"`
@@ -375,8 +375,8 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		"Generates a full content plan (a set of draft posts across the campaign's platforms) for the current campaign and saves the posts. "+
 			"Call this when the user asks to generate, create, or regenerate a content plan. Takes no arguments. Returns how many posts were created.",
 		assistantkit.Gated("runContentPlan", contentPlanGate,
-			assistantkit.Wrap(func(ctx context.Context, _ RunContentPlanInput) (*RunContentPlanOutput, error) {
-				return toolRunContentPlan(ctx)
+			assistantkit.Wrap(func(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
+				return toolRunContentPlan(ctx, in)
 			}, contentPlanInvalid)),
 	)
 
@@ -515,7 +515,9 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 
 // ── Tool implementations ─────────────────────────────────────────────────────
 
-func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
+// toolRunContentPlan generates and saves a full content plan, from the
+// campaign's sources unless the call is exploratory.
+func toolRunContentPlan(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
 	st := getRequestState(ctx)
 	if !st.reserveHeavy(ctx) {
 		return &RunContentPlanOutput{Note: heavySkipNote}, nil
@@ -524,8 +526,11 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 		return nil, fmt.Errorf("content plan generation is not available")
 	}
 
-	// Generate from the campaign's attached assets when it has any.
-	ensureCampaignAssetUse(ctx, st)
+	// Generate from the campaign's attached assets when it has any, unless
+	// the user asked to go ahead without them.
+	if !in.Exploratory {
+		ensureCampaignAssetUse(ctx, st)
+	}
 
 	emit(st.onEvent, SSEEventContentPlanStarted, ContentPlanStartedEventPayload{})
 
@@ -543,7 +548,7 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 		}
 	})
 
-	resp, err := st.contentPlan(ctx, st.campaignID, nested)
+	resp, err := st.contentPlan(explore(ctx, in.Exploratory), st.campaignID, nested)
 	if err != nil {
 		return nil, err
 	}
@@ -554,7 +559,7 @@ func toolRunContentPlan(ctx context.Context) (*RunContentPlanOutput, error) {
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
 	}
 
-	res := &ContentPlanResult{PostCount: len(resp.Posts), Warnings: resp.Warnings, UsedAssets: used, Grounding: groundingOf(used)}
+	res := &ContentPlanResult{PostCount: len(resp.Posts), Warnings: resp.Warnings, UsedAssets: used, Grounding: groundingOf(in.Exploratory, used, resp.Posts)}
 	st.contentPlanResult = res
 	st.recordWrite(actionContentPlan)
 	return &RunContentPlanOutput{PostCount: res.PostCount, WarningCount: len(res.Warnings), UsedAssets: used, Grounding: res.Grounding}, nil
@@ -718,8 +723,11 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 
 	// Generate from the campaign's attached assets when it has any. After
 	// the reservation so a soft-failed or slot-skipped turn never flips UseAssets
-	// in the DB for work that isn't going to run.
-	ensureCampaignAssetUse(ctx, st)
+	// in the DB for work that isn't going to run. An exploratory call leaves
+	// the setting alone.
+	if !in.Exploratory {
+		ensureCampaignAssetUse(ctx, st)
+	}
 
 	emit(st.onEvent, SSEEventGeneratePostsStarted, GeneratePostsStartedEventPayload{
 		PlatformIDs: platformIDs,
@@ -739,7 +747,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		}
 	})
 
-	resp, err := st.generatePosts(ctx, content_plan.GeneratePostsRequest{
+	resp, err := st.generatePosts(explore(ctx, in.Exploratory), content_plan.GeneratePostsRequest{
 		CampaignID:  st.campaignID,
 		PlatformIDs: platformIDs,
 		PhaseID:     phaseID,
@@ -761,13 +769,14 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
 	}
 
+	grounding := groundingOf(in.Exploratory, used, resp.Posts)
 	st.generatedPostsResult = &GeneratedPostsResult{
 		PostCount:   len(resp.Posts),
 		PlatformIDs: platformIDs,
 		PhaseID:     phaseID,
 		Warnings:    resp.Warnings,
 		UsedAssets:  used,
-		Grounding:   groundingOf(used),
+		Grounding:   grounding,
 	}
 	st.recordWrite(actionPostsGenerated)
 	return assistantkit.OK(GeneratePostsOutput{
@@ -780,7 +789,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		Dates:          publishDatesOf(resp.Posts),
 		Warnings:       resp.Warnings,
 		UsedAssets:     used,
-		Grounding:      groundingOf(used),
+		Grounding:      grounding,
 	}), nil
 }
 
