@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -139,15 +140,11 @@ func ParseTrendWindow(s string) (int, bool) {
 	if err != nil || n <= 0 {
 		return 0, false
 	}
-	switch m[2] {
-	case "d":
-		return n, true
-	case "w":
-		return n * 7, true
-	case "mo":
-		return n * 30, true
+	perUnit := map[string]int{"d": 1, "w": 7, "mo": 30}[m[2]]
+	if perUnit == 0 || n > math.MaxInt/perUnit {
+		return 0, false
 	}
-	return 0, false
+	return n * perUnit, true
 }
 
 // IsVideoPost reports whether a platform post type is a video format.
