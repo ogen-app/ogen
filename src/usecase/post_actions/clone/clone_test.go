@@ -2,6 +2,7 @@ package clone_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -73,5 +74,71 @@ func TestCloneOfAPlannedPostCopiesItsTheses(t *testing.T) {
 	}
 	if kept, err := notes.ListByPostID(ctx, id); err != nil || len(kept) != 2 {
 		t.Fatalf("source notes = %d, err = %v, want both kept", len(kept), err)
+	}
+}
+
+// A clone's theses read back in the source's order.
+func TestCloneKeepsThesisOrder(t *testing.T) {
+	db := pgtest.MustDB()
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.Exec("SET session_replication_role = replica"); err != nil {
+		t.Fatalf("disable fks: %v", err)
+	}
+	ctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+	posts := repository.NewPostRepository(db)
+	notes := repository.NewPostNoteRepository(db)
+
+	id, err := models.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := posts.Create(ctx, &models.Post{
+		ID: id, CampaignID: "camp-1", Title: "t",
+		MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+		Status: models.PostStatusPlanned, CTAType: models.CTATypeNone, CreatedBy: "user-1",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	want := []string{"- one", "- two", "- three", "- four", "- five", "- six"}
+	for i, body := range want {
+		nid, err := models.NewID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := now.Add(time.Duration(i) * time.Second)
+		if err := notes.Create(ctx, &models.PostNote{
+			ID: nid, PostID: id, Type: models.PostNoteTypeDraftThesis, Body: body,
+			Origin: models.PostNoteOriginContentPlan, CreatedBy: "user-1", CreatedAt: at, UpdatedAt: at,
+		}); err != nil {
+			t.Fatalf("seed note: %v", err)
+		}
+	}
+
+	svc := clone.New(db, posts, repository.NewPostVersionRepository(db), repository.NewPostAttachmentRepository(db),
+		repository.NewPlatformRepository(db), repository.NewPostLogRepository(db), nil, nil)
+	res, err := svc.Clone(ctx, id, clone.DefaultOptions("user-1", clone.TriggerAPI))
+	if err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	copied, err := notes.ListByPostID(ctx, res.Post.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(copied))
+	for i, n := range copied {
+		got[i] = n.Body
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("clone theses = %q, want %q", got, want)
+	}
+	// Equal stamps would leave the read order to the table's physical order.
+	for i := 1; i < len(copied); i++ {
+		if !copied[i].CreatedAt.After(copied[i-1].CreatedAt) {
+			t.Fatalf("thesis %d stamped %v, not after %v", i, copied[i].CreatedAt, copied[i-1].CreatedAt)
+		}
 	}
 }
