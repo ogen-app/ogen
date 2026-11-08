@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -34,16 +35,16 @@ func foundationPack(d Deps) assistant.Pack {
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			get := genkit.DefineTool(g, "getBrand",
 				"Returns the brand foundation: its voices (when to use each), audiences, guardrails (may and never claim, banned words), and the facts still current.",
-				assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) }))
+				assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) }), ai.WithStrictSchema(false))
 			add := genkit.DefineTool(g, "addFact",
 				"Adds a fact to the ledger: a claim posts may make, with its kind and source. Returns an undo id.",
-				assistantkit.Wrap(func(ctx context.Context, in FactInput) (*FactOut, error) { return addFact(ctx, d, facts, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in FactInput) (*FactOut, error) { return addFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
 			edit := genkit.DefineTool(g, "updateFact",
 				"Corrects a fact in the ledger: only the fields passed change. Returns an undo id.",
-				assistantkit.Wrap(func(ctx context.Context, in UpdateFactInput) (*FactOut, error) { return updateFact(ctx, d, facts, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in UpdateFactInput) (*FactOut, error) { return updateFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
 			remove := genkit.DefineTool(g, "removeFact",
 				"Removes a fact from the ledger, so no post claims it any more. Returns an undo id.",
-				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
 			return []assistantkit.Spec{
 				spec(foundationPackName, get, assistantkit.TierRead,
 					`Call this when the user asks about their brand — "what's our voice for LinkedIn?", "which facts can we claim?" — or before editing facts.`),
