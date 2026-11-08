@@ -44,6 +44,9 @@ type Response struct {
 	Proposals []ProposalCard `json:"proposals,omitempty"`
 	// Result is the work's result when an offer was answered from its card.
 	Result any `json:"result,omitempty"`
+	// Results are what the packs' tools did this turn, by pack — the
+	// campaign pack's plan or dates, the post pack's edit or schedule.
+	Results map[string]any `json:"results,omitempty"`
 }
 
 const (
@@ -170,6 +173,9 @@ type Assistant struct {
 	// card, without a model call. Another assistant's offer is
 	// ErrNotThisAssistant.
 	Answer func(ctx context.Context, req AnswerRequest, onEvent OnEventFunc) (*Response, error)
+	// Route makes a turn's first model call without running the tools it
+	// asks for: what the evals check.
+	Route func(ctx context.Context, req Request) (*Routing, error)
 }
 
 // ErrNotThisAssistant is an offer another assistant made.
