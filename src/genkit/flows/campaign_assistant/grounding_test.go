@@ -43,6 +43,24 @@ func sourcesState(store *memProposals, gen *generation, ready int) *requestState
 	return st
 }
 
+// confirm runs the stored call, or the named option's call, past the gate.
+func confirm(t *testing.T, st *requestState, store *memProposals, option string) {
+	t.Helper()
+	p := store.rows[0]
+	tool, args := p.Tool, p.Args
+	if option != "" {
+		o, ok := p.Option(option)
+		if !ok {
+			t.Fatalf("no option %q", option)
+		}
+		tool, args = o.Tool, o.Args
+	}
+	raw, err := newTestTools(t).reg.RunConfirmed(st.bind(t.Context()), tool, map[string]any(args))
+	if res, _ := raw.(map[string]any); err != nil || res["status"] != string(assistantkit.StatusOK) {
+		t.Fatalf("confirming = %#v, %v", raw, err)
+	}
+}
+
 // No sources and no explicit ask: generation becomes a choice instead of a
 // silent fallback to general knowledge.
 func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
@@ -57,17 +75,18 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 		t.Fatalf("exploratory option args = %+v", o.Args)
 	}
 
-	// A plain yes takes the only way forward.
-	st.registry = newTestTools(t).reg
-	out = runTool(t, st, "confirmProposal", map[string]any{"proposalId": store.rows[0].ID})
-	if out.Status != assistantkit.StatusOK || gen.count != 1 || store.rows[0].Chosen != "exploratory" {
-		t.Fatalf("plain yes = %+v, generated = %d, chosen = %q", out, gen.count, store.rows[0].Chosen)
+	// Taking the option runs its call past the gate, without assets.
+	confirm(t, st, store, "exploratory")
+	if gen.count != 1 || !gen.excluded {
+		t.Fatalf("generated = %d, excluded = %v", gen.count, gen.excluded)
 	}
 	if g := st.generatedPostsResult.Grounding; g.Mode != assistantkit.Exploratory {
 		t.Fatalf("grounding = %+v", g)
 	}
 }
 
+// An explicit ask runs without the campaign's assets, even when it has ready
+// ones, and the result says it is not grounded.
 func TestGeneratePosts_ExplicitExploratoryLeavesAssetsOut(t *testing.T) {
 	for name, ready := range map[string]int{"no sources": 0, "ready sources": 2} {
 		t.Run(name, func(t *testing.T) {
@@ -85,7 +104,7 @@ func TestGeneratePosts_ExplicitExploratoryLeavesAssetsOut(t *testing.T) {
 	}
 }
 
-// With sources, the result names only the offered ones the posts cite.
+// With sources, the result names only the offered ones the ideas cite.
 func TestGeneratePosts_GroundingFromCitedAssets(t *testing.T) {
 	brochure := content_plan.AssetRef{ID: "a1", Title: "Hotel de Russie brochure"}
 	cases := map[string]struct {
@@ -117,7 +136,7 @@ func TestGeneratePosts_GroundingFromCitedAssets(t *testing.T) {
 }
 
 // The content plan, always proposed, offers the exploratory choice when
-// there are no sources; confirming it runs without assets and is labelled
+// there are no sources; taking it runs without assets and is labelled
 // exploratory whatever the engine reports.
 func TestRunContentPlan_NoSourcesOffersExploratory(t *testing.T) {
 	cases := map[string]*generation{
@@ -133,10 +152,9 @@ func TestRunContentPlan_NoSourcesOffersExploratory(t *testing.T) {
 				t.Fatalf("outcome = %+v", out)
 			}
 
-			st.registry = newTestTools(t).reg
-			out = runTool(t, st, "confirmProposal", map[string]any{"proposalId": store.rows[0].ID})
-			if out.Status != assistantkit.StatusOK || gen.count != 1 || !gen.excluded {
-				t.Fatalf("confirm = %+v, generated = %d, excluded = %v", out, gen.count, gen.excluded)
+			confirm(t, st, store, "exploratory")
+			if gen.count != 1 || !gen.excluded {
+				t.Fatalf("generated = %d, excluded = %v", gen.count, gen.excluded)
 			}
 			if g := st.contentPlanResult.Grounding; g.Mode != assistantkit.Exploratory || len(g.Sources) != 0 {
 				t.Fatalf("grounding = %+v", g)
@@ -146,7 +164,7 @@ func TestRunContentPlan_NoSourcesOffersExploratory(t *testing.T) {
 }
 
 // With sources, a confirmed content plan uses them and is grounded by what
-// its posts cite.
+// its ideas cite.
 func TestRunContentPlan_GroundedWithSources(t *testing.T) {
 	store := &memProposals{}
 	gen := &generation{offered: []content_plan.AssetRef{{ID: "a1", Title: "Brochure"}}, cited: []string{"a1"}}
@@ -155,10 +173,9 @@ func TestRunContentPlan_GroundedWithSources(t *testing.T) {
 	if out.Status != assistantkit.StatusProposed {
 		t.Fatalf("outcome = %+v", out)
 	}
-	st.registry = newTestTools(t).reg
-	out = runTool(t, st, "confirmProposal", map[string]any{"proposalId": store.rows[0].ID})
-	if out.Status != assistantkit.StatusOK || gen.excluded {
-		t.Fatalf("confirm = %+v, excluded = %v", out, gen.excluded)
+	confirm(t, st, store, "")
+	if gen.excluded {
+		t.Fatal("a grounded plan was told to leave assets out")
 	}
 	if g := st.contentPlanResult.Grounding; g.Mode != assistantkit.Grounded || len(g.Sources) != 1 {
 		t.Fatalf("grounding = %+v", g)
