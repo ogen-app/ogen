@@ -27,7 +27,7 @@ func (f *fakeProber) Probe(_ context.Context, _, _, _ string) (string, int64, er
 }
 
 // TestListFlowsAndModels covers the read-only catalogs: ListFlows returns the
-// code catalog (incl. the orchestrated post_assistant with two slots) and
+// code catalog (incl. the assistant with two slots) and
 // ListModels(embed) returns only embed models, priced and capability-tagged.
 func TestListFlowsAndModels(t *testing.T) {
 	s := newModelConfigAdminService(nil, nil) // reads don't touch the repo/prober
@@ -41,8 +41,8 @@ func TestListFlowsAndModels(t *testing.T) {
 	for _, f := range fr.GetFlows() {
 		slots[f.GetKey()] = len(f.GetSlots())
 	}
-	if slots[modelconfig.FlowPostAssistant] != 2 {
-		t.Fatalf("post_assistant slots = %d, want 2 (planner+writer)", slots[modelconfig.FlowPostAssistant])
+	if slots[modelconfig.FlowAssistant] != 2 {
+		t.Fatalf("assistant slots = %d, want 2 (orchestrator+writer)", slots[modelconfig.FlowAssistant])
 	}
 	if slots[modelconfig.FlowContentPlan] != 1 {
 		t.Fatalf("content_plan slots = %d, want 1", slots[modelconfig.FlowContentPlan])
