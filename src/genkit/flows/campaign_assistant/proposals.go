@@ -189,10 +189,10 @@ var (
 				return err
 			}
 			var fill func(int) any
-			if len(in.Platforms) == 1 {
+			if draftPlatforms(ctx, in) == 1 {
 				fill = func(n int) any { in.Count = n; return in }
 			}
-			return overGoal(ctx, "draftPost", max(in.Count, 1)*len(in.Platforms), in, fill)
+			return overGoal(ctx, "draftPost", draftTotal(ctx, in), in, fill)
 		},
 		Needs: func(ctx context.Context, in DraftPostInput) bool {
 			return draftTotal(ctx, in) > proposalThreshold(ctx)
@@ -210,12 +210,22 @@ func generateTotal(ctx context.Context, in GeneratePostsInput) int {
 	return n
 }
 
+// draftPlatforms is how many distinct campaign platforms a draftPost call
+// targets: the tool drafts once per platform, however often one is named.
+func draftPlatforms(ctx context.Context, in DraftPostInput) int {
+	ids, _, err := resolveTargetPlatforms(getRequestState(ctx).campaign, in.Platforms)
+	if err != nil {
+		return len(in.Platforms)
+	}
+	return len(ids)
+}
+
 // draftTotal is how many posts a draftPost call creates: the count on each
-// platform, with the total capped per call as the tool caps it.
+// distinct platform, with the total capped per call as the tool caps it.
 func draftTotal(ctx context.Context, in DraftPostInput) int {
 	maxN := getRequestState(ctx).draftCap()
 	perPlatform, _, _ := resolveGenerateCount(in.Count, maxN)
-	return min(perPlatform*len(in.Platforms), maxN)
+	return min(perPlatform*draftPlatforms(ctx, in), maxN)
 }
 
 // overGoal returns a conflict when adding count posts would take the

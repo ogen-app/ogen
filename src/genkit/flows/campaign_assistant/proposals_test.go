@@ -246,7 +246,7 @@ func TestPropose_ReusesIdenticalOfferInTurn(t *testing.T) {
 // The gate compares the threshold with what the tool would create, which is
 // capped per call.
 func TestPostGates_ThresholdUsesCappedCount(t *testing.T) {
-	st := &requestState{proposalThreshold: 5, maxDraftPosts: 5, maxGeneratePosts: 5}
+	st := &requestState{campaign: timelineCampaign(), proposalThreshold: 5, maxDraftPosts: 5, maxGeneratePosts: 5}
 	ctx := withRequestState(t.Context(), st)
 	if draftPostGate.Needs(ctx, DraftPostInput{Platforms: []string{"LinkedIn", "Threads"}, Count: 10}) {
 		t.Fatal("draftPost: 10 on two platforms creates 5, within the threshold")
