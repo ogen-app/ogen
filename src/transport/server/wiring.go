@@ -53,7 +53,6 @@ type repos struct {
 	postRepo                 repository.PostRepository
 	brandRepo                repository.BrandRepository
 	postVersionRepo          repository.PostVersionRepository
-	postMessageRepo          repository.PostAssistantMessageRepository
 	campaignMessageRepo      repository.CampaignAssistantMessageRepository
 	proposalRepo             repository.AssistantProposalRepository
 	actionRepo               repository.AssistantActionRepository
@@ -137,7 +136,6 @@ func wireRepositories(db, analyticsDB *bun.DB) *repos {
 		postRepo:                 repository.NewPostRepository(db),
 		brandRepo:                repository.NewBrandRepository(db), // CON-228 store; CON-245 ref validation + flow resolution
 		postVersionRepo:          repository.NewPostVersionRepository(db),
-		postMessageRepo:          repository.NewPostAssistantMessageRepository(db),
 		campaignMessageRepo:      repository.NewCampaignAssistantMessageRepository(db),
 		proposalRepo:             repository.NewAssistantProposalRepository(db),
 		actionRepo:               repository.NewAssistantActionRepository(db),

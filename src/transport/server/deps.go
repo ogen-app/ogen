@@ -366,7 +366,6 @@ func (d *deps) genkitDeps() genkitDeps {
 			Chunks:      r.chunksRepo,
 			Campaigns:   r.campaignRepo,
 			Versions:    r.postVersionRepo,
-			Messages:    r.postMessageRepo,
 			Logs:        r.postLogRepo,
 			Platforms:   r.platformRepo,
 			Settings:    r.settingRepo,
