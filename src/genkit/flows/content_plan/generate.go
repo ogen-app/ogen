@@ -474,7 +474,9 @@ func persistCited(campaign *models.Campaign, scope planScope, repos ContentPlanR
 	grounded := idSet(assetIDsOf(assets))
 	return func(ctx context.Context, dp *DraftPost) (string, error) {
 		dp.BrandVoiceID = brandVoiceID
-		return persistIdea(ctx, dp, campaign, &scope.start, &scope.end, repos.Ideas, groundedRefs(dp.AssetRefs, grounded))
+		// The streamed idea cites what the saved one is bound to.
+		dp.AssetRefs = groundedRefs(dp.AssetRefs, grounded)
+		return persistIdea(ctx, dp, campaign, &scope.start, &scope.end, repos.Ideas, dp.AssetRefs)
 	}
 }
 
