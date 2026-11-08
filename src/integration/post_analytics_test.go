@@ -125,7 +125,7 @@ var _ = Describe("Post analytics — CON-93", Ordered, func() {
 
 		handlers.NewUsersHandler(db, userRepo, repository.NewAccountRepository(db), settingRepo, auth, nil, nil).Register(app)
 		handlers.NewSessionsHandler(userRepo, repository.NewAccountRepository(db), sessionRepo, "test_session", false, nil).Register(app)
-		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
+		handlers.NewCampaignsHandler(campaignRepo, campaignTypeRepo, auth, nil, nil, nil, handlers.CampaignsOptions{}).Register(app)
 
 		postsHandler := handlers.NewPostsHandler(postRepo, repository.NewPostVersionRepository(db), platformRepo, repository.NewPostAttachmentRepository(db), auth, handlers.PostsOptions{})
 

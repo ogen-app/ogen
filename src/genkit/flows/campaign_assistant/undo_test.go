@@ -121,7 +121,7 @@ type noPosts struct{ repository.PostRepository }
 
 func (noPosts) ListByCampaign(context.Context, string) ([]models.Post, error) { return nil, nil }
 
-// A date change logs what it replaced, for undo to put back.
+// A date change logs what it replaced; undo puts it back.
 func TestSetCampaignDates_IsUndoable(t *testing.T) {
 	c := timelineCampaign()
 	c.ID = "c1"
@@ -140,10 +140,7 @@ func TestSetCampaignDates_IsUndoable(t *testing.T) {
 
 	// The undo service (tested against Postgres) restores Before while the
 	// campaign matches After.
-	a, err := actions.GetByID(t.Context(), st.datesResult.UndoID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := actions.logged(t, st.datesResult.UndoID)
 	if a.Before["endDate"] != "2026-01-30T00:00:00Z" || a.After["endDate"] != "2026-03-31T00:00:00Z" {
 		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
 	}
@@ -191,11 +188,7 @@ func TestEnrichBrief_IsUndoable(t *testing.T) {
 	if st.briefResult == nil || st.briefResult.UndoID == "" || campaigns.c.Description != "new desc" {
 		t.Fatalf("result = %+v, description = %q", st.briefResult, campaigns.c.Description)
 	}
-
-	a, err := actions.GetByID(t.Context(), st.briefResult.UndoID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := actions.logged(t, st.briefResult.UndoID)
 	want := models.JSONMap{"description": "desc", "targetPersona": "persona", "keyMessages": "messages", "toneGuidelines": "tone"}
 	if !maps.Equal(a.Before, want) || a.After["toneGuidelines"] != "new tone" {
 		t.Fatalf("logged before = %v, after = %v", a.Before, a.After)
