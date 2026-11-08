@@ -15,8 +15,9 @@ func TestPostGroundingMode(t *testing.T) {
 	ctx := tenantCtx()
 	repo := repository.NewPostRepository(db)
 
+	// One post throughout, so the nil case clears a stored label.
+	post := seedSubmissionPost(t, repo, "camp-1", models.PostStatusDraft, "")
 	for _, mode := range []*models.GroundingMode{models.GroundingFor(1), models.GroundingFor(0), nil} {
-		post := seedSubmissionPost(t, repo, "camp-1", models.PostStatusDraft, "")
 		post.GroundingMode = mode
 		if err := repo.Update(ctx, post); err != nil {
 			t.Fatalf("update grounding %v: %v", mode, err)
@@ -33,7 +34,7 @@ func TestPostGroundingMode(t *testing.T) {
 		}
 	}
 
-	post := seedSubmissionPost(t, repo, "camp-1", models.PostStatusDraft, "")
+	post = seedSubmissionPost(t, repo, "camp-1", models.PostStatusDraft, "")
 	post.GroundingMode = new(models.GroundingMode("speculative"))
 	err := repo.Update(ctx, post)
 	if err == nil || !strings.Contains(err.Error(), "check constraint") {

@@ -354,11 +354,15 @@ func TestUpdatePlannedBecomesDraftWithABody(t *testing.T) {
 	post := &models.Post{ID: "p", CampaignID: "c1", Status: models.PostStatusPlanned}
 	in := input(post, models.PostStatusPlanned)
 	in.Content = "The body."
+	in.Apply = func(p *models.Post) { p.Status, p.Content = models.PostStatusPlanned, "The body." }
 	if _, err := svc.Update(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
 	if post.Status != models.PostStatusDraft || len(logs.entries) != 1 || *logs.entries[0].ToStatus != models.PostStatusDraft {
 		t.Fatalf("status = %s, logs = %d", post.Status, len(logs.entries))
+	}
+	if saved := posts.updated[len(posts.updated)-1]; saved.Content != "The body." || saved.Status != models.PostStatusDraft {
+		t.Fatalf("saved %q as %s, want the body as a draft", saved.Content, saved.Status)
 	}
 
 	post = &models.Post{ID: "p2", CampaignID: "c1", Status: models.PostStatusPlanned}
