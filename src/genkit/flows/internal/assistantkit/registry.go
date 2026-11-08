@@ -83,8 +83,8 @@ func (r *Registry) Guide(packs ...string) string {
 }
 
 // Prepare runs the named tool's Prepare, if it has one, before a stored
-// proposal for it is confirmed. release gives the claim back; it is never
-// nil.
+// proposal for it is confirmed. release gives back what the run didn't
+// use; it is never nil.
 func (r *Registry) Prepare(ctx context.Context, name string) (prepared context.Context, release func(), err error) {
 	s, ok := r.Lookup(name)
 	if !ok || s.Prepare == nil {
