@@ -57,8 +57,9 @@ type IdeaRepository interface {
 	Update(ctx context.Context, idea *models.Idea, columns ...string) (bool, error)
 	// SetTriageIf writes idea's verdict, remind_at, decided_at and
 	// decided_by, and updated_at, on db (nil uses the repository's DB) only
-	// while the row still holds was's, in one statement. Returns false when
-	// they differ or the idea is gone.
+	// while the row still holds was's, in one statement; a decider who is no
+	// longer a user is written as null. Returns false when they differ or the
+	// idea is gone.
 	SetTriageIf(ctx context.Context, db bun.IDB, idea, was *models.Idea) (bool, error)
 	Delete(ctx context.Context, id string) (bool, error)
 	// LiveCampaignExists reports whether campaignID names a campaign in the
@@ -297,7 +298,8 @@ func (r *ideaRepository) Update(ctx context.Context, idea *models.Idea, columns 
 	return n > 0, nil
 }
 
-// SetTriageIf is a compare-and-set of the idea's triage columns.
+// SetTriageIf is a compare-and-set of the idea's triage columns. A decider
+// who is no longer a user is written as no one.
 func (r *ideaRepository) SetTriageIf(ctx context.Context, db bun.IDB, idea, was *models.Idea) (bool, error) {
 	if db == nil {
 		db = r.db
@@ -305,6 +307,7 @@ func (r *ideaRepository) SetTriageIf(ctx context.Context, db bun.IDB, idea, was 
 	res, err := db.NewUpdate().
 		Model(idea).
 		Column("verdict", "remind_at", "decided_at", "decided_by", "updated_at").
+		Value("decided_by", "(SELECT u.id FROM users AS u WHERE u.id = ?)", idea.DecidedBy).
 		WherePK().
 		Where("i.verdict IS NOT DISTINCT FROM ?", was.Verdict).
 		Where("i.remind_at IS NOT DISTINCT FROM ?", was.RemindAt).
