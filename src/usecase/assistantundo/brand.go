@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
@@ -83,10 +85,11 @@ func (s *Service) WithBrand(brand repository.BrandRepository) *Service {
 
 type brandFact struct{ brand repository.BrandRepository }
 
-// Undo restores a fact as it was. Taking back an add or a correction checks
-// the fact against the logged after state under its row lock, in the same
-// write, so an edit made since is never deleted or overwritten.
-func (u brandFact) Undo(ctx context.Context, a *models.AssistantAction) error {
+// Undo restores a fact as it was, within tx. Each write is conditional on
+// the logged after state: an add or a correction is taken back only while the
+// fact, locked, still holds it, and a removed fact is put back only while its
+// id is free. An edit made since is never deleted or overwritten.
+func (u brandFact) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
 	was, err := brandFactOf(a.EntityID, a.After)
 	if err != nil {
 		return fmt.Errorf("read changed fact: %w", err)
@@ -99,19 +102,12 @@ func (u brandFact) Undo(ctx context.Context, a *models.AssistantAction) error {
 	switch {
 	case was != nil && restored == nil:
 		// It was added: take it away.
-		_, err = u.brand.DeleteFactIf(ctx, a.EntityID, was)
+		_, err = u.brand.DeleteFactIf(ctx, tx, a.EntityID, was)
 	case was != nil:
 		restored.UpdatedAt = now
-		_, err = u.brand.UpdateFactIf(ctx, restored, was)
+		_, err = u.brand.UpdateFactIf(ctx, tx, restored, was)
 	case restored != nil:
-		// It was removed: put it back, unless it is back already.
-		cur, err := u.brand.GetFact(ctx, a.EntityID)
-		if err != nil {
-			return fmt.Errorf("load fact: %w", err)
-		}
-		if cur != nil {
-			return ErrChangedSince
-		}
+		// It was removed: put it back.
 		if _, kept := a.Before["createdByName"]; !kept {
 			restored.CreatedBy = &a.CreatedBy
 		}
@@ -119,7 +115,7 @@ func (u brandFact) Undo(ctx context.Context, a *models.AssistantAction) error {
 			restored.CreatedAt = now
 		}
 		restored.UpdatedAt = now
-		return u.brand.RestoreFact(ctx, restored)
+		err = u.brand.RestoreFact(ctx, tx, restored)
 	default:
 		return errors.New("fact change logs no fact")
 	}
