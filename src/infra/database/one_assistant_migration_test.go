@@ -1,7 +1,9 @@
 package database
 
 import (
+	"slices"
 	"testing"
+	"time"
 )
 
 const (
@@ -49,9 +51,14 @@ func TestOneAssistantMigration(t *testing.T) {
 	exec(`INSERT INTO campaigns_types (id, name, label, is_system, tenant_id, created_at) VALUES ('t', 't', 'T', FALSE, 'default', now())`)
 	exec(`INSERT INTO campaigns (id, name, campaign_type_id, created_by, tenant_id) VALUES ('c', 'C', 't', 'u', 'default')`)
 	exec(`INSERT INTO posts (id, campaign_id, title, content, status, created_by, tenant_id) VALUES ('p', 'c', 'a', 'Body.', 'draft', 'u', 'default')`)
+	// A turn's two messages were written in one transaction, so they share
+	// created_at; the model's is inserted first so the table's own order
+	// can't put it right.
 	exec(`INSERT INTO campaign_assistant_messages (id, campaign_id, role, content, tenant_id, created_at) VALUES
-		('cm1', 'c', 'user', 'plan it', 'default', now() - interval '2 minutes'),
-		('cm2', 'c', 'model', '{"explanation":"Planned.","action":"content_plan_generated"}', 'default', now() - interval '1 minute')`)
+		('cm2', 'c', 'model', '{"explanation":"Planned.","action":"content_plan_generated"}', 'default', '2026-11-01 10:00:00+00'),
+		('cm1', 'c', 'user', 'plan it', 'default', '2026-11-01 10:00:00+00'),
+		('cm4', 'c', 'model', '{"explanation":"Done.","action":"answered"}', 'default', '2026-11-01 10:05:00+00'),
+		('cm3', 'c', 'user', 'thanks', 'default', '2026-11-01 10:05:00+00')`)
 	exec(`INSERT INTO post_assistant_messages (id, post_id, role, content, tenant_id) VALUES
 		('pm1', 'p', 'user', 'shorten it', 'default')`)
 	// A thread of a post deleted before.
@@ -64,8 +71,35 @@ func TestOneAssistantMigration(t *testing.T) {
 		('o-global', NULL, 'campaign_assistant', 'orchestrator', 'claude-haiku-4-5-20251001')`)
 
 	execFile(oneAssistantUp)
-	if n := count(`SELECT count(*) FROM assistant_messages WHERE scope_kind = 'campaign' AND scope_id = 'c' AND tenant_id = 'default'`); n != 2 {
-		t.Errorf("campaign thread = %d messages, want 2", n)
+	// The thread replays in the assistant's order, each turn's request
+	// before its reply, with the messages as they were.
+	rows, err := db.DB.QueryContext(ctx, `SELECT id, role, content, created_at FROM assistant_messages
+		WHERE scope_kind = 'campaign' AND scope_id = 'c' AND tenant_id = 'default' ORDER BY created_at, seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type msg struct{ id, role, content, at string }
+	var thread []msg
+	for rows.Next() {
+		var m msg
+		var at time.Time
+		if err := rows.Scan(&m.id, &m.role, &m.content, &at); err != nil {
+			t.Fatal(err)
+		}
+		m.at = at.UTC().Format("15:04:05.000000")
+		thread = append(thread, m)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []msg{
+		{"cm1", "user", "plan it", "10:00:00.000000"},
+		{"cm2", "model", `{"explanation":"Planned.","action":"content_plan_generated"}`, "10:00:00.000001"},
+		{"cm3", "user", "thanks", "10:05:00.000000"},
+		{"cm4", "model", `{"explanation":"Done.","action":"answered"}`, "10:05:00.000001"},
+	}
+	if !slices.Equal(thread, want) {
+		t.Errorf("campaign thread = %v, want %v", thread, want)
 	}
 	if n := count(`SELECT count(*) FROM assistant_messages WHERE scope_kind = 'post' AND scope_id = 'p'`); n != 1 {
 		t.Errorf("post thread = %d messages, want 1", n)
@@ -85,8 +119,8 @@ func TestOneAssistantMigration(t *testing.T) {
 	}
 
 	execFile(oneAssistantDown)
-	if n := count(`SELECT count(*) FROM campaign_assistant_messages WHERE campaign_id = 'c'`); n != 2 {
-		t.Errorf("after down: campaign messages = %d, want 2", n)
+	if n := count(`SELECT count(*) FROM campaign_assistant_messages WHERE campaign_id = 'c'`); n != 4 {
+		t.Errorf("after down: campaign messages = %d, want 4", n)
 	}
 	if n := count(`SELECT count(*) FROM post_assistant_messages WHERE post_id = 'p'`); n != 1 {
 		t.Errorf("after down: post messages = %d, want 1", n)
