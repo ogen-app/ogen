@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -34,12 +35,12 @@ func ideasPack(d Deps) assistant.Pack {
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			find := genkit.DefineTool(g, "findIdeas",
 				"Lists ideas matching a filter in the Ideas list's syntax, with their id, title, verdict, origin and plan.",
-				assistantkit.Wrap(func(ctx context.Context, in FindIdeasInput) (*FindIdeasOutput, error) { return findIdeas(ctx, d, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in FindIdeasInput) (*FindIdeasOutput, error) { return findIdeas(ctx, d, in) }), ai.WithStrictSchema(false))
 			verdict := genkit.DefineTool(g, "setIdeaVerdict",
 				"Triages one idea: yes, later (with a reminder date), no, or none to put it back in the inbox. Returns an undo id.",
 				assistantkit.Wrap(func(ctx context.Context, in SetIdeaVerdictInput) (*SetIdeaVerdictOutput, error) {
 					return setIdeaVerdict(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			verdicts := genkit.DefineTool(g, "setIdeaVerdicts",
 				"Triages several ideas at once with the same verdict. Above a few ideas it is offered for the user to confirm first.",
 				assistantkit.Gated("setIdeaVerdicts", assistantkit.Gate[SetIdeaVerdictsInput]{
@@ -50,7 +51,7 @@ func ideasPack(d Deps) assistant.Pack {
 					},
 				}, assistantkit.Wrap(func(ctx context.Context, in SetIdeaVerdictsInput) (*BulkIdeasOutput, error) {
 					return setIdeaVerdicts(ctx, d, in)
-				})))
+				})), ai.WithStrictSchema(false))
 			move := genkit.DefineTool(g, "moveIdeas",
 				"Moves ideas into a campaign, or out to the workspace backlog. Always offered for the user to confirm first.",
 				assistantkit.Gated("moveIdeas", assistantkit.Gate[MoveIdeasInput]{
@@ -61,7 +62,7 @@ func ideasPack(d Deps) assistant.Pack {
 						}
 						return fmt.Sprintf("Move %s into the campaign", plural(len(in.IdeaIDs), "idea", "ideas"))
 					},
-				}, assistantkit.Wrap(func(ctx context.Context, in MoveIdeasInput) (*BulkIdeasOutput, error) { return moveIdeas(ctx, d, in) })))
+				}, assistantkit.Wrap(func(ctx context.Context, in MoveIdeasInput) (*BulkIdeasOutput, error) { return moveIdeas(ctx, d, in) })), ai.WithStrictSchema(false))
 			del := genkit.DefineTool(g, "deleteIdeas",
 				"Deletes ideas for good. Always offered for the user to confirm first.",
 				assistantkit.Gated("deleteIdeas", assistantkit.Gate[DeleteIdeasInput]{
@@ -71,12 +72,12 @@ func ideasPack(d Deps) assistant.Pack {
 					},
 				}, assistantkit.Wrap(func(ctx context.Context, in DeleteIdeasInput) (*BulkIdeasOutput, error) {
 					return deleteIdeas(ctx, d, in)
-				})))
+				})), ai.WithStrictSchema(false))
 			compile := genkit.DefineTool(g, "compileIdeas",
 				"Compiles one or more ideas into one planned post: their titles and angles become its theses, their plan suggests its platform, type, phase and date, and the post links back to them. No body is written.",
 				assistantkit.Wrap(func(ctx context.Context, in CompileIdeasInput) (*CompileIdeasOutput, error) {
 					return compileIdeas(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			draft := genkit.DefineTool(g, "draftIdeas",
 				"Writes finished posts from ideas and saves them as drafts with a body: one per idea per platform, or with together one per platform from all of them. Above a few posts it is offered for the user to confirm first.",
 				assistantkit.Gated("draftIdeas", assistantkit.Gate[DraftIdeasInput]{
@@ -93,7 +94,7 @@ func ideasPack(d Deps) assistant.Pack {
 					},
 				}, assistantkit.Wrap(func(ctx context.Context, in DraftIdeasInput) (*DraftIdeasOutput, error) {
 					return draftIdeas(ctx, d, in)
-				})))
+				})), ai.WithStrictSchema(false))
 
 			return []assistantkit.Spec{
 				spec(ideasPackName, find, assistantkit.TierRead,

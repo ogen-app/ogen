@@ -49,18 +49,18 @@ func assetsPack(d Deps) assistant.Pack {
 				"Lists assets matching a filter in the Assets list's syntax, with their id, title, kind and status.",
 				assistantkit.Wrap(func(ctx context.Context, in FindAssetsInput) (*FindAssetsOutput, error) {
 					return findAssets(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			ask := genkit.DefineTool(g, "askAssets",
 				"Searches what assets say: returns the passages most relevant to a question, with their asset and pages.",
-				assistantkit.Wrap(func(ctx context.Context, in AskAssetsInput) (*AskAssetsOutput, error) { return askAssets(ctx, d, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in AskAssetsInput) (*AskAssetsOutput, error) { return askAssets(ctx, d, in) }), ai.WithStrictSchema(false))
 			analyse := genkit.DefineTool(g, "analyseAsset",
 				"Starts, or re-runs, an asset's analysis — its summary and the ideas distilled from it — for the workspace or for a campaign's lens.",
 				assistantkit.Wrap(func(ctx context.Context, in AnalyseAssetInput) (*QueuedOutput, error) {
 					return analyseAsset(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			distill := genkit.DefineTool(g, "distillMoreIdeas",
 				"Asks an analysed asset for more ideas, optionally steered by a focus, without repeating the ones it has.",
-				assistantkit.Wrap(func(ctx context.Context, in DistillMoreInput) (*QueuedOutput, error) { return distillMore(ctx, d, in) }))
+				assistantkit.Wrap(func(ctx context.Context, in DistillMoreInput) (*QueuedOutput, error) { return distillMore(ctx, d, in) }), ai.WithStrictSchema(false))
 			tag := genkit.DefineTool(g, "tagAssets",
 				"Adds or removes tags on assets, by tag name. Above a few assets it is offered for the user to confirm first.",
 				assistantkit.Gated("tagAssets", assistantkit.Gate[TagAssetsInput]{
@@ -69,17 +69,17 @@ func assetsPack(d Deps) assistant.Pack {
 					Summary: func(in TagAssetsInput) string {
 						return fmt.Sprintf("Tag %s", plural(len(in.AssetIDs), "asset", "assets"))
 					},
-				}, assistantkit.Wrap(func(ctx context.Context, in TagAssetsInput) (*TagAssetsOutput, error) { return tagAssets(ctx, d, in) })))
+				}, assistantkit.Wrap(func(ctx context.Context, in TagAssetsInput) (*TagAssetsOutput, error) { return tagAssets(ctx, d, in) })), ai.WithStrictSchema(false))
 			attach := genkit.DefineTool(g, "attachAssets",
 				"Attaches assets to a campaign as its sources, or detaches them. Returns an undo id.",
 				assistantkit.Wrap(func(ctx context.Context, in AttachAssetsInput) (*AttachAssetsOutput, error) {
 					return attachAssets(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 			importURL := genkit.DefineTool(g, "importPage",
 				"Imports a web page as an asset (its text and images), and attaches it to the thread's campaign when there is one.",
 				assistantkit.Wrap(func(ctx context.Context, in ImportPageInput) (*ImportPageOutput, error) {
 					return importPage(ctx, d, in)
-				}))
+				}), ai.WithStrictSchema(false))
 
 			return []assistantkit.Spec{
 				spec(assetsPackName, find, assistantkit.TierRead,
