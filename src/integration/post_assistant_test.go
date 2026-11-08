@@ -15,6 +15,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
@@ -28,8 +29,8 @@ var _ = Describe("Post assistant flow", Ordered, func() {
 		campaignID  string
 		postRepo    repository.PostRepository
 		versionRepo repository.PostVersionRepository
-		messageRepo repository.PostAssistantMessageRepository
-		callback    func(ctx context.Context, req post_assistant.PostAssistantRequest, onEvent post_assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error)
+		messageRepo repository.AssistantMessageRepository
+		callback    func(ctx context.Context, req postTurn, onEvent assistant.OnEventFunc) (*post_assistant.PostAssistantResponse, error)
 
 		platformID = "AXqWG7U2qnpt" // seeded LinkedIn platform (Sqid)
 	)
@@ -52,7 +53,7 @@ var _ = Describe("Post assistant flow", Ordered, func() {
 		campaignRepo := repository.NewCampaignRepository(db, tagRepo, platformRepo, campaignTypeRepo)
 		postRepo = repository.NewPostRepository(db)
 		versionRepo = repository.NewPostVersionRepository(db)
-		messageRepo = repository.NewPostAssistantMessageRepository(db)
+		messageRepo = repository.NewAssistantMessageRepository(db)
 
 		// Seed user.
 		var err error
@@ -109,34 +110,24 @@ var _ = Describe("Post assistant flow", Ordered, func() {
 		if planningModelID == "" {
 			planningModelID = "claude-haiku-4-5-20251001"
 		}
-		// The flow resolves its loop model (and the editPost writer
-		// model) through the Provider — without one, cfg.Provider.Ref would
-		// panic. Exercise the hybrid planner path by default (the shipped
-		// default); set POST_ASSISTANT_PLANNER=false to run the legacy
-		// single-Sonnet path instead, so the same suite covers both.
-		provider := llm.NewProvider()
-		// The flow resolves its loop + writer models through the
-		// modelconfig resolver; seed it so Ref returns real model ids.
+		// The orchestrator runs on the planning model, the editPost writer on
+		// the generation one; seed the resolver so both resolve.
 		initModelConfig(ctx, modelID, planningModelID)
-		flowCfg := post_assistant.PostAssistantFlowConfig{
-			Provider:       provider,
-			PlannerEnabled: os.Getenv("POST_ASSISTANT_PLANNER") != "false",
-		}
 		repos := post_assistant.PostAssistantRepos{
 			Posts:     postRepo,
 			Assets:    assetRepo,
 			Chunks:    chunksRepo,
 			Campaigns: campaignRepo,
 			Versions:  versionRepo,
-			Messages:  messageRepo,
 		}
-		Expect(post_assistant.InitPostAssistant(g, flowCfg, repos)).To(Succeed())
-		callback = post_assistant.NewPostAssistantCallback()
+		pack, err := post_assistant.NewPack(g, post_assistant.PostAssistantFlowConfig{Provider: llm.NewProvider()}, repos)
+		Expect(err).NotTo(HaveOccurred())
+		callback = postCallback(newAssistant(g, assistant.Repos{Messages: messageRepo, Proposals: repository.NewAssistantProposalRepository(db)}, pack))
 	})
 
 	AfterEach(func() {
 		// Cleared between tests so each spec starts with a fresh post.
-		_, _ = db.NewDelete().TableExpr("post_assistant_messages").Where("1 = 1").Exec(ctx)
+		_, _ = db.NewDelete().TableExpr("assistant_messages").Where("scope_kind = 'post'").Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("post_versions").Where("1 = 1").Exec(ctx)
 		_, _ = db.NewDelete().TableExpr("posts").Where("campaign_id = ?", campaignID).Exec(ctx)
 	})
@@ -179,7 +170,7 @@ Go is a great choice for AI engineering for many reasons. The language has stron
 
 This post explores each of these benefits in detail and explains why teams shipping production AI features should consider Go alongside Python.`)
 
-			resp, err := callback(ctx, post_assistant.PostAssistantRequest{
+			resp, err := callback(ctx, postTurn{
 				PostID:      postID,
 				Instruction: "Cut this post in half. Keep the same meaning but make it much shorter and tighter.",
 			}, nil)
@@ -211,14 +202,14 @@ This post explores each of these benefits in detail and explains why teams shipp
 
 Go's static typing catches schema mismatches at compile time. Goroutines give a natural concurrency model. Single-binary deploys minimise ops overhead.`)
 
-			resp, err := callback(ctx, post_assistant.PostAssistantRequest{
+			resp, err := callback(ctx, postTurn{
 				PostID:      postID,
 				Instruction: "Don't change the post. Just tell me roughly how many words this post has.",
 			}, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).NotTo(BeNil())
 
-			Expect(resp.Action).To(Equal("declined"), "informational request should not be treated as an edit")
+			Expect(resp.Action).To(Equal("answered"), "informational request should not be treated as an edit")
 			Expect(resp.UpdatedContent).To(BeEmpty(), "answer mode never writes to updatedContent")
 			Expect(resp.Explanation).NotTo(BeEmpty(), "the answer to the user's question lives in explanation")
 
@@ -235,13 +226,13 @@ Go's static typing catches schema mismatches at compile time. Goroutines give a 
 
 A short note about Go.`)
 
-			_, err := callback(ctx, post_assistant.PostAssistantRequest{
+			_, err := callback(ctx, postTurn{
 				PostID:      postID,
 				Instruction: "Expand this into a single paragraph mentioning static typing.",
 			}, nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			msgs, err := messageRepo.ListRecentByPostID(ctx, postID, 10)
+			msgs, err := messageRepo.ListRecent(ctx, models.AssistantScopePost, postID, 10)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(len(msgs)).To(BeNumerically(">=", 2), "user instruction + model response should be persisted")
 
@@ -254,7 +245,7 @@ A short note about Go.`)
 					Expect(m.Content).To(ContainSubstring("static typing"))
 				case "model":
 					sawModel = true
-					// Model turn is persisted as JSON of action/explanation/saveVersion/versionNote.
+					// The model turn is persisted as the JSON the complete event carried.
 					Expect(strings.HasPrefix(strings.TrimSpace(m.Content), "{")).To(BeTrue(),
 						"model turn should be stored as JSON for badge reconstruction on reload")
 				}
@@ -275,23 +266,23 @@ A concise post about Go.`)
 				gotContentDelta     bool
 				gotComplete         bool
 				gotError            bool
-				eventOrder          []post_assistant.SSEEventKind
+				eventOrder          []assistant.SSEEventKind
 			)
-			onEvent := post_assistant.OnEventFunc(func(name post_assistant.SSEEventKind, _ any) {
+			onEvent := assistant.OnEventFunc(func(name assistant.SSEEventKind, _ any) {
 				eventOrder = append(eventOrder, name)
 				switch name {
-				case post_assistant.SSEEventExplanationDelta:
+				case assistant.SSEEventExplanationDelta:
 					gotExplanationDelta = true
-				case post_assistant.SSEEventContentDelta:
+				case assistant.SSEEventKind(post_assistant.SSEEventContentDelta):
 					gotContentDelta = true
-				case post_assistant.SSEEventComplete:
+				case assistant.SSEEventComplete:
 					gotComplete = true
-				case post_assistant.SSEEventError:
+				case assistant.SSEEventError:
 					gotError = true
 				}
 			})
 
-			_, err := callback(ctx, post_assistant.PostAssistantRequest{
+			_, err := callback(ctx, postTurn{
 				PostID:      postID,
 				Instruction: "Make it about three sentences longer with concrete examples.",
 			}, onEvent)
@@ -299,14 +290,13 @@ A concise post about Go.`)
 
 			Expect(gotError).To(BeFalse(), "error event should not fire on the happy path")
 			Expect(gotExplanationDelta).To(BeTrue(), "explanation_delta should fire as the model writes the explanation")
-			// content_delta must stream the edited copy: in the hybrid path this
-			// proves the editPost writer sub-call streams through to the client;
-			// in the legacy path it is the inline updatedContent stream.
+			// content_delta proves the editPost writer streams through to the
+			// client.
 			Expect(gotContentDelta).To(BeTrue(), "content_delta should stream the rewritten post content on an edit")
 			Expect(gotComplete).To(BeTrue(), "complete event signals the canonical final response")
 
 			// complete should be the last event emitted.
-			Expect(eventOrder[len(eventOrder)-1]).To(Equal(post_assistant.SSEEventComplete))
+			Expect(eventOrder[len(eventOrder)-1]).To(Equal(assistant.SSEEventComplete))
 		})
 	})
 })
