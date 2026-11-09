@@ -37,28 +37,29 @@ func repairPack(d Deps) assistant.Pack {
 		Name:    repairPackName,
 		Summary: "check a campaign's calendar, its brief and posts, and posts against the brand voice and guardrails, for problems, and fix them: even out the dates, move a post, fill silences and goal shortfalls, finish what's due, change, unschedule or delete posts of a type the campaign dropped",
 		Screens: []viewcontext.Screen{"calendar", "campaign.calendar", "campaign.overview", "campaign.list"},
-		// checkBrand's findings reach the client as
-		// complete.results.repair.checkBrand, so they replay from history.
+		// Each tool's last output reaches the client as
+		// complete.results.repair.<tool>, so findings, their keys and
+		// fixes, the locked posts and a fix's undo id replay from history.
 		Begin: beginResults(repairPackName),
 		End:   endResults(repairPackName),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			check := genkit.DefineTool(g, "checkCalendar",
 				"Checks a campaign's calendar: posts outside its dates or on days it doesn't publish, crowded days and slots, long silences, goal periods short of posts, posts due soon that aren't written or ready, posts of a type the campaign no longer includes, and posts from one idea or source published close together. Each finding comes with its fixes, offered for the user to confirm.",
-				assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*CheckCalendarOutput, error) {
+				assistantkit.Wrap(recorded(repairPackName, "checkCalendar", nil, func(ctx context.Context, in CampaignRef) (*CheckCalendarOutput, error) {
 					return checkCalendar(ctx, d, in)
-				}), ai.WithStrictSchema(false))
+				})), ai.WithStrictSchema(false))
 			optimise := genkit.DefineTool(g, "optimiseCalendar",
 				"Works out how to even a campaign's movable posts out over its dates, phase by phase, and offers the moves for the user to confirm, with each post's old and new date. Planned, draft and ready posts move: nothing is queued to publish for them yet. Scheduled posts stay where they are and come back as locked.",
-				assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*OptimiseOutput, error) {
+				assistantkit.Wrap(recorded(repairPackName, "optimiseCalendar", nil, func(ctx context.Context, in CampaignRef) (*OptimiseOutput, error) {
 					return optimiseCalendar(ctx, d, in)
-				}), ai.WithStrictSchema(false))
+				})), ai.WithStrictSchema(false))
 			apply := genkit.DefineTool(g, "applyCalendarMoves",
 				"Moves posts to new dates exactly as offered. Only runs once the user confirmed the offer.",
 				assistantkit.Gated("applyCalendarMoves", assistantkit.Gate[ApplyMovesInput]{
 					Summary: func(in ApplyMovesInput) string { return fmt.Sprintf("Move %s", plural(len(in.Moves), "post", "posts")) },
-				}, assistantkit.Wrap(func(ctx context.Context, in ApplyMovesInput) (*ApplyMovesOutput, error) {
+				}, assistantkit.Wrap(recorded(repairPackName, "applyCalendarMoves", nil, func(ctx context.Context, in ApplyMovesInput) (*ApplyMovesOutput, error) {
 					return applyMoves(ctx, d, in)
-				})), ai.WithStrictSchema(false))
+				}))), ai.WithStrictSchema(false))
 			dismiss := genkit.DefineTool(g, "dismissFinding",
 				"Dismisses a calendar or review finding the user is fine with, so checks of this thread stop raising it while its posts, or the brief, stay the same.",
 				assistantkit.Wrap(func(ctx context.Context, in DismissFindingInput) (*DismissFindingOutput, error) {
@@ -78,7 +79,7 @@ func repairPack(d Deps) assistant.Pack {
 			if d.CheckBrief != nil && d.CheckPosts != nil {
 				review := genkit.DefineTool(g, "reviewCampaign",
 					"Reviews a campaign's brief for consistency and completeness, and its unpublished posts against the brief, and offers fixes for each finding.",
-					assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*ReviewOutput, error) { return reviewCampaign(ctx, d, in) }), ai.WithStrictSchema(false))
+					assistantkit.Wrap(recorded(repairPackName, "reviewCampaign", nil, func(ctx context.Context, in CampaignRef) (*ReviewOutput, error) { return reviewCampaign(ctx, d, in) })), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, review, assistantkit.TierRead,
 					`Call this when the user asks whether the brief holds up or the posts follow it, or for a full review. Relay the findings with their fixes, which are already offered (proposalId) or open the post (navigate to it): a brief finding's fixes improve the brief, a post's rewrite it to follow the brief. A finding the user is fine with is dismissed by its key.`))
 			}
@@ -87,9 +88,9 @@ func repairPack(d Deps) assistant.Pack {
 					"Rewrites one of the campaign's posts by an instruction, as the post's own assistant would, and saves it as a new version. It is offered for the user to confirm before it runs.",
 					assistantkit.Gated("revisePost", assistantkit.Gate[RevisePostInput]{
 						Summary: func(in RevisePostInput) string { return "Rewrite the post: " + in.Instruction },
-					}, assistantkit.Wrap(func(ctx context.Context, in RevisePostInput) (*RevisePostOutput, error) {
+					}, assistantkit.Wrap(recorded(repairPackName, "revisePost", nil, func(ctx context.Context, in RevisePostInput) (*RevisePostOutput, error) {
 						return revisePost(ctx, d, in)
-					})),
+					}))),
 					ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, revise, assistantkit.TierProposal,
 					`Call this when the user, in a campaign's thread, asks to rewrite one of its posts by an instruction; pass the post's id and the instruction verbatim. It is offered for the user to confirm. A review finding's "rewrite it" fix is already this offer. In the post's own thread, use editPost instead.`))
