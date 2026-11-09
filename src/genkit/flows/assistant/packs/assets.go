@@ -87,7 +87,7 @@ func assetsPack(d Deps) assistant.Pack {
 				spec(assetsPackName, find, assistantkit.TierRead,
 					`Call this to look up assets — "which PDFs are still processing?", "assets about pricing". filter is a URL query string in the Assets list's syntax (e.g. text=pricing&status=ready&kind=pdf). To show the user, also call setFilter with it.`),
 				spec(assetsPackName, ask, assistantkit.TierRead,
-					`Call this when the user asks what their assets say — "what does the deck say about enterprise pricing?". Pass assetIds to search only those (e.g. the selected ones); otherwise it searches the thread's campaign's assets, or every asset outside a campaign. Answer only from the passages and name the assets you used; if none match, say so.`),
+					`Call this when the user asks what their assets say — "what does the deck say about enterprise pricing?". Pass assetIds to search only those (e.g. the selected ones, or the ones the user names). Otherwise, on an asset page it searches the open asset alone, and elsewhere the thread's campaign's assets, or every asset outside a campaign; set allAssets when the user asks beyond the open asset. Answer only from the passages and name the assets you used; when scope is "open_asset", say the answer is from that asset only. If none match, say so.`),
 				spec(assetsPackName, analyse, assistantkit.TierRead,
 					`Call this when the user asks to analyse an asset, or to re-run a failed analysis. It runs in the background; say the results arrive on the asset page.`),
 				spec(assetsPackName, distill, assistantkit.TierRead,
@@ -166,7 +166,17 @@ func findAssets(ctx context.Context, d Deps, in FindAssetsInput) (*FindAssetsOut
 type AskAssetsInput struct {
 	Question string   `json:"question"`
 	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Search only these assets"`
+	// AllAssets widens a question asked on an asset page past that asset.
+	AllAssets bool `json:"allAssets,omitempty" jsonschema:"description=Search the campaign's or the workspace's assets, not only the asset open on screen"`
 }
+
+// What a question searched.
+const (
+	scopeAsked     = "asked"
+	scopeOpenAsset = "open_asset"
+	scopeCampaign  = "campaign"
+	scopeWorkspace = "workspace"
+)
 
 // Excerpt is a passage that answers a question.
 type Excerpt struct {
@@ -179,7 +189,10 @@ type Excerpt struct {
 // AskAssetsOutput is the best passages, or why there are none.
 type AskAssetsOutput struct {
 	Excerpts []Excerpt `json:"excerpts"`
-	Note     string    `json:"note,omitempty"`
+	// Scope is what was searched: the assets asked for, the asset open on
+	// screen, the thread's campaign's assets or the workspace's.
+	Scope string `json:"scope"`
+	Note  string `json:"note,omitempty"`
 }
 
 func askAssets(ctx context.Context, d Deps, in AskAssetsInput) (*AskAssetsOutput, error) {
@@ -190,16 +203,20 @@ func askAssets(ctx context.Context, d Deps, in AskAssetsInput) (*AskAssetsOutput
 	if !embedopts.Available(d.Embedder) || d.Chunks == nil {
 		return &AskAssetsOutput{Excerpts: []Excerpt{}, Note: "asset search is unavailable right now"}, nil
 	}
-	ids, err := searchScope(ctx, d, dedupe(in.AssetIDs))
+	ids, scope, err := searchScope(ctx, d, dedupe(in.AssetIDs), in.AllAssets)
 	if err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
-		return &AskAssetsOutput{Excerpts: []Excerpt{}, Note: "there are no ready assets to search"}, nil
+		note := "there are no ready assets to search"
+		if scope == scopeOpenAsset {
+			note = "the open asset isn't ready to search yet; set allAssets to search the others"
+		}
+		return &AskAssetsOutput{Excerpts: []Excerpt{}, Scope: scope, Note: note}, nil
 	}
 	emb, err := d.Embedder.Embed(ctx, &ai.EmbedRequest{Input: []*ai.Document{ai.DocumentFromText(question, nil)}, Options: embedopts.Query()})
 	if err != nil || len(emb.Embeddings) == 0 {
-		return &AskAssetsOutput{Excerpts: []Excerpt{}, Note: "asset search is unavailable right now"}, nil
+		return &AskAssetsOutput{Excerpts: []Excerpt{}, Scope: scope, Note: "asset search is unavailable right now"}, nil
 	}
 	chunks, err := d.Chunks.SearchSimilar(ctx, pgvector.NewHalfVector(emb.Embeddings[0].Embedding), ids, askMinSimilarity, askChunkLimit)
 	if err != nil {
@@ -211,7 +228,7 @@ func askAssets(ctx context.Context, d Deps, in AskAssetsInput) (*AskAssetsOutput
 			titles[a.ID] = a.Title
 		}
 	}
-	out := &AskAssetsOutput{Excerpts: make([]Excerpt, 0, len(chunks))}
+	out := &AskAssetsOutput{Excerpts: make([]Excerpt, 0, len(chunks)), Scope: scope}
 	for _, c := range chunks {
 		out.Excerpts = append(out.Excerpts, Excerpt{AssetID: c.AssetID, Title: titles[c.AssetID], Pages: pages(c.PageStart, c.PageEnd), Text: c.Content})
 	}
@@ -221,29 +238,35 @@ func askAssets(ctx context.Context, d Deps, in AskAssetsInput) (*AskAssetsOutput
 	return out, nil
 }
 
-// searchScope is the ready assets a question searches: the ones asked for,
-// else the thread's campaign's, else the workspace's.
-func searchScope(ctx context.Context, d Deps, asked []string) ([]string, error) {
+// searchScope is the ready assets a question searches, and which they are:
+// the ones asked for, else the asset open on screen unless all is set, else
+// the thread's campaign's, else the workspace's.
+func searchScope(ctx context.Context, d Deps, asked []string, all bool) ([]string, string, error) {
 	var candidates []string
-	if len(asked) > 0 {
-		candidates = asked
-	} else if id := assistant.CampaignID(ctx); id != "" {
-		c, err := d.Campaigns.GetByID(ctx, id)
+	scope := scopeWorkspace
+	switch open := assistant.FocusedAsset(ctx); {
+	case len(asked) > 0:
+		candidates, scope = asked, scopeAsked
+	case open != "" && !all:
+		candidates, scope = []string{open}, scopeOpenAsset
+	case assistant.CampaignID(ctx) != "":
+		scope = scopeCampaign
+		c, err := d.Campaigns.GetByID(ctx, assistant.CampaignID(ctx))
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, assistantkit.Refused("this thread's campaign is gone")
+			return nil, scope, assistantkit.Refused("this thread's campaign is gone")
 		}
 		if err != nil {
-			return nil, err
+			return nil, scope, err
 		}
 		candidates = c.AssetIDs
 		if len(candidates) == 0 {
-			return nil, nil
+			return nil, scope, nil
 		}
 	}
 	// nil lists every asset of the tenant.
 	metas, err := d.Assets.ListMeta(ctx, candidates)
 	if err != nil {
-		return nil, err
+		return nil, scope, err
 	}
 	var ready []string
 	for _, a := range metas {
@@ -251,7 +274,7 @@ func searchScope(ctx context.Context, d Deps, asked []string) ([]string, error) 
 			ready = append(ready, a.ID)
 		}
 	}
-	return ready, nil
+	return ready, scope, nil
 }
 
 func pages(start, end *int) string {

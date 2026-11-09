@@ -61,6 +61,7 @@ var (
 	evalCampaign  = viewcontext.Scope{Kind: models.AssistantScopeCampaign, ID: "c1"}
 	evalPost      = viewcontext.Scope{Kind: models.AssistantScopePost, ID: "p1"}
 	evalWorkspace = viewcontext.Scope{Kind: models.AssistantScopeWorkspace}
+	evalOpenAsset = &viewcontext.Ref{Kind: viewcontext.KindAsset, ID: "a1"}
 	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas"}
 )
 
@@ -88,6 +89,8 @@ var evalCases = []evalCase{
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "What do my assets say about enterprise pricing?", want: []string{"askAssets", "findAssets"}, not: writes},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Import https://example.com/launch as an asset.", want: []string{"importPage"}},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "How many analyses failed, and which?", not: []string{"findAssets", "askAssets", "analyseAsset"}},
+	{pack: "assets", screen: "asset", scope: evalWorkspace, focus: evalOpenAsset, say: "What does it promise about the spa?", want: []string{"askAssets"}, not: writes},
+	{pack: "campaign", screen: "campaign.asset", scope: evalCampaign, focus: evalOpenAsset, say: "Plan 3 LinkedIn posts from this for next week.", want: []string{"generatePosts"}},
 	// repair
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Anything wrong with the calendar?", want: []string{"checkCalendar"}, not: writes},
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Even out the calendar.", want: []string{"optimiseCalendar", "redistributePosts", "checkCalendar"}},

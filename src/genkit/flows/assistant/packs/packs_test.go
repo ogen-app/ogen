@@ -329,15 +329,31 @@ func TestSearchScope(t *testing.T) {
 		}},
 	}
 	ctx, _ := turn(t, campaign1, nil)
-	if ids, err := searchScope(ctx, d, nil); err != nil || !slices.Equal(ids, []string{"a1"}) {
-		t.Fatalf("campaign scope = %v, %v; want its ready assets", ids, err)
+	if ids, scope, err := searchScope(ctx, d, nil, false); err != nil || !slices.Equal(ids, []string{"a1"}) || scope != scopeCampaign {
+		t.Fatalf("campaign scope = %v %q, %v; want its ready assets", ids, scope, err)
 	}
-	if ids, _ := searchScope(ctx, d, []string{"a3"}); !slices.Equal(ids, []string{"a3"}) {
-		t.Fatalf("asked = %v", ids)
+	if ids, scope, _ := searchScope(ctx, d, []string{"a3"}, false); !slices.Equal(ids, []string{"a3"}) || scope != scopeAsked {
+		t.Fatalf("asked = %v %q", ids, scope)
 	}
 	ctx, _ = turn(t, workspace, nil)
-	if ids, _ := searchScope(ctx, d, nil); !slices.Equal(ids, []string{"a1", "a3"}) {
-		t.Fatalf("workspace = %v", ids)
+	if ids, scope, _ := searchScope(ctx, d, nil, false); !slices.Equal(ids, []string{"a1", "a3"}) || scope != scopeWorkspace {
+		t.Fatalf("workspace = %v %q", ids, scope)
+	}
+
+	// On an asset page the open asset is the default; naming others or
+	// asking for all of them widens it.
+	ctx, _ = assistant.NewViewTurnContext(t.Context(), viewcontext.ViewContext{
+		Version: viewcontext.Version, Screen: "campaign.asset", Scope: campaign1,
+		Focus: &viewcontext.Ref{Kind: viewcontext.KindAsset, ID: "a3"},
+	}, nil)
+	if ids, scope, _ := searchScope(ctx, d, nil, false); !slices.Equal(ids, []string{"a3"}) || scope != scopeOpenAsset {
+		t.Fatalf("open asset = %v %q", ids, scope)
+	}
+	if ids, scope, _ := searchScope(ctx, d, []string{"a1"}, false); !slices.Equal(ids, []string{"a1"}) || scope != scopeAsked {
+		t.Fatalf("named on an asset page = %v %q", ids, scope)
+	}
+	if ids, scope, _ := searchScope(ctx, d, nil, true); !slices.Equal(ids, []string{"a1"}) || scope != scopeCampaign {
+		t.Fatalf("all on an asset page = %v %q", ids, scope)
 	}
 }
 

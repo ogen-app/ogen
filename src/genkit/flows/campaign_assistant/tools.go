@@ -256,7 +256,9 @@ type RunContentPlanInput struct {
 	Exploratory bool `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants a plan without the campaign's sources (from general knowledge)."`
 	// AssetIDs limit the sources ("use only these"). They are part of the
 	// stored offer, so a confirmed plan keeps them.
-	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Only these of the campaign's assets are used as sources; ids from getSelection. Omit to use all of them."`
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Only these of the campaign's assets are used as sources; ids from getSelection. Omit for the default: the asset open on the user's screen, else all of them."`
+	// AllAssets widens a call made on an asset page past that asset.
+	AllAssets bool `json:"allAssets,omitempty" jsonschema:"description=Use all the campaign's assets, not only the asset open on the user's screen; set it when the user asks for that."`
 }
 
 // RunContentPlanOutput is returned to the model after a content plan runs.
@@ -290,7 +292,9 @@ type GeneratePostsInput struct {
 	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Optional post-type slug (e.g. text-post, article); omit for the platform default."`
 	Exploratory bool     `json:"exploratory,omitempty" jsonschema:"description=Set only when the user explicitly wants posts without the campaign's sources (from general knowledge)."`
 	// AssetIDs limit the sources ("use only these").
-	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Only these of the campaign's assets are used as sources; ids from getSelection. Omit to use all of them."`
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Only these of the campaign's assets are used as sources; ids from getSelection. Omit for the default: the asset open on the user's screen, else all of them."`
+	// AllAssets widens a call made on an asset page past that asset.
+	AllAssets bool `json:"allAssets,omitempty" jsonschema:"description=Use all the campaign's assets, not only the asset open on the user's screen; set it when the user asks for that."`
 	// CampaignID names the campaign of an offer made on another screen.
 	CampaignID string `json:"campaignId,omitempty" jsonschema:"description=Leave empty: the campaign is this thread's. Set only by offers made on other screens."`
 }
@@ -374,7 +378,9 @@ type CheckPostsInput struct {
 type AskCampaignAssetsInput struct {
 	Query string `json:"query" jsonschema:"description=The question to answer from the campaign's attached assets, e.g. 'what does the pricing PDF say about enterprise tiers?'"`
 	// AssetIDs limit the search ("in these").
-	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Search only these of the campaign's assets; ids from getSelection. Omit to search all of them."`
+	AssetIDs []string `json:"assetIds,omitempty" jsonschema:"description=Search only these of the campaign's assets; ids from getSelection. Omit for the default: the asset open on the user's screen, else all of them."`
+	// AllAssets widens a question asked on an asset page past that asset.
+	AllAssets bool `json:"allAssets,omitempty" jsonschema:"description=Search all the campaign's assets, not only the asset open on the user's screen."`
 }
 
 // AskCampaignAssetsOutput returns the asset excerpts most relevant to the query
@@ -383,6 +389,9 @@ type AskCampaignAssetsOutput struct {
 	Excerpts  []AssetExcerpt `json:"excerpts"`
 	Available bool           `json:"available"`      // false when asset search could not run
 	Note      string         `json:"note,omitempty"` // status when excerpts is empty
+	// OpenAssetOnly says only the asset open on the user's screen was
+	// searched, the default on its page.
+	OpenAssetOnly bool `json:"openAssetOnly,omitempty"`
 }
 
 // AssetExcerpt is one relevant chunk of an attached asset.
@@ -418,10 +427,11 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	runContentPlan := genkit.DefineTool(g, "runContentPlan",
 		"Plans the campaign's content: a set of ideas across its platforms and phases, each with a thesis and a suggested platform, post type, phase and date, saved to the campaign's ideas. "+
 			"No post is created: the user picks ideas and compiles or drafts them. Call this when the user asks to generate, create, or regenerate a content plan. Returns how many ideas were saved.",
-		assistantkit.Gated("runContentPlan", contentPlanGate,
-			assistantkit.Wrap(func(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
-				return toolRunContentPlan(ctx, in)
-			}, contentPlanInvalid)),
+		onOpenAsset(func(in *RunContentPlanInput) (*[]string, bool) { return &in.AssetIDs, in.AllAssets || in.Exploratory },
+			assistantkit.Gated("runContentPlan", contentPlanGate,
+				assistantkit.Wrap(func(ctx context.Context, in RunContentPlanInput) (*RunContentPlanOutput, error) {
+					return toolRunContentPlan(ctx, in)
+				}, contentPlanInvalid))),
 		ai.WithStrictSchema(false),
 	)
 
@@ -457,10 +467,11 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		"Plans a few NEW ideas for a specific platform, phase, and timeframe — e.g. 'add a few Threads posts in the current phase for the upcoming weeks' — saved to the campaign's ideas with that plan. "+
 			"Different from runContentPlan (which plans the WHOLE campaign across all platforms/phases). Only platforms the campaign already targets are allowed. "+
 			"Resolve the requested timeframe into windowStart/windowEnd (ISO dates) using today's date shown in the context. Returns how many ideas were saved; no post is created.",
-		assistantkit.Gated("generatePosts", generatePostsGate,
-			func(ctx *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
-				return toolGeneratePosts(ctx, in)
-			}),
+		onOpenAsset(func(in *GeneratePostsInput) (*[]string, bool) { return &in.AssetIDs, in.AllAssets || in.Exploratory },
+			assistantkit.Gated("generatePosts", generatePostsGate,
+				func(ctx *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[GeneratePostsOutput], error) {
+					return toolGeneratePosts(ctx, in)
+				})),
 		ai.WithStrictSchema(false),
 	)
 
@@ -1245,6 +1256,12 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 	if len(ids) == 0 {
 		return &AskCampaignAssetsOutput{Available: true, Note: "this campaign has no ready assets to search"}, nil
 	}
+	openOnly := false
+	if len(in.AssetIDs) == 0 && !in.AllAssets {
+		if open := assistant.FocusedAsset(ctx); slices.Contains(ids, open) {
+			ids, openOnly = []string{open}, true
+		}
+	}
 	if len(in.AssetIDs) > 0 {
 		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(in.AssetIDs, id) })
 		if len(ids) == 0 {
@@ -1283,7 +1300,41 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 			Text:    c.Content,
 		})
 	}
-	return &AskCampaignAssetsOutput{Excerpts: excerpts, Available: true}, nil
+	return &AskCampaignAssetsOutput{Excerpts: excerpts, Available: true, OpenAssetOnly: openOnly}, nil
+}
+
+// onOpenAsset makes the asset open on the user's screen the default source
+// of a generation, when it is one of the campaign's ready assets: a call
+// that names no assets and doesn't ask for all of them draws on it alone.
+// It runs before the gate, so a proposal stores the source it will use and
+// keeps it when confirmed from another screen.
+func onOpenAsset[In, Out any](sources func(*In) (ids *[]string, all bool), next ai.ToolFunc[In, Out]) ai.ToolFunc[In, Out] {
+	return func(ctx *ai.ToolContext, in In) (Out, error) {
+		if ids, all := sources(&in); !all && len(*ids) == 0 && !assistantkit.Confirmed(ctx) {
+			if open := openAsset(ctx); open != "" {
+				*ids = []string{open}
+			}
+		}
+		return next(ctx, in)
+	}
+}
+
+// openAsset is the asset open on the user's screen when it is one of the
+// campaign's ready assets, else "".
+func openAsset(ctx context.Context) string {
+	open := assistant.FocusedAsset(ctx)
+	if open == "" {
+		return ""
+	}
+	st := getRequestState(ctx)
+	if st.repos.Assets == nil {
+		return ""
+	}
+	ids, err := readyCampaignAssetIDs(ctx, st.campaign, st.repos.Assets)
+	if err != nil || !slices.Contains(ids, open) {
+		return ""
+	}
+	return open
 }
 
 // readyCampaignAssetIDs resolves the campaign's attached, ready asset IDs — the
