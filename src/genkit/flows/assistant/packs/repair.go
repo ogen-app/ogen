@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -61,7 +62,7 @@ func repairPack(d Deps) assistant.Pack {
 					return applyMoves(ctx, d, in)
 				}))), ai.WithStrictSchema(false))
 			dismiss := genkit.DefineTool(g, "dismissFinding",
-				"Dismisses a calendar or review finding the user is fine with, so checks of this thread stop raising it while its posts, or the brief, stay the same.",
+				"Dismisses a calendar or review finding the user is fine with, for its campaign: no check, here or on the campaign's Overview, raises it again while its key stays the same. A calendar finding's key follows its posts; a review finding's follows the brief, or the post's text.",
 				assistantkit.Wrap(func(ctx context.Context, in DismissFindingInput) (*DismissFindingOutput, error) {
 					return dismissFinding(ctx, d, in)
 				}), ai.WithStrictSchema(false))
@@ -73,7 +74,7 @@ func repairPack(d Deps) assistant.Pack {
 				spec(repairPackName, apply, assistantkit.TierProposal,
 					`Never call this yourself: it is what an optimise or check offer runs once confirmed.`),
 				spec(repairPackName, dismiss, assistantkit.TierRead,
-					`Call this when the user says a finding is fine as it is ("leave the gap", "that's intended"). Pass its key.`),
+					`Call this when the user says a finding is fine as it is ("leave the gap", "that's intended"). Pass its key, and the campaign the check was for when it isn't the thread's.`),
 			}
 			specs = append(specs, postFixSpecs(g, d)...)
 			if d.CheckBrief != nil && d.CheckPosts != nil {
@@ -170,7 +171,7 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 			return nil, fmt.Errorf("read the posts' ideas: %w", err)
 		}
 	}
-	dismissed, err := d.dismissedKeys(ctx)
+	dismissed, err := d.dismissedKeys(ctx, c.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -498,6 +499,8 @@ func sameInstant(a, b *time.Time) bool {
 // DismissFindingInput names the finding to dismiss.
 type DismissFindingInput struct {
 	Key string `json:"key"`
+	// CampaignID is the campaign whose check raised it.
+	CampaignID string `json:"campaignId,omitempty" jsonschema:"description=The campaign whose check raised the finding; defaults to the thread's campaign"`
 }
 
 // DismissFindingOutput confirms it.
@@ -512,8 +515,13 @@ func dismissFinding(ctx context.Context, d Deps, in DismissFindingInput) (*Dismi
 	if strings.TrimSpace(in.Key) == "" {
 		return nil, assistantkit.Refused("pass the finding's key")
 	}
-	scope, _ := assistant.Scope(ctx)
-	if err := d.Dismissals.Dismiss(ctx, scope.Kind, scope.ID, in.Key, actor(ctx)); err != nil {
+	// A finding belongs to the campaign checked, whichever thread checked
+	// it, so the campaign's Overview and every thread leave it out.
+	c, err := d.loadCampaign(ctx, CampaignRef{CampaignID: in.CampaignID})
+	if err != nil {
+		return nil, err
+	}
+	if err := d.Dismissals.Dismiss(ctx, models.AssistantScopeCampaign, c.ID, in.Key, actor(ctx)); err != nil {
 		return nil, err
 	}
 	return &DismissFindingOutput{Dismissed: true}, nil
@@ -559,7 +567,7 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 	if err != nil {
 		return nil, assistantkit.Refused("couldn't review the posts: " + err.Error())
 	}
-	dismissed, err := d.dismissedKeys(ctx)
+	dismissed, err := d.dismissedKeys(ctx, c.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -629,13 +637,28 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 	return out, nil
 }
 
-// dismissedKeys are the findings the thread's user dismissed.
-func (d Deps) dismissedKeys(ctx context.Context) (map[string]bool, error) {
+// dismissedKeys are the campaign's dismissed findings, the ones its Overview
+// and any thread dismissed, and those dismissed in this thread before
+// dismissals followed the campaign.
+func (d Deps) dismissedKeys(ctx context.Context, campaignID string) (map[string]bool, error) {
 	if d.Dismissals == nil {
 		return map[string]bool{}, nil
 	}
+	keys, err := d.Dismissals.Keys(ctx, models.AssistantScopeCampaign, campaignID)
+	if err != nil {
+		return nil, err
+	}
 	scope, _ := assistant.Scope(ctx)
-	return d.Dismissals.Keys(ctx, scope.Kind, scope.ID)
+	if scope.Kind == models.AssistantScopeCampaign && scope.ID == campaignID {
+		return keys, nil
+	}
+	thread, err := d.Dismissals.Keys(ctx, scope.Kind, scope.ID)
+	if err != nil {
+		return nil, err
+	}
+	keys = maps.Clone(keys)
+	maps.Copy(keys, thread)
+	return keys, nil
 }
 
 // RevisePostInput is a post of the campaign and how to rewrite it.
@@ -645,11 +668,13 @@ type RevisePostInput struct {
 	Instruction string `json:"instruction"`
 }
 
-// RevisePostOutput confirms the rewrite.
+// RevisePostOutput confirms the rewrite, and whether it was saved as a
+// version.
 type RevisePostOutput struct {
-	PostID  string `json:"postId"`
-	Revised bool   `json:"revised"`
-	Note    string `json:"note"`
+	PostID    string `json:"postId"`
+	Revised   bool   `json:"revised"`
+	Versioned bool   `json:"versioned"`
+	Note      string `json:"note"`
 }
 
 // revisePost rewrites one of the campaign's posts by the instruction a
@@ -669,11 +694,16 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 	if posts[0].Status.IsSubmitted() {
 		return nil, assistantkit.Refused("the post is " + string(posts[0].Status) + ", so its copy is locked; unschedule it first")
 	}
-	if err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten by the campaign's assistant"); err != nil {
+	versioned, err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten by the campaign's assistant")
+	if err != nil {
 		return nil, fmt.Errorf("rewrite post: %w", err)
 	}
-	return &RevisePostOutput{PostID: in.PostID, Revised: true,
-		Note: "saved as a new version; restoring the previous version from the post's history undoes it"}, nil
+	out := &RevisePostOutput{PostID: in.PostID, Revised: true, Versioned: versioned,
+		Note: "saved as a new version; restoring the previous version from the post's history undoes it"}
+	if !versioned {
+		out.Note = "the post is rewritten, but saving the rewrite as a version failed, so its history has no copy of it"
+	}
+	return out, nil
 }
 
 // gapIdeas is how many ideas a silence's fix plans.

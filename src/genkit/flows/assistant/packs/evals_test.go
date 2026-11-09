@@ -308,7 +308,7 @@ func TestPackEvals(t *testing.T) {
 		},
 		CheckBrand: func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
 		Remove:     evalRemover{},
-		Revise:     func(context.Context, string, string, string) error { return nil },
+		Revise:     func(context.Context, string, string, string) (bool, error) { return true, nil },
 	})
 	a, err := assistant.Init(g, assistant.FlowConfig{Provider: llm.NewProvider(), MaxOutputTokens: 4096}, assistant.Repos{Messages: evalMessages{}, Proposals: evalProposals{}, SavedViewLists: evalSavedViews{}}, all...)
 	if err != nil {

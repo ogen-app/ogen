@@ -33,7 +33,7 @@ type Overview struct {
 	Goal *GoalProgress `json:"goal"`
 	// Problems are the calendar's findings, warnings first, each with the
 	// fixes the campaign's assistant offers once asked to fix it by its key;
-	// the ones dismissed in the campaign's thread are left out and counted.
+	// the campaign's dismissed ones are left out and counted.
 	Problems          []calendarcheck.Finding `json:"problems"`
 	ProblemsDismissed int                     `json:"problemsDismissed"`
 	GeneratedAt       time.Time               `json:"generatedAt"`

@@ -69,10 +69,11 @@ func (h *CampaignReadHandler) Overview(c *fiber.Ctx) error {
 
 // DismissFinding godoc
 // @Summary      Dismiss a campaign problem
-// @Description  Dismisses one of the overview's problems by its key, the way
-// @Description  the campaign's assistant does when told a finding is fine: neither
-// @Description  the overview nor the assistant raises it again while its posts
-// @Description  stay the same. Dismissing twice is one dismissal.
+// @Description  Dismisses a finding of the campaign by its key: one of the overview's
+// @Description  problems, or a review finding. Neither the overview nor the campaign's
+// @Description  assistant raises it again while a check gives the same key. A calendar
+// @Description  finding's key follows its posts; a review finding's follows the brief,
+// @Description  or the post's text. Dismissing a key twice is one dismissal.
 // @Tags         campaigns
 // @Security     CookieAuth
 // @Param        id   path  string  true  "Campaign Sqid"

@@ -468,9 +468,12 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	pd := r.packDeps
 	pd.Campaign, pd.Post = &campaignPack, &postPack
 	pd.CheckBrief, pd.CheckPosts = checkBriefFn, checkPostsFn
-	pd.Revise = func(ctx context.Context, postID, instruction, note string) error {
+	pd.Revise = func(ctx context.Context, postID, instruction, note string) (bool, error) {
 		_, err := revise(ctx, postID, instruction, note)
-		return err
+		if errors.Is(err, post_assistant.ErrVersionNotSaved) {
+			return false, nil
+		}
+		return err == nil, err
 	}
 	pd.Compare = asset_compare.New(g, provider, r.recorder)
 	pd.CheckBrand = brand_check.New(g, provider, r.recorder)

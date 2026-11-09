@@ -49,8 +49,7 @@ func New(campaigns repository.CampaignRepository, posts repository.PostRepositor
 }
 
 // WithProblems adds the calendar's problems to the overview, without the
-// ones dismissed in the campaign's assistant thread, and lets the overview
-// dismiss them.
+// campaign's dismissed ones, and lets the overview dismiss them.
 func (s *Service) WithProblems(links repository.PostIdeaRepository, dismissals repository.AssistantDismissalRepository) *Service {
 	s.links, s.dismissals = links, dismissals
 	return s
@@ -59,9 +58,9 @@ func (s *Service) WithProblems(links repository.PostIdeaRepository, dismissals r
 // ErrNoProblems is Dismiss on an overview without problems.
 var ErrNoProblems = errors.New("campaign problems are not available")
 
-// Dismiss dismisses a problem of the campaign by its key, in the campaign's
-// assistant thread, so neither the overview nor the assistant raises it
-// again while its posts stay the same.
+// Dismiss dismisses a finding of the campaign by its key, so neither the
+// overview nor the assistant raises it again while a check gives the same
+// key.
 func (s *Service) Dismiss(ctx context.Context, campaignID, key, by string) error {
 	if s.dismissals == nil {
 		return ErrNoProblems

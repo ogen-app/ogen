@@ -85,8 +85,9 @@ type Deps struct {
 	CheckBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	CheckPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
 	// Revise rewrites a post by an instruction with the post pack's writer,
-	// saving a version; nil leaves revisePost out of the repair pack.
-	Revise func(ctx context.Context, postID, instruction, note string) error
+	// saving a version; versioned is false for a rewrite on the post whose
+	// version couldn't be saved. nil leaves revisePost out of the repair pack.
+	Revise func(ctx context.Context, postID, instruction, note string) (versioned bool, err error)
 	// CheckBrand checks posts against their voice and guardrails; nil leaves
 	// checkBrand out of the repair pack.
 	CheckBrand brand_check.Run
