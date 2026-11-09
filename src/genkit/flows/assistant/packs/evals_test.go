@@ -5,6 +5,7 @@ package packs_test
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"maps"
 	"os"
@@ -32,6 +33,8 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/analytics"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/settings"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
@@ -130,6 +133,17 @@ func (evalNotes) ListByPostID(context.Context, string) ([]models.PostNote, error
 		Body: "- Static types catch schema drift before production\n- Goroutines fit token streaming\n- One binary ships the model client"}}, nil
 }
 
+// evalSettings is a workspace with its timezone set, as real ones are, so
+// "next Monday at 9am" has a zone to resolve against.
+type evalSettings struct{ repository.SettingRepository }
+
+func (evalSettings) GetByKey(_ context.Context, key string) (*models.Setting, error) {
+	if key != settings.TimezoneKey {
+		return nil, sql.ErrNoRows
+	}
+	return &models.Setting{Key: key, Value: "Europe/Kyiv"}, nil
+}
+
 type evalVersions struct {
 	repository.PostVersionRepository
 }
@@ -161,7 +175,7 @@ func TestPackEvals(t *testing.T) {
 		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 	ctx := tenantctx.With(t.Context(), models.DefaultTenantID)
-	model := cmp.Or(os.Getenv("EVAL_MODEL_ID"), "claude-haiku-4-5-20251001")
+	model := cmp.Or(os.Getenv("EVAL_MODEL_ID"), modelconfig.SeedDefaults.Planning)
 	modelconfig.Init(ctx, &memModelConfig{}, modelconfig.Defaults{Generation: model, Planning: model, Quality: model}, vendors.VendorOf, tenantctx.TierFrom)
 
 	g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
@@ -169,8 +183,8 @@ func TestPackEvals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	post, err := post_assistant.NewPack(g, post_assistant.PostAssistantFlowConfig{}, post_assistant.PostAssistantRepos{
-		Posts: evalPosts{}, Campaigns: evalCampaigns{}, Versions: evalVersions{}, Notes: evalNotes{}})
+	post, err := post_assistant.NewPack(g, post_assistant.PostAssistantFlowConfig{ScheduleService: &schedule.Service{}}, post_assistant.PostAssistantRepos{
+		Posts: evalPosts{}, Campaigns: evalCampaigns{}, Versions: evalVersions{}, Notes: evalNotes{}, Settings: evalSettings{}})
 	if err != nil {
 		t.Fatal(err)
 	}
