@@ -429,6 +429,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Dismissals:        r.dismissalRepo,
 			Analytics:         d.analytics.Service(),
 			Brand:             r.brandRepo,
+			Series:            d.svc.series,
 			Activity:          d.svc.activityReport,
 			Settings:          r.settingRepo,
 			SocialAccounts:    r.socialAccountRepo,

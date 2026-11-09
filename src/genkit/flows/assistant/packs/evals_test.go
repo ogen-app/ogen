@@ -37,6 +37,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/savedviews"
+	"github.com/ogen-app/ogen/src/usecase/series"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
@@ -69,7 +70,8 @@ var (
 	evalOpenAsset = &viewcontext.Ref{Kind: viewcontext.KindAsset, ID: "a1"}
 	evalOpenVoice = &viewcontext.Ref{Kind: viewcontext.KindVoice, ID: "v1"}
 	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas",
-		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails"}
+		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails",
+		"createSeries", "updateSeries", "removeSeries", "runSeries", "stopSeries", "editBrand"}
 )
 
 var evalCases = []evalCase{
@@ -126,6 +128,9 @@ var evalCases = []evalCase{
 	{pack: "foundation", screen: "foundation.audiences", scope: evalWorkspace, say: "Delete the Students audience.", want: []string{"getBrand", "removeAudience"}},
 	{pack: "foundation", screen: "foundation.guardrails", scope: evalWorkspace, say: "Never use the word 'synergy'.", want: []string{"updateGuardrails"}, not: []string{"addFact"}},
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Add these facts: founded in 2019; 40 employees; offices in Kyiv and Lisbon; ISO 27001 certified.", want: []string{"editBrand"}},
+	{pack: "foundation", screen: "foundation.series", scope: evalWorkspace, say: "Which series do we have?", want: []string{"listSeries"}, not: writes},
+	{pack: "foundation", screen: "foundation.series", scope: evalWorkspace, say: "Start a weekly 'Tip Tuesday' series: one practical tip per post.", want: []string{"createSeries"}},
+	{pack: "foundation", screen: "campaign.overview", scope: evalCampaign, say: "Run the Tip Tuesday series in this campaign, twice a month.", want: []string{"loadPack", "listSeries", "runSeries"}},
 	// workspace
 	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "What happened yesterday?", want: []string{"activityReport"}},
 	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Do any of my accounts need reconnecting?", want: []string{"workspaceSetup"}},
@@ -261,7 +266,7 @@ func TestPackEvals(t *testing.T) {
 		},
 		CreateCampaign: &create.Service{}, CampaignTypes: evalTypes{},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
-		Brand: brandRepo{}, Activity: report.New(nil, nil, nil),
+		Brand: brandRepo{}, Series: series.New(nil), Activity: report.New(nil, nil, nil),
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {
 			return nil, nil
 		},

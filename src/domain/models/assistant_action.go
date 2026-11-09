@@ -35,6 +35,11 @@ const (
 	AssistantActionBrandAudience AssistantActionKind = "brand_audience"
 	// AssistantActionBrandGuardrails is a change to the guardrails' rules.
 	AssistantActionBrandGuardrails AssistantActionKind = "brand_guardrails"
+	// AssistantActionSeries is a series added, changed or removed.
+	AssistantActionSeries AssistantActionKind = "series"
+	// AssistantActionCampaignSeries is a campaign starting or stopping a
+	// series, or running it at another rhythm.
+	AssistantActionCampaignSeries AssistantActionKind = "campaign_series"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's
