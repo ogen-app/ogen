@@ -160,6 +160,13 @@ func (st *turnState) addCard(c ProposalCard) {
 	st.cards = append(st.cards, c)
 }
 
+// offeredNow reports whether the offer id was made this turn.
+func (st *turnState) offeredNow(id string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.ContainsFunc(st.cards, func(c ProposalCard) bool { return c.ID == id })
+}
+
 func (st *turnState) addResolved(r ProposalResolved) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
