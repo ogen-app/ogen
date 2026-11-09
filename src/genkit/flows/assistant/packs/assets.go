@@ -108,6 +108,15 @@ func assetsPack(d Deps) assistant.Pack {
 				specs = append(specs, spec(assetsPackName, read, assistantkit.TierRead,
 					`Call this when the user asks what an analysis found — "what did the analysis find?", "what does it say for Spring reopening?". assetId defaults to the asset open on screen. A lens the user names picks it: pass that campaign's id, or workspace for the workspace lens; none named means the thread's. If status is not_read, pending, failed or skipped, say so plainly and offer what otherLenses has or analyseAsset; never answer from another lens unasked.`))
 			}
+			if d.Compare != nil {
+				compare := genkit.DefineTool(g, "compareAssets",
+					"Summarises assets together, or compares them: what they all say, what only some say and where they disagree, each claim tied to its assets. Reads each asset's analysis for the thread's lens, else its passages.",
+					assistantkit.Wrap(func(ctx context.Context, in CompareAssetsInput) (*CompareAssetsOutput, error) {
+						return compareAssets(ctx, d, in)
+					}), ai.WithStrictSchema(false))
+				specs = append(specs, spec(assetsPackName, compare, assistantkit.TierRead,
+					`Call this when the user asks to summarise or compare assets — "compare these", "summarise them", "summarise it" — not for one question about them (askAssets). Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Answer from its result: name the assets by their letter and title, give the disagreements their own line and offer to settle one, and say which assets were read from passages rather than an analysis.`))
+			}
 			return specs, nil
 		},
 	}

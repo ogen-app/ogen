@@ -10,6 +10,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
@@ -46,7 +47,9 @@ type Deps struct {
 	Analysis  *assetanalysis.Service
 	// Analyses reads the lenses: the bank's state and what an analysis
 	// found; nil leaves both out.
-	Analyses  repository.AssetAnalysisRepository
+	Analyses repository.AssetAnalysisRepository
+	// Compare reads assets together for compareAssets; nil leaves it out.
+	Compare   asset_compare.Run
 	URLImport *urlimport.Service
 
 	Posts     repository.PostRepository

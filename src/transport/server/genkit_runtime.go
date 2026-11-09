@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_analysis"
+	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant/packs"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
@@ -461,6 +462,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	pd := r.packDeps
 	pd.Campaign, pd.Post = &campaignPack, &postPack
 	pd.CheckBrief, pd.CheckPosts = checkBriefFn, checkPostsFn
+	pd.Compare = asset_compare.New(g, provider, r.recorder)
 	if pd.Compose != nil {
 		pd.Compose = pd.Compose.WithDrafter(ideaDrafter(r))
 	}

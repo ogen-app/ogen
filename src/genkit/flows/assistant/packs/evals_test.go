@@ -20,6 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/modelconfig"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
+	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant/packs"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
@@ -91,6 +92,8 @@ var evalCases = []evalCase{
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "How many analyses failed, and which?", not: []string{"findAssets", "askAssets", "analyseAsset"}},
 	{pack: "assets", screen: "asset", scope: evalWorkspace, focus: evalOpenAsset, say: "What does it promise about the spa?", want: []string{"askAssets"}, not: writes},
 	{pack: "assets", screen: "asset", scope: evalWorkspace, focus: evalOpenAsset, say: "What did the analysis find?", want: []string{"readAnalysis"}, not: writes},
+	{pack: "assets", screen: "asset", scope: evalWorkspace, focus: evalOpenAsset, say: "Summarise it in a paragraph.", want: []string{"compareAssets"}, not: writes},
+	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Compare the Villa Aurora brochure with the press kit.", want: []string{"findAssets", "getSelection", "compareAssets"}, not: writes},
 	{pack: "campaign", screen: "campaign.asset", scope: evalCampaign, focus: evalOpenAsset, say: "Plan 3 LinkedIn posts from this for next week.", want: []string{"generatePosts"}},
 	// repair
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Anything wrong with the calendar?", want: []string{"checkCalendar"}, not: writes},
@@ -220,6 +223,9 @@ func TestPackEvals(t *testing.T) {
 		Ideas: ideas.New(ideaRepo{}, nil), IdeaRepo: ideaRepo{},
 		Compose: compose.New(nil, ideaRepo{}, campaignRepo{}, nil, nil, nil),
 		Assets:  evalAssets{}, Analyses: evalAnalyses{}, Campaigns: evalCampaigns{},
+		Compare: func(context.Context, asset_compare.Request) (*asset_compare.Result, error) {
+			return &asset_compare.Result{}, nil
+		},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
 		Brand: brandRepo{}, Activity: report.New(nil, nil, nil),
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {
