@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/firebase/genkit/go/genkit"
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -233,5 +234,34 @@ func TestDeletePosts(t *testing.T) {
 	}
 	if out.Changed != 1 || !slices.Equal(rm.deleted, []string{"p1"}) || !slices.Equal(skippedIDs(out.Skipped), []string{"p2"}) {
 		t.Fatalf("out = %+v, deleted %v", out, rm.deleted)
+	}
+}
+
+// The repair pack registers the tools its fixes run: deleting only with a
+// remover, rewriting only with the post writer.
+func TestRepairPack_RegistersFixTools(t *testing.T) {
+	tools := func(d Deps) []string {
+		specs, err := repairPack(d).Define(genkit.Init(t.Context()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, s := range specs {
+			names = append(names, s.Name)
+		}
+		return names
+	}
+	d, posts, _ := repairDeps()
+	d.Remove = &memRemover{posts: posts}
+	d.Revise = func(context.Context, string, string, string) error { return nil }
+	got := tools(d)
+	for _, want := range []string{"applyCalendarMoves", "unschedulePosts", "changePostType", "deletePosts", "revisePost"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s isn't registered: %v", want, got)
+		}
+	}
+	d.Remove, d.Revise = nil, nil
+	if got := tools(d); slices.Contains(got, "deletePosts") || slices.Contains(got, "revisePost") {
+		t.Fatalf("registered without their services: %v", got)
 	}
 }

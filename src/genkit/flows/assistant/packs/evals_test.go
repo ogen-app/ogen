@@ -78,7 +78,8 @@ var (
 	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas",
 		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails",
 		"createSeries", "updateSeries", "removeSeries", "runSeries", "stopSeries", "editBrand",
-		"startBrandDistill", "answerDistillQuestions", "commitBrandDistill"}
+		"startBrandDistill", "answerDistillQuestions", "commitBrandDistill",
+		"applyCalendarMoves", "unschedulePosts", "deletePosts", "changePostType", "revisePost"}
 )
 
 var evalCases = []evalCase{
@@ -119,6 +120,14 @@ var evalCases = []evalCase{
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Even out the calendar.", want: []string{"optimiseCalendar", "redistributePosts", "checkCalendar"}},
 	{pack: "repair", screen: "post", scope: evalPost, say: "Is this post on brand? Check it against our voice and guardrails.", want: []string{"loadPack", "checkBrand"}, not: writes},
 	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Do the selected posts use any banned words or claims we can't make?", want: []string{"getSelection", "checkBrand"}, not: writes},
+	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Are we on track for our posting goal each week?", want: []string{"checkCalendar", "getCampaignOverview"}, not: writes},
+	{pack: "repair", screen: "campaign.overview", scope: evalCampaign, say: "Fix the problem crowded_slot:4f2a9c1d7e3b from the overview.", want: []string{"loadPack", "checkCalendar"}, not: writes},
+	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Which posts reuse the same idea too close together?", want: []string{"checkCalendar"}, not: writes},
+	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Take the selected posts off the calendar.", want: []string{"getSelection", "unschedulePosts"}, not: []string{"deletePosts"}},
+	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Delete the selected posts.", want: []string{"getSelection", "deletePosts"}},
+	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Turn the selected posts into image posts.", want: []string{"getSelection", "changePostType"}, not: []string{"editPost", "revisePost"}},
+	{pack: "repair", screen: "campaign.overview", scope: evalCampaign, say: "Do our posts still follow the brief? Rewrite the ones that drift.", want: []string{"loadPack", "reviewCampaign", "checkPostsConsistency"}, not: []string{"revisePost", "editPost"}},
+	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production"}, say: "Rewrite the selected post to lead with the benchmark numbers.", want: []string{"getSelection", "revisePost"}, not: []string{"editPost"}},
 	// analytics
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How did we do over the last 4 weeks?", want: []string{"analyticsOverview"}, not: writes},
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Which posts performed best?", want: []string{"topPosts"}, not: writes},
@@ -155,6 +164,12 @@ var evalCases = []evalCase{
 	// reaching another part of the app loads its pack
 	{pack: "campaign", screen: "home", scope: evalWorkspace, say: "Show me how my posts did last month.", want: []string{"loadPack", "navigate"}},
 }
+
+// evalRemover lets the repair pack offer deleting and withdrawing posts.
+type evalRemover struct{}
+
+func (evalRemover) Delete(context.Context, *models.Post, string) (bool, error) { return true, nil }
+func (evalRemover) Cancel(context.Context, string, string) error               { return nil }
 
 type evalCampaigns struct{ repository.CampaignRepository }
 
@@ -292,6 +307,8 @@ func TestPackEvals(t *testing.T) {
 			return nil, nil
 		},
 		CheckBrand: func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
+		Remove:     evalRemover{},
+		Revise:     func(context.Context, string, string, string) error { return nil },
 	})
 	a, err := assistant.Init(g, assistant.FlowConfig{Provider: llm.NewProvider(), MaxOutputTokens: 4096}, assistant.Repos{Messages: evalMessages{}, Proposals: evalProposals{}, SavedViewLists: evalSavedViews{}}, all...)
 	if err != nil {

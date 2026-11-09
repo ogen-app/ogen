@@ -101,6 +101,12 @@ func (r *fakePostRepo) UpdateScheduledAtBatch(context.Context, []*models.Post) e
 func (r *fakePostRepo) MoveScheduledAt(context.Context, []repository.ScheduleMove, time.Time) ([]string, error) {
 	return nil, nil
 }
+func (r *fakePostRepo) SetScheduleIf(context.Context, bun.IDB, []repository.ScheduleChange, time.Time) ([]string, error) {
+	return nil, nil
+}
+func (r *fakePostRepo) SetPostTypeIf(context.Context, bun.IDB, []repository.PostTypeChange, time.Time) ([]string, error) {
+	return nil, nil
+}
 func (r *fakePostRepo) AddUsedAssetIDs(context.Context, string, []string) (*models.Post, error) {
 	return nil, nil
 }
