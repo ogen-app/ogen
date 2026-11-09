@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
@@ -80,6 +81,9 @@ type Deps struct {
 	// reviewCampaign out of the repair pack.
 	CheckBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	CheckPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
+	// CheckBrand checks posts against their voice and guardrails; nil leaves
+	// checkBrand out of the repair pack.
+	CheckBrand brand_check.Run
 
 	// Hub announces committed changes to the workspace's other sessions;
 	// nil publishes nothing.

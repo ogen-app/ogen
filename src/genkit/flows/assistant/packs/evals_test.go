@@ -23,6 +23,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant/packs"
+	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
@@ -112,6 +113,8 @@ var evalCases = []evalCase{
 	// repair
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Anything wrong with the calendar?", want: []string{"checkCalendar"}, not: writes},
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Even out the calendar.", want: []string{"optimiseCalendar", "redistributePosts", "checkCalendar"}},
+	{pack: "repair", screen: "campaign.overview", scope: evalCampaign, say: "Are this campaign's posts on brand? Check them against our voice and guardrails.", want: []string{"checkBrand"}, not: writes},
+	{pack: "repair", screen: "campaign.list", scope: evalCampaign, say: "Do the selected posts use any banned words or claims we can't make?", want: []string{"getSelection", "checkBrand"}, not: writes},
 	// analytics
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How did we do over the last 4 weeks?", want: []string{"analyticsOverview"}, not: writes},
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Which posts performed best?", want: []string{"topPosts"}, not: writes},
@@ -279,6 +282,7 @@ func TestPackEvals(t *testing.T) {
 		CheckPosts: func(context.Context, consistency.PostsCheckRequest, consistency.OnEventFunc) (*consistency.PostsReview, error) {
 			return nil, nil
 		},
+		CheckBrand: func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
 	})
 	a, err := assistant.Init(g, assistant.FlowConfig{Provider: llm.NewProvider(), MaxOutputTokens: 4096}, assistant.Repos{Messages: evalMessages{}, Proposals: evalProposals{}, SavedViewLists: evalSavedViews{}}, all...)
 	if err != nil {
