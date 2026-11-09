@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 )
 
 // offers records what tools offered.
@@ -335,26 +336,60 @@ func TestCheckCalendar_DismissesOneFindingOfACode(t *testing.T) {
 	}
 }
 
+// Each brief finding gets its own brief edit and one shared by all of them;
+// a post finding gets a rewrite and an open; a dismissed finding is left out.
 func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
-	d, _, _ := repairDeps()
+	d, _, dismissals := repairDeps()
+	fix := func(aspect string) []consistency.Fix {
+		return []consistency.Fix{{Kind: consistency.FixImproveBrief, Title: "Improve the brief's " + aspect, Instruction: "fix " + aspect}}
+	}
 	d.CheckBrief = func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {
 		return &consistency.BriefReview{Findings: []consistency.Finding{
-			{Aspect: "persona", Severity: "high", Issue: "no persona", Suggestion: "name one"},
-			{Aspect: "tone", Severity: "low", Issue: "vague", Suggestion: "pick two words"},
+			{Key: "b1", Aspect: "persona", Severity: "high", Issue: "no persona", Suggestion: "name one", Fixes: fix("persona")},
+			{Key: "b2", Aspect: "tone", Severity: "low", Issue: "vague", Suggestion: "pick two words", Fixes: fix("tone")},
+			{Key: "b3", Aspect: "messages", Severity: "low", Issue: "dismissed", Fixes: fix("messages")},
 		}}, nil
 	}
 	d.CheckPosts = func(context.Context, consistency.PostsCheckRequest, consistency.OnEventFunc) (*consistency.PostsReview, error) {
-		return &consistency.PostsReview{Checked: 2, Findings: []consistency.PostFinding{{PostID: "p2", Issue: "off-brief"}}}, nil
+		return &consistency.PostsReview{Checked: 2, Findings: []consistency.PostFinding{{Key: "p", PostID: "p2", Issue: "off-brief", Fixes: []consistency.Fix{
+			{Kind: consistency.FixRevisePost, Title: "Rewrite it", PostID: "p2", Instruction: "follow the brief"},
+			{Kind: consistency.FixOpenPost, Title: "Open the post", PostID: "p2"},
+		}}}}, nil
 	}
+	var revised []string
+	d.Revise = func(_ context.Context, id, instruction, _ string) error {
+		revised = append(revised, id+": "+instruction)
+		return nil
+	}
+	dismissals.keys["b3"] = true
 	sink := &offers{}
 	ctx, _ := turn(t, campaign1, nil)
 	out, err := reviewCampaign(assistantkit.WithProposalSink(ctx, sink), d, CampaignRef{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One brief edit for both brief findings; the post finding opens the post.
-	if len(out.Findings) != 3 || len(sink.got) != 1 || out.Findings[0].Fix.ProposalID != "offer-1" || out.Findings[1].Fix.ProposalID != "offer-1" ||
-		out.Findings[2].Fix.PostID != "p2" || out.Findings[2].Fix.ProposalID != "" {
-		t.Fatalf("findings = %+v, offers = %d", out.Findings, len(sink.got))
+	if len(out.Findings) != 3 || out.Dismissed != 1 {
+		t.Fatalf("findings = %+v, dismissed %d", out.Findings, out.Dismissed)
+	}
+	persona, tone, post := out.Findings[0], out.Findings[1], out.Findings[2]
+	if persona.Key != "b1" || len(persona.Fixes) != 2 || len(tone.Fixes) != 2 || persona.Fixes[1].ProposalID != tone.Fixes[1].ProposalID ||
+		persona.Fixes[0].ProposalID == tone.Fixes[0].ProposalID {
+		t.Fatalf("brief fixes = %+v / %+v", persona.Fixes, tone.Fixes)
+	}
+	own := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Summary == "Improve the brief's persona" })]
+	if in := own.Args.(campaign_assistant.EnrichBriefInput); in.Instruction != "fix persona" || in.CampaignID != "c1" {
+		t.Fatalf("persona offer = %+v", in)
+	}
+	if len(post.Fixes) != 2 || post.Fixes[0].Kind != consistency.FixRevisePost || post.Fixes[0].ProposalID == "" ||
+		post.Fixes[1].Kind != calendarcheck.FixOpenPost || post.Fixes[1].ProposalID != "" {
+		t.Fatalf("post fixes = %+v", post.Fixes)
+	}
+	rewrite := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Tool == "revisePost" })]
+	if _, err := revisePost(ctx, d, rewrite.Args.(RevisePostInput)); err != nil || !slices.Equal(revised, []string{"p2: follow the brief"}) {
+		t.Fatalf("revise = %v, %v", revised, err)
+	}
+	// A scheduled post's copy is locked.
+	if _, err := revisePost(ctx, d, RevisePostInput{PostID: "p3", Instruction: "x"}); !isRefusal(err) {
+		t.Fatalf("scheduled post = %v", err)
 	}
 }

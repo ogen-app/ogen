@@ -25,6 +25,10 @@ type Finding struct {
 	Severity   string `json:"severity"`   // high | medium | low
 	Issue      string `json:"issue"`      // one-line problem
 	Suggestion string `json:"suggestion"` // concrete guidance
+	// Key identifies the finding while the brief stays the same, so the
+	// assistant can dismiss it.
+	Key   string `json:"key"`
+	Fixes []Fix  `json:"fixes"`
 }
 
 // BriefReview is the read-only result of a brief consistency check.
@@ -43,6 +47,10 @@ type PostFinding struct {
 	Severity   string `json:"severity"`
 	Issue      string `json:"issue"`
 	Suggestion string `json:"suggestion"`
+	// Key identifies the finding while the post stays the same, so the
+	// assistant can dismiss it.
+	Key   string `json:"key"`
+	Fixes []Fix  `json:"fixes"`
 }
 
 // PostsReview is the read-only result of a posts-vs-brief consistency check.

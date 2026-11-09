@@ -78,6 +78,7 @@ func runCheckBrief(
 		}
 	}
 
+	findings = briefFindings(campaign, findings)
 	slog.InfoContext(ctx, "brief review done", logging.AttrComponent, "genkit.consistency", "campaign_id", campaignID, "duration_ms", time.Since(start).Milliseconds(), "findings", len(findings), "consistent", consistent)
 	return &BriefReview{
 		CampaignID:  campaign.ID,
@@ -181,13 +182,13 @@ func runCheckPosts(
 			continue
 		}
 		seen[f.PostID] = true
-		findings = append(findings, PostFinding{
+		findings = append(findings, postFinding(campaign.ID, p, PostFinding{
 			PostID:     p.ID,
 			Title:      p.Title,
 			Severity:   f.Severity,
 			Issue:      f.Issue,
 			Suggestion: f.Suggestion,
-		})
+		}))
 	}
 
 	slog.InfoContext(ctx, "posts review done", logging.AttrComponent, "genkit.consistency", "campaign_id", req.CampaignID, "duration_ms", time.Since(start).Milliseconds(), "checked", len(checked), "total", total, "capped", capped, "drift", len(findings))
