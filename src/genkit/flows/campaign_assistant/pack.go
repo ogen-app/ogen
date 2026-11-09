@@ -139,11 +139,18 @@ func begin(ctx context.Context, cfg CampaignAssistantFlowConfig, repos CampaignA
 // work to the campaign owner, and returns the turn's campaign result.
 func end(ctx context.Context) (*assistant.PackResult, error) {
 	st := getRequestState(ctx)
+	st.mu.Lock()
+	ask := st.ask
+	st.mu.Unlock()
 	outs := st.outcomes()
 	if len(outs) == 0 {
+		// A question changes nothing, so it is reported and not announced.
+		if ask != nil {
+			return &assistant.PackResult{Value: &CampaignAssistantResponse{Action: actionAnswered, Ask: ask}}, nil
+		}
 		return nil, nil
 	}
-	resp := &CampaignAssistantResponse{Action: turnAction(outs, st.writes)}
+	resp := &CampaignAssistantResponse{Action: turnAction(outs, st.writes), Ask: ask}
 	for _, o := range outs {
 		if o.attach != nil {
 			o.attach(resp)

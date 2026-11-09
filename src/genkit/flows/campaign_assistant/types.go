@@ -50,6 +50,33 @@ type CampaignAssistantResponse struct {
 	// Platforms is set by the server when updateCampaignPlatforms added
 	// platforms or post types this turn. Action is then "platforms_updated".
 	Platforms *PlatformsResult `json:"platforms,omitempty" jsonschema:"-"`
+	// Ask is set by the server when askCampaignAssets answered this turn:
+	// the last answer's sources, for the client's card. It doesn't change
+	// Action.
+	Ask *AskResult `json:"ask,omitempty" jsonschema:"-"`
+}
+
+// What an askCampaignAssets answer searched: the asset open on screen, the
+// assets asked for, or the campaign's.
+const (
+	askScopeOpenAsset = "open_asset"
+	askScopeAsked     = "asked"
+	askScopeCampaign  = "campaign"
+)
+
+// AskResult is an askCampaignAssets answer's sources: what was searched
+// and the passages' assets and pages, without their text — the assets
+// pack's results.assets.ask shape.
+type AskResult struct {
+	Scope    string    `json:"scope"`
+	Excerpts []AskCite `json:"excerpts"`
+}
+
+// AskCite is one passage an answer drew on.
+type AskCite struct {
+	AssetID string `json:"assetId"`
+	Title   string `json:"title"`
+	Pages   string `json:"pages,omitempty"`
 }
 
 // DatesResult summarises a setCampaignDates tool invocation.
