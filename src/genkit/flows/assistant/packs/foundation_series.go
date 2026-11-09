@@ -306,21 +306,21 @@ func seriesSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	}
 	list := genkit.DefineTool(g, "listSeries",
 		"Lists the workspace's series — standing instructions for a recurring kind of post — with what each promises, how one is made, its default rhythm and the posts it produced; with a campaign, which of them it runs and how often.",
-		assistantkit.Wrap(func(ctx context.Context, in ListSeriesInput) (*ListSeriesOutput, error) {
+		assistantkit.Wrap(recorded(foundationPackName, "listSeries", nil, func(ctx context.Context, in ListSeriesInput) (*ListSeriesOutput, error) {
 			return listSeries(ctx, d, in)
-		}), ai.WithStrictSchema(false))
+		})), ai.WithStrictSchema(false))
 	create := genkit.DefineTool(g, "createSeries", "Adds a series to the workspace library, or inside one campaign. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in SeriesInput) (*SeriesChangeOut, error) { return createSeries(ctx, d, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "createSeries", nil, func(ctx context.Context, in SeriesInput) (*SeriesChangeOut, error) { return createSeries(ctx, d, in) })), ai.WithStrictSchema(false))
 	update := genkit.DefineTool(g, "updateSeries", "Edits a series: only the fields passed change. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in UpdateSeriesInput) (*SeriesChangeOut, error) {
+		assistantkit.Wrap(recorded(foundationPackName, "updateSeries", nil, func(ctx context.Context, in UpdateSeriesInput) (*SeriesChangeOut, error) {
 			return updateSeries(ctx, d, in)
-		}), ai.WithStrictSchema(false))
+		})), ai.WithStrictSchema(false))
 	remove := genkit.DefineTool(g, "removeSeries", "Removes a series; campaigns stop running it, its posts keep it. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in SeriesRef) (*SeriesChangeOut, error) { return removeSeries(ctx, d, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "removeSeries", nil, func(ctx context.Context, in SeriesRef) (*SeriesChangeOut, error) { return removeSeries(ctx, d, in) })), ai.WithStrictSchema(false))
 	run := genkit.DefineTool(g, "runSeries", "Makes a campaign run a series, or run it at another rhythm. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in RunSeriesInput) (*RunOut, error) { return runSeries(ctx, d, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "runSeries", nil, func(ctx context.Context, in RunSeriesInput) (*RunOut, error) { return runSeries(ctx, d, in) })), ai.WithStrictSchema(false))
 	stop := genkit.DefineTool(g, "stopSeries", "Makes a campaign stop running a series. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in StopSeriesInput) (*RunOut, error) { return stopSeries(ctx, d, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "stopSeries", nil, func(ctx context.Context, in StopSeriesInput) (*RunOut, error) { return stopSeries(ctx, d, in) })), ai.WithStrictSchema(false))
 	return []assistantkit.Spec{
 		spec(foundationPackName, list, assistantkit.TierRead,
 			`Call this when the user asks about series — "which series do we have?", "what does this campaign run?" — or before changing one.`),

@@ -36,16 +36,20 @@ func foundationPack(d Deps) assistant.Pack {
 			"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions",
 			"foundation.series", "foundation.series_item", "foundation.templates",
 		},
+		// Each tool's last output in the turn reaches the client under its
+		// name, as complete.results.foundation.
+		Begin: beginResults(foundationPackName),
+		End:   endResults(foundationPackName),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			get := genkit.DefineTool(g, "getBrand",
 				"Returns the brand foundation: its voices (when to use each, our summary, rules, samples, per-channel notes), audiences, guardrails (may and never claim, banned words), the facts still current and those expired, the look (logo jobs, palette, typefaces) and the templates.",
-				assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(foundationPackName, "getBrand", expiredOnly, func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) })), ai.WithStrictSchema(false))
 			add := genkit.DefineTool(g, "addFact",
 				"Adds a fact to the ledger: a claim posts may make, with its kind and source. Returns an undo id.",
 				assistantkit.Wrap(func(ctx context.Context, in FactInput) (*FactOut, error) { return addFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
 			edit := genkit.DefineTool(g, "updateFact",
 				"Corrects a fact in the ledger: only the fields passed change. Returns an undo id.",
-				assistantkit.Wrap(func(ctx context.Context, in UpdateFactInput) (*FactOut, error) { return updateFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(foundationPackName, "updateFact", nil, func(ctx context.Context, in UpdateFactInput) (*FactOut, error) { return updateFact(ctx, d, facts, in) })), ai.WithStrictSchema(false))
 			remove := genkit.DefineTool(g, "removeFact",
 				"Removes a fact from the ledger, so no post claims it any more. Returns an undo id.",
 				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
@@ -55,9 +59,9 @@ func foundationPack(d Deps) assistant.Pack {
 					Precheck: func(_ context.Context, in EditBrandInput) error { return in.precheck() },
 					Needs:    func(_ context.Context, in EditBrandInput) bool { return overN(d, in.size()) },
 					Summary:  func(in EditBrandInput) string { return in.summary() },
-				}, assistantkit.Wrap(func(ctx context.Context, in EditBrandInput) (*EditBrandOutput, error) {
+				}, assistantkit.Wrap(recorded(foundationPackName, "editBrand", nil, func(ctx context.Context, in EditBrandInput) (*EditBrandOutput, error) {
 					return editBrand(ctx, d, facts, lib, in)
-				})), ai.WithStrictSchema(false))
+				}))), ai.WithStrictSchema(false))
 			lspecs := append(slices.Concat(librarySpecs(g, d, lib), seriesSpecs(g, d), distillSpecs(g, d)), spec(foundationPackName, bulk, assistantkit.TierProposal,
 				`Call this when one message asks for several brand changes — "add these five facts", "remove every fact about pricing", "delete the three old voices". Read the ids with getBrand first. For a single change use the one-item tool.`))
 			return append([]assistantkit.Spec{
@@ -86,6 +90,14 @@ type BrandOut struct {
 	Look         *BrandLookOut      `json:"look,omitempty"`
 	Templates    []BrandTemplateOut `json:"templates"`
 }
+
+// BrandResult is what getBrand reports to the client: the expired facts, to
+// renew; the rest of the brand stays with the model.
+type BrandResult struct {
+	ExpiredFacts []models.BrandFact `json:"expiredFacts"`
+}
+
+func expiredOnly(b *BrandOut) any { return BrandResult{ExpiredFacts: b.ExpiredFacts} }
 
 // BrandVoiceOut is a voice: when to use it, our summary of its samples, its
 // rules, samples and per-channel notes.
