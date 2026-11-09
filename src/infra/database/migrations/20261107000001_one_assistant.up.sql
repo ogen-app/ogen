@@ -10,6 +10,17 @@ ON CONFLICT (id) DO NOTHING;
 
 DROP TABLE post_assistant_messages;
 
+-- The old table's rows went with their post; a thread now goes when the
+-- post's delete removes it. The threads and offers of posts deleted before
+-- this go now.
+DELETE FROM assistant_messages m
+WHERE m.scope_kind = 'post'
+  AND NOT EXISTS (SELECT 1 FROM posts p WHERE p.id = m.scope_id);
+
+DELETE FROM assistant_proposals ap
+WHERE ap.scope_kind = 'post'
+  AND NOT EXISTS (SELECT 1 FROM posts p WHERE p.id = ap.scope_id);
+
 -- One model config: the post assistant's writer becomes the assistant's,
 -- per scope, unless the assistant already has one there. The old flow's
 -- rows go; its planner fell to the assistant's orchestrator.

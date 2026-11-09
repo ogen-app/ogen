@@ -113,6 +113,19 @@ func (r *postRepository) DeleteTx(ctx context.Context, db bun.IDB, id string) (*
 	if len(deleted) == 0 {
 		return nil, nil
 	}
+	// The post's assistant thread and offers go with it. A turn still
+	// running holds the post row while it stores its messages, so the
+	// delete waits for it and removes them too.
+	if _, err := db.NewDelete().Model((*models.AssistantMessage)(nil)).
+		Where("asm.scope_kind = ? AND asm.scope_id = ?", models.AssistantScopePost, id).
+		Exec(ctx); err != nil {
+		return nil, err
+	}
+	if _, err := db.NewDelete().Model((*models.AssistantProposal)(nil)).
+		Where("ap.scope_kind = ? AND ap.scope_id = ?", models.AssistantScopePost, id).
+		Exec(ctx); err != nil {
+		return nil, err
+	}
 	return &deleted[0], nil
 }
 
