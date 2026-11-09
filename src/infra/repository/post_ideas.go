@@ -19,6 +19,9 @@ type PostIdeaRepository interface {
 	IdeasOfPost(ctx context.Context, postID string) ([]models.PostSourceIdea, error)
 	// PostsOfIdea returns the posts made from an idea, oldest first.
 	PostsOfIdea(ctx context.Context, ideaID string) ([]models.IdeaPostRef, error)
+	// IdeasOfCampaignPosts maps each of a campaign's posts made from ideas
+	// to their ids, in order.
+	IdeasOfCampaignPosts(ctx context.Context, campaignID string) (map[string][]string, error)
 }
 
 type postIdeaRepository struct {
@@ -70,4 +73,26 @@ func (r *postIdeaRepository) PostsOfIdea(ctx context.Context, ideaID string) ([]
 		OrderExpr("po.created_at, po.id").
 		Scan(ctx, &out)
 	return out, err
+}
+
+func (r *postIdeaRepository) IdeasOfCampaignPosts(ctx context.Context, campaignID string) (map[string][]string, error) {
+	tenantID, ok := tenantctx.From(ctx)
+	if !ok {
+		return nil, tenantctx.ErrNoTenant
+	}
+	var links []models.PostIdea
+	err := r.db.NewSelect().Model(&links).
+		Column("pi.post_id", "pi.idea_id").
+		Join("JOIN posts AS po ON po.id = pi.post_id AND po.tenant_id = ?", tenantID).
+		Where("po.campaign_id = ?", campaignID).
+		OrderExpr("pi.post_id, pi.position, pi.idea_id").
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]string)
+	for _, l := range links {
+		out[l.PostID] = append(out[l.PostID], l.IdeaID)
+	}
+	return out, nil
 }

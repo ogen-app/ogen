@@ -148,6 +148,12 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 	if err != nil {
 		return nil, err
 	}
+	var ideas map[string][]string
+	if d.Links != nil {
+		if ideas, err = d.Links.IdeasOfCampaignPosts(ctx, c.ID); err != nil {
+			return nil, fmt.Errorf("read the posts' ideas: %w", err)
+		}
+	}
 	dismissed := map[string]bool{}
 	if d.Dismissals != nil {
 		scope, _ := assistant.Scope(ctx)
@@ -158,7 +164,7 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 	out := &CheckCalendarOutput{CampaignID: c.ID, Findings: []FindingOut{}}
 	// One redistribution fixes every finding that offers it.
 	var redistributeID string
-	for _, f := range calendarcheck.Check(c, posts, time.Now()) {
+	for _, f := range calendarcheck.Check(c, posts, ideas, time.Now()) {
 		if dismissed[f.Key] {
 			out.Dismissed++
 			continue

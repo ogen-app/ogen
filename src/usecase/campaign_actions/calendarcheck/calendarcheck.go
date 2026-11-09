@@ -1,8 +1,10 @@
 // Package calendarcheck finds what is wrong with a campaign's calendar,
 // deterministically: posts outside the campaign's dates or on days it doesn't
-// publish, crowded days, long silences, and posts due soon that aren't
-// written or ready. Each finding names the posts and how it can be fixed, so
-// the assistant offers the repair rather than only reporting the problem.
+// publish, crowded days and slots, long silences, periods short of the goal,
+// posts due soon that aren't written or ready, posts of a type the campaign
+// no longer includes, and posts from one idea or source published close
+// together. Each finding names the posts and how it can be fixed, so the
+// assistant offers the repair rather than only reporting the problem.
 package calendarcheck
 
 import (
@@ -28,6 +30,17 @@ const (
 	GapDays = 7
 	// DueSoonDays is how close a publish date is "soon".
 	DueSoonDays = 3
+	// SameIdeaDays is how far apart two posts from one idea must be on one
+	// platform.
+	SameIdeaDays = 7
+	// SameSourceDays is how far apart two posts from one source must be on
+	// one platform.
+	SameSourceDays = 2
+	// SlotMinutes is the least time between two posts to one account; a
+	// campaign's wider spread widens it.
+	SlotMinutes = 30
+	// ConvertTypes caps the post types a finding offers to convert to.
+	ConvertTypes = 3
 )
 
 // Codes of the findings.
@@ -38,6 +51,16 @@ const (
 	CodeGap           = "gap"
 	CodeUnwrittenSoon = "unwritten_soon"
 	CodeNotReadySoon  = "not_ready_soon"
+	// CodePostTypeNotAllowed is posts of a type the campaign no longer
+	// includes on their platform.
+	CodePostTypeNotAllowed = "post_type_not_allowed"
+	CodeSameIdea           = "same_idea_close"
+	CodeSameSource         = "same_source_close"
+	CodeCrowdedSlot        = "crowded_slot"
+	// CodeGoalShort is a goal period with fewer posts than the goal asks.
+	CodeGoalShort = "goal_short"
+	// CodeGoalOver is a goal period with well over the goal's posts.
+	CodeGoalOver = "goal_over"
 )
 
 // Severity orders findings: warnings first.
@@ -58,17 +81,38 @@ const (
 	FixPlanWindow FixKind = "plan_window"
 	// FixOpenPost opens a post to finish it.
 	FixOpenPost FixKind = "open_post"
+	// FixMovePost moves one post to another day.
+	FixMovePost FixKind = "move_post"
+	// FixEnablePostType allows a post type on a platform of the campaign
+	// again.
+	FixEnablePostType FixKind = "enable_post_type"
+	// FixConvertPostType changes posts to another post type.
+	FixConvertPostType FixKind = "convert_post_type"
+	// FixUnschedule takes posts off the calendar.
+	FixUnschedule FixKind = "unschedule"
+	// FixDelete deletes posts.
+	FixDelete FixKind = "delete"
 )
 
 // Fix is one way to repair a finding.
 type Fix struct {
 	Kind  FixKind `json:"kind"`
 	Title string  `json:"title"`
-	// PostID is the post an open_post fix opens.
+	// PostID is the post an open_post fix opens or a move_post fix moves.
 	PostID string `json:"postId,omitempty"`
-	// From and To bound a plan_window fix, YYYY-MM-DD.
+	// PostIDs are the posts a convert, unschedule or delete fix changes.
+	PostIDs []string `json:"postIds,omitempty"`
+	// From and To bound a plan_window fix, YYYY-MM-DD; a move_post fix
+	// moves its post from one day to the other.
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
+	// Count is how many ideas a plan_window fix plans; zero leaves it to
+	// the planner.
+	Count int `json:"count,omitzero"`
+	// PlatformID and PostType are the type an enable_post_type fix allows,
+	// or the type a convert_post_type fix converts to (PostType only).
+	PlatformID string `json:"platformId,omitempty"`
+	PostType   string `json:"postType,omitempty"`
 }
 
 // Finding is one problem with the calendar.
@@ -81,12 +125,16 @@ type Finding struct {
 	Message  string   `json:"message"`
 	PostIDs  []string `json:"postIds,omitempty"`
 	Fixes    []Fix    `json:"fixes"`
+	// scope tells apart findings of one code over the same posts, such as
+	// the goal's periods, in the key.
+	scope string
 }
 
-// Check returns the campaign's calendar findings, warnings first. now is the
-// clock "soon" reads; a post's date is its day in the campaign's timezone,
-// and the campaign's start and end are calendar dates already.
-func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
+// Check returns the campaign's calendar findings, warnings first. ideas
+// maps a post to the ideas it was made from. now is the clock "soon" reads;
+// a post's date is its day in the campaign's timezone, and the campaign's
+// start and end are calendar dates already.
+func Check(c *models.Campaign, posts []models.Post, ideas map[string][]string, now time.Time) []Finding {
 	loc := Location(c)
 	day := func(t time.Time) time.Time {
 		y, m, d := t.In(loc).Date()
@@ -94,7 +142,7 @@ func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
 	}
 	var out []Finding
 	add := func(f Finding) {
-		f.Key = key(c.ID, f.Code, f.PostIDs, f.Fixes)
+		f.Key = key(c.ID, f.Code, f.PostIDs, f.Fixes, f.scope)
 		out = append(out, f)
 	}
 	redistribute := Fix{Kind: FixRedistribute, Title: "Even out the calendar"}
@@ -152,6 +200,19 @@ func Check(c *models.Campaign, posts []models.Post, now time.Time) []Finding {
 				Message: fmt.Sprintf("nothing is planned from %s to %s", g[0].Format("2 Jan"), g[1].Format("2 Jan")),
 				Fixes:   []Fix{{Kind: FixPlanWindow, Title: "Plan ideas for these days", From: g[0].Format(time.DateOnly), To: g[1].Format(time.DateOnly)}}})
 		}
+	}
+	cal := newCalendar(c, posts, day, day(now))
+	for _, f := range postTypes(c, posts) {
+		add(f)
+	}
+	for _, f := range cal.closeTogether(ideas) {
+		add(f)
+	}
+	for _, f := range cal.crowdedSlots() {
+		add(f)
+	}
+	for _, f := range cal.goal() {
+		add(f)
 	}
 	slices.SortStableFunc(out, bySeverity)
 	return out
@@ -254,16 +315,24 @@ func sorted(ids []string) []string {
 	return out
 }
 
-// key is a finding's stable id: its campaign, its code, its posts and its
-// fixes' windows.
-func key(campaignID, code string, ids []string, fixes []Fix) string {
+// key is a finding's stable id: its campaign, its code, its posts, and its
+// scope or else its fixes' windows. Only the first fix kinds count among
+// the fixes: a later kind's dates move with the calendar, and the key must
+// not.
+func key(campaignID, code string, ids []string, fixes []Fix, scope string) string {
 	h := sha256.New()
 	h.Write([]byte(campaignID + "|" + code))
 	for _, id := range ids {
 		h.Write([]byte("|" + id))
 	}
-	for _, f := range fixes {
-		h.Write([]byte("|" + f.From + f.To))
+	if scope != "" {
+		h.Write([]byte("|" + scope))
+	} else {
+		for _, f := range fixes {
+			if f.Kind == FixRedistribute || f.Kind == FixPlanWindow || f.Kind == FixOpenPost {
+				h.Write([]byte("|" + f.From + f.To))
+			}
+		}
 	}
 	return code + ":" + hex.EncodeToString(h.Sum(nil))[:12]
 }

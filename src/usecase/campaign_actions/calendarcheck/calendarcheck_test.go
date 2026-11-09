@@ -57,7 +57,7 @@ func TestCheck(t *testing.T) {
 		// Published posts never count.
 		{ID: "pub", Status: models.PostStatusPublished, PlatformID: "x", ScheduledAt: at("2026-12-12T09:00")},
 	}
-	got := Check(campaign(), posts, now)
+	got := Check(campaign(), posts, nil, now)
 
 	want := []string{CodeUnwrittenSoon, CodeNotReadySoon, CodeOutsideWindow, CodeDisabledDay, CodeCrowdedDay, CodeGap}
 	if !slices.Equal(codes(got), want) {
@@ -81,7 +81,7 @@ func TestCheck(t *testing.T) {
 	}
 
 	// Keys are stable for the same posts, and differ with them.
-	again := Check(campaign(), posts, now)
+	again := Check(campaign(), posts, nil, now)
 	if again[0].Key != got[0].Key {
 		t.Fatal("the same finding got another key")
 	}
@@ -99,7 +99,7 @@ func TestCheck_LocalCampaignKeepsItsDates(t *testing.T) {
 		{ID: "first", Status: models.PostStatusDraft, PlatformID: "li", ScheduledAt: at("2026-12-01T17:00")},
 		{ID: "last", Status: models.PostStatusDraft, PlatformID: "li", ScheduledAt: at("2026-12-31T17:00")},
 	}
-	got := Check(c, posts, *at("2026-11-01T00:00"))
+	got := Check(c, posts, nil, *at("2026-11-01T00:00"))
 	if f := find(got, CodeOutsideWindow); f != nil {
 		t.Fatalf("a post on the campaign's last day is flagged outside: %+v", f)
 	}
@@ -116,7 +116,7 @@ func TestCheck_ImmovableCrowdHasNoFix(t *testing.T) {
 		{ID: "s2", Status: models.PostStatusScheduled, PlatformID: "li", ScheduledAt: at("2026-12-08T12:00")},
 		{ID: "s3", Status: models.PostStatusScheduled, PlatformID: "li", ScheduledAt: at("2026-12-08T15:00")},
 	}
-	f := find(Check(campaign(), posts, *at("2026-11-01T00:00")), CodeCrowdedDay)
+	f := find(Check(campaign(), posts, nil, *at("2026-11-01T00:00")), CodeCrowdedDay)
 	if f == nil || len(f.Fixes) != 0 || !strings.Contains(f.Message, "reschedule one by hand") {
 		t.Fatalf("crowded = %+v", f)
 	}
@@ -143,26 +143,26 @@ func TestCheck_KeysPerFinding(t *testing.T) {
 		}
 		return out
 	}
-	got := Check(campaign(), posts, now)
+	got := Check(campaign(), posts, nil, now)
 	for _, code := range []string{CodeCrowdedDay, CodeGap} {
 		ks := keys(got, code)
 		if len(ks) != 2 || ks[0] == ks[1] {
 			t.Fatalf("%s keys = %v, want two distinct", code, ks)
 		}
-		if again := keys(Check(campaign(), posts, now), code); !slices.Equal(again, ks) {
+		if again := keys(Check(campaign(), posts, nil, now), code); !slices.Equal(again, ks) {
 			t.Fatalf("%s keys changed across checks: %v, then %v", code, ks, again)
 		}
 	}
 	other := campaign()
 	other.ID = "other"
-	if slices.Equal(keys(Check(other, posts, now), CodeGap), keys(got, CodeGap)) {
+	if slices.Equal(keys(Check(other, posts, nil, now), CodeGap), keys(got, CodeGap)) {
 		t.Fatal("another campaign's gaps share the keys")
 	}
 }
 
 func TestCheck_UndatedCampaign(t *testing.T) {
 	c := &models.Campaign{ID: "c"}
-	got := Check(c, []models.Post{{ID: "p", Status: models.PostStatusDraft, ScheduledAt: at("2026-12-05T09:00")}}, *at("2026-01-01T00:00"))
+	got := Check(c, []models.Post{{ID: "p", Status: models.PostStatusDraft, ScheduledAt: at("2026-12-05T09:00")}}, nil, *at("2026-01-01T00:00"))
 	if len(got) != 0 {
 		t.Fatalf("an undated campaign with every day enabled = %v", codes(got))
 	}
