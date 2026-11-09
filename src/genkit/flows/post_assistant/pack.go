@@ -19,6 +19,8 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 )
 
 // PackName is the post pack's name.
@@ -126,6 +128,8 @@ func begin(ctx context.Context, g *genkit.Genkit, cfg PostAssistantFlowConfig, r
 		qualityAuto:     cfg.QualityAuto,
 		hub:             cfg.Hub,
 		owner:           post.CreatedBy,
+		tenant:          post.TenantID,
+		notifier:        cfg.Notifier,
 		actor:           post.CreatedBy,
 		platforms:       loadPlatforms(ctx, repos),
 		g:               g,
@@ -134,7 +138,11 @@ func begin(ctx context.Context, g *genkit.Genkit, cfg PostAssistantFlowConfig, r
 		writerMaxTokens: cfg.MaxOutputTokens,
 		// The writer sees the post block too, so it knows the campaign's
 		// voice and the current content without a second read.
-		writerSystem: p.writer + "\n\n" + actx.ContextBlock,
+		writerSystem:  p.writer + "\n\n" + actx.ContextBlock,
+		writerPrompt:  p.writer,
+		contextTmpl:   p.context,
+		writerContent: post.Content,
+		content:       post.Content,
 	}
 	// The writer's copy and the tools' progress stream to the client
 	// through the turn.
@@ -186,7 +194,32 @@ func end(ctx context.Context) (*assistant.PackResult, error) {
 		assistantkit.Touch(ctx, "note", "")
 	}
 	publishFinalised(st.hub, st.postID, st.owner, r.Action)
+	notifyFinalised(st.notifier, st.tenant, st.owner, st.postID, r)
 	return &assistant.PackResult{Value: r, Fallback: r.Explanation}, nil
+}
+
+// notifyFinalised leaves the post's owner a notification that the assistant
+// finished work on the post: the tab that asked hides its live echo, so it is
+// for other devices and a later return. The dedupe key keeps one unread row
+// per post however many turns follow. It uses a fresh tenant-scoped context,
+// bounded: the request's may be done.
+func notifyFinalised(n *notify.Service, tenantID, ownerID, postID string, r *PostAssistantResponse) {
+	if n == nil || ownerID == "" || tenantID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(tenantctx.With(context.Background(), tenantID), 5*time.Second)
+	defer cancel()
+	_ = n.Emit(ctx, ownerID, notify.Spec{
+		Level:      models.NotificationLevelSuccess,
+		Type:       "assistant.completed",
+		Title:      "Assistant finished",
+		Body:       "The post assistant finished your request.",
+		EntityType: "post",
+		EntityID:   postID,
+		ActionURL:  "/posts/" + postID,
+		Data:       map[string]any{"action": r.Action},
+		DedupeKey:  "assistant.completed:" + postID,
+	})
 }
 
 // result is what the turn's tools committed, labelled by the most telling:
@@ -195,7 +228,7 @@ func end(ctx context.Context) (*assistant.PackResult, error) {
 func (st *requestState) result() *PostAssistantResponse {
 	r := &PostAssistantResponse{}
 	if e := st.editResult; e != nil {
-		r.Action, r.UpdatedContent, r.SaveVersion, r.VersionNote = actionEdited, e.Content, e.SaveVersion, e.Note
+		r.Action, r.UpdatedContent, r.SaveVersion, r.VersionNote = actionEdited, st.content, e.SaveVersion, e.Note
 		r.Explanation = "Updated the post."
 	}
 	if n := len(st.noteResults); n > 0 {
@@ -218,7 +251,9 @@ func (st *requestState) result() *PostAssistantResponse {
 		r.ScheduleResult = &ScheduleResultPayload{ScheduledAt: sr.ScheduledAt.Format(time.RFC3339), Status: string(sr.Status), AutoPublish: sr.AutoPublish, Promoted: sr.Promoted}
 	}
 	if rr := st.restoreResult; rr != nil {
-		r.Action, r.UpdatedContent = actionRestored, rr.Post.Content
+		// The content is the post's after the turn's last edit or restore,
+		// whichever ran later.
+		r.Action, r.UpdatedContent = actionRestored, st.content
 		r.Explanation = fmt.Sprintf("Restored the post to version %d (saved as version %d). Your previous content is kept in the history.", rr.RestoredFromVersion, rr.NewVersionNumber)
 		if rr.NoOp {
 			r.Explanation = fmt.Sprintf("The post already matches version %d — nothing to restore.", rr.RestoredFromVersion)
