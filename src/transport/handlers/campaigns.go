@@ -3,6 +3,7 @@ package handlers
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/activity"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/create"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
@@ -36,7 +38,6 @@ var validStatuses = map[models.CampaignStatus]bool{
 type CampaignsHandler struct {
 	repo             repository.CampaignRepository
 	campaignTypeRepo repository.CampaignTypeRepository
-	limiter          *entitlements.Limiter // CON-295 entitlement quota gate (nil-safe)
 	// brandRepo validates campaign brand_voice_id/brand_audience_id belong to
 	// the tenant. nil skips validation.
 	brandRepo     repository.BrandRepository
@@ -62,6 +63,8 @@ type CampaignsHandler struct {
 	withdraw *withdraw.Service
 	// analysis keeps asset analyses in step with the campaign; nil skips it.
 	analysis AssetAnalysisTriggers
+	// create makes a campaign, as the assistant does.
+	create *create.Service
 }
 
 // AssetAnalysisTriggers keeps the campaign lenses of asset analyses in step
@@ -84,28 +87,6 @@ type CampaignsOptions struct {
 	// Analysis re-runs asset analyses on attach, detach and brief edits; nil
 	// skips them.
 	Analysis AssetAnalysisTriggers
-}
-
-// baselineCampaignTypeSlug is the one system campaign type every tier can use;
-// the other system types are gated by all_campaign_types.
-const baselineCampaignTypeSlug = "evergreen"
-
-// gateCampaignType enforces the campaign-type entitlement gates for the selected
-// type: a custom (non-system) type requires custom_campaign_types, a non-baseline
-// system type requires all_campaign_types. The Evergreen baseline is always
-// allowed. Returns a *FeatureNotAvailableError (rendered 403) when gated off.
-func (h *CampaignsHandler) gateCampaignType(c *fiber.Ctx, ct *models.CampaignType) error {
-	tenantID, ok := tenantctx.From(reqCtx(c))
-	if !ok {
-		return nil
-	}
-	switch {
-	case !ct.IsSystem:
-		return h.limiter.RequireGate(reqCtx(c), tenantID, "custom_campaign_types")
-	case ct.Name != baselineCampaignTypeSlug:
-		return h.limiter.RequireGate(reqCtx(c), tenantID, "all_campaign_types")
-	}
-	return nil
 }
 
 // recordActivity emits a best-effort CON-125 activity event. Tenant + user are
@@ -134,8 +115,14 @@ func NewCampaignsHandler(
 	enrichBrief func(ctx context.Context, req enrich_brief.EnrichBriefRequest, onEvent enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error),
 	opts CampaignsOptions,
 ) *CampaignsHandler {
+	var analysis create.AnalysisTrigger
+	if opts.Analysis != nil {
+		analysis = opts.Analysis
+	}
 	return &CampaignsHandler{
-		limiter:            opts.Limiter,
+		create: &create.Service{
+			Campaigns: repo, Types: campaignTypeRepo, Limiter: opts.Limiter, Analysis: analysis, Activity: opts.Activity,
+		},
 		activity:           opts.Activity,
 		brandRepo:          opts.Brands,
 		withdraw:           opts.Withdraw,
@@ -380,19 +367,6 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 	if !validStatuses[status] {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid status")
 	}
-	// The active_campaigns quota gates a new campaign.
-	campaignQuota, err := requireQuota(c, h.limiter, "active_campaigns")
-	if err != nil {
-		return err
-	}
-	campaignType, err := h.campaignTypeRepo.GetByID(reqCtx(c), req.CampaignTypeID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
-	}
-	// Custom / non-baseline campaign types are entitlement-gated.
-	if err := h.gateCampaignType(c, campaignType); err != nil {
-		return err
-	}
 	publishingTime, timezone, publishingDays, spread, err := req.normalizeScheduling()
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
@@ -445,16 +419,13 @@ func (h *CampaignsHandler) Create(c *fiber.Ctx) error {
 		GoalCadence:        goalCadence,
 		CreatedBy:          session.UserID,
 	}
-	if err := h.repo.Create(reqCtx(c), campaign); err != nil {
+	err = h.create.Create(reqCtx(c), campaign, activity.SourceAPI)
+	if errors.Is(err, create.ErrInvalidType) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid campaign_type_id")
+	}
+	if err != nil {
 		return err
 	}
-	// The campaign now exists — fire any near-limit crossing.
-	campaignQuota.dispatch(reqCtx(c))
-	h.analysisAttached(c, campaign.ID, campaign.AssetIDs)
-	h.recordActivity(c, activity.CategoryCampaign, "campaign_created",
-		activity.WithEntity("campaign", campaign.ID),
-		activity.WithPayload(map[string]any{"status": string(campaign.Status), "campaign_type_id": campaign.CampaignTypeID}),
-	)
 	return c.Status(fiber.StatusCreated).JSON(campaign)
 }
 
@@ -627,7 +598,7 @@ func (h *CampaignsHandler) checkTypeChange(c *fiber.Ctx, campaign *models.Campai
 	if campaign.TypeLocked {
 		return rejectTypeLocked(c, campaign.PhasedPostCount)
 	}
-	return h.gateCampaignType(c, target)
+	return h.create.GateType(reqCtx(c), target)
 }
 
 // recordCampaignUpdated emits the update activity plus the status- and
