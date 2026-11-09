@@ -34,7 +34,7 @@ type TierFunc func(ctx context.Context) (tierID string, ok bool)
 type Defaults struct {
 	Generation     string // chat generation flows (incl. post_assistant writer)
 	Quality        string // post_quality
-	Planning       string // post_assistant planner + campaign_assistant orchestrator
+	Planning       string // assistant orchestrator, asset_analysis map, brand_distill extract
 	Embed          string // embed
 	VisionClassify string // vision classify + alt_text
 	VisionExtract  string // vision extract
@@ -49,7 +49,7 @@ type Defaults struct {
 var SeedDefaults = Defaults{
 	Generation:     "claude-sonnet-5-5",
 	Quality:        "claude-sonnet-5-5",
-	Planning:       "claude-haiku-4-5-20251001",
+	Planning:       "claude-haiku-5-5",
 	VisionClassify: "gemini-3.8-flash",
 	VisionExtract:  "gemini-3.8-flash",
 	VisionEscalate: "gemini-3.8-flash",
