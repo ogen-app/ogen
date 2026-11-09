@@ -1256,7 +1256,8 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 			handlers.NewSessionsHandler(uRepo, repository.NewAccountRepository(db), sRepo, testCookieName, false, nil).Register(a)
 			ch := handlers.NewCampaignsHandler(cRepo, ctRepo, a2, nil, nil, nil, handlers.CampaignsOptions{})
 			ch.Register(a)
-			handlers.NewCampaignReadHandler(overview.New(cRepo, postRepo, pRepo), nil, a2).Register(a)
+			handlers.NewCampaignReadHandler(overview.New(cRepo, postRepo, pRepo).
+				WithProblems(repository.NewPostIdeaRepository(db), repository.NewAssistantDismissalRepository(db)), nil, a2).Register(a)
 			return a, postRepo
 		}
 
@@ -1381,6 +1382,55 @@ var _ = Describe("CampaignsHandler", Ordered, func() {
 					statusTotal += b.Count
 				}
 				Expect(statusTotal).To(Equal(3), "byStatus should reconcile with totalPosts")
+			})
+
+			It("lists the calendar's problems and dismisses one by its key", func() {
+				a, postRepo := buildOverviewApp()
+				ck := seedCookie(a, "ovproblems@example.com")
+				camp := createCampaignOn(a, ck, "Problem Campaign", "Uk")
+				tctx := tenantctx.With(context.Background(), models.DefaultTenantID)
+				at := time.Now().UTC().AddDate(0, 0, 10).Truncate(time.Hour)
+				for i, id := range []string{"ovp-a", "ovp-b"} {
+					when := at.Add(time.Duration(i) * 10 * time.Minute)
+					Expect(postRepo.Create(tctx, &models.Post{ID: id, CampaignID: camp.ID, PlatformID: "AXqWG7U2qnpt", Title: id,
+						Content: "c", Status: models.PostStatusDraft, ScheduledAt: &when, MediaURLs: models.StringSlice{},
+						UsedAssetIDs: models.StringSlice{}, CTAType: models.CTATypeNone, CreatedBy: camp.CreatedBy})).To(Succeed())
+				}
+				read := func() overview.Overview {
+					req := httptest.NewRequest("GET", "/api/campaigns/"+camp.ID+"/overview", nil)
+					req.AddCookie(ck)
+					resp, err := a.Test(req)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(resp.StatusCode).To(Equal(200))
+					var ov overview.Overview
+					Expect(json.NewDecoder(resp.Body).Decode(&ov)).To(Succeed())
+					return ov
+				}
+				ov := read()
+				var slot string
+				for _, p := range ov.Problems {
+					if p.Code == "crowded_slot" {
+						slot = p.Key
+						Expect(p.PostIDs).To(ConsistOf("ovp-a", "ovp-b"))
+						Expect(p.Fixes).NotTo(BeEmpty())
+					}
+				}
+				Expect(slot).NotTo(BeEmpty(), "two posts ten minutes apart are a crowded slot")
+
+				dismiss := func(campaignID, key string) int {
+					req := httptest.NewRequest("POST", "/api/campaigns/"+campaignID+"/findings/"+key+"/dismiss", nil)
+					req.AddCookie(ck)
+					resp, err := a.Test(req)
+					Expect(err).NotTo(HaveOccurred())
+					return resp.StatusCode
+				}
+				Expect(dismiss(camp.ID, slot)).To(Equal(204))
+				Expect(dismiss("nonexistent", slot)).To(Equal(404))
+				after := read()
+				Expect(after.ProblemsDismissed).To(Equal(1))
+				for _, p := range after.Problems {
+					Expect(p.Key).NotTo(Equal(slot))
+				}
 			})
 		})
 	})

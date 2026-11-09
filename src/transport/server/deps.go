@@ -259,7 +259,7 @@ func (d *deps) initJobs(ctx context.Context) error {
 func (d *deps) initServices(context.Context) error {
 	r := d.r
 	d.svc = services{
-		campaignOverview:  overview.New(r.campaignRepo, r.postRepo, r.platformRepo),
+		campaignOverview:  overview.New(r.campaignRepo, r.postRepo, r.platformRepo).WithProblems(r.postIdeaRepo, r.dismissalRepo),
 		campaignSummaries: summaries.New(r.postRepo),
 		activityReport:    activityreport.New(r.postRepo, r.postLogRepo, r.campaignRepo),
 		// Deep-copies attachments in object storage so a clone and its source

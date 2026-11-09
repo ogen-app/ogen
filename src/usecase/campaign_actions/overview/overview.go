@@ -1,6 +1,6 @@
 // Package overview computes a read-only "quick overview" of a campaign:
-// its brief, phases with per-phase post counts, and content
-// distribution by status, platform, and content type. The same service backs
+// its brief, phases with per-phase post counts, content distribution by
+// status, platform, and content type, and the calendar's problems. The same service backs
 // both the Campaign Assistant's getCampaignOverview tool and the
 // GET /api/campaigns/:id/overview REST endpoint.
 package overview
@@ -8,6 +8,8 @@ package overview
 import (
 	"errors"
 	"time"
+
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 )
 
 // ErrNotFound is returned by Service.Overview when the campaign does not exist
@@ -28,8 +30,13 @@ type Overview struct {
 	Distribution Distribution `json:"distribution"`
 	// Goal is the CON-182 post-rate goal progress, or null when the campaign has
 	// no goal configured (no positive estimated_post_count).
-	Goal        *GoalProgress `json:"goal"`
-	GeneratedAt time.Time     `json:"generatedAt"`
+	Goal *GoalProgress `json:"goal"`
+	// Problems are the calendar's findings, warnings first, each with the
+	// fixes the campaign's assistant offers once asked to fix it by its key;
+	// the ones dismissed in the campaign's thread are left out and counted.
+	Problems          []calendarcheck.Finding `json:"problems"`
+	ProblemsDismissed int                     `json:"problemsDismissed"`
+	GeneratedAt       time.Time               `json:"generatedAt"`
 }
 
 // GoalProgress recaps a campaign's post-rate goal: the per-period

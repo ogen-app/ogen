@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"cmp"
 	"errors"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
 )
@@ -34,6 +37,7 @@ func NewCampaignReadHandler(overviewSvc *overview.Service, summariesSvc *summari
 func (h *CampaignReadHandler) Register(app *fiber.App) {
 	app.Get("/api/campaigns/summaries", h.auth, h.Summaries)
 	app.Get("/api/campaigns/:id/overview", h.auth, h.Overview)
+	app.Post("/api/campaigns/:id/findings/:key/dismiss", h.auth, h.DismissFinding)
 }
 
 // Overview godoc
@@ -62,6 +66,45 @@ func (h *CampaignReadHandler) Overview(c *fiber.Ctx) error {
 	}
 	return c.JSON(ov)
 }
+
+// DismissFinding godoc
+// @Summary      Dismiss a campaign problem
+// @Description  Dismisses one of the overview's problems by its key, the way
+// @Description  the campaign's assistant does when told a finding is fine: neither
+// @Description  the overview nor the assistant raises it again while its posts
+// @Description  stay the same. Dismissing twice is one dismissal.
+// @Tags         campaigns
+// @Security     CookieAuth
+// @Param        id   path  string  true  "Campaign Sqid"
+// @Param        key  path  string  true  "The problem's key"
+// @Success      204
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /api/campaigns/{id}/findings/{key}/dismiss [post]
+func (h *CampaignReadHandler) DismissFinding(c *fiber.Ctx) error {
+	if h.overview == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "campaign problems are not available")
+	}
+	key := strings.TrimSpace(c.Params("key"))
+	if key == "" || len(key) > maxFindingKey {
+		return fiber.NewError(fiber.StatusBadRequest, "a finding key is required")
+	}
+	err := h.overview.Dismiss(reqCtx(c), c.Params("id"), key, cmp.Or(actorID(c), models.ActorSystem))
+	switch {
+	case errors.Is(err, overview.ErrNotFound):
+		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
+	case errors.Is(err, overview.ErrNoProblems):
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+	case err != nil:
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// maxFindingKey bounds a finding key: a code and a 12-character hash.
+const maxFindingKey = 64
 
 // Summaries godoc
 // @Summary      Batched campaign post summaries
