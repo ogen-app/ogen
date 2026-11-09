@@ -63,6 +63,8 @@ type evalCase struct {
 	// title; the asset brochure's when empty.
 	focus *viewcontext.Ref
 	title string
+	// selected are the posts the user ticked, by title.
+	selected []string
 }
 
 var (
@@ -71,6 +73,8 @@ var (
 	evalWorkspace = viewcontext.Scope{Kind: models.AssistantScopeWorkspace}
 	evalOpenAsset = &viewcontext.Ref{Kind: viewcontext.KindAsset, ID: "a1"}
 	evalOpenVoice = &viewcontext.Ref{Kind: viewcontext.KindVoice, ID: "v1"}
+	evalOpenAud   = &viewcontext.Ref{Kind: viewcontext.KindAudience, ID: "au1"}
+	evalOpenSer   = &viewcontext.Ref{Kind: viewcontext.KindSeries, ID: "s1"}
 	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas",
 		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails",
 		"createSeries", "updateSeries", "removeSeries", "runSeries", "stopSeries", "editBrand",
@@ -113,8 +117,8 @@ var evalCases = []evalCase{
 	// repair
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Anything wrong with the calendar?", want: []string{"checkCalendar"}, not: writes},
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Even out the calendar.", want: []string{"optimiseCalendar", "redistributePosts", "checkCalendar"}},
-	{pack: "repair", screen: "campaign.overview", scope: evalCampaign, say: "Are this campaign's posts on brand? Check them against our voice and guardrails.", want: []string{"checkBrand"}, not: writes},
-	{pack: "repair", screen: "campaign.list", scope: evalCampaign, say: "Do the selected posts use any banned words or claims we can't make?", want: []string{"getSelection", "checkBrand"}, not: writes},
+	{pack: "repair", screen: "post", scope: evalPost, say: "Is this post on brand? Check it against our voice and guardrails.", want: []string{"loadPack", "checkBrand"}, not: writes},
+	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Do the selected posts use any banned words or claims we can't make?", want: []string{"getSelection", "checkBrand"}, not: writes},
 	// analytics
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How did we do over the last 4 weeks?", want: []string{"analyticsOverview"}, not: writes},
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Which posts performed best?", want: []string{"topPosts"}, not: writes},
@@ -135,6 +139,11 @@ var evalCases = []evalCase{
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Add these facts: founded in 2019; 40 employees; offices in Kyiv and Lisbon; ISO 27001 certified.", want: []string{"editBrand"}},
 	{pack: "foundation", screen: "foundation.series", scope: evalWorkspace, say: "Which series do we have?", want: []string{"listSeries"}, not: writes},
 	{pack: "foundation", screen: "foundation.series", scope: evalWorkspace, say: "Start a weekly 'Tip Tuesday' series: one practical tip per post.", want: []string{"createSeries"}},
+	{pack: "foundation", screen: "foundation.voice", scope: evalWorkspace, focus: evalOpenVoice, title: "Formal", say: "Delete this voice.", want: []string{"removeVoice"}},
+	{pack: "foundation", screen: "foundation.audience", scope: evalWorkspace, focus: evalOpenAud, title: "CTOs", say: "They mostly read on LinkedIn, not X. Update that.", want: []string{"getBrand", "updateAudience"}},
+	{pack: "foundation", screen: "foundation.series_item", scope: evalWorkspace, focus: evalOpenSer, title: "Tip Tuesday", say: "Make this series twice a week by default.", want: []string{"updateSeries"}},
+	{pack: "foundation", screen: "foundation.series_item", scope: evalWorkspace, focus: evalOpenSer, title: "Tip Tuesday", say: "Delete this series.", want: []string{"removeSeries"}},
+	{pack: "foundation", screen: "foundation.series_item", scope: evalCampaign, focus: evalOpenSer, title: "Tip Tuesday", say: "Stop running this series in this campaign.", want: []string{"stopSeries"}},
 	{pack: "foundation", screen: "campaign.overview", scope: evalCampaign, say: "Run the Tip Tuesday series in this campaign, twice a month.", want: []string{"loadPack", "listSeries", "runSeries"}},
 	{pack: "foundation", screen: "foundation", scope: evalWorkspace, say: "Fill in our brand from our website, villa-aurora.com.", want: []string{"startBrandDistill"}},
 	{pack: "foundation", screen: "foundation.questions", scope: evalWorkspace, say: "What does the brand reading still want to know?", want: []string{"getBrandDistill"}, not: writes},
@@ -297,6 +306,15 @@ func TestPackEvals(t *testing.T) {
 				title := cmp.Or(c.title, "Villa Aurora brochure 2026")
 				view.Focus = &viewresolve.Item{Kind: c.focus.Kind, ID: c.focus.ID, Title: title}
 				view.Summary += `, showing "` + title + `"`
+			}
+			if len(c.selected) > 0 {
+				sel := &viewcontext.Selection{Kind: viewcontext.KindPost}
+				for i, title := range c.selected {
+					id := fmt.Sprintf("p%d", i+1)
+					sel.IDs = append(sel.IDs, id)
+					view.Selection = append(view.Selection, viewresolve.Item{Kind: viewcontext.KindPost, ID: id, Title: title})
+				}
+				view.View.Selection, view.SelectionTotal = sel, len(c.selected)
 			}
 			r, err := a.Route(ctx, assistant.Request{Instruction: c.say, View: view})
 			if err != nil {
