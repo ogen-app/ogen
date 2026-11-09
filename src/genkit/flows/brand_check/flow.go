@@ -190,10 +190,7 @@ func bannedWords(grp Group) []Finding {
 		if w == "" {
 			continue
 		}
-		re, err := regexp.Compile(`(?i)(^|[^\p{L}\p{N}])(` + regexp.QuoteMeta(w) + `)($|[^\p{L}\p{N}])`)
-		if err != nil {
-			continue
-		}
+		re := regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}])(` + regexp.QuoteMeta(w) + `)($|[^\p{L}\p{N}])`)
 		for _, p := range grp.Posts {
 			if m := re.FindStringSubmatch(p.Text); m != nil {
 				res = append(res, Finding{PostID: p.ID, Rule: RuleBannedWord, Severity: "high", Quote: m[2],

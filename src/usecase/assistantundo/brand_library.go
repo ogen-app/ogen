@@ -113,19 +113,17 @@ func (u brandVoice) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAct
 	}
 	switch was, restored := after.Voice, before.Voice; {
 	case was != nil && restored == nil:
-		bound, err := u.brand.VoiceBindings(ctx, tx, a.EntityID)
-		if err != nil {
-			return err
-		}
-		if !bound.Empty() {
-			return ErrChangedSince
-		}
-		gone, _, err := u.brand.DeleteVoiceIf(ctx, tx, a.EntityID, was)
+		// The bindings are read under the voice's lock; any means it is in
+		// use since, and the error rolls the delete back.
+		gone, bound, err := u.brand.DeleteVoiceIf(ctx, tx, a.EntityID, was)
 		if err == nil && gone == nil {
 			return ErrChangedSince
 		}
 		if err != nil {
 			return changedSince(err)
+		}
+		if !bound.Empty() {
+			return ErrChangedSince
 		}
 		if was.IsDefault && after.ReplacedDefault != "" {
 			return u.brand.SetDefaultVoice(ctx, tx, after.ReplacedDefault)
@@ -165,18 +163,17 @@ func (u brandAudience) Undo(ctx context.Context, tx bun.IDB, a *models.Assistant
 	}
 	switch was, restored := after.Audience, before.Audience; {
 	case was != nil && restored == nil:
-		bound, err := u.brand.AudienceBindings(ctx, tx, a.EntityID)
+		gone, bound, err := u.brand.DeleteAudienceIf(ctx, tx, a.EntityID, was)
+		if err == nil && gone == nil {
+			return ErrChangedSince
+		}
 		if err != nil {
-			return err
+			return changedSince(err)
 		}
 		if !bound.Empty() {
 			return ErrChangedSince
 		}
-		gone, _, err := u.brand.DeleteAudienceIf(ctx, tx, a.EntityID, was)
-		if err == nil && gone == nil {
-			return ErrChangedSince
-		}
-		return changedSince(err)
+		return nil
 	case was != nil:
 		restored.ID, restored.UpdatedAt = a.EntityID, time.Now().UTC().Truncate(time.Microsecond)
 		_, err := u.brand.UpdateAudienceIf(ctx, tx, restored, was)
