@@ -298,14 +298,14 @@ the DB is authoritative. The one exception is embeddings: the embedder runs
 with it for display. In-process chat slots accept only Anthropic models. The
 vision and transcribe slots accept only Gemini models, because `image-service`
 and `audio-service` run the model ogen passes on each request. The assistants'
-tool loops (`post_assistant` planner, `campaign_assistant` orchestrator) cache
+tool loops (`assistant` and `campaign_assistant` orchestrators) cache
 their prompt, whichever model their slot runs.
 
 | Flow | Slot(s) | Seed default |
 |------|---------|--------------|
 | `content_plan`, `draft_post`, `enrich_brief`, `consistency` | `main` | Claude Sonnet 5.5 |
 | `post_quality` | `main` | Claude Sonnet 5.5 |
-| `post_assistant` | `planner` / `writer` | Claude Haiku 4.5 / Sonnet 5.5 |
+| `assistant` | `orchestrator` / `writer` | Claude Haiku 4.5 / Sonnet 5.5 |
 | `campaign_assistant` | `orchestrator` | Claude Haiku 4.5 |
 | `embed` | `main` (global only, no tier override) | Gemini Embedding 2 (`EMBED_MODEL`, 3072-dim) |
 | `vision` (`image-service`) | `classify` / `extract` / `escalate` / `alt_text` | Gemini 3.8 Flash |
@@ -324,7 +324,7 @@ segment use the same model.
 | `process_audio` (job, `audio` queue) | Probes + tier-gates, normalizes once, segments, transcribes each segment via `audio-service` (Gemini multimodal), assembles time-anchored transcript chunks, then embeds. Checkpointed + resumable. | Audio upload / finalize. |
 | `process_image` (job, `image` queue) | Presigns the original + a normalized slot, runs the full `image-service` pipeline (normalize + EXIF-strip + classify + per-shape extraction + description + alt text), persists the extraction/blocks, embeds the searchable text, and snapshots cost. | Image asset upload. |
 | `content_plan` | Per-phase, per-platform post drafts for a campaign; parallel K-sized batches against Anthropic with SSE progress. | `POST /api/campaigns/:id/generate-draft` (SSE). |
-| `post_assistant` | Interactive post editor. Haiku planner loop + Sonnet `editPost` write-tool; streams `explanation_delta` / `content_delta`; tool use over the asset library. | `POST /api/posts/:id/assistant` (SSE). |
+| `assistant` (post pack) | Interactive post editor: the one assistant's post pack. Haiku orchestrator + Sonnet `editPost` write-tool; streams `explanation_delta` / `content_delta`; tool use over the asset library; a schedule is an offer the user confirms. | `POST /api/assistant` with a post-scoped `viewContext` (SSE). |
 | `campaign_assistant` | Campaign-level planning assistant; flows-as-tools (content plan, enrich brief, draft post, consistency check) under a Haiku orchestration loop. `enrich_brief` edits the campaign's existing brief rather than rewriting it. | Campaign assistant endpoint (SSE). |
 | `post_quality` | Scores a post version across weighted per-platform dimensions. | Quality assessment. |
 
@@ -597,7 +597,7 @@ feature lands looking like the rest of the codebase.
 | Skill | When to invoke | What it scaffolds |
 |-------|----------------|-------------------|
 | **`add-entity`** | Adding a new resource / table / domain entity — a full vertical slice. | Migration up/down, `bun`-tagged model, narrow `Repository` + impl, Fiber handler with swag annotations, `server.New` wiring, ginkgo tests against real Postgres, and an `http-client/` example. |
-| **`add-genkit-flow`** | Adding an AI assistant / generator / classifier — anything LLM-driven. | A flow package mirroring `post_assistant` / `content_plan`: types, prompt template, `run.go` with the SSE-streaming closure, optional tools, context cache, runtime init, streaming handler, and tests. |
+| **`add-genkit-flow`** | Adding an AI assistant / generator / classifier — anything LLM-driven. | A flow package mirroring `content_plan`: types, prompt template, `run.go` with the SSE-streaming closure, optional tools, context cache, runtime init, streaming handler, and tests. |
 | **`add-river-job`** | Adding a background/async task, queue worker, or recurring sweep. | Proto args message, outbox enqueue, the job's steps or maintenance pass, the river-service side, and tests. |
 | **`add-grpc-service`** | Adding a gRPC service/client or a private-network sidecar. | buf-managed proto codegen, (client-)streaming RPCs, health service, graceful shutdown, status-error mapping, and a nil-disabled thin client — the `pdf-service` pattern. |
 | **`email-templates`** | Adding/editing an email, its copy/design, or the drip schedule. | The Maizzle authoring project + DB seeds + embedded-default → seed-on-boot → DB-wins lifecycle, the `[[ ]]` Go delimiters, and the brand tokens (CON-154). |
