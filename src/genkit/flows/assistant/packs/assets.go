@@ -117,6 +117,22 @@ func assetsPack(d Deps) assistant.Pack {
 				specs = append(specs, spec(assetsPackName, compare, assistantkit.TierRead,
 					`Call this when the user asks to summarise or compare assets — "compare these", "summarise them", "summarise it" — not for one question about them (askAssets). Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Answer from its result: name the assets by their letter and title, give the disagreements their own line and offer to settle one, and say which assets were read from passages rather than an analysis.`))
 			}
+			if d.CreateCampaign != nil && d.CampaignTypes != nil {
+				setUp := genkit.DefineTool(g, "createCampaignFromAssets",
+					"Sets up a new campaign with assets as its sources: its name, type, dates and brief line, the assets attached. Offered for the user to confirm first; returns an undo id.",
+					resolveFirst(func(ctx context.Context, in *CampaignFromAssetsInput) { in.AssetIDs = in.sources(ctx) },
+						assistantkit.Gated("createCampaignFromAssets", assistantkit.Gate[CampaignFromAssetsInput]{
+							Precheck: func(ctx context.Context, in CampaignFromAssetsInput) error {
+								_, err := planCampaign(ctx, d, in)
+								return err
+							},
+							Describe: func(ctx context.Context, in CampaignFromAssetsInput) string { return campaignSummary(ctx, d, in) },
+						}, assistantkit.Wrap(func(ctx context.Context, in CampaignFromAssetsInput) (*CampaignFromAssetsOutput, error) {
+							return campaignFromAssets(ctx, d, in)
+						}))), ai.WithStrictSchema(false))
+				specs = append(specs, spec(assetsPackName, setUp, assistantkit.TierProposal,
+					`Call this when the user asks to set up, start or make a campaign from assets — "set up a campaign from these". Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Name it, and take the type and dates from what the sources say (an opening date, a launch), leaving dates out when they don't say; the card shows them so the user can change them. It creates no posts: offer a content plan once it's set up.`))
+			}
 			return specs, nil
 		},
 	}

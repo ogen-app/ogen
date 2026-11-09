@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -172,4 +174,52 @@ func (u campaignBrief) Undo(ctx context.Context, tx bun.IDB, a *models.Assistant
 	c.KeyMessages = text("keyMessages")
 	c.ToneGuidelines = text("toneGuidelines")
 	return u.campaigns.UpdateColumns(ctx, tx, c, "description", "target_persona", "key_messages", "tone_guidelines")
+}
+
+// CampaignCreated is the snapshot a new campaign is logged and compared
+// with: what its proposal set.
+func CampaignCreated(c *models.Campaign) models.JSONMap {
+	return models.JSONMap{
+		"name":      c.Name,
+		"startDate": timeValue(c.StartDate),
+		"endDate":   timeValue(c.EndDate),
+		"assetIds":  strings.Join(slices.Sorted(slices.Values(c.AssetIDs)), ","),
+	}
+}
+
+type campaignCreated struct{ campaigns repository.CampaignRepository }
+
+// Undo deletes a campaign the assistant created while it is still as
+// created: unchanged, with no posts, and no ideas anyone wrote, planned or
+// decided — only the ones its sources' analyses distilled on their own.
+func (u campaignCreated) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	c, err := lockCampaign(ctx, u.campaigns, tx, a.EntityID)
+	if err != nil {
+		return err
+	}
+	if !same(CampaignCreated(c), a.After) {
+		return ErrChangedSince
+	}
+	posts, err := tx.NewSelect().Model((*models.Post)(nil)).Where("po.campaign_id = ?", c.ID).Exists(ctx)
+	if err != nil {
+		return err
+	}
+	worked, err := tx.NewSelect().Model((*models.Idea)(nil)).
+		Where("i.campaign_id = ?", c.ID).
+		Where("i.origin <> ? OR i.verdict IS NOT NULL", models.IdeaOriginAssetAnalysis).
+		Exists(ctx)
+	if err != nil {
+		return err
+	}
+	if posts || worked {
+		return ErrChangedSince
+	}
+	deleted, err := u.campaigns.DeleteTx(ctx, tx, c.ID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return ErrNotFound
+	}
+	return nil
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/analytics"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/create"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 	"github.com/ogen-app/ogen/src/usecase/urlimport"
@@ -49,8 +50,12 @@ type Deps struct {
 	// found; nil leaves both out.
 	Analyses repository.AssetAnalysisRepository
 	// Compare reads assets together for compareAssets; nil leaves it out.
-	Compare   asset_compare.Run
-	URLImport *urlimport.Service
+	Compare asset_compare.Run
+	// CreateCampaign and CampaignTypes set up a campaign from assets; nil
+	// leaves createCampaignFromAssets out.
+	CreateCampaign *create.Service
+	CampaignTypes  repository.CampaignTypeRepository
+	URLImport      *urlimport.Service
 
 	Posts     repository.PostRepository
 	Links     repository.PostIdeaRepository
