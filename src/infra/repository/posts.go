@@ -544,8 +544,15 @@ func (r *postRepository) MoveScheduledAt(ctx context.Context, moves []ScheduleMo
 	return moved, err
 }
 
+// Delete hard-deletes the post with its assistant thread, in one
+// transaction.
 func (r *postRepository) Delete(ctx context.Context, id string) (bool, error) {
-	deleted, err := r.DeleteTx(ctx, r.db, id)
+	var deleted *models.Post
+	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var err error
+		deleted, err = r.DeleteTx(ctx, tx, id)
+		return err
+	})
 	return deleted != nil, err
 }
 
