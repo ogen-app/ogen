@@ -76,6 +76,24 @@ func viewOf(t *testing.T, raw string) *viewresolve.Resolved {
 	return &viewresolve.Resolved{View: v, Summary: "On " + string(v.Screen)}
 }
 
+// An offer's own subject wins over the thread's and the focus, so
+// confirming it works on what it was offered for.
+func TestTurn_SubjectPrefersTheOffers(t *testing.T) {
+	view := viewOf(t, `{"version":1,"screen":"campaign.overview","scope":{"kind":"campaign","id":"c1"}}`)
+	view.Focus = &viewresolve.Item{Kind: viewcontext.KindPost, ID: "p2"}
+	turn := Turn{View: view, Args: map[string]any{"postId": "p1"}}
+	if got := turn.Subject(models.AssistantScopePost); got != "p1" {
+		t.Fatalf("offer's subject = %q, want p1", got)
+	}
+	turn.Args = nil
+	if got := turn.Subject(models.AssistantScopePost); got != "p2" {
+		t.Fatalf("focus subject = %q, want p2", got)
+	}
+	if got := turn.Subject(models.AssistantScopeCampaign); got != "c1" {
+		t.Fatalf("thread subject = %q, want c1", got)
+	}
+}
+
 func TestPacks_Defaults(t *testing.T) {
 	ps := packList{ideasPack(), campaignPack()}
 	if got := ps.defaults("campaign.ideas", models.AssistantScopeCampaign); !slices.Equal(got, []string{"ideas", "campaign"}) {
