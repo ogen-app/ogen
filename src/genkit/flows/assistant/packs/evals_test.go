@@ -56,8 +56,10 @@ type evalCase struct {
 	// must never be. An empty want means: answer without a tool.
 	want []string
 	not  []string
-	// focus is the item the screen shows, on a detail screen.
+	// focus is the item the screen shows, on a detail screen, and title its
+	// title; the asset brochure's when empty.
 	focus *viewcontext.Ref
+	title string
 }
 
 var (
@@ -65,7 +67,9 @@ var (
 	evalPost      = viewcontext.Scope{Kind: models.AssistantScopePost, ID: "p1"}
 	evalWorkspace = viewcontext.Scope{Kind: models.AssistantScopeWorkspace}
 	evalOpenAsset = &viewcontext.Ref{Kind: viewcontext.KindAsset, ID: "a1"}
-	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas"}
+	evalOpenVoice = &viewcontext.Ref{Kind: viewcontext.KindVoice, ID: "v1"}
+	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas",
+		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails"}
 )
 
 var evalCases = []evalCase{
@@ -115,6 +119,12 @@ var evalCases = []evalCase{
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "What's our brand voice?", want: []string{"getBrand"}, not: writes},
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Which of our facts have expired?", want: []string{"getBrand"}, not: writes},
 	{pack: "foundation", screen: "foundation.templates", scope: evalWorkspace, say: "What templates do we have?", want: []string{"getBrand"}, not: writes},
+	{pack: "foundation", screen: "foundation.voices", scope: evalWorkspace, say: "Add a casual voice for Instagram: short posts, emoji welcome.", want: []string{"addVoice"}},
+	{pack: "foundation", screen: "foundation.voice", scope: evalWorkspace, focus: evalOpenVoice, title: "Formal", say: "Make this the default voice.", want: []string{"updateVoice"}},
+	{pack: "foundation", screen: "foundation.voice", scope: evalWorkspace, focus: evalOpenVoice, title: "Formal", say: "Summarise this voice for me.", want: []string{"getBrand"}, not: writes},
+	{pack: "foundation", screen: "foundation.audiences", scope: evalWorkspace, say: "Add an audience: CTOs at mid-size SaaS companies who read on LinkedIn.", want: []string{"addAudience"}},
+	{pack: "foundation", screen: "foundation.audiences", scope: evalWorkspace, say: "Delete the Students audience.", want: []string{"getBrand", "removeAudience"}},
+	{pack: "foundation", screen: "foundation.guardrails", scope: evalWorkspace, say: "Never use the word 'synergy'.", want: []string{"updateGuardrails"}, not: []string{"addFact"}},
 	// workspace
 	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "What happened yesterday?", want: []string{"activityReport"}},
 	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Do any of my accounts need reconnecting?", want: []string{"workspaceSetup"}},
@@ -268,8 +278,9 @@ func TestPackEvals(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/%s", c.pack, c.say), func(t *testing.T) {
 			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope, Focus: c.focus}, Summary: "On " + string(c.screen)}
 			if c.focus != nil {
-				view.Focus = &viewresolve.Item{Kind: c.focus.Kind, ID: c.focus.ID, Title: "Villa Aurora brochure 2026"}
-				view.Summary += `, showing "Villa Aurora brochure 2026"`
+				title := cmp.Or(c.title, "Villa Aurora brochure 2026")
+				view.Focus = &viewresolve.Item{Kind: c.focus.Kind, ID: c.focus.ID, Title: title}
+				view.Summary += `, showing "` + title + `"`
 			}
 			r, err := a.Route(ctx, assistant.Request{Instruction: c.say, View: view})
 			if err != nil {

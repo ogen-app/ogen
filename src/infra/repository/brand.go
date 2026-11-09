@@ -27,11 +27,22 @@ type BrandRepository interface {
 	CreateVoice(ctx context.Context, v *models.BrandVoice) error
 	UpdateVoice(ctx context.Context, v *models.BrandVoice) error // sql.ErrNoRows when unknown
 	DeleteVoice(ctx context.Context, id string) (bool, error)
+	// The conditional writes take db (nil runs their own transaction) and
+	// return ErrBrandChanged when the stored material no longer equals was.
+	UpdateVoiceIf(ctx context.Context, db bun.IDB, v, was *models.BrandVoice) (*models.BrandVoice, error)
+	DeleteVoiceIf(ctx context.Context, db bun.IDB, id string, was *models.BrandVoice) (*models.BrandVoice, BrandBindings, error)
+	RestoreVoice(ctx context.Context, db bun.IDB, v *models.BrandVoice, b BrandBindings) error
+	SetDefaultVoice(ctx context.Context, db bun.IDB, id string) error
+	VoiceBindings(ctx context.Context, db bun.IDB, id string) (BrandBindings, error)
 
 	GetAudience(ctx context.Context, id string) (*models.BrandAudience, error) // nil when not in tenant
 	CreateAudience(ctx context.Context, a *models.BrandAudience) error
 	UpdateAudience(ctx context.Context, a *models.BrandAudience) error // sql.ErrNoRows when unknown
 	DeleteAudience(ctx context.Context, id string) (bool, error)
+	UpdateAudienceIf(ctx context.Context, db bun.IDB, a, was *models.BrandAudience) (*models.BrandAudience, error)
+	DeleteAudienceIf(ctx context.Context, db bun.IDB, id string, was *models.BrandAudience) (*models.BrandAudience, BrandBindings, error)
+	RestoreAudience(ctx context.Context, db bun.IDB, a *models.BrandAudience, b BrandBindings) error
+	AudienceBindings(ctx context.Context, db bun.IDB, id string) (BrandBindings, error)
 
 	// GetGuardrails returns nil when unset. Facts is the ledger projection.
 	GetGuardrails(ctx context.Context) (*models.BrandGuardrails, error)
@@ -39,6 +50,7 @@ type BrandRepository interface {
 	// reconciles the ledger by statement.
 	SaveGuardrails(ctx context.Context, g *models.BrandGuardrails, facts []string, author *string) (FactsReconciled, error)
 	DeleteGuardrails(ctx context.Context) (bool, error) // leaves the ledger alone
+	SaveGuardrailsIf(ctx context.Context, db bun.IDB, g, was *models.BrandGuardrails) (*models.BrandGuardrails, error)
 
 	// Facts ledger.
 	ListFacts(ctx context.Context) ([]models.BrandFact, error)
@@ -285,7 +297,7 @@ func (r *brandRepository) DeleteVoice(ctx context.Context, id string) (bool, err
 // cannot slip between the select and the update and leave the library with no
 // default; the row-count check turns any such surprise into a rolled-back
 // (fail-closed) delete rather than a silently broken invariant.
-func promoteEarliestVoice(ctx context.Context, tx bun.Tx) error {
+func promoteEarliestVoice(ctx context.Context, tx bun.IDB) error {
 	survivor := new(models.BrandVoice)
 	err := tx.NewSelect().Model(survivor).OrderExpr("created_at ASC").Limit(1).For("UPDATE").Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -505,7 +517,7 @@ func promoteEarliestTemplate(ctx context.Context, tx bun.Tx) error {
 // but this is a cross-row write with no bound instance, so the tenant predicate
 // is also added explicitly (and fails closed with no tenant in context) —
 // belt-and-braces on the one operation that touches rows other than the target.
-func demoteDefault(ctx context.Context, tx bun.Tx, model any, exceptID string) error {
+func demoteDefault(ctx context.Context, tx bun.IDB, model any, exceptID string) error {
 	tid, ok := tenantctx.From(ctx)
 	if !ok {
 		return tenantctx.ErrNoTenant
