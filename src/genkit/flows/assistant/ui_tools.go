@@ -260,6 +260,10 @@ type ListSavedViewsOutput struct {
 	Note  string         `json:"note,omitempty"`
 }
 
+// resultSavedViews is where listSavedViews's last list reaches the client,
+// beside the packs' results.
+const resultSavedViews = "savedViews"
+
 // savedViewTotal is the count every saved-views surface carries.
 const savedViewTotal = "total"
 
@@ -303,6 +307,9 @@ func (t *toolSet) listSavedViews(ctx context.Context, in ListSavedViewsInput) (*
 		}
 		out.Views = append(out.Views, ref)
 	}
+	st.mu.Lock()
+	st.savedViews = out
+	st.mu.Unlock()
 	switch {
 	case invalid > 0:
 		out.Note = fmt.Sprintf("%d of the saved views no longer match the list's filters and were left out", invalid)

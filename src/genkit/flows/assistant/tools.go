@@ -68,6 +68,9 @@ type turnState struct {
 	touches   assistantkit.Touches
 	cards     []ProposalCard
 	resolved  []ProposalResolved
+	// savedViews is the last list listSavedViews returned, for the
+	// client's card.
+	savedViews *ListSavedViewsOutput
 	// proposing serialises proposing; proposedKeys maps each call proposed
 	// this turn (tool and args) to its offer's id.
 	proposing    sync.Mutex
@@ -195,6 +198,14 @@ func (t *toolSet) bind(ctx context.Context, st *turnState) context.Context {
 func (t *toolSet) finish(st *turnState, resp *Response) {
 	var fallback string
 	resp.Results, fallback = t.end(st)
+	st.mu.Lock()
+	if st.savedViews != nil {
+		if resp.Results == nil {
+			resp.Results = map[string]any{}
+		}
+		resp.Results[resultSavedViews] = st.savedViews
+	}
+	st.mu.Unlock()
 	if resp.Explanation == "" {
 		resp.Explanation, resp.Action = fallback, actionAnswered
 	}

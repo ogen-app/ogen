@@ -249,3 +249,26 @@ func TestListSavedViews(t *testing.T) {
 	_, err = tools.listSavedViews(ctx, ListSavedViewsInput{List: "posts"})
 	refusal(t, err, "which list")
 }
+
+// The listed views reach the client beside the packs' results, so its card
+// replays from history.
+func TestListSavedViews_Result(t *testing.T) {
+	lister := &listedViews{views: []models.SavedView{{ID: "sv1", Name: "Press", Query: "tag=press", Valid: true}}}
+	tools := &toolSet{deps: Repos{SavedViewLists: lister}}
+	ctx, st := onScreen(t, `{"version":1,"screen":"assets","scope":{"kind":"workspace"}}`)
+
+	resp := &Response{}
+	tools.finish(st, resp)
+	if resp.Results != nil {
+		t.Fatalf("results = %v before any list", resp.Results)
+	}
+	if _, err := tools.listSavedViews(ctx, ListSavedViewsInput{}); err != nil {
+		t.Fatal(err)
+	}
+	resp = &Response{}
+	tools.finish(st, resp)
+	got, ok := resp.Results["savedViews"].(*ListSavedViewsOutput)
+	if !ok || len(got.Views) != 1 || got.Views[0].Name != "Press" {
+		t.Fatalf("results = %#v", resp.Results)
+	}
+}
