@@ -83,7 +83,7 @@ func assetsPack(d Deps) assistant.Pack {
 					return importPage(ctx, d, in)
 				}), ai.WithStrictSchema(false))
 
-			return []assistantkit.Spec{
+			specs := []assistantkit.Spec{
 				spec(assetsPackName, find, assistantkit.TierRead,
 					`Call this to look up assets — "which PDFs are still processing?", "assets about pricing". filter is a URL query string in the Assets list's syntax (e.g. text=pricing&status=ready&kind=pdf). To show the user, also call setFilter with it.`),
 				spec(assetsPackName, ask, assistantkit.TierRead,
@@ -98,7 +98,17 @@ func assetsPack(d Deps) assistant.Pack {
 					`Call this when the user asks to use assets in a campaign ("add these to the Spring campaign") or to stop using them (detach). campaignId defaults to the thread's. It can be undone.`),
 				spec(assetsPackName, importURL, assistantkit.TierRead,
 					`Call this when the user gives a web page to use — "add https://… as a source". The page is read in the background.`),
-			}, nil
+			}
+			if d.Analyses != nil && d.IdeaRepo != nil {
+				read := genkit.DefineTool(g, "readAnalysis",
+					"Reads what an asset's analysis found for one lens — the workspace's or a campaign's: its summary, key points and the ideas it distilled with their verdicts, plus the asset's other lenses.",
+					assistantkit.Wrap(func(ctx context.Context, in ReadAnalysisInput) (*ReadAnalysisOutput, error) {
+						return readAnalysis(ctx, d, in)
+					}), ai.WithStrictSchema(false))
+				specs = append(specs, spec(assetsPackName, read, assistantkit.TierRead,
+					`Call this when the user asks what an analysis found — "what did the analysis find?", "what does it say for Spring reopening?". assetId defaults to the asset open on screen. A lens the user names picks it: pass that campaign's id, or workspace for the workspace lens; none named means the thread's. If status is not_read, pending, failed or skipped, say so plainly and offer what otherLenses has or analyseAsset; never answer from another lens unasked.`))
+			}
+			return specs, nil
 		},
 	}
 }
