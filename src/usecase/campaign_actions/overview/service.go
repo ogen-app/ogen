@@ -13,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/campaignphase"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 	"github.com/ogen-app/ogen/src/usecase/campaigngoal"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 )
@@ -35,12 +36,43 @@ type Service struct {
 	campaigns repository.CampaignRepository
 	posts     repository.PostRepository
 	platforms repository.PlatformRepository
+	// links and dismissals back the problems; nil dismissals leaves them
+	// out.
+	links      repository.PostIdeaRepository
+	dismissals repository.AssistantDismissalRepository
 }
 
 // New builds a Service. The repositories carry tenant scoping, so Overview is
 // safe to call in any tenant context.
 func New(campaigns repository.CampaignRepository, posts repository.PostRepository, platforms repository.PlatformRepository) *Service {
 	return &Service{campaigns: campaigns, posts: posts, platforms: platforms}
+}
+
+// WithProblems adds the calendar's problems to the overview, without the
+// ones dismissed in the campaign's assistant thread, and lets the overview
+// dismiss them.
+func (s *Service) WithProblems(links repository.PostIdeaRepository, dismissals repository.AssistantDismissalRepository) *Service {
+	s.links, s.dismissals = links, dismissals
+	return s
+}
+
+// ErrNoProblems is Dismiss on an overview without problems.
+var ErrNoProblems = errors.New("campaign problems are not available")
+
+// Dismiss dismisses a problem of the campaign by its key, in the campaign's
+// assistant thread, so neither the overview nor the assistant raises it
+// again while its posts stay the same.
+func (s *Service) Dismiss(ctx context.Context, campaignID, key, by string) error {
+	if s.dismissals == nil {
+		return ErrNoProblems
+	}
+	if _, err := s.campaigns.GetByID(ctx, campaignID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load campaign: %w", err)
+	}
+	return s.dismissals.Dismiss(ctx, models.AssistantScopeCampaign, campaignID, key, by)
 }
 
 // Overview loads the campaign (with its type + phases hydrated) and its posts,
@@ -58,7 +90,8 @@ func (s *Service) Overview(ctx context.Context, campaignID string) (*Overview, e
 
 	// Only the fields buildOverview counts by, without per-post hydration.
 	posts, err := s.posts.ListRowsByCampaign(ctx, campaignID,
-		"id", "status", "platform_id", "platform_post_type", "campaign_type_phase_id")
+		"id", "title", "status", "platform_id", "platform_post_type", "campaign_type_phase_id",
+		"scheduled_at", "social_account_id", "used_asset_ids")
 	if err != nil {
 		return nil, fmt.Errorf("list posts: %w", err)
 	}
@@ -75,7 +108,38 @@ func (s *Service) Overview(ctx context.Context, campaignID string) (*Overview, e
 
 	ov := buildOverview(campaign, posts, names)
 	ov.GeneratedAt = time.Now().UTC()
+	if err := s.problems(ctx, ov, campaign, posts); err != nil {
+		return nil, err
+	}
 	return ov, nil
+}
+
+// problems fills in the calendar's findings the campaign's thread hasn't
+// dismissed.
+func (s *Service) problems(ctx context.Context, ov *Overview, c *models.Campaign, posts []models.Post) error {
+	ov.Problems = []calendarcheck.Finding{}
+	if s.dismissals == nil {
+		return nil
+	}
+	var ideas map[string][]string
+	if s.links != nil {
+		var err error
+		if ideas, err = s.links.IdeasOfCampaignPosts(ctx, c.ID); err != nil {
+			return fmt.Errorf("read the posts' ideas: %w", err)
+		}
+	}
+	dismissed, err := s.dismissals.Keys(ctx, models.AssistantScopeCampaign, c.ID)
+	if err != nil {
+		return fmt.Errorf("read dismissed problems: %w", err)
+	}
+	for _, f := range calendarcheck.Check(c, posts, ideas, ov.GeneratedAt) {
+		if dismissed[f.Key] {
+			ov.ProblemsDismissed++
+			continue
+		}
+		ov.Problems = append(ov.Problems, f)
+	}
+	return nil
 }
 
 // buildOverview is the pure aggregation (no I/O), unit-testable with hand-built

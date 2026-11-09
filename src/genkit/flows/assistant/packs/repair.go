@@ -66,7 +66,7 @@ func repairPack(d Deps) assistant.Pack {
 				}), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(repairPackName, check, assistantkit.TierRead,
-					`Call this when the user asks what's wrong with the calendar or plan, or to check it — "anything I should fix?", "is the calendar ok?". Relay the findings in order and offer their fixes, which are already offered (proposalId) or are a post to open (navigate to it). Don't fix anything they didn't pick.`),
+					`Call this when the user asks what's wrong with the calendar or plan, or to check it — "anything I should fix?", "is the calendar ok?". Relay the findings in order and offer their fixes, which are already offered (proposalId) or are a post to open (navigate to it). Don't fix anything they didn't pick. When the user asks to fix one problem by its key (as the campaign's Overview does), check and offer only that finding's fixes.`),
 				spec(repairPackName, optimise, assistantkit.TierRead,
 					`Call this when the user asks to even out, rebalance or optimise the calendar. It offers the moves; show a few of them (old → new date) and say they run once the user confirms.`),
 				spec(repairPackName, apply, assistantkit.TierProposal,

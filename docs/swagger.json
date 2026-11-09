@@ -3907,6 +3907,77 @@
                 }
             }
         },
+        "/api/campaigns/{id}/findings/{key}/dismiss": {
+            "post": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Dismisses one of the overview's problems by its key, the way\nthe campaign's assistant does when told a finding is fine: neither\nthe overview nor the assistant raises it again while its posts\nstay the same. Dismissing twice is one dismissal.",
+                "tags": [
+                    "campaigns"
+                ],
+                "summary": "Dismiss a campaign problem",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The problem's key",
+                        "name": "key",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/campaigns/{id}/generate-draft": {
             "post": {
                 "security": [
@@ -14953,6 +15024,110 @@
                 }
             }
         },
+        "calendarcheck.Finding": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "fixes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/calendarcheck.Fix"
+                    }
+                },
+                "key": {
+                    "description": "Key identifies the finding across checks, so a dismissed one stays\ndismissed while its posts are the same.",
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "postIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "severity": {
+                    "$ref": "#/definitions/calendarcheck.Severity"
+                }
+            }
+        },
+        "calendarcheck.Fix": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "description": "Count is how many ideas a plan_window fix plans; zero leaves it to\nthe planner.",
+                    "type": "integer"
+                },
+                "from": {
+                    "description": "From and To bound a plan_window fix, YYYY-MM-DD; a move_post fix\nmoves its post from one day to the other.",
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/calendarcheck.FixKind"
+                },
+                "platformId": {
+                    "description": "PlatformID and PostType are the type an enable_post_type fix allows,\nor the type a convert_post_type fix converts to (PostType only).",
+                    "type": "string"
+                },
+                "postId": {
+                    "description": "PostID is the post an open_post fix opens or a move_post fix moves.",
+                    "type": "string"
+                },
+                "postIds": {
+                    "description": "PostIDs are the posts a convert, unschedule or delete fix changes.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "postType": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "calendarcheck.FixKind": {
+            "type": "string",
+            "enum": [
+                "redistribute",
+                "plan_window",
+                "open_post",
+                "move_post",
+                "enable_post_type",
+                "convert_post_type",
+                "unschedule",
+                "delete"
+            ],
+            "x-enum-varnames": [
+                "FixRedistribute",
+                "FixPlanWindow",
+                "FixOpenPost",
+                "FixMovePost",
+                "FixEnablePostType",
+                "FixConvertPostType",
+                "FixUnschedule",
+                "FixDelete"
+            ]
+        },
+        "calendarcheck.Severity": {
+            "type": "string",
+            "enum": [
+                "warning",
+                "info"
+            ],
+            "x-enum-varnames": [
+                "SeverityWarning",
+                "SeverityInfo"
+            ]
+        },
         "campaignphase.Source": {
             "type": "string",
             "enum": [
@@ -22831,6 +23006,16 @@
                     "items": {
                         "$ref": "#/definitions/overview.PhaseInfo"
                     }
+                },
+                "problems": {
+                    "description": "Problems are the calendar's findings, warnings first, each with the\nfixes the campaign's assistant offers once asked to fix it by its key;\nthe ones dismissed in the campaign's thread are left out and counted.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/calendarcheck.Finding"
+                    }
+                },
+                "problemsDismissed": {
+                    "type": "integer"
                 },
                 "status": {
                     "type": "string"
