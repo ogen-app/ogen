@@ -8,6 +8,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
@@ -123,6 +124,10 @@ type PostAssistantFlowConfig struct {
 	// QualityAuto queues an automatic quality assessment when an edit is
 	// saved as a version. nil queues none.
 	QualityAuto *qualityauto.Service
+	// Notifier leaves the post's owner a notification when a turn's tools
+	// changed the post, for another device or a later return. nil leaves
+	// none.
+	Notifier *notify.Service
 }
 
 // postRemoved is the refusal when the post is deleted while a tool works
