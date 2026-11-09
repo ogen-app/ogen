@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
@@ -22,13 +24,22 @@ import (
 // returns.
 const threadMessages = 50
 
+// defaultThreads and maxThreads bound a page of the thread list.
+const (
+	defaultThreads = 50
+	maxThreads     = 100
+)
+
+// threadPreviewLen caps a thread row's preview, in characters.
+const threadPreviewLen = 140
+
 // maxInstructionLen caps a turn's message, in characters. With the replayed
 // history capped by message count, it keeps a turn's input well inside the
 // model's context window.
 const maxInstructionLen = 8000
 
 // AssistantHandler serves the universal assistant: one endpoint for every
-// screen, and the thread history.
+// screen, the workspace's thread list, and each thread's history.
 type AssistantHandler struct {
 	run       func(ctx context.Context, req assistant.Request, onEvent assistant.OnEventFunc) (*assistant.Response, error)
 	available func() bool
@@ -53,6 +64,7 @@ func NewAssistantHandler(
 
 func (h *AssistantHandler) Register(app *fiber.App) {
 	app.Post("/api/assistant", h.auth, h.Turn)
+	app.Get("/api/assistant/threads", h.auth, h.Threads)
 	app.Get("/api/assistant/threads/:scope/messages", h.auth, h.Messages)
 }
 
@@ -179,6 +191,111 @@ func (h *AssistantHandler) Messages(c *fiber.Ctx) error {
 		msgs = []models.AssistantMessage{}
 	}
 	return c.JSON(msgs)
+}
+
+// assistantThreadRow is one thread in the list.
+type assistantThreadRow struct {
+	// Scope is the thread's address for the history read.
+	Scope     string                    `json:"scope"`
+	ScopeKind models.AssistantScopeKind `json:"scope_kind" swaggertype:"string" enums:"workspace,campaign,post"`
+	ScopeID   string                    `json:"scope_id"`
+	// Title is the campaign's name or the post's title; empty for the
+	// workspace.
+	Title string `json:"title"`
+	// CampaignID and CampaignTitle name the thread's campaign: its own for a
+	// campaign thread, the post's for a post thread. Empty for the workspace.
+	CampaignID    string `json:"campaign_id"`
+	CampaignTitle string `json:"campaign_title"`
+	// Archived reports that the thread's campaign is archived.
+	Archived      bool      `json:"archived"`
+	LastMessageAt time.Time `json:"last_message_at"`
+	LastRole      string    `json:"last_role" enums:"user,model"`
+	// Preview is the start of the latest message as plain text: the user's
+	// words, or the model's explanation.
+	Preview      string `json:"preview"`
+	MessageCount int    `json:"message_count"`
+}
+
+// Threads godoc
+// @Summary      Universal assistant threads
+// @Description  Lists the workspace's threads, the latest message first. Threads are the workspace's, not one
+// @Description  user's. A campaign thread is left out once its campaign is deleted, and a post thread once its
+// @Description  post or its campaign is; an archived campaign's threads are listed with archived set. For the
+// @Description  next page, pass the last row's last_message_at as before.
+// @Tags         assistant
+// @Produce      json
+// @Security     CookieAuth
+// @Param        limit   query  int     false  "Page size, 1-100 (default 50)"
+// @Param        before  query  string  false  "RFC 3339 timestamp; only threads whose latest message is earlier"
+// @Success      200  {array}   assistantThreadRow
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Router       /api/assistant/threads [get]
+func (h *AssistantHandler) Threads(c *fiber.Ctx) error {
+	limit := defaultThreads
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxThreads {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("limit must be between 1 and %d", maxThreads))
+		}
+		limit = n
+	}
+	var before time.Time
+	if v := c.Query("before"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "before must be RFC3339")
+		}
+		before = t
+	}
+	threads, err := h.messages.ListThreads(reqCtx(c), before, limit)
+	if err != nil {
+		return err
+	}
+	rows := make([]assistantThreadRow, 0, len(threads))
+	for _, t := range threads {
+		scope := string(t.ScopeKind)
+		if t.ScopeKind != models.AssistantScopeWorkspace {
+			scope += ":" + t.ScopeID
+		}
+		rows = append(rows, assistantThreadRow{
+			Scope:         scope,
+			ScopeKind:     t.ScopeKind,
+			ScopeID:       t.ScopeID,
+			Title:         t.Title,
+			CampaignID:    t.CampaignID,
+			CampaignTitle: t.CampaignTitle,
+			Archived:      t.Archived,
+			LastMessageAt: t.LastMessageAt,
+			LastRole:      t.LastRole,
+			Preview:       threadPreview(t.LastRole, t.LastContent),
+			MessageCount:  t.MessageCount,
+		})
+	}
+	return c.JSON(rows)
+}
+
+// threadPreview is a message as one line of plain text, cut to
+// threadPreviewLen characters. A model message is stored as its "complete"
+// event's JSON, so its preview is the explanation; one that doesn't decode
+// has none rather than showing the JSON.
+func threadPreview(role, content string) string {
+	text := content
+	if role == "model" {
+		var env struct {
+			Explanation string `json:"explanation"`
+		}
+		if err := json.Unmarshal([]byte(content), &env); err != nil {
+			return ""
+		}
+		text = env.Explanation
+	}
+	text = strings.Join(strings.Fields(strings.ReplaceAll(text, "**", "")), " ")
+	if utf8.RuneCountInString(text) <= threadPreviewLen {
+		return text
+	}
+	runes := []rune(text)
+	return strings.TrimRight(string(runes[:threadPreviewLen-1]), " ") + "…"
 }
 
 // parseThreadScope reads "workspace", "campaign:<id>" or "post:<id>".

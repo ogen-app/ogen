@@ -1353,6 +1353,66 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/assistant/threads": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Lists the workspace's threads, the latest message first. Threads are the workspace's, not one\nuser's. A campaign thread is left out once its campaign is deleted, and a post thread once its\npost or its campaign is; an archived campaign's threads are listed with archived set. For the\nnext page, pass the last row's last_message_at as before.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assistant"
+                ],
+                "summary": "Universal assistant threads",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page size, 1-100 (default 50)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 timestamp; only threads whose latest message is earlier",
+                        "name": "before",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/handlers.assistantThreadRow"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/assistant/threads/{scope}/messages": {
             "get": {
                 "security": [
@@ -15272,6 +15332,58 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "handlers.assistantThreadRow": {
+            "type": "object",
+            "properties": {
+                "archived": {
+                    "description": "Archived reports that the thread's campaign is archived.",
+                    "type": "boolean"
+                },
+                "campaign_id": {
+                    "description": "CampaignID and CampaignTitle name the thread's campaign: its own for a\ncampaign thread, the post's for a post thread. Empty for the workspace.",
+                    "type": "string"
+                },
+                "campaign_title": {
+                    "type": "string"
+                },
+                "last_message_at": {
+                    "type": "string"
+                },
+                "last_role": {
+                    "type": "string",
+                    "enum": [
+                        "user",
+                        "model"
+                    ]
+                },
+                "message_count": {
+                    "type": "integer"
+                },
+                "preview": {
+                    "description": "Preview is the start of the latest message as plain text: the user's\nwords, or the model's explanation.",
+                    "type": "string"
+                },
+                "scope": {
+                    "description": "Scope is the thread's address for the history read.",
+                    "type": "string"
+                },
+                "scope_id": {
+                    "type": "string"
+                },
+                "scope_kind": {
+                    "type": "string",
+                    "enum": [
+                        "workspace",
+                        "campaign",
+                        "post"
+                    ]
+                },
+                "title": {
+                    "description": "Title is the campaign's name or the post's title; empty for the\nworkspace.",
+                    "type": "string"
                 }
             }
         },

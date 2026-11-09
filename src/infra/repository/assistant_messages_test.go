@@ -2,8 +2,11 @@ package repository_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -142,5 +145,108 @@ func TestAssistantMessages_PostThreadGoesWithThePost(t *testing.T) {
 	}
 	if got, err := msgs.ListRecent(ctx, models.AssistantScopePost, "post-thread", 10); err != nil || len(got) != 0 {
 		t.Fatalf("a late turn recreated the thread: %+v (err %v)", got, err)
+	}
+}
+
+// threadPost seeds a post in campaignID for a post thread to belong to.
+func threadPost(t *testing.T, db *bun.DB, id, campaignID, title string) {
+	t.Helper()
+	now := time.Now().UTC()
+	post := &models.Post{
+		ID:           id,
+		CampaignID:   campaignID,
+		Title:        title,
+		Content:      "content " + id,
+		MediaURLs:    models.StringSlice{},
+		UsedAssetIDs: models.StringSlice{},
+		Status:       models.PostStatusDraft,
+		CTAType:      models.CTATypeNone,
+		CreatedBy:    "user-1",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if _, err := db.NewInsert().Model(post).Exec(tenantCtx()); err != nil {
+		t.Fatalf("seed post %s: %v", id, err)
+	}
+}
+
+func TestAssistantMessages_ListThreads(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	msgs := repository.NewAssistantMessageRepository(db)
+	campaigns := repository.NewCampaignRepository(db, nil, nil, nil)
+	live := seedCampaign(t, campaigns, ctx, "Spring launch")
+	archived := seedCampaign(t, campaigns, ctx, "Old promo")
+	deleted := seedCampaign(t, campaigns, ctx, "Scrapped")
+	threadPost(t, db, "post-live", live, "Teaser")
+	threadPost(t, db, "post-in-deleted", deleted, "Lost")
+
+	t0 := time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
+	for _, b := range [][]*models.AssistantMessage{
+		{
+			message(t, models.AssistantScopeWorkspace, "", "user", "what's working?", t0, nil),
+			message(t, models.AssistantScopeWorkspace, "", "model", `{"explanation":"Reels."}`, t0.Add(time.Second), nil),
+		},
+		{message(t, models.AssistantScopeCampaign, live, "user", "plan it", t0.Add(2*time.Minute), nil)},
+		{message(t, models.AssistantScopeCampaign, archived, "user", "wrap it up", t0.Add(3*time.Minute), nil)},
+		{message(t, models.AssistantScopeCampaign, deleted, "user", "start over", t0.Add(4*time.Minute), nil)},
+		{message(t, models.AssistantScopePost, "post-live", "user", "shorten it", t0.Add(5*time.Minute), nil)},
+		{message(t, models.AssistantScopePost, "post-in-deleted", "user", "fix it", t0.Add(6*time.Minute), nil)},
+	} {
+		if err := msgs.CreateBatch(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A post thread whose post is gone, written past CreateBatch's check.
+	if _, err := db.NewInsert().Model(message(t, models.AssistantScopePost, "post-gone", "user", "hello?", t0.Add(7*time.Minute), nil)).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Another tenant's thread, newer than all of them.
+	other := tenantctx.With(context.Background(), "tenant-other")
+	if err := msgs.CreateBatch(other, []*models.AssistantMessage{message(t, models.AssistantScopeWorkspace, "", "user", "not yours", t0.Add(8*time.Minute), nil)}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := campaigns.Archive(ctx, archived); err != nil || !ok {
+		t.Fatalf("archive = %v, %v", ok, err)
+	}
+	if ok, err := campaigns.Delete(ctx, deleted); err != nil || !ok {
+		t.Fatalf("delete = %v, %v", ok, err)
+	}
+
+	got, err := msgs.ListThreads(ctx, time.Time{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []repository.AssistantThread{
+		{ScopeKind: models.AssistantScopePost, ScopeID: "post-live", Title: "Teaser", CampaignID: live, CampaignTitle: "Spring launch", LastMessageAt: t0.Add(5 * time.Minute), LastRole: "user", LastContent: "shorten it", MessageCount: 1},
+		{ScopeKind: models.AssistantScopeCampaign, ScopeID: archived, Title: "Old promo", CampaignID: archived, CampaignTitle: "Old promo", Archived: true, LastMessageAt: t0.Add(3 * time.Minute), LastRole: "user", LastContent: "wrap it up", MessageCount: 1},
+		{ScopeKind: models.AssistantScopeCampaign, ScopeID: live, Title: "Spring launch", CampaignID: live, CampaignTitle: "Spring launch", LastMessageAt: t0.Add(2 * time.Minute), LastRole: "user", LastContent: "plan it", MessageCount: 1},
+		{ScopeKind: models.AssistantScopeWorkspace, LastMessageAt: t0.Add(time.Second), LastRole: "model", LastContent: `{"explanation":"Reels."}`, MessageCount: 2},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("threads = %+v; want %d", got, len(want))
+	}
+	for i := range want {
+		got[i].LastMessageAt = got[i].LastMessageAt.UTC()
+		if got[i] != want[i] {
+			t.Fatalf("thread %d = %+v; want %+v", i, got[i], want[i])
+		}
+	}
+
+	// A page, and the next one from its last row.
+	page, err := msgs.ListThreads(ctx, time.Time{}, 2)
+	if err != nil || len(page) != 2 || page[1].ScopeID != archived {
+		t.Fatalf("first page = %+v (err %v)", page, err)
+	}
+	next, err := msgs.ListThreads(ctx, page[1].LastMessageAt, 2)
+	if err != nil || len(next) != 2 || next[0].ScopeID != live || next[1].ScopeKind != models.AssistantScopeWorkspace {
+		t.Fatalf("next page = %+v (err %v)", next, err)
+	}
+
+	if got, err := msgs.ListThreads(ctx, time.Time{}, 0); err != nil || got != nil {
+		t.Fatalf("zero limit = %+v (err %v)", got, err)
+	}
+	if _, err := msgs.ListThreads(context.Background(), time.Time{}, 10); !errors.Is(err, tenantctx.ErrNoTenant) {
+		t.Fatalf("no tenant: err = %v; want ErrNoTenant", err)
 	}
 }
