@@ -244,21 +244,32 @@ DELETE {{baseUrl}}/api/posts/nonexistent
 # ── Assistant ─────────────────────────────────────────────────────────────────
 ###
 
+# The post assistant is the one assistant's post pack: a turn sent from the
+# post's screen, with a post-scoped viewContext, works on that post in its
+# thread. Response is a Server-Sent Events stream (see POST /api/assistant).
+
 ### Send instruction to post assistant  [protected]
-POST {{baseUrl}}/api/posts/{{postId}}/assistant
+POST {{baseUrl}}/api/assistant
+Accept: text/event-stream
 Content-Type: application/json
 
 {
-  "instruction": "Make the description more concise and punchy, targeting senior developers."
+  "instruction": "Make the description more concise and punchy, targeting senior developers.",
+  "viewContext": {"version": 1, "screen": "post", "scope": {"kind": "post", "id": "{{postId}}"}, "focus": {"kind": "post", "id": "{{postId}}"}}
 }
 
 ### Send instruction — incorporate asset info  [protected]
-POST {{baseUrl}}/api/posts/{{postId}}/assistant
+POST {{baseUrl}}/api/assistant
+Accept: text/event-stream
 Content-Type: application/json
 
 {
-  "instruction": "Incorporate key facts from the attached brand guidelines asset into the description."
+  "instruction": "Incorporate key facts from the attached brand guidelines asset into the description.",
+  "viewContext": {"version": 1, "screen": "post", "scope": {"kind": "post", "id": "{{postId}}"}, "focus": {"kind": "post", "id": "{{postId}}"}}
 }
+
+### Post thread — its latest messages  [protected]
+GET {{baseUrl}}/api/assistant/threads/post:{{postId}}/messages
 
 ###
 # ── Quality assessment — CON-85 ───────────────────────────────────────────────
