@@ -154,15 +154,6 @@ func (r *brandRepository) SetDefaultVoice(ctx context.Context, db bun.IDB, id st
 	})
 }
 
-// VoiceBindings lists the campaigns and posts bound to voice id, on db (nil
-// for the repository's own).
-func (r *brandRepository) VoiceBindings(ctx context.Context, db bun.IDB, id string) (BrandBindings, error) {
-	if db == nil {
-		db = r.db
-	}
-	return bindings(ctx, db, "brand_voice_id", id)
-}
-
 // ── Audiences ───────────────────────────────────────────────────────────────
 
 // UpdateAudienceIf is UpdateAudience on db (nil runs its own transaction),
@@ -237,15 +228,6 @@ func (r *brandRepository) RestoreAudience(ctx context.Context, db bun.IDB, a *mo
 		}
 		return rebind(ctx, tx, "brand_audience_id", a.ID, b)
 	})
-}
-
-// AudienceBindings lists the campaigns and posts bound to audience id, on db
-// (nil for the repository's own).
-func (r *brandRepository) AudienceBindings(ctx context.Context, db bun.IDB, id string) (BrandBindings, error) {
-	if db == nil {
-		db = r.db
-	}
-	return bindings(ctx, db, "brand_audience_id", id)
 }
 
 // ── Guardrails ──────────────────────────────────────────────────────────────

@@ -33,7 +33,6 @@ type BrandRepository interface {
 	DeleteVoiceIf(ctx context.Context, db bun.IDB, id string, was *models.BrandVoice) (*models.BrandVoice, BrandBindings, error)
 	RestoreVoice(ctx context.Context, db bun.IDB, v *models.BrandVoice, b BrandBindings) error
 	SetDefaultVoice(ctx context.Context, db bun.IDB, id string) error
-	VoiceBindings(ctx context.Context, db bun.IDB, id string) (BrandBindings, error)
 
 	GetAudience(ctx context.Context, id string) (*models.BrandAudience, error) // nil when not in tenant
 	CreateAudience(ctx context.Context, a *models.BrandAudience) error
@@ -42,7 +41,6 @@ type BrandRepository interface {
 	UpdateAudienceIf(ctx context.Context, db bun.IDB, a, was *models.BrandAudience) (*models.BrandAudience, error)
 	DeleteAudienceIf(ctx context.Context, db bun.IDB, id string, was *models.BrandAudience) (*models.BrandAudience, BrandBindings, error)
 	RestoreAudience(ctx context.Context, db bun.IDB, a *models.BrandAudience, b BrandBindings) error
-	AudienceBindings(ctx context.Context, db bun.IDB, id string) (BrandBindings, error)
 
 	// GetGuardrails returns nil when unset. Facts is the ledger projection.
 	GetGuardrails(ctx context.Context) (*models.BrandGuardrails, error)

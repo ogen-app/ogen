@@ -90,9 +90,6 @@ func (f *fakeBrandRepo) RestoreVoice(context.Context, bun.IDB, *models.BrandVoic
 	return nil
 }
 func (f *fakeBrandRepo) SetDefaultVoice(context.Context, bun.IDB, string) error { return nil }
-func (f *fakeBrandRepo) VoiceBindings(context.Context, bun.IDB, string) (repository.BrandBindings, error) {
-	return repository.BrandBindings{}, nil
-}
 func (f *fakeBrandRepo) UpdateAudienceIf(context.Context, bun.IDB, *models.BrandAudience, *models.BrandAudience) (*models.BrandAudience, error) {
 	return nil, nil
 }
@@ -101,9 +98,6 @@ func (f *fakeBrandRepo) DeleteAudienceIf(context.Context, bun.IDB, string, *mode
 }
 func (f *fakeBrandRepo) RestoreAudience(context.Context, bun.IDB, *models.BrandAudience, repository.BrandBindings) error {
 	return nil
-}
-func (f *fakeBrandRepo) AudienceBindings(context.Context, bun.IDB, string) (repository.BrandBindings, error) {
-	return repository.BrandBindings{}, nil
 }
 func (f *fakeBrandRepo) SaveGuardrailsIf(context.Context, bun.IDB, *models.BrandGuardrails, *models.BrandGuardrails) (*models.BrandGuardrails, error) {
 	return nil, nil
