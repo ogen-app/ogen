@@ -274,44 +274,54 @@ Content-Type: application/json
 ###
 # ── Schedule via the Post Assistant (SSE) — CON-78 ────────────────────────────
 ###
-# Natural-language scheduling is a TWO-TURN, confirm-then-commit flow.
+# Natural-language scheduling is an OFFER the user confirms: the schedulePost
+# call is held back, not run, until the user says yes.
 # Requires ANTHROPIC_API_KEY set on the server; returns 503 when disabled.
 # The assistant resolves the relative time against the workspace timezone
-# (settings → timezone) and the current time, then asks you to confirm.
-# Response is a Server-Sent Events stream:
-#   schedule_started → schedule_complete { scheduledAt, status, autoPublish,
-#   promoted }; complete carries action "scheduled".
+# (settings → timezone) and the current time. Response is a Server-Sent
+# Events stream (see POST /api/assistant).
 
-### Turn 1 — ask to schedule (assistant CONFIRMS, does not commit)  [protected]
+### Turn 1 — ask to schedule (the assistant OFFERS, does not commit)  [protected]
 # Run createReadyPost (or createDraft) first; uses {{scheduleReadyId}}.
-# Expect action "declined" with the resolved absolute time + auto/manual mode,
-# asking you to confirm — no schedule_complete event yet.
-POST {{baseUrl}}/api/posts/{{scheduleReadyId}}/assistant
+# Expect a "proposal_created" event { id, tool: "schedulePost", summary,
+# expiresAt } with the resolved absolute time, and no schedule_complete yet.
+# Copy its id into {{scheduleProposalId}}.
+POST {{baseUrl}}/api/assistant
 Accept: text/event-stream
 Content-Type: application/json
 
 {
-  "instruction": "Schedule this for tomorrow at 9am."
+  "instruction": "Schedule this for tomorrow at 9am.",
+  "viewContext": {"version": 1, "screen": "post", "scope": {"kind": "post", "id": "{{scheduleReadyId}}"}, "focus": {"kind": "post", "id": "{{scheduleReadyId}}"}}
 }
 
-### Turn 2 — confirm (assistant COMMITS via the schedulePost tool)  [protected]
-# Expect schedule_started → schedule_complete and a final "complete" with
-# action "scheduled".
-POST {{baseUrl}}/api/posts/{{scheduleReadyId}}/assistant
+### Turn 2a — confirm from the card (runs the stored schedule, no model call)  [protected]
+# Expect schedule_started → schedule_complete { scheduledAt, status,
+# autoPublish, promoted } and a "complete" whose results.post.action is
+# "scheduled".
+POST {{baseUrl}}/api/assistant/proposals/{{scheduleProposalId}}/confirm
+Accept: text/event-stream
+
+### Turn 2b — or confirm in chat  [protected]
+# The assistant confirms the waiting offer (confirmOffer); same events as 2a.
+POST {{baseUrl}}/api/assistant
 Accept: text/event-stream
 Content-Type: application/json
 
 {
-  "instruction": "Yes, go ahead."
+  "instruction": "Yes, go ahead.",
+  "viewContext": {"version": 1, "screen": "post", "scope": {"kind": "post", "id": "{{scheduleReadyId}}"}, "focus": {"kind": "post", "id": "{{scheduleReadyId}}"}}
 }
 
-### Schedule a draft via the assistant — promote in one conversation  [protected]
-# Run createDraft first; uses {{scheduleDraftId}}. The assistant validates
-# readiness, confirms, and on your "yes" promotes + schedules (allowPromote).
-POST {{baseUrl}}/api/posts/{{scheduleDraftId}}/assistant
+### Schedule a draft via the assistant — promote on confirm  [protected]
+# Run createDraft first; uses {{scheduleDraftId}}. The assistant checks
+# readiness and offers the schedule with allowPromote; confirming it
+# promotes and schedules.
+POST {{baseUrl}}/api/assistant
 Accept: text/event-stream
 Content-Type: application/json
 
 {
-  "instruction": "Publish this next Monday morning."
+  "instruction": "Publish this next Monday morning.",
+  "viewContext": {"version": 1, "screen": "post", "scope": {"kind": "post", "id": "{{scheduleDraftId}}"}, "focus": {"kind": "post", "id": "{{scheduleDraftId}}"}}
 }
