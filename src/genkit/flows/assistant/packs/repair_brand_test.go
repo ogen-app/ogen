@@ -56,7 +56,7 @@ func TestCheckBrand(t *testing.T) {
 		t.Fatalf("request = %+v", got)
 	}
 	if len(out.Findings) != 2 || out.Findings[0].PostID != "p1" || out.Findings[0].Title != "Rooms" ||
-		out.Findings[0].Fix.PostID != "p1" || out.Findings[0].Fix.Kind != "open_post" {
+		out.Findings[0].Fix.PostID != "p1" || out.Findings[0].Fix.Kind != "open_post" || out.Findings[0].CampaignID != "c1" {
 		t.Fatalf("findings = %+v; want the high one first, opening its post", out.Findings)
 	}
 

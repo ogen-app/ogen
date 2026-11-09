@@ -28,8 +28,10 @@ type CheckBrandInput struct {
 // BrandFinding is a way a post breaks the brand, with its fix.
 type BrandFinding struct {
 	brand_check.Finding
-	Title string   `json:"title,omitempty"`
-	Fix   FixOffer `json:"fix"`
+	// CampaignID is the post's campaign, which opening it needs.
+	CampaignID string   `json:"campaignId"`
+	Title      string   `json:"title,omitempty"`
+	Fix        FixOffer `json:"fix"`
 }
 
 // CheckBrandOutput is what the check found. Left counts the posts past the
@@ -91,7 +93,7 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 	ctx = brandresolve.WithMemo(ctx)
 	groups := map[string]*brand_check.Group{}
 	var order []string
-	titles := map[string]string{}
+	titles, campaignIDs := map[string]string{}, map[string]string{}
 	campaigns := map[string]*models.Campaign{}
 	for _, p := range posts {
 		c, ok := campaigns[p.CampaignID]
@@ -120,7 +122,7 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 			platform = cmp.Or(p.Platform.Name, platform)
 		}
 		g.Posts = append(g.Posts, brand_check.Post{ID: p.ID, Platform: platform, Text: p.Content})
-		titles[p.ID] = p.Title
+		titles[p.ID], campaignIDs[p.ID] = p.Title, p.CampaignID
 	}
 	req := brand_check.Request{}
 	for _, b := range order {
@@ -132,7 +134,7 @@ func checkBrand(ctx context.Context, d Deps, in CheckBrandInput) (*CheckBrandOut
 	}
 	out.Checked = res.Checked
 	for _, f := range res.Findings {
-		out.Findings = append(out.Findings, BrandFinding{Finding: f, Title: titles[f.PostID],
+		out.Findings = append(out.Findings, BrandFinding{Finding: f, CampaignID: campaignIDs[f.PostID], Title: titles[f.PostID],
 			Fix: FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixOpenPost, Title: "Open the post", PostID: f.PostID}}})
 	}
 	slices.SortStableFunc(out.Findings, func(a, b BrandFinding) int { return cmp.Compare(severityRank(a.Severity), severityRank(b.Severity)) })
