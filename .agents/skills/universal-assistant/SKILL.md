@@ -21,24 +21,22 @@ Canonical code:
 
 1. `POST /api/assistant` with `{instruction, viewContext}`. `domain/viewcontext` validates it and `usecase/viewresolve` resolves it. Errors return 400/404 before SSE opens.
 2. Spend cap check, then history for the thread scope (`workspace`, `campaign:<id>`, `post:<id>`).
-3. The default packs for the screen and scope load. Each pack's `Begin` resolves its subject (thread scope, else focus, else the offer's `<kind>Id`) and returns a block that follows `<view>`. A `Refused` from `Begin` drops the pack and tells the model why.
+3. The default packs for the screen and scope load. Each pack's `Begin` resolves its subject with `t.Subject(kind)`: the offer's own `<kind>Id` when confirming one; else the thread's entity of that kind, or none when a different one of that kind is in focus (ambiguous); else the entity in focus. It returns a block that follows `<view>`. A `Refused` from `Begin` drops the pack and tells the model why.
 4. One model call: cached system prompt (core rules + loaded packs' `Instructions` + generated tool guide), history, then `<view>` + pack blocks + message. Tool rounds are capped by `MaxTurns`.
 5. `loadPack` restarts the call once with one more pack, replaying the rounds already done.
-6. Tools run through the registry: tier, gate, outcome. Proposal-tier work becomes an **offer** instead of running.
+6. Tools run through the registry: gate, then outcome. A gated call that needs a yes becomes an **offer** instead of running.
 7. The reply is the final round's text. Each pack's `End` reports `results.<pack>`, and wins when tool rounds ran out.
 8. The turn is persisted. A failed write sets `unsaved`; it never fails the turn.
 9. The stream ends with `proposal_created`/`proposal_resolved`, `ui_action`s, then `complete`. If the model call fails after work was committed, `End` still runs.
 
 ## The tool contract (assistantkit)
 
-- **Tier**:
-  - `TierRead` runs.
-  - `TierReversible` runs and logs an undo action.
-  - `TierProposal` always becomes an offer.
+- **Tier** labels what a tool may do: `TierRead`, `TierReversible` (single undoable change) or `TierProposal` (bulk, generative, scheduling, external or destructive). Nothing enforces a tier at run time beyond checking it is valid. **Only the gate holds a call back**, so a proposal-tier tool must be wrapped in `assistantkit.Gated`.
 - **Gate** (`assistantkit.Gated(name, Gate[In]{Precheck, Needs, Summary}, tool)`):
   - `Precheck` refuses bad input before any offer.
-  - `Needs` decides when the call becomes an offer. Bulk work uses `overN(d, n)`, where N is `ASSISTANT_PROPOSAL_THRESHOLD` (default 3).
-  - `Summary` is the card text.
+  - `Needs` decides when the call becomes an offer. **`Needs` nil means every call asks first.** Bulk work that may run small requests directly uses `Needs: overN(d, n)`, where N is `ASSISTANT_PROPOSAL_THRESHOLD` (default 3).
+  - `Summary` (or `Describe`) is the card text.
+  - A confirmed call (`assistantkit.Confirmed(ctx)`) skips the gate and runs.
 - **Outcome**: every tool returns `{status, result}`, with status `ok`, `refused` (`reason`, `alternatives`), `conflict` (`options`) or `proposed`.
   - Return user-facing problems as `assistantkit.Refused("…")`, never as a Go error. A Go error aborts the turn.
 - **Touch**: `assistantkit.Touch(ctx, "<kind>", id)` marks what changed, so the client refetches through `complete.touched`.
@@ -57,7 +55,7 @@ Canonical code:
 1. **What the pack does**: one sentence. It becomes `Summary`, which `loadPack` shows the model.
 2. **Where it loads by default**: `Screens` and/or `Scopes`. Every screen must be in `viewcontext.screens` (`src/domain/viewcontext/viewcontext.go`); add new ones there. Keep default sets small, because each distinct set is a cached prompt prefix that is prewarmed at boot.
 3. **Does it need a subject?** If it works on one campaign or post, add a `Begin` that reads `t.Subject(kind)`. Otherwise read `assistant.CampaignID(ctx)` / `assistant.Scope(ctx)` inside tools.
-4. **The tier of each tool**: read, reversible (needs an undoer) or proposal (bulk, destructive or plan-wide).
+4. **The tier of each tool**: read, reversible (needs an undoer) or proposal (bulk, destructive or plan-wide; needs a gate).
 
 ### Step 1: Put the logic in a service
 
@@ -108,12 +106,17 @@ genkit.DefineTool(g, "archiveReports", "… Above a few it is offered for the us
 	ai.WithStrictSchema(false))
 ```
 
-Spec it as `TierProposal` when it must always ask, or `TierReversible` when the gate decides.
+Spec it as `TierProposal`. The gate, not the tier, decides when it asks:
+
+- **Always ask** (delete, move, regenerate a plan): leave `Needs` out. Every unconfirmed call becomes an offer.
+- **Ask above a threshold** (bulk verdicts): `Needs: overN(d, n)`. Calls at or below N run directly, so make sure running them without a yes is acceptable.
 
 ### Step 4: Make reversible writes undoable
 
 1. Add an `AssistantActionKind` in `src/domain/models/assistant_action.go`.
 2. In the tool, after the write, call `recordUndo(ctx, d, kind, entityID, before, after)` with JSON snapshots of only the fields you changed. Return the undo id in the output.
+   - `recordUndo` is best effort. If logging fails it returns `""`, and the write stands without an undo, so the output's undo id is empty. The model must not then promise undo; say so in the tool's guide.
+   - When undo must be guaranteed, make the write and the log one transaction. Write through repository methods that take `bun.IDB`, and record the action with a transaction-aware create in the same `RunInTx`. `AssistantActionRepository.Create` doesn't take a transaction today, so add a variant.
 3. Add an `Undoer` in `src/usecase/assistantundo`. It runs inside the undo transaction (`tx bun.IDB`):
    - lock the entity;
    - return `ErrChangedSince` unless it still matches `After`;
