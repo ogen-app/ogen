@@ -48,8 +48,9 @@ type Response struct {
 	Result any `json:"result,omitempty"`
 	// Results are what the packs' tools did this turn, by pack — the
 	// campaign pack's plan or dates, the post pack's edit or schedule, the
-	// assets pack's cards — and under "savedViews" the views
-	// listSavedViews listed.
+	// assets pack's cards, the foundation pack's last output of each tool
+	// by tool name, the repair pack's checkBrand — and under "savedViews"
+	// the views listSavedViews listed.
 	Results map[string]any `json:"results,omitempty"`
 }
 

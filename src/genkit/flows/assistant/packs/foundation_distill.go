@@ -312,7 +312,7 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	}
 	get := genkit.DefineTool(g, "getBrandDistill",
 		"Returns a brand reading: where it is (pending, collecting, reading, composing, ready, committed, failed), what it proposes — voices, audiences, guardrail lines, facts, each with an id — and the questions it asks about what the sources left out.",
-		assistantkit.Wrap(func(ctx context.Context, in DistillRef) (*DistillOut, error) { return getBrandDistill(ctx, d, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "getBrandDistill", nil, func(ctx context.Context, in DistillRef) (*DistillOut, error) { return getBrandDistill(ctx, d, in) })), ai.WithStrictSchema(false))
 	start := genkit.DefineTool(g, "startBrandDistill",
 		"Starts reading the brand off a website (its homepage and up to nine pages) and/or assets, proposing voices, audiences, guardrails and facts to save. Always offered for the user to confirm first; it counts against the plan's monthly readings.",
 		assistantkit.Gated("startBrandDistill", assistantkit.Gate[StartDistillInput]{
@@ -327,9 +327,9 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 				}
 				return "Read the brand off the open asset"
 			},
-		}, assistantkit.Wrap(func(ctx context.Context, in StartDistillInput) (*DistillOut, error) {
+		}, assistantkit.Wrap(recorded(foundationPackName, "startBrandDistill", nil, func(ctx context.Context, in StartDistillInput) (*DistillOut, error) {
 			return startBrandDistill(ctx, d, in)
-		})),
+		}))),
 		ai.WithStrictSchema(false))
 	answer := genkit.DefineTool(g, "answerDistillQuestions",
 		"Answers a ready reading's questions; the proposal is composed again with the answers. Always offered for the user to confirm first.",
@@ -343,9 +343,9 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			Summary: func(in AnswerDistillInput) string {
 				return "Answer " + plural(len(in.Answers), "question", "questions") + " and update the brand proposal"
 			},
-		}, assistantkit.Wrap(func(ctx context.Context, in AnswerDistillInput) (*DistillOut, error) {
+		}, assistantkit.Wrap(recorded(foundationPackName, "answerDistillQuestions", nil, func(ctx context.Context, in AnswerDistillInput) (*DistillOut, error) {
 			return answerDistill(ctx, d, in)
-		})),
+		}))),
 		ai.WithStrictSchema(false))
 	commit := genkit.DefineTool(g, "commitBrandDistill",
 		"Saves a ready reading's proposal to the brand: every item, or the ones kept. Nothing existing is changed or removed. Always offered for the user to confirm first.",
@@ -359,9 +359,9 @@ func distillSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 				}
 				return "Save the brand proposal"
 			},
-		}, assistantkit.Wrap(func(ctx context.Context, in CommitDistillInput) (*DistillSaved, error) {
+		}, assistantkit.Wrap(recorded(foundationPackName, "commitBrandDistill", nil, func(ctx context.Context, in CommitDistillInput) (*DistillSaved, error) {
 			return commitDistill(ctx, d, in)
-		})),
+		}))),
 		ai.WithStrictSchema(false))
 	return []assistantkit.Spec{
 		spec(foundationPackName, get, assistantkit.TierRead,

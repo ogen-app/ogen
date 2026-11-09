@@ -384,25 +384,25 @@ func updateGuardrails(ctx context.Context, d Deps, lib *brandlib.Service, in Gua
 // librarySpecs are the voice, audience and guardrail edits, each undoable.
 func librarySpecs(g *genkit.Genkit, d Deps, lib *brandlib.Service) []assistantkit.Spec {
 	addV := genkit.DefineTool(g, "addVoice", "Adds a voice: a name, when to use it, real samples, rules and per-channel notes. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in VoiceInput) (*VoiceOut, error) { return addVoice(ctx, d, lib, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "addVoice", nil, func(ctx context.Context, in VoiceInput) (*VoiceOut, error) { return addVoice(ctx, d, lib, in) })), ai.WithStrictSchema(false))
 	editV := genkit.DefineTool(g, "updateVoice", "Edits a voice: only the fields passed change. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in UpdateVoiceInput) (*VoiceOut, error) { return updateVoice(ctx, d, lib, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "updateVoice", nil, func(ctx context.Context, in UpdateVoiceInput) (*VoiceOut, error) { return updateVoice(ctx, d, lib, in) })), ai.WithStrictSchema(false))
 	rmV := genkit.DefineTool(g, "removeVoice", "Removes a voice; campaigns and posts set to it fall back to the default. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in VoiceRef) (*VoiceOut, error) { return removeVoice(ctx, d, lib, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "removeVoice", nil, func(ctx context.Context, in VoiceRef) (*VoiceOut, error) { return removeVoice(ctx, d, lib, in) })), ai.WithStrictSchema(false))
 	addA := genkit.DefineTool(g, "addAudience", "Adds an audience: who they are, where they read, what makes them scroll past and what they need to believe. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in AudienceInput) (*AudienceOut, error) { return addAudience(ctx, d, lib, in) }), ai.WithStrictSchema(false))
+		assistantkit.Wrap(recorded(foundationPackName, "addAudience", nil, func(ctx context.Context, in AudienceInput) (*AudienceOut, error) { return addAudience(ctx, d, lib, in) })), ai.WithStrictSchema(false))
 	editA := genkit.DefineTool(g, "updateAudience", "Edits an audience: only the fields passed change. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in UpdateAudienceInput) (*AudienceOut, error) {
+		assistantkit.Wrap(recorded(foundationPackName, "updateAudience", nil, func(ctx context.Context, in UpdateAudienceInput) (*AudienceOut, error) {
 			return updateAudience(ctx, d, lib, in)
-		}), ai.WithStrictSchema(false))
+		})), ai.WithStrictSchema(false))
 	rmA := genkit.DefineTool(g, "removeAudience", "Removes an audience. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in AudienceRef) (*AudienceOut, error) {
+		assistantkit.Wrap(recorded(foundationPackName, "removeAudience", nil, func(ctx context.Context, in AudienceRef) (*AudienceOut, error) {
 			return removeAudience(ctx, d, lib, in)
-		}), ai.WithStrictSchema(false))
+		})), ai.WithStrictSchema(false))
 	guard := genkit.DefineTool(g, "updateGuardrails", "Edits the guardrails: adds or removes may-claim and never-claim lines and banned words, sets or clears the disclaimer. Returns an undo id.",
-		assistantkit.Wrap(func(ctx context.Context, in GuardrailsInput) (*GuardrailsOut, error) {
+		assistantkit.Wrap(recorded(foundationPackName, "updateGuardrails", nil, func(ctx context.Context, in GuardrailsInput) (*GuardrailsOut, error) {
 			return updateGuardrails(ctx, d, lib, in)
-		}), ai.WithStrictSchema(false))
+		})), ai.WithStrictSchema(false))
 	return []assistantkit.Spec{
 		spec(foundationPackName, addV, assistantkit.TierReversible,
 			`Call this when the user asks for a new voice — "add a casual voice for Instagram". Put real posts they give in samples, verbatim; never invent samples. It can be undone.`),
