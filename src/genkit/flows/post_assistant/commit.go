@@ -36,8 +36,17 @@ func writeErr(err error, op string) error {
 	return fmt.Errorf("%s: %w", op, err)
 }
 
+// isVersionTaken reports whether err is the unique violation of a version
+// number another writer took first.
+func isVersionTaken(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_post_versions_post_version"
+}
+
 // ensureInitialVersion snapshots the user's content as version 1 before the
-// assistant's first change, so it can always be restored.
+// assistant's first change, so it can always be restored. When another turn
+// or writer saved version 1 first, the post has its first version and the
+// turn goes on.
 func ensureInitialVersion(ctx context.Context, repos PostAssistantRepos, post *models.Post) error {
 	count, err := repos.Versions.CountByPostID(ctx, post.ID)
 	if err != nil {
@@ -57,43 +66,50 @@ func ensureInitialVersion(ctx context.Context, repos PostAssistantRepos, post *m
 		Content:       post.Content,
 		Note:          "Initial version",
 		Creator:       models.PostVersionCreatorUser,
-	}); err != nil {
+	}); err != nil && !isVersionTaken(err) {
 		return writeErr(err, "create initial version")
 	}
 	return nil
 }
 
-// commitEdit writes the writer's content to the post, after saving it as a
-// version when asked. The post is read again first, so what another tool of
-// the turn changed (a schedule, a restore) isn't written back over. Writing
-// a planned post's body makes it a draft. Content is stored as Markdown.
-func commitEdit(ctx context.Context, st *requestState, content string, saveVersion bool, note string) error {
-	if saveVersion {
-		if err := createVersion(ctx, st, content, note); err != nil {
-			return err
-		}
-	}
+// commitEdit writes the writer's content to the post, then saves it as a
+// version when asked, and reports whether it did. The post is read again
+// first, so what another tool of the turn changed (a schedule, a restore)
+// isn't written back over. Writing a planned post's body makes it a draft.
+// Content is stored as Markdown.
+//
+// The post is written before the version, so a failed write leaves no
+// version of content the post never had, which "undo" would restore. A
+// failed version leaves the edit unversioned, as a small tweak is; a restore
+// snapshots it first.
+func commitEdit(ctx context.Context, st *requestState, content string, saveVersion bool, note string) (bool, error) {
 	post, err := st.repos.Posts.GetByID(ctx, st.postID)
 	if err != nil {
-		return writeErr(err, "load post")
+		return false, writeErr(err, "load post")
 	}
 	prev := post.Status
 	post.Content = content
 	post.Status = prev.WithBody(content)
 	post.UpdatedAt = time.Now().UTC()
 	if err := st.repos.Posts.Update(ctx, post); err != nil {
-		return writeErr(err, "update post")
+		return false, writeErr(err, "update post")
 	}
 	if post.Status != prev {
 		logTransition(ctx, st, post.ID, prev, post.Status)
 	}
 	st.postStatus = post.Status
-	if saveVersion {
-		st.qualityAuto.Schedule(ctx, post, models.QualityTriggerVersion)
-	}
+	st.content = content
 	invalidateContextCache(st.postID)
 	assistantkit.Touch(ctx, "post", st.postID)
-	return nil
+	if !saveVersion {
+		return false, nil
+	}
+	if err := createVersion(ctx, st, content, note); err != nil {
+		slog.WarnContext(ctx, "save edit as a version failed; the edit stands unversioned", logging.AttrComponent, logComponent, "post_id", st.postID, logging.AttrError, err)
+		return false, nil
+	}
+	st.qualityAuto.Schedule(ctx, post, models.QualityTriggerVersion)
+	return true, nil
 }
 
 // logTransition records a status change the edit made in the post's audit
