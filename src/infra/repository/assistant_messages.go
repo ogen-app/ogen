@@ -29,12 +29,24 @@ func NewAssistantMessageRepository(db *bun.DB) AssistantMessageRepository {
 }
 
 // CreateBatch inserts msgs in one statement inside a transaction, in slice
-// order, so seq follows the batch order.
+// order, so seq follows the batch order. A post thread's messages are stored
+// only while the post exists: its row is held until they commit, so a post
+// deleted meanwhile takes them with it, and one already gone stores none.
 func (r *assistantMessageRepository) CreateBatch(ctx context.Context, msgs []*models.AssistantMessage) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if m := msgs[0]; m.ScopeKind == models.AssistantScopePost {
+			var ids []string
+			if err := tx.NewSelect().Model((*models.Post)(nil)).Column("po.id").
+				Where("po.id = ?", m.ScopeID).For("KEY SHARE").Scan(ctx, &ids); err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				return nil
+			}
+		}
 		_, err := tx.NewInsert().Model(&msgs).Exec(ctx)
 		return err
 	})
