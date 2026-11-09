@@ -1,6 +1,7 @@
 package packs
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/platforms"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
@@ -33,7 +35,7 @@ const repairPackName = "repair"
 func repairPack(d Deps) assistant.Pack {
 	return assistant.Pack{
 		Name:    repairPackName,
-		Summary: "check a campaign's calendar, its brief and posts, and posts against the brand voice and guardrails, for problems, and fix them: even out the dates, fill silences, finish what's due",
+		Summary: "check a campaign's calendar, its brief and posts, and posts against the brand voice and guardrails, for problems, and fix them: even out the dates, move a post, fill silences and goal shortfalls, finish what's due, change, unschedule or delete posts of a type the campaign dropped",
 		Screens: []viewcontext.Screen{"calendar", "campaign.calendar", "campaign.overview", "campaign.list"},
 		// checkBrand's findings reach the client as
 		// complete.results.repair.checkBrand, so they replay from history.
@@ -41,7 +43,7 @@ func repairPack(d Deps) assistant.Pack {
 		End:   endResults(repairPackName),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			check := genkit.DefineTool(g, "checkCalendar",
-				"Checks a campaign's calendar: posts outside its dates or on days it doesn't publish, crowded days, long silences, and posts due soon that aren't written or ready. Each finding comes with its fixes, offered for the user to confirm.",
+				"Checks a campaign's calendar: posts outside its dates or on days it doesn't publish, crowded days and slots, long silences, goal periods short of posts, posts due soon that aren't written or ready, posts of a type the campaign no longer includes, and posts from one idea or source published close together. Each finding comes with its fixes, offered for the user to confirm.",
 				assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*CheckCalendarOutput, error) {
 					return checkCalendar(ctx, d, in)
 				}), ai.WithStrictSchema(false))
@@ -171,11 +173,13 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 		}
 		fo := FindingOut{Key: f.Key, Code: f.Code, Severity: string(f.Severity), Message: f.Message, PostIDs: f.PostIDs, Fixes: []FixOffer{}}
 		for _, fix := range f.Fixes {
-			offer, err := offerFix(ctx, d, c, posts, fix, &redistributeID)
+			offer, ok, err := offerFix(ctx, d, c, posts, fix, &redistributeID)
 			if err != nil {
 				return nil, err
 			}
-			fo.Fixes = append(fo.Fixes, offer)
+			if ok {
+				fo.Fixes = append(fo.Fixes, offer)
+			}
 		}
 		out.Findings = append(out.Findings, fo)
 	}
@@ -184,11 +188,15 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 }
 
 // offerFix makes a fix's offer: one shared redistribution (its id kept in
-// redistributeID), or planning ideas for a silence. A post to open needs
-// no offer.
-func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Post, fix calendarcheck.Fix, redistributeID *string) (FixOffer, error) {
+// redistributeID), planning ideas for a silence, or the tool call that
+// makes the fix. A post to open needs no offer. ok is false for a fix this
+// assistant can't make, which is left out.
+func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Post, fix calendarcheck.Fix, redistributeID *string) (FixOffer, bool, error) {
 	offer := FixOffer{Fix: fix}
 	var err error
+	propose := func(tool string, args any) {
+		offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{Tool: tool, Args: args, Summary: fix.Title})
+	}
 	switch fix.Kind {
 	case calendarcheck.FixRedistribute:
 		if *redistributeID == "" {
@@ -204,8 +212,30 @@ func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Po
 		default:
 			offer.ProposalID, err = offerGapIdeas(ctx, d, c, fix)
 		}
+	case calendarcheck.FixMovePost:
+		i := slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == fix.PostID })
+		if i < 0 {
+			return offer, false, nil
+		}
+		propose("applyCalendarMoves", ApplyMovesInput{CampaignID: c.ID, Moves: []Move{
+			{PostID: fix.PostID, Title: posts[i].Title, From: fix.From, To: fix.To, FromAt: posts[i].ScheduledAt}}})
+	case calendarcheck.FixEnablePostType:
+		if d.Campaign == nil {
+			return offer, false, nil
+		}
+		propose("updateCampaignPlatforms", campaign_assistant.UpdateCampaignPlatformsInput{
+			Platforms: []platforms.Request{{Platform: fix.PlatformID, PostTypes: []string{fix.PostType}}}})
+	case calendarcheck.FixConvertPostType:
+		propose("changePostType", ChangePostTypeInput{CampaignID: c.ID, PostIDs: fix.PostIDs, PostType: fix.PostType})
+	case calendarcheck.FixUnschedule:
+		propose("unschedulePosts", PostsRef{CampaignID: c.ID, PostIDs: fix.PostIDs})
+	case calendarcheck.FixDelete:
+		if d.Remove == nil {
+			return offer, false, nil
+		}
+		propose("deletePosts", PostsRef{CampaignID: c.ID, PostIDs: fix.PostIDs})
 	}
-	return offer, err
+	return offer, true, err
 }
 
 // offerGapIdeas offers planning ideas for a silence, in the phase the
@@ -214,10 +244,11 @@ func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Po
 // first, or go ahead from general knowledge.
 func offerGapIdeas(ctx context.Context, d Deps, c *models.Campaign, fix calendarcheck.Fix) (string, error) {
 	phase, end := gapPhase(c, fix.From, fix.To)
+	count := cmp.Or(fix.Count, gapIdeas)
 	in := campaign_assistant.GeneratePostsInput{CampaignID: c.ID, Platforms: platformNames(c), Phase: phase,
-		Count: gapIdeas, WindowStart: fix.From, WindowEnd: end}
+		Count: count, WindowStart: fix.From, WindowEnd: end}
 	p := assistantkit.Proposal{Tool: "generatePosts", Args: in,
-		Summary: fmt.Sprintf("Plan %d ideas for %s to %s", gapIdeas, fix.From, end)}
+		Summary: fmt.Sprintf("Plan %d ideas for %s to %s", count, fix.From, end)}
 	if d.Assets != nil {
 		ready, _, err := flowkit.ReadyCampaignAssetIDs(ctx, d.Assets, c)
 		if err != nil {

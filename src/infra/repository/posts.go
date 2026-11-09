@@ -60,6 +60,14 @@ type PostRepository interface {
 	// From. It returns the ids it moved; the others changed since and keep
 	// their schedule.
 	MoveScheduledAt(ctx context.Context, moves []ScheduleMove, now time.Time) ([]string, error)
+	// SetScheduleIf is MoveScheduledAt on db, a transaction or the pool,
+	// that may also clear a post's date: a nil To unschedules it. A nil db
+	// is the pool.
+	SetScheduleIf(ctx context.Context, db bun.IDB, changes []ScheduleChange, now time.Time) ([]string, error)
+	// SetPostTypeIf changes several posts' post type and status, each only
+	// while it still has the change's From type and status, on db. It
+	// returns the ids it changed. A nil db is the pool.
+	SetPostTypeIf(ctx context.Context, db bun.IDB, changes []PostTypeChange, now time.Time) ([]string, error)
 	// UpdateSubmission is the publish workers' compare-and-set write; see
 	// posts_submission.go.
 	UpdateSubmission(ctx context.Context, post *models.Post, heldID string, columns ...string) (bool, error)

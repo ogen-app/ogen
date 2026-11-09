@@ -59,7 +59,10 @@ type Deps struct {
 	CampaignTypes  repository.CampaignTypeRepository
 	URLImport      *urlimport.Service
 
-	Posts     repository.PostRepository
+	Posts repository.PostRepository
+	// Remove deletes and withdraws posts for the repair pack's fixes; nil
+	// leaves deletePosts out, and scheduled posts to unschedule by hand.
+	Remove    PostRemover
 	Links     repository.PostIdeaRepository
 	Analytics *analytics.Service
 
