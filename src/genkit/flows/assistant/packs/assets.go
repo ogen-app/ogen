@@ -46,6 +46,7 @@ func assetsPack(d Deps) assistant.Pack {
 		Screens:      []viewcontext.Screen{"assets", "campaign.assets", "asset", "campaign.asset"},
 		Instructions: assetsRules,
 		Begin:        assetsBegin(d),
+		End:          assetsEnd,
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			find := genkit.DefineTool(g, "findAssets",
 				"Lists assets matching a filter in the Assets list's syntax, with their id, title, kind and status.",
@@ -54,7 +55,13 @@ func assetsPack(d Deps) assistant.Pack {
 				}), ai.WithStrictSchema(false))
 			ask := genkit.DefineTool(g, "askAssets",
 				"Searches what assets say: returns the passages most relevant to a question, with their asset and pages.",
-				assistantkit.Wrap(func(ctx context.Context, in AskAssetsInput) (*AskAssetsOutput, error) { return askAssets(ctx, d, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(func(ctx context.Context, in AskAssetsInput) (*AskAssetsOutput, error) {
+					out, err := askAssets(ctx, d, in)
+					if err == nil {
+						recordAssets(ctx, func(r *AssetsResult) { r.Ask = askCard(out) })
+					}
+					return out, err
+				}), ai.WithStrictSchema(false))
 			analyse := genkit.DefineTool(g, "analyseAsset",
 				"Starts, or re-runs, an asset's analysis — its summary and the ideas distilled from it — for the workspace or for a campaign's lens.",
 				assistantkit.Wrap(func(ctx context.Context, in AnalyseAssetInput) (*QueuedOutput, error) {
@@ -103,7 +110,11 @@ func assetsPack(d Deps) assistant.Pack {
 				read := genkit.DefineTool(g, "readAnalysis",
 					"Reads what an asset's analysis found for one lens — the workspace's or a campaign's: its summary, key points and the ideas it distilled with their verdicts, plus the asset's other lenses.",
 					assistantkit.Wrap(func(ctx context.Context, in ReadAnalysisInput) (*ReadAnalysisOutput, error) {
-						return readAnalysis(ctx, d, in)
+						out, err := readAnalysis(ctx, d, in)
+						if err == nil {
+							recordAssets(ctx, func(r *AssetsResult) { r.Analysis = out })
+						}
+						return out, err
 					}), ai.WithStrictSchema(false))
 				specs = append(specs, spec(assetsPackName, read, assistantkit.TierRead,
 					`Call this when the user asks what an analysis found — "what did the analysis find?", "what does it say for Spring reopening?". assetId defaults to the asset open on screen. A lens the user names picks it: pass that campaign's id, or workspace for the workspace lens; none named means the thread's. If status is not_read, pending, failed or skipped, say so plainly and offer what otherLenses has or analyseAsset; never answer from another lens unasked.`))
@@ -112,7 +123,11 @@ func assetsPack(d Deps) assistant.Pack {
 				compare := genkit.DefineTool(g, "compareAssets",
 					"Summarises assets together, or compares them: what they all say, what only some say and where they disagree, each claim tied to its assets. Reads each asset's analysis for the thread's lens, else its passages.",
 					assistantkit.Wrap(func(ctx context.Context, in CompareAssetsInput) (*CompareAssetsOutput, error) {
-						return compareAssets(ctx, d, in)
+						out, err := compareAssets(ctx, d, in)
+						if err == nil {
+							recordAssets(ctx, func(r *AssetsResult) { r.Compare = out })
+						}
+						return out, err
 					}), ai.WithStrictSchema(false))
 				specs = append(specs, spec(assetsPackName, compare, assistantkit.TierRead,
 					`Call this when the user asks to summarise or compare assets — "compare these", "summarise them", "summarise it" — not for one question about them (askAssets). Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Answer from its result: name the assets by their letter and title, give the disagreements their own line and offer to settle one, and say which assets were read from passages rather than an analysis.`))
@@ -128,7 +143,11 @@ func assetsPack(d Deps) assistant.Pack {
 							},
 							Describe: func(ctx context.Context, in CampaignFromAssetsInput) string { return campaignSummary(ctx, d, in) },
 						}, assistantkit.Wrap(func(ctx context.Context, in CampaignFromAssetsInput) (*CampaignFromAssetsOutput, error) {
-							return campaignFromAssets(ctx, d, in)
+							out, err := campaignFromAssets(ctx, d, in)
+							if err == nil {
+								recordAssets(ctx, func(r *AssetsResult) { r.Campaign = out })
+							}
+							return out, err
 						}))), ai.WithStrictSchema(false))
 				specs = append(specs, spec(assetsPackName, setUp, assistantkit.TierProposal,
 					`Call this when the user asks to set up, start or make a campaign from assets — "set up a campaign from these". Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Name it, and take the type and dates from what the sources say (an opening date, a launch), leaving dates out when they don't say; the card shows them so the user can change them. It creates no posts: offer a content plan once it's set up.`))

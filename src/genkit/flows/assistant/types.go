@@ -47,7 +47,9 @@ type Response struct {
 	// Result is the work's result when an offer was answered from its card.
 	Result any `json:"result,omitempty"`
 	// Results are what the packs' tools did this turn, by pack — the
-	// campaign pack's plan or dates, the post pack's edit or schedule.
+	// campaign pack's plan or dates, the post pack's edit or schedule, the
+	// assets pack's cards — and under "savedViews" the views
+	// listSavedViews listed.
 	Results map[string]any `json:"results,omitempty"`
 }
 

@@ -18,11 +18,12 @@ const assetsRules = `The <assets> block after the <view> is the asset bank's sta
 
 On an asset page the open asset is the default source: questions search it alone and generation draws on it alone, unless the user names other assets or asks for all of them. Say so when you answer ("from the brochure only"), so the narrower source is never hidden.`
 
-// assetsBegin gives the turn the bank's state: the thread's campaign's
-// sources, else the workspace's. A state that can't be read leaves the block
-// out; the tools still work.
+// assetsBegin readies the turn's results and gives it the bank's state: the
+// thread's campaign's sources, else the workspace's. A state that can't be
+// read leaves the block out; the tools still work.
 func assetsBegin(d Deps) func(ctx context.Context, t assistant.Turn) (context.Context, string, error) {
 	return func(ctx context.Context, t assistant.Turn) (context.Context, string, error) {
+		ctx = withAssetsTurn(ctx)
 		if d.Analyses == nil {
 			return ctx, "", nil
 		}
