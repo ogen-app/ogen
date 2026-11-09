@@ -88,6 +88,9 @@ type requestState struct {
 	// reserveHeavyAction.
 	mu            sync.Mutex
 	heavyReserved bool
+	// ask is the last askCampaignAssets answer's sources, for the client's
+	// card; guarded by mu.
+	ask *AskResult
 	// heavyUsed is set once a confirmed call holding the slot reached its
 	// work, so the slot stays taken after the call returns.
 	heavyUsed bool
@@ -1270,7 +1273,9 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 		return nil, fmt.Errorf("search assets: %w", err)
 	}
 	if len(chunks) == 0 {
-		return &AskCampaignAssetsOutput{Available: true, Note: "no attached asset content matched the question"}, nil
+		out := &AskCampaignAssetsOutput{Available: true, Note: "no attached asset content matched the question", OpenAssetOnly: openOnly}
+		st.recordAsk(in, out)
+		return out, nil
 	}
 
 	titles := make(map[string]string)
@@ -1288,7 +1293,27 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 			Text:    c.Content,
 		})
 	}
-	return &AskCampaignAssetsOutput{Excerpts: excerpts, Available: true, OpenAssetOnly: openOnly}, nil
+	out := &AskCampaignAssetsOutput{Excerpts: excerpts, Available: true, OpenAssetOnly: openOnly}
+	st.recordAsk(in, out)
+	return out, nil
+}
+
+// recordAsk keeps an answer's sources for the turn's result: what was
+// searched, and the passages' assets and pages without their text.
+func (st *requestState) recordAsk(in AskCampaignAssetsInput, out *AskCampaignAssetsOutput) {
+	r := &AskResult{Scope: askScopeCampaign, Excerpts: make([]AskCite, len(out.Excerpts))}
+	switch {
+	case out.OpenAssetOnly:
+		r.Scope = askScopeOpenAsset
+	case len(in.AssetIDs) > 0:
+		r.Scope = askScopeAsked
+	}
+	for i, e := range out.Excerpts {
+		r.Excerpts[i] = AskCite{AssetID: e.AssetID, Title: e.Title, Pages: e.Pages}
+	}
+	st.mu.Lock()
+	st.ask = r
+	st.mu.Unlock()
 }
 
 // askScope is the ready assets a question searches: the ones asked for,

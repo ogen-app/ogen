@@ -127,3 +127,55 @@ func TestAskCampaignAssets_OpenAssetOnly(t *testing.T) {
 		t.Fatalf("unready open asset = %+v over %v; want a note, no search", out, searched)
 	}
 }
+
+// An answer's sources reach the client as results.campaign.ask, the last
+// one in the turn, without the passages' text; a turn that changed nothing
+// still reports it.
+func TestAskCampaignAssets_Result(t *testing.T) {
+	var searched []string
+	ask := func(ctx context.Context, in AskCampaignAssetsInput) *requestState {
+		t.Helper()
+		st := getRequestState(ctx)
+		st.embedder = vecEmbedder{}
+		st.repos.Chunks = searchedChunks{ids: &searched}
+		in.Query = "spa?"
+		if _, err := toolAskCampaignAssets(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	for name, c := range map[string]struct {
+		ctx   context.Context
+		in    AskCampaignAssetsInput
+		scope string
+	}{
+		"the open asset": {onAssetPage(t, "a2"), AskCampaignAssetsInput{}, askScopeOpenAsset},
+		"asked":          {onAssetPage(t, "a2"), AskCampaignAssetsInput{AssetIDs: []string{"a1"}}, askScopeAsked},
+		"the campaign":   {onAssetPage(t, "a2"), AskCampaignAssetsInput{AllAssets: true}, askScopeCampaign},
+	} {
+		st := ask(c.ctx, c.in)
+		if st.ask == nil || st.ask.Scope != c.scope || len(st.ask.Excerpts) != 1 || st.ask.Excerpts[0].AssetID == "" {
+			t.Errorf("%s: ask = %+v", name, st.ask)
+		}
+	}
+
+	ctx := onAssetPage(t, "a2")
+	ask(ctx, AskCampaignAssetsInput{})
+	res, err := end(ctx)
+	if err != nil || res == nil {
+		t.Fatalf("end = %v, %v", res, err)
+	}
+	got := res.Value.(*CampaignAssistantResponse)
+	if got.Action != actionAnswered || got.Ask == nil || got.Ask.Scope != askScopeOpenAsset {
+		t.Fatalf("result = %+v", got)
+	}
+
+	// An unready open asset searches nothing and reports nothing.
+	ctx = onAssetPage(t, "a3")
+	if st := ask(ctx, AskCampaignAssetsInput{}); st.ask != nil {
+		t.Fatalf("unready = %+v", st.ask)
+	}
+	if res, _ := end(ctx); res != nil {
+		t.Fatalf("end = %+v", res)
+	}
+}
