@@ -53,6 +53,8 @@ type evalCase struct {
 	// must never be. An empty want means: answer without a tool.
 	want []string
 	not  []string
+	// focus is the item the screen shows, on a detail screen.
+	focus *viewcontext.Ref
 }
 
 var (
@@ -85,6 +87,7 @@ var evalCases = []evalCase{
 	// assets
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "What do my assets say about enterprise pricing?", want: []string{"askAssets", "findAssets"}, not: writes},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Import https://example.com/launch as an asset.", want: []string{"importPage"}},
+	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "How many analyses failed, and which?", not: []string{"findAssets", "askAssets", "analyseAsset"}},
 	// repair
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Anything wrong with the calendar?", want: []string{"checkCalendar"}, not: writes},
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Even out the calendar.", want: []string{"optimiseCalendar", "redistributePosts", "checkCalendar"}},
@@ -113,6 +116,26 @@ func (evalCampaigns) GetByID(context.Context, string) (*models.Campaign, error) 
 		KeyMessages: "Static types, single-binary deploys.", Language: "en", StartDate: &start, EndDate: &end,
 		Platforms:       []models.Platform{{ID: "pl1", Name: "LinkedIn", PostTypes: models.PostTypeMap{"text-post": "Text"}}},
 		TargetPlatforms: models.CampaignPlatforms{{ID: "pl1"}}}, nil
+}
+
+// evalAssets and evalAnalyses are a bank with work waiting, for the assets
+// pack's state block.
+type evalAssets struct{ repository.AssetRepository }
+
+func (evalAssets) Query(context.Context, models.AssetQuery) (*models.AssetQueryResult, error) {
+	return &models.AssetQueryResult{TotalUnfiltered: 64}, nil
+}
+
+type evalAnalyses struct {
+	repository.AssetAnalysisRepository
+}
+
+func (evalAnalyses) State(context.Context, *string, time.Time, int) (*repository.AnalysisState, error) {
+	return &repository.AnalysisState{
+		Lenses:    map[models.AssetAnalysisStatus]int{models.AssetAnalysisStatusReady: 49, models.AssetAnalysisStatusPending: 12, models.AssetAnalysisStatusFailed: 3},
+		Failed:    []repository.AssetTitle{{ID: "a3", Title: "Coast & Table review"}, {ID: "a4", Title: "Press kit"}, {ID: "a5", Title: "Spa menu"}},
+		Undecided: []repository.LensIdeas{{Ideas: 29}},
+	}, nil
 }
 
 type evalPosts struct{ repository.PostRepository }
@@ -192,7 +215,7 @@ func TestPackEvals(t *testing.T) {
 		Campaign: &campaign, Post: &post,
 		Ideas: ideas.New(ideaRepo{}, nil), IdeaRepo: ideaRepo{},
 		Compose: compose.New(nil, ideaRepo{}, campaignRepo{}, nil, nil, nil),
-		Assets:  assetRepo{}, Campaigns: evalCampaigns{},
+		Assets:  evalAssets{}, Analyses: evalAnalyses{}, Campaigns: evalCampaigns{},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
 		Brand: brandRepo{}, Activity: report.New(nil, nil, nil),
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {
@@ -210,7 +233,11 @@ func TestPackEvals(t *testing.T) {
 	passed := map[string][2]int{}
 	for _, c := range evalCases {
 		t.Run(fmt.Sprintf("%s/%s", c.pack, c.say), func(t *testing.T) {
-			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope}, Summary: "On " + string(c.screen)}
+			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope, Focus: c.focus}, Summary: "On " + string(c.screen)}
+			if c.focus != nil {
+				view.Focus = &viewresolve.Item{Kind: c.focus.Kind, ID: c.focus.ID, Title: "Villa Aurora brochure 2026"}
+				view.Summary += `, showing "Villa Aurora brochure 2026"`
+			}
 			r, err := a.Route(ctx, assistant.Request{Instruction: c.say, View: view})
 			if err != nil {
 				t.Fatal(err)

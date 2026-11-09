@@ -33,6 +33,12 @@ type AssetAnalysisRepository interface {
 	// workspace lens for a nil campaignID, in one query; assets without that
 	// lens are absent.
 	LensDigests(ctx context.Context, assetIDs []string, campaignID *string) (map[string]LensDigest, error)
+	// State counts the lenses of one scope by status — the workspace lens of
+	// every asset for a nil campaignID, else that campaign's lenses — names
+	// the first names waiting and failed, and counts the undecided ideas of
+	// each live lens it covers: every lens for the workspace, the campaign's
+	// alone for a campaign. now is the clock the reminder rule reads.
+	State(ctx context.Context, campaignID *string, now time.Time, names int) (*AnalysisState, error)
 	// SetStatus writes status with its failure code and reason (both empty
 	// unless failed or skipped).
 	SetStatus(ctx context.Context, db bun.IDB, id string, status models.AssetAnalysisStatus, code, reason string) error
@@ -212,6 +218,93 @@ func (r *assetAnalysisRepository) LensDigests(ctx context.Context, assetIDs []st
 	}
 	for _, row := range rows {
 		out[row.AssetID] = LensDigest{Status: row.Status, Gist: row.Gist, SummaryHead: row.SummaryHead}
+	}
+	return out, nil
+}
+
+// AnalysisState is what the analyses of one scope hold.
+type AnalysisState struct {
+	// Lenses counts the scope's lenses by status.
+	Lenses map[models.AssetAnalysisStatus]int
+	// Waiting and Failed are the first assets whose lens is pending or
+	// failed, the most recently changed first.
+	Waiting []AssetTitle
+	Failed  []AssetTitle
+	// Undecided counts the undecided ideas per lens, the workspace lens
+	// first, then the campaigns with the most.
+	Undecided []LensIdeas
+}
+
+// AssetTitle names an asset.
+type AssetTitle struct {
+	ID    string `bun:"id"`
+	Title string `bun:"title"`
+}
+
+// LensIdeas is how many ideas one lens holds; CampaignID is nil for the
+// workspace lens.
+type LensIdeas struct {
+	CampaignID   *string `bun:"campaign_id"`
+	CampaignName string  `bun:"campaign_name"`
+	Ideas        int     `bun:"ideas"`
+}
+
+// whereScopeLens narrows q, over aa, to the lens a scope reads.
+func whereScopeLens(q *bun.SelectQuery, campaignID *string) *bun.SelectQuery {
+	if campaignID == nil {
+		return q.Where("aa.campaign_id IS NULL")
+	}
+	return q.Where("aa.campaign_id = ?", *campaignID)
+}
+
+func (r *assetAnalysisRepository) State(ctx context.Context, campaignID *string, now time.Time, names int) (*AnalysisState, error) {
+	out := &AnalysisState{Lenses: map[models.AssetAnalysisStatus]int{}, Waiting: []AssetTitle{}, Failed: []AssetTitle{}, Undecided: []LensIdeas{}}
+	var counts []struct {
+		Status models.AssetAnalysisStatus `bun:"status"`
+		N      int                        `bun:"n"`
+	}
+	q := r.db.NewSelect().Model((*models.AssetAnalysis)(nil)).
+		ColumnExpr("aa.status, count(*) AS n").
+		GroupExpr("aa.status")
+	if err := whereScopeLens(q, campaignID).Scan(ctx, &counts); err != nil {
+		return nil, err
+	}
+	for _, c := range counts {
+		out.Lenses[c.Status] = c.N
+	}
+	if names > 0 {
+		for status, dst := range map[models.AssetAnalysisStatus]*[]AssetTitle{
+			models.AssetAnalysisStatusPending: &out.Waiting,
+			models.AssetAnalysisStatusFailed:  &out.Failed,
+		} {
+			if out.Lenses[status] == 0 {
+				continue
+			}
+			q := r.db.NewSelect().Model((*models.AssetAnalysis)(nil)).
+				ColumnExpr("a.id, a.title").
+				Join("JOIN assets AS a ON a.id = aa.asset_id").
+				Where("aa.status = ?", status).
+				OrderExpr("aa.updated_at DESC, a.id").
+				Limit(names)
+			if err := whereScopeLens(q, campaignID).Scan(ctx, dst); err != nil {
+				return nil, err
+			}
+		}
+	}
+	q = r.db.NewSelect().Model((*models.Idea)(nil)).
+		ColumnExpr("aa.campaign_id, coalesce(c.name, '') AS campaign_name, count(*) AS ideas").
+		Join("JOIN asset_analyses AS aa ON aa.id = i.asset_analysis_id").
+		Join("LEFT JOIN campaigns AS c ON c.id = aa.campaign_id").
+		Where("i.origin = ?", models.IdeaOriginAssetAnalysis).
+		Where(undecidedIdeaSQL, now).
+		Where("aa.campaign_id IS NULL OR (c.id IS NOT NULL AND c.deleted_at IS NULL)").
+		GroupExpr("aa.campaign_id, c.name").
+		OrderExpr("aa.campaign_id IS NOT NULL, count(*) DESC, c.name")
+	if campaignID != nil {
+		q = q.Where("aa.campaign_id = ?", *campaignID)
+	}
+	if err := q.Scan(ctx, &out.Undecided); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

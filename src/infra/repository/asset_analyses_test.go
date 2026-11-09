@@ -374,3 +374,73 @@ func TestAssetAnalysisHeartbeatReportsALostSlot(t *testing.T) {
 		t.Fatal("the new holder's heartbeat did not hold")
 	}
 }
+
+func TestAssetAnalysisState(t *testing.T) {
+	f := newAnalysisFixture(t)
+	for _, id := range []string{"done", "queued-1", "queued-2", "broken"} {
+		f.seedAsset(t, id)
+		if _, err := f.analyses.Ensure(f.ctx, f.db, id, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done, err := f.analyses.GetLens(f.ctx, "done", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.save(t, done, 0, "open", "decided")
+	f.triage(t, "decided")
+	broken, err := f.analyses.GetLens(f.ctx, "broken", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.analyses.SetStatus(f.ctx, f.db, broken.ID, models.AssetAnalysisStatusFailed, "x", "y"); err != nil {
+		t.Fatal(err)
+	}
+	launch := seedCampaign(t, f.campaigns, f.ctx, "Launch")
+	gone := seedCampaign(t, f.campaigns, f.ctx, "Gone")
+	for _, c := range []string{launch, gone} {
+		lens, err := f.analyses.Ensure(f.ctx, f.db, "done", &c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.save(t, lens, 50, "campaign idea "+c)
+	}
+	if _, err := f.campaigns.Delete(f.ctx, gone); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+
+	ws, err := f.analyses.State(f.ctx, nil, now, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.Lenses[models.AssetAnalysisStatusReady] != 1 || ws.Lenses[models.AssetAnalysisStatusPending] != 2 || ws.Lenses[models.AssetAnalysisStatusFailed] != 1 {
+		t.Fatalf("workspace lenses = %v", ws.Lenses)
+	}
+	if len(ws.Waiting) != 2 || len(ws.Failed) != 1 || ws.Failed[0].ID != "broken" || ws.Failed[0].Title != "Title broken" {
+		t.Fatalf("workspace names = waiting %v, failed %v", ws.Waiting, ws.Failed)
+	}
+	// The triaged idea and the deleted campaign's are not undecided.
+	if len(ws.Undecided) != 2 || ws.Undecided[0].CampaignID != nil || ws.Undecided[0].Ideas != 1 ||
+		ws.Undecided[1].CampaignName != "Launch" || ws.Undecided[1].Ideas != 1 {
+		t.Fatalf("workspace undecided = %+v", ws.Undecided)
+	}
+
+	if got, err := f.analyses.State(f.ctx, nil, now, 1); err != nil || len(got.Waiting) != 1 {
+		t.Fatalf("one name = %v, %v", got, err)
+	}
+	if got, err := f.analyses.State(f.ctx, nil, now, 0); err != nil || len(got.Waiting) != 0 || len(got.Failed) != 0 {
+		t.Fatalf("no names = %v, %v", got, err)
+	}
+
+	c, err := f.analyses.State(f.ctx, &launch, now, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Lenses) != 1 || c.Lenses[models.AssetAnalysisStatusReady] != 1 || len(c.Waiting) != 0 {
+		t.Fatalf("campaign lenses = %v, waiting %v", c.Lenses, c.Waiting)
+	}
+	if len(c.Undecided) != 1 || c.Undecided[0].CampaignID == nil || *c.Undecided[0].CampaignID != launch || c.Undecided[0].Ideas != 1 {
+		t.Fatalf("campaign undecided = %+v", c.Undecided)
+	}
+}

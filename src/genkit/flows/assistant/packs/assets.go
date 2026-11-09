@@ -41,9 +41,11 @@ const (
 // them to campaigns and imports pages.
 func assetsPack(d Deps) assistant.Pack {
 	return assistant.Pack{
-		Name:    assetsPackName,
-		Summary: "find assets and ask what they say, analyse them or distil more ideas, tag them, attach them to a campaign, and import a web page",
-		Screens: []viewcontext.Screen{"assets", "campaign.assets", "asset", "campaign.asset"},
+		Name:         assetsPackName,
+		Summary:      "find assets and ask what they say, analyse them or distil more ideas, tag them, attach them to a campaign, and import a web page",
+		Screens:      []viewcontext.Screen{"assets", "campaign.assets", "asset", "campaign.asset"},
+		Instructions: assetsRules,
+		Begin:        assetsBegin(d),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			find := genkit.DefineTool(g, "findAssets",
 				"Lists assets matching a filter in the Assets list's syntax, with their id, title, kind and status.",
