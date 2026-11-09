@@ -110,3 +110,37 @@ func TestAssistantMessages_TiedTimestampsKeepBatchOrder(t *testing.T) {
 		t.Fatalf("zero limit returned %d messages (err %v)", len(got), err)
 	}
 }
+
+// Deleting a post deletes its assistant thread and offers, and a turn that
+// finishes after the delete stores nothing for it.
+func TestAssistantMessages_PostThreadGoesWithThePost(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	msgs := repository.NewAssistantMessageRepository(db)
+	posts := repository.NewPostRepository(db)
+	seedPost(t, db, "post-thread", "", "", time.Now().UTC())
+	t0 := time.Now().UTC()
+	if err := msgs.CreateBatch(ctx, []*models.AssistantMessage{message(t, models.AssistantScopePost, "post-thread", "user", "shorten it", t0, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	offer := &models.AssistantProposal{ID: "offer-thread", ScopeKind: models.AssistantScopePost, ScopeID: "post-thread", Tool: "schedulePost", Args: models.JSONMap{}, Summary: "Schedule it", ExpiresAt: t0.Add(time.Hour)}
+	if err := repository.NewAssistantProposalRepository(db).Create(ctx, offer); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := posts.Delete(ctx, "post-thread"); err != nil || !deleted {
+		t.Fatalf("delete = %v, %v", deleted, err)
+	}
+	if got, err := msgs.ListRecent(ctx, models.AssistantScopePost, "post-thread", 10); err != nil || len(got) != 0 {
+		t.Fatalf("thread after delete = %+v (err %v)", got, err)
+	}
+	var offers int
+	if err := db.NewRaw("SELECT count(*) FROM assistant_proposals WHERE scope_id = ?", "post-thread").Scan(ctx, &offers); err != nil || offers != 0 {
+		t.Fatalf("offers after delete = %d (err %v)", offers, err)
+	}
+	if err := msgs.CreateBatch(ctx, []*models.AssistantMessage{message(t, models.AssistantScopePost, "post-thread", "model", "{}", t0.Add(time.Second), nil)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := msgs.ListRecent(ctx, models.AssistantScopePost, "post-thread", 10); err != nil || len(got) != 0 {
+		t.Fatalf("a late turn recreated the thread: %+v (err %v)", got, err)
+	}
+}

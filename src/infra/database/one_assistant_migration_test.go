@@ -10,7 +10,7 @@ const (
 )
 
 // TestOneAssistantMigration moves the post conversations into the
-// assistant's threads, and the post writer's model onto the assistant's
+// assistant's threads, drops the threads of posts already deleted, and the post writer's model onto the assistant's
 // writer unless it has its own. The down migration puts the threads back.
 func TestOneAssistantMigration(t *testing.T) {
 	ctx := t.Context()
@@ -50,6 +50,9 @@ func TestOneAssistantMigration(t *testing.T) {
 	exec(`INSERT INTO posts (id, campaign_id, title, content, status, created_by, tenant_id) VALUES ('p', 'c', 'a', 'Body.', 'draft', 'u', 'default')`)
 	exec(`INSERT INTO post_assistant_messages (id, post_id, role, content, tenant_id) VALUES
 		('pm1', 'p', 'user', 'shorten it', 'default')`)
+	// A thread of a post deleted before.
+	exec(`INSERT INTO assistant_messages (id, tenant_id, scope_kind, scope_id, role, content) VALUES ('gm1', 'default', 'post', 'gone', 'user', 'hi')`)
+	exec(`INSERT INTO assistant_proposals (id, tenant_id, scope_kind, scope_id, tool, summary, expires_at) VALUES ('go1', 'default', 'post', 'gone', 'schedulePost', 'Schedule it', now())`)
 	exec(`DELETE FROM flow_model_config WHERE flow_key = 'assistant' AND slot_key = 'writer'`)
 	exec(`INSERT INTO flow_model_config (id, tier_id, flow_key, slot_key, model_id) VALUES
 		('w-global', NULL, 'post_assistant', 'writer', 'claude-opus-5-5'),
@@ -58,6 +61,9 @@ func TestOneAssistantMigration(t *testing.T) {
 	execFile(oneAssistantUp)
 	if n := count(`SELECT count(*) FROM assistant_messages WHERE scope_kind = 'post' AND scope_id = 'p' AND tenant_id = 'default'`); n != 1 {
 		t.Errorf("post thread = %d messages, want 1", n)
+	}
+	if n := count(`SELECT count(*) FROM assistant_messages WHERE scope_id = 'gone'`) + count(`SELECT count(*) FROM assistant_proposals WHERE scope_id = 'gone'`); n != 0 {
+		t.Errorf("a deleted post's thread kept %d rows", n)
 	}
 	if n := count(`SELECT count(*) FROM information_schema.tables WHERE table_name = 'post_assistant_messages'`); n != 0 {
 		t.Errorf("%d old tables left", n)
