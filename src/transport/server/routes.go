@@ -217,7 +217,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 	}).Register(app)
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, rec, d.auth).Register(app)
 	handlers.NewAssistantProposalsHandler(gk.AnswerProposal, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
-	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).WithIdeas(r.ideaRepo).WithBrand(r.brandRepo).Undo, rec, d.auth).Register(app)
+	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).WithIdeas(r.ideaRepo).WithBrand(r.brandRepo).WithBrandLibrary(r.brandRepo).Undo, rec, d.auth).Register(app)
 	handlers.NewAssistantHandler(gk.RunAssistant, gk.IsAnthropicAvailable,
 		viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo).Resolve, r.assistantMessageRepo, rec, d.auth).Register(app)
 }

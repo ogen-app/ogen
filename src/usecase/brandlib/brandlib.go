@@ -264,3 +264,75 @@ func sameStatementSet(a, b []string) bool {
 	}
 	return true
 }
+
+// ── Conditional edits ───────────────────────────────────────────────────────
+
+// UpdateVoiceIf replaces a voice's fields while the stored voice still equals
+// was (repository.ErrBrandChanged otherwise; sql.ErrNoRows when gone), and
+// returns it as it was and as it is.
+func (s *Service) UpdateVoiceIf(ctx context.Context, v, was *models.BrandVoice) (before, after *models.BrandVoice, err error) {
+	NormalizeVoice(v)
+	if err := brandcheck.Voice(v); err != nil {
+		return nil, nil, err
+	}
+	v.Summary = ""
+	v.UpdatedAt = s.now()
+	if before, err = s.repo.UpdateVoiceIf(ctx, nil, v, was); err != nil {
+		return nil, nil, err
+	}
+	v.Usage = models.BrandUsage{}
+	return before, v, nil
+}
+
+// RemoveVoice deletes a voice and returns it with the campaigns and posts it
+// was bound to; nil when it doesn't exist.
+func (s *Service) RemoveVoice(ctx context.Context, id string) (*models.BrandVoice, repository.BrandBindings, error) {
+	return s.repo.DeleteVoiceIf(ctx, nil, id, nil)
+}
+
+// UpdateAudienceIf replaces an audience's fields while the stored audience
+// still equals was, and returns it as it was and as it is.
+func (s *Service) UpdateAudienceIf(ctx context.Context, a, was *models.BrandAudience) (before, after *models.BrandAudience, err error) {
+	NormalizeAudience(a)
+	if err := brandcheck.Audience(a); err != nil {
+		return nil, nil, err
+	}
+	a.Summary = ""
+	a.UpdatedAt = s.now()
+	if before, err = s.repo.UpdateAudienceIf(ctx, nil, a, was); err != nil {
+		return nil, nil, err
+	}
+	a.Usage = models.BrandUsage{}
+	return before, a, nil
+}
+
+// RemoveAudience deletes an audience and returns it with the campaigns and
+// posts it was bound to; nil when it doesn't exist.
+func (s *Service) RemoveAudience(ctx context.Context, id string) (*models.BrandAudience, repository.BrandBindings, error) {
+	return s.repo.DeleteAudienceIf(ctx, nil, id, nil)
+}
+
+// SaveGuardrailsIf sets the rules while the stored ones still equal was (nil:
+// none set), leaving the ledger alone, and returns them as they were and as
+// they are.
+func (s *Service) SaveGuardrailsIf(ctx context.Context, g, was *models.BrandGuardrails) (before, after *models.BrandGuardrails, err error) {
+	NormalizeGuardrails(g)
+	if err := brandcheck.Guardrails(g, nil); err != nil {
+		return nil, nil, err
+	}
+	now := s.now()
+	g.UpdatedAt = now
+	if was == nil {
+		if g.ID, err = models.NewID(); err != nil {
+			return nil, nil, err
+		}
+		g.CreatedAt = now
+	}
+	if before, err = s.repo.SaveGuardrailsIf(ctx, nil, g, was); err != nil {
+		return nil, nil, err
+	}
+	if before != nil {
+		g.ID, g.CreatedAt = before.ID, before.CreatedAt
+	}
+	return before, g, nil
+}

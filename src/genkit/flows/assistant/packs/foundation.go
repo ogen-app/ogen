@@ -17,6 +17,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/brandfacts"
+	"github.com/ogen-app/ogen/src/usecase/brandlib"
 )
 
 const foundationPackName = "foundation"
@@ -25,9 +26,10 @@ const foundationPackName = "foundation"
 // guardrails, facts — and keeps the fact ledger, each change undoable.
 func foundationPack(d Deps) assistant.Pack {
 	facts := brandfacts.New(d.Brand)
+	lib := brandlib.New(d.Brand)
 	return assistant.Pack{
 		Name:    foundationPackName,
-		Summary: "read the brand foundation (voices, audiences, guardrails, facts) and add, correct or retire facts in the fact ledger",
+		Summary: "read the brand foundation (voices, audiences, guardrails, facts, look, templates); add, edit or remove voices, audiences and facts; edit the guardrails",
 		Screens: []viewcontext.Screen{
 			"foundation", "foundation.voices", "foundation.voice", "foundation.audiences", "foundation.audience",
 			"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions",
@@ -46,7 +48,8 @@ func foundationPack(d Deps) assistant.Pack {
 			remove := genkit.DefineTool(g, "removeFact",
 				"Removes a fact from the ledger, so no post claims it any more. Returns an undo id.",
 				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
-			return []assistantkit.Spec{
+			lspecs := librarySpecs(g, d, lib)
+			return append([]assistantkit.Spec{
 				spec(foundationPackName, get, assistantkit.TierRead,
 					`Call this when the user asks about their brand — "what's our voice for LinkedIn?", "summarise our formal voice", "which facts have expired?", "what colours do we use?" — or before editing it.`),
 				spec(foundationPackName, add, assistantkit.TierReversible,
@@ -55,7 +58,7 @@ func foundationPack(d Deps) assistant.Pack {
 					`Call this when the user corrects a fact or confirms it is still true (checkedAt today). To renew an expired fact, pass checkedAt today and a new expiresAt, or clearExpiry when it no longer goes stale. Pass factId from getBrand. It can be undone.`),
 				spec(foundationPackName, remove, assistantkit.TierReversible,
 					`Call this when the user says a fact is no longer true or shouldn't be claimed. It can be undone.`),
-			}, nil
+			}, lspecs...), nil
 		},
 	}
 }

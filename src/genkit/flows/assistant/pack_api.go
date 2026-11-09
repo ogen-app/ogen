@@ -52,11 +52,17 @@ func Window(ctx context.Context) *viewcontext.Window {
 // on any other screen. It is the screen the message was sent from, not one a
 // navigate in the turn moves to.
 func FocusedAsset(ctx context.Context) string {
+	return Focused(ctx, viewcontext.KindAsset)
+}
+
+// Focused is the id of the item of kind the turn's screen shows, if it
+// shows one.
+func Focused(ctx context.Context, kind viewcontext.EntityKind) string {
 	st, err := turnStateFrom(ctx)
 	if err != nil {
 		return ""
 	}
-	if f := st.view.Focus; f != nil && f.Kind == viewcontext.KindAsset {
+	if f := st.view.Focus; f != nil && f.Kind == kind {
 		return f.ID
 	}
 	return ""

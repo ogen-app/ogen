@@ -80,6 +80,34 @@ func (f *fakeBrandRepo) DeleteFactIf(context.Context, bun.IDB, string, *models.B
 	return nil, nil
 }
 func (f *fakeBrandRepo) RestoreFact(context.Context, bun.IDB, *models.BrandFact) error { return nil }
+func (f *fakeBrandRepo) UpdateVoiceIf(context.Context, bun.IDB, *models.BrandVoice, *models.BrandVoice) (*models.BrandVoice, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) DeleteVoiceIf(context.Context, bun.IDB, string, *models.BrandVoice) (*models.BrandVoice, repository.BrandBindings, error) {
+	return nil, repository.BrandBindings{}, nil
+}
+func (f *fakeBrandRepo) RestoreVoice(context.Context, bun.IDB, *models.BrandVoice, repository.BrandBindings) error {
+	return nil
+}
+func (f *fakeBrandRepo) SetDefaultVoice(context.Context, bun.IDB, string) error { return nil }
+func (f *fakeBrandRepo) VoiceBindings(context.Context, bun.IDB, string) (repository.BrandBindings, error) {
+	return repository.BrandBindings{}, nil
+}
+func (f *fakeBrandRepo) UpdateAudienceIf(context.Context, bun.IDB, *models.BrandAudience, *models.BrandAudience) (*models.BrandAudience, error) {
+	return nil, nil
+}
+func (f *fakeBrandRepo) DeleteAudienceIf(context.Context, bun.IDB, string, *models.BrandAudience) (*models.BrandAudience, repository.BrandBindings, error) {
+	return nil, repository.BrandBindings{}, nil
+}
+func (f *fakeBrandRepo) RestoreAudience(context.Context, bun.IDB, *models.BrandAudience, repository.BrandBindings) error {
+	return nil
+}
+func (f *fakeBrandRepo) AudienceBindings(context.Context, bun.IDB, string) (repository.BrandBindings, error) {
+	return repository.BrandBindings{}, nil
+}
+func (f *fakeBrandRepo) SaveGuardrailsIf(context.Context, bun.IDB, *models.BrandGuardrails, *models.BrandGuardrails) (*models.BrandGuardrails, error) {
+	return nil, nil
+}
 func (f *fakeBrandRepo) GetGuardrailsStance(context.Context) (*models.BrandGuardrailsStanceRecord, error) {
 	return nil, nil
 }

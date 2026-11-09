@@ -29,6 +29,12 @@ const (
 	// AssistantActionCampaignCreated is a campaign the assistant created;
 	// undo deletes it while nothing was made in it.
 	AssistantActionCampaignCreated AssistantActionKind = "campaign_created"
+	// AssistantActionBrandVoice is a voice added, changed or removed.
+	AssistantActionBrandVoice AssistantActionKind = "brand_voice"
+	// AssistantActionBrandAudience is an audience added, changed or removed.
+	AssistantActionBrandAudience AssistantActionKind = "brand_audience"
+	// AssistantActionBrandGuardrails is a change to the guardrails' rules.
+	AssistantActionBrandGuardrails AssistantActionKind = "brand_guardrails"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's
