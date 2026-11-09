@@ -28,6 +28,8 @@ func (r *savedPosts) GetByID(context.Context, string) (*models.Post, error) {
 
 func (r *savedPosts) Update(_ context.Context, p *models.Post, _ ...string) error {
 	r.saved = append(r.saved, *p)
+	cp := *p
+	r.post = &cp
 	return nil
 }
 
@@ -58,7 +60,7 @@ func TestCommitEdit_PlannedBecomesDraft(t *testing.T) {
 	for _, tc := range cases {
 		posts, logs := &savedPosts{post: &models.Post{ID: "p1", Status: tc.status}}, &appendedLogs{}
 		st := &requestState{postID: "p1", postStatus: tc.status, repos: PostAssistantRepos{Posts: posts, Logs: logs}}
-		if err := commitEdit(ctx, st, tc.content, false, ""); err != nil {
+		if _, err := commitEdit(ctx, st, tc.content, false, ""); err != nil {
 			t.Fatal(err)
 		}
 		if got := posts.saved[0].Status; got != tc.want || st.postStatus != tc.want {
@@ -78,7 +80,7 @@ func TestCommitEdit_PlannedBecomesDraft(t *testing.T) {
 func TestCommitEdit_RereadsThePost(t *testing.T) {
 	posts := &savedPosts{post: &models.Post{ID: "p1", Status: models.PostStatusScheduledForManualPublish, Content: "old"}}
 	st := &requestState{postID: "p1", postStatus: models.PostStatusDraft, repos: PostAssistantRepos{Posts: posts}}
-	if err := commitEdit(t.Context(), st, "new", false, ""); err != nil {
+	if _, err := commitEdit(t.Context(), st, "new", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := posts.saved[0]; got.Status != models.PostStatusScheduledForManualPublish || got.Content != "new" {
@@ -86,7 +88,7 @@ func TestCommitEdit_RereadsThePost(t *testing.T) {
 	}
 
 	posts.post = nil
-	err := commitEdit(t.Context(), st, "newer", false, "")
+	_, err := commitEdit(t.Context(), st, "newer", false, "")
 	if r, ok := err.(*assistantkit.Refusal); !ok || r.Reason != postRemoved {
 		t.Fatalf("deleted post: %v", err)
 	}
