@@ -140,11 +140,25 @@ func Check(c *models.Campaign, posts []models.Post, ideas map[string][]string, n
 		y, m, d := t.In(loc).Date()
 		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 	}
-	var out []Finding
-	add := func(f Finding) {
+	out := dateChecks(c, posts, day, day(now))
+	cal := newCalendar(c, posts, day, day(now))
+	out = append(out, postTypes(c, posts)...)
+	out = append(out, cal.closeTogether(ideas)...)
+	out = append(out, cal.crowdedSlots()...)
+	out = append(out, cal.goal()...)
+	for i := range out {
+		f := &out[i]
 		f.Key = key(c.ID, f.Code, f.PostIDs, f.Fixes, f.scope)
-		out = append(out, f)
 	}
+	slices.SortStableFunc(out, bySeverity)
+	return out
+}
+
+// dateChecks are the findings about the posts' dates: due soon and not
+// ready, outside the campaign, on a day it doesn't publish, crowded days,
+// and silences.
+func dateChecks(c *models.Campaign, posts []models.Post, day func(time.Time) time.Time, today time.Time) []Finding {
+	var out []Finding
 	redistribute := Fix{Kind: FixRedistribute, Title: "Even out the calendar"}
 
 	var start, end time.Time
@@ -177,44 +191,28 @@ func Check(c *models.Campaign, posts []models.Post, ideas map[string][]string, n
 		crowd[k] = append(crowd[k], p.ID)
 		movableCrowd[k] = movableCrowd[k] || movable
 
-		if f, ok := dueSoon(p, d, day(now)); ok {
-			add(f)
+		if f, ok := dueSoon(p, d, today); ok {
+			out = append(out, f)
 		}
 	}
 	if len(outside) > 0 {
-		add(Finding{Code: CodeOutsideWindow, Severity: SeverityWarning, PostIDs: sorted(outside),
+		out = append(out, Finding{Code: CodeOutsideWindow, Severity: SeverityWarning, PostIDs: sorted(outside),
 			Message: fmt.Sprintf("%d post(s) are dated outside the campaign (%s to %s)", len(outside), start.Format("2 Jan"), end.Format("2 Jan")),
 			Fixes:   []Fix{redistribute}})
 	}
 	if len(offDay) > 0 {
-		add(Finding{Code: CodeDisabledDay, Severity: SeverityWarning, PostIDs: sorted(offDay),
+		out = append(out, Finding{Code: CodeDisabledDay, Severity: SeverityWarning, PostIDs: sorted(offDay),
 			Message: fmt.Sprintf("%d post(s) fall on days the campaign doesn't publish (%s)", len(offDay), scheduling.DayLabels(c.PublishingDays)),
 			Fixes:   []Fix{redistribute}})
 	}
-	for _, f := range crowded(crowd, movableCrowd, redistribute) {
-		add(f)
-	}
+	out = append(out, crowded(crowd, movableCrowd, redistribute)...)
 	if dated {
 		for _, g := range gaps(start, end, scheduled) {
-			add(Finding{Code: CodeGap, Severity: SeverityInfo,
+			out = append(out, Finding{Code: CodeGap, Severity: SeverityInfo,
 				Message: fmt.Sprintf("nothing is planned from %s to %s", g[0].Format("2 Jan"), g[1].Format("2 Jan")),
 				Fixes:   []Fix{{Kind: FixPlanWindow, Title: "Plan ideas for these days", From: g[0].Format(time.DateOnly), To: g[1].Format(time.DateOnly)}}})
 		}
 	}
-	cal := newCalendar(c, posts, day, day(now))
-	for _, f := range postTypes(c, posts) {
-		add(f)
-	}
-	for _, f := range cal.closeTogether(ideas) {
-		add(f)
-	}
-	for _, f := range cal.crowdedSlots() {
-		add(f)
-	}
-	for _, f := range cal.goal() {
-		add(f)
-	}
-	slices.SortStableFunc(out, bySeverity)
 	return out
 }
 

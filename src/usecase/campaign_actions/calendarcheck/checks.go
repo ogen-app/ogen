@@ -251,8 +251,8 @@ func (k *calendar) crowdedSlots() []Finding {
 		f := Finding{Code: CodeCrowdedSlot, Severity: SeverityWarning, PostIDs: sorted(ids), Fixes: []Fix{},
 			Message: fmt.Sprintf("%d posts go to the same %s account within %s of each other around %s", len(run),
 				cmp.Or(platformName(k.c, run[0].PlatformID), "no platform"), slot, run[0].ScheduledAt.In(Location(k.c)).Format("Mon 2 Jan 15:04"))}
-		for i := len(run) - 1; i >= 0; i-- {
-			if fix, ok := k.move(run[i], func(time.Time) bool { return true }); ok {
+		for _, p := range slices.Backward(run) {
+			if fix, ok := k.move(p, func(time.Time) bool { return true }); ok {
 				f.Fixes = append(f.Fixes, fix)
 				break
 			}

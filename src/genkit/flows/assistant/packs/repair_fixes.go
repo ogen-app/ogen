@@ -62,7 +62,7 @@ type SkippedPost struct {
 // posts off the calendar, deleting them, and changing their post type.
 func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	unschedule := genkit.DefineTool(g, "unschedulePosts",
-		"Takes posts off the calendar: an unscheduled post loses its date, a scheduled one is withdrawn from publishing and goes back to ready. Only runs once the user confirmed the offer.",
+		"Takes posts off the calendar: an unscheduled post loses its date, a scheduled one is withdrawn from publishing and goes back to ready. It is offered for the user to confirm before it runs.",
 		assistantkit.Gated("unschedulePosts", assistantkit.Gate[PostsRef]{
 			Summary: func(in PostsRef) string {
 				return fmt.Sprintf("Take %s off the calendar", plural(len(in.PostIDs), "post", "posts"))
@@ -70,7 +70,7 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		}, assistantkit.Wrap(func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return unschedulePosts(ctx, d, in) })),
 		ai.WithStrictSchema(false))
 	changeType := genkit.DefineTool(g, "changePostType",
-		"Changes posts to another post type the campaign allows on their platform; a post ready to publish goes back to draft to be checked again. Only runs once the user confirmed the offer.",
+		"Changes posts to another post type the campaign allows on their platform; a post ready to publish goes back to draft to be checked again. It is offered for the user to confirm before it runs.",
 		assistantkit.Gated("changePostType", assistantkit.Gate[ChangePostTypeInput]{
 			Summary: func(in ChangePostTypeInput) string {
 				return fmt.Sprintf("Make %s %s", plural(len(in.PostIDs), "post", "posts"), in.PostType)
@@ -79,19 +79,22 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			return changePostType(ctx, d, in)
 		})), ai.WithStrictSchema(false))
 	specs := []assistantkit.Spec{
-		spec(repairPackName, unschedule, assistantkit.TierProposal, `Never call this yourself: it is what a finding's "take them off the calendar" offer runs once confirmed.`),
-		spec(repairPackName, changeType, assistantkit.TierProposal, `Never call this yourself: it is what a finding's "make them …" offer runs once confirmed.`),
+		spec(repairPackName, unschedule, assistantkit.TierProposal,
+			`Call this when the user asks to unschedule posts or take them off the calendar; pass the selected posts' ids when there is a selection. It is offered for the user to confirm. A finding's "take them off the calendar" fix is already this offer.`),
+		spec(repairPackName, changeType, assistantkit.TierProposal,
+			`Call this when the user asks to change posts to another post type ("make these image posts"); pass the post type's slug and the selected posts' ids. It is offered for the user to confirm. A finding's "make them …" fix is already this offer.`),
 	}
 	if d.Remove != nil {
 		del := genkit.DefineTool(g, "deletePosts",
-			"Deletes posts for good; published posts are kept. Only runs once the user confirmed the offer.",
+			"Deletes posts for good; published posts are kept. It is offered for the user to confirm before it runs.",
 			assistantkit.Gated("deletePosts", assistantkit.Gate[PostsRef]{
 				Summary: func(in PostsRef) string {
 					return fmt.Sprintf("Delete %s; this can't be undone", plural(len(in.PostIDs), "post", "posts"))
 				},
 			}, assistantkit.Wrap(func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return deletePosts(ctx, d, in) })),
 			ai.WithStrictSchema(false))
-		specs = append(specs, spec(repairPackName, del, assistantkit.TierProposal, `Never call this yourself: it is what a finding's "delete them" offer runs once confirmed.`))
+		specs = append(specs, spec(repairPackName, del, assistantkit.TierProposal,
+			`Call this when the user asks to delete posts; pass the selected posts' ids when there is a selection. It is offered for the user to confirm, and says it can't be undone. A finding's "delete them" fix is already this offer.`))
 	}
 	return specs
 }

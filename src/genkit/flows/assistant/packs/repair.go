@@ -74,24 +74,25 @@ func repairPack(d Deps) assistant.Pack {
 				spec(repairPackName, dismiss, assistantkit.TierRead,
 					`Call this when the user says a finding is fine as it is ("leave the gap", "that's intended"). Pass its key.`),
 			}
+			specs = append(specs, postFixSpecs(g, d)...)
 			if d.CheckBrief != nil && d.CheckPosts != nil {
 				review := genkit.DefineTool(g, "reviewCampaign",
 					"Reviews a campaign's brief for consistency and completeness, and its unpublished posts against the brief, and offers fixes for each finding.",
 					assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*ReviewOutput, error) { return reviewCampaign(ctx, d, in) }), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, review, assistantkit.TierRead,
 					`Call this when the user asks whether the brief holds up or the posts follow it, or for a full review. Relay the findings with their fixes, which are already offered (proposalId) or open the post (navigate to it): a brief finding's fixes improve the brief, a post's rewrite it to follow the brief. A finding the user is fine with is dismissed by its key.`))
-				if d.Revise != nil {
-					revise := genkit.DefineTool(g, "revisePost",
-						"Rewrites one of the campaign's posts by an instruction, as the post's own assistant would, and saves it as a new version. Only runs once the user confirmed the offer.",
-						assistantkit.Gated("revisePost", assistantkit.Gate[RevisePostInput]{
-							Summary: func(in RevisePostInput) string { return "Rewrite the post to follow the brief" },
-						}, assistantkit.Wrap(func(ctx context.Context, in RevisePostInput) (*RevisePostOutput, error) {
-							return revisePost(ctx, d, in)
-						})),
-						ai.WithStrictSchema(false))
-					specs = append(specs, spec(repairPackName, revise, assistantkit.TierProposal,
-						`Never call this yourself: it is what a review finding's "rewrite it" offer runs once confirmed.`))
-				}
+			}
+			if d.Revise != nil {
+				revise := genkit.DefineTool(g, "revisePost",
+					"Rewrites one of the campaign's posts by an instruction, as the post's own assistant would, and saves it as a new version. It is offered for the user to confirm before it runs.",
+					assistantkit.Gated("revisePost", assistantkit.Gate[RevisePostInput]{
+						Summary: func(in RevisePostInput) string { return "Rewrite the post: " + in.Instruction },
+					}, assistantkit.Wrap(func(ctx context.Context, in RevisePostInput) (*RevisePostOutput, error) {
+						return revisePost(ctx, d, in)
+					})),
+					ai.WithStrictSchema(false))
+				specs = append(specs, spec(repairPackName, revise, assistantkit.TierProposal,
+					`Call this when the user, in a campaign's thread, asks to rewrite one of its posts by an instruction; pass the post's id and the instruction verbatim. It is offered for the user to confirm. A review finding's "rewrite it" fix is already this offer. In the post's own thread, use editPost instead.`))
 			}
 			if d.CheckBrand != nil {
 				brand := genkit.DefineTool(g, "checkBrand",
@@ -667,7 +668,7 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 	if posts[0].Status.IsSubmitted() {
 		return nil, assistantkit.Refused("the post is " + string(posts[0].Status) + ", so its copy is locked; unschedule it first")
 	}
-	if err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten to follow the brief"); err != nil {
+	if err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten by the campaign's assistant"); err != nil {
 		return nil, fmt.Errorf("rewrite post: %w", err)
 	}
 	return &RevisePostOutput{PostID: in.PostID, Revised: true,
