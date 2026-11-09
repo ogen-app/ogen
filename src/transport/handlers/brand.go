@@ -1,22 +1,23 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
-	"github.com/ogen-app/ogen/src/domain/brandcheck"
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
 	"github.com/ogen-app/ogen/src/kernel/activity"
+	"github.com/ogen-app/ogen/src/usecase/brandlib"
 )
 
 // BrandHandler is the REST surface for the Brand module: one aggregate
@@ -26,6 +27,7 @@ import (
 // apiJson call against these endpoints with nothing above them changing.
 type BrandHandler struct {
 	repo     repository.BrandRepository
+	lib      *brandlib.Service
 	storage  storage.Storage
 	auth     fiber.Handler
 	activity *activity.Recorder
@@ -34,7 +36,7 @@ type BrandHandler struct {
 // NewBrandHandler constructs the handler. storage may be nil (uploads then 503);
 // a nil rec records nothing.
 func NewBrandHandler(repo repository.BrandRepository, store storage.Storage, auth fiber.Handler, rec *activity.Recorder) *BrandHandler {
-	return &BrandHandler{repo: repo, storage: store, auth: auth, activity: rec}
+	return &BrandHandler{repo: repo, lib: brandlib.New(repo), storage: store, auth: auth, activity: rec}
 }
 
 func (h *BrandHandler) recordActivity(c *fiber.Ctx, typ string, opts ...activity.Option) {
@@ -95,27 +97,12 @@ func (h *BrandHandler) CreateVoice(c *fiber.Ctx) error {
 	if err := c.BodyParser(&v); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	normalizeVoice(&v)
-	if err := validateVoice(&v); err != nil {
-		return err
-	}
-	id, err := models.NewID()
+	created, err := h.lib.CreateVoice(reqCtx(c), &v)
 	if err != nil {
-		return err
+		return libError(err, "voice not found")
 	}
-	v.ID = id
-	// FR5: summary is server-owned, generated off the samples. Generation (a
-	// genkit River job) is a CON-228 follow-up; until then it is withdrawn to ""
-	// — the honest rendering of a voice with nothing read back off it yet.
-	v.Summary = ""
-	now := brandNow()
-	v.CreatedAt, v.UpdatedAt = now, now
-	if err := h.repo.CreateVoice(reqCtx(c), &v); err != nil {
-		return err
-	}
-	h.recordActivity(c, "brand_voice_created", activity.WithEntity("brand_voice", v.ID))
-	v.Usage = models.BrandUsage{} // derived; zero until CON-245
-	return c.Status(fiber.StatusCreated).JSON(&v)
+	h.recordActivity(c, "brand_voice_created", activity.WithEntity("brand_voice", created.ID))
+	return c.Status(fiber.StatusCreated).JSON(created)
 }
 
 func (h *BrandHandler) UpdateVoice(c *fiber.Ctx) error {
@@ -124,22 +111,16 @@ func (h *BrandHandler) UpdateVoice(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 	v.ID = c.Params("id")
-	normalizeVoice(&v)
-	if err := validateVoice(&v); err != nil {
-		return err
+	updated, err := h.lib.UpdateVoice(reqCtx(c), &v)
+	if err != nil {
+		return libError(err, "voice not found")
 	}
-	v.Summary = "" // FR5: withdrawn; regeneration is a follow-up.
-	v.UpdatedAt = brandNow()
-	if err := h.repo.UpdateVoice(reqCtx(c), &v); err != nil {
-		return notFound(err, "voice not found")
-	}
-	h.recordActivity(c, "brand_voice_updated", activity.WithEntity("brand_voice", v.ID))
-	v.Usage = models.BrandUsage{}
-	return c.JSON(&v)
+	h.recordActivity(c, "brand_voice_updated", activity.WithEntity("brand_voice", updated.ID))
+	return c.JSON(updated)
 }
 
 func (h *BrandHandler) DeleteVoice(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteVoice(reqCtx(c), c.Params("id"))
+	deleted, err := h.lib.DeleteVoice(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -157,24 +138,12 @@ func (h *BrandHandler) CreateAudience(c *fiber.Ctx) error {
 	if err := c.BodyParser(&a); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
-	normalizeAudience(&a)
-	if err := validateAudience(&a); err != nil {
-		return err
-	}
-	id, err := models.NewID()
+	created, err := h.lib.CreateAudience(reqCtx(c), &a)
 	if err != nil {
-		return err
+		return libError(err, "audience not found")
 	}
-	a.ID = id
-	a.Summary = "" // FR5
-	now := brandNow()
-	a.CreatedAt, a.UpdatedAt = now, now
-	if err := h.repo.CreateAudience(reqCtx(c), &a); err != nil {
-		return err
-	}
-	h.recordActivity(c, "brand_audience_created", activity.WithEntity("brand_audience", a.ID))
-	a.Usage = models.BrandUsage{}
-	return c.Status(fiber.StatusCreated).JSON(&a)
+	h.recordActivity(c, "brand_audience_created", activity.WithEntity("brand_audience", created.ID))
+	return c.Status(fiber.StatusCreated).JSON(created)
 }
 
 func (h *BrandHandler) UpdateAudience(c *fiber.Ctx) error {
@@ -183,22 +152,16 @@ func (h *BrandHandler) UpdateAudience(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 	a.ID = c.Params("id")
-	normalizeAudience(&a)
-	if err := validateAudience(&a); err != nil {
-		return err
+	updated, err := h.lib.UpdateAudience(reqCtx(c), &a)
+	if err != nil {
+		return libError(err, "audience not found")
 	}
-	a.Summary = "" // FR5
-	a.UpdatedAt = brandNow()
-	if err := h.repo.UpdateAudience(reqCtx(c), &a); err != nil {
-		return notFound(err, "audience not found")
-	}
-	h.recordActivity(c, "brand_audience_updated", activity.WithEntity("brand_audience", a.ID))
-	a.Usage = models.BrandUsage{}
-	return c.JSON(&a)
+	h.recordActivity(c, "brand_audience_updated", activity.WithEntity("brand_audience", updated.ID))
+	return c.JSON(updated)
 }
 
 func (h *BrandHandler) DeleteAudience(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteAudience(reqCtx(c), c.Params("id"))
+	deleted, err := h.lib.DeleteAudience(reqCtx(c), c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -207,6 +170,18 @@ func (h *BrandHandler) DeleteAudience(c *fiber.Ctx) error {
 	}
 	h.recordActivity(c, "brand_audience_deleted", activity.WithEntity("brand_audience", c.Params("id")))
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// libError maps a brand library error: a broken rule is a 422, a missing
+// item a 404 with missing as its message.
+func libError(err error, missing string) error {
+	switch {
+	case brandlib.IsRule(err):
+		return ruleError(err)
+	case errors.Is(err, sql.ErrNoRows):
+		return fiber.NewError(fiber.StatusNotFound, missing)
+	}
+	return err
 }
 
 // ── Guardrails (singleton) ──────────────────────────────────────────────────
@@ -236,59 +211,32 @@ func (h *BrandHandler) PutGuardrails(c *fiber.Ctx) error {
 	// nil facts = key omitted: the ledger is not touched.
 	var facts []string
 	if req.Facts.Present {
-		facts = normalizeFactStatements(req.Facts.orZero())
-	}
-	normalizeGuardrails(&g)
-	if err := validateGuardrails(&g, facts); err != nil {
-		return err
-	}
-	existing, err := h.repo.GetGuardrails(reqCtx(c))
-	if err != nil {
-		return err
-	}
-	// FR8: an unchanged save must not restamp updated_at — this is the one
-	// section where "when was this last checked" is a real question. With
-	// facts present, unchanged also means the ledger already holds exactly
-	// those statements.
-	if existing != nil && guardrailsEqual(existing, &g) &&
-		(facts == nil || sameStatementSet(existing.Facts, facts)) {
-		return c.JSON(existing)
-	}
-	now := brandNow()
-	g.UpdatedAt = now
-	if existing == nil {
-		id, err := models.NewID()
-		if err != nil {
-			return err
+		facts = req.Facts.orZero()
+		if facts == nil {
+			facts = []string{}
 		}
-		g.ID = id
-		g.CreatedAt = now
-	} else {
-		// The upsert is ON CONFLICT DO UPDATE and does not touch id /
-		// created_at, so carry the stored ones through.
-		g.ID = existing.ID
-		g.CreatedAt = existing.CreatedAt
 	}
-	rec, err := h.repo.SaveGuardrails(reqCtx(c), &g, facts, sessionUserID(c))
+	saved, err := h.lib.SaveGuardrails(reqCtx(c), &g, facts, sessionUserID(c))
 	if err != nil {
+		if brandlib.IsRule(err) {
+			return ruleError(err)
+		}
 		return factError(err)
 	}
-	var opts []activity.Option
-	if facts != nil {
-		opts = append(opts, activity.WithPayload(map[string]any{"facts_reconciled": rec}))
+	if saved.Changed {
+		var opts []activity.Option
+		if saved.Facts != nil {
+			opts = append(opts, activity.WithPayload(map[string]any{"facts_reconciled": *saved.Facts}))
+		}
+		h.recordActivity(c, "brand_guardrails_updated", opts...)
 	}
-	h.recordActivity(c, "brand_guardrails_updated", opts...)
-	saved, err := h.repo.GetGuardrails(reqCtx(c))
-	if err != nil {
-		return err
-	}
-	return c.JSON(saved)
+	return c.JSON(saved.Guardrails)
 }
 
 // DeleteGuardrails removes the rules. The facts ledger is its own section now
 // and is not touched, nor is a previous stance brought back.
 func (h *BrandHandler) DeleteGuardrails(c *fiber.Ctx) error {
-	deleted, err := h.repo.DeleteGuardrails(reqCtx(c))
+	deleted, err := h.lib.DeleteGuardrails(reqCtx(c))
 	if err != nil {
 		return err
 	}
@@ -463,97 +411,12 @@ func unprocessable(format string, args ...any) error {
 	return fiber.NewError(fiber.StatusUnprocessableEntity, fmt.Sprintf(format, args...))
 }
 
-func normalizeVoice(v *models.BrandVoice) {
-	if v.Samples == nil {
-		v.Samples = models.StringSlice{}
-	}
-	if v.ChannelNotes == nil {
-		v.ChannelNotes = models.StringMap{}
-	}
-	if v.Origin.Kind == "" {
-		v.Origin = models.BrandOrigin{Kind: "blank"}
-	}
-}
-
-func validateVoice(v *models.BrandVoice) error {
-	return ruleError(brandcheck.Voice(v))
-}
-
-func normalizeAudience(a *models.BrandAudience) {
-	if a.Origin.Kind == "" {
-		a.Origin = models.BrandOrigin{Kind: "blank"}
-	}
-}
-
-func validateAudience(a *models.BrandAudience) error {
-	return ruleError(brandcheck.Audience(a))
-}
-
-func normalizeGuardrails(g *models.BrandGuardrails) {
-	if g.MayClaim == nil {
-		g.MayClaim = models.StringSlice{}
-	}
-	if g.NeverClaim == nil {
-		g.NeverClaim = models.StringSlice{}
-	}
-	if g.BannedWords == nil {
-		g.BannedWords = models.StringSlice{}
-	}
-}
-
-// validateGuardrails checks the rules, and facts when the key was present
-// (non-nil). Rules and facts all empty is a 422: DELETE is the way to clear
-// the rules.
-func validateGuardrails(g *models.BrandGuardrails, facts []string) error {
-	return ruleError(brandcheck.Guardrails(g, facts))
-}
-
 // ruleError turns a broken brand rule into a 422.
 func ruleError(err error) error {
 	if err == nil {
 		return nil
 	}
 	return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
-}
-
-// normalizeFactStatements trims, drops blanks and de-duplicates, keeping the
-// first occurrence. Never nil, so a present-but-empty list still reconciles
-// (to an empty ledger).
-func normalizeFactStatements(in []string) []string {
-	out := make([]string, 0, len(in))
-	seen := make(map[string]bool, len(in))
-	for _, s := range in {
-		s = strings.TrimSpace(s)
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out
-}
-
-func sameStatementSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	set := make(map[string]bool, len(a))
-	for _, s := range a {
-		set[s] = true
-	}
-	for _, s := range b {
-		if !set[s] {
-			return false
-		}
-	}
-	return true
-}
-
-func guardrailsEqual(a, b *models.BrandGuardrails) bool {
-	return a.Disclaimer == b.Disclaimer &&
-		slices.Equal(a.MayClaim, b.MayClaim) &&
-		slices.Equal(a.NeverClaim, b.NeverClaim) &&
-		slices.Equal(a.BannedWords, b.BannedWords)
 }
 
 func normalizeLook(l *models.BrandLook) {
