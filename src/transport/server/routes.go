@@ -8,10 +8,12 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/publishers"
 	pubzernio "github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/storage"
+	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/kernel/netguard"
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	"github.com/ogen-app/ogen/src/usecase/assets"
@@ -20,6 +22,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/linkpreview"
 	"github.com/ogen-app/ogen/src/usecase/oauthlogin"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
+	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 	"github.com/ogen-app/ogen/src/usecase/savedviews"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
@@ -217,7 +220,7 @@ func registerCampaignRoutes(app *fiber.App, d *deps) {
 	}).Register(app)
 	handlers.NewCampaignPhasesHandler(r.campaignRepo, rec, d.auth).Register(app)
 	handlers.NewAssistantProposalsHandler(gk.AnswerProposal, gk.IsAnthropicAvailable, rec, d.auth).Register(app)
-	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).WithIdeas(r.ideaRepo).WithBrand(r.brandRepo).WithBrandLibrary(r.brandRepo).WithSeries(r.seriesRepo).Undo, rec, d.auth).Register(app)
+	handlers.NewAssistantActionsHandler(assistantundo.New(d.db, r.actionRepo, r.campaignRepo).WithIdeas(r.ideaRepo).WithBrand(r.brandRepo).WithBrandLibrary(r.brandRepo).WithSeries(r.seriesRepo).WithPosts(r.postRepo).Undo, rec, d.auth).Register(app)
 	handlers.NewAssistantHandler(gk.RunAssistant, gk.IsAnthropicAvailable,
 		viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo).Resolve, r.assistantMessageRepo, rec, d.auth).Register(app)
 }
@@ -341,4 +344,23 @@ func deleteAttachmentBlobs(store storage.Storage, attachments repository.PostAtt
 		}
 		return store.DeletePrefix(ctx, storage.TenantKey(ctx, "post-attachments/"+postID+"/"))
 	}
+}
+
+// postRemover deletes and withdraws posts for the assistant's repair fixes
+// as the post endpoints do: files first, then the row with its Zernio copy.
+type postRemover struct {
+	blobs    func(ctx context.Context, postID string) error
+	withdraw *withdraw.Service
+	jobs     *queues.Enqueuer
+}
+
+func (r postRemover) Delete(ctx context.Context, post *models.Post, actor string) (bool, error) {
+	if err := r.blobs(ctx, post.ID); err != nil {
+		return false, err
+	}
+	return r.withdraw.DeletePost(ctx, post, actor)
+}
+
+func (r postRemover) Cancel(ctx context.Context, postID, actor string) error {
+	return r.jobs.EnqueueCancel(ctx, postID, queues.CancelTargetReadyForPublish, actor)
 }

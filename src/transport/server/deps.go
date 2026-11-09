@@ -425,6 +425,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			ProposalThreshold: d.cfg.AssistantProposalThreshold,
 			DraftMax:          d.cfg.DraftPostMax,
 			Posts:             r.postRepo,
+			Remove:            postRemover{blobs: deleteAttachmentBlobs(d.store, r.postAttachmentRepo), withdraw: d.svc.withdraw, jobs: d.enqueuer},
 			Links:             r.postIdeaRepo,
 			Dismissals:        r.dismissalRepo,
 			Analytics:         d.analytics.Service(),
