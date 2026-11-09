@@ -48,7 +48,17 @@ func foundationPack(d Deps) assistant.Pack {
 			remove := genkit.DefineTool(g, "removeFact",
 				"Removes a fact from the ledger, so no post claims it any more. Returns an undo id.",
 				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
-			lspecs := librarySpecs(g, d, lib)
+			bulk := genkit.DefineTool(g, "editBrand",
+				"Makes several brand changes at once: facts, voices and audiences added, updated or removed. Above a few changes it is offered for the user to confirm first. Each change made returns its own undo id.",
+				assistantkit.Gated("editBrand", assistantkit.Gate[EditBrandInput]{
+					Precheck: func(_ context.Context, in EditBrandInput) error { return in.precheck() },
+					Needs:    func(_ context.Context, in EditBrandInput) bool { return overN(d, in.size()) },
+					Summary:  func(in EditBrandInput) string { return in.summary() },
+				}, assistantkit.Wrap(func(ctx context.Context, in EditBrandInput) (*EditBrandOutput, error) {
+					return editBrand(ctx, d, facts, lib, in)
+				})), ai.WithStrictSchema(false))
+			lspecs := append(librarySpecs(g, d, lib), spec(foundationPackName, bulk, assistantkit.TierProposal,
+				`Call this when one message asks for several brand changes — "add these five facts", "remove every fact about pricing", "delete the three old voices". Read the ids with getBrand first. For a single change use the one-item tool.`))
 			return append([]assistantkit.Spec{
 				spec(foundationPackName, get, assistantkit.TierRead,
 					`Call this when the user asks about their brand — "what's our voice for LinkedIn?", "summarise our formal voice", "which facts have expired?", "what colours do we use?" — or before editing it.`),

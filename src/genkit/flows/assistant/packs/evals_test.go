@@ -125,6 +125,7 @@ var evalCases = []evalCase{
 	{pack: "foundation", screen: "foundation.audiences", scope: evalWorkspace, say: "Add an audience: CTOs at mid-size SaaS companies who read on LinkedIn.", want: []string{"addAudience"}},
 	{pack: "foundation", screen: "foundation.audiences", scope: evalWorkspace, say: "Delete the Students audience.", want: []string{"getBrand", "removeAudience"}},
 	{pack: "foundation", screen: "foundation.guardrails", scope: evalWorkspace, say: "Never use the word 'synergy'.", want: []string{"updateGuardrails"}, not: []string{"addFact"}},
+	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Add these facts: founded in 2019; 40 employees; offices in Kyiv and Lisbon; ISO 27001 certified.", want: []string{"editBrand"}},
 	// workspace
 	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "What happened yesterday?", want: []string{"activityReport"}},
 	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Do any of my accounts need reconnecting?", want: []string{"workspaceSetup"}},

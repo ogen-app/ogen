@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
@@ -12,6 +13,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
+	"github.com/ogen-app/ogen/src/usecase/brandfacts"
 	"github.com/ogen-app/ogen/src/usecase/brandlib"
 )
 
@@ -109,4 +111,43 @@ func TestLibrary_AudienceAndGuardrails(t *testing.T) {
 	if !slices.ContainsFunc(touched(), func(t assistantkit.Touched) bool { return t.Kind == "guardrails" }) {
 		t.Fatalf("touched = %v", touched())
 	}
+}
+
+func TestEditBrand(t *testing.T) {
+	db, actions := undoStore(t)
+	brand := repository.NewBrandRepository(db)
+	d := Deps{Brand: brand, Actions: actions, ProposalThreshold: 2}
+	lib := brandlib.New(brand)
+	facts := brandfacts.New(brand)
+	ctx, _ := turn(t, workspace, nil)
+	for _, m := range []any{
+		&models.Account{ID: "acc-1", Email: "jane@example.com", Name: "Jane"},
+		&models.User{ID: "u1", AccountID: "acc-1", TenantID: "tenant-1", Name: "Jane", Email: "jane@example.com", Role: models.RoleOwner},
+	} {
+		if _, err := db.NewInsert().Model(m).Exec(ctx); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	in := EditBrandInput{
+		AddFacts:     []FactInput{{Statement: "Founded in 2019"}, {Statement: "Founded in 2019"}, {Statement: "Offices in Kyiv and Lisbon"}},
+		AddAudiences: []AudienceInput{{Name: "CTOs"}},
+		RemoveVoices: []string{"gone"},
+	}
+	if in.size() != 5 || !overN(d, in.size()) || in.summary() != "Add 3 facts, remove 1 voice, add 1 audience" {
+		t.Fatalf("size = %d, summary = %q", in.size(), in.summary())
+	}
+	out, err := editBrand(ctx, d, facts, lib, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The repeated fact and the missing voice are reported; the rest is
+	// made, each undoable on its own.
+	if out.Done != 3 || len(out.UndoIDs) != 3 || len(out.Failed) != 2 {
+		t.Fatalf("out = %+v", out)
+	}
+	if err := (EditBrandInput{}).precheck(); err == nil {
+		t.Fatal("an empty edit passed")
+	}
+	refused(t, EditBrandInput{UpdateVoices: []UpdateVoiceInput{{Name: "x"}}}.precheck())
 }
