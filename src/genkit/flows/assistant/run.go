@@ -127,8 +127,14 @@ func run(
 		slog.ErrorContext(ctx, "persist conversation turn failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		result.Unsaved = true
 	}
-	// The screen moves only once the reply is final, so a restarted call
-	// never leaves half a plan on it.
+	emitFinal(onEvent, st, result)
+	return result, nil
+}
+
+// emitFinal streams a finished turn: its offers and answered offers, its UI
+// actions, then complete. The screen moves only once the reply is final, so
+// a restarted call never leaves half a plan on it.
+func emitFinal(onEvent OnEventFunc, st *turnState, result *Response) {
 	for _, c := range result.Proposals {
 		emit(onEvent, SSEEventProposalCreated, c)
 	}
@@ -139,7 +145,6 @@ func run(
 		emit(onEvent, SSEEventUIAction, a)
 	}
 	emit(onEvent, SSEEventComplete, result)
-	return result, nil
 }
 
 // restartWithPack begins the pack loadPack asked for and makes the turn's
