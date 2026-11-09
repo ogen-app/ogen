@@ -271,6 +271,10 @@ func TestOptimiseCalendar(t *testing.T) {
 			t.Fatalf("%s moved to a %s, a day the campaign doesn't publish", m.PostID, wd)
 		}
 	}
+	// The scheduled post is the one kept in place, for the before and after.
+	if len(out.Locked) != 1 || out.Locked[0].PostID != "p3" || out.Locked[0].Date != "2027-03-04" {
+		t.Fatalf("locked = %+v", out.Locked)
+	}
 	undated := Deps{Campaigns: &memCampaigns{c: &models.Campaign{ID: "c1"}}, Posts: &memPosts{}}
 	_, err = optimiseCalendar(ctx, undated, CampaignRef{})
 	refused(t, err)
