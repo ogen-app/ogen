@@ -44,6 +44,9 @@ type Deps struct {
 	Chunks    repository.AssetChunksRepository
 	Embedder  ai.Embedder
 	Analysis  *assetanalysis.Service
+	// Analyses reads the lenses: the bank's state and what an analysis
+	// found; nil leaves both out.
+	Analyses  repository.AssetAnalysisRepository
 	URLImport *urlimport.Service
 
 	Posts     repository.PostRepository

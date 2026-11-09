@@ -411,6 +411,7 @@ func (d *deps) genkitDeps() genkitDeps {
 			Chunks:            r.chunksRepo,
 			Embedder:          d.ingest.embedder,
 			Analysis:          d.analysis,
+			Analyses:          r.assetAnalysisRepo,
 			URLImport:         newURLImporter(d),
 			Actions:           r.actionRepo,
 			ProposalThreshold: d.cfg.AssistantProposalThreshold,

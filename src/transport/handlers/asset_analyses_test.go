@@ -358,6 +358,62 @@ var _ = Describe("AssetAnalysesHandler", Ordered, func() {
 		Expect(triggers.rebriefs).To(HaveLen(3), "the posting goal is part of the brief")
 	})
 
+	It("reads the bank's state for the workspace and for a campaign", func() {
+		seedAsset("doc-1", models.AssetTypeDocument)
+		seedAsset("doc-2", models.AssetTypeDocument)
+		camp := createCampaign("Launch", "doc-1")
+		saveLens("doc-1", nil, models.AssetAnalysisStatusReady, 0, "ws idea")
+		_, err := analyses.Ensure(tenantCtx(), db, "doc-2", nil)
+		Expect(err).NotTo(HaveOccurred())
+		saveLens("doc-1", &camp, models.AssetAnalysisStatusReady, 80, "launch idea", "second launch idea")
+
+		type stateWire struct {
+			CampaignID    string `json:"campaign_id"`
+			Total         int    `json:"total"`
+			Analysed      int    `json:"analysed"`
+			Waiting       int    `json:"waiting"`
+			WaitingAssets []struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+			} `json:"waiting_assets"`
+			FailedAssets []any `json:"failed_assets"`
+			Undecided    []struct {
+				CampaignID   string `json:"campaign_id"`
+				CampaignName string `json:"campaign_name"`
+				Ideas        int    `json:"ideas"`
+			} `json:"undecided"`
+		}
+		read := func(path string) stateWire {
+			GinkgoHelper()
+			resp := request(admin, "GET", path, nil)
+			Expect(resp.StatusCode).To(Equal(200))
+			var st stateWire
+			Expect(json.NewDecoder(resp.Body).Decode(&st)).To(Succeed())
+			return st
+		}
+
+		ws := read("/api/content-bank/assets-state")
+		Expect(ws.Total).To(Equal(2))
+		Expect(ws.Analysed).To(Equal(1))
+		Expect(ws.Waiting).To(Equal(1))
+		Expect(ws.WaitingAssets).To(HaveLen(1))
+		Expect(ws.WaitingAssets[0].Title).To(Equal("Asset doc-2"))
+		Expect(ws.FailedAssets).NotTo(BeNil(), "an empty list, not null")
+		Expect(ws.Undecided).To(HaveLen(2))
+		Expect(ws.Undecided[0].CampaignID).To(BeEmpty())
+		Expect(ws.Undecided[1].CampaignName).To(Equal("Launch"))
+		Expect(ws.Undecided[1].Ideas).To(Equal(2))
+
+		c := read("/api/content-bank/assets-state?campaign_id=" + camp)
+		Expect(c.CampaignID).To(Equal(camp))
+		Expect(c.Total).To(Equal(1))
+		Expect(c.Analysed).To(Equal(1))
+		Expect(c.Undecided).To(HaveLen(1))
+
+		Expect(request(admin, "GET", "/api/content-bank/assets-state?campaign_id=nope", nil).StatusCode).To(Equal(404))
+		Expect(request(nil, "GET", "/api/content-bank/assets-state", nil).StatusCode).To(Equal(401))
+	})
+
 	It("does not reveal another workspace's analyses", func() {
 		seedAsset("doc-1", models.AssetTypeDocument)
 		saveLens("doc-1", nil, models.AssetAnalysisStatusReady, 0)

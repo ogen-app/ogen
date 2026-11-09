@@ -12,6 +12,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
+	"github.com/ogen-app/ogen/src/usecase/assets"
 )
 
 const codeAnalysisNotRetryable = "analysis_not_retryable"
@@ -50,6 +51,7 @@ func (h *AssetAnalysesHandler) Register(app *fiber.App) {
 	app.Get("/api/content-bank/assets/:id/analysis", h.auth, h.Get)
 	app.Post("/api/content-bank/assets/:id/analysis/retry", h.auth, h.Retry)
 	app.Get("/api/campaigns/:id/asset-analyses", h.auth, h.ListForCampaign)
+	app.Get("/api/content-bank/assets-state", h.auth, h.State)
 }
 
 // assetAnalysisResponse is one lens of an asset's analysis. The meeting
@@ -221,6 +223,28 @@ func (h *AssetAnalysesHandler) ListForCampaign(c *fiber.Ctx) error {
 		out = append(out, toAnalysisResponse(l))
 	}
 	return c.JSON(assetAnalysesResponse{Analyses: out})
+}
+
+// State godoc
+// @Summary      The asset bank's state
+// @Description  Counts of the workspace's assets, or of one campaign's sources with campaign_id: how many are still being read in, how the analyses of the lens in scope stand (done, waiting, running, failed, skipped) with the first waiting and failed assets named, and the undecided ideas per lens. The assistant reads the same state on the Assets screens.
+// @Tags         assets
+// @Produce      json
+// @Security     CookieAuth
+// @Param        campaign_id  query     string  false  "Campaign Sqid: that campaign's sources and lens"
+// @Success      200          {object}  assets.State
+// @Failure      401          {object}  map[string]string
+// @Failure      404          {object}  map[string]string
+// @Router       /api/content-bank/assets-state [get]
+func (h *AssetAnalysesHandler) State(c *fiber.Ctx) error {
+	st, err := assets.ReadState(reqCtx(c), assets.StateReaders{Assets: h.assets, Analyses: h.analyses}, c.Query("campaign_id"), time.Now())
+	if errors.Is(err, sql.ErrNoRows) {
+		return fiber.NewError(fiber.StatusNotFound, "campaign not found")
+	}
+	if err != nil {
+		return err
+	}
+	return c.JSON(st)
 }
 
 // withIdeas renders lenses with the ideas each distilled, in one ideas read.

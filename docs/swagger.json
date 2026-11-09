@@ -4903,6 +4903,57 @@
                 }
             }
         },
+        "/api/content-bank/assets-state": {
+            "get": {
+                "security": [
+                    {
+                        "CookieAuth": []
+                    }
+                ],
+                "description": "Counts of the workspace's assets, or of one campaign's sources with campaign_id: how many are still being read in, how the analyses of the lens in scope stand (done, waiting, running, failed, skipped) with the first waiting and failed assets named, and the undecided ideas per lens. The assistant reads the same state on the Assets screens.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "assets"
+                ],
+                "summary": "The asset bank's state",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Campaign Sqid: that campaign's sources and lens",
+                        "name": "campaign_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/assets.State"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/content-bank/assets/audio/finalize": {
             "post": {
                 "security": [
@@ -14702,6 +14753,85 @@
         }
     },
     "definitions": {
+        "assets.AssetName": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "assets.LensIdeas": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {
+                    "type": "string"
+                },
+                "campaign_name": {
+                    "type": "string"
+                },
+                "ideas": {
+                    "type": "integer"
+                }
+            }
+        },
+        "assets.State": {
+            "type": "object",
+            "properties": {
+                "analysed": {
+                    "description": "The analyses of the scope's lens, by status: done, waiting in the\nqueue, running now, failed (retryable) and skipped.",
+                    "type": "integer"
+                },
+                "analysing": {
+                    "type": "integer"
+                },
+                "analysis_failed": {
+                    "type": "integer"
+                },
+                "campaign_id": {
+                    "type": "string"
+                },
+                "failed_assets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/assets.AssetName"
+                    }
+                },
+                "processing": {
+                    "type": "integer"
+                },
+                "processing_failed": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total counts the assets in scope; Processing those still being read\nin, ProcessingFailed those that couldn't be.",
+                    "type": "integer"
+                },
+                "undecided": {
+                    "description": "Undecided is the undecided ideas per lens, the workspace lens first.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/assets.LensIdeas"
+                    }
+                },
+                "waiting": {
+                    "type": "integer"
+                },
+                "waiting_assets": {
+                    "description": "WaitingAssets and FailedAssets name the first of them.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/assets.AssetName"
+                    }
+                }
+            }
+        },
         "billing.BillingView": {
             "type": "object",
             "properties": {
