@@ -18,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant/packs"
+	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_distill"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
@@ -463,6 +464,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	pd.Campaign, pd.Post = &campaignPack, &postPack
 	pd.CheckBrief, pd.CheckPosts = checkBriefFn, checkPostsFn
 	pd.Compare = asset_compare.New(g, provider, r.recorder)
+	pd.CheckBrand = brand_check.New(g, provider, r.recorder)
 	if pd.Compose != nil {
 		pd.Compose = pd.Compose.WithDrafter(ideaDrafter(r))
 	}

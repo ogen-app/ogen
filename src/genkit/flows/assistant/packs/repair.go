@@ -33,8 +33,8 @@ const repairPackName = "repair"
 func repairPack(d Deps) assistant.Pack {
 	return assistant.Pack{
 		Name:    repairPackName,
-		Summary: "check a campaign's calendar and its brief and posts for problems, and fix them: even out the dates, fill silences, finish what's due",
-		Screens: []viewcontext.Screen{"calendar", "campaign.calendar", "campaign.overview"},
+		Summary: "check a campaign's calendar, its brief and posts, and posts against the brand voice and guardrails, for problems, and fix them: even out the dates, fill silences, finish what's due",
+		Screens: []viewcontext.Screen{"calendar", "campaign.calendar", "campaign.overview", "campaign.list"},
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			check := genkit.DefineTool(g, "checkCalendar",
 				"Checks a campaign's calendar: posts outside its dates or on days it doesn't publish, crowded days, long silences, and posts due soon that aren't written or ready. Each finding comes with its fixes, offered for the user to confirm.",
@@ -74,6 +74,15 @@ func repairPack(d Deps) assistant.Pack {
 					assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*ReviewOutput, error) { return reviewCampaign(ctx, d, in) }), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, review, assistantkit.TierRead,
 					`Call this when the user asks whether the brief holds up or the posts follow it, or for a full review. Relay the findings with their fixes: a brief finding's fix improves the brief (offered), a post's opens the post.`))
+			}
+			if d.CheckBrand != nil {
+				brand := genkit.DefineTool(g, "checkBrand",
+					"Checks posts against the brand they're written for: the voice and its channel notes, banned words, claims the guardrails rule out, claims no fact backs, and a missing disclaimer. Takes the posts named, else the thread's post, else a campaign's unpublished posts. Each finding quotes the post and opens it to fix.",
+					assistantkit.Wrap(func(ctx context.Context, in CheckBrandInput) (*CheckBrandOutput, error) {
+						return checkBrand(ctx, d, in)
+					}), ai.WithStrictSchema(false))
+				specs = append(specs, spec(repairPackName, brand, assistantkit.TierRead,
+					`Call this when the user asks whether posts are on brand, in the voice, or within the guardrails — "are these on brand?", "check the selected posts against our voice". Pass the selected posts' ids when there is a selection. Relay the findings, most serious first, with the quoted words; each one's fix opens the post. In the post's own thread, offer to fix it with editPost.`))
 			}
 			return specs, nil
 		},
