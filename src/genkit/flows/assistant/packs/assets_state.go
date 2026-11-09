@@ -14,7 +14,9 @@ import (
 )
 
 // assetsRules tell the model what the <assets> block is for.
-const assetsRules = `The <assets> block after the <view> is the asset bank's state, read on the server with the view: how many assets there are, how their analyses stand and how many ideas wait for a decision. Answer "what's left", "how many" and "what needs doing" from it without searching. Waiting analyses run on their own; offer analyseAsset only for failed ones, and offer analysing many at once before doing it.`
+const assetsRules = `The <assets> block after the <view> is the asset bank's state, read on the server with the view: how many assets there are, how their analyses stand and how many ideas wait for a decision. Answer "what's left", "how many" and "what needs doing" from it without searching. Waiting analyses run on their own; offer analyseAsset only for failed ones, and offer analysing many at once before doing it.
+
+On an asset page the open asset is the default source: questions search it alone and generation draws on it alone, unless the user names other assets or asks for all of them. Say so when you answer ("from the brochure only"), so the narrower source is never hidden.`
 
 // assetsBegin gives the turn the bank's state: the thread's campaign's
 // sources, else the workspace's. A state that can't be read leaves the block

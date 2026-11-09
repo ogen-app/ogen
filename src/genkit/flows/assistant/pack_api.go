@@ -21,7 +21,11 @@ func NewTurnContext(ctx context.Context, scope viewcontext.Scope, onEvent OnEven
 
 // NewViewTurnContext is NewTurnContext with the user's screen as view.
 func NewViewTurnContext(ctx context.Context, view viewcontext.ViewContext, onEvent OnEventFunc) (context.Context, func() []assistantkit.Touched) {
-	st := newTurnState(&viewresolve.Resolved{View: &view}, nil)
+	r := &viewresolve.Resolved{View: &view}
+	if f := view.Focus; f != nil {
+		r.Focus = &viewresolve.Item{Kind: f.Kind, ID: f.ID}
+	}
+	st := newTurnState(r, nil)
 	st.emit = onEvent
 	return withTurnState(ctx, st), st.touches.List
 }
@@ -42,6 +46,20 @@ func Window(ctx context.Context) *viewcontext.Window {
 		return nil
 	}
 	return st.view.View.Window
+}
+
+// FocusedAsset is the asset the user's screen shows, on an asset page; ""
+// on any other screen. It is the screen the message was sent from, not one a
+// navigate in the turn moves to.
+func FocusedAsset(ctx context.Context) string {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return ""
+	}
+	if f := st.view.Focus; f != nil && f.Kind == viewcontext.KindAsset {
+		return f.ID
+	}
+	return ""
 }
 
 // CampaignID is the thread's campaign; empty outside a campaign thread.
