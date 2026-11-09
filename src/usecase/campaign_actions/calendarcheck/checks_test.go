@@ -2,6 +2,7 @@ package calendarcheck
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -100,6 +101,9 @@ func TestCheck_CrowdedSlot(t *testing.T) {
 	}
 	if len(f.Fixes) != 1 || f.Fixes[0].PostID != "b" {
 		t.Fatalf("fix = %+v", f.Fixes)
+	}
+	if !strings.Contains(f.Message, "within 30 minutes") {
+		t.Fatalf("message = %q", f.Message)
 	}
 }
 

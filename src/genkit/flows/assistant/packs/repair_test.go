@@ -49,18 +49,35 @@ func (r *memPosts) MoveScheduledAt(_ context.Context, ms []repository.ScheduleMo
 	return ids, nil
 }
 
+// memDismissals keeps campaign c1's dismissals in keys, and any other
+// scope's in others, by "kind|id".
 type memDismissals struct {
 	repository.AssistantDismissalRepository
-	keys map[string]bool
+	keys   map[string]bool
+	others map[string]map[string]bool
 }
 
-func (r *memDismissals) Dismiss(_ context.Context, _ models.AssistantScopeKind, _, key, _ string) error {
-	r.keys[key] = true
+func (r *memDismissals) scope(kind models.AssistantScopeKind, id string) map[string]bool {
+	if kind == models.AssistantScopeCampaign && id == "c1" {
+		return r.keys
+	}
+	if r.others == nil {
+		r.others = map[string]map[string]bool{}
+	}
+	k := string(kind) + "|" + id
+	if r.others[k] == nil {
+		r.others[k] = map[string]bool{}
+	}
+	return r.others[k]
+}
+
+func (r *memDismissals) Dismiss(_ context.Context, kind models.AssistantScopeKind, id, key, _ string) error {
+	r.scope(kind, id)[key] = true
 	return nil
 }
 
-func (r *memDismissals) Keys(context.Context, models.AssistantScopeKind, string) (map[string]bool, error) {
-	return r.keys, nil
+func (r *memDismissals) Keys(_ context.Context, kind models.AssistantScopeKind, id string) (map[string]bool, error) {
+	return r.scope(kind, id), nil
 }
 
 func day(s string) *time.Time {
@@ -361,9 +378,10 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 		}}}}, nil
 	}
 	var revised []string
-	d.Revise = func(_ context.Context, id, instruction, _ string) error {
+	versioned := true
+	d.Revise = func(_ context.Context, id, instruction, _ string) (bool, error) {
 		revised = append(revised, id+": "+instruction)
-		return nil
+		return versioned, nil
 	}
 	dismissals.keys["b3"] = true
 	sink := &offers{}
@@ -392,8 +410,49 @@ func TestReviewCampaign_FindingsCarryFixes(t *testing.T) {
 	if _, err := revisePost(ctx, d, rewrite.Args.(RevisePostInput)); err != nil || !slices.Equal(revised, []string{"p2: follow the brief"}) {
 		t.Fatalf("revise = %v, %v", revised, err)
 	}
+	// A rewrite whose version couldn't be saved says so.
+	versioned = false
+	if out, err := revisePost(ctx, d, rewrite.Args.(RevisePostInput)); err != nil || !out.Revised || out.Versioned {
+		t.Fatalf("unversioned rewrite = %+v, %v", out, err)
+	}
 	// A scheduled post's copy is locked.
 	if _, err := revisePost(ctx, d, RevisePostInput{PostID: "p3", Instruction: "x"}); !isRefusal(err) {
 		t.Fatalf("scheduled post = %v", err)
+	}
+}
+
+// A finding is dismissed for the campaign checked, whichever thread checked
+// it, so the Overview leaves it out too; one dismissed in a workspace thread
+// before dismissals followed the campaign is still left out there.
+func TestDismissFinding_FollowsTheCampaign(t *testing.T) {
+	d, _, dismissals := repairDeps()
+	ctx, _ := turn(t, workspace, nil)
+	ctx = assistantkit.WithProposalSink(ctx, &offers{})
+	out, err := checkCalendar(ctx, d, CampaignRef{CampaignID: "c1"})
+	if err != nil || len(out.Findings) < 2 {
+		t.Fatalf("out = %+v, %v", out, err)
+	}
+	if _, err := dismissFinding(ctx, d, DismissFindingInput{}); !isRefusal(err) {
+		t.Fatalf("no key = %v", err)
+	}
+	if _, err := dismissFinding(ctx, d, DismissFindingInput{Key: "k"}); !isRefusal(err) {
+		t.Fatalf("a workspace thread named no campaign = %v", err)
+	}
+	if _, err := dismissFinding(ctx, d, DismissFindingInput{Key: out.Findings[0].Key, CampaignID: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !dismissals.keys[out.Findings[0].Key] {
+		t.Fatalf("dismissed in %v, not for the campaign", dismissals.others)
+	}
+	dismissals.scope(models.AssistantScopeWorkspace, "")[out.Findings[1].Key] = true
+	after, err := checkCalendar(ctx, d, CampaignRef{CampaignID: "c1"})
+	if err != nil || after.Dismissed != 2 {
+		t.Fatalf("after = %+v, %v", after, err)
+	}
+	// The campaign's own thread sees only the campaign's.
+	cctx, _ := turn(t, campaign1, nil)
+	in, err := checkCalendar(assistantkit.WithProposalSink(cctx, &offers{}), d, CampaignRef{})
+	if err != nil || in.Dismissed != 1 {
+		t.Fatalf("campaign thread = %+v, %v", in, err)
 	}
 }

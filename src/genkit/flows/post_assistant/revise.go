@@ -2,6 +2,7 @@ package post_assistant
 
 import (
 	"context"
+	"errors"
 
 	"github.com/firebase/genkit/go/genkit"
 
@@ -10,8 +11,14 @@ import (
 
 // Reviser rewrites one post by an instruction from outside its thread, as
 // editPost would in it, and saves the result as a version, so the post's
-// history can restore what it was. A submitted post is refused.
+// history can restore what it was. A submitted post is refused. A rewrite
+// whose version couldn't be saved is ErrVersionNotSaved, with the output:
+// the post has it all the same.
 type Reviser func(ctx context.Context, postID, instruction, note string) (*EditPostOutput, error)
+
+// ErrVersionNotSaved is a rewrite that is on the post already but couldn't
+// be saved as a version, so the post's history holds no copy of it.
+var ErrVersionNotSaved = errors.New("the post was already rewritten, but saving the rewrite as a version failed")
 
 // NewReviser returns the post pack's writer as a Reviser, over the same
 // config and repositories as NewPack.
@@ -33,6 +40,9 @@ func NewReviser(g *genkit.Genkit, cfg PostAssistantFlowConfig, repos PostAssista
 		}
 		if _, err := end(ctx); err != nil {
 			return nil, err
+		}
+		if r := getRequestState(ctx).editResult; r == nil || !r.SaveVersion {
+			return out, ErrVersionNotSaved
 		}
 		return out, nil
 	}, nil

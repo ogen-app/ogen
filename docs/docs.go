@@ -3920,7 +3920,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Dismisses one of the overview's problems by its key, the way\nthe campaign's assistant does when told a finding is fine: neither\nthe overview nor the assistant raises it again while its posts\nstay the same. Dismissing twice is one dismissal.",
+                "description": "Dismisses a finding of the campaign by its key: one of the overview's\nproblems, or a review finding. Neither the overview nor the campaign's\nassistant raises it again while a check gives the same key. A calendar\nfinding's key follows its posts; a review finding's follows the brief,\nor the post's text. Dismissing a key twice is one dismissal.",
                 "tags": [
                     "campaigns"
                 ],
@@ -23014,7 +23014,7 @@ const docTemplate = `{
                     }
                 },
                 "problems": {
-                    "description": "Problems are the calendar's findings, warnings first, each with the\nfixes the campaign's assistant offers once asked to fix it by its key;\nthe ones dismissed in the campaign's thread are left out and counted.",
+                    "description": "Problems are the calendar's findings, warnings first, each with the\nfixes the campaign's assistant offers once asked to fix it by its key;\nthe campaign's dismissed ones are left out and counted.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/calendarcheck.Finding"
