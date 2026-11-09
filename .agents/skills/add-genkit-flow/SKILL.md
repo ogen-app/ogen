@@ -1,10 +1,12 @@
 ---
 name: add-genkit-flow
-description: Add a new Genkit-powered AI flow (Anthropic-backed) to the app — types, prompt template, run function, tools, context cache, HTTP handler, tests, and optional SSE streaming with per-field delta events. Use when the user asks to build an AI assistant, generator, classifier, or any other LLM-driven feature that needs prompt templates, structured output, tool use, or progress streaming to the UI.
+description: Add a new Genkit-powered AI flow (Anthropic-backed) to the app — types, prompt template, run function, tools, context cache, HTTP handler, tests, and optional SSE streaming with per-field delta events. Use when the user asks to build a generator, classifier, or any other LLM-driven sub-flow that needs prompt templates, structured output, tool use, or progress streaming to the UI. For anything the user talks to in chat, use the universal-assistant skill instead.
 tools: Read, Edit, Write, Glob, Grep, Bash
 ---
 
 # Add Genkit Flow Skill
+
+> **Chat capabilities go in the universal assistant, not a new flow.** The campaign and post assistants are now packs of the one assistant (`POST /api/assistant`); their old endpoints are gone. To let users ask for something in chat, add a pack or tool: see `.agents/skills/universal-assistant/SKILL.md`. Use this skill for the sub-flows those tools call (content plan, draft post, enrich brief, …). Where the text below points at `post_assistant` as a standalone conversational flow, read it as historical.
 
 Scaffold a Genkit flow package with the canonical layering used by `post_assistant` and `content_plan`. Follow this exactly — the project already has two flows to diff against; deviating costs more than it saves. Canonical references:
 
