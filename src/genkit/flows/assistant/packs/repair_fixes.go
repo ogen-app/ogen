@@ -67,7 +67,7 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			Summary: func(in PostsRef) string {
 				return fmt.Sprintf("Take %s off the calendar", plural(len(in.PostIDs), "post", "posts"))
 			},
-		}, assistantkit.Wrap(func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return unschedulePosts(ctx, d, in) })),
+		}, assistantkit.Wrap(recorded(repairPackName, "unschedulePosts", nil, func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return unschedulePosts(ctx, d, in) }))),
 		ai.WithStrictSchema(false))
 	changeType := genkit.DefineTool(g, "changePostType",
 		"Changes posts to another post type the campaign allows on their platform; a post ready to publish goes back to draft to be checked again. It is offered for the user to confirm before it runs.",
@@ -75,9 +75,9 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			Summary: func(in ChangePostTypeInput) string {
 				return fmt.Sprintf("Make %s %s", plural(len(in.PostIDs), "post", "posts"), in.PostType)
 			},
-		}, assistantkit.Wrap(func(ctx context.Context, in ChangePostTypeInput) (*PostFixOutput, error) {
+		}, assistantkit.Wrap(recorded(repairPackName, "changePostType", nil, func(ctx context.Context, in ChangePostTypeInput) (*PostFixOutput, error) {
 			return changePostType(ctx, d, in)
-		})), ai.WithStrictSchema(false))
+		}))), ai.WithStrictSchema(false))
 	specs := []assistantkit.Spec{
 		spec(repairPackName, unschedule, assistantkit.TierProposal,
 			`Call this when the user asks to unschedule posts or take them off the calendar; pass the selected posts' ids when there is a selection. It is offered for the user to confirm. A finding's "take them off the calendar" fix is already this offer.`),
@@ -91,7 +91,7 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 				Summary: func(in PostsRef) string {
 					return fmt.Sprintf("Delete %s; this can't be undone", plural(len(in.PostIDs), "post", "posts"))
 				},
-			}, assistantkit.Wrap(func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return deletePosts(ctx, d, in) })),
+			}, assistantkit.Wrap(recorded(repairPackName, "deletePosts", nil, func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return deletePosts(ctx, d, in) }))),
 			ai.WithStrictSchema(false))
 		specs = append(specs, spec(repairPackName, del, assistantkit.TierProposal,
 			`Call this when the user asks to delete posts; pass the selected posts' ids when there is a selection. It is offered for the user to confirm, and says it can't be undone. A finding's "delete them" fix is already this offer.`))
