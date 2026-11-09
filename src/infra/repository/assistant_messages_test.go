@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -213,7 +214,7 @@ func TestAssistantMessages_ListThreads(t *testing.T) {
 		t.Fatalf("delete = %v, %v", ok, err)
 	}
 
-	got, err := msgs.ListThreads(ctx, time.Time{}, 10)
+	got, err := msgs.ListThreads(ctx, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,19 +235,73 @@ func TestAssistantMessages_ListThreads(t *testing.T) {
 	}
 
 	// A page, and the next one from its last row.
-	page, err := msgs.ListThreads(ctx, time.Time{}, 2)
+	page, err := msgs.ListThreads(ctx, nil, 2)
 	if err != nil || len(page) != 2 || page[1].ScopeID != archived {
 		t.Fatalf("first page = %+v (err %v)", page, err)
 	}
-	next, err := msgs.ListThreads(ctx, page[1].LastMessageAt, 2)
+	next, err := msgs.ListThreads(ctx, &repository.ThreadCursor{LastMessageAt: page[1].LastMessageAt, ScopeKind: page[1].ScopeKind, ScopeID: page[1].ScopeID}, 2)
 	if err != nil || len(next) != 2 || next[0].ScopeID != live || next[1].ScopeKind != models.AssistantScopeWorkspace {
 		t.Fatalf("next page = %+v (err %v)", next, err)
 	}
 
-	if got, err := msgs.ListThreads(ctx, time.Time{}, 0); err != nil || got != nil {
+	// A cursor given at the zero time is still a bound: nothing is older.
+	if got, err := msgs.ListThreads(ctx, &repository.ThreadCursor{}, 10); err != nil || len(got) != 0 {
+		t.Fatalf("zero-time cursor = %+v (err %v)", got, err)
+	}
+	if got, err := msgs.ListThreads(ctx, nil, 0); err != nil || got != nil {
 		t.Fatalf("zero limit = %+v (err %v)", got, err)
 	}
-	if _, err := msgs.ListThreads(context.Background(), time.Time{}, 10); !errors.Is(err, tenantctx.ErrNoTenant) {
+	if _, err := msgs.ListThreads(context.Background(), nil, 10); !errors.Is(err, tenantctx.ErrNoTenant) {
 		t.Fatalf("no tenant: err = %v; want ErrNoTenant", err)
+	}
+}
+
+// Threads whose latest messages share a time page by scope: a page that ends
+// inside the tie resumes after its last row, and a time-only cursor skips the
+// whole tie.
+func TestAssistantMessages_ListThreadsTiedTimes(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := tenantCtx()
+	msgs := repository.NewAssistantMessageRepository(db)
+	campaigns := repository.NewCampaignRepository(db, nil, nil, nil)
+	at := time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
+	var ids []string
+	for _, name := range []string{"One", "Two", "Three"} {
+		id := seedCampaign(t, campaigns, ctx, name)
+		ids = append(ids, id)
+		if err := msgs.CreateBatch(ctx, []*models.AssistantMessage{message(t, models.AssistantScopeCampaign, id, "user", "go", at, nil)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := msgs.CreateBatch(ctx, []*models.AssistantMessage{message(t, models.AssistantScopeWorkspace, "", "user", "earlier", at.Add(-time.Minute), nil)}); err != nil {
+		t.Fatal(err)
+	}
+
+	var seen []string
+	var cursor *repository.ThreadCursor
+	for range 4 {
+		page, err := msgs.ListThreads(ctx, cursor, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) != 1 {
+			t.Fatalf("page after %v = %+v", seen, page)
+		}
+		row := page[0]
+		seen = append(seen, string(row.ScopeKind)+":"+row.ScopeID)
+		cursor = &repository.ThreadCursor{LastMessageAt: row.LastMessageAt, ScopeKind: row.ScopeKind, ScopeID: row.ScopeID}
+	}
+	// Each tied thread once, in the database's order for scopes, then the
+	// older one.
+	tied := slices.Sorted(slices.Values(seen[:3]))
+	want := []string{"campaign:" + ids[0], "campaign:" + ids[1], "campaign:" + ids[2]}
+	slices.Sort(want)
+	if !slices.Equal(tied, want) || seen[3] != "workspace:" {
+		t.Fatalf("paged %v; want each of %v once, then the workspace", seen, want)
+	}
+
+	got, err := msgs.ListThreads(ctx, &repository.ThreadCursor{LastMessageAt: at}, 10)
+	if err != nil || len(got) != 1 || got[0].ScopeKind != models.AssistantScopeWorkspace {
+		t.Fatalf("time-only cursor = %+v (err %v)", got, err)
 	}
 }

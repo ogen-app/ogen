@@ -20,9 +20,18 @@ type AssistantMessageRepository interface {
 	// ListRecent returns a thread's last limit messages, oldest first.
 	ListRecent(ctx context.Context, kind models.AssistantScopeKind, scopeID string, limit int) ([]models.AssistantMessage, error)
 	// ListThreads returns up to limit of the workspace's threads, latest
-	// message first, from those whose latest message is before before (zero
-	// for no bound).
-	ListThreads(ctx context.Context, before time.Time, limit int) ([]AssistantThread, error)
+	// message first: from the first, or from the one after cursor.
+	ListThreads(ctx context.Context, cursor *ThreadCursor, limit int) ([]AssistantThread, error)
+}
+
+// ThreadCursor marks where a page of threads ended: the last row's latest
+// message time and scope. The next page starts after it in the list's order,
+// so threads tied on that time aren't skipped. Without a scope, the page
+// starts at the first thread whose latest message is earlier.
+type ThreadCursor struct {
+	LastMessageAt time.Time
+	ScopeKind     models.AssistantScopeKind
+	ScopeID       string
 }
 
 // AssistantThread is one thread in the workspace's list: its scope, the
@@ -105,7 +114,7 @@ func (r *assistantMessageRepository) ListRecent(ctx context.Context, kind models
 // counts the thread on the way, and joins its subject for the labels. A raw
 // query bypasses the TenantScoped hooks, so every table is scoped by the
 // tenant argument. Threads tied on their latest message order by scope, so
-// the order is stable.
+// the order is stable and a cursor can resume inside a tie.
 const listThreadsSQL = `
 SELECT t.scope_kind, t.scope_id,
        CASE t.scope_kind WHEN 'campaign' THEN c.name WHEN 'post' THEN p.title ELSE '' END AS title,
@@ -131,13 +140,15 @@ LEFT JOIN campaigns AS pc
 WHERE (t.scope_kind = 'workspace'
        OR (t.scope_kind = 'campaign' AND c.id IS NOT NULL AND c.deleted_at IS NULL)
        OR (t.scope_kind = 'post' AND pc.id IS NOT NULL AND pc.deleted_at IS NULL))
-  AND (?1::timestamptz IS NULL OR t.created_at < ?1)
+  AND (NOT ?1
+       OR t.created_at < ?2
+       OR (t.created_at = ?2 AND ?3 <> '' AND (t.scope_kind, t.scope_id) > (?3, ?4)))
 ORDER BY t.created_at DESC, t.scope_kind, t.scope_id
-LIMIT ?2`
+LIMIT ?5`
 
 // ListThreads returns the workspace's threads, latest message first, and none
 // for a limit below one.
-func (r *assistantMessageRepository) ListThreads(ctx context.Context, before time.Time, limit int) ([]AssistantThread, error) {
+func (r *assistantMessageRepository) ListThreads(ctx context.Context, cursor *ThreadCursor, limit int) ([]AssistantThread, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -145,12 +156,14 @@ func (r *assistantMessageRepository) ListThreads(ctx context.Context, before tim
 	if !ok {
 		return nil, tenantctx.ErrNoTenant
 	}
-	var bound *time.Time
-	if !before.IsZero() {
-		bound = &before
+	var at time.Time
+	var kind models.AssistantScopeKind
+	var scopeID string
+	if cursor != nil {
+		at, kind, scopeID = cursor.LastMessageAt, cursor.ScopeKind, cursor.ScopeID
 	}
 	var threads []AssistantThread
-	if err := r.db.NewRaw(listThreadsSQL, tid, bound, limit).Scan(ctx, &threads); err != nil {
+	if err := r.db.NewRaw(listThreadsSQL, tid, cursor != nil, at, kind, scopeID, limit).Scan(ctx, &threads); err != nil {
 		return nil, err
 	}
 	return threads, nil
