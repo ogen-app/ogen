@@ -35,6 +35,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
+	"github.com/ogen-app/ogen/src/usecase/savedviews"
 	"github.com/ogen-app/ogen/src/usecase/settings"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
@@ -94,6 +95,8 @@ var evalCases = []evalCase{
 	{pack: "assets", screen: "asset", scope: evalWorkspace, focus: evalOpenAsset, say: "What did the analysis find?", want: []string{"readAnalysis"}, not: writes},
 	{pack: "assets", screen: "asset", scope: evalWorkspace, focus: evalOpenAsset, say: "Summarise it in a paragraph.", want: []string{"compareAssets"}, not: writes},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Compare the Villa Aurora brochure with the press kit.", want: []string{"findAssets", "getSelection", "compareAssets"}, not: writes},
+	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Which smart groups do we have?", want: []string{"listSavedViews"}, not: writes},
+	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Open the Needs analysis group.", want: []string{"listSavedViews"}},
 	{pack: "campaign", screen: "campaign.asset", scope: evalCampaign, focus: evalOpenAsset, say: "Plan 3 LinkedIn posts from this for next week.", want: []string{"generatePosts"}},
 	// repair
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Anything wrong with the calendar?", want: []string{"checkCalendar"}, not: writes},
@@ -143,6 +146,12 @@ func (evalAnalyses) State(context.Context, *string, time.Time, int) (*repository
 		Failed:    []repository.AssetTitle{{ID: "a3", Title: "Coast & Table review"}, {ID: "a4", Title: "Press kit"}, {ID: "a5", Title: "Spa menu"}},
 		Undecided: []repository.LensIdeas{{Ideas: 29}},
 	}, nil
+}
+
+type evalSavedViews struct{}
+
+func (evalSavedViews) List(context.Context, savedviews.Caller, string, []string, *time.Location) ([]models.SavedView, error) {
+	return []models.SavedView{{ID: "sv1", Name: "Needs analysis", Query: "ideas=unread", Valid: true}}, nil
 }
 
 type evalPosts struct{ repository.PostRepository }
@@ -235,7 +244,7 @@ func TestPackEvals(t *testing.T) {
 			return nil, nil
 		},
 	})
-	a, err := assistant.Init(g, assistant.FlowConfig{Provider: llm.NewProvider(), MaxOutputTokens: 4096}, assistant.Repos{Messages: evalMessages{}, Proposals: evalProposals{}}, all...)
+	a, err := assistant.Init(g, assistant.FlowConfig{Provider: llm.NewProvider(), MaxOutputTokens: 4096}, assistant.Repos{Messages: evalMessages{}, Proposals: evalProposals{}, SavedViewLists: evalSavedViews{}}, all...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ package assistant
 
 import (
 	"context"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
@@ -13,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
+	"github.com/ogen-app/ogen/src/usecase/savedviews"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
@@ -130,6 +132,9 @@ type Repos struct {
 	Views ViewReader
 	// SavedViews finds the saved view openSavedView opens.
 	SavedViews SavedViewReader
+	// SavedViewLists lists the saved views listSavedViews returns; nil
+	// leaves the tool out.
+	SavedViewLists SavedViewLister
 	// Proposals stores the offers pack tools hold back for a yes; nil
 	// leaves the proposal-tier tools unable to run and drops
 	// confirmOffer / dismissOffer.
@@ -146,6 +151,12 @@ type ViewReader interface {
 // SavedViewReader reads one saved view; repository.SavedViewRepository.
 type SavedViewReader interface {
 	GetByID(ctx context.Context, id string) (*models.SavedView, error)
+}
+
+// SavedViewLister lists the saved views a user sees on one list, with the
+// counts asked for; savedviews.Service.
+type SavedViewLister interface {
+	List(ctx context.Context, caller savedviews.Caller, surface string, counts []string, loc *time.Location) ([]models.SavedView, error)
 }
 
 // ValidationError is a turn the server won't run (HTTP 400).

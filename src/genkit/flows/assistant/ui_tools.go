@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/usecase/assets"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
+	"github.com/ogen-app/ogen/src/usecase/savedviews"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
@@ -232,6 +234,82 @@ func (t *toolSet) openSavedView(ctx context.Context, in OpenSavedViewInput) (*UI
 	}
 	st.addUI(UIAction{Type: UIOpenSavedView, Screen: screen, CampaignID: campaign, SavedViewID: view.ID})
 	return &UIResult{Done: fmt.Sprintf("opening the saved view %q", view.Name), Note: uiApplies}, nil
+}
+
+// ListSavedViewsInput names the list whose saved views to return.
+type ListSavedViewsInput struct {
+	List string `json:"list,omitempty" jsonschema:"enum=ideas,enum=assets,description=The list; defaults to the one on the user's screen"`
+}
+
+// SavedViewRef is one saved view: its name, the filter it stands for, and
+// how many items it matches across the workspace.
+type SavedViewRef struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Filter string `json:"filter"`
+	Shared bool   `json:"shared"`
+	// Count is left out inside a campaign, where the view opens on the
+	// campaign's own list and the workspace count would mislead.
+	Count *int `json:"count,omitempty"`
+}
+
+// ListSavedViewsOutput is the saved views of one list.
+type ListSavedViewsOutput struct {
+	List  string         `json:"list"`
+	Views []SavedViewRef `json:"views"`
+	Note  string         `json:"note,omitempty"`
+}
+
+// savedViewTotal is the count every saved-views surface carries.
+const savedViewTotal = "total"
+
+// listSurfaces maps a list kind to its saved-views surface.
+var listSurfaces = map[viewcontext.EntityKind]string{viewcontext.KindIdea: ideas.SurfaceName, viewcontext.KindAsset: assets.SurfaceName}
+
+func (t *toolSet) listSavedViews(ctx context.Context, in ListSavedViewsInput) (*ListSavedViewsOutput, error) {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	surface := in.List
+	if surface == "" {
+		if kind, ok := st.currentScreen().ListKind(); ok {
+			surface = listSurfaces[kind]
+		}
+	}
+	if _, ok := savedViewScreens[surface]; !ok {
+		return nil, assistantkit.Refused("which list? pass ideas or assets")
+	}
+	inCampaign := st.currentCampaign() != ""
+	var counts []string
+	if !inCampaign {
+		counts = []string{savedViewTotal}
+	}
+	user, _ := logging.UserIDFrom(ctx)
+	views, err := t.deps.SavedViewLists.List(ctx, savedviews.Caller{UserID: user}, surface, counts, time.UTC)
+	if err != nil {
+		return nil, err
+	}
+	out := &ListSavedViewsOutput{List: surface, Views: []SavedViewRef{}}
+	invalid := 0
+	for _, v := range views {
+		if !v.Valid {
+			invalid++
+			continue
+		}
+		ref := SavedViewRef{ID: v.ID, Name: v.Name, Filter: v.Query, Shared: v.Shared}
+		if n, ok := v.Counts[savedViewTotal]; ok && !inCampaign {
+			ref.Count = new(n)
+		}
+		out.Views = append(out.Views, ref)
+	}
+	switch {
+	case invalid > 0:
+		out.Note = fmt.Sprintf("%d of the saved views no longer match the list's filters and were left out", invalid)
+	case inCampaign && len(out.Views) > 0:
+		out.Note = "inside a campaign a saved view opens on the campaign's own list"
+	}
+	return out, nil
 }
 
 func plural(kind viewcontext.EntityKind, n int) string {
