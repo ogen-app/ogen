@@ -55,6 +55,16 @@ type SeriesRepository interface {
 	// LiveCampaignExists reports whether campaignID names a campaign in the
 	// caller's tenant that is not soft-deleted (archived counts as live).
 	LiveCampaignExists(ctx context.Context, campaignID string) (bool, error)
+
+	// The conditional writes take db (nil runs their own transaction) and
+	// return ErrSeriesChanged when the stored series or run no longer equals
+	// was.
+	UpdateIf(ctx context.Context, db bun.IDB, s, was *models.Series) error
+	SoftDeleteIf(ctx context.Context, db bun.IDB, id string, was *models.Series) ([]models.CampaignSeriesRun, error)
+	Undelete(ctx context.Context, db bun.IDB, was *models.Series, runs []models.CampaignSeriesRun) error
+	// Run returns the campaign's run of a series; nil when it doesn't run it.
+	Run(ctx context.Context, campaignID, seriesID string) (*models.CampaignSeriesRun, error)
+	SetRunIf(ctx context.Context, db bun.IDB, campaignID, seriesID string, want, was *models.CampaignSeriesRun) error
 }
 
 type seriesRepository struct {

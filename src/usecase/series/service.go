@@ -177,6 +177,66 @@ func (s *Service) Update(ctx context.Context, id string, in Input) (*models.Seri
 	return series, nil
 }
 
+// UpdateIf replaces the editable fields of series was.ID while it still
+// equals was (repository.ErrSeriesChanged otherwise), and returns it as it is.
+func (s *Service) UpdateIf(ctx context.Context, was *models.Series, in Input) (*models.Series, error) {
+	in = normalize(in)
+	if err := validate(in); err != nil {
+		return nil, err
+	}
+	series := *was
+	series.Name, series.Promise, series.Recipe = in.Name, in.Promise, in.Recipe
+	series.Supply, series.ContentFormat, series.DefaultRhythm = in.Supply, in.ContentFormat, in.DefaultRhythm
+	series.UpdatedAt = s.stamp()
+	if err := s.repo.UpdateIf(ctx, nil, &series, was); err != nil {
+		return nil, repoError(err)
+	}
+	return &series, nil
+}
+
+// Remove soft-deletes a series, as Delete does, and returns it with the
+// runs it removed.
+func (s *Service) Remove(ctx context.Context, id string) (*models.Series, []models.CampaignSeriesRun, error) {
+	series, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	runs, err := s.repo.SoftDeleteIf(ctx, nil, id, series)
+	if err != nil {
+		return nil, nil, repoError(err)
+	}
+	return series, runs, nil
+}
+
+// SetRun makes a campaign run a series at want's rhythm, or stop running it
+// when want is nil, and returns the run as it was (nil: not run). A series
+// local to another campaign can't be run.
+func (s *Service) SetRun(ctx context.Context, campaignID, seriesID string, want *models.CampaignSeriesRun) (*models.CampaignSeriesRun, error) {
+	if err := s.checkCampaign(ctx, campaignID); err != nil {
+		return nil, err
+	}
+	if want != nil {
+		if want.Rhythm != nil && !want.Rhythm.Valid() {
+			return nil, ErrInvalidRhythm
+		}
+		series, err := s.Get(ctx, seriesID)
+		if err != nil {
+			return nil, err
+		}
+		if series.CampaignID != nil && *series.CampaignID != campaignID {
+			return nil, ErrSeriesOutOfScope
+		}
+	}
+	cur, err := s.repo.Run(ctx, campaignID, seriesID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.SetRunIf(ctx, nil, campaignID, seriesID, want, cur); err != nil {
+		return nil, repoError(err)
+	}
+	return cur, nil
+}
+
 // Delete soft-deletes a series and removes its campaign runs. Posts keep their
 // series_id. Returns the series as it was, or ErrNotFound.
 func (s *Service) Delete(ctx context.Context, id string) (*models.Series, error) {

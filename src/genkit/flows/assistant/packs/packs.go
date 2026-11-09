@@ -24,6 +24,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/create"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
+	"github.com/ogen-app/ogen/src/usecase/series"
 	"github.com/ogen-app/ogen/src/usecase/urlimport"
 )
 
@@ -61,7 +62,10 @@ type Deps struct {
 	Links     repository.PostIdeaRepository
 	Analytics *analytics.Service
 
-	Brand          repository.BrandRepository
+	Brand repository.BrandRepository
+	// Series keeps the series and the campaigns' runs of them; nil leaves
+	// the series tools out.
+	Series         *series.Service
 	Activity       *report.Service
 	Settings       repository.SettingRepository
 	SocialAccounts repository.SocialAccountRepository
