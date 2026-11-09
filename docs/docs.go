@@ -1360,7 +1360,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Lists the workspace's threads, the latest message first. Threads are the workspace's, not one\nuser's. A campaign thread is left out once its campaign is deleted, and a post thread once its\npost or its campaign is; an archived campaign's threads are listed with archived set. For the\nnext page, pass the last row's last_message_at as before.",
+                "description": "Lists the workspace's threads, the latest message first. Threads are the workspace's, not one\nuser's. A campaign thread is left out once its campaign is deleted, and a post thread once its\npost or its campaign is; an archived campaign's threads are listed with archived set. For the\nnext page, pass the last row's last_message_at as before and its scope as before_scope; with\nbefore alone, the page starts at the first thread whose latest message is earlier.",
                 "produces": [
                     "application/json"
                 ],
@@ -1377,8 +1377,14 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "RFC 3339 timestamp; only threads whose latest message is earlier",
+                        "description": "The last row's last_message_at (RFC 3339)",
                         "name": "before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "The last row's scope; needs before",
+                        "name": "before_scope",
                         "in": "query"
                     }
                 ],

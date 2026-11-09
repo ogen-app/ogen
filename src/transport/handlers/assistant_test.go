@@ -28,12 +28,12 @@ type threadRepo struct {
 	id   string
 
 	list   []repository.AssistantThread
-	before time.Time
+	cursor *repository.ThreadCursor
 	limit  int
 }
 
-func (r *threadRepo) ListThreads(_ context.Context, before time.Time, limit int) ([]repository.AssistantThread, error) {
-	r.before, r.limit = before, limit
+func (r *threadRepo) ListThreads(_ context.Context, cursor *repository.ThreadCursor, limit int) ([]repository.AssistantThread, error) {
+	r.cursor, r.limit = cursor, limit
 	return r.list, nil
 }
 
@@ -194,8 +194,8 @@ func TestAssistantThreads(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
 		t.Fatal(err)
 	}
-	if f.threads.limit != 50 || !f.threads.before.IsZero() {
-		t.Fatalf("read limit %d before %v; want 50 and no bound", f.threads.limit, f.threads.before)
+	if f.threads.limit != 50 || f.threads.cursor != nil {
+		t.Fatalf("read limit %d cursor %+v; want 50 and none", f.threads.limit, f.threads.cursor)
 	}
 	if len(rows) != 3 {
 		t.Fatalf("rows = %v", rows)
@@ -221,18 +221,25 @@ func TestAssistantThreads(t *testing.T) {
 }
 
 func TestAssistantThreads_Query(t *testing.T) {
+	at := time.Date(2026, 11, 9, 9, 0, 0, 123456000, time.UTC)
 	cases := map[string]struct {
 		query  string
 		status int
 		limit  int
-		before time.Time
+		cursor *repository.ThreadCursor
 	}{
-		"page":         {"?limit=10&before=2026-11-09T09:00:00.123456Z", 200, 10, time.Date(2026, 11, 9, 9, 0, 0, 123456000, time.UTC)},
-		"max":          {"?limit=100", 200, 100, time.Time{}},
-		"zero limit":   {"?limit=0", 400, 0, time.Time{}},
-		"over max":     {"?limit=101", 400, 0, time.Time{}},
-		"not a number": {"?limit=ten", 400, 0, time.Time{}},
-		"bad before":   {"?before=yesterday", 400, 0, time.Time{}},
+		"first page":       {"", 200, 50, nil},
+		"page":             {"?limit=10&before=2026-11-09T09:00:00.123456Z&before_scope=campaign:c1", 200, 10, &repository.ThreadCursor{LastMessageAt: at, ScopeKind: models.AssistantScopeCampaign, ScopeID: "c1"}},
+		"workspace scope":  {"?before=2026-11-09T09:00:00.123456Z&before_scope=workspace", 200, 50, &repository.ThreadCursor{LastMessageAt: at, ScopeKind: models.AssistantScopeWorkspace}},
+		"time only":        {"?before=2026-11-09T09:00:00.123456Z", 200, 50, &repository.ThreadCursor{LastMessageAt: at}},
+		"zero time":        {"?before=0001-01-01T00:00:00Z", 200, 50, &repository.ThreadCursor{}},
+		"max":              {"?limit=100", 200, 100, nil},
+		"zero limit":       {"?limit=0", 400, 0, nil},
+		"over max":         {"?limit=101", 400, 0, nil},
+		"not a number":     {"?limit=ten", 400, 0, nil},
+		"bad before":       {"?before=yesterday", 400, 0, nil},
+		"scope alone":      {"?before_scope=campaign:c1", 400, 0, nil},
+		"bad before_scope": {"?before=2026-11-09T09:00:00Z&before_scope=team:t1", 400, 0, nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -251,8 +258,14 @@ func TestAssistantThreads_Query(t *testing.T) {
 			if strings.TrimSpace(string(body)) != "[]" {
 				t.Fatalf("body = %s; want []", body)
 			}
-			if f.threads.limit != tc.limit || !f.threads.before.Equal(tc.before) {
-				t.Fatalf("read limit %d before %v; want %d and %v", f.threads.limit, f.threads.before, tc.limit, tc.before)
+			if f.threads.limit != tc.limit {
+				t.Fatalf("read limit %d; want %d", f.threads.limit, tc.limit)
+			}
+			switch got := f.threads.cursor; {
+			case tc.cursor == nil && got != nil, tc.cursor != nil && got == nil:
+				t.Fatalf("cursor = %+v; want %+v", got, tc.cursor)
+			case tc.cursor != nil && (!got.LastMessageAt.Equal(tc.cursor.LastMessageAt) || got.ScopeKind != tc.cursor.ScopeKind || got.ScopeID != tc.cursor.ScopeID):
+				t.Fatalf("cursor = %+v; want %+v", got, tc.cursor)
 			}
 		})
 	}

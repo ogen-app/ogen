@@ -221,12 +221,14 @@ type assistantThreadRow struct {
 // @Description  Lists the workspace's threads, the latest message first. Threads are the workspace's, not one
 // @Description  user's. A campaign thread is left out once its campaign is deleted, and a post thread once its
 // @Description  post or its campaign is; an archived campaign's threads are listed with archived set. For the
-// @Description  next page, pass the last row's last_message_at as before.
+// @Description  next page, pass the last row's last_message_at as before and its scope as before_scope; with
+// @Description  before alone, the page starts at the first thread whose latest message is earlier.
 // @Tags         assistant
 // @Produce      json
 // @Security     CookieAuth
-// @Param        limit   query  int     false  "Page size, 1-100 (default 50)"
-// @Param        before  query  string  false  "RFC 3339 timestamp; only threads whose latest message is earlier"
+// @Param        limit         query  int     false  "Page size, 1-100 (default 50)"
+// @Param        before        query  string  false  "The last row's last_message_at (RFC 3339)"
+// @Param        before_scope  query  string  false  "The last row's scope; needs before"
 // @Success      200  {array}   assistantThreadRow
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
@@ -240,15 +242,25 @@ func (h *AssistantHandler) Threads(c *fiber.Ctx) error {
 		}
 		limit = n
 	}
-	var before time.Time
+	var cursor *repository.ThreadCursor
 	if v := c.Query("before"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "before must be RFC3339")
 		}
-		before = t
+		cursor = &repository.ThreadCursor{LastMessageAt: t}
 	}
-	threads, err := h.messages.ListThreads(reqCtx(c), before, limit)
+	if v := c.Query("before_scope"); v != "" {
+		if cursor == nil {
+			return fiber.NewError(fiber.StatusBadRequest, "before_scope needs before")
+		}
+		kind, id, err := parseThreadScope(v)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "before_scope: "+err.Error())
+		}
+		cursor.ScopeKind, cursor.ScopeID = kind, id
+	}
+	threads, err := h.messages.ListThreads(reqCtx(c), cursor, limit)
 	if err != nil {
 		return err
 	}
