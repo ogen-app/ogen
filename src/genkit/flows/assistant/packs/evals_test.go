@@ -32,6 +32,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/analytics"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/create"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
@@ -97,6 +98,8 @@ var evalCases = []evalCase{
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Compare the Villa Aurora brochure with the press kit.", want: []string{"findAssets", "getSelection", "compareAssets"}, not: writes},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Which smart groups do we have?", want: []string{"listSavedViews"}, not: writes},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Open the Needs analysis group.", want: []string{"listSavedViews"}},
+	{pack: "assets", screen: "asset", scope: evalWorkspace, focus: evalOpenAsset, say: "Set up a campaign from this, around its March opening.", want: []string{"createCampaignFromAssets"}},
+	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Make a campaign from the brochure and the press kit.", want: []string{"findAssets", "getSelection", "createCampaignFromAssets"}},
 	{pack: "campaign", screen: "campaign.asset", scope: evalCampaign, focus: evalOpenAsset, say: "Plan 3 LinkedIn posts from this for next week.", want: []string{"generatePosts"}},
 	// repair
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Anything wrong with the calendar?", want: []string{"checkCalendar"}, not: writes},
@@ -146,6 +149,14 @@ func (evalAnalyses) State(context.Context, *string, time.Time, int) (*repository
 		Failed:    []repository.AssetTitle{{ID: "a3", Title: "Coast & Table review"}, {ID: "a4", Title: "Press kit"}, {ID: "a5", Title: "Spa menu"}},
 		Undecided: []repository.LensIdeas{{Ideas: 29}},
 	}, nil
+}
+
+type evalTypes struct {
+	repository.CampaignTypeRepository
+}
+
+func (evalTypes) List(context.Context) ([]models.CampaignType, error) {
+	return []models.CampaignType{{ID: "t1", Name: "evergreen", Label: "Evergreen", IsSystem: true}, {ID: "t2", Name: "launch", Label: "Launch", IsSystem: true}}, nil
 }
 
 type evalSavedViews struct{}
@@ -235,6 +246,7 @@ func TestPackEvals(t *testing.T) {
 		Compare: func(context.Context, asset_compare.Request) (*asset_compare.Result, error) {
 			return &asset_compare.Result{}, nil
 		},
+		CreateCampaign: &create.Service{}, CampaignTypes: evalTypes{},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
 		Brand: brandRepo{}, Activity: report.New(nil, nil, nil),
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {

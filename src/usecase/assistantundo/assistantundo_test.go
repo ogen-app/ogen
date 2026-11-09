@@ -499,3 +499,71 @@ func TestUndo_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// logCreated logs the seeded campaign as one the assistant created.
+func (f *fixture) logCreated(t *testing.T) string {
+	t.Helper()
+	id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{
+		ScopeKind: models.AssistantScopeWorkspace, Kind: models.AssistantActionCampaignCreated, EntityID: "c1",
+		Before: models.JSONMap{}, After: assistantundo.CampaignCreated(f.load(t)), CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestUndo_CampaignCreated(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) {
+		c.StartDate, c.EndDate, c.AssetIDs = day("2026-03-02"), day("2026-04-26"), models.StringSlice{"a2", "a1"}
+	})
+	id := f.logCreated(t)
+	// An idea the sources' analyses distilled on their own isn't work.
+	if _, err := f.db.NewInsert().Model(&models.Idea{ID: "auto", Title: "t", CampaignID: new("c1"),
+		Origin: models.IdeaOriginAssetAnalysis, CreatedByName: "Ogen"}).Exec(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.campaigns.GetByID(f.ctx, "c1"); err == nil {
+		t.Fatal("the campaign is still there")
+	}
+}
+
+func TestUndo_CampaignCreatedRefusesOnceUsed(t *testing.T) {
+	for name, use := range map[string]func(t *testing.T, f *fixture){
+		"renamed": func(t *testing.T, f *fixture) {
+			c := f.load(t)
+			c.Name = "Spring"
+			f.save(t, c)
+		},
+		"an idea written in it": func(t *testing.T, f *fixture) {
+			if _, err := f.db.NewInsert().Model(&models.Idea{ID: "mine", Title: "t", CampaignID: new("c1"), CreatedByName: "Jane"}).Exec(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"an analysis idea decided": func(t *testing.T, f *fixture) {
+			if _, err := f.db.NewInsert().Model(&models.Idea{ID: "kept", Title: "t", CampaignID: new("c1"),
+				Origin: models.IdeaOriginAssetAnalysis, Verdict: new(models.IdeaVerdictYes), DecidedAt: new(time.Now()), DecidedBy: new("user-1"),
+				CreatedByName: "Ogen"}).Exec(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.seedCampaign(t, nil)
+			id := f.logCreated(t)
+			use(t, f)
+			if _, err := f.svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+				t.Fatalf("err = %v, want ErrChangedSince", err)
+			}
+			if _, err := f.campaigns.GetByID(f.ctx, "c1"); err != nil {
+				t.Fatalf("the campaign is gone: %v", err)
+			}
+		})
+	}
+}

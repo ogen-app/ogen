@@ -35,6 +35,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/assets"
 	"github.com/ogen-app/ogen/src/usecase/billing"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/create"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/summaries"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
@@ -403,17 +404,22 @@ func (d *deps) genkitDeps() genkitDeps {
 			Platforms: r.platformRepo,
 		},
 		packDeps: packs.Deps{
-			Ideas:             ideas.New(r.ideaRepo, r.userRepo),
-			IdeaRepo:          r.ideaRepo,
-			Compose:           compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub),
-			Hub:               d.hub,
-			Assets:            r.pieceRepo,
-			Campaigns:         r.campaignRepo,
-			Tags:              r.tagRepo,
-			Chunks:            r.chunksRepo,
-			Embedder:          d.ingest.embedder,
-			Analysis:          d.analysis,
-			Analyses:          r.assetAnalysisRepo,
+			Ideas:     ideas.New(r.ideaRepo, r.userRepo),
+			IdeaRepo:  r.ideaRepo,
+			Compose:   compose.New(d.db, r.ideaRepo, r.campaignRepo, r.postIdeaRepo, r.postLogRepo, d.hub),
+			Hub:       d.hub,
+			Assets:    r.pieceRepo,
+			Campaigns: r.campaignRepo,
+			Tags:      r.tagRepo,
+			Chunks:    r.chunksRepo,
+			Embedder:  d.ingest.embedder,
+			Analysis:  d.analysis,
+			Analyses:  r.assetAnalysisRepo,
+			CreateCampaign: &create.Service{
+				Campaigns: r.campaignRepo, Types: r.campaignTypeRepo, Limiter: d.entitlements.limiter,
+				Analysis: d.analysis, Activity: d.activity.recorder,
+			},
+			CampaignTypes:     r.campaignTypeRepo,
 			URLImport:         newURLImporter(d),
 			Actions:           r.actionRepo,
 			ProposalThreshold: d.cfg.AssistantProposalThreshold,

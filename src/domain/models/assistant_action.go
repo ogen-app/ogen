@@ -26,6 +26,9 @@ const (
 	// AssistantActionBrandFact is a fact added to, changed in or removed
 	// from the ledger.
 	AssistantActionBrandFact AssistantActionKind = "brand_fact"
+	// AssistantActionCampaignCreated is a campaign the assistant created;
+	// undo deletes it while nothing was made in it.
+	AssistantActionCampaignCreated AssistantActionKind = "campaign_created"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's
