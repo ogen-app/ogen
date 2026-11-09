@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"text/template"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -21,6 +23,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/usage"
 	"github.com/ogen-app/ogen/src/usecase/notes"
+	"github.com/ogen-app/ogen/src/usecase/notify"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/clone"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/restore"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
@@ -60,8 +63,11 @@ type requestState struct {
 	// the response.
 	cloneSvc *clone.Service
 	actor    string
-	// owner is the post's creator, whom the hub event is for.
-	owner string
+	// owner is the post's creator, whom the hub event and the notification
+	// are for; tenant is the post's workspace.
+	owner    string
+	tenant   string
+	notifier *notify.Service
 	// qualityAuto queues an assessment of an edit saved as a version.
 	qualityAuto *qualityauto.Service
 	hub         eventhub.Hub
@@ -101,6 +107,18 @@ type requestState struct {
 	writerSystem    string
 	writerMaxTokens int64
 	editResult      *editResult
+
+	// The writer's system prompt carries the post block, so it is rebuilt
+	// from writerPrompt and contextTmpl when an edit or restore of the turn
+	// changed the post since writerContent, the content it was built from.
+	writerMu      sync.Mutex
+	writerPrompt  string
+	contextTmpl   *template.Template
+	writerContent string
+
+	// content is the post's content as the turn's last edit or restore left
+	// it.
+	content string
 
 	// retrieved holds the asset excerpts the planner pulled via the
 	// asset-retrieval tools this turn. The writer's context block
@@ -171,6 +189,13 @@ func getRequestState(ctx context.Context) *requestState {
 	return ctx.Value(requestStateKey).(*requestState)
 }
 
+// requestStateFrom is getRequestState for a caller that may run without the
+// pack's state.
+func requestStateFrom(ctx context.Context) (*requestState, bool) {
+	st, ok := ctx.Value(requestStateKey).(*requestState)
+	return st, ok
+}
+
 // ���─ Tool input/output types ──────────────────────────────────────────────────
 
 // AssetInfo is the output element for the listAssets tool.
@@ -236,10 +261,6 @@ type EditPostInput struct {
 type EditPostOutput struct {
 	OK    bool `json:"ok"`
 	Chars int  `json:"chars"`
-	// Reason is set (with OK=false) when the edit was refused rather than
-	// failed — e.g. the post is submitted and its content is locked.
-	// The planner relays it to the user instead of retrying.
-	Reason string `json:"reason,omitempty"`
 }
 
 // ClonePostOutput is returned to the model after a clone is created.
@@ -273,6 +294,10 @@ type RestoreVersionOutput struct {
 type SchedulePostInput struct {
 	ScheduledAt  string `json:"scheduledAt"            jsonschema:"description=Absolute publish time as ISO-8601 with a timezone offset (e.g. 2026-06-15T09:00:00+03:00). Resolve relative phrases against the scheduling context before calling."`
 	AllowPromote bool   `json:"allowPromote,omitempty" jsonschema:"description=Set true to auto-promote a draft (run pre-publish validation then Draft → ReadyForPublish) before scheduling. Required when the post is still a draft."`
+	// PostID binds the offer to the post it was made for. The server sets it
+	// when the offer is made, so confirming it later never schedules another
+	// post.
+	PostID string `json:"postId,omitempty" jsonschema:"description=Leave empty: the server fills in the post being scheduled."`
 }
 
 // SchedulePostOutput is returned to the model after a schedule commits.
@@ -311,11 +336,22 @@ func free(s assistantkit.Spec) assistantkit.Spec {
 }
 
 // scheduleGate offers every schedule for the user's yes, with the resolved
-// time on the card.
+// time on the card. A schedule that couldn't run — a past time, or no
+// scheduling service — is refused before it becomes an offer; the service
+// checks the time again when the offer is confirmed.
 var scheduleGate = assistantkit.Gate[SchedulePostInput]{
-	Precheck: func(_ context.Context, in SchedulePostInput) error {
-		_, err := parseScheduledAt(in.ScheduledAt)
-		return err
+	Precheck: func(ctx context.Context, in SchedulePostInput) error {
+		if st, ok := requestStateFrom(ctx); ok && st.scheduleSvc == nil {
+			return assistantkit.Refused("scheduling is not available")
+		}
+		when, err := parseScheduledAt(in.ScheduledAt)
+		if err != nil {
+			return err
+		}
+		if !when.After(time.Now()) {
+			return assistantkit.Refused(refusePastSchedule)
+		}
+		return nil
 	},
 	Summary: func(in SchedulePostInput) string {
 		when, _ := parseScheduledAt(in.ScheduledAt)
@@ -367,7 +403,7 @@ func defineTools(g *genkit.Genkit) []assistantkit.Spec {
 			"Schedules the post for publishing at an absolute time. Pass scheduledAt as "+
 				"ISO-8601 with a timezone offset; set allowPromote:true when the post is a draft. "+
 				"It is offered for the user to confirm before it runs.",
-			assistantkit.Gated("schedulePost", scheduleGate, assistantkit.Wrap(toolSchedulePost))), assistantkit.TierProposal,
+			bindScheduledPost(assistantkit.Gated("schedulePost", scheduleGate, assistantkit.Wrap(toolSchedulePost)))), assistantkit.TierProposal,
 			`Call this for "schedule this for tomorrow at 9am", "publish next Monday". Resolve the time against the scheduling context in <post> (its timezone and defaults: morning 09:00, afternoon 14:00, evening 18:00) and pass it with its offset; set allowPromote when the post is a draft that passes validation. The schedule is offered for the user's yes: tell them the absolute time and whether it auto-publishes or waits for manual publishing. If the readiness summary says the post can't be published, don't call it; tell the user what to fix.`)),
 		spec(genkit.DefineTool(g, "createNote",
 			"Saves a standalone note attached to the post — an image-generation prompt "+
@@ -375,6 +411,17 @@ func defineTools(g *genkit.Genkit) []assistantkit.Spec {
 				"(type note), instead of putting it in the post body. Returns the new note's id.",
 			assistantkit.Wrap(toolCreateNote)), assistantkit.TierReversible,
 			`Call this for "make an image prompt", "jot a note", "save this as a note" — anything that should NOT go into the post body. To change the copy AND capture a note, call both editPost and createNote.`),
+	}
+}
+
+// bindScheduledPost names the turn's post in a schedule before it is offered,
+// whatever the model passed, so the offer stays bound to it.
+func bindScheduledPost[Out any](next ai.ToolFunc[SchedulePostInput, Out]) ai.ToolFunc[SchedulePostInput, Out] {
+	return func(ctx *ai.ToolContext, in SchedulePostInput) (Out, error) {
+		if st, ok := requestStateFrom(ctx); ok && !assistantkit.Confirmed(ctx) {
+			in.PostID = st.postID
+		}
+		return next(ctx, in)
 	}
 }
 
@@ -557,9 +604,10 @@ func toolRestoreVersion(ctx context.Context, in RestoreVersionInput) (*RestoreVe
 		VersionNumber: versionNumber,
 	})
 	if err != nil {
-		return nil, err
+		return nil, restoreToolError(err, versionNumber)
 	}
 	st.restoreResult = res
+	st.content = res.Post.Content
 
 	return &RestoreVersionOutput{
 		RestoredFromVersion: res.RestoredFromVersion,
@@ -574,6 +622,11 @@ func toolSchedulePost(ctx context.Context, in SchedulePostInput) (*SchedulePostO
 		return nil, assistantkit.Refused("scheduling is not available")
 	}
 
+	// An offer made for another post — confirmed while this one is open —
+	// never schedules this one.
+	if in.PostID != "" && in.PostID != st.postID {
+		return nil, assistantkit.Refused("that schedule was offered for another post; open that post and ask again")
+	}
 	when, err := parseScheduledAt(in.ScheduledAt)
 	if err != nil {
 		return nil, err
@@ -648,15 +701,10 @@ func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error
 	st := getRequestState(ctx)
 	// A submitted post (scheduled or published) holds a copy outside
 	// Ogen, so its content is locked — the assistant can read and advise but
-	// must not write. Refuse via the return value, not a Go error, so the
-	// planner loop continues and relays the reason (a tool error would abort
-	// Generate). editResult stays nil, so the runner finalises this as a
-	// non-edit turn.
+	// must not write. The refusal is the tool's outcome, which the model
+	// relays; editResult stays nil, so the turn reports no edit.
 	if st.postStatus.IsSubmitted() {
-		return &EditPostOutput{
-			OK:     false,
-			Reason: "This post is " + string(st.postStatus) + "; a copy already lives outside Ogen, so its content is locked and can't be edited. Unschedule it first (or duplicate it into a new draft) to make changes.",
-		}, nil
+		return nil, assistantkit.Refused("This post is " + string(st.postStatus) + "; a copy already lives outside Ogen, so its content is locked and can't be edited. Unschedule it first (or duplicate it into a new draft) to make changes.")
 	}
 	instruction := strings.TrimSpace(in.Instruction)
 	if instruction == "" {
@@ -670,10 +718,11 @@ func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error
 	if content == "" {
 		return nil, fmt.Errorf("the writer produced no content")
 	}
-	if err := commitEdit(ctx, st, content, in.SaveVersion, in.VersionNote); err != nil {
+	saved, err := commitEdit(ctx, st, content, in.SaveVersion, in.VersionNote)
+	if err != nil {
 		return nil, err
 	}
-	st.editResult = &editResult{Content: content, SaveVersion: in.SaveVersion, Note: in.VersionNote}
+	st.editResult = &editResult{Content: content, SaveVersion: saved, Note: in.VersionNote}
 	return &EditPostOutput{OK: true, Chars: len(content)}, nil
 }
 
@@ -685,6 +734,10 @@ func toolEditPost(ctx context.Context, in EditPostInput) (*EditPostOutput, error
 func runWriter(ctx context.Context, st *requestState, instruction string, stream bool) (string, error) {
 	if st.g == nil || st.writerSystem == "" {
 		return "", fmt.Errorf("content writing is not available")
+	}
+	system, err := st.currentWriterSystem(ctx)
+	if err != nil {
+		return "", err
 	}
 
 	var buf strings.Builder
@@ -701,7 +754,7 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 	}
 	resp, err := genkit.Generate(ctx, st.g,
 		ai.WithModelName(mc.Ref),
-		ai.WithSystem(st.writerSystem),
+		ai.WithSystem(system),
 		ai.WithPrompt(composeWriterInstruction(instruction, st.retrieved)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{OnText: onText})),
 		ai.WithMiddleware(st.provider.CallMiddleware(modelconfig.FlowAssistant, record)),
@@ -717,6 +770,31 @@ func runWriter(ctx context.Context, st *requestState, instruction string, stream
 		content = strings.TrimSpace(resp.Text())
 	}
 	return content, nil
+}
+
+// currentWriterSystem is the writer's system prompt over the post as it is
+// now: an edit or restore earlier in the turn is in it, so the writer neither
+// writes over it nor adapts the older copy.
+func (st *requestState) currentWriterSystem(ctx context.Context) (string, error) {
+	st.writerMu.Lock()
+	defer st.writerMu.Unlock()
+	if st.repos.Posts == nil || st.contextTmpl == nil {
+		return st.writerSystem, nil
+	}
+	post, err := st.repos.Posts.GetByID(ctx, st.postID)
+	if err != nil {
+		return "", writeErr(err, "load post")
+	}
+	if post.Content == st.writerContent {
+		return st.writerSystem, nil
+	}
+	actx, err := assembleContextCached(ctx, post, st.repos, st.contextTmpl)
+	if err != nil {
+		return "", fmt.Errorf("assemble post context: %w", err)
+	}
+	st.writerSystem = st.writerPrompt + "\n\n" + actx.ContextBlock
+	st.writerContent = post.Content
+	return st.writerSystem, nil
 }
 
 // composeWriterInstruction assembles the writer's prompt: the user's verbatim
@@ -783,12 +861,29 @@ func scheduleToolError(err error) error {
 		}
 		return assistantkit.Refused("the post can't be scheduled until these are fixed: " + strings.Join(reasons, "; "))
 	case errors.Is(err, schedule.ErrScheduledAtInPast):
-		return assistantkit.Refused("that time is in the past — propose the next valid time")
+		return assistantkit.Refused(refusePastSchedule)
 	case errors.Is(err, schedule.ErrNoPlatform):
 		return assistantkit.Refused("this post has no platform set, so it can't be scheduled — ask the user to choose a platform first")
 	case errors.Is(err, schedule.ErrNotSchedulable):
 		return assistantkit.Refused(err.Error() + " — only a ready-for-publish post (or a draft you promote) can be scheduled; if it's already scheduled, it must be cancelled first")
 	case errors.Is(err, schedule.ErrPostNotFound):
+		return assistantkit.Refused(postRemoved)
+	}
+	return err
+}
+
+// refusePastSchedule is the refusal of a schedule whose time has passed.
+const refusePastSchedule = "that time is in the past — propose the next valid time"
+
+// restoreToolError turns the restore service's expected rejections into
+// refusals the model relays; anything else aborts the turn.
+func restoreToolError(err error, versionNumber int) error {
+	switch {
+	case errors.Is(err, restore.ErrVersionNotFound):
+		return assistantkit.Refused(fmt.Sprintf("there is no version %d of this post; use a number from its version history", versionNumber))
+	case errors.Is(err, restore.ErrNotEditable):
+		return assistantkit.Refused("this post is scheduled or published, so its content is locked and can't be restored; unschedule it first")
+	case errors.Is(err, restore.ErrPostNotFound):
 		return assistantkit.Refused(postRemoved)
 	}
 	return err
