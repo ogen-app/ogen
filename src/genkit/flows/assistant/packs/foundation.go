@@ -31,10 +31,11 @@ func foundationPack(d Deps) assistant.Pack {
 		Screens: []viewcontext.Screen{
 			"foundation", "foundation.voices", "foundation.voice", "foundation.audiences", "foundation.audience",
 			"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions",
+			"foundation.series", "foundation.series_item", "foundation.templates",
 		},
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			get := genkit.DefineTool(g, "getBrand",
-				"Returns the brand foundation: its voices (when to use each), audiences, guardrails (may and never claim, banned words), and the facts still current.",
+				"Returns the brand foundation: its voices (when to use each, our summary, rules, samples, per-channel notes), audiences, guardrails (may and never claim, banned words), the facts still current and those expired, the look (logo jobs, palette, typefaces) and the templates.",
 				assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*BrandOut, error) { return getBrand(ctx, d, facts) }), ai.WithStrictSchema(false))
 			add := genkit.DefineTool(g, "addFact",
 				"Adds a fact to the ledger: a claim posts may make, with its kind and source. Returns an undo id.",
@@ -47,11 +48,11 @@ func foundationPack(d Deps) assistant.Pack {
 				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
 			return []assistantkit.Spec{
 				spec(foundationPackName, get, assistantkit.TierRead,
-					`Call this when the user asks about their brand — "what's our voice for LinkedIn?", "which facts can we claim?" — or before editing facts.`),
+					`Call this when the user asks about their brand — "what's our voice for LinkedIn?", "summarise our formal voice", "which facts have expired?", "what colours do we use?" — or before editing it.`),
 				spec(foundationPackName, add, assistantkit.TierReversible,
 					`Call this when the user gives a fact to remember — "we have 4,000 customers", "our NPS is 62 as of March". kind is measured, documented (default), commitment or judgement; subject is us (default), problem or opportunity. Pass expiresAt (YYYY-MM-DD) for anything that goes stale. It can be undone.`),
 				spec(foundationPackName, edit, assistantkit.TierReversible,
-					`Call this when the user corrects a fact or confirms it is still true (checkedAt today). Pass factId from getBrand. It can be undone.`),
+					`Call this when the user corrects a fact or confirms it is still true (checkedAt today). To renew an expired fact, pass checkedAt today and a new expiresAt, or clearExpiry when it no longer goes stale. Pass factId from getBrand. It can be undone.`),
 				spec(foundationPackName, remove, assistantkit.TierReversible,
 					`Call this when the user says a fact is no longer true or shouldn't be claimed. It can be undone.`),
 			}, nil
@@ -59,29 +60,59 @@ func foundationPack(d Deps) assistant.Pack {
 	}
 }
 
-// BrandOut is the foundation, compact.
+// BrandOut is the foundation.
 type BrandOut struct {
 	Voices     []BrandVoiceOut         `json:"voices"`
 	Audiences  []BrandAudienceOut      `json:"audiences"`
 	Guardrails *models.BrandGuardrails `json:"guardrails,omitempty"`
 	Facts      []models.BrandFact      `json:"facts"`
+	// ExpiredFacts are facts past their expiry: kept in the ledger but not
+	// claimed, until renewed with updateFact.
+	ExpiredFacts []models.BrandFact `json:"expiredFacts"`
+	Look         *BrandLookOut      `json:"look,omitempty"`
+	Templates    []BrandTemplateOut `json:"templates"`
 }
 
-// BrandVoiceOut is a voice, compact.
+// BrandVoiceOut is a voice: when to use it, our summary of its samples, its
+// rules, samples and per-channel notes.
 type BrandVoiceOut struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	WhenToUse string `json:"whenToUse"`
-	IsDefault bool   `json:"isDefault,omitempty"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	WhenToUse    string            `json:"whenToUse"`
+	IsDefault    bool              `json:"isDefault,omitzero"`
+	Summary      string            `json:"summary,omitempty"`
+	Rules        models.VoiceRules `json:"rules"`
+	Samples      []string          `json:"samples"`
+	ChannelNotes map[string]string `json:"channelNotes,omitempty"`
 }
 
-// BrandAudienceOut is an audience, compact.
+// BrandAudienceOut is an audience.
 type BrandAudienceOut struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
 	Who             string `json:"who"`
+	ReadsOn         string `json:"readsOn,omitempty"`
 	ScrollsPastWhen string `json:"scrollsPastWhen,omitempty"`
 	BelievesWhen    string `json:"believesWhen,omitempty"`
+}
+
+// BrandLookOut is the look: the logos' jobs, the palette and the type,
+// without the images.
+type BrandLookOut struct {
+	Logos           []string            `json:"logos"`
+	Palette         []models.BrandColor `json:"palette"`
+	Typefaces       []string            `json:"typefaces"`
+	ReferenceImages int                 `json:"referenceImages,omitzero"`
+}
+
+// BrandTemplateOut is a template, without its images.
+type BrandTemplateOut struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Role      string   `json:"role"`
+	Ratios    []string `json:"ratios"`
+	Platforms []string `json:"platforms"`
+	IsDefault bool     `json:"isDefault,omitzero"`
 }
 
 func getBrand(ctx context.Context, d Deps, facts *brandfacts.Service) (*BrandOut, error) {
@@ -89,18 +120,51 @@ func getBrand(ctx context.Context, d Deps, facts *brandfacts.Service) (*BrandOut
 	if err != nil {
 		return nil, err
 	}
-	current, err := facts.Current(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := &BrandOut{Guardrails: all.Guardrails, Facts: current, Voices: []BrandVoiceOut{}, Audiences: []BrandAudienceOut{}}
+	out := &BrandOut{Guardrails: all.Guardrails, Voices: []BrandVoiceOut{}, Audiences: []BrandAudienceOut{}, Templates: []BrandTemplateOut{}}
+	out.Facts, out.ExpiredFacts = facts.Split(all.Facts)
 	for _, v := range all.Voices {
-		out.Voices = append(out.Voices, BrandVoiceOut{ID: v.ID, Name: v.Name, WhenToUse: v.WhenToUse, IsDefault: v.IsDefault})
+		out.Voices = append(out.Voices, voiceOut(&v))
 	}
 	for _, a := range all.Audiences {
-		out.Audiences = append(out.Audiences, BrandAudienceOut{ID: a.ID, Name: a.Name, Who: a.Who, ScrollsPastWhen: a.ScrollsPastWhen, BelievesWhen: a.BelievesWhen})
+		out.Audiences = append(out.Audiences, audienceOut(&a))
+	}
+	if l := all.Look; l != nil {
+		look := &BrandLookOut{Logos: []string{}, Palette: l.Palette, Typefaces: l.Typefaces, ReferenceImages: len(l.ReferenceImages)}
+		for _, lg := range l.Logos {
+			look.Logos = append(look.Logos, lg.Job)
+		}
+		if look.Palette == nil {
+			look.Palette = []models.BrandColor{}
+		}
+		if look.Typefaces == nil {
+			look.Typefaces = []string{}
+		}
+		out.Look = look
+	}
+	for _, t := range all.Templates {
+		tpl := BrandTemplateOut{ID: t.ID, Name: t.Name, Role: t.Role, Ratios: []string{}, Platforms: t.Platforms, IsDefault: t.IsDefault}
+		for _, r := range t.Ratios {
+			tpl.Ratios = append(tpl.Ratios, r.Ratio)
+		}
+		if tpl.Platforms == nil {
+			tpl.Platforms = []string{}
+		}
+		out.Templates = append(out.Templates, tpl)
 	}
 	return out, nil
+}
+
+func voiceOut(v *models.BrandVoice) BrandVoiceOut {
+	samples := []string(v.Samples)
+	if samples == nil {
+		samples = []string{}
+	}
+	return BrandVoiceOut{ID: v.ID, Name: v.Name, WhenToUse: v.WhenToUse, IsDefault: v.IsDefault, Summary: v.Summary,
+		Rules: v.Rules, Samples: samples, ChannelNotes: v.ChannelNotes}
+}
+
+func audienceOut(a *models.BrandAudience) BrandAudienceOut {
+	return BrandAudienceOut{ID: a.ID, Name: a.Name, Who: a.Who, ReadsOn: a.ReadsOn, ScrollsPastWhen: a.ScrollsPastWhen, BelievesWhen: a.BelievesWhen}
 }
 
 // FactInput is a new fact.

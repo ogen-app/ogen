@@ -22,13 +22,22 @@ import (
 type memBrand struct {
 	repository.BrandRepository
 	facts map[string]*models.BrandFact
+	// data is what GetAll returns besides the facts; nil is one voice.
+	data *models.BrandData
 	// beforeWrite runs as a conditional update starts, to land a concurrent
 	// edit between the tool's read and its write.
 	beforeWrite func()
 }
 
-func (b *memBrand) GetAll(context.Context) (*models.BrandData, error) {
-	return &models.BrandData{Voices: []models.BrandVoice{{ID: "v1", Name: "Plain", WhenToUse: "always", IsDefault: true}}}, nil
+// GetAll returns data, or one default voice, with the ledger's facts.
+func (b *memBrand) GetAll(ctx context.Context) (*models.BrandData, error) {
+	out := models.BrandData{Voices: []models.BrandVoice{{ID: "v1", Name: "Plain", WhenToUse: "always", IsDefault: true}}}
+	if b.data != nil {
+		out = *b.data
+	}
+	facts, err := b.ListFacts(ctx)
+	out.Facts = facts
+	return &out, err
 }
 
 func (b *memBrand) ListFacts(context.Context) ([]models.BrandFact, error) {
@@ -303,5 +312,37 @@ func TestFacts_UndoRemoveKeepsAuthor(t *testing.T) {
 	got := brand.facts["f1"]
 	if got == nil || got.CreatedBy == nil || *got.CreatedBy != "u2" || got.CreatedByName != "Ann" || !got.CreatedAt.Equal(created) {
 		t.Fatalf("restored = %+v, want u2/Ann at %v", got, created)
+	}
+}
+
+func TestGetBrand_FullRead(t *testing.T) {
+	brand := &memBrand{facts: map[string]*models.BrandFact{
+		"f1": {ID: "f1", Statement: "We serve 4,000 customers", ExpiresAt: new(models.CalendarDateOf(time.Now().AddDate(0, 0, -1)))},
+		"f2": {ID: "f2", Statement: "Founded in 2019"},
+	}, data: &models.BrandData{
+		Voices: []models.BrandVoice{{ID: "v1", Name: "Formal", WhenToUse: "LinkedIn", Summary: "Measured, plain.",
+			Rules: models.VoiceRules{Formality: "formal"}, Samples: models.StringSlice{"We shipped it."},
+			ChannelNotes: models.StringMap{"linkedin": "No emoji"}}},
+		Look: &models.BrandLook{Logos: models.BrandLogos{{Job: "profile", URL: "https://x/logo.png"}},
+			Palette: models.BrandPalette{{Role: "primary", Hex: "#112233"}}, ReferenceImages: models.StringSlice{"https://x/a.png"}},
+		Templates: []models.BrandTemplate{{ID: "t1", Name: "Quote card", Role: "foreground",
+			Ratios: models.TemplateRatios{{Ratio: "1:1", URL: "https://x/t.png"}}}},
+	}}
+	out, err := getBrand(t.Context(), Deps{Brand: brand}, brandfacts.New(brand))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Facts) != 1 || out.Facts[0].ID != "f2" || len(out.ExpiredFacts) != 1 || out.ExpiredFacts[0].ID != "f1" {
+		t.Fatalf("facts = %+v, expired = %+v", out.Facts, out.ExpiredFacts)
+	}
+	v := out.Voices[0]
+	if v.Summary != "Measured, plain." || v.Rules.Formality != "formal" || len(v.Samples) != 1 || v.ChannelNotes["linkedin"] != "No emoji" {
+		t.Fatalf("voice = %+v", v)
+	}
+	if out.Look == nil || !slices.Equal(out.Look.Logos, []string{"profile"}) || out.Look.Palette[0].Hex != "#112233" || out.Look.ReferenceImages != 1 {
+		t.Fatalf("look = %+v", out.Look)
+	}
+	if len(out.Templates) != 1 || !slices.Equal(out.Templates[0].Ratios, []string{"1:1"}) || out.Templates[0].Platforms == nil {
+		t.Fatalf("templates = %+v", out.Templates)
 	}
 }
