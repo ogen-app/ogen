@@ -478,6 +478,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		ScheduleService: r.scheduleSvc,
 		NoteService:     r.noteSvc,
 		QualityAuto:     r.qualityAuto,
+		Notifier:        r.notifier,
 	}, r.postAssistRepos)
 	if err != nil {
 		return fmt.Errorf("init post pack: %w", err)

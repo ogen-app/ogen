@@ -1,10 +1,12 @@
 package post_assistant
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 )
 
@@ -36,14 +38,12 @@ func TestToolEditPost_RefusesAfterScheduleThisTurn(t *testing.T) {
 	}
 
 	ctx := withRequestState(t.Context(), st)
-	out, err := toolEditPost(ctx, EditPostInput{Instruction: "make it punchier"})
-	if err != nil {
-		// A start-of-turn status that was never refreshed would fall through to
-		// the (unavailable) writer and error — the regression this guards.
-		t.Fatalf("editPost after schedule must refuse gracefully, not error: %v", err)
-	}
-	if out == nil || out.OK {
-		t.Fatal("editPost must refuse once the post was scheduled to auto-publish this turn")
+	_, err := toolEditPost(ctx, EditPostInput{Instruction: "make it punchier"})
+	// A start-of-turn status that was never refreshed would fall through to
+	// the (unavailable) writer and error — the regression this guards. The
+	// refusal is a Refusal, which the tool wrapper reports as refused.
+	if _, ok := errors.AsType[*assistantkit.Refusal](err); !ok {
+		t.Fatalf("editPost after schedule must refuse, got %v", err)
 	}
 	if st.editResult != nil {
 		t.Fatal("editResult must stay nil when the post locked this turn")
