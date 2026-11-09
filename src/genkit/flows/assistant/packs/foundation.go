@@ -30,7 +30,7 @@ func foundationPack(d Deps) assistant.Pack {
 	lib := brandlib.New(d.Brand)
 	return assistant.Pack{
 		Name:    foundationPackName,
-		Summary: "read the brand foundation (voices, audiences, guardrails, facts, look, templates); add, edit or remove voices, audiences, facts and series; edit the guardrails; set which series a campaign runs",
+		Summary: "read the brand foundation (voices, audiences, guardrails, facts, look, templates); add, edit or remove voices, audiences, facts and series; edit the guardrails; set which series a campaign runs; read the brand off a website or assets and answer its questions",
 		Screens: []viewcontext.Screen{
 			"foundation", "foundation.voices", "foundation.voice", "foundation.audiences", "foundation.audience",
 			"foundation.facts", "foundation.guardrails", "foundation.look", "foundation.questions",
@@ -58,7 +58,7 @@ func foundationPack(d Deps) assistant.Pack {
 				}, assistantkit.Wrap(func(ctx context.Context, in EditBrandInput) (*EditBrandOutput, error) {
 					return editBrand(ctx, d, facts, lib, in)
 				})), ai.WithStrictSchema(false))
-			lspecs := append(slices.Concat(librarySpecs(g, d, lib), seriesSpecs(g, d)), spec(foundationPackName, bulk, assistantkit.TierProposal,
+			lspecs := append(slices.Concat(librarySpecs(g, d, lib), seriesSpecs(g, d), distillSpecs(g, d)), spec(foundationPackName, bulk, assistantkit.TierProposal,
 				`Call this when one message asks for several brand changes — "add these five facts", "remove every fact about pricing", "delete the three old voices". Read the ids with getBrand first. For a single change use the one-item tool.`))
 			return append([]assistantkit.Spec{
 				spec(foundationPackName, get, assistantkit.TierRead,

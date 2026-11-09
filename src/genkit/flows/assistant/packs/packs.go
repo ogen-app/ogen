@@ -65,7 +65,10 @@ type Deps struct {
 	Brand repository.BrandRepository
 	// Series keeps the series and the campaigns' runs of them; nil leaves
 	// the series tools out.
-	Series         *series.Service
+	Series *series.Service
+	// Distill reads the brand off a website or assets; nil leaves the
+	// brand reading tools out.
+	Distill        Distiller
 	Activity       *report.Service
 	Settings       repository.SettingRepository
 	SocialAccounts repository.SocialAccountRepository

@@ -32,6 +32,7 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/analytics"
+	"github.com/ogen-app/ogen/src/usecase/branddistill"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/create"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
@@ -71,7 +72,8 @@ var (
 	evalOpenVoice = &viewcontext.Ref{Kind: viewcontext.KindVoice, ID: "v1"}
 	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas",
 		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails",
-		"createSeries", "updateSeries", "removeSeries", "runSeries", "stopSeries", "editBrand"}
+		"createSeries", "updateSeries", "removeSeries", "runSeries", "stopSeries", "editBrand",
+		"startBrandDistill", "answerDistillQuestions", "commitBrandDistill"}
 )
 
 var evalCases = []evalCase{
@@ -131,6 +133,10 @@ var evalCases = []evalCase{
 	{pack: "foundation", screen: "foundation.series", scope: evalWorkspace, say: "Which series do we have?", want: []string{"listSeries"}, not: writes},
 	{pack: "foundation", screen: "foundation.series", scope: evalWorkspace, say: "Start a weekly 'Tip Tuesday' series: one practical tip per post.", want: []string{"createSeries"}},
 	{pack: "foundation", screen: "campaign.overview", scope: evalCampaign, say: "Run the Tip Tuesday series in this campaign, twice a month.", want: []string{"loadPack", "listSeries", "runSeries"}},
+	{pack: "foundation", screen: "foundation", scope: evalWorkspace, say: "Fill in our brand from our website, villa-aurora.com.", want: []string{"startBrandDistill"}},
+	{pack: "foundation", screen: "foundation.questions", scope: evalWorkspace, say: "What does the brand reading still want to know?", want: []string{"getBrandDistill"}, not: writes},
+	{pack: "foundation", screen: "foundation.questions", scope: evalWorkspace, say: "Answer its question about who books most: families with young kids.", want: []string{"getBrandDistill", "answerDistillQuestions"}},
+	{pack: "foundation", screen: "foundation", scope: evalWorkspace, say: "Save everything the brand reading proposed.", want: []string{"getBrandDistill", "commitBrandDistill"}},
 	// workspace
 	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "What happened yesterday?", want: []string{"activityReport"}},
 	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Do any of my accounts need reconnecting?", want: []string{"workspaceSetup"}},
@@ -266,7 +272,7 @@ func TestPackEvals(t *testing.T) {
 		},
 		CreateCampaign: &create.Service{}, CampaignTypes: evalTypes{},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
-		Brand: brandRepo{}, Series: series.New(nil), Activity: report.New(nil, nil, nil),
+		Brand: brandRepo{}, Series: series.New(nil), Distill: &branddistill.Service{}, Activity: report.New(nil, nil, nil),
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {
 			return nil, nil
 		},
