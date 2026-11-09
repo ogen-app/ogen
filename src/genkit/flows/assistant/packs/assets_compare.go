@@ -51,13 +51,15 @@ type ComparedClaim struct {
 // CompareAssetsOutput is the summary or the comparison, every claim tied to
 // its assets.
 type CompareAssetsOutput struct {
-	Mode      string                 `json:"mode"`
-	Assets    []ComparedAsset        `json:"assets"`
-	Summary   string                 `json:"summary,omitempty"`
-	Shared    []ComparedClaim        `json:"shared"`
-	Partial   []ComparedClaim        `json:"partial"`
-	Conflicts []ComparedClaim        `json:"conflicts"`
-	Skipped   []ComparedAsset        `json:"skipped,omitempty"`
+	Mode      string          `json:"mode"`
+	Assets    []ComparedAsset `json:"assets"`
+	Summary   string          `json:"summary,omitempty"`
+	Shared    []ComparedClaim `json:"shared"`
+	Partial   []ComparedClaim `json:"partial"`
+	Conflicts []ComparedClaim `json:"conflicts"`
+	Skipped   []ComparedAsset `json:"skipped,omitempty"`
+	// Missing are the ids asked for that name no asset.
+	Missing   []string               `json:"missing,omitempty"`
 	Grounding assistantkit.Grounding `json:"grounding"`
 	Note      string                 `json:"note,omitempty"`
 }
@@ -72,9 +74,15 @@ func compareAssets(ctx context.Context, d Deps, in CompareAssetsInput) (*Compare
 	if err != nil {
 		return nil, err
 	}
+	if len(out.Missing) == len(ids) {
+		return nil, assistantkit.Refused("none of those assets exist; get their ids from getSelection or findAssets")
+	}
+	if len(out.Missing) > 0 {
+		out.Note = fmt.Sprintf("These ids name no asset and were left out: %s. Say the selection was incomplete.", strings.Join(out.Missing, ", "))
+	}
 	if len(sources) == 0 || (mode == asset_compare.ModeCompare && len(sources) < 2) {
 		out.Grounding = assistantkit.GroundingFrom(nil)
-		out.Note = "there's too little to read: the assets have no analysis for this lens and no passages yet"
+		out.Note = strings.TrimSpace(out.Note + " There's too little to read: the assets have no analysis for this lens and no passages yet.")
 		return out, nil
 	}
 	res, err := d.Compare(ctx, asset_compare.Request{Mode: mode, Focus: in.Focus, Sources: sources})
@@ -148,6 +156,7 @@ func gatherSources(ctx context.Context, d Deps, ids []string, focus string, out 
 	for _, id := range ids {
 		title, ok := titles[id]
 		if !ok {
+			out.Missing = append(out.Missing, id)
 			continue
 		}
 		from, text, err := material(ctx, d, id, focus)
@@ -167,10 +176,16 @@ func gatherSources(ctx context.Context, d Deps, ids []string, focus string, out 
 }
 
 // material is what to read of an asset: the summary and key points of its
-// analysis for the thread's lens, else its passages — the ones about focus
-// when it is set and search is available, else its first ones. "" when it
-// has neither.
+// analysis for the thread's lens, else its passages. With a focus, the
+// passages about it are read too, beside an analysis that may not cover it;
+// without one, an asset with no analysis is read from its first passages.
+// "" when it has neither.
 func material(ctx context.Context, d Deps, assetID, focus string) (string, string, error) {
+	focus = strings.TrimSpace(focus)
+	about, err := focusedPassages(ctx, d, assetID, focus)
+	if err != nil {
+		return "", "", err
+	}
 	if d.Analyses != nil {
 		lens, err := d.Analyses.GetLens(ctx, assetID, lensCampaign(ctx, ""))
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -181,28 +196,41 @@ func material(ctx context.Context, d Deps, assetID, focus string) (string, strin
 			if len(lens.Result.KeyPoints) > 0 {
 				text += "\n\nKey points:\n- " + strings.Join(lens.Result.KeyPoints, "\n- ")
 			}
+			if about == "" {
+				return asset_compare.FromAnalysis, clip(text, compareRunes), nil
+			}
+			text = clip(text, compareRunes/2) + "\n\nPassages about " + focus + ":\n" + about
 			return asset_compare.FromAnalysis, clip(text, compareRunes), nil
 		}
 	}
-	if d.Chunks == nil {
-		return asset_compare.FromPassages, "", nil
-	}
-	var chunks []models.AssetChunk
-	if focus = strings.TrimSpace(focus); focus != "" && embedopts.Available(d.Embedder) {
-		emb, err := d.Embedder.Embed(ctx, &ai.EmbedRequest{Input: []*ai.Document{ai.DocumentFromText(focus, nil)}, Options: embedopts.Query()})
-		if err == nil && len(emb.Embeddings) > 0 {
-			chunks, err = d.Chunks.SearchSimilar(ctx, pgvector.NewHalfVector(emb.Embeddings[0].Embedding), []string{assetID}, askMinSimilarity, comparePassages)
-			if err != nil {
-				return "", "", err
-			}
-		}
-	}
-	if len(chunks) == 0 {
-		var err error
-		if chunks, _, err = d.Chunks.ListPageByAssetID(ctx, assetID, 0, comparePassages); err != nil {
+	if about == "" && d.Chunks != nil {
+		chunks, _, err := d.Chunks.ListPageByAssetID(ctx, assetID, 0, comparePassages)
+		if err != nil {
 			return "", "", err
 		}
+		about = joinPassages(chunks)
 	}
+	return asset_compare.FromPassages, clip(about, compareRunes), nil
+}
+
+// focusedPassages is the asset's passages about focus; "" without a focus,
+// or when search is unavailable or finds none.
+func focusedPassages(ctx context.Context, d Deps, assetID, focus string) (string, error) {
+	if focus == "" || d.Chunks == nil || !embedopts.Available(d.Embedder) {
+		return "", nil
+	}
+	emb, err := d.Embedder.Embed(ctx, &ai.EmbedRequest{Input: []*ai.Document{ai.DocumentFromText(focus, nil)}, Options: embedopts.Query()})
+	if err != nil || len(emb.Embeddings) == 0 {
+		return "", nil
+	}
+	chunks, err := d.Chunks.SearchSimilar(ctx, pgvector.NewHalfVector(emb.Embeddings[0].Embedding), []string{assetID}, askMinSimilarity, comparePassages)
+	if err != nil {
+		return "", err
+	}
+	return joinPassages(chunks), nil
+}
+
+func joinPassages(chunks []models.AssetChunk) string {
 	parts := make([]string, 0, len(chunks))
 	for _, c := range chunks {
 		if p := pages(c.PageStart, c.PageEnd); p != "" {
@@ -211,5 +239,5 @@ func material(ctx context.Context, d Deps, assetID, focus string) (string, strin
 			parts = append(parts, c.Content)
 		}
 	}
-	return asset_compare.FromPassages, clip(strings.Join(parts, "\n\n"), compareRunes), nil
+	return strings.Join(parts, "\n\n")
 }

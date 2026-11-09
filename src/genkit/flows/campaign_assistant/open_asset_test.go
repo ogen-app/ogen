@@ -34,18 +34,20 @@ func onAssetPage(t *testing.T, open string) context.Context {
 
 func TestOnOpenAsset(t *testing.T) {
 	var got []string
+	ran := false
 	call := onOpenAsset(func(in *GeneratePostsInput) (*[]string, bool) { return &in.AssetIDs, in.AllAssets || in.Exploratory },
-		func(_ *ai.ToolContext, in GeneratePostsInput) (struct{}, error) {
-			got = in.AssetIDs
-			return struct{}{}, nil
+		func(_ *ai.ToolContext, in GeneratePostsInput) (assistantkit.Outcome[struct{}], error) {
+			got, ran = in.AssetIDs, true
+			return assistantkit.Outcome[struct{}]{}, nil
 		})
-	run := func(ctx context.Context, in GeneratePostsInput) []string {
+	run := func(ctx context.Context, in GeneratePostsInput) ([]string, assistantkit.Outcome[struct{}]) {
 		t.Helper()
-		got = nil
-		if _, err := call(&ai.ToolContext{Context: ctx}, in); err != nil {
+		got, ran = nil, false
+		out, err := call(&ai.ToolContext{Context: ctx}, in)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return got
+		return got, out
 	}
 
 	page := onAssetPage(t, "a2")
@@ -59,13 +61,21 @@ func TestOnOpenAsset(t *testing.T) {
 		"all of them widens it":            {page, GeneratePostsInput{AllAssets: true}, nil},
 		"an exploratory call uses none":    {page, GeneratePostsInput{Exploratory: true}, nil},
 		"a confirmed offer runs as stored": {assistantkit.WithConfirmed(page), GeneratePostsInput{}, nil},
-		"an unready asset isn't a source":  {onAssetPage(t, "a3"), GeneratePostsInput{}, nil},
 		"another campaign's asset isn't":   {onAssetPage(t, "x9"), GeneratePostsInput{}, nil},
 		"off an asset page, all of them":   {withRequestState(t.Context(), getRequestState(page)), GeneratePostsInput{}, nil},
 	} {
-		if got := run(c.ctx, c.in); !slices.Equal(got, c.want) {
-			t.Errorf("%s: sources = %v, want %v", name, got, c.want)
+		if got, _ := run(c.ctx, c.in); !ran || !slices.Equal(got, c.want) {
+			t.Errorf("%s: ran %t, sources = %v, want %v", name, ran, got, c.want)
 		}
+	}
+
+	// One of the campaign's assets that isn't ready is refused, not
+	// silently widened to the others; asking for all of them runs.
+	if _, out := run(onAssetPage(t, "a3"), GeneratePostsInput{}); ran || out.Status != assistantkit.StatusRefused {
+		t.Fatalf("unready open asset: ran %t, outcome %+v", ran, out)
+	}
+	if got, _ := run(onAssetPage(t, "a3"), GeneratePostsInput{AllAssets: true}); !ran || got != nil {
+		t.Fatalf("unready, all: ran %t, sources %v", ran, got)
 	}
 }
 
@@ -111,5 +121,9 @@ func TestAskCampaignAssets_OpenAssetOnly(t *testing.T) {
 	}
 	if out := ask(onAssetPage(t, "x9"), AskCampaignAssetsInput{}); out.OpenAssetOnly || !slices.Equal(searched, []string{"a1", "a2"}) {
 		t.Fatalf("another campaign's asset open = %+v over %v", out, searched)
+	}
+	searched = nil
+	if out := ask(onAssetPage(t, "a3"), AskCampaignAssetsInput{}); out.Note != openAssetUnready || searched != nil {
+		t.Fatalf("unready open asset = %+v over %v; want a note, no search", out, searched)
 	}
 }

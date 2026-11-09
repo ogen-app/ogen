@@ -1249,24 +1249,12 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 		return &AskCampaignAssetsOutput{Available: false, Note: "asset search is unavailable right now"}, nil
 	}
 
-	ids, err := readyCampaignAssetIDs(ctx, st.campaign, st.repos.Assets)
+	ids, openOnly, note, err := askScope(ctx, st, in)
 	if err != nil {
-		return nil, fmt.Errorf("resolve campaign assets: %w", err)
+		return nil, err
 	}
-	if len(ids) == 0 {
-		return &AskCampaignAssetsOutput{Available: true, Note: "this campaign has no ready assets to search"}, nil
-	}
-	openOnly := false
-	if len(in.AssetIDs) == 0 && !in.AllAssets {
-		if open := assistant.FocusedAsset(ctx); slices.Contains(ids, open) {
-			ids, openOnly = []string{open}, true
-		}
-	}
-	if len(in.AssetIDs) > 0 {
-		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(in.AssetIDs, id) })
-		if len(ids) == 0 {
-			return &AskCampaignAssetsOutput{Available: true, Note: "none of the selected assets are ready assets of this campaign; the campaign's other ready assets can be searched without the selection"}, nil
-		}
+	if note != "" {
+		return &AskCampaignAssetsOutput{Available: true, Note: note}, nil
 	}
 
 	qResp, err := st.embedder.Embed(ctx, &ai.EmbedRequest{
@@ -1303,15 +1291,60 @@ func toolAskCampaignAssets(ctx context.Context, in AskCampaignAssetsInput) (*Ask
 	return &AskCampaignAssetsOutput{Excerpts: excerpts, Available: true, OpenAssetOnly: openOnly}, nil
 }
 
+// askScope is the ready assets a question searches: the ones asked for,
+// else the asset open on screen unless all of them are asked for, else every
+// ready asset of the campaign. openOnly reports the open asset alone; a note
+// says why there is nothing to search.
+func askScope(ctx context.Context, st *requestState, in AskCampaignAssetsInput) (ids []string, openOnly bool, note string, err error) {
+	if ids, err = readyCampaignAssetIDs(ctx, st.campaign, st.repos.Assets); err != nil {
+		return nil, false, "", fmt.Errorf("resolve campaign assets: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, false, "this campaign has no ready assets to search", nil
+	}
+	if len(in.AssetIDs) > 0 {
+		ids = slices.DeleteFunc(ids, func(id string) bool { return !slices.Contains(in.AssetIDs, id) })
+		if len(ids) == 0 {
+			return nil, false, "none of the selected assets are ready assets of this campaign; the campaign's other ready assets can be searched without the selection", nil
+		}
+		return ids, false, "", nil
+	}
+	if in.AllAssets {
+		return ids, false, "", nil
+	}
+	open, unready, err := openAsset(ctx)
+	switch {
+	case err != nil:
+		return nil, false, "", fmt.Errorf("resolve the open asset: %w", err)
+	case unready:
+		return nil, false, openAssetUnready, nil
+	case open != "":
+		return []string{open}, true, "", nil
+	}
+	return ids, false, "", nil
+}
+
+// openAssetUnready is the refusal for a call on the page of one of the
+// campaign's assets that isn't ready to use.
+const openAssetUnready = "the asset open on screen isn't ready to use yet; set allAssets to use the campaign's other assets, or wait until it's read in"
+
 // onOpenAsset makes the asset open on the user's screen the default source
-// of a generation, when it is one of the campaign's ready assets: a call
-// that names no assets and doesn't ask for all of them draws on it alone.
-// It runs before the gate, so a proposal stores the source it will use and
-// keeps it when confirmed from another screen.
-func onOpenAsset[In, Out any](sources func(*In) (ids *[]string, all bool), next ai.ToolFunc[In, Out]) ai.ToolFunc[In, Out] {
-	return func(ctx *ai.ToolContext, in In) (Out, error) {
+// of a generation, when it is one of the campaign's assets: a call that
+// names no assets and doesn't ask for all of them draws on it alone, and is
+// refused while it isn't ready rather than widened to the others. It runs
+// before the gate, so a proposal stores the source it will use and keeps it
+// when confirmed from another screen.
+func onOpenAsset[In, Out any](sources func(*In) (ids *[]string, all bool), next ai.ToolFunc[In, assistantkit.Outcome[Out]]) ai.ToolFunc[In, assistantkit.Outcome[Out]] {
+	return func(ctx *ai.ToolContext, in In) (assistantkit.Outcome[Out], error) {
 		if ids, all := sources(&in); !all && len(*ids) == 0 && !assistantkit.Confirmed(ctx) {
-			if open := openAsset(ctx); open != "" {
+			open, unready, err := openAsset(ctx)
+			if err != nil {
+				return assistantkit.Outcome[Out]{}, err
+			}
+			if unready {
+				return assistantkit.Refuse[Out](openAssetUnready), nil
+			}
+			if open != "" {
 				*ids = []string{open}
 			}
 		}
@@ -1320,21 +1353,30 @@ func onOpenAsset[In, Out any](sources func(*In) (ids *[]string, all bool), next 
 }
 
 // openAsset is the asset open on the user's screen when it is one of the
-// campaign's ready assets, else "".
-func openAsset(ctx context.Context) string {
-	open := assistant.FocusedAsset(ctx)
+// campaign's ready assets. unready reports one of the campaign's assets that
+// isn't ready; both are zero on any other screen, or for an asset outside
+// the campaign.
+func openAsset(ctx context.Context) (open string, unready bool, err error) {
+	open = assistant.FocusedAsset(ctx)
 	if open == "" {
-		return ""
+		return "", false, nil
 	}
 	st := getRequestState(ctx)
 	if st.repos.Assets == nil {
-		return ""
+		return "", false, nil
 	}
 	ids, err := readyCampaignAssetIDs(ctx, st.campaign, st.repos.Assets)
-	if err != nil || !slices.Contains(ids, open) {
-		return ""
+	if err != nil {
+		return "", false, err
 	}
-	return open
+	switch {
+	case slices.Contains(ids, open):
+		return open, false, nil
+	// A campaign with no list draws on every asset of the workspace.
+	case len(st.campaign.AssetIDs) == 0 || slices.Contains(st.campaign.AssetIDs, open):
+		return "", true, nil
+	}
+	return "", false, nil
 }
 
 // readyCampaignAssetIDs resolves the campaign's attached, ready asset IDs — the

@@ -138,7 +138,8 @@ func prompt(req Request) string {
 }
 
 // result keeps the claims that cite the request's sources, each source
-// once, and drops the claim lists of a summary.
+// once, and drops the claim lists of a summary. A shared claim must cite
+// every source, else it is only partial; a conflict needs two sources.
 func result(req Request, out *output) *Result {
 	known := make([]string, len(req.Sources))
 	for i, s := range req.Sources {
@@ -148,21 +149,32 @@ func result(req Request, out *output) *Result {
 	if req.Mode != ModeCompare {
 		return res
 	}
-	keep := func(claims []Claim) []Claim {
-		kept := []Claim{}
-		for _, c := range claims {
-			var ids []string
-			for _, id := range c.AssetIDs {
-				if slices.Contains(known, id) && !slices.Contains(ids, id) {
-					ids = append(ids, id)
-				}
-			}
-			if text := strings.TrimSpace(c.Text); text != "" && len(ids) > 0 {
-				kept = append(kept, Claim{Text: text, AssetIDs: ids})
+	cited := func(c Claim) (Claim, bool) {
+		var ids []string
+		for _, id := range c.AssetIDs {
+			if slices.Contains(known, id) && !slices.Contains(ids, id) {
+				ids = append(ids, id)
 			}
 		}
-		return kept
+		text := strings.TrimSpace(c.Text)
+		return Claim{Text: text, AssetIDs: ids}, text != "" && len(ids) > 0
 	}
-	res.Shared, res.Partial, res.Conflicts = keep(out.Shared), keep(out.Partial), keep(out.Conflicts)
+	for _, c := range out.Shared {
+		if c, ok := cited(c); ok && len(c.AssetIDs) == len(known) {
+			res.Shared = append(res.Shared, c)
+		} else if ok {
+			res.Partial = append(res.Partial, c)
+		}
+	}
+	for _, c := range out.Partial {
+		if c, ok := cited(c); ok {
+			res.Partial = append(res.Partial, c)
+		}
+	}
+	for _, c := range out.Conflicts {
+		if c, ok := cited(c); ok && len(c.AssetIDs) >= 2 {
+			res.Conflicts = append(res.Conflicts, c)
+		}
+	}
 	return res
 }

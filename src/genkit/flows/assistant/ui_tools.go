@@ -310,12 +310,14 @@ func (t *toolSet) listSavedViews(ctx context.Context, in ListSavedViewsInput) (*
 	st.mu.Lock()
 	st.savedViews = out
 	st.mu.Unlock()
-	switch {
-	case invalid > 0:
-		out.Note = fmt.Sprintf("%d of the saved views no longer match the list's filters and were left out", invalid)
-	case inCampaign && len(out.Views) > 0:
-		out.Note = "inside a campaign a saved view opens on the campaign's own list"
+	var notes []string
+	if invalid > 0 {
+		notes = append(notes, fmt.Sprintf("%d of the saved views no longer match the list's filters and were left out.", invalid))
 	}
+	if inCampaign && len(out.Views) > 0 {
+		notes = append(notes, "Inside a campaign a saved view opens on the campaign's own list, so no counts are given.")
+	}
+	out.Note = strings.Join(notes, " ")
 	return out, nil
 }
 

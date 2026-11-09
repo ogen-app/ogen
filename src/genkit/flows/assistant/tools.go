@@ -424,7 +424,7 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 	}
 	if deps.SavedViewLists != nil {
 		specs = append(specs, spec(genkit.DefineTool(g, "listSavedViews",
-			"Lists the user's saved views (smart groups) of the Ideas or Assets list: their id, name, the filter each stands for and how many items it matches.",
+			"Lists the user's saved views (smart groups) of the Ideas or Assets list: their id, name, the filter each stands for and how many items it matches (not given inside a campaign).",
 			assistantkit.Wrap(t.listSavedViews)),
 			`Call this when the user asks which saved views or smart groups they have, or names one to open and you don't have its id. It defaults to the list on screen. To open one, call openSavedView with its id.`))
 	}

@@ -259,15 +259,27 @@ func whereScopeLens(q *bun.SelectQuery, campaignID *string) *bun.SelectQuery {
 
 func (r *assetAnalysisRepository) State(ctx context.Context, campaignID *string, now time.Time, names int) (*AnalysisState, error) {
 	out := &AnalysisState{Lenses: map[models.AssetAnalysisStatus]int{}, Waiting: []AssetTitle{}, Failed: []AssetTitle{}, Undecided: []LensIdeas{}}
+	// One snapshot, so the names agree with the counts.
+	err := r.db.RunInTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}, func(ctx context.Context, tx bun.Tx) error {
+		return r.state(ctx, tx, out, campaignID, now, names)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// state reads State's parts on tx.
+func (r *assetAnalysisRepository) state(ctx context.Context, tx bun.Tx, out *AnalysisState, campaignID *string, now time.Time, names int) error {
 	var counts []struct {
 		Status models.AssetAnalysisStatus `bun:"status"`
 		N      int                        `bun:"n"`
 	}
-	q := r.db.NewSelect().Model((*models.AssetAnalysis)(nil)).
+	q := tx.NewSelect().Model((*models.AssetAnalysis)(nil)).
 		ColumnExpr("aa.status, count(*) AS n").
 		GroupExpr("aa.status")
 	if err := whereScopeLens(q, campaignID).Scan(ctx, &counts); err != nil {
-		return nil, err
+		return err
 	}
 	for _, c := range counts {
 		out.Lenses[c.Status] = c.N
@@ -280,18 +292,18 @@ func (r *assetAnalysisRepository) State(ctx context.Context, campaignID *string,
 			if out.Lenses[status] == 0 {
 				continue
 			}
-			q := r.db.NewSelect().Model((*models.AssetAnalysis)(nil)).
+			q := tx.NewSelect().Model((*models.AssetAnalysis)(nil)).
 				ColumnExpr("a.id, a.title").
 				Join("JOIN assets AS a ON a.id = aa.asset_id").
 				Where("aa.status = ?", status).
 				OrderExpr("aa.updated_at DESC, a.id").
 				Limit(names)
 			if err := whereScopeLens(q, campaignID).Scan(ctx, dst); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
-	q = r.db.NewSelect().Model((*models.Idea)(nil)).
+	q = tx.NewSelect().Model((*models.Idea)(nil)).
 		ColumnExpr("aa.campaign_id, coalesce(c.name, '') AS campaign_name, count(*) AS ideas").
 		Join("JOIN asset_analyses AS aa ON aa.id = i.asset_analysis_id").
 		Join("LEFT JOIN campaigns AS c ON c.id = aa.campaign_id").
@@ -303,10 +315,7 @@ func (r *assetAnalysisRepository) State(ctx context.Context, campaignID *string,
 	if campaignID != nil {
 		q = q.Where("aa.campaign_id = ?", *campaignID)
 	}
-	if err := q.Scan(ctx, &out.Undecided); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return q.Scan(ctx, &out.Undecided)
 }
 
 func (r *assetAnalysisRepository) SetStatus(ctx context.Context, db bun.IDB, id string, status models.AssetAnalysisStatus, code, reason string) error {

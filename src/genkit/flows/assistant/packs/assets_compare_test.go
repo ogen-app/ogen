@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
+	"github.com/pgvector/pgvector-go"
+
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/asset_compare"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -132,5 +135,46 @@ func TestCompareAssets_Refusals(t *testing.T) {
 		return nil, errors.New("overloaded")
 	}
 	_, err = compareAssets(ctx, d, CompareAssetsInput{AssetIDs: []string{"a1", "a3"}})
+	refused(t, err)
+}
+
+// focusChunks finds the passages about a focus by search.
+type focusChunks struct {
+	firstChunks
+	searched []string
+}
+
+func (r *focusChunks) SearchSimilar(_ context.Context, _ pgvector.HalfVector, ids []string, _ float64, _ int) ([]models.AssetChunk, error) {
+	r.searched = append(r.searched, ids...)
+	return []models.AssetChunk{{AssetID: ids[0], Content: "Spa hours 9:00–21:00.", PageStart: new(12)}}, nil
+}
+
+type vecEmbedder struct{ ai.Embedder }
+
+func (vecEmbedder) Embed(context.Context, *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+	return &ai.EmbedResponse{Embeddings: []*ai.Embedding{{Embedding: []float32{1}}}}, nil
+}
+
+// A focus reads the passages about it beside an analysis that may not cover
+// it; ids that name no asset are said, not dropped silently.
+func TestCompareAssets_FocusAndMissing(t *testing.T) {
+	var req asset_compare.Request
+	d := compareDeps(&req)
+	chunks := &focusChunks{firstChunks: d.Chunks.(firstChunks)}
+	d.Chunks, d.Embedder = chunks, vecEmbedder{}
+	ctx, _ := turn(t, workspace, nil)
+
+	out, err := compareAssets(ctx, d, CompareAssetsInput{AssetIDs: []string{"a1", "gone", "a3"}, Focus: "spa hours"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(req.Sources[0].Text, "Sells the reopening.") || !strings.Contains(req.Sources[0].Text, "Passages about spa hours:\n(p. 12) Spa hours 9:00–21:00.") {
+		t.Fatalf("analysis source = %q; want the analysis and the focused passages", req.Sources[0].Text)
+	}
+	if !slices.Equal(out.Missing, []string{"gone"}) || !strings.Contains(out.Note, "gone") {
+		t.Fatalf("missing = %v, note %q", out.Missing, out.Note)
+	}
+
+	_, err = compareAssets(ctx, d, CompareAssetsInput{AssetIDs: []string{"gone", "lost"}})
 	refused(t, err)
 }
