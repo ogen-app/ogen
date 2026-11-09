@@ -48,7 +48,7 @@ func repairPack(d Deps) assistant.Pack {
 					return checkCalendar(ctx, d, in)
 				}), ai.WithStrictSchema(false))
 			optimise := genkit.DefineTool(g, "optimiseCalendar",
-				"Works out how to even a campaign's movable posts (planned, draft, ready) out over its dates, phase by phase, and offers the moves for the user to confirm, with each post's old and new date.",
+				"Works out how to even a campaign's movable posts out over its dates, phase by phase, and offers the moves for the user to confirm, with each post's old and new date. Planned, draft and ready posts move: nothing is queued to publish for them yet. Scheduled posts stay where they are and come back as locked.",
 				assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*OptimiseOutput, error) {
 					return optimiseCalendar(ctx, d, in)
 				}), ai.WithStrictSchema(false))
@@ -68,7 +68,7 @@ func repairPack(d Deps) assistant.Pack {
 				spec(repairPackName, check, assistantkit.TierRead,
 					`Call this when the user asks what's wrong with the calendar or plan, or to check it — "anything I should fix?", "is the calendar ok?". Relay the findings in order and offer their fixes, which are already offered (proposalId) or are a post to open (navigate to it). Don't fix anything they didn't pick. When the user asks to fix one problem by its key (as the campaign's Overview does), check and offer only that finding's fixes.`),
 				spec(repairPackName, optimise, assistantkit.TierRead,
-					`Call this when the user asks to even out, rebalance or optimise the calendar. It offers the moves; show a few of them (old → new date) and say they run once the user confirms.`),
+					`Call this when the user asks to even out, rebalance or optimise the calendar. It offers the moves; show a few of them (old → new date), say that the scheduled posts stay locked in place, and that the moves run once the user confirms.`),
 				spec(repairPackName, apply, assistantkit.TierProposal,
 					`Never call this yourself: it is what an optimise or check offer runs once confirmed.`),
 				spec(repairPackName, dismiss, assistantkit.TierRead,
@@ -348,12 +348,37 @@ func offerMoves(ctx context.Context, c *models.Campaign, posts []models.Post) (s
 	})
 }
 
-// OptimiseOutput is the offered moves.
+// OptimiseOutput is the offered moves, and the scheduled posts they leave
+// where they are.
 type OptimiseOutput struct {
-	CampaignID string `json:"campaignId"`
-	ProposalID string `json:"proposalId,omitempty"`
-	Moves      []Move `json:"moves"`
-	Note       string `json:"note,omitempty"`
+	CampaignID string       `json:"campaignId"`
+	ProposalID string       `json:"proposalId,omitempty"`
+	Moves      []Move       `json:"moves"`
+	Locked     []LockedPost `json:"locked"`
+	Note       string       `json:"note,omitempty"`
+}
+
+// LockedPost is a scheduled post a redistribution doesn't move: a copy of it
+// waits to publish.
+type LockedPost struct {
+	PostID string `json:"postId"`
+	Title  string `json:"title,omitempty"`
+	// Date is its day in the campaign's timezone, YYYY-MM-DD.
+	Date string `json:"date"`
+}
+
+// locked are the campaign's scheduled posts, by date.
+func locked(c *models.Campaign, posts []models.Post) []LockedPost {
+	loc := calendarcheck.Location(c)
+	out := []LockedPost{}
+	for _, p := range posts {
+		if p.ScheduledAt == nil || reschedule.Eligible(p.Status) || p.Status == models.PostStatusPublished {
+			continue
+		}
+		out = append(out, LockedPost{PostID: p.ID, Title: p.Title, Date: p.ScheduledAt.In(loc).Format(time.DateOnly)})
+	}
+	slices.SortStableFunc(out, func(a, b LockedPost) int { return strings.Compare(a.Date, b.Date) })
+	return out
 }
 
 func optimiseCalendar(ctx context.Context, d Deps, in CampaignRef) (*OptimiseOutput, error) {
@@ -368,7 +393,7 @@ func optimiseCalendar(ctx context.Context, d Deps, in CampaignRef) (*OptimiseOut
 	if err != nil {
 		return nil, err
 	}
-	out := &OptimiseOutput{CampaignID: c.ID, Moves: moves(c, posts)}
+	out := &OptimiseOutput{CampaignID: c.ID, Moves: moves(c, posts), Locked: locked(c, posts)}
 	if len(out.Moves) == 0 {
 		out.Note = "the calendar is already even; nothing would move"
 		return out, nil
