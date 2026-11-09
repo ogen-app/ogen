@@ -441,7 +441,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	if err != nil {
 		return fmt.Errorf("init campaign pack: %w", err)
 	}
-	postPack, err := post_assistant.NewPack(g, post_assistant.PostAssistantFlowConfig{
+	postCfg := post_assistant.PostAssistantFlowConfig{
 		Provider:        provider,
 		Recorder:        r.recorder,
 		MaxOutputTokens: r.cfg.MaxOutputTokens,
@@ -453,9 +453,14 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		NoteService:     r.noteSvc,
 		QualityAuto:     r.qualityAuto,
 		Notifier:        r.notifier,
-	}, r.postAssistRepos)
+	}
+	postPack, err := post_assistant.NewPack(g, postCfg, r.postAssistRepos)
 	if err != nil {
 		return fmt.Errorf("init post pack: %w", err)
+	}
+	revise, err := post_assistant.NewReviser(g, postCfg, r.postAssistRepos)
+	if err != nil {
+		return fmt.Errorf("init post reviser: %w", err)
 	}
 
 	// The packs reach the review flows and the draft writer through this
@@ -463,6 +468,10 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	pd := r.packDeps
 	pd.Campaign, pd.Post = &campaignPack, &postPack
 	pd.CheckBrief, pd.CheckPosts = checkBriefFn, checkPostsFn
+	pd.Revise = func(ctx context.Context, postID, instruction, note string) error {
+		_, err := revise(ctx, postID, instruction, note)
+		return err
+	}
 	pd.Compare = asset_compare.New(g, provider, r.recorder)
 	pd.CheckBrand = brand_check.New(g, provider, r.recorder)
 	if pd.Compose != nil {

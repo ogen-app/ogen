@@ -60,7 +60,7 @@ func repairPack(d Deps) assistant.Pack {
 					return applyMoves(ctx, d, in)
 				})), ai.WithStrictSchema(false))
 			dismiss := genkit.DefineTool(g, "dismissFinding",
-				"Dismisses a finding the user is fine with, so checks of this thread stop raising it while its posts stay the same.",
+				"Dismisses a calendar or review finding the user is fine with, so checks of this thread stop raising it while its posts, or the brief, stay the same.",
 				assistantkit.Wrap(func(ctx context.Context, in DismissFindingInput) (*DismissFindingOutput, error) {
 					return dismissFinding(ctx, d, in)
 				}), ai.WithStrictSchema(false))
@@ -76,10 +76,22 @@ func repairPack(d Deps) assistant.Pack {
 			}
 			if d.CheckBrief != nil && d.CheckPosts != nil {
 				review := genkit.DefineTool(g, "reviewCampaign",
-					"Reviews a campaign's brief for consistency and completeness, and its unpublished posts against the brief, and offers a fix for each finding.",
+					"Reviews a campaign's brief for consistency and completeness, and its unpublished posts against the brief, and offers fixes for each finding.",
 					assistantkit.Wrap(func(ctx context.Context, in CampaignRef) (*ReviewOutput, error) { return reviewCampaign(ctx, d, in) }), ai.WithStrictSchema(false))
 				specs = append(specs, spec(repairPackName, review, assistantkit.TierRead,
-					`Call this when the user asks whether the brief holds up or the posts follow it, or for a full review. Relay the findings with their fixes: a brief finding's fix improves the brief (offered), a post's opens the post.`))
+					`Call this when the user asks whether the brief holds up or the posts follow it, or for a full review. Relay the findings with their fixes, which are already offered (proposalId) or open the post (navigate to it): a brief finding's fixes improve the brief, a post's rewrite it to follow the brief. A finding the user is fine with is dismissed by its key.`))
+				if d.Revise != nil {
+					revise := genkit.DefineTool(g, "revisePost",
+						"Rewrites one of the campaign's posts by an instruction, as the post's own assistant would, and saves it as a new version. Only runs once the user confirmed the offer.",
+						assistantkit.Gated("revisePost", assistantkit.Gate[RevisePostInput]{
+							Summary: func(in RevisePostInput) string { return "Rewrite the post to follow the brief" },
+						}, assistantkit.Wrap(func(ctx context.Context, in RevisePostInput) (*RevisePostOutput, error) {
+							return revisePost(ctx, d, in)
+						})),
+						ai.WithStrictSchema(false))
+					specs = append(specs, spec(repairPackName, revise, assistantkit.TierProposal,
+						`Never call this yourself: it is what a review finding's "rewrite it" offer runs once confirmed.`))
+				}
 			}
 			if d.CheckBrand != nil {
 				brand := genkit.DefineTool(g, "checkBrand",
@@ -156,12 +168,9 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 			return nil, fmt.Errorf("read the posts' ideas: %w", err)
 		}
 	}
-	dismissed := map[string]bool{}
-	if d.Dismissals != nil {
-		scope, _ := assistant.Scope(ctx)
-		if dismissed, err = d.Dismissals.Keys(ctx, scope.Kind, scope.ID); err != nil {
-			return nil, err
-		}
+	dismissed, err := d.dismissedKeys(ctx)
+	if err != nil {
+		return nil, err
 	}
 	out := &CheckCalendarOutput{CampaignID: c.ID, Findings: []FindingOut{}}
 	// One redistribution fixes every finding that offers it.
@@ -483,17 +492,20 @@ func dismissFinding(ctx context.Context, d Deps, in DismissFindingInput) (*Dismi
 	return &DismissFindingOutput{Dismissed: true}, nil
 }
 
-// ReviewFinding is a brief or post finding with its fix.
+// ReviewFinding is a brief or post finding with its fixes.
 type ReviewFinding struct {
 	// Kind is brief or post.
-	Kind       string   `json:"kind"`
-	Severity   string   `json:"severity"`
-	Aspect     string   `json:"aspect,omitempty"`
-	PostID     string   `json:"postId,omitempty"`
-	Title      string   `json:"title,omitempty"`
-	Issue      string   `json:"issue"`
-	Suggestion string   `json:"suggestion,omitempty"`
-	Fix        FixOffer `json:"fix"`
+	Kind string `json:"kind"`
+	// Key dismisses the finding while the brief, or its post, stays the
+	// same.
+	Key        string     `json:"key"`
+	Severity   string     `json:"severity"`
+	Aspect     string     `json:"aspect,omitempty"`
+	PostID     string     `json:"postId,omitempty"`
+	Title      string     `json:"title,omitempty"`
+	Issue      string     `json:"issue"`
+	Suggestion string     `json:"suggestion,omitempty"`
+	Fixes      []FixOffer `json:"fixes"`
 }
 
 // ReviewOutput is the campaign's review.
@@ -503,6 +515,8 @@ type ReviewOutput struct {
 	PostsSummary string          `json:"postsSummary,omitempty"`
 	PostsChecked int             `json:"postsChecked"`
 	Findings     []ReviewFinding `json:"findings"`
+	// Dismissed counts findings left out because the user dismissed them.
+	Dismissed int `json:"dismissed,omitempty"`
 }
 
 func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput, error) {
@@ -518,28 +532,121 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 	if err != nil {
 		return nil, assistantkit.Refused("couldn't review the posts: " + err.Error())
 	}
+	dismissed, err := d.dismissedKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := &ReviewOutput{CampaignID: c.ID, BriefSummary: brief.Summary, PostsSummary: postsReview.Summary,
 		PostsChecked: postsReview.Checked, Findings: []ReviewFinding{}}
-	var briefFix string
+	var open []consistency.Finding
 	for _, f := range brief.Findings {
-		// One brief edit takes every brief finding.
-		if briefFix == "" && d.Campaign != nil {
-			if briefFix, err = assistantkit.Offer(ctx, assistantkit.Proposal{
-				Tool:    "enrichBrief",
-				Args:    campaign_assistant.EnrichBriefInput{CampaignID: c.ID, Instruction: "Fix these review findings: " + briefIssues(brief.Findings)},
-				Summary: "Improve the brief to fix the review's findings",
-			}); err != nil {
+		if dismissed[f.Key] {
+			out.Dismissed++
+			continue
+		}
+		open = append(open, f)
+	}
+	// One brief edit takes every open brief finding, beside each one's own.
+	var allFix *FixOffer
+	if len(open) > 1 && d.Campaign != nil {
+		id, err := assistantkit.Offer(ctx, assistantkit.Proposal{
+			Tool:    "enrichBrief",
+			Args:    campaign_assistant.EnrichBriefInput{CampaignID: c.ID, Instruction: "Fix these review findings: " + briefIssues(open)},
+			Summary: "Improve the brief to fix the review's findings",
+		})
+		if err != nil {
+			return nil, err
+		}
+		allFix = &FixOffer{Fix: calendarcheck.Fix{Kind: consistency.FixImproveBrief, Title: "Fix all of the brief's findings"}, ProposalID: id}
+	}
+	for _, f := range open {
+		rf := ReviewFinding{Kind: "brief", Key: f.Key, Severity: f.Severity, Aspect: f.Aspect, Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
+		for _, fix := range f.Fixes {
+			if fix.Kind != consistency.FixImproveBrief || d.Campaign == nil {
+				continue
+			}
+			id, err := assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "enrichBrief",
+				Args: campaign_assistant.EnrichBriefInput{CampaignID: c.ID, Instruction: fix.Instruction}, Summary: fix.Title})
+			if err != nil {
 				return nil, err
 			}
+			rf.Fixes = append(rf.Fixes, FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(fix.Kind), Title: fix.Title}, ProposalID: id})
 		}
-		out.Findings = append(out.Findings, ReviewFinding{Kind: "brief", Severity: string(f.Severity), Aspect: string(f.Aspect),
-			Issue: f.Issue, Suggestion: f.Suggestion, Fix: FixOffer{Fix: calendarcheck.Fix{Kind: "improve_brief", Title: "Improve the brief"}, ProposalID: briefFix}})
+		if allFix != nil {
+			rf.Fixes = append(rf.Fixes, *allFix)
+		}
+		out.Findings = append(out.Findings, rf)
 	}
 	for _, f := range postsReview.Findings {
-		out.Findings = append(out.Findings, ReviewFinding{Kind: "post", Severity: string(f.Severity), PostID: f.PostID, Title: f.Title,
-			Issue: f.Issue, Suggestion: f.Suggestion, Fix: FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixOpenPost, Title: "Open the post", PostID: f.PostID}}})
+		if dismissed[f.Key] {
+			out.Dismissed++
+			continue
+		}
+		rf := ReviewFinding{Kind: "post", Key: f.Key, Severity: f.Severity, PostID: f.PostID, Title: f.Title,
+			Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
+		for _, fix := range f.Fixes {
+			offer := FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(fix.Kind), Title: fix.Title, PostID: fix.PostID}}
+			if fix.Kind == consistency.FixRevisePost {
+				if d.Revise == nil {
+					continue
+				}
+				if offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "revisePost",
+					Args: RevisePostInput{CampaignID: c.ID, PostID: fix.PostID, Instruction: fix.Instruction}, Summary: fix.Title}); err != nil {
+					return nil, err
+				}
+			}
+			rf.Fixes = append(rf.Fixes, offer)
+		}
+		out.Findings = append(out.Findings, rf)
 	}
 	return out, nil
+}
+
+// dismissedKeys are the findings the thread's user dismissed.
+func (d Deps) dismissedKeys(ctx context.Context) (map[string]bool, error) {
+	if d.Dismissals == nil {
+		return map[string]bool{}, nil
+	}
+	scope, _ := assistant.Scope(ctx)
+	return d.Dismissals.Keys(ctx, scope.Kind, scope.ID)
+}
+
+// RevisePostInput is a post of the campaign and how to rewrite it.
+type RevisePostInput struct {
+	CampaignID  string `json:"campaignId,omitempty" jsonschema:"description=Defaults to the thread's campaign"`
+	PostID      string `json:"postId"`
+	Instruction string `json:"instruction"`
+}
+
+// RevisePostOutput confirms the rewrite.
+type RevisePostOutput struct {
+	PostID  string `json:"postId"`
+	Revised bool   `json:"revised"`
+	Note    string `json:"note"`
+}
+
+// revisePost rewrites one of the campaign's posts by the instruction a
+// finding's fix carries, as the post's own assistant would, and saves a
+// version the post's history restores from.
+func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOutput, error) {
+	if in.Instruction == "" {
+		return nil, assistantkit.Refused("say how to rewrite the post")
+	}
+	_, posts, skipped, err := campaignPosts(ctx, d, in.CampaignID, []string{in.PostID})
+	if err != nil {
+		return nil, err
+	}
+	if len(skipped) > 0 {
+		return nil, assistantkit.Refused("that post isn't in this campaign any more")
+	}
+	if posts[0].Status.IsSubmitted() {
+		return nil, assistantkit.Refused("the post is " + string(posts[0].Status) + ", so its copy is locked; unschedule it first")
+	}
+	if err := d.Revise(ctx, in.PostID, in.Instruction, "Rewritten to follow the brief"); err != nil {
+		return nil, fmt.Errorf("rewrite post: %w", err)
+	}
+	return &RevisePostOutput{PostID: in.PostID, Revised: true,
+		Note: "saved as a new version; restoring the previous version from the post's history undoes it"}, nil
 }
 
 // gapIdeas is how many ideas a silence's fix plans.
