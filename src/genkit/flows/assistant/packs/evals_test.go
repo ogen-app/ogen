@@ -113,6 +113,8 @@ var evalCases = []evalCase{
 	// foundation
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Add a fact: we have 1,200 customers.", want: []string{"addFact"}},
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "What's our brand voice?", want: []string{"getBrand"}, not: writes},
+	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Which of our facts have expired?", want: []string{"getBrand"}, not: writes},
+	{pack: "foundation", screen: "foundation.templates", scope: evalWorkspace, say: "What templates do we have?", want: []string{"getBrand"}, not: writes},
 	// workspace
 	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "What happened yesterday?", want: []string{"activityReport"}},
 	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Do any of my accounts need reconnecting?", want: []string{"workspaceSetup"}},

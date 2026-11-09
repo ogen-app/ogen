@@ -129,14 +129,22 @@ func (s *Service) Current(ctx context.Context) ([]models.BrandFact, error) {
 	if err != nil {
 		return nil, err
 	}
+	current, _ := s.Split(all)
+	return current, nil
+}
+
+// Split sorts facts into those still current today and those expired.
+func (s *Service) Split(facts []models.BrandFact) (current, expired []models.BrandFact) {
 	today := models.CalendarDateOf(s.now())
-	out := make([]models.BrandFact, 0, len(all))
-	for _, f := range all {
-		if !f.ExpiredOn(today) {
-			out = append(out, f)
+	current, expired = []models.BrandFact{}, []models.BrandFact{}
+	for _, f := range facts {
+		if f.ExpiredOn(today) {
+			expired = append(expired, f)
+		} else {
+			current = append(current, f)
 		}
 	}
-	return out, nil
+	return current, expired
 }
 
 // InputOf is a fact's editable fields, to restore it.
