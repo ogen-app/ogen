@@ -23,6 +23,9 @@ const proposalTTL = 24 * time.Hour
 const (
 	refuseOfferGone     = "That offer is no longer available. Ask again and I'll set it up."
 	refuseOfferAnswered = "That offer has already been answered or has expired. Ask again and I'll set it up."
+	// refuseOfferUnanswered is a confirmation of an offer made in the same
+	// message, before the user saw it.
+	refuseOfferUnanswered = "That offer was made in this message and the user hasn't answered it yet. Tell them what it will do and wait for their answer."
 )
 
 // ErrProposalNotFound is an offer that doesn't exist for the caller (404).
@@ -152,6 +155,11 @@ func (t *toolSet) confirmProposal(ctx context.Context, in AnswerProposalInput) (
 	p, err := t.openProposal(ctx, st, in.ProposalID)
 	if err != nil {
 		return nil, err
+	}
+	// An offer made in this message waits for the user's answer in the next
+	// one: the model can't take its own offer's yes.
+	if st.offeredNow(p.ID) {
+		return nil, assistantkit.Refused(refuseOfferUnanswered)
 	}
 	if !t.Owns(p.Tool) && !t.ownsOption(p) {
 		return t.foreign(ctx, st, AnswerRequest{ProposalID: p.ID, OptionID: in.OptionID, Confirm: true})

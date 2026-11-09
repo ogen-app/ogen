@@ -171,6 +171,25 @@ func TestProposals_ProposeThenConfirmInChat(t *testing.T) {
 	}
 }
 
+// The model can't confirm an offer it made in the same message: it waits
+// for the user's answer.
+func TestProposals_ConfirmInTheOfferingTurnIsRefused(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	st := newTurnState(viewOf(t, `{"version":1,"screen":"home","scope":{"kind":"workspace"}}`), nil)
+	ctx := h.tools.bind(withTurnState(context.WithValue(t.Context(), logging.UserIDKey, "u1"), st), st)
+	id, err := assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "bulkThing", Args: bulkIn{N: 5}, Summary: "Do 5 things"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.tools.confirmProposal(ctx, AnswerProposalInput{ProposalID: id})
+	if r, ok := errors.AsType[*assistantkit.Refusal](err); !ok || r.Reason != refuseOfferUnanswered {
+		t.Fatalf("err = %v", err)
+	}
+	if *ran != 0 || store.rows[0].Status != models.ProposalPending {
+		t.Fatalf("ran = %d, status = %s", *ran, store.rows[0].Status)
+	}
+}
+
 // The same call proposed twice in a turn, in parallel, is one offer.
 func TestProposals_IdenticalCallsShareOneOffer(t *testing.T) {
 	h, store, ran := proposalHarness(t)

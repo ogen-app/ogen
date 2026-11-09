@@ -55,25 +55,28 @@ type Turn struct {
 	Args map[string]any
 }
 
-// Subject is the entity of kind the turn is about: the thread's when it is
-// that kind's thread, else the item in focus when it is one, else the one an
-// offer names as "<kind>Id"; "" when none. A thread of kind with another of
-// kind in focus is ambiguous — "this" means the focus, the thread is the
-// other — so only an offer's own subject counts there.
+// Subject is the entity of kind the turn is about: the one an offer names as
+// "<kind>Id", which is what confirming it works on, else the thread's when it
+// is that kind's thread, else the item in focus when it is one; "" when none.
+// A thread of kind with another of kind in focus is ambiguous — "this" means
+// the focus, the thread is the other — so only an offer's own subject counts
+// there.
 func (t Turn) Subject(kind models.AssistantScopeKind) string {
+	if offered, _ := t.Args[string(kind)+"Id"].(string); offered != "" {
+		return offered
+	}
 	v := t.View.View
 	focus := ""
 	if f := t.View.Focus; f != nil && string(f.Kind) == string(kind) {
 		focus = f.ID
 	}
-	offered, _ := t.Args[string(kind)+"Id"].(string)
 	if v.Scope.Kind == kind && v.Scope.ID != "" {
 		if focus != "" && focus != v.Scope.ID {
-			return offered
+			return ""
 		}
 		return v.Scope.ID
 	}
-	return cmp.Or(focus, offered)
+	return focus
 }
 
 // PackResult is what a pack's tools did in a turn.
