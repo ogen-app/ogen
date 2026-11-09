@@ -97,8 +97,9 @@ func planCampaign(ctx context.Context, d Deps, in CampaignFromAssetsInput) (*cam
 	if p.end, err = isoDay(in.EndDate); err != nil {
 		return nil, err
 	}
-	if p.start != nil && p.end != nil && p.end.Before(*p.start) {
-		return nil, assistantkit.Refused("the end date is before the start date")
+	// A content plan needs the end after the start, so the campaign does too.
+	if p.start != nil && p.end != nil && !p.start.Before(*p.end) {
+		return nil, assistantkit.Refused("the end date must be after the start date")
 	}
 	metas, err := d.Assets.ListMeta(ctx, ids)
 	if err != nil {

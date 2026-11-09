@@ -34,18 +34,22 @@ func run(t *testing.T, req Request, answer string) (*Result, *fakemodel.Model) {
 func TestCompare_KeepsClaimsThatCiteTheSources(t *testing.T) {
 	res, m := run(t, Request{Mode: ModeCompare, Focus: "the reopening", Sources: sources}, `{
 		"summary": "Both announce the reopening.",
-		"shared": [{"text": "Reopening on 14 March", "assetIds": ["a1", "a2", "a1"]}],
+		"shared": [{"text": "Reopening on 14 March", "assetIds": ["a1", "a2", "a1"]}, {"text": "Spa open daily", "assetIds": ["a1"]}],
 		"partial": [{"text": "A new head chef, Marta Ruiz", "assetIds": ["a2"]}, {"text": "Rooftop bar", "assetIds": ["a9"]}],
-		"conflicts": [{"text": " ", "assetIds": ["a1"]}]
+		"conflicts": [{"text": " ", "assetIds": ["a1"]}, {"text": "Hours differ", "assetIds": ["a1", "a9"]}, {"text": "Opening day differs", "assetIds": ["a1", "a2"]}]
 	}`)
 	if len(res.Shared) != 1 || strings.Join(res.Shared[0].AssetIDs, ",") != "a1,a2" {
 		t.Fatalf("shared = %+v; want each source once", res.Shared)
 	}
-	if len(res.Partial) != 1 || res.Partial[0].Text != "A new head chef, Marta Ruiz" {
-		t.Fatalf("partial = %+v; a claim citing no given source is dropped", res.Partial)
+	var partial []string
+	for _, c := range res.Partial {
+		partial = append(partial, c.Text)
 	}
-	if len(res.Conflicts) != 0 {
-		t.Fatalf("conflicts = %+v; an empty claim is dropped", res.Conflicts)
+	if strings.Join(partial, "|") != "Spa open daily|A new head chef, Marta Ruiz" {
+		t.Fatalf("partial = %v; a shared claim citing one source is partial, one citing none is dropped", partial)
+	}
+	if len(res.Conflicts) != 1 || res.Conflicts[0].Text != "Opening day differs" {
+		t.Fatalf("conflicts = %+v; a conflict needs two known sources", res.Conflicts)
 	}
 
 	prompt := m.Requests()[0].Messages[len(m.Requests()[0].Messages)-1].Text()

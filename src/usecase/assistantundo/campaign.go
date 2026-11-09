@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -177,21 +178,28 @@ func (u campaignBrief) Undo(ctx context.Context, tx bun.IDB, a *models.Assistant
 }
 
 // CampaignCreated is the snapshot a new campaign is logged and compared
-// with: what its proposal set.
+// with: what its proposal set, and the brief and platforms an edit since
+// would change.
 func CampaignCreated(c *models.Campaign) models.JSONMap {
-	return models.JSONMap{
+	snap := models.JSONMap{
 		"name":      c.Name,
 		"startDate": timeValue(c.StartDate),
 		"endDate":   timeValue(c.EndDate),
 		"assetIds":  strings.Join(slices.Sorted(slices.Values(c.AssetIDs)), ","),
 	}
+	maps.Copy(snap, CampaignBrief(c))
+	maps.Copy(snap, CampaignPlatforms(c))
+	return snap
 }
 
 type campaignCreated struct{ campaigns repository.CampaignRepository }
 
 // Undo deletes a campaign the assistant created while it is still as
-// created: unchanged, with no posts, and no ideas anyone wrote, planned or
-// decided — only the ones its sources' analyses distilled on their own.
+// created: unchanged, with no posts or series, and no ideas anyone wrote,
+// planned, asked for, merged or decided — only the ones its sources'
+// analyses distilled on their own. The campaign's row and its ideas are
+// locked first, so no post, series or idea is added to it, and no idea
+// decided, between the check and the delete.
 func (u campaignCreated) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
 	c, err := lockCampaign(ctx, u.campaigns, tx, a.EntityID)
 	if err != nil {
@@ -200,18 +208,16 @@ func (u campaignCreated) Undo(ctx context.Context, tx bun.IDB, a *models.Assista
 	if !same(CampaignCreated(c), a.After) {
 		return ErrChangedSince
 	}
-	posts, err := tx.NewSelect().Model((*models.Post)(nil)).Where("po.campaign_id = ?", c.ID).Exists(ctx)
+	var ideaIDs []string
+	if err := tx.NewSelect().Model((*models.Idea)(nil)).Column("i.id").
+		Where("i.campaign_id = ?", c.ID).For("UPDATE OF i").Scan(ctx, &ideaIDs); err != nil {
+		return err
+	}
+	used, err := campaignUsed(ctx, tx, c.ID)
 	if err != nil {
 		return err
 	}
-	worked, err := tx.NewSelect().Model((*models.Idea)(nil)).
-		Where("i.campaign_id = ?", c.ID).
-		Where("i.origin <> ? OR i.verdict IS NOT NULL", models.IdeaOriginAssetAnalysis).
-		Exists(ctx)
-	if err != nil {
-		return err
-	}
-	if posts || worked {
+	if used {
 		return ErrChangedSince
 	}
 	deleted, err := u.campaigns.DeleteTx(ctx, tx, c.ID)
@@ -222,4 +228,27 @@ func (u campaignCreated) Undo(ctx context.Context, tx bun.IDB, a *models.Assista
 		return ErrNotFound
 	}
 	return nil
+}
+
+// campaignUsed reports whether anything was made in the campaign: a post, a
+// series or its run, or an idea that isn't one its sources' analyses
+// distilled on their own and nobody touched.
+func campaignUsed(ctx context.Context, tx bun.IDB, campaignID string) (bool, error) {
+	checks := []*bun.SelectQuery{
+		tx.NewSelect().Model((*models.Post)(nil)).Where("po.campaign_id = ?", campaignID),
+		tx.NewSelect().Model((*models.CampaignSeriesRun)(nil)).Where("cs.campaign_id = ?", campaignID),
+		tx.NewSelect().Model((*models.Series)(nil)).Where("bs.campaign_id = ?", campaignID).Where("bs.deleted_at IS NULL"),
+		tx.NewSelect().Model((*models.Idea)(nil)).
+			Where("i.campaign_id = ?", campaignID).
+			Where(`i.origin <> ? OR i.verdict IS NOT NULL OR i.distill_run_id IS NOT NULL OR i.merged_at IS NOT NULL
+				OR i.plan_platform_id IS NOT NULL OR i.plan_post_type IS NOT NULL OR i.plan_phase_id IS NOT NULL
+				OR i.plan_target_date IS NOT NULL`, models.IdeaOriginAssetAnalysis),
+	}
+	for _, q := range checks {
+		ok, err := q.Exists(ctx)
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/entitlements"
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -108,6 +109,7 @@ func TestCampaignFromAssets_Refusals(t *testing.T) {
 		"an unknown type": {AssetIDs: []string{"a1"}, Name: "x", Type: "webinar"},
 		"a bad date":      {AssetIDs: []string{"a1"}, Name: "x", StartDate: "14 March"},
 		"dates reversed":  {AssetIDs: []string{"a1"}, Name: "x", StartDate: "2026-04-01", EndDate: "2026-03-01"},
+		"one day":         {AssetIDs: []string{"a1"}, Name: "x", StartDate: "2026-04-01", EndDate: "2026-04-01"},
 		"unknown assets":  {AssetIDs: []string{"a9"}, Name: "x"},
 		"a gated type":    {AssetIDs: []string{"a1"}, Name: "x", Type: "Launch"},
 	} {
@@ -124,11 +126,11 @@ func TestCampaignFromAssets_Refusals(t *testing.T) {
 		t.Fatalf("refusal = %v", err)
 	}
 
-	full, _, _ := campaignDeps(plan{"active_campaigns": float64(1)}, 1)
+	full, fullCamps, _ := campaignDeps(plan{"active_campaigns": float64(1)}, 1)
 	_, err = campaignFromAssets(ctx, full, CampaignFromAssetsInput{AssetIDs: []string{"a1"}, Name: "x"})
 	refused(t, err)
-	if len(camps.made) != 0 {
-		t.Fatalf("made %d", len(camps.made))
+	if len(camps.made) != 0 || len(fullCamps.made) != 0 {
+		t.Fatalf("made %d / %d; a refused campaign is never stored", len(camps.made), len(fullCamps.made))
 	}
 }
 
@@ -156,5 +158,19 @@ func TestCampaignFromAssets_Proposal(t *testing.T) {
 	line := campaignSummary(page, d, CampaignFromAssetsInput{Name: "Spring reopening", Type: "Launch", StartDate: "2026-03-02", EndDate: "2026-04-26"})
 	if !strings.HasPrefix(line, `New campaign "Spring reopening" from 1 asset, Launch, 2 Mar – 26 Apr`) {
 		t.Fatalf("summary = %q", line)
+	}
+}
+
+// Creating a campaign calls no model, so a yes past the spend cap still runs.
+func TestCampaignFromAssets_IsFree(t *testing.T) {
+	d, _, _ := campaignDeps(plan{}, 0)
+	d.Campaigns = &memCampaigns{}
+	specs, err := assetsPack(d).Define(genkit.Init(t.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(specs, func(s assistantkit.Spec) bool { return s.Name == "createCampaignFromAssets" })
+	if i < 0 || !specs[i].Free || specs[i].Tier != assistantkit.TierProposal {
+		t.Fatalf("spec = %+v", specs[max(i, 0)])
 	}
 }

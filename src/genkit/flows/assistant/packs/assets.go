@@ -149,8 +149,12 @@ func assetsPack(d Deps) assistant.Pack {
 							}
 							return out, err
 						}))), ai.WithStrictSchema(false))
-				specs = append(specs, spec(assetsPackName, setUp, assistantkit.TierProposal,
-					`Call this when the user asks to set up, start or make a campaign from assets — "set up a campaign from these". Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Name it, and take the type and dates from what the sources say (an opening date, a launch), leaving dates out when they don't say; the card shows them so the user can change them. It creates no posts: offer a content plan once it's set up.`))
+				setUpSpec := spec(assetsPackName, setUp, assistantkit.TierProposal,
+					`Call this when the user asks to set up, start or make a campaign from assets — "set up a campaign from these". Pass the selected ids from getSelection, or the ones named; it defaults to the asset open on screen. Name it, and take the type and dates from what the sources say (an opening date, a launch), leaving dates out when they don't say; the card shows them so the user can change them. It creates no posts: offer a content plan once it's set up.`)
+				// Creating the campaign calls no model, so a yes isn't held to the
+				// spend cap; its sources' analyses keep their own cap.
+				setUpSpec.Free = true
+				specs = append(specs, setUpSpec)
 			}
 			return specs, nil
 		},

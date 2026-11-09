@@ -545,6 +545,23 @@ func TestUndo_CampaignCreatedRefusesOnceUsed(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"its brief written": func(t *testing.T, f *fixture) {
+			c := f.load(t)
+			c.KeyMessages = "Slow down at the villa"
+			f.save(t, c)
+		},
+		"an analysis idea planned": func(t *testing.T, f *fixture) {
+			if _, err := f.db.NewInsert().Model(&models.Idea{ID: "planned", Title: "t", CampaignID: new("c1"),
+				Origin: models.IdeaOriginAssetAnalysis, Plan: models.IdeaPlan{PostType: new("text-post")}, CreatedByName: "Ogen"}).Exec(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a series run in it": func(t *testing.T, f *fixture) {
+			if _, err := f.db.NewInsert().Model(&models.Series{ID: "s1", Name: "Fridays", Promise: "p", Recipe: "r",
+				Supply: models.SeriesSupplySelf, CampaignID: new("c1")}).Exec(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"an analysis idea decided": func(t *testing.T, f *fixture) {
 			if _, err := f.db.NewInsert().Model(&models.Idea{ID: "kept", Title: "t", CampaignID: new("c1"),
 				Origin: models.IdeaOriginAssetAnalysis, Verdict: new(models.IdeaVerdictYes), DecidedAt: new(time.Now()), DecidedBy: new("user-1"),
@@ -565,5 +582,32 @@ func TestUndo_CampaignCreatedRefusesOnceUsed(t *testing.T) {
 				t.Fatalf("the campaign is gone: %v", err)
 			}
 		})
+	}
+}
+
+// The tool logs the campaign as it built it, before the database read it
+// back: that snapshot must match the stored row, or no creation could be
+// undone.
+func TestUndo_CampaignCreatedFromTheBuiltCampaign(t *testing.T) {
+	f := newFixture(t)
+	c := &models.Campaign{
+		ID: "c1", Name: "Spring reopening", Description: "Around the opening.", CampaignTypeID: "Uk", Status: models.StatusActive,
+		AssetIDs: models.StringSlice{"a2", "a1"}, UseAssets: true, TargetPlatforms: models.CampaignPlatforms{},
+		TagIDs: models.StringSlice{}, Tags: []models.Tag{}, StartDate: day("2026-03-02"), EndDate: day("2026-04-26"),
+		PublishingTime: "09:00", PublishingDays: models.StringSlice{"mon"}, SpreadMinutes: 15, GoalCadence: "month", CreatedBy: "user-1",
+	}
+	after := assistantundo.CampaignCreated(c)
+	if err := f.campaigns.Create(f.ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{
+		ScopeKind: models.AssistantScopeWorkspace, Kind: models.AssistantActionCampaignCreated, EntityID: "c1",
+		Before: models.JSONMap{}, After: after, CreatedBy: "user-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatalf("undo = %v; the built campaign's snapshot must match its row", err)
 	}
 }
