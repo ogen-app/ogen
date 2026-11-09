@@ -409,7 +409,13 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 		spec(genkit.DefineTool(g, "openSavedView",
 			"Opens one of the user's saved views of the Ideas or Assets list. Takes the saved view's id.",
 			assistantkit.Wrap(t.openSavedView)),
-			`Call this when the user asks to open one of their saved views by name and you know its id.`),
+			`Call this when the user asks to open one of their saved views by name and you know its id; listSavedViews gives it.`),
+	}
+	if deps.SavedViewLists != nil {
+		specs = append(specs, spec(genkit.DefineTool(g, "listSavedViews",
+			"Lists the user's saved views (smart groups) of the Ideas or Assets list: their id, name, the filter each stands for and how many items it matches.",
+			assistantkit.Wrap(t.listSavedViews)),
+			`Call this when the user asks which saved views or smart groups they have, or names one to open and you don't have its id. It defaults to the list on screen. To open one, call openSavedView with its id.`))
 	}
 	if deps.Proposals != nil {
 		specs = append(specs,

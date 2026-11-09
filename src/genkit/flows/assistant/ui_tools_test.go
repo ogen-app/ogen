@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/savedviews"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
@@ -193,4 +195,57 @@ func TestSelectIsPlannedApartFromNavigate(t *testing.T) {
 		got[1].Type != UINavigate || got[1].CampaignID != "c2" {
 		t.Fatalf("actions = %+v; want the selection on c1's ideas, then the navigation", got)
 	}
+}
+
+// listedViews answers List with views and records what it was asked.
+type listedViews struct {
+	views   []models.SavedView
+	surface string
+	counts  []string
+	caller  savedviews.Caller
+}
+
+func (l *listedViews) List(_ context.Context, caller savedviews.Caller, surface string, counts []string, _ *time.Location) ([]models.SavedView, error) {
+	l.caller, l.surface, l.counts = caller, surface, counts
+	return l.views, nil
+}
+
+func TestListSavedViews(t *testing.T) {
+	lister := &listedViews{views: []models.SavedView{
+		{ID: "sv1", Name: "Needs analysis", Query: "ideas=unread", Shared: true, Valid: true, Counts: map[string]int{"total": 12}},
+		{ID: "sv2", Name: "Old", Query: "bogus=1"},
+	}}
+	tools := &toolSet{deps: Repos{SavedViewLists: lister}}
+
+	ctx, _ := onScreen(t, `{"version":1,"screen":"assets","scope":{"kind":"workspace"}}`)
+	out, err := tools.listSavedViews(ctx, ListSavedViewsInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lister.surface != "assets" || lister.caller.UserID != "u1" || len(lister.counts) != 1 {
+		t.Fatalf("asked %q as %+v for %v; want the list on screen, as the user, with its count", lister.surface, lister.caller, lister.counts)
+	}
+	if len(out.Views) != 1 || out.Views[0].Name != "Needs analysis" || out.Views[0].Filter != "ideas=unread" || *out.Views[0].Count != 12 {
+		t.Fatalf("views = %+v", out.Views)
+	}
+	if !strings.Contains(out.Note, "1 of the saved views no longer match") {
+		t.Fatalf("note = %q; an invalid view is left out and said so", out.Note)
+	}
+
+	// Inside a campaign the view opens on the campaign's list, so the
+	// workspace count is left out.
+	ctx, _ = onScreen(t, campaignIdeas)
+	out, err = tools.listSavedViews(ctx, ListSavedViewsInput{List: "assets"})
+	if err != nil || lister.surface != "assets" || lister.counts != nil || out.Views[0].Count != nil {
+		t.Fatalf("campaign = %+v, %v (counts %v)", out, err, lister.counts)
+	}
+	if _, err := tools.listSavedViews(ctx, ListSavedViewsInput{}); err != nil || lister.surface != "ideas" {
+		t.Fatalf("campaign.ideas lists %q, %v", lister.surface, err)
+	}
+
+	ctx, _ = onScreen(t, workspaceHome)
+	_, err = tools.listSavedViews(ctx, ListSavedViewsInput{})
+	refusal(t, err, "which list")
+	_, err = tools.listSavedViews(ctx, ListSavedViewsInput{List: "posts"})
+	refusal(t, err, "which list")
 }

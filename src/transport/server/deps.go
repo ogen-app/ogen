@@ -32,6 +32,7 @@ import (
 	"github.com/ogen-app/ogen/src/transport/handlers"
 	activityreport "github.com/ogen-app/ogen/src/usecase/activity/report"
 	"github.com/ogen-app/ogen/src/usecase/assetanalysis"
+	"github.com/ogen-app/ogen/src/usecase/assets"
 	"github.com/ogen-app/ogen/src/usecase/billing"
 	"github.com/ogen-app/ogen/src/usecase/branddistill"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
@@ -48,6 +49,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
 	"github.com/ogen-app/ogen/src/usecase/qualityauto"
+	"github.com/ogen-app/ogen/src/usecase/savedviews"
 	"github.com/ogen-app/ogen/src/usecase/series"
 	"github.com/ogen-app/ogen/src/usecase/signupaccess"
 	"github.com/ogen-app/ogen/src/usecase/tenant_actions/signup"
@@ -431,6 +433,8 @@ func (d *deps) genkitDeps() genkitDeps {
 			Messages:   r.assistantMessageRepo,
 			Views:      viewresolve.New(r.entityTitleRepo, r.ideaRepo, r.pieceRepo),
 			SavedViews: r.savedViewRepo,
+			SavedViewLists: savedviews.New(r.savedViewRepo, d.hub,
+				ideas.NewSurface(r.ideaRepo), assets.NewSurface(r.pieceRepo)),
 		},
 		draftPostRepos: draft_post.DraftPostRepos{
 			Campaigns: r.campaignRepo,
