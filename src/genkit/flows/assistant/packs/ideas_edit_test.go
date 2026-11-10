@@ -70,6 +70,8 @@ func TestSimilarIdeas(t *testing.T) {
 type similarIdeaRepo struct{ *memIdeaRepo }
 
 func (r similarIdeaRepo) Query(context.Context, models.IdeaQuery) (*models.IdeaQueryResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var out []models.Idea
 	for _, id := range slices.Sorted(maps.Keys(r.byID)) {
 		out = append(out, *r.byID[id])

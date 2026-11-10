@@ -16,6 +16,8 @@ import (
 )
 
 func (r *memIdeaRepo) Create(_ context.Context, i *models.Idea) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	cp := *i
 	r.byID[i.ID] = &cp
 	return nil

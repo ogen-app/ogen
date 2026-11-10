@@ -16,6 +16,8 @@ import (
 )
 
 func (r *memIdeaRepo) OpenIdeas(_ context.Context, campaignID string, limit int) ([]models.Idea, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var out []models.Idea
 	for _, i := range r.byID {
 		if (campaignID == "" && i.CampaignID == nil) || (i.CampaignID != nil && *i.CampaignID == campaignID) {
@@ -27,6 +29,8 @@ func (r *memIdeaRepo) OpenIdeas(_ context.Context, campaignID string, limit int)
 }
 
 func (r *memIdeaRepo) MergeSet(_ context.Context, ids []string) (repository.IdeaMergeSet, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var set repository.IdeaMergeSet
 	for _, id := range ids {
 		if i, ok := r.byID[id]; ok {
@@ -42,6 +46,8 @@ func (r *memIdeaRepo) MergeIdeas(ctx context.Context, ids []string, plan func(re
 	if err != nil {
 		return nil, err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.byID[m.Keep.ID] = m.Keep
 	for _, id := range m.Delete {
 		delete(r.byID, id)
