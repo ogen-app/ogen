@@ -19,7 +19,7 @@ func (h *AnalyticsHandler) Service() *analytics.Service {
 	return &analytics.Service{
 		Repo: h.repo, Followers: h.followerRepo, Posts: h.posts, Platforms: h.platforms,
 		Accounts: h.accounts, Campaigns: h.campaigns, ReachSamples: h.reachByAgeSamples,
-		LifespanSamples: h.lifespanSamples,
+		LifespanSamples: h.lifespanSamples, Zernio: h.client, ProfileID: h.profileID, InsightCache: h.insights.get,
 	}
 }
 

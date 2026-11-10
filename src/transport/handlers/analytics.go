@@ -185,7 +185,7 @@ func (h *AnalyticsHandler) ListPosts(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "order must be asc or desc")
 	}
 
-	items, overview, err := h.repo.List(reqCtx(c), repository.PostAnalyticsListOptions{
+	res, _, err := h.Service().ListPosts(reqCtx(c), repository.PostAnalyticsListOptions{
 		// Restricted to Zernio-published posts. The marker
 		// lives in models so this stays decoupled from the zernio adapter.
 		Publisher: models.PublisherZernio,
@@ -198,21 +198,9 @@ func (h *AnalyticsHandler) ListPosts(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-
-	total := overview.PostCount
-	pages := 0
-	if total > 0 {
-		pages = (total + limit - 1) / limit
-	}
-
 	return c.JSON(analyticsListResponse{
-		Items: items,
-		Pagination: analyticsPagination{
-			Page:  page,
-			Limit: limit,
-			Total: total,
-			Pages: pages,
-		},
-		Overview: overview,
+		Items:      res.Items,
+		Pagination: analyticsPagination{Page: res.Page, Limit: res.Limit, Total: res.Total, Pages: res.Pages},
+		Overview:   res.Overview,
 	})
 }
