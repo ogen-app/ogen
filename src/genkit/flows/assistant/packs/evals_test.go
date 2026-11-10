@@ -74,6 +74,10 @@ type evalCase struct {
 	// offered is an offer the assistant made in the previous turn, still
 	// waiting for the user's answer.
 	offered *evalOffer
+	// atGoal runs the case on a campaign already at its goal of 10 posts.
+	atGoal bool
+	// orReply also accepts an answer without a tool: pushing back in words.
+	orReply bool
 }
 
 // evalOffer is an earlier turn that ended in an offer: what the user asked,
@@ -116,6 +120,14 @@ var evalCases = []evalCase{
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Make the brief more technical and benchmark-driven.", want: []string{"enrichBrief"}},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Move the campaign end to the last day of next month.", want: []string{"setCampaignDates"}},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Is the brief consistent?", want: []string{"checkBrief"}, not: writes},
+	// CON-256: a campaign at its goal pushes back on 20 more: the draft's
+	// guard offers the ways forward, ideas fill no goal, or the reply says so.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Create 20 more posts.", atGoal: true, orReply: true,
+		want: []string{"draftPost", "generatePosts", "setCampaignGoal"}, not: []string{"redistributePosts"}},
+	// CON-257: posts for a platform the campaign doesn't target lead to
+	// adding it, through the draft's offer or the platform tool itself.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Draft 2 Threads posts about the launch.",
+		want: []string{"draftPost", "generatePosts", "updateCampaignPlatforms"}},
 	// A yes to a waiting offer takes it, on the first try.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "yes please", offered: offerThreads, want: []string{"confirmOffer"}},
 	// Many posts start with a tool that waits for a yes, never one that
@@ -167,9 +179,11 @@ var evalCases = []evalCase{
 	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Even out the calendar.", want: []string{"optimiseCalendar", "redistributePosts", "checkCalendar"}},
 	{pack: "repair", screen: "post", scope: evalPost, say: "Is this post on brand? Check it against our voice and guardrails.", want: []string{"loadPack", "checkBrand"}, not: writes},
 	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Do the selected posts use any banned words or claims we can't make?", want: []string{"getSelection", "checkBrand"}, not: writes},
-	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Are we on track for our posting goal each week?", want: []string{"checkCalendar", "getCampaignOverview"}, not: writes},
+	// The campaign state carries the goal period and the calendar's
+	// problems, so answering from it is right too.
+	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Are we on track for our posting goal each week?", want: []string{"checkCalendar", "getCampaignOverview"}, not: writes, orReply: true},
 	{pack: "repair", screen: "campaign.overview", scope: evalCampaign, say: "Fix the problem crowded_slot:4f2a9c1d7e3b from the overview.", want: []string{"loadPack", "checkCalendar"}, not: writes},
-	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Which posts reuse the same idea too close together?", want: []string{"checkCalendar"}, not: writes},
+	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Which posts reuse the same idea too close together?", want: []string{"checkCalendar"}, not: writes, orReply: true},
 	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Take the selected posts off the calendar.", want: []string{"getSelection", "unschedulePosts"}, not: []string{"deletePosts"}},
 	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Delete the selected posts.", want: []string{"getSelection", "deletePosts"}},
 	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Turn the selected posts into image posts.", want: []string{"getSelection", "changePostType"}, not: []string{"editPost", "revisePost"}},
@@ -242,11 +256,38 @@ type evalCampaigns struct{ repository.CampaignRepository }
 
 func (evalCampaigns) GetByID(context.Context, string) (*models.Campaign, error) {
 	start := time.Now().UTC().Truncate(24 * time.Hour)
-	end := start.AddDate(0, 1, 0)
-	return &models.Campaign{ID: "c1", Name: "Go for AI engineering", Description: "Using Go for production AI features.",
+	end := start.AddDate(0, 1, 0).AddDate(0, 0, -1)
+	c := &models.Campaign{ID: "c1", Name: "Go for AI engineering", Description: "Using Go for production AI features.",
 		KeyMessages: "Static types, single-binary deploys.", Language: "en", StartDate: &start, EndDate: &end,
 		Platforms:       []models.Platform{{ID: "pl1", Name: "LinkedIn", PostTypes: models.PostTypeMap{"text-post": "Text"}}},
-		TargetPlatforms: models.CampaignPlatforms{{ID: "pl1"}}}, nil
+		TargetPlatforms: models.CampaignPlatforms{{ID: "pl1"}}}
+	if evalAtGoal {
+		c.EstimatedPostCount, c.GoalCadence = new(10), "month"
+	}
+	return c, nil
+}
+
+// evalAtGoal puts the eval campaign at its goal: a goal of 10 posts, and
+// 10 drafts in it. Cases run one at a time.
+var evalAtGoal bool
+
+// evalCampaignPosts are the eval campaign's posts: LinkedIn drafts every
+// few days, 10 of them at its goal, else 6.
+type evalCampaignPosts struct{ repository.PostRepository }
+
+func (evalCampaignPosts) ListRowsByCampaign(context.Context, string, ...string) ([]models.Post, error) {
+	n := 6
+	if evalAtGoal {
+		n = 10
+	}
+	start := time.Now().UTC().Truncate(24 * time.Hour).Add(9 * time.Hour)
+	posts := make([]models.Post, n)
+	for i := range posts {
+		at := start.AddDate(0, 0, 1+3*i)
+		posts[i] = models.Post{ID: fmt.Sprintf("p%d", i+1), Title: fmt.Sprintf("Post %d", i+1), Status: models.PostStatusDraft,
+			PlatformID: "pl1", PlatformPostType: "text-post", ScheduledAt: &at}
+	}
+	return posts, nil
 }
 
 // evalAssets and evalAnalyses are a bank with work waiting, for the assets
@@ -358,7 +399,7 @@ func TestPackEvals(t *testing.T) {
 	modelconfig.Init(ctx, &memModelConfig{}, modelconfig.Defaults{Generation: model, Planning: model, Quality: model}, vendors.VendorOf, tenantctx.TierFrom)
 
 	g := genkit.Init(ctx, genkit.WithPlugins(&anthropic.Anthropic{}))
-	campaign, err := campaign_assistant.NewPack(campaign_assistant.CampaignAssistantFlowConfig{}, campaign_assistant.CampaignAssistantRepos{Campaigns: evalCampaigns{}})
+	campaign, err := campaign_assistant.NewPack(campaign_assistant.CampaignAssistantFlowConfig{}, campaign_assistant.CampaignAssistantRepos{Campaigns: evalCampaigns{}, Posts: evalCampaignPosts{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,8 +440,8 @@ func TestPackEvals(t *testing.T) {
 	passed := map[string][2]int{}
 	for _, c := range evalCases {
 		t.Run(fmt.Sprintf("%s/%s", c.pack, c.say), func(t *testing.T) {
-			evalThread = c.offered
-			t.Cleanup(func() { evalThread = nil })
+			evalThread, evalAtGoal = c.offered, c.atGoal
+			t.Cleanup(func() { evalThread, evalAtGoal = nil, false })
 			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope, Focus: c.focus, Window: c.window}, Summary: "On " + string(c.screen)}
 			if c.focus != nil {
 				title := cmp.Or(c.title, "Villa Aurora brochure 2026")
@@ -453,6 +494,7 @@ func (c evalCase) judge(r *assistant.Routing) (bool, string) {
 	switch {
 	case len(c.want) == 0 && slices.ContainsFunc(got, func(n string) bool { return !strings.HasPrefix(n, "get") && n != "listCampaignPosts" }):
 		return false, "called a tool for a plain answer"
+	case len(c.want) > 0 && len(got) == 0 && c.orReply:
 	case len(c.want) > 0 && (len(got) == 0 || !slices.Contains(c.want, got[0])):
 		return false, fmt.Sprintf("first call isn't one of %v", c.want)
 	}
