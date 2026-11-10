@@ -59,6 +59,9 @@ type turnState struct {
 	// after a navigate applies to the new list.
 	screen   viewcontext.Screen
 	campaign string
+	// window is the analytics window a set_window in the turn asked for;
+	// nil keeps the screen's.
+	window *viewcontext.Window
 	// loaded is the turn's packs, besides core; restarted is set once the
 	// turn restarted with a pack loadPack asked for (requested).
 	loaded    []string
@@ -259,6 +262,20 @@ func (st *turnState) addUI(a UIAction) {
 	if a.Type == UINavigate || a.Type == UIOpenSavedView {
 		st.screen, st.campaign = a.Screen, a.CampaignID
 	}
+	if a.Type == UISetWindow {
+		st.window = a.Window
+	}
+}
+
+// currentWindow is the analytics window the turn reads: the one a
+// set_window asked for, else the screen's.
+func (st *turnState) currentWindow() *viewcontext.Window {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.window != nil {
+		return st.window
+	}
+	return st.view.View.Window
 }
 
 func (st *turnState) uiActions() []UIAction {
