@@ -32,85 +32,97 @@ func ideasPack(d Deps) assistant.Pack {
 		Name:    ideasPackName,
 		Summary: "find ideas, triage them (yes, later, no), move or delete them, and compile or draft them into posts",
 		Screens: []viewcontext.Screen{"ideas", "campaign.ideas"},
+		Begin:   beginResults(ideasPackName),
+		End:     endResults(ideasPackName),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			find := genkit.DefineTool(g, "findIdeas",
 				"Lists ideas matching a filter in the Ideas list's syntax, with their id, title, verdict, origin and plan.",
-				assistantkit.Wrap(func(ctx context.Context, in FindIdeasInput) (*FindIdeasOutput, error) { return findIdeas(ctx, d, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(ideasPackName, "findIdeas", nil, func(ctx context.Context, in FindIdeasInput) (*FindIdeasOutput, error) {
+					return findIdeas(ctx, d, in)
+				})), ai.WithStrictSchema(false))
 			verdict := genkit.DefineTool(g, "setIdeaVerdict",
 				"Triages one idea: yes, later (with a reminder date), no, or none to put it back in the inbox. Returns an undo id.",
-				assistantkit.Wrap(func(ctx context.Context, in SetIdeaVerdictInput) (*SetIdeaVerdictOutput, error) {
-					return setIdeaVerdict(ctx, d, in)
-				}), ai.WithStrictSchema(false))
+				onScreen(func(ctx context.Context, in *SetIdeaVerdictInput) { in.IdeaID = ideaOnScreen(ctx, in.IdeaID) },
+					assistantkit.Wrap(recorded(ideasPackName, "setIdeaVerdict", nil, func(ctx context.Context, in SetIdeaVerdictInput) (*SetIdeaVerdictOutput, error) {
+						return setIdeaVerdict(ctx, d, in)
+					}))), ai.WithStrictSchema(false))
 			verdicts := genkit.DefineTool(g, "setIdeaVerdicts",
 				"Triages several ideas at once with the same verdict. Above a few ideas it is offered for the user to confirm first.",
-				assistantkit.Gated("setIdeaVerdicts", assistantkit.Gate[SetIdeaVerdictsInput]{
-					Precheck: func(_ context.Context, in SetIdeaVerdictsInput) error { return checkIDs(in.IdeaIDs) },
-					Needs:    func(_ context.Context, in SetIdeaVerdictsInput) bool { return overN(d, len(in.IdeaIDs)) },
-					Summary: func(in SetIdeaVerdictsInput) string {
-						return fmt.Sprintf("Mark %s %s", plural(len(in.IdeaIDs), "idea", "ideas"), verdictLabel(in.Verdict))
-					},
-				}, assistantkit.Wrap(func(ctx context.Context, in SetIdeaVerdictsInput) (*BulkIdeasOutput, error) {
-					return setIdeaVerdicts(ctx, d, in)
-				})), ai.WithStrictSchema(false))
+				onScreen(func(ctx context.Context, in *SetIdeaVerdictsInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
+					assistantkit.Gated("setIdeaVerdicts", assistantkit.Gate[SetIdeaVerdictsInput]{
+						Precheck: func(_ context.Context, in SetIdeaVerdictsInput) error { return checkIDs(in.IdeaIDs) },
+						Needs:    func(_ context.Context, in SetIdeaVerdictsInput) bool { return overN(d, len(in.IdeaIDs)) },
+						Summary: func(in SetIdeaVerdictsInput) string {
+							return fmt.Sprintf("Mark %s %s", plural(len(in.IdeaIDs), "idea", "ideas"), verdictLabel(in.Verdict))
+						},
+					}, assistantkit.Wrap(recorded(ideasPackName, "setIdeaVerdicts", nil, func(ctx context.Context, in SetIdeaVerdictsInput) (*BulkIdeasOutput, error) {
+						return setIdeaVerdicts(ctx, d, in)
+					})))), ai.WithStrictSchema(false))
 			move := genkit.DefineTool(g, "moveIdeas",
 				"Moves ideas into a campaign, or out to the workspace backlog. Always offered for the user to confirm first.",
-				assistantkit.Gated("moveIdeas", assistantkit.Gate[MoveIdeasInput]{
-					Precheck: func(_ context.Context, in MoveIdeasInput) error { return checkIDs(in.IdeaIDs) },
-					Summary: func(in MoveIdeasInput) string {
-						if in.CampaignID == "" {
-							return fmt.Sprintf("Move %s to the workspace backlog", plural(len(in.IdeaIDs), "idea", "ideas"))
-						}
-						return fmt.Sprintf("Move %s into the campaign", plural(len(in.IdeaIDs), "idea", "ideas"))
-					},
-				}, assistantkit.Wrap(func(ctx context.Context, in MoveIdeasInput) (*BulkIdeasOutput, error) { return moveIdeas(ctx, d, in) })), ai.WithStrictSchema(false))
+				onScreen(func(ctx context.Context, in *MoveIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
+					assistantkit.Gated("moveIdeas", assistantkit.Gate[MoveIdeasInput]{
+						Precheck: func(_ context.Context, in MoveIdeasInput) error { return checkIDs(in.IdeaIDs) },
+						Summary: func(in MoveIdeasInput) string {
+							if in.CampaignID == "" {
+								return fmt.Sprintf("Move %s to the workspace backlog", plural(len(in.IdeaIDs), "idea", "ideas"))
+							}
+							return fmt.Sprintf("Move %s into the campaign", plural(len(in.IdeaIDs), "idea", "ideas"))
+						},
+					}, assistantkit.Wrap(recorded(ideasPackName, "moveIdeas", nil, func(ctx context.Context, in MoveIdeasInput) (*BulkIdeasOutput, error) {
+						return moveIdeas(ctx, d, in)
+					})))), ai.WithStrictSchema(false))
 			del := genkit.DefineTool(g, "deleteIdeas",
 				"Deletes ideas for good. Always offered for the user to confirm first.",
-				assistantkit.Gated("deleteIdeas", assistantkit.Gate[DeleteIdeasInput]{
-					Precheck: func(_ context.Context, in DeleteIdeasInput) error { return checkIDs(in.IdeaIDs) },
-					Summary: func(in DeleteIdeasInput) string {
-						return fmt.Sprintf("Delete %s", plural(len(in.IdeaIDs), "idea", "ideas"))
-					},
-				}, assistantkit.Wrap(func(ctx context.Context, in DeleteIdeasInput) (*BulkIdeasOutput, error) {
-					return deleteIdeas(ctx, d, in)
-				})), ai.WithStrictSchema(false))
+				onScreen(func(ctx context.Context, in *DeleteIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
+					assistantkit.Gated("deleteIdeas", assistantkit.Gate[DeleteIdeasInput]{
+						Precheck: func(_ context.Context, in DeleteIdeasInput) error { return checkIDs(in.IdeaIDs) },
+						Summary: func(in DeleteIdeasInput) string {
+							return fmt.Sprintf("Delete %s", plural(len(in.IdeaIDs), "idea", "ideas"))
+						},
+					}, assistantkit.Wrap(recorded(ideasPackName, "deleteIdeas", nil, func(ctx context.Context, in DeleteIdeasInput) (*BulkIdeasOutput, error) {
+						return deleteIdeas(ctx, d, in)
+					})))), ai.WithStrictSchema(false))
 			compile := genkit.DefineTool(g, "compileIdeas",
 				"Compiles one or more ideas into one planned post: their titles and angles become its theses, their plan suggests its platform, type, phase and date, and the post links back to them. No body is written.",
-				assistantkit.Wrap(func(ctx context.Context, in CompileIdeasInput) (*CompileIdeasOutput, error) {
-					return compileIdeas(ctx, d, in)
-				}), ai.WithStrictSchema(false))
+				onScreen(func(ctx context.Context, in *CompileIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
+					assistantkit.Wrap(recorded(ideasPackName, "compileIdeas", nil, func(ctx context.Context, in CompileIdeasInput) (*CompileIdeasOutput, error) {
+						return compileIdeas(ctx, d, in)
+					}))), ai.WithStrictSchema(false))
 			draft := genkit.DefineTool(g, "draftIdeas",
 				"Writes finished posts from ideas and saves them as drafts with a body: one per idea per platform, or with together one per platform from all of them. Above a few posts it is offered for the user to confirm first.",
-				assistantkit.Gated("draftIdeas", assistantkit.Gate[DraftIdeasInput]{
-					Precheck: func(ctx context.Context, in DraftIdeasInput) error {
-						_, err := planDraft(ctx, d, in)
-						return err
-					},
-					Needs: func(ctx context.Context, in DraftIdeasInput) bool {
-						plan, err := planDraft(ctx, d, in)
-						return err == nil && overN(d, len(plan.Jobs))
-					},
-					Summary: func(in DraftIdeasInput) string {
-						return fmt.Sprintf("Write posts from %s", plural(len(in.IdeaIDs), "idea", "ideas"))
-					},
-				}, assistantkit.Wrap(func(ctx context.Context, in DraftIdeasInput) (*DraftIdeasOutput, error) {
-					return draftIdeas(ctx, d, in)
-				})), ai.WithStrictSchema(false))
+				onScreen(func(ctx context.Context, in *DraftIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
+					assistantkit.Gated("draftIdeas", assistantkit.Gate[DraftIdeasInput]{
+						Precheck: func(ctx context.Context, in DraftIdeasInput) error {
+							_, err := planDraft(ctx, d, in)
+							return err
+						},
+						Needs: func(ctx context.Context, in DraftIdeasInput) bool {
+							plan, err := planDraft(ctx, d, in)
+							return err == nil && overN(d, len(plan.Jobs))
+						},
+						Summary: func(in DraftIdeasInput) string {
+							return fmt.Sprintf("Write posts from %s", plural(len(in.IdeaIDs), "idea", "ideas"))
+						},
+					}, assistantkit.Wrap(recorded(ideasPackName, "draftIdeas", nil, func(ctx context.Context, in DraftIdeasInput) (*DraftIdeasOutput, error) {
+						return draftIdeas(ctx, d, in)
+					})))), ai.WithStrictSchema(false))
 
 			return append([]assistantkit.Spec{
 				spec(ideasPackName, find, assistantkit.TierRead,
 					`Call this to look up ideas by what they are about or by state — e.g. "which ideas are about pricing?", "the undecided ones from analyses". filter is a URL query string in the Ideas list's syntax: text=, pile=waiting|yes|later|no, origin=asset_analysis|content_plan|assistant|manual, fit=high|medium|low, campaign=<id>. To show the user, also call setFilter with the same filter.`),
 				spec(ideasPackName, verdict, assistantkit.TierReversible,
-					`Call this to triage ONE idea — "yes to this one", "snooze it until Monday", "not this". later needs remindAt (YYYY-MM-DD or RFC 3339). It can be undone.`),
+					`Call this to triage ONE idea — "yes to this one", "snooze it until Monday", "not this". ideaId defaults to the idea open on screen, else the one selected. later needs remindAt (YYYY-MM-DD or RFC 3339). It can be undone.`),
 				spec(ideasPackName, verdicts, assistantkit.TierProposal,
-					`Call this to triage SEVERAL ideas the same way — "mark all of these yes". Pass ideaIds (from getSelection or findIdeas, at most 200). More than a few are offered first; relay that.`),
+					`Call this to triage SEVERAL ideas the same way — "mark all of these yes". ideaIds default to the ideas selected on screen; otherwise pass them (from getSelection or findIdeas, at most 200). More than a few are offered first; relay that.`),
 				spec(ideasPackName, move, assistantkit.TierProposal,
-					`Call this to move ideas into a campaign (campaignId) or back to the workspace backlog (campaignId empty). Always offered first.`),
+					`Call this to move ideas into a campaign (campaignId) or back to the workspace backlog (campaignId empty). ideaIds default to the selected ideas, else the open one. Always offered first.`),
 				spec(ideasPackName, del, assistantkit.TierProposal,
-					`Call this when the user asks to delete ideas. Always offered first; it can't be undone.`),
+					`Call this when the user asks to delete ideas. ideaIds default to the selected ideas, else the open one. Always offered first; it can't be undone.`),
 				spec(ideasPackName, compile, assistantkit.TierReversible,
-					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these". It writes no body: the post holds their theses until someone drafts it. Pass ideaIds in the order the theses should come; the campaign defaults to the one they share.`),
+					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these". It writes no body: the post holds their theses until someone drafts it. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share.`),
 				spec(ideasPackName, draft, assistantkit.TierProposal,
-					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. More than a few posts are offered first.`),
+					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". ideaIds default to the selected ideas, else the open one. platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. More than a few posts are offered first.`),
 			}, defineMergeTools(g, d)...), nil
 		},
 	}
@@ -203,7 +215,7 @@ func ideaRef(i models.Idea) IdeaRef {
 
 // SetIdeaVerdictInput triages one idea.
 type SetIdeaVerdictInput struct {
-	IdeaID   string `json:"ideaId"`
+	IdeaID   string `json:"ideaId,omitempty"   jsonschema:"description=Defaults to the idea open on screen, else the one selected"`
 	Verdict  string `json:"verdict"            jsonschema:"description=yes, later, no, or none to put it back in the inbox"`
 	RemindAt string `json:"remindAt,omitempty" jsonschema:"description=When a later idea comes back: YYYY-MM-DD or RFC 3339"`
 }
@@ -260,6 +272,9 @@ func triageErr(err error) error {
 }
 
 func setIdeaVerdict(ctx context.Context, d Deps, in SetIdeaVerdictInput) (*SetIdeaVerdictOutput, error) {
+	if strings.TrimSpace(in.IdeaID) == "" {
+		return nil, assistantkit.Refused("which idea? open it, select it, or pass ideaId")
+	}
 	verdict, remindAt, err := parseVerdict(in.Verdict, in.RemindAt)
 	if err != nil {
 		return nil, err
@@ -280,7 +295,7 @@ func setIdeaVerdict(ctx context.Context, d Deps, in SetIdeaVerdictInput) (*SetId
 
 // SetIdeaVerdictsInput triages several ideas the same way.
 type SetIdeaVerdictsInput struct {
-	IdeaIDs  []string `json:"ideaIds"`
+	IdeaIDs  []string `json:"ideaIds,omitempty"  jsonschema:"description=Default the ideas selected on screen, else the open one"`
 	Verdict  string   `json:"verdict"            jsonschema:"description=yes, later, no, or none"`
 	RemindAt string   `json:"remindAt,omitempty" jsonschema:"description=For later: YYYY-MM-DD or RFC 3339"`
 }
@@ -333,7 +348,7 @@ func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*Bul
 
 // MoveIdeasInput moves ideas into a campaign or out of one.
 type MoveIdeasInput struct {
-	IdeaIDs    []string `json:"ideaIds"`
+	IdeaIDs    []string `json:"ideaIds,omitempty"    jsonschema:"description=Default the ideas selected on screen, else the open one"`
 	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=The campaign to move them into; empty moves them to the workspace backlog"`
 }
 
@@ -362,7 +377,7 @@ func moveIdeas(ctx context.Context, d Deps, in MoveIdeasInput) (*BulkIdeasOutput
 
 // DeleteIdeasInput deletes ideas.
 type DeleteIdeasInput struct {
-	IdeaIDs []string `json:"ideaIds"`
+	IdeaIDs []string `json:"ideaIds,omitempty" jsonschema:"description=Default the ideas selected on screen, else the open one"`
 }
 
 func deleteIdeas(ctx context.Context, d Deps, in DeleteIdeasInput) (*BulkIdeasOutput, error) {
@@ -380,7 +395,7 @@ func deleteIdeas(ctx context.Context, d Deps, in DeleteIdeasInput) (*BulkIdeasOu
 
 // CompileIdeasInput turns ideas into one planned post.
 type CompileIdeasInput struct {
-	IdeaIDs    []string `json:"ideaIds"              jsonschema:"description=The ideas, in the order their theses should come"`
+	IdeaIDs    []string `json:"ideaIds,omitempty"    jsonschema:"description=The ideas, in the order their theses should come; default the selected ideas, else the open one"`
 	Title      string   `json:"title,omitempty"      jsonschema:"description=The post's title; defaults to the first idea's"`
 	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=The post's campaign; defaults to the one the ideas share"`
 	PlatformID string   `json:"platformId,omitempty"`
@@ -449,7 +464,7 @@ func orphaned(err error) bool {
 
 // DraftIdeasInput writes posts from ideas.
 type DraftIdeasInput struct {
-	IdeaIDs     []string `json:"ideaIds"`
+	IdeaIDs     []string `json:"ideaIds,omitempty"     jsonschema:"description=Default the ideas selected on screen, else the open one"`
 	PlatformIDs []string `json:"platformIds,omitempty" jsonschema:"description=Platforms to write for; default the ideas' suggested platform"`
 	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Needs exactly one platform"`
 	Together    bool     `json:"together,omitempty"    jsonschema:"description=One post per platform from all the ideas, instead of one per idea"`
