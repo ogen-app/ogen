@@ -25,6 +25,12 @@ const (
 	AssistantActionIdeaVerdict AssistantActionKind = "idea_verdict"
 	// AssistantActionIdeaEdit is a change to one idea's title, note or plan.
 	AssistantActionIdeaEdit AssistantActionKind = "idea_edit"
+	// AssistantActionIdeaVerdicts is several ideas triaged the same way at
+	// once.
+	AssistantActionIdeaVerdicts AssistantActionKind = "idea_verdicts"
+	// AssistantActionPostCreated is a post the assistant made from ideas;
+	// undoing it deletes the post while no one has changed it.
+	AssistantActionPostCreated AssistantActionKind = "post_created"
 	// AssistantActionBrandFact is a fact added to, changed in or removed
 	// from the ledger.
 	AssistantActionBrandFact AssistantActionKind = "brand_fact"
