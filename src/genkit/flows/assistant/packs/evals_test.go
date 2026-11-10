@@ -26,6 +26,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
+	"github.com/ogen-app/ogen/src/genkit/flows/more_like_these"
 	"github.com/ogen-app/ogen/src/genkit/flows/post_assistant"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/infra/vendors"
@@ -65,6 +66,8 @@ type evalCase struct {
 	title string
 	// selected are the posts the user ticked, by title.
 	selected []string
+	// window is the analytics window on screen.
+	window *viewcontext.Window
 }
 
 var (
@@ -131,7 +134,19 @@ var evalCases = []evalCase{
 	// analytics
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How did we do over the last 4 weeks?", want: []string{"analyticsOverview"}, not: writes},
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Which posts performed best?", want: []string{"topPosts"}, not: writes},
-	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "What's the best time of day to post, judging by what worked?", want: []string{"analyticsLessons"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "What's the best time of day to post, judging by what worked?", want: []string{"analyticsLessons", "bestTimes"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "What does the publisher say is the best hour to post on Instagram?", want: []string{"bestTimes"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Do we post too often on LinkedIn? What cadence works best?", want: []string{"postingFrequency"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How quickly do our posts get most of their engagement?", want: []string{"contentDecay", "analyticsLessons"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How have our followers grown since March?", want: []string{"followerHistory"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "List our posts by saves.", want: []string{"listPostAnalytics"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Compare March with April.", want: []string{"comparePeriods"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Show only LinkedIn for last month on the dashboard.", want: []string{"setAnalyticsWindow"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, window: &viewcontext.Window{From: "2026-10-01", To: "2026-10-31", CampaignID: "c1"},
+		say: "How did reach do in this view?", want: []string{"analyticsOverview"}, not: writes},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, selected: []string{"Why discounts backfire", "The 3 pricing pages"},
+		say: "Give me three ideas like the selected posts.", want: []string{"moreLikeThese", "getSelection"}, not: []string{"draftPost", "draftIdeas", "generatePosts"}},
+	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Make three more like our top performers.", want: []string{"topPosts", "moreLikeThese"}, not: []string{"draftPost", "draftIdeas", "generatePosts"}},
 	{pack: "analytics", screen: "analytics.post", scope: evalPost, say: "How is this post doing?", want: []string{"postStats"}, not: writes},
 	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, say: "Merge the duplicate ideas.", want: []string{"findDuplicateIdeas"}, not: []string{"deleteIdeas"}},
 	// foundation
@@ -307,6 +322,7 @@ func TestPackEvals(t *testing.T) {
 			return nil, nil
 		},
 		CheckBrand: func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
+		MoreLike:   func(context.Context, more_like_these.Request) ([]more_like_these.Idea, error) { return nil, nil },
 		Remove:     evalRemover{},
 		Revise:     func(context.Context, string, string, string) (bool, error) { return true, nil },
 	})
@@ -318,7 +334,7 @@ func TestPackEvals(t *testing.T) {
 	passed := map[string][2]int{}
 	for _, c := range evalCases {
 		t.Run(fmt.Sprintf("%s/%s", c.pack, c.say), func(t *testing.T) {
-			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope, Focus: c.focus}, Summary: "On " + string(c.screen)}
+			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope, Focus: c.focus, Window: c.window}, Summary: "On " + string(c.screen)}
 			if c.focus != nil {
 				title := cmp.Or(c.title, "Villa Aurora brochure 2026")
 				view.Focus = &viewresolve.Item{Kind: c.focus.Kind, ID: c.focus.ID, Title: title}
