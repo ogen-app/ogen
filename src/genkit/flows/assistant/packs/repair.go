@@ -581,7 +581,28 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 		}
 		open = append(open, f)
 	}
-	// One brief edit takes every open brief finding, beside each one's own.
+	briefs, err := briefFindings(ctx, d, c, open)
+	if err != nil {
+		return nil, err
+	}
+	out.Findings = append(out.Findings, briefs...)
+	for _, f := range postsReview.Findings {
+		if dismissed[f.Key] {
+			out.Dismissed++
+			continue
+		}
+		rf, err := postFinding(ctx, d, c, f)
+		if err != nil {
+			return nil, err
+		}
+		out.Findings = append(out.Findings, rf)
+	}
+	return out, nil
+}
+
+// briefFindings offers the brief's open findings their fixes: each its own
+// brief edit, and when there are several, one edit taking them all.
+func briefFindings(ctx context.Context, d Deps, c *models.Campaign, open []consistency.Finding) ([]ReviewFinding, error) {
 	var allFix *FixOffer
 	if len(open) > 1 && d.Campaign != nil {
 		id, err := assistantkit.Offer(ctx, assistantkit.Proposal{
@@ -594,6 +615,7 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 		}
 		allFix = &FixOffer{Fix: calendarcheck.Fix{Kind: consistency.FixImproveBrief, Title: "Fix all of the brief's findings"}, ProposalID: id}
 	}
+	out := make([]ReviewFinding, 0, len(open))
 	for _, f := range open {
 		rf := ReviewFinding{Kind: "brief", Key: f.Key, Severity: f.Severity, Aspect: f.Aspect, Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
 		for _, fix := range f.Fixes {
@@ -610,31 +632,31 @@ func reviewCampaign(ctx context.Context, d Deps, in CampaignRef) (*ReviewOutput,
 		if allFix != nil {
 			rf.Fixes = append(rf.Fixes, *allFix)
 		}
-		out.Findings = append(out.Findings, rf)
-	}
-	for _, f := range postsReview.Findings {
-		if dismissed[f.Key] {
-			out.Dismissed++
-			continue
-		}
-		rf := ReviewFinding{Kind: "post", Key: f.Key, Severity: f.Severity, PostID: f.PostID, Title: f.Title,
-			Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
-		for _, fix := range f.Fixes {
-			offer := FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(fix.Kind), Title: fix.Title, PostID: fix.PostID}}
-			if fix.Kind == consistency.FixRevisePost {
-				if d.Revise == nil {
-					continue
-				}
-				if offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "revisePost",
-					Args: RevisePostInput{CampaignID: c.ID, PostID: fix.PostID, Instruction: fix.Instruction}, Summary: fix.Title}); err != nil {
-					return nil, err
-				}
-			}
-			rf.Fixes = append(rf.Fixes, offer)
-		}
-		out.Findings = append(out.Findings, rf)
+		out = append(out, rf)
 	}
 	return out, nil
+}
+
+// postFinding offers a drifting post's fixes: rewriting it, when the
+// writer is here, and opening it.
+func postFinding(ctx context.Context, d Deps, c *models.Campaign, f consistency.PostFinding) (ReviewFinding, error) {
+	rf := ReviewFinding{Kind: "post", Key: f.Key, Severity: f.Severity, PostID: f.PostID, Title: f.Title,
+		Issue: f.Issue, Suggestion: f.Suggestion, Fixes: []FixOffer{}}
+	for _, fix := range f.Fixes {
+		offer := FixOffer{Fix: calendarcheck.Fix{Kind: calendarcheck.FixKind(fix.Kind), Title: fix.Title, PostID: fix.PostID}}
+		if fix.Kind == consistency.FixRevisePost {
+			if d.Revise == nil {
+				continue
+			}
+			var err error
+			if offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{Tool: "revisePost",
+				Args: RevisePostInput{CampaignID: c.ID, PostID: fix.PostID, Instruction: fix.Instruction}, Summary: fix.Title}); err != nil {
+				return ReviewFinding{}, err
+			}
+		}
+		rf.Fixes = append(rf.Fixes, offer)
+	}
+	return rf, nil
 }
 
 // dismissedKeys are the campaign's dismissed findings, the ones its Overview
