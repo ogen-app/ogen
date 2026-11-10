@@ -293,6 +293,20 @@ func (e *Enqueuer) EnqueueAdminTenantRegisteredEmail(ctx context.Context, tenant
 	}, nil)
 }
 
+// EnqueueWeeklyReportEmail queues a weekly report a member asked for to
+// that member, under key. With no enqueuer wired it fails, since the member
+// is told it is on its way.
+func (e *Enqueuer) EnqueueWeeklyReportEmail(ctx context.Context, userID, tenantID, key string, view models.WeeklyReportView) error {
+	return e.enqueue(ctx, SendEmailTask{
+		UserID:         userID,
+		TenantID:       tenantID,
+		TemplateKey:    templates.KeyWeeklyReport,
+		EmailKind:      models.EmailKindTransactional,
+		IdempotencyKey: key,
+		Report:         &view,
+	}, nil)
+}
+
 // EnqueueNotifyHarborTenantRegisteredTx enqueues the CON-229 "notify Harbor a
 // new tenant registered" webhook job inside the signup transaction, so the
 // operator notification fires iff the tenant commits. A nil enqueuer is a no-op.

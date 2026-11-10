@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"slices"
 
 	"github.com/uptrace/bun"
 
@@ -22,6 +23,10 @@ type AutoPublishAllowlistRepository interface {
 	List(ctx context.Context) ([]string, error)
 	Set(ctx context.Context, platformIDs []string) error
 	Contains(ctx context.Context, platformID string) (bool, error)
+	// ReplaceIf sets the list to `to` only while it is exactly `from` (in
+	// any order), on db (nil: the pool); false when it was changed since.
+	// It locks the workspace's rows, so two replaces don't both pass.
+	ReplaceIf(ctx context.Context, db bun.IDB, from, to []string) (bool, error)
 }
 
 type autoPublishAllowlistRepository struct {
@@ -83,4 +88,40 @@ func (r *autoPublishAllowlistRepository) Contains(ctx context.Context, platformI
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (r *autoPublishAllowlistRepository) ReplaceIf(ctx context.Context, db bun.IDB, from, to []string) (bool, error) {
+	if db == nil {
+		db = r.db
+	}
+	replaced := false
+	err := db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		var cur []string
+		if err := tx.NewSelect().Model((*models.AutoPublishAllowlistEntry)(nil)).
+			Column("platform_id").For("UPDATE").Scan(ctx, &cur); err != nil {
+			return err
+		}
+		slices.Sort(cur)
+		want := slices.Clone(from)
+		slices.Sort(want)
+		if !slices.Equal(cur, slices.Compact(want)) {
+			return nil
+		}
+		if _, err := tx.NewDelete().Model((*models.AutoPublishAllowlistEntry)(nil)).Where("1 = 1").Exec(ctx); err != nil {
+			return err
+		}
+		next := slices.Compact(slices.Sorted(slices.Values(to)))
+		if len(next) > 0 {
+			rows := make([]models.AutoPublishAllowlistEntry, len(next))
+			for i, id := range next {
+				rows[i] = models.AutoPublishAllowlistEntry{PlatformID: id}
+			}
+			if _, err := tx.NewInsert().Model(&rows).Exec(ctx); err != nil {
+				return err
+			}
+		}
+		replaced = true
+		return nil
+	})
+	return replaced, err
 }

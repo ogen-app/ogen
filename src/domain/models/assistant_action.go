@@ -46,6 +46,9 @@ const (
 	// AssistantActionPostTypes is posts of a campaign changed to another
 	// post type.
 	AssistantActionPostTypes AssistantActionKind = "post_types"
+	// AssistantActionAutoPublish is the workspace's auto-publish allowlist
+	// changed.
+	AssistantActionAutoPublish AssistantActionKind = "auto_publish"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's

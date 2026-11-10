@@ -60,6 +60,31 @@ func (s *Service) Report(ctx context.Context, date, tz, campaignID string) (*Rep
 	return &r, nil
 }
 
+// Range rolls up the local days from to to (inclusive, YYYY-MM-DD) in tz,
+// optionally for one campaign, at most MaxRangeDays of them.
+func (s *Service) Range(ctx context.Context, from, to, tz, campaignID string) (*RangeReport, error) {
+	defer track(s.now())
+	Requests.Add(1)
+
+	loc, err := loadLocation(tz)
+	if err != nil {
+		return nil, err
+	}
+	w, err := rangeWindow(from, to, loc)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireCampaign(ctx, campaignID); err != nil {
+		return nil, err
+	}
+	in, err := s.loadInputs(ctx, w.Lo, w.Hi, campaignID, 0)
+	if err != nil {
+		return nil, err
+	}
+	r := computeRange(in, from, to, tz, w, loc)
+	return &r, nil
+}
+
 // Reports lists the non-empty local days newest-first, at most `limit`, older
 // than `before` (exclusive; empty = up to now). Keyset-paginated by date via
 // `before`.
