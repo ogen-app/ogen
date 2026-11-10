@@ -64,8 +64,10 @@ type evalCase struct {
 	// title; the asset brochure's when empty.
 	focus *viewcontext.Ref
 	title string
-	// selected are the posts the user ticked, by title.
+	// selected are the items the user ticked, by title: posts, or ideas
+	// with ideas set.
 	selected []string
+	ideas    bool
 	// window is the analytics window on screen.
 	window *viewcontext.Window
 }
@@ -78,11 +80,14 @@ var (
 	evalOpenVoice = &viewcontext.Ref{Kind: viewcontext.KindVoice, ID: "v1"}
 	evalOpenAud   = &viewcontext.Ref{Kind: viewcontext.KindAudience, ID: "au1"}
 	evalOpenSer   = &viewcontext.Ref{Kind: viewcontext.KindSeries, ID: "s1"}
+	evalOpenIdea  = &viewcontext.Ref{Kind: viewcontext.KindIdea, ID: "i1"}
+	evalIdeas     = []string{"Pricing myths founders believe", "Why pricing pages fail", "A founder's pricing story"}
 	writes        = []string{"runContentPlan", "generatePosts", "draftPost", "enrichBrief", "setCampaignDates", "redistributePosts", "editPost", "deleteIdeas",
 		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails",
 		"createSeries", "updateSeries", "removeSeries", "runSeries", "stopSeries", "editBrand",
 		"startBrandDistill", "answerDistillQuestions", "commitBrandDistill",
-		"applyCalendarMoves", "unschedulePosts", "deletePosts", "changePostType", "revisePost", "setAutoPublish", "emailWeeklyDigest"}
+		"applyCalendarMoves", "unschedulePosts", "deletePosts", "changePostType", "revisePost", "setAutoPublish", "emailWeeklyDigest",
+		"setIdeaVerdict", "setIdeaVerdicts", "moveIdeas", "mergeIdeas", "compileIdeas", "draftIdeas", "editIdea"}
 )
 
 var evalCases = []evalCase{
@@ -105,6 +110,20 @@ var evalCases = []evalCase{
 	// ideas
 	{pack: "ideas", screen: "ideas", scope: evalWorkspace, say: "Which undecided ideas are about pricing?", want: []string{"findIdeas", "setFilter"}, not: writes},
 	{pack: "ideas", screen: "ideas", scope: evalWorkspace, say: "Find duplicate ideas.", want: []string{"findDuplicateIdeas", "findIdeas"}, not: writes},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, say: "How many ideas are waiting for a decision?", not: []string{"findIdeas"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, say: "Which planned ideas haven't been made into posts yet?", not: []string{"findIdeas", "compileIdeas", "draftIdeas"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, focus: evalOpenIdea, title: evalIdeas[0], say: "Why does this idea fit so well?", want: []string{"getIdea"}, not: writes},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, focus: evalOpenIdea, title: evalIdeas[0], say: "Has this idea been used in a post yet?", want: []string{"getIdea"}, not: writes},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, focus: evalOpenIdea, title: evalIdeas[0], say: "Yes to this one.", want: []string{"setIdeaVerdict"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, focus: evalOpenIdea, title: evalIdeas[0], say: "Rename it to 'Five pricing myths founders believe'.", want: []string{"editIdea"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, focus: evalOpenIdea, title: evalIdeas[0], say: "Plan this one for LinkedIn on 2026-12-08.", want: []string{"editIdea"}, not: []string{"compileIdeas", "draftIdeas"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, focus: evalOpenIdea, title: evalIdeas[0], say: "Anything similar to this one?", want: []string{"similarIdeas"}, not: writes},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, selected: evalIdeas, ideas: true, say: "What do the selected ideas have in common?", want: []string{"ideasInCommon", "getSelection"}, not: writes},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, selected: evalIdeas, ideas: true, say: "Mark the selected ideas as no.", want: []string{"setIdeaVerdicts", "getSelection"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, selected: evalIdeas, ideas: true, say: "Move the selected ideas into the Go for AI engineering campaign (c1).", want: []string{"moveIdeas", "getSelection"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, selected: evalIdeas, ideas: true, say: "Delete the selected ideas.", want: []string{"deleteIdeas", "getSelection"}},
+	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, selected: evalIdeas, ideas: true, say: "Make one post out of the selected ideas.", want: []string{"compileIdeas", "getSelection"}, not: []string{"draftIdeas"}},
+	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, selected: evalIdeas, ideas: true, say: "Write LinkedIn posts from the selected ideas.", want: []string{"draftIdeas", "getSelection"}, not: []string{"compileIdeas"}},
 	// assets
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "What do my assets say about enterprise pricing?", want: []string{"askAssets", "findAssets"}, not: writes},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Import https://example.com/launch as an asset.", want: []string{"importPage"}},
@@ -351,11 +370,15 @@ func TestPackEvals(t *testing.T) {
 				view.Summary += `, showing "` + title + `"`
 			}
 			if len(c.selected) > 0 {
-				sel := &viewcontext.Selection{Kind: viewcontext.KindPost}
+				kind, prefix := viewcontext.KindPost, "p"
+				if c.ideas {
+					kind, prefix = viewcontext.KindIdea, "i"
+				}
+				sel := &viewcontext.Selection{Kind: kind}
 				for i, title := range c.selected {
-					id := fmt.Sprintf("p%d", i+1)
+					id := fmt.Sprintf("%s%d", prefix, i+1)
 					sel.IDs = append(sel.IDs, id)
-					view.Selection = append(view.Selection, viewresolve.Item{Kind: viewcontext.KindPost, ID: id, Title: title})
+					view.Selection = append(view.Selection, viewresolve.Item{Kind: kind, ID: id, Title: title})
 				}
 				view.View.Selection, view.SelectionTotal = sel, len(c.selected)
 			}
