@@ -14,6 +14,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/usecase/analytics"
 )
 
 // SetWindowInput is the analytics window to show; what it leaves out stays
@@ -45,17 +46,45 @@ func setWindowSpec(g *genkit.Genkit, d Deps) assistantkit.Spec {
 }
 
 func setAnalyticsWindow(ctx context.Context, d Deps, in SetWindowInput) (*SetWindowOutput, error) {
+	var sc *analytics.Scope
+	screen, w, err := assistant.SetWindow(ctx, func(cur *viewcontext.Window) (viewcontext.Window, error) {
+		w, err := mergeWindow(cur, in)
+		if err != nil {
+			return w, err
+		}
+		// The scope check refuses an unknown platform or campaign before the
+		// screen changes.
+		sc, err = resolveScope(ctx, d, w.Platforms, w.CampaignID)
+		return w, err
+	})
+	if errors.Is(err, assistant.ErrNoAnalyticsScreen) {
+		return nil, assistantkit.Refused(err.Error())
+	}
+	if err != nil {
+		return nil, err
+	}
+	a := Applied{From: w.From, To: w.To, Platforms: sc.Platforms()}
+	if id := sc.Campaign(); id != "" {
+		a.Campaign = &AppliedCampaign{ID: id, Name: sc.CampaignName()}
+	}
+	return &SetWindowOutput{Done: "showing " + describeWindow(a) + " on " + string(screen), Applied: a,
+		Note: "The user's screen changes when your reply arrives; describe it as done."}, nil
+}
+
+// mergeWindow is cur with what in sets: its dates, its platforms ("all"
+// clears them), its campaign ("all" clears it).
+func mergeWindow(cur *viewcontext.Window, in SetWindowInput) (viewcontext.Window, error) {
 	var w viewcontext.Window
-	if cur := assistant.Window(ctx); cur != nil {
+	if cur != nil {
 		w = *cur
 	}
 	if in.Window != "" || in.From != "" || in.To != "" {
 		rng, err := timeframe.Resolve(in.From, in.To, in.Window, "", time.Now().UTC())
 		if errors.Is(err, timeframe.ErrWindowTooLarge) {
-			return nil, assistantkit.Refused("that window is too long; pick a shorter one")
+			return w, assistantkit.Refused("that window is too long; pick a shorter one")
 		}
 		if err != nil {
-			return nil, assistantkit.Refused("the window is a relative span like 28d, or from and to dates")
+			return w, assistantkit.Refused("the window is a relative span like 28d, or from and to dates")
 		}
 		w.From, w.To = rng.From.Format(time.DateOnly), rng.To.AddDate(0, 0, -1).Format(time.DateOnly)
 	}
@@ -74,25 +103,7 @@ func setAnalyticsWindow(ctx context.Context, d Deps, in SetWindowInput) (*SetWin
 	case in.CampaignID != "":
 		w.CampaignID = in.CampaignID
 	}
-	// The scope check refuses an unknown platform or campaign before the
-	// screen changes.
-	sc, err := resolveScope(ctx, d, w.Platforms, w.CampaignID)
-	if err != nil {
-		return nil, err
-	}
-	screen, err := assistant.SetWindow(ctx, w)
-	if errors.Is(err, assistant.ErrNoAnalyticsScreen) {
-		return nil, assistantkit.Refused(err.Error())
-	}
-	if err != nil {
-		return nil, err
-	}
-	a := Applied{From: w.From, To: w.To, Platforms: sc.Platforms()}
-	if id := sc.Campaign(); id != "" {
-		a.Campaign = &AppliedCampaign{ID: id, Name: sc.CampaignName()}
-	}
-	return &SetWindowOutput{Done: "showing " + describeWindow(a) + " on " + string(screen), Applied: a,
-		Note: "The user's screen changes when your reply arrives; describe it as done."}, nil
+	return w, nil
 }
 
 // describeWindow says a window in words.
