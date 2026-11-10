@@ -77,9 +77,11 @@ type bulkIn struct {
 
 // brokenBulk is the count bulkThing fails on; goneBulk the one it refuses
 // once confirmed, as work whose subject went away while it waited.
+// shrunkBulk is the count that shrinks by one while its offer waits.
 const (
 	brokenBulk = 13
 	goneBulk   = 14
+	shrunkBulk = 15
 )
 
 // bulkPack has one gated tool: more than 3 items wait for a yes.
@@ -91,6 +93,12 @@ func bulkPack(ran *int) Pack {
 				assistantkit.Gated("bulkThing", assistantkit.Gate[bulkIn]{
 					Needs:   func(_ context.Context, in bulkIn) bool { return in.N > 3 },
 					Summary: func(in bulkIn) string { return fmt.Sprintf("Do %d things", in.N) },
+					Recheck: func(_ context.Context, in bulkIn) (bulkIn, error) {
+						if in.N == shrunkBulk {
+							in.N--
+						}
+						return in, nil
+					},
 				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (int, error) {
 					if in.N == brokenBulk {
 						return 0, errors.New("bulk engine down")
@@ -343,8 +351,9 @@ func TestProposals_CardConfirmRefusedIsConflict(t *testing.T) {
 	if !slices.Equal(events, []SSEEventKind{SSEEventProposalResolved}) {
 		t.Fatalf("events = %v; want only proposal_resolved", events)
 	}
+	// The thread keeps why it didn't run.
 	thread, _ := h.msgs.ListRecent(ctx, models.AssistantScopeWorkspace, "", 10)
-	if len(thread) != 2 || !strings.Contains(thread[1].Content, unfinishedAnswer) {
+	if len(thread) != 2 || !strings.Contains(thread[1].Content, "those things are gone") {
 		t.Fatalf("thread = %+v", thread)
 	}
 }
@@ -369,5 +378,26 @@ func TestProposals_ConfirmFromAnotherThreadIsRefused(t *testing.T) {
 		if *ran != 0 || store.rows[0].Status != models.ProposalPending {
 			t.Fatalf("from %s: ran = %d, status = %s; want pending, unrun", view, *ran, store.rows[0].Status)
 		}
+	}
+}
+
+// An offer whose subject changed while it waited runs nothing once
+// confirmed: what still holds comes back on a fresh card.
+func TestProposals_AnswerFromTheCardReoffersWhatStillHolds(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	store.rows = []*models.AssistantProposal{
+		{ID: "stale", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(shrunkBulk)},
+			Summary: "Do 15 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	var events []SSEEventKind
+	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "stale", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
+	if err != nil || *ran != 0 || !strings.HasPrefix(resp.Explanation, assistantkit.ChangedSince) {
+		t.Fatalf("resp = %+v, err = %v, ran = %d", resp, err, *ran)
+	}
+	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Do 14 things" || len(store.rows) != 2 || store.rows[0].Status != models.ProposalConfirmed || store.rows[1].Status != models.ProposalPending {
+		t.Fatalf("cards = %+v, rows = %d", resp.Proposals, len(store.rows))
+	}
+	if !slices.Equal(events, []SSEEventKind{SSEEventProposalCreated, SSEEventProposalResolved, SSEEventComplete}) {
+		t.Fatalf("events = %v", events)
 	}
 }

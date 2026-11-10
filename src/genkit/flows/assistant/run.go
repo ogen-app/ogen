@@ -223,6 +223,8 @@ func callModel(ctx context.Context, g *genkit.Genkit, cfg FlowConfig, p *prompts
 		ai.WithModelName(mc.Ref),
 		ai.WithSystem(system),
 		ai.WithTools(tools.tools(loaded)...),
+		// The runner, not the prompt, holds each tool to its tier.
+		ai.WithUse(tools.reg.Guard()),
 		ai.WithMaxTurns(cmp.Or(cfg.MaxTurns, 4)),
 		ai.WithStreaming(flowkit.StreamCallback(flowkit.StreamHandlers{
 			OnRound: reply.round,
