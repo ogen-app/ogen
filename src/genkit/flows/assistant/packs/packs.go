@@ -42,6 +42,9 @@ type Deps struct {
 	Ideas    *ideas.Service
 	IdeaRepo repository.IdeaRepository
 	Compose  *compose.Service
+	// Titles tells which ideas, assets and posts still exist, for an offer
+	// confirmed after some went; nil keeps the offer as made.
+	Titles repository.EntityTitleRepository
 
 	Assets    repository.AssetRepository
 	Campaigns repository.CampaignRepository

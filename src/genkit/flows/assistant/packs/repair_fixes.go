@@ -12,6 +12,7 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
@@ -92,6 +93,7 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	unschedule := genkit.DefineTool(g, "unschedulePosts",
 		"Takes posts off the calendar: an unscheduled post loses its date, a scheduled one is withdrawn from publishing and goes back to ready. It is offered for the user to confirm before it runs.",
 		assistantkit.GatedRetry("unschedulePosts", assistantkit.Gate[PostsRef]{
+			Recheck: recheckIDs(d, viewcontext.KindPost, campaignPostsIn, withPosts),
 			Summary: func(in PostsRef) string {
 				return fmt.Sprintf("Take %s off the calendar", plural(len(in.PostIDs), "post", "posts"))
 			},
@@ -100,6 +102,9 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	changeType := genkit.DefineTool(g, "changePostType",
 		"Changes posts to another post type the campaign allows on their platform; a post ready to publish goes back to draft to be checked again. It is offered for the user to confirm before it runs.",
 		assistantkit.Gated("changePostType", assistantkit.Gate[ChangePostTypeInput]{
+			Recheck: recheckIDs(d, viewcontext.KindPost, func(ctx context.Context, in ChangePostTypeInput) (string, []string) {
+				return campaignPostsIn(ctx, PostsRef{CampaignID: in.CampaignID, PostIDs: in.PostIDs})
+			}, func(in ChangePostTypeInput, ids []string) ChangePostTypeInput { in.PostIDs = ids; return in }),
 			Summary: func(in ChangePostTypeInput) string {
 				return fmt.Sprintf("Make %s %s", plural(len(in.PostIDs), "post", "posts"), in.PostType)
 			},
@@ -116,6 +121,7 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 		del := genkit.DefineTool(g, "deletePosts",
 			"Deletes posts for good; published posts are kept. It is offered for the user to confirm before it runs.",
 			assistantkit.GatedRetry("deletePosts", assistantkit.Gate[PostsRef]{
+				Recheck: recheckIDs(d, viewcontext.KindPost, campaignPostsIn, withPosts),
 				Summary: func(in PostsRef) string {
 					return fmt.Sprintf("Delete %s; this can't be undone", plural(len(in.PostIDs), "post", "posts"))
 				},
@@ -125,6 +131,12 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 			`Call this when the user asks to delete posts; pass the selected posts' ids when there is a selection. It is offered for the user to confirm, and says it can't be undone. A finding's "delete them" fix is already this offer.`))
 	}
 	return specs
+}
+
+// withPosts narrows a post fix to ids.
+func withPosts(in PostsRef, ids []string) PostsRef {
+	in.PostIDs = ids
+	return in
 }
 
 // campaignPosts loads the campaign and the named posts of it, in the order

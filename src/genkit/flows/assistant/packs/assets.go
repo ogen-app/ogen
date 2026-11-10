@@ -74,7 +74,9 @@ func assetsPack(d Deps) assistant.Pack {
 				"Adds or removes tags on assets, by tag name. Above a few assets it is offered for the user to confirm first.",
 				assistantkit.Gated("tagAssets", assistantkit.Gate[TagAssetsInput]{
 					Precheck: func(_ context.Context, in TagAssetsInput) error { return checkAssetIDs(in.AssetIDs) },
-					Needs:    func(_ context.Context, in TagAssetsInput) bool { return overN(d, len(in.AssetIDs)) },
+					Recheck: recheckIDs(d, viewcontext.KindAsset, func(_ context.Context, in TagAssetsInput) (string, []string) { return "", in.AssetIDs },
+						func(in TagAssetsInput, ids []string) TagAssetsInput { in.AssetIDs = ids; return in }),
+					Needs: func(_ context.Context, in TagAssetsInput) bool { return overN(d, len(in.AssetIDs)) },
 					Summary: func(in TagAssetsInput) string {
 						return fmt.Sprintf("Tag %s", plural(len(in.AssetIDs), "asset", "assets"))
 					},
