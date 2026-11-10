@@ -27,6 +27,10 @@ func NewRegistry(specs ...Spec) (*Registry, error) {
 			errs = append(errs, err)
 			continue
 		}
+		if err := s.checkTier(); err != nil {
+			errs = append(errs, err)
+			continue
+		}
 		if _, dup := r.byName[s.Name]; dup {
 			errs = append(errs, fmt.Errorf("tool %q is registered twice", s.Name))
 			continue

@@ -325,8 +325,11 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 		_, err = t.dismissProposal(ctx, in)
 	}
 	reason, refused := refusedResult(result)
-	if err != nil || refused {
-		t.recordUnfinished(ctx, st, onEvent)
+	switch {
+	case err != nil:
+		t.recordUnfinished(ctx, st, onEvent, unfinishedAnswer)
+	case refused:
+		t.recordUnfinished(ctx, st, onEvent, reason)
 	}
 	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
 		return nil, &ProposalConflictError{Msg: r.Reason}
@@ -341,6 +344,11 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	if req.Confirm {
 		resp.Explanation = "Done: " + p.Summary
 	}
+	// What the offer was made on changed while it waited: nothing ran, and
+	// what still holds waits on a fresh card.
+	if changed, ok := reofferedResult(result); ok {
+		resp.Explanation = changed
+	}
 	t.finish(st, resp)
 	// The answer joins the thread, so the next chat turn knows it happened.
 	// The work has run, so a failed write marks the reply unsaved rather
@@ -351,10 +359,7 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 			resp.Unsaved = true
 		}
 	}
-	for _, r := range st.resolvedList() {
-		emit(onEvent, SSEEventProposalResolved, r)
-	}
-	emit(onEvent, SSEEventComplete, resp)
+	emitFinal(onEvent, st, resp)
 	return resp, nil
 }
 
@@ -367,13 +372,13 @@ const unfinishedAnswer = "I couldn't finish that. Ask again and I'll set it up."
 // and tells the client it was answered, so neither the next turn nor the card
 // waits on it. The offer stays answered: work that failed part way must not
 // run twice from the same card.
-func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent OnEventFunc) {
+func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent OnEventFunc, explanation string) {
 	resolved := st.resolvedList()
 	if len(resolved) == 0 {
 		return
 	}
 	if t.deps.Messages != nil {
-		resp := &Response{Action: actionAnswered, Explanation: unfinishedAnswer, Touched: st.touches.List()}
+		resp := &Response{Action: actionAnswered, Explanation: explanation, Touched: st.touches.List()}
 		if err := persistTurn(ctx, t.deps, Request{Instruction: st.turn.Instruction, View: st.view}, resp); err != nil {
 			slog.ErrorContext(ctx, "persist offer answer failed", logging.AttrComponent, logComponent, logging.AttrError, err)
 		}
@@ -388,6 +393,17 @@ func (t *toolSet) recordUnfinished(ctx context.Context, st *turnState, onEvent O
 func refusedResult(raw any) (string, bool) {
 	m, ok := raw.(map[string]any)
 	if !ok || m["status"] != string(assistantkit.StatusRefused) {
+		return "", false
+	}
+	reason, _ := m["reason"].(string)
+	return reason, true
+}
+
+// reofferedResult reports whether a confirmed tool offered its work afresh
+// instead of running it, with why; the fresh card says what it does.
+func reofferedResult(raw any) (string, bool) {
+	m, ok := raw.(map[string]any)
+	if !ok || m["status"] != string(assistantkit.StatusProposed) {
 		return "", false
 	}
 	reason, _ := m["reason"].(string)

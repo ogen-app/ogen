@@ -1,8 +1,11 @@
 package assistantkit
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
 )
@@ -85,6 +88,12 @@ type Gate[In any] struct {
 	// Describe is Summary for a card that needs to read something, e.g. the
 	// title of the idea a merge keeps. It wins over Summary when set.
 	Describe func(context.Context, In) string
+	// Recheck runs when the user confirms, after Precheck, and returns the
+	// call narrowed to what still holds, e.g. without the ideas deleted
+	// while the offer waited. A call that narrowed is offered afresh
+	// instead of run; a *Refusal means nothing holds any more. Nil keeps
+	// the call as stored.
+	Recheck func(context.Context, In) (In, error)
 }
 
 // Gated holds a proposal-tier tool back until the user confirms it. Unless
@@ -92,9 +101,11 @@ type Gate[In any] struct {
 // the context's sink and the model gets a proposed outcome to relay instead of
 // the tool running. A confirmed call runs next unchanged.
 func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome[Out]]) ai.ToolFunc[In, Outcome[Out]] {
+	gated.Store(tool, true)
 	return func(ctx *ai.ToolContext, in In) (Outcome[Out], error) {
+		passGate(ctx)
 		if Confirmed(ctx) {
-			return next(ctx, in)
+			return runConfirmed(ctx, tool, gate, in, next)
 		}
 		if gate.Precheck != nil {
 			err := gate.Precheck(ctx, in)
@@ -111,15 +122,70 @@ func Gated[In, Out any](tool string, gate Gate[In], next ai.ToolFunc[In, Outcome
 		if gate.Needs != nil && !gate.Needs(ctx, in) {
 			return next(ctx, in)
 		}
-		summary := tool
-		switch {
-		case gate.Describe != nil:
-			summary = gate.Describe(ctx, in)
-		case gate.Summary != nil:
-			summary = gate.Summary(in)
-		}
-		return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: summary}, StatusProposed)
+		return propose[Out](ctx, Proposal{Tool: tool, Args: in, Summary: gate.summary(ctx, tool, in)}, StatusProposed)
 	}
+}
+
+// summary describes the call for its card.
+func (g Gate[In]) summary(ctx context.Context, tool string, in In) string {
+	switch {
+	case g.Describe != nil:
+		return g.Describe(ctx, in)
+	case g.Summary != nil:
+		return g.Summary(in)
+	}
+	return tool
+}
+
+// ChangedSince prefixes why a confirmed offer did not run as offered.
+const ChangedSince = "Things changed since the offer: "
+
+// runConfirmed runs a call the user confirmed, unless what it was offered on
+// changed while it waited: a call its precheck now refuses runs nothing, and
+// one that narrowed is offered afresh with what still holds. A conflict the
+// precheck raises again was the user's to answer, and they did.
+func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], in In, next ai.ToolFunc[In, Outcome[Out]]) (Outcome[Out], error) {
+	if gate.Precheck != nil {
+		err := gate.Precheck(ctx, in)
+		if r, ok := errors.AsType[*Refusal](err); ok {
+			return Refuse[Out](ChangedSince+r.Reason, r.Alternatives...), nil
+		}
+		if _, ok := errors.AsType[*ConflictError](err); err != nil && !ok {
+			return Outcome[Out]{}, err
+		}
+	}
+	if gate.Recheck != nil {
+		fresh, err := gate.Recheck(ctx, in)
+		if r, ok := errors.AsType[*Refusal](err); ok {
+			return Refuse[Out](ChangedSince+r.Reason, r.Alternatives...), nil
+		}
+		if err != nil {
+			return Outcome[Out]{}, err
+		}
+		same, err := sameArgs(fresh, in)
+		if err != nil {
+			return Outcome[Out]{}, fmt.Errorf("recheck %s: %w", tool, err)
+		}
+		if !same {
+			out, err := propose[Out](ctx, Proposal{Tool: tool, Args: fresh, Summary: gate.summary(ctx, tool, fresh)}, StatusProposed)
+			out.Reason = ChangedSince + "nothing ran, and what still holds is offered again."
+			return out, err
+		}
+	}
+	return next(ctx, in)
+}
+
+// sameArgs reports whether two calls encode alike.
+func sameArgs(a, b any) (bool, error) {
+	ja, err := json.Marshal(a)
+	if err != nil {
+		return false, err
+	}
+	jb, err := json.Marshal(b)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(ja, jb), nil
 }
 
 // Offer stores p as an offer from a tool that computed it — e.g. a plan of

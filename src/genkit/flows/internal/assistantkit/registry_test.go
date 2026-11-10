@@ -18,9 +18,23 @@ func tool(g *genkit.Genkit, name string) ai.ToolRef {
 	})
 }
 
+// gatedTool is tool behind a gate that asks every time.
+func gatedTool(g *genkit.Genkit, name string) ai.ToolRef {
+	return genkit.DefineTool(g, name, name, Gated(name, Gate[noIn]{}, func(*ai.ToolContext, noIn) (Outcome[string], error) {
+		return OK("done"), nil
+	}))
+}
+
+// spec describes a tool of tier; a proposal-tier one is gated.
 func spec(g *genkit.Genkit, name, pack string, tier Tier, action *Action) Spec {
+	var t ai.ToolRef
+	if tier == TierProposal {
+		t = gatedTool(g, name)
+	} else {
+		t = tool(g, name)
+	}
 	return Spec{Name: name, Pack: pack, Scopes: []Scope{ScopeCampaign}, Tier: tier,
-		Guide: "Call " + name + " when asked.", Action: action, Tool: tool(g, name)}
+		Guide: "Call " + name + " when asked.", Action: action, Tool: t}
 }
 
 func names(refs []ai.ToolRef) []string {
