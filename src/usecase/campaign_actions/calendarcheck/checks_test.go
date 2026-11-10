@@ -144,3 +144,24 @@ func TestCheck_Goal(t *testing.T) {
 		t.Fatal("two periods share a key")
 	}
 }
+
+// Posts left on a platform the campaign stopped targeting get a finding,
+// with the platform added back, taking them off the calendar and deleting
+// them as fixes; published ones are history.
+func TestCheck_PlatformNotTargeted(t *testing.T) {
+	c := campaign()
+	c.TargetPlatforms = models.CampaignPlatforms{{ID: "li"}}
+	posts := []models.Post{
+		{ID: "t1", Status: models.PostStatusDraft, PlatformID: "th", Platform: &models.Platform{ID: "th", Name: "Threads"}},
+		{ID: "t2", Status: models.PostStatusScheduled, PlatformID: "th", ScheduledAt: at("2026-12-08T09:00")},
+		{ID: "t3", Status: models.PostStatusPublished, PlatformID: "th", ScheduledAt: at("2026-11-02T09:00")},
+		{ID: "l1", Status: models.PostStatusDraft, PlatformID: "li"},
+	}
+	f := find(Check(c, posts, nil, *at("2026-11-01T00:00")), CodePlatformNotTargeted)
+	if f == nil || !slices.Equal(f.PostIDs, []string{"t1", "t2"}) || !strings.Contains(f.Message, "Threads") {
+		t.Fatalf("finding = %+v", f)
+	}
+	if !slices.Equal(kinds(f.Fixes), []FixKind{FixEnablePlatform, FixUnschedule, FixDelete}) || f.Fixes[0].PlatformID != "th" || !slices.Equal(f.Fixes[1].PostIDs, []string{"t2"}) {
+		t.Fatalf("fixes = %+v", f.Fixes)
+	}
+}

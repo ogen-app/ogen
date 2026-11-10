@@ -94,3 +94,48 @@ func TestPlan_OmittedTypesLiftARestriction(t *testing.T) {
 		t.Fatal("Plan modified the current post types")
 	}
 }
+
+func TestPlanRemoval(t *testing.T) {
+	cur := models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article", "carousel"}}, {ID: "pl2"}}
+	next, removed, err := PlanRemoval(cur, catalog, []Request{{Platform: "Threads"}, {Platform: "LinkedIn", PostTypes: []string{"carousel"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 1 || !slices.Equal(next[0].PostTypes, []string{"article"}) {
+		t.Fatalf("next = %+v", next)
+	}
+	if RemovedSummary(removed) != "Threads; the carousel post type on LinkedIn" {
+		t.Fatalf("summary = %q", RemovedSummary(removed))
+	}
+	if len(cur) != 2 || len(cur[0].PostTypes) != 2 {
+		t.Fatal("PlanRemoval modified the current platforms")
+	}
+}
+
+// A platform allowing every type keeps the rest of its types; a type it
+// doesn't allow, or a platform it doesn't target, changes nothing.
+func TestPlanRemoval_FromEveryType(t *testing.T) {
+	next, removed, err := PlanRemoval(models.CampaignPlatforms{{ID: "pl1"}}, catalog, []Request{{Platform: "LinkedIn", PostTypes: []string{"article"}}})
+	if err != nil || !slices.Equal(next[0].PostTypes, []string{"carousel", "text-post"}) || len(removed) != 1 {
+		t.Fatalf("next = %+v, removed = %+v, err = %v", next, removed, err)
+	}
+	_, removed, err = PlanRemoval(models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}, catalog, []Request{{Platform: "Threads"}, {Platform: "LinkedIn", PostTypes: []string{"carousel"}}})
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("removed = %+v, err = %v; want nothing", removed, err)
+	}
+}
+
+// The last platform, or a platform's last type, can't go.
+func TestPlanRemoval_KeepsSomething(t *testing.T) {
+	for name, req := range map[string]Request{
+		"last platform": {Platform: "LinkedIn"},
+		"last type":     {Platform: "LinkedIn", PostTypes: []string{"article"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := PlanRemoval(models.CampaignPlatforms{{ID: "pl1", PostTypes: []string{"article"}}}, catalog, []Request{req})
+			if _, ok := errors.AsType[*InvalidError](err); !ok {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}

@@ -542,8 +542,8 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 	)
 
 	updateCampaignPlatforms := genkit.DefineTool(g, "updateCampaignPlatforms",
-		"Adds platforms to the campaign, or post types to a platform it already targets, checked against the platforms Ogen publishes to. "+
-			"It is proposed for the user to confirm before anything changes.",
+		"Adds platforms to the campaign, or post types to a platform it already targets, and removes platforms or post types, checked against the platforms Ogen publishes to. "+
+			"It is proposed for the user to confirm before anything changes. Posts on what it removes stay as they are.",
 		assistantkit.Gated("updateCampaignPlatforms", updatePlatformsGate, assistantkit.Wrap(toolUpdateCampaignPlatforms)),
 		ai.WithStrictSchema(false),
 	)

@@ -352,3 +352,49 @@ func platformName(c *models.Campaign, id string) string {
 	}
 	return id
 }
+
+// offPlatform is a finding per platform the campaign no longer targets that
+// still has unpublished posts: removing a platform leaves its posts, and
+// scheduled ones still publish. The fixes add the platform back, take the
+// posts off the calendar, or delete them. A campaign that targets no platform
+// yet has nothing to compare against.
+func offPlatform(c *models.Campaign, posts []models.Post) []Finding {
+	if len(c.TargetPlatforms) == 0 {
+		return nil
+	}
+	groups := map[string][]models.Post{}
+	for _, p := range posts {
+		switch p.Status {
+		case models.PostStatusPublished, models.PostStatusFailed, models.PostStatusNotPublished:
+			continue
+		}
+		if p.PlatformID == "" || slices.ContainsFunc(c.TargetPlatforms, func(tp models.CampaignPlatform) bool { return tp.ID == p.PlatformID }) {
+			continue
+		}
+		groups[p.PlatformID] = append(groups[p.PlatformID], p)
+	}
+	var out []Finding
+	for _, platform := range slices.Sorted(maps.Keys(groups)) {
+		var ids, onCalendar []string
+		name := platform
+		for _, p := range groups[platform] {
+			ids = append(ids, p.ID)
+			if p.ScheduledAt != nil {
+				onCalendar = append(onCalendar, p.ID)
+			}
+			if p.Platform != nil && p.Platform.Name != "" {
+				name = p.Platform.Name
+			}
+		}
+		ids = sorted(ids)
+		fixes := []Fix{{Kind: FixEnablePlatform, Title: "Add " + name + " back to the campaign", PlatformID: platform}}
+		if len(onCalendar) > 0 {
+			fixes = append(fixes, Fix{Kind: FixUnschedule, Title: "Take them off the calendar", PostIDs: sorted(onCalendar)})
+		}
+		fixes = append(fixes, Fix{Kind: FixDelete, Title: "Delete them", PostIDs: ids})
+		out = append(out, Finding{Code: CodePlatformNotTargeted, Severity: SeverityWarning, PostIDs: ids,
+			Message: fmt.Sprintf("%d unpublished post(s) on %s, which the campaign no longer targets", len(ids), name),
+			Fixes:   fixes})
+	}
+	return out
+}

@@ -2,7 +2,8 @@
 // deterministically: posts outside the campaign's dates or on days it doesn't
 // publish, crowded days and slots, long silences, periods short of the goal,
 // posts due soon that aren't written or ready, posts of a type the campaign
-// no longer includes, and posts from one idea or source published close
+// no longer includes or on a platform it no longer targets, and posts from
+// one idea or source published close
 // together. Each finding names the posts and how it can be fixed, so the
 // assistant offers the repair rather than only reporting the problem.
 package calendarcheck
@@ -54,9 +55,12 @@ const (
 	// CodePostTypeNotAllowed is posts of a type the campaign no longer
 	// includes on their platform.
 	CodePostTypeNotAllowed = "post_type_not_allowed"
-	CodeSameIdea           = "same_idea_close"
-	CodeSameSource         = "same_source_close"
-	CodeCrowdedSlot        = "crowded_slot"
+	// CodePlatformNotTargeted is posts on a platform the campaign no longer
+	// targets.
+	CodePlatformNotTargeted = "platform_not_targeted"
+	CodeSameIdea            = "same_idea_close"
+	CodeSameSource          = "same_source_close"
+	CodeCrowdedSlot         = "crowded_slot"
 	// CodeGoalShort is a goal period with fewer posts than the goal asks.
 	CodeGoalShort = "goal_short"
 	// CodeGoalOver is a goal period with well over the goal's posts.
@@ -86,6 +90,8 @@ const (
 	// FixEnablePostType allows a post type on a platform of the campaign
 	// again.
 	FixEnablePostType FixKind = "enable_post_type"
+	// FixEnablePlatform adds a platform back to the campaign.
+	FixEnablePlatform FixKind = "enable_platform"
 	// FixConvertPostType changes posts to another post type.
 	FixConvertPostType FixKind = "convert_post_type"
 	// FixUnschedule takes posts off the calendar.
@@ -143,6 +149,7 @@ func Check(c *models.Campaign, posts []models.Post, ideas map[string][]string, n
 	out := dateChecks(c, posts, day, day(now))
 	cal := newCalendar(c, posts, day, day(now))
 	out = append(out, postTypes(c, posts)...)
+	out = append(out, offPlatform(c, posts)...)
 	out = append(out, cal.closeTogether(ideas)...)
 	out = append(out, cal.crowdedSlots()...)
 	out = append(out, cal.goal()...)

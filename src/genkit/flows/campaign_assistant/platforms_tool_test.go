@@ -133,3 +133,47 @@ func TestUpdateCampaignPlatforms_ProposedAndChecked(t *testing.T) {
 		t.Fatalf("already targeted = %+v", out)
 	}
 }
+
+// platformPosts are a campaign's posts, by platform, type and status.
+type platformPosts struct {
+	repository.PostRepository
+	posts []models.Post
+}
+
+func (p platformPosts) ListRowsByCampaign(context.Context, string, ...string) ([]models.Post, error) {
+	return p.posts, nil
+}
+
+// Removing a platform leaves its posts, and the card and the result say how
+// many still publish; the campaign's last platform can't go.
+func TestUpdateCampaignPlatforms_Removes(t *testing.T) {
+	c := linkedInOnly()
+	c.TargetPlatforms = append(c.TargetPlatforms, models.CampaignPlatform{ID: "pl2"})
+	c.Platforms = append(c.Platforms, models.Platform{ID: "pl2", Name: "Threads"})
+	posts := platformPosts{posts: []models.Post{
+		{ID: "t1", PlatformID: "pl2", Status: models.PostStatusDraft},
+		{ID: "t2", PlatformID: "pl2", Status: models.PostStatusScheduled},
+		{ID: "t3", PlatformID: "pl2", Status: models.PostStatusPublished},
+		{ID: "l1", PlatformID: "pl1", Status: models.PostStatusDraft},
+	}}
+	store := &memProposals{}
+	campaigns := &storedCampaign{c: c}
+	st := &requestState{campaignID: "c1", campaign: c,
+		repos: CampaignAssistantRepos{Proposals: store, Platforms: catalogRepo{}, Posts: posts, Campaigns: campaigns}}
+
+	out := runTool(t, st, "updateCampaignPlatforms", map[string]any{"remove": []map[string]any{{"platform": "Threads"}}})
+	if out.Status != assistantkit.StatusProposed || out.Summary != "Remove Threads. 2 unpublished posts stay on it, 1 scheduled and still publishing until taken off the calendar" {
+		t.Fatalf("outcome = %+v", out)
+	}
+	got, err := toolUpdateCampaignPlatforms(withRequestState(t.Context(), st), UpdateCampaignPlatformsInput{Remove: []platforms.Request{{Platform: "Threads"}}})
+	if err != nil || got.Removed != "Threads" || got.PostsLeft == nil || got.PostsLeft.Posts != 2 || !slices.Equal(got.Platforms, []string{"LinkedIn"}) {
+		t.Fatalf("out = %+v, err = %v", got, err)
+	}
+	if len(c.TargetPlatforms) != 1 || len(c.Platforms) != 1 || st.platformsResult.Removed != "Threads" {
+		t.Fatalf("campaign = %+v / %+v", c.TargetPlatforms, c.Platforms)
+	}
+	out = runTool(t, st, "updateCampaignPlatforms", map[string]any{"remove": []map[string]any{{"platform": "LinkedIn"}}})
+	if out.Status != assistantkit.StatusRefused {
+		t.Fatalf("last platform = %+v", out)
+	}
+}
