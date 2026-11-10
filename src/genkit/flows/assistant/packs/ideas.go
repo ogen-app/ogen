@@ -52,19 +52,19 @@ func ideasPack(d Deps) assistant.Pack {
 			verdicts := genkit.DefineTool(g, "setIdeaVerdicts",
 				"Triages several ideas at once with the same verdict. Above a few ideas it is offered for the user to confirm first.",
 				onScreen(func(ctx context.Context, in *SetIdeaVerdictsInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
-					assistantkit.Gated("setIdeaVerdicts", assistantkit.Gate[SetIdeaVerdictsInput]{
+					assistantkit.GatedRetry("setIdeaVerdicts", assistantkit.Gate[SetIdeaVerdictsInput]{
 						Precheck: func(_ context.Context, in SetIdeaVerdictsInput) error { return checkIDs(in.IdeaIDs) },
 						Needs:    func(_ context.Context, in SetIdeaVerdictsInput) bool { return overN(d, len(in.IdeaIDs)) },
 						Summary: func(in SetIdeaVerdictsInput) string {
 							return fmt.Sprintf("Mark %s %s", plural(len(in.IdeaIDs), "idea", "ideas"), verdictLabel(in.Verdict))
 						},
-					}, assistantkit.Wrap(recorded(ideasPackName, "setIdeaVerdicts", nil, func(ctx context.Context, in SetIdeaVerdictsInput) (*BulkIdeasOutput, error) {
+					}, ideaRetry(func(in SetIdeaVerdictsInput, ids []string) SetIdeaVerdictsInput { in.IdeaIDs = ids; return in }), assistantkit.Wrap(recorded(ideasPackName, "setIdeaVerdicts", nil, func(ctx context.Context, in SetIdeaVerdictsInput) (*BulkIdeasOutput, error) {
 						return setIdeaVerdicts(ctx, d, in)
 					})))), ai.WithStrictSchema(false))
 			move := genkit.DefineTool(g, "moveIdeas",
 				"Moves ideas into a campaign, or out to the workspace backlog. Always offered for the user to confirm first.",
 				onScreen(func(ctx context.Context, in *MoveIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
-					assistantkit.Gated("moveIdeas", assistantkit.Gate[MoveIdeasInput]{
+					assistantkit.GatedRetry("moveIdeas", assistantkit.Gate[MoveIdeasInput]{
 						Precheck: func(_ context.Context, in MoveIdeasInput) error { return checkIDs(in.IdeaIDs) },
 						Summary: func(in MoveIdeasInput) string {
 							if in.CampaignID == "" {
@@ -72,7 +72,7 @@ func ideasPack(d Deps) assistant.Pack {
 							}
 							return fmt.Sprintf("Move %s into the campaign", plural(len(in.IdeaIDs), "idea", "ideas"))
 						},
-					}, assistantkit.Wrap(recorded(ideasPackName, "moveIdeas", nil, func(ctx context.Context, in MoveIdeasInput) (*BulkIdeasOutput, error) {
+					}, ideaRetry(func(in MoveIdeasInput, ids []string) MoveIdeasInput { in.IdeaIDs = ids; return in }), assistantkit.Wrap(recorded(ideasPackName, "moveIdeas", nil, func(ctx context.Context, in MoveIdeasInput) (*BulkIdeasOutput, error) {
 						return moveIdeas(ctx, d, in)
 					})))), ai.WithStrictSchema(false))
 			del := genkit.DefineTool(g, "deleteIdeas",
@@ -95,7 +95,7 @@ func ideasPack(d Deps) assistant.Pack {
 			draft := genkit.DefineTool(g, "draftIdeas",
 				"Writes finished posts from ideas and saves them as drafts with a body: one per idea per platform, or with together one per platform from all of them. Above a few posts it is offered for the user to confirm first.",
 				onScreen(func(ctx context.Context, in *DraftIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
-					assistantkit.Gated("draftIdeas", assistantkit.Gate[DraftIdeasInput]{
+					assistantkit.GatedRetry("draftIdeas", assistantkit.Gate[DraftIdeasInput]{
 						Precheck: func(ctx context.Context, in DraftIdeasInput) error {
 							_, err := planDraft(ctx, d, in)
 							return err
@@ -107,7 +107,7 @@ func ideasPack(d Deps) assistant.Pack {
 						Summary: func(in DraftIdeasInput) string {
 							return fmt.Sprintf("Write posts from %s", plural(len(in.IdeaIDs), "idea", "ideas"))
 						},
-					}, assistantkit.Wrap(recorded(ideasPackName, "draftIdeas", nil, func(ctx context.Context, in DraftIdeasInput) (*DraftIdeasOutput, error) {
+					}, draftRetry, assistantkit.Wrap(recorded(ideasPackName, "draftIdeas", nil, func(ctx context.Context, in DraftIdeasInput) (*DraftIdeasOutput, error) {
 						return draftIdeas(ctx, d, in)
 					})))), ai.WithStrictSchema(false))
 
@@ -312,13 +312,16 @@ type BulkIdeasOutput struct {
 	Stopped string `json:"stopped,omitempty"`
 	// UndoID undoes a triage, the ideas it changed all at once.
 	UndoID string `json:"undoId,omitempty"`
+	// left is the ideas a stop on an error left unchanged, worth a retry.
+	left []string
 }
 
-// stoppedEarly ends a bulk change that failed part way. What it changed
-// before stays changed, so it is reported and touched for the client to
-// refresh rather than lost in the error; with nothing changed the error
-// stands.
-func stoppedEarly(ctx context.Context, out *BulkIdeasOutput, err error) (*BulkIdeasOutput, error) {
+// stoppedEarly ends a bulk change that failed part way on left, the ideas
+// from the one it failed on. What it changed before stays changed, so it is
+// reported and touched for the client to refresh rather than lost in the
+// error; with nothing changed the error stands. Ideas left by an error are
+// worth a retry; by a refusal, not.
+func stoppedEarly(ctx context.Context, out *BulkIdeasOutput, left []string, err error) (*BulkIdeasOutput, error) {
 	if out.Done == 0 {
 		return out, err
 	}
@@ -326,6 +329,8 @@ func stoppedEarly(ctx context.Context, out *BulkIdeasOutput, err error) (*BulkId
 	reason := err.Error()
 	if r, ok := errors.AsType[*assistantkit.Refusal](err); ok {
 		reason = r.Reason
+	} else {
+		out.left = left
 	}
 	out.Stopped = "stopped early: " + reason
 	return out, nil
@@ -344,7 +349,8 @@ func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*Bul
 			out.UndoID = recordUndo(ctx, d, models.AssistantActionIdeaVerdicts, "", assistantundo.IdeaVerdicts(before), assistantundo.IdeaVerdicts(after))
 		}
 	}()
-	for _, id := range dedupe(in.IdeaIDs) {
+	ids := dedupe(in.IdeaIDs)
+	for i, id := range ids {
 		was, err := d.Ideas.Get(ctx, id)
 		if err == nil {
 			var idea *models.Idea
@@ -355,7 +361,7 @@ func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*Bul
 			}
 		}
 		if !errors.Is(err, ideas.ErrNotFound) && !ideas.IsValidation(err) {
-			return stoppedEarly(ctx, out, err)
+			return stoppedEarly(ctx, out, ids[i:], err)
 		}
 		out.Failed = append(out.Failed, id)
 	}
@@ -375,13 +381,14 @@ func moveIdeas(ctx context.Context, d Deps, in MoveIdeasInput) (*BulkIdeasOutput
 		campaign = &id
 	}
 	out := &BulkIdeasOutput{}
-	for _, id := range dedupe(in.IdeaIDs) {
+	ids := dedupe(in.IdeaIDs)
+	for i, id := range ids {
 		if _, _, err := d.Ideas.Update(ctx, id, ideas.UpdateInput{SetCampaign: true, CampaignID: campaign}); err != nil {
 			if errors.Is(err, ideas.ErrCampaignNotFound) {
-				return stoppedEarly(ctx, out, assistantkit.Refused("that campaign doesn't exist"))
+				return stoppedEarly(ctx, out, ids[i:], assistantkit.Refused("that campaign doesn't exist"))
 			}
 			if !errors.Is(err, ideas.ErrNotFound) {
-				return stoppedEarly(ctx, out, err)
+				return stoppedEarly(ctx, out, ids[i:], err)
 			}
 			out.Failed = append(out.Failed, id)
 			continue
@@ -538,6 +545,9 @@ type DraftIdeasInput struct {
 type DraftIdeasOutput struct {
 	Posts    []DraftedIdeaPost `json:"posts"`
 	Warnings []string          `json:"warnings,omitempty"`
+	// retry and notMade are what a run stopped by an error left unwritten.
+	retry   *DraftIdeasInput
+	notMade []assistantkit.NotMade
 }
 
 // DraftedIdeaPost is a post written from ideas and what it is grounded in:
@@ -585,6 +595,65 @@ func draftIdeas(ctx context.Context, d Deps, in DraftIdeasInput) (*DraftIdeasOut
 	out.Warnings = res.Warnings
 	if err != nil {
 		out.Warnings = append(out.Warnings, "stopped early: "+err.Error())
+		out.retry, out.notMade = unwritten(plan, res.Posts, in, "stopped early: "+err.Error())
 	}
 	return out, nil
+}
+
+// draftRetry retries the posts a stopped draft left unwritten.
+func draftRetry(_ DraftIdeasInput, out *DraftIdeasOutput) (DraftIdeasInput, []assistantkit.NotMade, bool) {
+	if out.retry == nil {
+		return DraftIdeasInput{}, out.notMade, false
+	}
+	return *out.retry, out.notMade, true
+}
+
+// unwritten is the jobs of plan no post came from, each one idea (or all of
+// them, together) for one platform, and the call that writes them again. A
+// stop leaves a tail of the jobs, which a call covers exactly when it is
+// whole ideas, or whole platforms; otherwise the call covers the ideas
+// nothing was written from, and the rest is only reported.
+func unwritten(plan *compose.DraftPlan, written []compose.DraftedPost, in DraftIdeasInput, reason string) (*DraftIdeasInput, []assistantkit.NotMade) {
+	type job struct{ idea, platform string }
+	done := map[job]bool{}
+	for _, p := range written {
+		done[job{p.IdeaIDs[0], p.PlatformID}] = true
+	}
+	titles := map[string]string{}
+	for _, i := range plan.Ideas {
+		titles[i.ID] = i.Title
+	}
+	var notMade []assistantkit.NotMade
+	var ideaIDs, platforms []string
+	wrote := map[string]bool{}
+	for _, j := range plan.Jobs {
+		key := job{j.IdeaIDs[0], j.Request.PlatformID}
+		if done[key] {
+			wrote[key.idea] = true
+			continue
+		}
+		notMade = append(notMade, assistantkit.NotMade{ID: key.idea, Title: titles[key.idea] + " · " + j.Request.PlatformID, Reason: reason})
+		if !slices.Contains(ideaIDs, key.idea) {
+			ideaIDs = append(ideaIDs, key.idea)
+		}
+		if !slices.Contains(platforms, key.platform) {
+			platforms = append(platforms, key.platform)
+		}
+	}
+	if len(notMade) == 0 {
+		return nil, nil
+	}
+	retry := in
+	retry.PlatformIDs = platforms
+	if !in.Together {
+		retry.IdeaIDs = ideaIDs
+		if len(ideaIDs)*len(platforms) != len(notMade) {
+			retry.IdeaIDs = slices.DeleteFunc(ideaIDs, func(id string) bool { return wrote[id] })
+			retry.PlatformIDs = in.PlatformIDs
+		}
+	}
+	if len(retry.IdeaIDs) == 0 {
+		return nil, notMade
+	}
+	return &retry, notMade
 }

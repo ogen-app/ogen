@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/firebase/genkit/go/ai"
 )
@@ -173,6 +174,38 @@ func runConfirmed[In, Out any](ctx *ai.ToolContext, tool string, gate Gate[In], 
 		}
 	}
 	return next(ctx, in)
+}
+
+// Retry reads a run that did part of the job: what it left undone, and the
+// call that tries just the items worth trying again. ok is false when none
+// is.
+type Retry[In, Out any] func(in In, out Out) (retry In, notMade []NotMade, ok bool)
+
+// GatedRetry is Gated for a tool that can do part of its job: a run that
+// left items undone says which, and offers the ones worth retrying on a
+// card of their own. The run's own offer stays answered, so the same work
+// never runs twice from it.
+func GatedRetry[In, Out any](tool string, gate Gate[In], retry Retry[In, Out], next ai.ToolFunc[In, Outcome[Out]]) ai.ToolFunc[In, Outcome[Out]] {
+	return Gated(tool, gate, func(ctx *ai.ToolContext, in In) (Outcome[Out], error) {
+		out, err := next(ctx, in)
+		if err != nil || !out.Succeeded() || out.Result == nil {
+			return out, err
+		}
+		again, notMade, ok := retry(in, *out.Result)
+		out.NotMade = notMade
+		if !ok {
+			return out, nil
+		}
+		// The work has run either way: an offer that can't be stored loses
+		// only the retry.
+		id, err := Offer(ctx, Proposal{Tool: tool, Args: again, Summary: "Retry: " + gate.summary(ctx, tool, again)})
+		if err != nil {
+			slog.WarnContext(ctx, "offer a retry failed", "tool", tool, "err", err)
+			return out, nil
+		}
+		out.RetryProposalID = id
+		return out, nil
+	})
 }
 
 // sameArgs reports whether two calls encode alike.

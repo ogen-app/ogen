@@ -1,6 +1,7 @@
 package packs
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -49,7 +50,34 @@ type PostFixOutput struct {
 	Withdrawing int `json:"withdrawing,omitzero"`
 	// Skipped are the posts left as they were, each with why.
 	Skipped []SkippedPost `json:"skipped,omitempty"`
-	UndoID  string        `json:"undoId,omitempty"`
+	// Failed are the posts an error stopped, worth a retry.
+	Failed []SkippedPost `json:"failed,omitempty"`
+	UndoID string        `json:"undoId,omitempty"`
+}
+
+// failedAll is the error of a fix every post of which failed: nothing was
+// done, so the run failed rather than did part of the job.
+func (o *PostFixOutput) failedAll(first error) error {
+	if first != nil && o.Changed == 0 && o.Withdrawing == 0 {
+		return first
+	}
+	return nil
+}
+
+// postRetry reads a post fix: the posts it skipped, and the ones an error
+// stopped, which the retried call takes again.
+func postRetry(in PostsRef, out *PostFixOutput) (PostsRef, []assistantkit.NotMade, bool) {
+	var notMade []assistantkit.NotMade
+	var ids []string
+	for _, p := range out.Skipped {
+		notMade = append(notMade, assistantkit.NotMade{ID: p.PostID, Reason: p.Reason})
+	}
+	for _, p := range out.Failed {
+		notMade = append(notMade, assistantkit.NotMade{ID: p.PostID, Reason: p.Reason})
+		ids = append(ids, p.PostID)
+	}
+	in.PostIDs = ids
+	return in, notMade, len(ids) > 0
 }
 
 // SkippedPost is a post a fix left, and why.
@@ -63,11 +91,11 @@ type SkippedPost struct {
 func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	unschedule := genkit.DefineTool(g, "unschedulePosts",
 		"Takes posts off the calendar: an unscheduled post loses its date, a scheduled one is withdrawn from publishing and goes back to ready. It is offered for the user to confirm before it runs.",
-		assistantkit.Gated("unschedulePosts", assistantkit.Gate[PostsRef]{
+		assistantkit.GatedRetry("unschedulePosts", assistantkit.Gate[PostsRef]{
 			Summary: func(in PostsRef) string {
 				return fmt.Sprintf("Take %s off the calendar", plural(len(in.PostIDs), "post", "posts"))
 			},
-		}, assistantkit.Wrap(recorded(repairPackName, "unschedulePosts", nil, func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return unschedulePosts(ctx, d, in) }))),
+		}, postRetry, assistantkit.Wrap(recorded(repairPackName, "unschedulePosts", nil, func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return unschedulePosts(ctx, d, in) }))),
 		ai.WithStrictSchema(false))
 	changeType := genkit.DefineTool(g, "changePostType",
 		"Changes posts to another post type the campaign allows on their platform; a post ready to publish goes back to draft to be checked again. It is offered for the user to confirm before it runs.",
@@ -87,11 +115,11 @@ func postFixSpecs(g *genkit.Genkit, d Deps) []assistantkit.Spec {
 	if d.Remove != nil {
 		del := genkit.DefineTool(g, "deletePosts",
 			"Deletes posts for good; published posts are kept. It is offered for the user to confirm before it runs.",
-			assistantkit.Gated("deletePosts", assistantkit.Gate[PostsRef]{
+			assistantkit.GatedRetry("deletePosts", assistantkit.Gate[PostsRef]{
 				Summary: func(in PostsRef) string {
 					return fmt.Sprintf("Delete %s; this can't be undone", plural(len(in.PostIDs), "post", "posts"))
 				},
-			}, assistantkit.Wrap(recorded(repairPackName, "deletePosts", nil, func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return deletePosts(ctx, d, in) }))),
+			}, postRetry, assistantkit.Wrap(recorded(repairPackName, "deletePosts", nil, func(ctx context.Context, in PostsRef) (*PostFixOutput, error) { return deletePosts(ctx, d, in) }))),
 			ai.WithStrictSchema(false))
 		specs = append(specs, spec(repairPackName, del, assistantkit.TierProposal,
 			`Call this when the user asks to delete posts; pass the selected posts' ids when there is a selection. It is offered for the user to confirm, and says it can't be undone. A finding's "delete them" fix is already this offer.`))
@@ -135,11 +163,14 @@ func unschedulePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, 
 	}
 	out := &PostFixOutput{Skipped: skipped}
 	var changes []repository.ScheduleChange
+	var first error
 	for _, p := range posts {
 		switch {
 		case p.Status == models.PostStatusScheduled && d.Remove != nil:
 			if err := d.Remove.Cancel(ctx, p.ID, actor(ctx)); err != nil {
-				return nil, fmt.Errorf("withdraw post: %w", err)
+				first = cmp.Or(first, fmt.Errorf("withdraw post: %w", err))
+				out.Failed = append(out.Failed, SkippedPost{PostID: p.ID, Reason: "withdrawing it failed: " + err.Error()})
+				continue
 			}
 			out.Withdrawing++
 		case reschedule.Eligible(p.Status) && p.ScheduledAt != nil:
@@ -170,6 +201,9 @@ func unschedulePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, 
 	if len(set) > 0 || out.Withdrawing > 0 {
 		assistantkit.Touch(ctx, "post", "")
 	}
+	if err := out.failedAll(first); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -181,6 +215,7 @@ func deletePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, erro
 		return nil, err
 	}
 	out := &PostFixOutput{Skipped: skipped}
+	var first error
 	for _, p := range posts {
 		if p.Status == models.PostStatusPublished {
 			out.Skipped = append(out.Skipped, SkippedPost{PostID: p.ID, Reason: "it is published"})
@@ -191,13 +226,17 @@ func deletePosts(ctx context.Context, d Deps, in PostsRef) (*PostFixOutput, erro
 		case errors.Is(err, withdraw.ErrPublished):
 			out.Skipped = append(out.Skipped, SkippedPost{PostID: p.ID, Reason: "it was published since"})
 		case err != nil:
-			return nil, fmt.Errorf("delete post: %w", err)
+			first = cmp.Or(first, fmt.Errorf("delete post: %w", err))
+			out.Failed = append(out.Failed, SkippedPost{PostID: p.ID, Reason: "deleting it failed: " + err.Error()})
 		case deleted:
 			out.Changed++
 		}
 	}
 	if out.Changed > 0 {
 		assistantkit.Touch(ctx, "post", "")
+	}
+	if err := out.failedAll(first); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

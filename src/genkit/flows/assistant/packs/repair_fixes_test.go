@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,9 +62,14 @@ type memRemover struct {
 	posts     *memPosts
 	deleted   []string
 	cancelled []string
+	// broken is the post whose delete fails.
+	broken string
 }
 
 func (r *memRemover) Delete(_ context.Context, p *models.Post, _ string) (bool, error) {
+	if p.ID == r.broken {
+		return false, errors.New("storage timeout")
+	}
 	if p.Status == models.PostStatusPublished {
 		return false, withdraw.ErrPublished
 	}
@@ -234,6 +240,28 @@ func TestDeletePosts(t *testing.T) {
 	}
 	if out.Changed != 1 || !slices.Equal(rm.deleted, []string{"p1"}) || !slices.Equal(skippedIDs(out.Skipped), []string{"p2"}) {
 		t.Fatalf("out = %+v, deleted %v", out, rm.deleted)
+	}
+}
+
+// A delete that fails for one post deletes the rest, and retries just it;
+// one that fails for every post fails.
+func TestDeletePosts_RetriesWhatFailed(t *testing.T) {
+	d, posts, _ := repairDeps()
+	rm := &memRemover{posts: posts, broken: "p2"}
+	d.Remove = rm
+	ctx, _ := turn(t, campaign1, nil)
+
+	in := PostsRef{PostIDs: []string{"p1", "p2"}}
+	out, err := deletePosts(ctx, d, in)
+	if err != nil || out.Changed != 1 || len(out.Failed) != 1 || out.Failed[0].PostID != "p2" {
+		t.Fatalf("out = %+v, err = %v", out, err)
+	}
+	retry, notMade, ok := postRetry(in, out)
+	if !ok || !slices.Equal(retry.PostIDs, []string{"p2"}) || len(notMade) != 1 || !strings.Contains(notMade[0].Reason, "storage timeout") {
+		t.Fatalf("retry = %+v, notMade = %+v, ok = %t", retry, notMade, ok)
+	}
+	if _, err := deletePosts(ctx, d, PostsRef{PostIDs: []string{"p2"}}); err == nil {
+		t.Fatal("a delete that deleted nothing must fail")
 	}
 }
 

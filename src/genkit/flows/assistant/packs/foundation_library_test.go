@@ -151,3 +151,22 @@ func TestEditBrand(t *testing.T) {
 	}
 	refused(t, EditBrandInput{UpdateVoices: []UpdateVoiceInput{{Name: "x"}}}.precheck())
 }
+
+// A bulk edit stopped by an error retries the changes from the one it
+// failed on, and reports the refused ones without retrying them.
+func TestBrandRetry(t *testing.T) {
+	in := EditBrandInput{
+		AddFacts:     []FactInput{{Statement: "Founded in 2019"}},
+		RemoveVoices: []string{"v1"},
+		AddAudiences: []AudienceInput{{Name: "CTOs"}},
+	}
+	edits := in.edits(Deps{}, nil, nil)
+	out := &EditBrandOutput{Done: 1, Failed: []BrandEditFailure{{What: "x", Reason: "already there"}}, Stopped: "remove voice v1 failed: timeout", left: edits[1:]}
+	retry, notMade, ok := brandRetry(in, out)
+	if !ok || len(retry.AddFacts) != 0 || !slices.Equal(retry.RemoveVoices, []string{"v1"}) || len(retry.AddAudiences) != 1 || len(notMade) != 3 {
+		t.Fatalf("retry = %+v, notMade = %+v", retry, notMade)
+	}
+	if _, _, ok := brandRetry(in, &EditBrandOutput{Done: 3}); ok {
+		t.Fatal("a whole edit offered a retry")
+	}
+}
