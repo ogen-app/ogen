@@ -29,11 +29,12 @@ const maxIdeaIDs = viewcontext.MaxSelectionIDs
 // posts: a planned post with their theses, or written drafts.
 func ideasPack(d Deps) assistant.Pack {
 	return assistant.Pack{
-		Name:    ideasPackName,
-		Summary: "find ideas, triage them (yes, later, no), move or delete them, and compile or draft them into posts",
-		Screens: []viewcontext.Screen{"ideas", "campaign.ideas"},
-		Begin:   beginResults(ideasPackName),
-		End:     endResults(ideasPackName),
+		Name:         ideasPackName,
+		Summary:      "find ideas, triage them (yes, later, no), move or delete them, and compile or draft them into posts",
+		Screens:      []viewcontext.Screen{"ideas", "campaign.ideas"},
+		Instructions: ideasRules,
+		Begin:        ideasBegin(d),
+		End:          endResults(ideasPackName),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			find := genkit.DefineTool(g, "findIdeas",
 				"Lists ideas matching a filter in the Ideas list's syntax, with their id, title, verdict, origin and plan.",

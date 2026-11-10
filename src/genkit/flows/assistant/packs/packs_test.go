@@ -83,6 +83,15 @@ func (r *memIdeaRepo) DeleteMany(_ context.Context, ids []string) ([]string, err
 	return out, nil
 }
 
+// Query and PlannedIdeas read an empty state, for the pack's block.
+func (r *memIdeaRepo) Query(context.Context, models.IdeaQuery) (*models.IdeaQueryResult, error) {
+	return &models.IdeaQueryResult{Piles: map[string]int{}}, nil
+}
+
+func (r *memIdeaRepo) PlannedIdeas(context.Context, string, int) ([]models.Idea, int, error) {
+	return nil, 0, nil
+}
+
 func (r *memIdeaRepo) LiveCampaignExists(_ context.Context, id string) (bool, error) {
 	return id == "c1", nil
 }
