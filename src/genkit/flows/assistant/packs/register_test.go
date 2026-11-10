@@ -85,13 +85,15 @@ func TestEveryPackRegistersTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkNotStrict(t, all)
-	checkWorkspaceTools(t, all)
+	checkTools(t, all, "workspace", "activityReport", "workspaceSetup", "weeklyDigest", "emailWeeklyDigest", "postHistory", "setAutoPublish", "openConnect")
+	checkTools(t, all, "ideas", "findIdeas", "setIdeaVerdict", "setIdeaVerdicts", "moveIdeas", "deleteIdeas", "compileIdeas", "draftIdeas",
+		"getIdea", "ideasInCommon", "editIdea", "similarIdeas", "findDuplicateIdeas", "mergeIdeas")
 }
 
-// The workspace pack has every tool once its services are set.
-func checkWorkspaceTools(t *testing.T, all []assistant.Pack) {
+// A pack has every tool once its services are set, in order.
+func checkTools(t *testing.T, all []assistant.Pack, pack string, want ...string) {
 	t.Helper()
-	i := slices.IndexFunc(all, func(p assistant.Pack) bool { return p.Name == "workspace" })
+	i := slices.IndexFunc(all, func(p assistant.Pack) bool { return p.Name == pack })
 	specs, err := all[i].Define(genkit.Init(t.Context()))
 	if err != nil {
 		t.Fatal(err)
@@ -100,9 +102,8 @@ func checkWorkspaceTools(t *testing.T, all []assistant.Pack) {
 	for _, s := range specs {
 		names = append(names, s.Name)
 	}
-	want := []string{"activityReport", "workspaceSetup", "weeklyDigest", "emailWeeklyDigest", "postHistory", "setAutoPublish", "openConnect"}
 	if !slices.Equal(names, want) {
-		t.Fatalf("workspace tools = %v, want %v", names, want)
+		t.Fatalf("%s tools = %v, want %v", pack, names, want)
 	}
 }
 
