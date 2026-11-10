@@ -26,6 +26,7 @@ const (
 	UISetFilter     UIActionType = "set_filter"
 	UISelect        UIActionType = "select"
 	UIOpenSavedView UIActionType = "open_saved_view"
+	UISetWindow     UIActionType = "set_window"
 )
 
 // UIAction drives the client's screen. The server has checked every
@@ -44,6 +45,9 @@ type UIAction struct {
 	// Selection replaces the list's selection.
 	Selection   *UISelection `json:"selection,omitempty"`
 	SavedViewID string       `json:"savedViewId,omitempty"`
+	// Window replaces an analytics screen's window: its dates, platforms
+	// and campaign.
+	Window *viewcontext.Window `json:"window,omitempty"`
 }
 
 // UISelection is the items a select action ticks.

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
@@ -39,13 +40,48 @@ func Scope(ctx context.Context) (viewcontext.Scope, bool) {
 	return st.view.View.Scope, true
 }
 
-// Window is the analytics window on the user's screen; nil when none.
+// Window is the analytics window the turn reads: the one set in the turn,
+// else the one on the user's screen; nil when none.
 func Window(ctx context.Context) *viewcontext.Window {
 	st, err := turnStateFrom(ctx)
 	if err != nil {
 		return nil
 	}
-	return st.view.View.Window
+	return st.currentWindow()
+}
+
+// ErrNoAnalyticsScreen is SetWindow when the screen isn't an analytics one.
+var ErrNoAnalyticsScreen = errors.New("the window applies on the analytics screens; navigate to one first")
+
+// SetWindow asks the client to show the analytics screen on view — the
+// user's, or the one the turn navigated to — over w, and reads it for the
+// rest of the turn. It returns the screen.
+func SetWindow(ctx context.Context, w viewcontext.Window) (viewcontext.Screen, error) {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return "", err
+	}
+	st.planning.Lock()
+	defer st.planning.Unlock()
+	screen := st.currentScreen()
+	if screen != "analytics" && screen != "campaign.analytics" {
+		return "", ErrNoAnalyticsScreen
+	}
+	st.addUI(UIAction{Type: UISetWindow, Screen: screen, CampaignID: st.currentCampaign(), Window: &w})
+	return screen, nil
+}
+
+// Selected is the ids of the items of kind selected on the user's screen,
+// as many as the client sent; nil when the selection is of another kind.
+func Selected(ctx context.Context, kind viewcontext.EntityKind) []string {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return nil
+	}
+	if sel := st.view.View.Selection; sel != nil && sel.Kind == kind {
+		return sel.IDs
+	}
+	return nil
 }
 
 // FocusedAsset is the asset the user's screen shows, on an asset page; ""

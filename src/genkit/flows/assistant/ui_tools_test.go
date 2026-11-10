@@ -272,3 +272,28 @@ func TestListSavedViews_Result(t *testing.T) {
 		t.Fatalf("results = %#v", resp.Results)
 	}
 }
+
+// SetWindow sends a set_window for the analytics screen on view, the one a
+// navigate opened included, and refuses any other screen; Selected reads
+// the screen's selection of one kind.
+func TestSetWindowAndSelected(t *testing.T) {
+	view := viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home", Scope: viewcontext.Scope{Kind: "workspace"},
+		Selection: &viewcontext.Selection{Kind: viewcontext.KindPost, IDs: []string{"p1", "p2"}}}
+	ctx, _ := NewViewTurnContext(t.Context(), view, nil)
+	if _, err := SetWindow(ctx, viewcontext.Window{From: "2026-03-01"}); !errors.Is(err, ErrNoAnalyticsScreen) {
+		t.Fatalf("home = %v", err)
+	}
+	st, _ := turnStateFrom(ctx)
+	st.addUI(UIAction{Type: UINavigate, Screen: "analytics"})
+	screen, err := SetWindow(ctx, viewcontext.Window{From: "2026-03-01", To: "2026-03-31"})
+	if err != nil || screen != "analytics" {
+		t.Fatalf("screen = %q, %v", screen, err)
+	}
+	ui := st.uiActions()
+	if len(ui) != 2 || ui[1].Type != UISetWindow || ui[1].Window.To != "2026-03-31" || Window(ctx).From != "2026-03-01" {
+		t.Fatalf("ui = %+v", ui)
+	}
+	if got := Selected(ctx, viewcontext.KindPost); len(got) != 2 || Selected(ctx, viewcontext.KindIdea) != nil {
+		t.Fatalf("selected = %v", got)
+	}
+}
