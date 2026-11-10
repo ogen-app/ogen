@@ -78,6 +78,20 @@ func SetWindow(ctx context.Context, merge func(cur *viewcontext.Window) (viewcon
 	return screen, w, nil
 }
 
+// OpenConnect asks the client to open the settings screen's connect flow
+// for c: the caller has checked its platform and account. It never runs
+// the flow.
+func OpenConnect(ctx context.Context, c UIConnect) error {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return err
+	}
+	st.planning.Lock()
+	defer st.planning.Unlock()
+	st.addUI(UIAction{Type: UIOpenConnect, Screen: "settings", Connect: &c})
+	return nil
+}
+
 // Selected is the ids of the items of kind selected on the user's screen,
 // as many as the client sent; nil when the selection is of another kind.
 func Selected(ctx context.Context, kind viewcontext.EntityKind) []string {

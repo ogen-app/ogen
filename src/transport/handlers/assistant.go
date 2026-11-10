@@ -87,14 +87,16 @@ type assistantTurnRequest struct {
 // @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
 // @Description  and "tool_result" {"name","ref","ok"} for each tool, "ok" false when it refused or hit a conflict; "pack_loaded" {"pack"} when the turn restarted
 // @Description  with another domain's tools (deltas before it are void); one "ui_action" per change to the screen,
-// @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view, "screen", "campaignId",
-// @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId"}, every reference already checked;
+// @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view|set_window|open_connect, "screen", "campaignId",
+// @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId", "window" {from,to,platforms,campaignId},
+// @Description  "connect" {platform,accountId,reconnect}}, every reference already checked; open_connect opens the settings
+// @Description  screen's connect flow (reconnect for an account), which the client runs;
 // @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs"}, where
 // @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, plus
 // @Description  "unsaved": true when the turn ran but could not be stored in the thread. "error"
 // @Description  carries {"message":"...","code":<http_code>} and ends the stream.
-// @Description  Offers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost and
-// @Description  applyCalendarMoves are always held back as an offer; generatePosts, draftPost, draftIdeas, moreLikeThese,
+// @Description  Offers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost,
+// @Description  applyCalendarMoves, setAutoPublish and emailWeeklyDigest are always held back as an offer; generatePosts, draftPost, draftIdeas, moreLikeThese,
 // @Description  setIdeaVerdicts and tagAssets only above a few items. Smaller batches and other tools (distillMoreIdeas
 // @Description  among them) run straight away, so a client can't rely on an offer before every write. "proposal_created" {"id","tool","summary",
 // @Description  "expiresAt","options"} streams once the reply is final, and "proposal_resolved" {"id","status","chosen"} when

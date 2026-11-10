@@ -334,3 +334,18 @@ func TestSetWindow_ConcurrentMerges(t *testing.T) {
 		t.Fatalf("failed merge = %v, ui %+v", err, st.uiActions())
 	}
 }
+
+// OpenConnect sends an open_connect on the settings screen, and the turn is
+// on settings after it.
+func TestOpenConnect(t *testing.T) {
+	view := viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home", Scope: viewcontext.Scope{Kind: "workspace"}}
+	ctx, _ := NewViewTurnContext(t.Context(), view, nil)
+	if err := OpenConnect(ctx, UIConnect{Platform: "linkedin", AccountID: "sa1", Reconnect: true}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := turnStateFrom(ctx)
+	ui := st.uiActions()
+	if len(ui) != 1 || ui[0].Type != UIOpenConnect || ui[0].Screen != "settings" || ui[0].Connect.AccountID != "sa1" || st.currentScreen() != "settings" {
+		t.Fatalf("ui = %+v", ui)
+	}
+}

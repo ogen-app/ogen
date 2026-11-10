@@ -436,6 +436,12 @@ func (d *deps) genkitDeps() genkitDeps {
 			Settings:          r.settingRepo,
 			SocialAccounts:    r.socialAccountRepo,
 			ProfileID:         d.zernioProfileID,
+			AutoPublish:       r.autoPublishAllowlistRepo,
+			ConnectPlatform:   connectablePlatform,
+			Digest:            weeklyDigest(d),
+			Versions:          r.postVersionRepo,
+			PostLogs:          r.postLogRepo,
+			Users:             r.userRepo,
 		},
 		assistantRepos: assistant.Repos{
 			Proposals:  r.proposalRepo,
@@ -463,4 +469,14 @@ func (d *deps) genkitDeps() genkitDeps {
 		limiter:             d.entitlements.limiter,
 		qualityAuto:         d.qualityAuto,
 	}
+}
+
+// connectablePlatform names a platform the workspace can connect and publish
+// to, by its Zernio slug.
+func connectablePlatform(slug string) (string, bool) {
+	p := pubzernio.LookupSupportedPlatform(slug)
+	if p == nil {
+		return "", false
+	}
+	return p.Label, true
 }
