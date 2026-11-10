@@ -21,6 +21,8 @@ func ran(tool string) string { return fmt.Sprintf("you called %s this turn.", to
 var heavyTools = map[string]bool{
 	"runContentPlan": true, "enrichBrief": true, "generatePosts": true,
 	"draftPost": true, "checkBrief": true, "checkPostsConsistency": true,
+	// They draft once their change is made.
+	"setCampaignGoal": true, "replaceWeakestDrafts": true,
 }
 
 // newToolRegistry describes the campaign tools for the prompt and the runner.
@@ -58,6 +60,10 @@ func newToolRegistry(t *toolSet) (*assistantkit.Registry, error) {
 			"Call this when the user asks whether the posts match, follow, or are consistent with the brief — e.g. \"do the posts follow the brief?\", \"check the posts against the brief\". It is READ-ONLY — it returns per-post findings but does NOT change any post. It reviews only non-published posts and is capped; when the result reports a cap, MENTION that only the first N were checked. Pass `max` only if the user asks for a specific number."),
 		spec(t.updateCampaignPlatforms, assistantkit.TierProposal, actionPlatformsUpdated,
 			`Call this when the user asks to add a platform to the campaign, or a post type to a platform it already targets — e.g. "add Threads", "also do LinkedIn carousels" — or accepts your offer to add one; and when they ask to remove one — "drop Threads", "no more LinkedIn carousels" (remove, with postTypes to drop only those types). Pass each platform by name, with postTypes only when the user names specific types. It is proposed for the user to confirm before anything changes. A removal leaves the posts on it as they are: say how many are left (postsLeft), that scheduled ones still publish, and that the calendar check offers what to do with them. It can't remove the campaign's last platform.`),
+		spec(t.setCampaignGoal, assistantkit.TierProposal, actionGoalUpdated,
+			`Call this when the user asks to set, raise or lower the campaign's goal — "make it 5 posts a week", "raise the goal to 20". Pass perPeriod, the posts per goal period. It is proposed for the user to confirm, and can be undone. A budget guard's "raise the goal" option is already this offer.`),
+		spec(t.replaceWeakestDrafts, assistantkit.TierProposal, actionPostDrafted,
+			`Never call this yourself: it is what a budget guard's "replace the weakest drafts" option runs once confirmed.`),
 		spec(t.askCampaignAssets, assistantkit.TierRead, "",
 			"Call this when the user asks a question about the campaign's attached assets (uploaded PDFs, markdown, etc.) — e.g. \"what does the pricing PDF say about enterprise tiers?\", \"summarise the attached brief\". It is READ-ONLY: it returns the most relevant asset excerpts (with title + page) for you to answer from; it does NOT generate posts. Answer from the returned excerpts and cite the asset title(s) you used. If the result reports `available:false` or has no excerpts, tell the user you couldn't search or find matching asset content — do not invent an answer."),
 	)

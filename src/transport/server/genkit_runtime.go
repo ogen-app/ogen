@@ -438,6 +438,7 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 		ProposalThreshold: r.cfg.AssistantProposalThreshold,
 		CheckBrief:        checkBriefFn,
 		CheckPosts:        checkPostsFn,
+		DeletePost:        deletePostFn(r.packDeps.Remove),
 	}, r.campaignAssistRepos)
 	if err != nil {
 		return fmt.Errorf("init campaign pack: %w", err)
@@ -527,4 +528,12 @@ func (r *genkitRuntime) rebuild(ctx context.Context, store secrets.Store) error 
 	slog.InfoContext(ctx, "anthropic flows rebuilt",
 		logging.AttrComponent, "genkit")
 	return nil
+}
+
+// deletePostFn is remove's Delete, or nil without a remover.
+func deletePostFn(remove packs.PostRemover) func(context.Context, *models.Post, string) (bool, error) {
+	if remove == nil {
+		return nil
+	}
+	return remove.Delete
 }
