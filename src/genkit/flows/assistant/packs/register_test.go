@@ -2,6 +2,7 @@ package packs_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -17,6 +18,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/analytics"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
+	"github.com/ogen-app/ogen/src/usecase/weeklyreport"
 )
 
 type proposals struct {
@@ -49,6 +51,8 @@ func TestEveryPackRegistersTogether(t *testing.T) {
 		Assets:  assetRepo{}, Campaigns: campaignRepo{},
 		Posts: postRepo{}, Links: linkRepo{}, Analytics: &analytics.Service{},
 		Brand: brandRepo{}, Activity: report.New(nil, nil, nil),
+		AutoPublish: evalAllowlist{}, ConnectPlatform: func(string) (string, bool) { return "LinkedIn", true },
+		Digest: evalDigest{}, Versions: evalVersionRepo{}, PostLogs: evalPostLogs{},
 		CheckBrief: func(context.Context, string, consistency.OnEventFunc) (*consistency.BriefReview, error) {
 			return nil, nil
 		},
@@ -64,6 +68,25 @@ func TestEveryPackRegistersTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkNotStrict(t, all)
+	checkWorkspaceTools(t, all)
+}
+
+// The workspace pack has every tool once its services are set.
+func checkWorkspaceTools(t *testing.T, all []assistant.Pack) {
+	t.Helper()
+	i := slices.IndexFunc(all, func(p assistant.Pack) bool { return p.Name == "workspace" })
+	specs, err := all[i].Define(genkit.Init(t.Context()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, s := range specs {
+		names = append(names, s.Name)
+	}
+	want := []string{"activityReport", "workspaceSetup", "weeklyDigest", "emailWeeklyDigest", "postHistory", "setAutoPublish", "openConnect"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("workspace tools = %v, want %v", names, want)
+	}
 }
 
 // Anthropic refuses a request with more than 20 strict tools, and a turn's
@@ -92,4 +115,25 @@ func checkNotStrict(t *testing.T, all []assistant.Pack) {
 			}
 		}
 	}
+}
+
+// evalAllowlist, evalDigest, evalPostLogs and evalVersionRepo let the
+// workspace pack offer its settings, report and history tools, here and in
+// the evals.
+type evalAllowlist struct {
+	repository.AutoPublishAllowlistRepository
+}
+
+type evalPostLogs struct{ repository.PostLogRepository }
+
+type evalDigest struct{}
+
+func (evalDigest) Build(context.Context, string) (*weeklyreport.Week, error) { return nil, nil }
+func (evalDigest) CanEmail(context.Context, string) error                    { return nil }
+func (evalDigest) EmailTo(context.Context, string, string) (*weeklyreport.Week, error) {
+	return nil, nil
+}
+
+type evalVersionRepo struct {
+	repository.PostVersionRepository
 }

@@ -82,7 +82,7 @@ var (
 		"addVoice", "updateVoice", "removeVoice", "addAudience", "updateAudience", "removeAudience", "updateGuardrails",
 		"createSeries", "updateSeries", "removeSeries", "runSeries", "stopSeries", "editBrand",
 		"startBrandDistill", "answerDistillQuestions", "commitBrandDistill",
-		"applyCalendarMoves", "unschedulePosts", "deletePosts", "changePostType", "revisePost"}
+		"applyCalendarMoves", "unschedulePosts", "deletePosts", "changePostType", "revisePost", "setAutoPublish", "emailWeeklyDigest"}
 )
 
 var evalCases = []evalCase{
@@ -176,6 +176,14 @@ var evalCases = []evalCase{
 	// workspace
 	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "What happened yesterday?", want: []string{"activityReport"}},
 	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Do any of my accounts need reconnecting?", want: []string{"workspaceSetup"}},
+	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "How many posts went out each day last week?", want: []string{"activityReport"}, not: writes},
+	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "Show me last week's weekly report.", want: []string{"weeklyDigest"}, not: writes},
+	{pack: "workspace", screen: "activity", scope: evalWorkspace, say: "Email me last week's report.", want: []string{"emailWeeklyDigest"}},
+	{pack: "workspace", screen: "post", scope: evalPost, say: "Who changed this post, and when?", want: []string{"postHistory"}, not: writes},
+	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Which platforms publish on their own?", want: []string{"workspaceSetup"}, not: writes},
+	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Turn on auto-publishing for LinkedIn.", want: []string{"workspaceSetup", "setAutoPublish"}},
+	{pack: "workspace", screen: "settings", scope: evalWorkspace, say: "Reconnect my LinkedIn account.", want: []string{"workspaceSetup", "openConnect"}},
+	{pack: "workspace", screen: "campaign.settings", scope: evalCampaign, say: "Are my social accounts connected?", want: []string{"workspaceSetup"}, not: writes},
 	// reaching another part of the app loads its pack
 	{pack: "campaign", screen: "home", scope: evalWorkspace, say: "Show me how my posts did last month.", want: []string{"loadPack", "navigate"}},
 }
@@ -321,10 +329,12 @@ func TestPackEvals(t *testing.T) {
 		CheckPosts: func(context.Context, consistency.PostsCheckRequest, consistency.OnEventFunc) (*consistency.PostsReview, error) {
 			return nil, nil
 		},
-		CheckBrand: func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
-		MoreLike:   func(context.Context, more_like_these.Request) ([]more_like_these.Idea, error) { return nil, nil },
-		Remove:     evalRemover{},
-		Revise:     func(context.Context, string, string, string) (bool, error) { return true, nil },
+		CheckBrand:  func(context.Context, brand_check.Request) (*brand_check.Result, error) { return nil, nil },
+		MoreLike:    func(context.Context, more_like_these.Request) ([]more_like_these.Idea, error) { return nil, nil },
+		Remove:      evalRemover{},
+		Revise:      func(context.Context, string, string, string) (bool, error) { return true, nil },
+		AutoPublish: evalAllowlist{}, ConnectPlatform: func(string) (string, bool) { return "LinkedIn", true },
+		Digest: evalDigest{}, Versions: evalVersions{}, PostLogs: evalPostLogs{},
 	})
 	a, err := assistant.Init(g, assistant.FlowConfig{Provider: llm.NewProvider(), MaxOutputTokens: 4096}, assistant.Repos{Messages: evalMessages{}, Proposals: evalProposals{}, SavedViewLists: evalSavedViews{}}, all...)
 	if err != nil {
