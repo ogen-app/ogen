@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -70,6 +71,24 @@ type evalCase struct {
 	ideas    bool
 	// window is the analytics window on screen.
 	window *viewcontext.Window
+	// offered is an offer the assistant made in the previous turn, still
+	// waiting for the user's answer.
+	offered *evalOffer
+}
+
+// evalOffer is an earlier turn that ended in an offer: what the user asked,
+// what the assistant said, and the offer itself.
+type evalOffer struct {
+	asked, said string
+	offer       models.AssistantProposal
+}
+
+// offerThreads is the offer to add Threads, which drafting for it raised.
+var offerThreads = &evalOffer{
+	asked: "Draft 2 Threads posts about the launch.",
+	said:  "The campaign doesn't publish to Threads yet. Shall I add Threads to the campaign?",
+	offer: models.AssistantProposal{ID: "prop1", Tool: "updateCampaignPlatforms", Summary: "The campaign doesn't publish to Threads yet.",
+		Options: []models.ProposalOption{{ID: "add_platform", Title: "Add Threads to the campaign", Recommended: true}}},
 }
 
 var (
@@ -97,6 +116,12 @@ var evalCases = []evalCase{
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Make the brief more technical and benchmark-driven.", want: []string{"enrichBrief"}},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Move the campaign end to the last day of next month.", want: []string{"setCampaignDates"}},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Is the brief consistent?", want: []string{"checkBrief"}, not: writes},
+	// A yes to a waiting offer takes it, on the first try.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "yes please", offered: offerThreads, want: []string{"confirmOffer"}},
+	// Many posts start with a tool that waits for a yes, never one that
+	// touches the calendar.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Generate 20 posts for this campaign.", want: []string{"generatePosts", "runContentPlan", "draftPost"},
+		not: []string{"redistributePosts", "applyCalendarMoves", "schedulePost", "setCampaignDates"}},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "How many posts does each phase have?", want: []string{"getCampaignOverview"}, not: writes},
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "What is this campaign about, in one sentence?", not: writes},
 	// post
@@ -297,12 +322,20 @@ func (evalVersions) ListByPostID(context.Context, string) ([]models.PostVersion,
 		{VersionNumber: 2, Content: "v2", Creator: models.PostVersionCreatorAssistant, Note: "Tighter"}}, nil
 }
 
+// evalThread is the earlier turn, if any, of the case being run; cases run
+// one at a time.
+var evalThread *evalOffer
+
 type evalMessages struct {
 	repository.AssistantMessageRepository
 }
 
 func (evalMessages) ListRecent(context.Context, models.AssistantScopeKind, string, int) ([]models.AssistantMessage, error) {
-	return nil, nil
+	if evalThread == nil {
+		return nil, nil
+	}
+	said, _ := json.Marshal(map[string]string{"explanation": evalThread.said, "action": "answered"})
+	return []models.AssistantMessage{{Role: "user", Content: evalThread.asked}, {Role: "model", Content: string(said)}}, nil
 }
 
 type evalProposals struct {
@@ -310,7 +343,10 @@ type evalProposals struct {
 }
 
 func (evalProposals) ListOpen(context.Context, models.AssistantScopeKind, string, time.Time) ([]models.AssistantProposal, error) {
-	return nil, nil
+	if evalThread == nil {
+		return nil, nil
+	}
+	return []models.AssistantProposal{evalThread.offer}, nil
 }
 
 func TestPackEvals(t *testing.T) {
@@ -363,6 +399,8 @@ func TestPackEvals(t *testing.T) {
 	passed := map[string][2]int{}
 	for _, c := range evalCases {
 		t.Run(fmt.Sprintf("%s/%s", c.pack, c.say), func(t *testing.T) {
+			evalThread = c.offered
+			t.Cleanup(func() { evalThread = nil })
 			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope, Focus: c.focus, Window: c.window}, Summary: "On " + string(c.screen)}
 			if c.focus != nil {
 				title := cmp.Or(c.title, "Villa Aurora brochure 2026")
