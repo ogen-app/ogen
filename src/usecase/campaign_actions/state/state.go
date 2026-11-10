@@ -1,7 +1,8 @@
 // Package state builds the snapshot of a campaign the assistant reads before
-// acting: the goal and how much room is left under it, the posts by status,
-// what each platform may publish, and whether there are sources to ground
-// generation in. It is pure: callers load the rows.
+// acting: the goal and how much room is left under it, overall and in the
+// current goal period, the posts by status, what each platform may publish,
+// the calendar's problems, and the sources there are to ground generation
+// in. It is pure: callers load the rows and run the calendar check.
 package state
 
 import (
@@ -26,6 +27,31 @@ type Snapshot struct {
 	Platforms    []Platform
 	// Sources is nil when the attached assets could not be counted.
 	Sources *Sources
+	// Calendar is nil when the calendar could not be checked.
+	Calendar *Calendar
+}
+
+// Calendar summarises the calendar check's findings: how many, of what kind,
+// and the first few as the check orders them, warnings first.
+type Calendar struct {
+	Total int
+	Kinds []KindCount
+	Top   []string
+}
+
+// KindCount is how many findings of one kind there are.
+type KindCount struct {
+	Kind  string
+	Count int
+}
+
+// Period is the goal period today falls in, against its share of the goal.
+type Period struct {
+	Label   string
+	Target  int
+	Planned int
+	// Left is how many more posts fit in the period; 0 once it is met.
+	Left int
 }
 
 // Goal is the campaign's post goal against the posts it already has.
@@ -43,6 +69,9 @@ type Goal struct {
 	// Unknown is set when the posts could not be read: Planned and Room
 	// are then 0 and say nothing about the room left.
 	Unknown bool
+	// Period is the current goal period; nil outside the campaign's dates,
+	// or when the posts could not be read.
+	Period *Period
 }
 
 // StatusCount is how many posts are in one status.
@@ -58,9 +87,17 @@ type Platform struct {
 	PostTypes []string
 }
 
-// Sources says whether generation has the campaign's own material to draw on.
+// Sources says what material generation has to draw on: the campaign's
+// attached assets, or the whole bank when it attached none; how many of them
+// are ready to use, and how many are analysed.
 type Sources struct {
-	Ready int
+	// WholeBank is set when the campaign attached no assets, so it draws on
+	// every asset in the workspace.
+	WholeBank bool
+	Attached  int
+	Ready     int
+	// Analysed is -1 when the analyses could not be read.
+	Analysed int
 }
 
 var statusOrder = []models.PostStatus{
@@ -73,9 +110,9 @@ var statusOrder = []models.PostStatus{
 	models.PostStatusNotPublished,
 }
 
-// Build summarises a campaign from its posts (only Status is read) and the
-// number of its ready attached assets; readyAssets < 0 means unknown.
-func Build(c *models.Campaign, posts []models.Post, readyAssets int) Snapshot {
+// Build summarises a campaign from its posts (only Status is read) and its
+// sources, nil when unknown.
+func Build(c *models.Campaign, posts []models.Post, sources *Sources) Snapshot {
 	counts := make(map[models.PostStatus]int, len(statusOrder))
 	for _, p := range posts {
 		counts[p.Status]++
@@ -90,9 +127,19 @@ func Build(c *models.Campaign, posts []models.Post, readyAssets int) Snapshot {
 	for _, tp := range c.TargetPlatforms {
 		s.Platforms = append(s.Platforms, Platform{ID: tp.ID, Name: platformName(c, tp.ID), PostTypes: AllowedPostTypes(c, tp.ID)})
 	}
-	if readyAssets >= 0 {
-		s.Sources = &Sources{Ready: readyAssets}
+	s.Sources = sources
+	return s
+}
+
+// WithPeriod sets the goal's current period from its share of the goal and
+// the posts dated in it.
+func (s Snapshot) WithPeriod(label string, target, planned int) Snapshot {
+	if s.Goal == nil || s.Goal.Unknown {
+		return s
 	}
+	g := *s.Goal
+	g.Period = &Period{Label: label, Target: target, Planned: planned, Left: max(target-planned, 0)}
+	s.Goal = &g
 	return s
 }
 

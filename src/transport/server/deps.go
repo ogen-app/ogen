@@ -402,6 +402,8 @@ func (d *deps) genkitDeps() genkitDeps {
 			Proposals: r.proposalRepo,
 			Actions:   r.actionRepo,
 			Platforms: r.platformRepo,
+			Analyses:  r.assetAnalysisRepo,
+			Links:     r.postIdeaRepo,
 		},
 		packDeps: packs.Deps{
 			Ideas:     ideas.New(r.ideaRepo, r.userRepo),

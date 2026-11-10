@@ -283,12 +283,7 @@ func (k *calendar) goal() []Finding {
 			continue
 		}
 		target := share(*c.EstimatedPostCount, cadence, from, until)
-		n := 0
-		for _, p := range k.posts {
-			if !p.day.Before(from) && p.day.Before(until) {
-				n++
-			}
-		}
+		n := k.within(from, until)
 		scope := from.Format(time.DateOnly)
 		switch {
 		case n < target:
@@ -305,6 +300,49 @@ func (k *calendar) goal() []Finding {
 		}
 	}
 	return out
+}
+
+// within counts the dated posts, published ones too, on days in [from,
+// until).
+func (k *calendar) within(from, until time.Time) int {
+	n := 0
+	for _, p := range k.posts {
+		if !p.day.Before(from) && p.day.Before(until) {
+			n++
+		}
+	}
+	return n
+}
+
+// Period is the goal period today falls in: its share of the goal, and the
+// posts dated in it, as the goal_short and goal_over findings count them.
+type Period struct {
+	Label  string
+	Target int
+	// Planned counts the posts dated in the period, published ones too.
+	Planned int
+}
+
+// CurrentPeriod is the goal period today falls in; nil when the campaign
+// has no goal or dates, or today is outside them.
+func CurrentPeriod(c *models.Campaign, posts []models.Post, now time.Time) *Period {
+	loc := Location(c)
+	day := func(t time.Time) time.Time {
+		y, m, d := t.In(loc).Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+	k := newCalendar(c, posts, day, day(now))
+	if c.EstimatedPostCount == nil || *c.EstimatedPostCount <= 0 || !k.dated {
+		return nil
+	}
+	cadence := cmp.Or(c.GoalCadence, campaigngoal.DefaultCadence)
+	for _, w := range campaigngoal.Windows(cadence, &k.start, &k.end, time.UTC) {
+		if k.today.Before(w.Start) || !k.today.Before(w.End) {
+			continue
+		}
+		return &Period{Label: w.Label, Target: share(*c.EstimatedPostCount, cadence, w.Start, w.End), Planned: k.within(w.Start, w.End)}
+	}
+	return nil
 }
 
 // share is a period's part of the goal: perPeriod for a whole period, and

@@ -1,5 +1,5 @@
 {{define "rules"}}
-These tools work on one campaign: the thread's, or the one in focus. The user's message is then followed by a <campaign> block (its brief and phases) and a <campaign_state> block (the goal and the room left under it, the posts by status, the post types each platform allows, whether there are sources), both read just before the message. Check them before you act and say so when a request doesn't fit, instead of running a tool that will be refused. Questions about the brief or the phases themselves are answered from <campaign> without a tool; call getCampaignOverview only for post counts and distribution.
+These tools work on one campaign: the thread's, or the one in focus. The user's message is then followed by a <campaign> block (its brief and phases) and a <campaign_state> block (the goal and the room left under it, overall and in the current goal period, the posts by status, the post types each platform allows, the sources attached, ready and analysed, and the calendar's problems), both read just before the message. Check them before you act and say so when a request doesn't fit, instead of running a tool that will be refused. Questions about the brief or the phases themselves are answered from <campaign> without a tool; call getCampaignOverview only for post counts and distribution.
 
 A question — "tell me about…", "what…", "which…", "how many…", "summarise…", "is the brief…", "do the posts…" — is READ-ONLY: answer it from <campaign> or with a read tool (getCampaignOverview, listCampaignPosts, checkBrief, checkPostsConsistency, askCampaignAssets). NEVER call a write or generation tool (runContentPlan, generatePosts, draftPost, enrichBrief, setCampaignDates, redistributePosts) to answer a question. Call one only when the current message explicitly asks for that change; never re-run an action from an earlier turn because it appears in the history. Resolve every date from the CURRENT message against today's date in <view>; never reuse a date from an earlier message, and when the message names none, leave the date out and let the tool default.
 
@@ -29,12 +29,13 @@ Key messages: {{.KeyMessages}}
 {{range .Phases}}- {{.Name}}: {{.Purpose}}
 {{end}}{{end}}{{end}}
 {{define "state"}}<campaign_state>
-{{if .Goal}}- Goal: {{.Goal.Target}} posts ({{.Goal.PerPeriod}} per {{.Goal.Cadence}} over {{.Goal.Periods}}). {{if .Goal.Unknown}}The campaign's posts could not be read, so the room left under the goal is unknown: do not add posts without telling the user it can't be checked right now.{{else}}Already in the campaign: {{.Goal.Planned}}. Room left under the goal: {{.Goal.Room}}.{{end}}
+{{if .Goal}}- Goal: {{.Goal.Target}} posts ({{.Goal.PerPeriod}} per {{.Goal.Cadence}} over {{.Goal.Periods}}). {{if .Goal.Unknown}}The campaign's posts could not be read, so the room left under the goal is unknown: do not add posts without telling the user it can't be checked right now.{{else}}Already in the campaign: {{.Goal.Planned}}. Room left under the goal: {{.Goal.Room}}.{{with .Goal.Period}} {{.Label}}: {{.Planned}} of the {{.Target}} posts it asks for, {{.Left}} left.{{end}}{{end}}
 {{else}}- Goal: none set.
 {{end}}- Posts: {{if .PostsUnknown}}unknown, they could not be read{{else}}{{.Posts}}{{end}}{{if .ByStatus}} ({{range $i, $s := .ByStatus}}{{if $i}}, {{end}}{{$s.Count}} {{$s.Status}}{{end}}){{end}}
 {{if .Platforms}}- Platforms, with the post types allowed on each:
 {{range .Platforms}}  - {{.Name}}: {{join .PostTypes ", "}}
-{{end}}{{end}}{{if .Sources}}- Ready source assets attached: {{.Sources.Ready}}
+{{end}}{{end}}{{with .Sources}}- Sources: {{if .WholeBank}}no assets attached, so the whole bank: {{.Attached}} assets{{else}}{{.Attached}} assets attached{{end}}, {{.Ready}} ready{{if ge .Analysed 0}}, {{.Analysed}} analysed{{end}}
+{{end}}{{with .Calendar}}- Calendar: {{if .Total}}{{.Total}} problems ({{range $i, $k := .Kinds}}{{if $i}}, {{end}}{{$k.Count}} {{$k.Kind}}{{end}}). First: {{range $i, $m := .Top}}{{if $i}}; {{end}}{{$m}}{{end}}. The repair tools' checkCalendar has the fixes.{{else}}no problems.{{end}}
 {{end}}</campaign_state>
 
 {{end}}

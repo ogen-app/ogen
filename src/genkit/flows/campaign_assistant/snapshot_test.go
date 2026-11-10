@@ -3,12 +3,15 @@ package campaign_assistant
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/fakemodel"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 )
 
 type statusRows struct {
@@ -90,5 +93,72 @@ func TestRunner_StateUnreadPostsLeaveRoomUnknown(t *testing.T) {
 	}
 	if strings.Contains(text, "Room left under the goal:") {
 		t.Errorf("unread posts reported as room:\n%s", text)
+	}
+}
+
+// datedRows are a campaign's posts with their dates and platforms.
+type datedRows struct {
+	repository.PostRepository
+	posts []models.Post
+}
+
+func (r datedRows) ListRowsByCampaign(context.Context, string, ...string) ([]models.Post, error) {
+	return r.posts, nil
+}
+
+// lensDigests reports a finished analysis for the ids in ready, through the
+// lens it was asked for.
+type lensDigests struct {
+	repository.AssetAnalysisRepository
+	ready []string
+	lens  **string
+}
+
+func (l lensDigests) LensDigests(_ context.Context, ids []string, campaignID *string) (map[string]repository.LensDigest, error) {
+	*l.lens = campaignID
+	out := map[string]repository.LensDigest{}
+	for _, id := range ids {
+		status := models.AssetAnalysisStatusPending
+		if slices.Contains(l.ready, id) {
+			status = models.AssetAnalysisStatusReady
+		}
+		out[id] = repository.LensDigest{Status: status}
+	}
+	return out, nil
+}
+
+// The state carries the current goal period's slots, the sources attached,
+// ready and analysed through the campaign's lens, and the calendar's
+// problems.
+func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
+	perPeriod := 3
+	c := timelineCampaign()
+	c.ID = "c1"
+	c.EstimatedPostCount, c.GoalCadence = &perPeriod, "week"
+	c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1"}}
+	c.AssetIDs = models.StringSlice{"a1", "a2", "a3"}
+	var lens *string
+	repos := CampaignAssistantRepos{
+		Posts: datedRows{posts: []models.Post{
+			{ID: "p1", Status: models.PostStatusDraft, PlatformID: "pl1", ScheduledAt: new(day("2026-01-02"))},
+			// Three on one day crowd it.
+			{ID: "p2", Status: models.PostStatusDraft, PlatformID: "pl1", ScheduledAt: new(day("2026-01-09"))},
+			{ID: "p3", Status: models.PostStatusDraft, PlatformID: "pl1", ScheduledAt: new(day("2026-01-09").Add(time.Hour))},
+			{ID: "p4", Status: models.PostStatusDraft, PlatformID: "pl1", ScheduledAt: new(day("2026-01-09").Add(2 * time.Hour))},
+		}},
+		Assets:   readyAssets{all: []models.Asset{{ID: "a1", Status: models.AssetStatusReady}, {ID: "a2", Status: models.AssetStatusReady}, {ID: "a3", Status: models.AssetStatusFailed}}},
+		Analyses: lensDigests{ready: []string{"a1"}, lens: &lens},
+	}
+	s := snapshot(t.Context(), repos, c, day("2026-01-02"))
+
+	if p := s.Goal.Period; p == nil || p.Target != 3 || p.Planned != 1 || p.Left != 2 {
+		t.Fatalf("period = %+v", s.Goal.Period)
+	}
+	if src := s.Sources; src == nil || src.WholeBank || src.Attached != 3 || src.Ready != 2 || src.Analysed != 1 || lens == nil || *lens != "c1" {
+		t.Fatalf("sources = %+v, lens = %v", s.Sources, lens)
+	}
+	if s.Calendar == nil || s.Calendar.Total == 0 || len(s.Calendar.Top) == 0 ||
+		!slices.ContainsFunc(s.Calendar.Kinds, func(k state.KindCount) bool { return k.Kind == "crowded day" }) {
+		t.Fatalf("calendar = %+v", s.Calendar)
 	}
 }

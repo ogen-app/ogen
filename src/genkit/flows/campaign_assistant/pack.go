@@ -119,7 +119,7 @@ func begin(ctx context.Context, cfg CampaignAssistantFlowConfig, repos CampaignA
 	if err != nil {
 		return nil, "", fmt.Errorf("render campaign context: %w", err)
 	}
-	snap := snapshot(ctx, repos, campaign)
+	snap := snapshot(ctx, repos, campaign, time.Now().UTC())
 	stateBlock, err := renderState(p, snap)
 	if err != nil {
 		return nil, "", fmt.Errorf("render campaign state: %w", err)
