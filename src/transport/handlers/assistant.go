@@ -99,6 +99,17 @@ type assistantTurnRequest struct {
 // @Description  health,tokenExpiresAt,autoPublish}],note}; weeklyDigest {from,to,empty,report};
 // @Description  emailWeeklyDigest {done,from,to}; postHistory {postId,title,entries[{at,kind: version|event,what,version,
 // @Description  by,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.
+// @Description  The ideas pack's, where an idea is {id,title,verdict,origin,campaignId,fitScore,plan} and grounding
+// @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total}; setIdeaVerdict {idea,undoId};
+// @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,undoId (setIdeaVerdicts only)};
+// @Description  compileIdeas {postId,title,status,campaignId,platformId,ideas,grounding,undoId}; draftIdeas
+// @Description  {posts[{postId,title,platformId,ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
+// @Description  rationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],
+// @Description  caps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
+// @Description  ideasInCommon {ideas[{id,title,angle}],missing,assets,campaigns,origins,lenses,platforms,postTypes,phases,
+// @Description  terms}, each [{value,label,ideaIds}]; editIdea {idea,note,changed,undoId}; similarIdeas {ideaId,title,
+// @Description  similar[{idea,score,why}]}; findDuplicateIdeas {groups[{keepId,similarity,ideas}],total,truncated};
+// @Description  mergeIdeas {idea,deleted}.
 // @Description  Plus "unsaved": true when the turn ran but could not be stored in the thread. "error"
 // @Description  carries {"message":"...","code":<http_code>} and ends the stream.
 // @Description  Offers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost,
@@ -108,7 +119,8 @@ type assistantTurnRequest struct {
 // @Description  "expiresAt","options"} streams once the reply is final, and "proposal_resolved" {"id","status","chosen"} when
 // @Description  one is answered in chat. Cards answer through POST /api/assistant/proposals/{id}/confirm or /dismiss.
 // @Description  Packs stream their own progress between: the campaign pack forwards the campaign assistant's events
-// @Description  (content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends "idea_draft_post" per post.
+// @Description  (content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends "idea_draft_post" per post,
+// @Description  shaped as one of its result's posts.
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream
