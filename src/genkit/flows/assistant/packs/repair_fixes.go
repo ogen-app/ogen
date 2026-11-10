@@ -54,6 +54,7 @@ type PostFixOutput struct {
 	// Failed are the posts an error stopped, worth a retry.
 	Failed []SkippedPost `json:"failed,omitempty"`
 	UndoID string        `json:"undoId,omitempty"`
+	assistantkit.Partial
 }
 
 // failedAll is the error of a fix every post of which failed: nothing was

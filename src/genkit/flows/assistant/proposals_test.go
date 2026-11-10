@@ -77,6 +77,12 @@ type bulkIn struct {
 	N int `json:"n"`
 }
 
+// bulkOut is how many things bulkThing did, and what it left.
+type bulkOut struct {
+	Done int `json:"done"`
+	assistantkit.Partial
+}
+
 // brokenBulk is the count bulkThing fails on; goneBulk the one it refuses
 // once confirmed, as work whose subject went away while it waited.
 // shrunkBulk is the count that shrinks by one while its offer waits;
@@ -103,17 +109,17 @@ func bulkPack(ran *int) Pack {
 						}
 						return in, nil
 					},
-				}, func(in bulkIn, done int) (bulkIn, []assistantkit.NotMade, bool) {
-					if done == in.N {
+				}, func(in bulkIn, out *bulkOut) (bulkIn, []assistantkit.NotMade, bool) {
+					if out.Done == in.N {
 						return in, nil, false
 					}
-					return bulkIn{N: in.N - done}, []assistantkit.NotMade{{ID: "rest", Reason: "engine hiccup"}}, true
-				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (int, error) {
+					return bulkIn{N: in.N - out.Done}, []assistantkit.NotMade{{ID: "rest", Reason: "engine hiccup"}}, true
+				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (*bulkOut, error) {
 					if in.N == brokenBulk {
-						return 0, errors.New("bulk engine down")
+						return nil, errors.New("bulk engine down")
 					}
 					if in.N == goneBulk {
-						return 0, assistantkit.Refused("those things are gone")
+						return nil, assistantkit.Refused("those things are gone")
 					}
 					done := in.N
 					if in.N == halfBulk {
@@ -121,7 +127,7 @@ func bulkPack(ran *int) Pack {
 					}
 					*ran += done
 					assistantkit.Touch(ctx, "thing", "")
-					return done, nil
+					return &bulkOut{Done: done}, nil
 				})))
 			return []assistantkit.Spec{{Name: tool.Name(), Pack: "bulk", Scopes: allScopes, Tier: assistantkit.TierProposal, Guide: "Does n things.", Tool: tool}}, nil
 		},

@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/vendors/llm"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
@@ -95,5 +96,37 @@ func TestIdeasOnScreen(t *testing.T) {
 		if got := ideaOnScreen(c.ctx, c.passedOne); got != c.wantOne {
 			t.Errorf("%d: ideaOnScreen = %q, want %q", i, got, c.wantOne)
 		}
+	}
+}
+
+// A bulk triage that stops part way says what it left in the chat turn's
+// results too, with the retry it offered.
+func TestIdeasEnd_PartialRunInResults(t *testing.T) {
+	ctx := tenantctx.With(context.WithValue(t.Context(), logging.UserIDKey, "u1"), "tenant-1")
+	g := genkit.Init(ctx)
+	d, repo, _ := ideaDeps()
+	repo.byID["i3"] = &models.Idea{ID: "i3", Title: "Onboarding tips"}
+	d.Ideas = ideas.New(failingIdeaRepo{repo, "i3"}, nil)
+	a, err := assistant.Init(g, assistant.FlowConfig{Provider: llm.NewProvider(), MaxOutputTokens: 1024},
+		assistant.Repos{Messages: turnMessages{}, Proposals: &storedProposals{}}, ideasPack(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := fakemodel.Define(g, "orchestrator",
+		fakemodel.Tools(fakemodel.Call{Name: "setIdeaVerdicts", Input: map[string]any{"ideaIds": []string{"i2", "i3"}, "verdict": "no"}}),
+		fakemodel.Answer(`{"explanation":"Done in part.","action":"answered"}`))
+	fakemodel.Route(ctx, m, fakemodel.Slot{Flow: modelconfig.FlowAssistant, Slot: modelconfig.SlotOrchestrator})
+
+	view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: "ideas", Scope: workspace}, Summary: "On the ideas list"}
+	resp, err := a.Run(ctx, assistant.Request{Instruction: "No to these two.", View: view}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bulk, ok := resp.Results["ideas"].(map[string]any)["setIdeaVerdicts"].(*BulkIdeasOutput)
+	if !ok || bulk.Done != 1 || len(bulk.NotMade) != 1 || bulk.NotMade[0].ID != "i3" || bulk.RetryProposalID == "" {
+		t.Fatalf("setIdeaVerdicts = %#v", resp.Results["ideas"])
+	}
+	if len(resp.Proposals) != 1 {
+		t.Fatalf("cards = %+v; want the retry", resp.Proposals)
 	}
 }

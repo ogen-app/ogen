@@ -43,10 +43,26 @@ type Outcome[T any] struct {
 	Options      []Option `json:"options,omitempty"`
 	ProposalID   string   `json:"proposalId,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
-	// NotMade lists what a run that did part of the job left undone, each
-	// with why; RetryProposalID offers just the items worth trying again.
+}
+
+// Partial is what a run that did part of the job left undone, each item
+// with why, and RetryProposalID, an offer of just the items worth trying
+// again; it is empty when nothing is. A result embeds it, so every reader
+// of the result — the model, a chat turn's results, a card's answer — sees
+// it the same.
+type Partial struct {
 	NotMade         []NotMade `json:"notMade,omitempty"`
 	RetryProposalID string    `json:"retryProposalId,omitempty"`
+}
+
+// MarkPartial records what the run left undone and the retry offered.
+func (p *Partial) MarkPartial(notMade []NotMade, retryProposalID string) {
+	p.NotMade, p.RetryProposalID = notMade, retryProposalID
+}
+
+// PartialResult is a result that can say a run did part of the job.
+type PartialResult interface {
+	MarkPartial(notMade []NotMade, retryProposalID string)
 }
 
 // NotMade is an item a run left undone.

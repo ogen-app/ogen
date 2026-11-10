@@ -53,8 +53,10 @@ type confirmProposalRequest struct {
 // @Description  Runs an offer the assistant proposed, exactly as proposed, and streams the work's events
 // @Description  like a chat turn: the work's own events, "proposal_created" for any fresh offer, "proposal_resolved",
 // @Description  then "complete" with a assistant.Response. When what the offer was made on changed since, nothing
-// @Description  runs: what still holds comes back as a fresh offer, explained in the response. A run that did part of
-// @Description  the job says so, and its result's "retryProposalId" offers just what is worth retrying.
+// @Description  runs: either the offer is refused (a 409 "error" whose message starts "Things changed since the
+// @Description  offer:"), or what still holds comes back as a fresh offer, explained in the response. A run that did
+// @Description  part of the job says so; its result lists "notMade" and, when some items are worth retrying, an
+// @Description  optional "retryProposalId" offering just those.
 // @Description  "error" carries {"message":"...","code":<http_code>}: 404 when the offer does not exist, 409 when it
 // @Description  was already answered, expired, names an unknown option, or the work itself was refused (the
 // @Description  message says why, e.g. what changed).

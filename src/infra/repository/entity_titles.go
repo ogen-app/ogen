@@ -21,7 +21,7 @@ type EntityTitleRepository interface {
 	// read returns ErrUntitledKind.
 	Titles(ctx context.Context, kind viewcontext.EntityKind, ids []string) (map[string]string, error)
 	// CampaignTitles is Titles confined to one campaign's posts or ideas; any
-	// other kind returns ErrUntitledKind.
+	// other kind, or no campaign, returns ErrUntitledKind.
 	CampaignTitles(ctx context.Context, kind viewcontext.EntityKind, campaignID string, ids []string) (map[string]string, error)
 }
 
@@ -71,7 +71,8 @@ func (r *entityTitleRepository) Titles(ctx context.Context, kind viewcontext.Ent
 // CampaignTitles reads the titles of ids of kind in one campaign.
 func (r *entityTitleRepository) CampaignTitles(ctx context.Context, kind viewcontext.EntityKind, campaignID string, ids []string) (map[string]string, error) {
 	src, ok := titleSources[kind]
-	if !ok || src.campaign == "" {
+	// No campaign would read the whole tenant's.
+	if !ok || src.campaign == "" || campaignID == "" {
 		return nil, ErrUntitledKind
 	}
 	return r.titles(ctx, src, ids, campaignID)
