@@ -162,7 +162,7 @@ func TestAnalyticsReads_RangeAndDegrade(t *testing.T) {
 
 	// No analytics database: an honest "not configured", not an error.
 	out, err := analyticsOverview(ctx, d, AnalyticsQuery{})
-	if u, ok := out.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
+	if u, ok := out.Data.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
 		t.Fatalf("overview = %#v, %v", out, err)
 	}
 	_, err = topPosts(ctx, d, TopPostsInput{By: "vibes"})
@@ -177,7 +177,7 @@ func TestAnalyticsLessons_RefusesAndDegrades(t *testing.T) {
 		refused(t, err)
 	}
 	out, err := analyticsLessons(ctx, d, LessonsInput{Since: "2026-01-01", TrendWindow: "12w", Metric: "saves"})
-	if u, ok := out.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
+	if u, ok := out.Data.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
 		t.Fatalf("lessons = %#v, %v", out, err)
 	}
 }
@@ -194,7 +194,7 @@ func TestPostStats_DefaultsToThePostThread(t *testing.T) {
 
 	postThread, _ := turn(t, viewcontext.Scope{Kind: models.AssistantScopePost, ID: "p1"}, nil)
 	out, err := postStats(postThread, Deps{Analytics: &analytics.Service{}}, PostStatsInput{})
-	if u, ok := out.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
+	if u, ok := out.Data.(Unavailable); err != nil || !ok || u.Reason != analytics.ReasonNotConfigured {
 		t.Fatalf("post stats = %#v, %v", out, err)
 	}
 

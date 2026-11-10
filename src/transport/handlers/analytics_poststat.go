@@ -34,7 +34,7 @@ import (
 // @Router       /api/analytics/posts/{post_id} [get]
 func (h *AnalyticsHandler) PostDetail(c *fiber.Ctx) error {
 	if h.repo == nil {
-		return c.JSON(insightEnvelope{Available: false, Reason: reasonNotConfigured})
+		return c.JSON(insightEnvelope{Available: false, Reason: analytics.ReasonNotConfigured})
 	}
 	resp, reason, err := h.Service().PostStats(reqCtx(c), c.Params("post_id"))
 	switch {

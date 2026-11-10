@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/ogen-app/ogen/src/analytics/performers"
 	"github.com/ogen-app/ogen/src/analytics/timeframe"
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/infra/publishers/zernio"
 	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
@@ -54,6 +56,13 @@ type Service struct {
 	// LifespanSamples returns the workspace's lifespan samples since a day
 	// (zero for all time); nil reads Repo each time.
 	LifespanSamples func(ctx context.Context, since time.Time) ([]repository.LifespanSample, error)
+	// Zernio and ProfileID back the live insight reads: the publisher, and
+	// the workspace's profile in it. Either nil reads ReasonNotConfigured.
+	Zernio    *zernio.Client
+	ProfileID func(ctx context.Context) (string, error)
+	// InsightCache reuses a live insight read by key; nil reads the
+	// publisher each time. The HTTP handler passes its cache.
+	InsightCache func(ctx context.Context, key string, load func(context.Context) (any, error)) (any, error)
 }
 
 // Scope is what a read is narrowed to: platforms and/or one campaign. A nil
@@ -63,9 +72,27 @@ type Service struct {
 // through their post's platform and campaign, and follower snapshots through
 // the Zernio slug.
 type Scope struct {
-	ids        map[string]bool
-	slugs      map[string]bool
-	campaignID string
+	ids          map[string]bool
+	slugs        map[string]bool
+	campaignID   string
+	campaignName string
+}
+
+// Platforms are the scope's platform slugs, sorted; nil for every platform.
+func (sc *Scope) Platforms() []string {
+	if sc == nil || len(sc.slugs) == 0 {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(sc.slugs))
+}
+
+// CampaignName is the name of the scope's campaign; empty for every
+// campaign.
+func (sc *Scope) CampaignName() string {
+	if sc == nil {
+		return ""
+	}
+	return sc.campaignName
 }
 
 // Scope resolves platform slugs (Zernio ids) and a campaign. A slug matching
@@ -95,7 +122,7 @@ func (s *Service) Scope(ctx context.Context, slugs []string, campaignID string) 
 	if s.Campaigns == nil {
 		return nil, ErrCampaignNotFound
 	}
-	_, err := s.Campaigns.GetByID(ctx, campaignID)
+	c, err := s.Campaigns.GetByID(ctx, campaignID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrCampaignNotFound
 	}
@@ -105,8 +132,22 @@ func (s *Service) Scope(ctx context.Context, slugs []string, campaignID string) 
 	if sc == nil {
 		sc = &Scope{}
 	}
-	sc.campaignID = campaignID
+	sc.campaignID, sc.campaignName = campaignID, c.Name
 	return sc, nil
+}
+
+// PlatformName is the display name of the platform with slug, which the
+// posts list filters by; ErrInvalidPlatform when no platform has it.
+func (s *Service) PlatformName(ctx context.Context, slug string) (string, error) {
+	bySlug, err := s.platformsBySlug(ctx)
+	if err != nil {
+		return "", err
+	}
+	p, ok := bySlug[strings.ToLower(strings.TrimSpace(slug))]
+	if !ok {
+		return "", ErrInvalidPlatform
+	}
+	return p.Name, nil
 }
 
 // platformsBySlug indexes every platform, disabled ones included (their

@@ -35,19 +35,32 @@ func analyticsPack(d Deps) assistant.Pack {
 		Name:    analyticsPackName,
 		Summary: "say how posts performed over a window — totals, trends, best and worst posts — or one post on its own, what the workspace's history has taught, and write more posts like the ones that worked",
 		Screens: []viewcontext.Screen{"analytics", "analytics.post", "campaign.analytics"},
+		// Each read's last output reaches the client as
+		// complete.results.analytics.<tool>, with the filters it applied, so
+		// cards cite them and replay from history.
+		Begin: beginResults(analyticsPackName),
+		End:   endResults(analyticsPackName),
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			overview := genkit.DefineTool(g, "analyticsOverview",
 				"Returns the analytics overview for a window: reach, interactions, posts published and followers, against the previous window, with trends and insights.",
-				assistantkit.Wrap(func(ctx context.Context, in AnalyticsQuery) (any, error) { return analyticsOverview(ctx, d, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(analyticsPackName, "analyticsOverview", nil, func(ctx context.Context, in AnalyticsQuery) (*AnalyticsResult, error) {
+					return analyticsOverview(ctx, d, in)
+				})), ai.WithStrictSchema(false))
 			top := genkit.DefineTool(g, "topPosts",
 				"Returns a window's best and worst posts, scored against the workspace's typical post at the same age, with insights.",
-				assistantkit.Wrap(func(ctx context.Context, in TopPostsInput) (any, error) { return topPosts(ctx, d, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(analyticsPackName, "topPosts", nil, func(ctx context.Context, in TopPostsInput) (*AnalyticsResult, error) {
+					return topPosts(ctx, d, in)
+				})), ai.WithStrictSchema(false))
 			lessons := genkit.DefineTool(g, "analyticsLessons",
 				"Returns what the workspace's whole history has taught: the best days and hours to post, how long a post keeps gaining reach, and the structural patterns that work or are fading.",
-				assistantkit.Wrap(func(ctx context.Context, in LessonsInput) (any, error) { return analyticsLessons(ctx, d, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(analyticsPackName, "analyticsLessons", nil, func(ctx context.Context, in LessonsInput) (*AnalyticsResult, error) {
+					return analyticsLessons(ctx, d, in)
+				})), ai.WithStrictSchema(false))
 			stats := genkit.DefineTool(g, "postStats",
 				"Returns one published post's statistics: reach, impressions, interactions, saves, clicks and engagement rate against the workspace's typical post at the same age, their running totals since publishing, and a narrative.",
-				assistantkit.Wrap(func(ctx context.Context, in PostStatsInput) (any, error) { return postStats(ctx, d, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(recorded(analyticsPackName, "postStats", nil, func(ctx context.Context, in PostStatsInput) (*AnalyticsResult, error) {
+					return postStats(ctx, d, in)
+				})), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(analyticsPackName, overview, assistantkit.TierRead,
 					`Call this when the user asks how things are going — "how did we do this month?", "is reach up?". The window defaults to the one on screen, else the last 28 days; the campaign to the thread's. Quote numbers as given; don't compute your own.`),
@@ -58,6 +71,7 @@ func analyticsPack(d Deps) assistant.Pack {
 				spec(analyticsPackName, stats, assistantkit.TierRead,
 					`Call this when the user asks how one post did — "how is this post doing?", "why did that one flop?". postId defaults to the post the thread is about; take ids from topPosts otherwise. Quote the multipliers and bands as given.`),
 			}
+			specs = append(specs, analyticsReadSpecs(g, d)...)
 			if d.Compose != nil && d.Links != nil {
 				more := genkit.DefineTool(g, "moreLikeThese",
 					"Writes new posts in the vein of posts that performed well — their angle and format, not their words — from the ideas and assets behind them, and saves them as drafts linked to the same ideas. More than a few are offered for the user to confirm first.",
@@ -84,12 +98,12 @@ type AnalyticsQuery struct {
 	From       string   `json:"from,omitempty"       jsonschema:"description=Inclusive start, YYYY-MM-DD"`
 	To         string   `json:"to,omitempty"         jsonschema:"description=Inclusive end, YYYY-MM-DD"`
 	Platforms  []string `json:"platforms,omitempty"  jsonschema:"description=Platform slugs, e.g. linkedin, instagram"`
-	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=Defaults to the thread's campaign; 'all' for the whole workspace"`
+	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=Defaults to the campaign on screen, else the thread's; 'all' for the whole workspace"`
 }
 
 // rangeAndScope resolves a query against the screen: its window when the
-// query names no dates, its platforms when the query names none, and the
-// thread's campaign unless "all".
+// query names no dates, its platforms when the query names none, and its
+// campaign, else the thread's, unless the query names one or "all".
 func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity string) (timeframe.Range, *analytics.Scope, error) {
 	from, to, window, platforms := in.From, in.To, in.Window, in.Platforms
 	if w := assistant.Window(ctx); w != nil {
@@ -111,6 +125,8 @@ func rangeAndScope(ctx context.Context, d Deps, in AnalyticsQuery, granularity s
 	switch {
 	case strings.EqualFold(campaign, "all"):
 		campaign = ""
+	case campaign == "" && assistant.Window(ctx) != nil && assistant.Window(ctx).CampaignID != "":
+		campaign = assistant.Window(ctx).CampaignID
 	case campaign == "":
 		campaign = assistant.CampaignID(ctx)
 	}
@@ -137,7 +153,51 @@ type Unavailable struct {
 	Reason    string `json:"reason"`
 }
 
-func analyticsOverview(ctx context.Context, d Deps, in AnalyticsQuery) (any, error) {
+// AnalyticsResult is a read's data and what it was narrowed to.
+type AnalyticsResult struct {
+	Applied Applied `json:"applied"`
+	// Data is the read, or Unavailable when it has none.
+	Data any `json:"data"`
+}
+
+// Applied is what a read was narrowed to, which its card cites: the days
+// (inclusive), the platforms (empty for every one), the campaign (nil for
+// the whole workspace), or the one post it is about.
+type Applied struct {
+	From      string           `json:"from,omitempty"`
+	To        string           `json:"to,omitempty"`
+	Platforms []string         `json:"platforms,omitempty"`
+	Campaign  *AppliedCampaign `json:"campaign,omitempty"`
+	PostID    string           `json:"postId,omitempty"`
+	// Note says what the read can't be narrowed by.
+	Note string `json:"note,omitempty"`
+}
+
+// AppliedCampaign is the campaign a read was narrowed to.
+type AppliedCampaign struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// windowApplied is a windowed read's filters.
+func windowApplied(rng timeframe.Range, sc *analytics.Scope, note string) Applied {
+	a := Applied{From: rng.From.Format(time.DateOnly), To: rng.To.AddDate(0, 0, -1).Format(time.DateOnly), Platforms: sc.Platforms(), Note: note}
+	if id := sc.Campaign(); id != "" {
+		a.Campaign = &AppliedCampaign{ID: id, Name: sc.CampaignName()}
+	}
+	return a
+}
+
+// result is a read's data with its filters; data nil is Unavailable for
+// reason.
+func result[T any](a Applied, data *T, reason string) *AnalyticsResult {
+	if data == nil {
+		return &AnalyticsResult{Applied: a, Data: Unavailable{Reason: reason}}
+	}
+	return &AnalyticsResult{Applied: a, Data: data}
+}
+
+func analyticsOverview(ctx context.Context, d Deps, in AnalyticsQuery) (*AnalyticsResult, error) {
 	rng, sc, err := rangeAndScope(ctx, d, in, "")
 	if err != nil {
 		return nil, err
@@ -146,10 +206,7 @@ func analyticsOverview(ctx context.Context, d Deps, in AnalyticsQuery) (any, err
 	if err != nil {
 		return nil, err
 	}
-	if resp == nil {
-		return Unavailable{Reason: reason}, nil
-	}
-	return resp, nil
+	return result(windowApplied(rng, sc, ""), resp, reason), nil
 }
 
 // TopPostsInput ranks a window's posts.
@@ -159,7 +216,7 @@ type TopPostsInput struct {
 	Limit int    `json:"limit,omitempty" jsonschema:"description=Posts per list; default 5"`
 }
 
-func topPosts(ctx context.Context, d Deps, in TopPostsInput) (any, error) {
+func topPosts(ctx context.Context, d Deps, in TopPostsInput) (*AnalyticsResult, error) {
 	by := in.By
 	if by == "" {
 		by = performers.ByAgainstTypical
@@ -179,10 +236,7 @@ func topPosts(ctx context.Context, d Deps, in TopPostsInput) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res == nil {
-		return Unavailable{Reason: reason}, nil
-	}
-	return res, nil
+	return result(windowApplied(rng, sc, ""), res, reason), nil
 }
 
 // LessonsInput shapes the lessons read.
@@ -193,7 +247,7 @@ type LessonsInput struct {
 	Platforms   []string `json:"platforms,omitempty"   jsonschema:"description=Platform slugs, e.g. linkedin, instagram"`
 }
 
-func analyticsLessons(ctx context.Context, d Deps, in LessonsInput) (any, error) {
+func analyticsLessons(ctx context.Context, d Deps, in LessonsInput) (*AnalyticsResult, error) {
 	opt := analytics.LessonsOptions{Metric: in.Metric}
 	if opt.Metric == "" {
 		opt.Metric = learnings.MetricReach
@@ -226,10 +280,8 @@ func analyticsLessons(ctx context.Context, d Deps, in LessonsInput) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	if resp == nil {
-		return Unavailable{Reason: reason}, nil
-	}
-	return resp, nil
+	a := Applied{From: in.Since, Platforms: sc.Platforms(), Note: "all time unless from is set, and workspace-wide"}
+	return result(a, resp, reason), nil
 }
 
 // PostStatsInput names the post to read.
@@ -237,7 +289,7 @@ type PostStatsInput struct {
 	PostID string `json:"postId,omitempty" jsonschema:"description=The post; defaults to the post the thread is about"`
 }
 
-func postStats(ctx context.Context, d Deps, in PostStatsInput) (any, error) {
+func postStats(ctx context.Context, d Deps, in PostStatsInput) (*AnalyticsResult, error) {
 	id := strings.TrimSpace(in.PostID)
 	if s, ok := assistant.Scope(ctx); ok && id == "" && s.Kind == models.AssistantScopePost {
 		id = s.ID
@@ -254,10 +306,7 @@ func postStats(ctx context.Context, d Deps, in PostStatsInput) (any, error) {
 	case err != nil:
 		return nil, err
 	}
-	if resp == nil {
-		return Unavailable{Reason: reason}, nil
-	}
-	return resp, nil
+	return result(Applied{PostID: id}, resp, reason), nil
 }
 
 // MoreLikeTheseInput asks for posts like the examples.

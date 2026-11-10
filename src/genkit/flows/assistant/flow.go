@@ -192,6 +192,9 @@ func renderView(p *prompts, v *viewresolve.Resolved, offers []models.AssistantPr
 		if len(w.Platforms) > 0 {
 			d.Window += ", platforms " + strings.Join(w.Platforms, ", ")
 		}
+		if w.CampaignID != "" {
+			d.Window += ", campaign " + w.CampaignID
+		}
 	}
 	return flowkit.RenderTemplate(p.view, d)
 }

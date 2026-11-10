@@ -123,11 +123,14 @@ type Selection struct {
 	Count int `json:"count,omitempty"`
 }
 
-// Window is an analytics range and platform filter.
+// Window is an analytics range and its platform and campaign filters.
 type Window struct {
 	From      string   `json:"from,omitempty"` // YYYY-MM-DD
 	To        string   `json:"to,omitempty"`   // YYYY-MM-DD
 	Platforms []string `json:"platforms,omitempty"`
+	// CampaignID is the campaign the dashboard is narrowed to; empty for
+	// the whole workspace.
+	CampaignID string `json:"campaignId,omitempty"`
 }
 
 // Visible lists the first items on screen, so "the third one" resolves.
@@ -255,8 +258,8 @@ func (s *Selection) validate() error {
 	return checkIDs("selection.ids", s.IDs)
 }
 
-// validate checks a window, when there is one: ISO dates in order and a
-// bounded platform list.
+// validate checks a window, when there is one: ISO dates in order, a
+// bounded platform list and a campaign id.
 func (w *Window) validate() error {
 	if w == nil {
 		return nil
@@ -279,7 +282,13 @@ func (w *Window) validate() error {
 	if len(w.Platforms) > MaxPlatforms {
 		return invalid("window.platforms", "more than %d platforms", MaxPlatforms)
 	}
-	return checkIDs("window.platforms", w.Platforms)
+	if err := checkIDs("window.platforms", w.Platforms); err != nil {
+		return err
+	}
+	if w.CampaignID != "" {
+		return checkID("window.campaignId", w.CampaignID)
+	}
+	return nil
 }
 
 // validate checks the visible items, when there are any: a known kind and
