@@ -178,7 +178,7 @@ const (
 // @Description  sources, and every post links to its ideas (GET /api/posts/{id}/ideas). The campaign defaults to
 // @Description  the one the ideas share; the platform, post type, phase and date to the first idea plan that sets
 // @Description  each. Requests that can't run are a plain 400 before the stream opens.
-// @Description  Events: "post" {postId,title,platformId,ideaIds} as each post is saved; "complete"
+// @Description  Events: "post" {postId,title,platformId,ideaIds,usedAssetIds} as each post is saved; "complete"
 // @Description  {posts,warnings}; "error" {message,code}, after which the posts already written are kept.
 // @Tags         ideas
 // @Accept       json

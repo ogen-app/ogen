@@ -9,6 +9,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
@@ -47,6 +48,7 @@ func ideasDB(t *testing.T) (context.Context, *bun.DB, Deps, *assistantundo.Servi
 	for _, i := range []*models.Idea{
 		{ID: "u-1", Title: "Pricing myths", CampaignID: &c1, Plan: models.IdeaPlan{PlatformID: new("linkedin")}},
 		{ID: "u-2", Title: "Founder story", CampaignID: &c1},
+		{ID: "u-3", Title: "Spa menu", CampaignID: &c1, SourceAssetID: new("a9")},
 	} {
 		if err := ideaRepo.Create(ctx, i); err != nil {
 			t.Fatal(err)
@@ -64,7 +66,7 @@ func TestCompileIdeas_Undo(t *testing.T) {
 	links := repository.NewPostIdeaRepository(db)
 
 	out, err := compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-1", "u-2"}})
-	if err != nil || out.UndoID == "" {
+	if err != nil || out.UndoID == "" || out.Grounding.Mode != assistantkit.Exploratory {
 		t.Fatalf("compile = %+v, %v", out, err)
 	}
 	if _, err := undo.Undo(ctx, out.UndoID, "u1"); err != nil {
@@ -80,9 +82,9 @@ func TestCompileIdeas_Undo(t *testing.T) {
 		t.Fatalf("the idea went with the post: %v", err)
 	}
 
-	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-1"}})
-	if err != nil {
-		t.Fatal(err)
+	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-3", "u-1"}})
+	if err != nil || out.Grounding.Mode != assistantkit.Grounded || len(out.Grounding.Sources) != 1 || out.Grounding.Sources[0].ID != "a9" {
+		t.Fatalf("grounded compile = %+v, %v", out, err)
 	}
 	if _, err := db.NewUpdate().Model((*models.Post)(nil)).Set("content = ?", "Written by hand").Where("id = ?", out.PostID).Exec(ctx); err != nil {
 		t.Fatal(err)

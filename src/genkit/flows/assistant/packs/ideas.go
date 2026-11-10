@@ -16,6 +16,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
@@ -427,6 +428,9 @@ type CompileIdeasOutput struct {
 	CampaignID string `json:"campaignId"`
 	PlatformID string `json:"platformId,omitempty"`
 	Ideas      int    `json:"ideas"`
+	// Grounding is the ideas' assets the post's theses rest on; exploratory
+	// when they had none.
+	Grounding assistantkit.Grounding `json:"grounding"`
 	// UndoID deletes the post again while no one has changed it.
 	UndoID string `json:"undoId,omitempty"`
 }
@@ -475,7 +479,41 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 		notes = append(notes, *res.Note)
 	}
 	return &CompileIdeasOutput{PostID: p.ID, Title: p.Title, Status: string(p.Status), CampaignID: p.CampaignID, PlatformID: p.PlatformID, Ideas: len(res.Ideas),
-		UndoID: recordUndo(ctx, d, models.AssistantActionPostCreated, p.ID, models.JSONMap{}, assistantundo.PostCreated(p, notes))}, nil
+		Grounding: newAssetTitles(d).grounding(ctx, p.UsedAssetIDs),
+		UndoID:    recordUndo(ctx, d, models.AssistantActionPostCreated, p.ID, models.JSONMap{}, assistantundo.PostCreated(p, notes))}, nil
+}
+
+// assetTitles names assets for grounding, reading each once.
+type assetTitles struct {
+	assets repository.AssetRepository
+	known  map[string]string
+}
+
+func newAssetTitles(d Deps) *assetTitles {
+	return &assetTitles{assets: d.Assets, known: map[string]string{}}
+}
+
+// grounding is the sources ids name, by title, in order; exploratory for
+// none. An asset that can't be read, or is gone, still counts by its id.
+func (t *assetTitles) grounding(ctx context.Context, ids []string) assistantkit.Grounding {
+	var missing []string
+	for _, id := range ids {
+		if _, ok := t.known[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 && t.assets != nil {
+		if metas, err := t.assets.ListMeta(ctx, missing); err == nil {
+			for _, m := range metas {
+				t.known[m.ID] = m.Title
+			}
+		}
+	}
+	sources := make([]assistantkit.Source, len(ids))
+	for i, id := range ids {
+		sources[i] = assistantkit.Source{ID: id, Title: t.known[id]}
+	}
+	return assistantkit.GroundingFrom(sources)
 }
 
 // orphaned reports a compile or draft that found no campaign to use: the
@@ -498,8 +536,16 @@ type DraftIdeasInput struct {
 
 // DraftIdeasOutput is the written posts.
 type DraftIdeasOutput struct {
-	Posts    []compose.DraftedPost `json:"posts"`
-	Warnings []string              `json:"warnings,omitempty"`
+	Posts    []DraftedIdeaPost `json:"posts"`
+	Warnings []string          `json:"warnings,omitempty"`
+}
+
+// DraftedIdeaPost is a post written from ideas and what it is grounded in:
+// the ideas' assets the writer was given, or exploratory without any. It
+// is also each idea_draft_post event.
+type DraftedIdeaPost struct {
+	compose.DraftedPost
+	Grounding assistantkit.Grounding `json:"grounding"`
 }
 
 func planDraft(ctx context.Context, d Deps, in DraftIdeasInput) (*compose.DraftPlan, error) {
@@ -525,14 +571,18 @@ func draftIdeas(ctx context.Context, d Deps, in DraftIdeasInput) (*DraftIdeasOut
 	if err != nil {
 		return nil, err
 	}
+	titles := newAssetTitles(d)
+	out := &DraftIdeasOutput{Posts: []DraftedIdeaPost{}}
 	res, err := d.Compose.RunDraft(ctx, plan, func(p compose.DraftedPost) {
 		assistantkit.Touch(ctx, "post", p.PostID)
-		assistant.Emit(ctx, "idea_draft_post", p)
+		drafted := DraftedIdeaPost{DraftedPost: p, Grounding: titles.grounding(ctx, p.UsedAssetIDs)}
+		out.Posts = append(out.Posts, drafted)
+		assistant.Emit(ctx, "idea_draft_post", drafted)
 	})
 	if err != nil && (res == nil || len(res.Posts) == 0) {
 		return nil, err
 	}
-	out := &DraftIdeasOutput{Posts: res.Posts, Warnings: res.Warnings}
+	out.Warnings = res.Warnings
 	if err != nil {
 		out.Warnings = append(out.Warnings, "stopped early: "+err.Error())
 	}
