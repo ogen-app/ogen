@@ -153,6 +153,9 @@ func (t *toolSet) setFilter(ctx context.Context, in SetFilterInput) (*UIResult, 
 	defer st.planning.Unlock()
 	screen := st.currentScreen()
 	kind, ok := screen.ListKind()
+	if _, selectable := screen.SelectKind(); !ok && selectable {
+		return nil, assistantkit.Refused("this list has no filter I can set; filters apply on the Ideas and Assets lists")
+	}
 	if !ok {
 		return nil, assistantkit.Refused("filters apply on the Ideas and Assets lists; navigate to one first")
 	}
@@ -186,14 +189,20 @@ func (t *toolSet) selectItems(ctx context.Context, in SelectInput) (*UIResult, e
 	st.planning.Lock()
 	defer st.planning.Unlock()
 	screen := st.currentScreen()
-	kind, ok := screen.ListKind()
+	kind, ok := screen.SelectKind()
 	if !ok {
-		return nil, assistantkit.Refused("items can be selected on the Ideas and Assets lists; navigate to one first")
+		return nil, assistantkit.Refused("items can be selected on the Ideas and Assets lists and a campaign's posts list; navigate to one first")
 	}
 	if len(in.IDs) == 0 || len(in.IDs) > viewcontext.MaxSelectionIDs {
 		return nil, assistantkit.Refused(fmt.Sprintf("select between 1 and %d items; for more, filter the list instead", viewcontext.MaxSelectionIDs))
 	}
-	items, err := t.deps.Views.Items(ctx, kind, in.IDs)
+	// A campaign's posts list shows that campaign's posts only.
+	var items []viewresolve.Item
+	if kind == viewcontext.KindPost {
+		items, err = t.deps.Views.CampaignItems(ctx, kind, st.currentCampaign(), in.IDs)
+	} else {
+		items, err = t.deps.Views.Items(ctx, kind, in.IDs)
+	}
 	if err != nil {
 		return nil, err
 	}

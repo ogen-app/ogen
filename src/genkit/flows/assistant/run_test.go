@@ -74,6 +74,12 @@ func (v memViews) Items(_ context.Context, kind viewcontext.EntityKind, ids []st
 	return out, nil
 }
 
+func (v memViews) CampaignItems(ctx context.Context, kind viewcontext.EntityKind, campaignID string, ids []string) ([]viewresolve.Item, error) {
+	// Posts named p-other belong to another campaign.
+	items, err := v.Items(ctx, kind, ids)
+	return slices.DeleteFunc(items, func(it viewresolve.Item) bool { return strings.HasSuffix(it.ID, "-other") }), err
+}
+
 func (memViews) CheckFilter(_ viewcontext.EntityKind, filter string) error {
 	if strings.Contains(filter, "nope") {
 		return &viewcontext.InvalidError{Field: "filter", Reason: "unknown pile"}
@@ -95,6 +101,7 @@ func testViews() memViews {
 		viewcontext.KindCampaign: {"c1": "Spring launch", "c2": "Autumn"},
 		viewcontext.KindAsset:    {"a1": "Q3 deck"},
 		viewcontext.KindIdea:     {"i1": "Pricing myths", "i2": "Founder story"},
+		viewcontext.KindPost:     {"p1": "Launch day", "p-other": "Another campaign's post"},
 	}}
 }
 

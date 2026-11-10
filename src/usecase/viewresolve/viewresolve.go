@@ -32,6 +32,7 @@ var ErrScopeNotFound = errors.New("assistant scope not found")
 // Titles reads entity titles; repository.EntityTitleRepository.
 type Titles interface {
 	Titles(ctx context.Context, kind viewcontext.EntityKind, ids []string) (map[string]string, error)
+	CampaignTitles(ctx context.Context, kind viewcontext.EntityKind, campaignID string, ids []string) (map[string]string, error)
 }
 
 // IdeaIDs expands an ideas query; repository.IdeaRepository.
@@ -229,13 +230,25 @@ func (r *Resolver) CheckFilter(kind viewcontext.EntityKind, filter string) error
 }
 
 // Items reloads ids of kind in the caller's tenant, in order, dropping those
-// that no longer exist. A kind without titles passes its ids through.
+// that no longer exist.
 func (r *Resolver) Items(ctx context.Context, kind viewcontext.EntityKind, ids []string) ([]Item, error) {
 	refs := newRefs()
 	refs.add(kind, ids...)
 	if err := refs.load(ctx, r.titles); err != nil {
 		return nil, err
 	}
+	return refs.items(kind, ids), nil
+}
+
+// CampaignItems is Items confined to one campaign's posts or ideas: ids of
+// another campaign are dropped too.
+func (r *Resolver) CampaignItems(ctx context.Context, kind viewcontext.EntityKind, campaignID string, ids []string) ([]Item, error) {
+	got, err := r.titles.CampaignTitles(ctx, kind, campaignID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load %s titles: %w", kind, err)
+	}
+	refs := newRefs()
+	refs.titles[kind] = got
 	return refs.items(kind, ids), nil
 }
 
@@ -259,16 +272,13 @@ func scopeKind(k models.AssistantScopeKind) viewcontext.EntityKind {
 type refs struct {
 	ids    map[viewcontext.EntityKind][]string
 	titles map[viewcontext.EntityKind]map[string]string
-	// untitled holds the kinds without titles, whose ids pass through.
-	untitled map[viewcontext.EntityKind]bool
 }
 
 // newRefs returns an empty refs.
 func newRefs() *refs {
 	return &refs{
-		ids:      map[viewcontext.EntityKind][]string{},
-		titles:   map[viewcontext.EntityKind]map[string]string{},
-		untitled: map[viewcontext.EntityKind]bool{},
+		ids:    map[viewcontext.EntityKind][]string{},
+		titles: map[viewcontext.EntityKind]map[string]string{},
 	}
 }
 
@@ -277,13 +287,14 @@ func (r *refs) add(kind viewcontext.EntityKind, ids ...string) {
 	r.ids[kind] = append(r.ids[kind], ids...)
 }
 
-// load reads the titles of every queued kind, one read per kind.
+// load reads the titles of every queued kind, one read per kind. Ids of a
+// kind with no titles to read can't be checked, so they count as gone.
 func (r *refs) load(ctx context.Context, titles Titles) error {
 	for kind, ids := range r.ids {
 		got, err := titles.Titles(ctx, kind, ids)
 		switch {
 		case errors.Is(err, repository.ErrUntitledKind):
-			r.untitled[kind] = true
+			r.titles[kind] = nil
 		case err != nil:
 			return fmt.Errorf("load %s titles: %w", kind, err)
 		default:
@@ -295,9 +306,6 @@ func (r *refs) load(ctx context.Context, titles Titles) error {
 
 // item returns the loaded entity, and false when it no longer exists.
 func (r *refs) item(kind viewcontext.EntityKind, id string) (Item, bool) {
-	if r.untitled[kind] {
-		return Item{Kind: kind, ID: id}, true
-	}
 	title, ok := r.titles[kind][id]
 	return Item{Kind: kind, ID: id, Title: title}, ok
 }

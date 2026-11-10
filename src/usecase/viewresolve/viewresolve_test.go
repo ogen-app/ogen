@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ogen-app/ogen/src/domain/models"
@@ -39,6 +41,14 @@ func (f *fakeTitles) Titles(_ context.Context, kind viewcontext.EntityKind, ids 
 	return out, nil
 }
 
+// CampaignTitles reads the titles of the ids not ending in -other, which
+// belong to another campaign.
+func (f *fakeTitles) CampaignTitles(ctx context.Context, kind viewcontext.EntityKind, _ string, ids []string) (map[string]string, error) {
+	got, err := f.Titles(ctx, kind, ids)
+	maps.DeleteFunc(got, func(id, _ string) bool { return strings.HasSuffix(id, "-other") })
+	return got, err
+}
+
 type fakeIdeas struct {
 	ids   []string
 	total int
@@ -67,7 +77,7 @@ func titles() *fakeTitles {
 		viewcontext.KindCampaign: {"c1": "Spring launch"},
 		viewcontext.KindIdea:     {"i1": "Pricing myths", "i2": "Founder story", "i3": "FAQ"},
 		viewcontext.KindAsset:    {"a1": "Q3 deck"},
-		viewcontext.KindPost:     {},
+		viewcontext.KindPost:     {"p1": "Launch day", "p1-other": "Elsewhere"},
 	}}
 }
 
@@ -211,15 +221,14 @@ func TestResolve_Refusals(t *testing.T) {
 	}
 }
 
-func TestResolve_UntitledKindPassesThrough(t *testing.T) {
+// Ids of a kind whose titles can't be read can't be checked for the tenant,
+// so they count as gone rather than passing through.
+func TestResolve_UncheckedKindIsDropped(t *testing.T) {
 	r := New(titles(), &fakeIdeas{}, &fakeAssets{})
 	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"foundation.voices","scope":{"kind":"workspace"},
 		"selection":{"kind":"voice","ids":["v1"]}}`))
-	if err != nil || len(got.Selection) != 1 || got.Selection[0].Title != "" {
+	if err != nil || len(got.Selection) != 0 || got.Dropped != 1 {
 		t.Fatalf("got %+v, %v", got, err)
-	}
-	if want := "On foundation.voices · 1 voice selected"; got.Summary != want {
-		t.Fatalf("summary = %q", got.Summary)
 	}
 }
 
@@ -229,8 +238,12 @@ func TestItemsAndCheckFilter(t *testing.T) {
 	if err != nil || !slices.Equal(itemIDs(got), []string{"i3", "i1"}) || got[0].Title != "FAQ" {
 		t.Fatalf("items = %+v, %v", got, err)
 	}
-	if got, err := r.Items(t.Context(), viewcontext.KindVoice, []string{"v1"}); err != nil || len(got) != 1 {
-		t.Fatalf("untitled kind: %+v, %v", got, err)
+	if got, err := r.Items(t.Context(), viewcontext.KindVoice, []string{"v1"}); err != nil || len(got) != 0 {
+		t.Fatalf("unchecked kind: %+v, %v", got, err)
+	}
+	got, err = r.CampaignItems(t.Context(), viewcontext.KindPost, "c1", []string{"p1-other", "p1"})
+	if err != nil || !slices.Equal(itemIDs(got), []string{"p1"}) {
+		t.Fatalf("campaign items = %+v, %v", got, err)
 	}
 
 	if err := r.CheckFilter(viewcontext.KindIdea, "origin=asset_analysis"); err != nil {

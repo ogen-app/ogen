@@ -76,6 +76,22 @@ var listKinds = map[Screen]EntityKind{
 	"assets": KindAsset, "campaign.assets": KindAsset,
 }
 
+// selectKinds names what each list screen whose items can be ticked lists:
+// the filterable lists, and the campaign's posts list, which has no filter
+// the server could read.
+var selectKinds = map[Screen]EntityKind{
+	"ideas": KindIdea, "campaign.ideas": KindIdea,
+	"assets": KindAsset, "campaign.assets": KindAsset,
+	"campaign.list": KindPost,
+}
+
+// SelectKind is the kind a list screen lets the assistant tick; false for a
+// screen without a selectable list.
+func (s Screen) SelectKind() (EntityKind, bool) {
+	k, ok := selectKinds[s]
+	return k, ok
+}
+
 // ListKind is the kind a filterable list screen lists; false for any other
 // screen.
 func (s Screen) ListKind() (EntityKind, bool) {
@@ -98,6 +114,9 @@ const (
 )
 
 var kinds = []EntityKind{KindIdea, KindAsset, KindPost, KindCampaign, KindVoice, KindAudience, KindFact, KindSeries}
+
+// Kinds lists every entity kind, in a stable order.
+func Kinds() []EntityKind { return slices.Clone(kinds) }
 
 // Scope is the thread a turn belongs to.
 type Scope struct {
