@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,7 +125,7 @@ func ideasPack(d Deps) assistant.Pack {
 					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these". It writes no body: the post holds their theses until someone drafts it. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share.`),
 				spec(ideasPackName, draft, assistantkit.TierProposal,
 					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". ideaIds default to the selected ideas, else the open one. platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. More than a few posts are offered first.`),
-			}, defineMergeTools(g, d)...), nil
+			}, slices.Concat(defineReadTools(g, d), defineMergeTools(g, d))...), nil
 		},
 	}
 }
