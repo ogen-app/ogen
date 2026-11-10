@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 	"github.com/ogen-app/ogen/src/usecase/analytics"
-	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 )
 
 type examplePosts struct {
@@ -48,73 +46,6 @@ func (exampleLinks) IdeasOfPost(_ context.Context, postID string) ([]models.Post
 func (l exampleLinks) Link(_ context.Context, _ bun.IDB, postID string, ids []string) error {
 	l.linked[postID] = ids
 	return nil
-}
-
-func TestMoreLikeThese_WritesFromTheExamplesAndKeepsProvenance(t *testing.T) {
-	var got compose.DraftRequest
-	links := exampleLinks{linked: map[string][]string{}}
-	svc := compose.New(nil, nil, nil, links, nil, nil).WithDrafter(func(_ context.Context, req compose.DraftRequest) ([]compose.Written, []string, error) {
-		got = req
-		return []compose.Written{{PostID: "new1", PlatformID: req.PlatformID}}, nil, nil
-	})
-	d := Deps{Compose: svc, Links: links, DraftMax: 5, Posts: examplePosts{byID: map[string]*models.Post{
-		"top1": {ID: "top1", CampaignID: "c1", PlatformID: "li", Title: "Why discounts backfire", Content: "Most buyers…", UsedAssetIDs: models.StringSlice{"a1"}},
-		"top2": {ID: "top2", CampaignID: "c1", PlatformID: "li", Title: "The 3 pricing pages", Content: "We tested…"},
-	}}}
-	ctx, touched := turn(t, workspace, nil)
-
-	out, err := moreLikeThese(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1", "top2"}, Count: 9})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.CampaignID != "c1" || got.PlatformID != "li" || got.Count != 5 || !slices.Equal(got.UsedAssetIDs, []string{"a1"}) {
-		t.Fatalf("request = %+v; want the examples' campaign and platform, the count capped", got)
-	}
-	// The writer requires a publish window; none was asked for, so one is set.
-	start, errS := time.Parse(time.DateOnly, got.WindowStart)
-	end, errE := time.Parse(time.DateOnly, got.WindowEnd)
-	if errS != nil || errE != nil || end.Before(start) {
-		t.Fatalf("window = %q..%q; want valid dates", got.WindowStart, got.WindowEnd)
-	}
-	if !strings.Contains(got.SourceMaterial, "Why discounts backfire") || !strings.Contains(got.SourceMaterial, "never repeat") ||
-		!strings.Contains(got.SourceMaterial, "Pricing myths") {
-		t.Fatalf("source material = %q", got.SourceMaterial)
-	}
-	// The new post links to the same ideas, its provenance.
-	if len(out.Posts) != 1 || !slices.Equal(links.linked["new1"], []string{"idea-pricing"}) {
-		t.Fatalf("out = %+v, links = %v", out, links.linked)
-	}
-	if len(touched()) != 1 {
-		t.Fatalf("touched = %v", touched())
-	}
-	_, err = moreLikeThese(ctx, d, MoreLikeTheseInput{PostIDs: []string{"nope"}})
-	refused(t, err)
-	refused(t, checkExamples(MoreLikeTheseInput{}))
-}
-
-func TestMoreLikeThese_KeepsAPartialDraft(t *testing.T) {
-	links := exampleLinks{linked: map[string][]string{}}
-	svc := compose.New(nil, nil, nil, links, nil, nil).WithDrafter(func(_ context.Context, req compose.DraftRequest) ([]compose.Written, []string, error) {
-		return []compose.Written{{PostID: "new1", PlatformID: req.PlatformID}}, nil, errors.New("writer down")
-	})
-	d := Deps{Compose: svc, Links: links, DraftMax: 5, Posts: examplePosts{byID: map[string]*models.Post{
-		"top1": {ID: "top1", CampaignID: "c1", PlatformID: "li", Title: "Why discounts backfire", Content: "Most buyers…"},
-	}}}
-	ctx, touched := turn(t, workspace, nil)
-
-	out, err := moreLikeThese(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1"}, Count: 2})
-	if err != nil {
-		t.Fatalf("a partial draft is a result, not an error: %v", err)
-	}
-	if len(out.Posts) != 1 || out.Posts[0].PostID != "new1" || !slices.Equal(links.linked["new1"], []string{"idea-pricing"}) {
-		t.Fatalf("out = %+v, links = %v; want the written post and its provenance", out, links.linked)
-	}
-	if len(touched()) != 1 {
-		t.Fatalf("touched = %v", touched())
-	}
-	if !slices.ContainsFunc(out.Warnings, func(w string) bool { return strings.HasPrefix(w, "stopped early: ") }) {
-		t.Fatalf("warnings = %v; want the stopped-early warning", out.Warnings)
-	}
 }
 
 type slugPlatforms struct{ repository.PlatformRepository }

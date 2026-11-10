@@ -2,10 +2,8 @@ package packs
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +18,6 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/usecase/analytics"
-	"github.com/ogen-app/ogen/src/usecase/post_actions/compose"
 )
 
 const analyticsPackName = "analytics"
@@ -28,12 +25,12 @@ const analyticsPackName = "analytics"
 // maxExamples caps the posts "more like these" learns from.
 const maxExamples = 5
 
-// analyticsPack explains how posts did, over the window on screen, and makes
-// more of what worked from the ideas and assets behind it.
+// analyticsPack explains how posts did, over the window on screen, and plans
+// ideas like what worked from the ideas and assets behind it.
 func analyticsPack(d Deps) assistant.Pack {
 	return assistant.Pack{
 		Name:    analyticsPackName,
-		Summary: "say how posts performed over a window — totals, trends, best and worst posts — or one post on its own, what the workspace's history has taught, and write more posts like the ones that worked",
+		Summary: "say how posts performed over a window — totals, trends, best and worst posts, two periods side by side — or one post on its own; the best times, cadence, decay and follower growth; what the workspace's history has taught; set the dashboard's window; and write ideas like the posts that worked",
 		Screens: []viewcontext.Screen{"analytics", "analytics.post", "campaign.analytics"},
 		// Each read's last output reaches the client as
 		// complete.results.analytics.<tool>, with the filters it applied, so
@@ -73,20 +70,8 @@ func analyticsPack(d Deps) assistant.Pack {
 			}
 			specs = append(specs, analyticsReadSpecs(g, d)...)
 			specs = append(specs, comparePeriodsSpec(g, d), setWindowSpec(g, d))
-			if d.Compose != nil && d.Links != nil {
-				more := genkit.DefineTool(g, "moreLikeThese",
-					"Writes new posts in the vein of posts that performed well — their angle and format, not their words — from the ideas and assets behind them, and saves them as drafts linked to the same ideas. More than a few are offered for the user to confirm first.",
-					assistantkit.Gated("moreLikeThese", assistantkit.Gate[MoreLikeTheseInput]{
-						Precheck: func(_ context.Context, in MoreLikeTheseInput) error { return checkExamples(in) },
-						Needs:    func(_ context.Context, in MoreLikeTheseInput) bool { return overN(d, max(in.Count, 1)) },
-						Summary: func(in MoreLikeTheseInput) string {
-							return fmt.Sprintf("Write %s like %s", plural(max(in.Count, 1), "post", "posts"), plural(len(in.PostIDs), "top post", "top posts"))
-						},
-					}, assistantkit.Wrap(func(ctx context.Context, in MoreLikeTheseInput) (*DraftIdeasOutput, error) {
-						return moreLikeThese(ctx, d, in)
-					})), ai.WithStrictSchema(false))
-				specs = append(specs, spec(analyticsPackName, more, assistantkit.TierProposal,
-					`Call this when the user asks for more like the posts that worked — "make three more like the top performers". Pass postIds from topPosts (at most 5) and count. The new posts are drafts on the examples' platform and campaign unless you pass others.`))
+			if d.MoreLike != nil && d.IdeaRepo != nil && d.Links != nil {
+				specs = append(specs, moreLikeTheseSpec(g, d))
 			}
 			return specs, nil
 		},
@@ -308,104 +293,4 @@ func postStats(ctx context.Context, d Deps, in PostStatsInput) (*AnalyticsResult
 		return nil, err
 	}
 	return result(Applied{PostID: id}, resp, reason), nil
-}
-
-// MoreLikeTheseInput asks for posts like the examples.
-type MoreLikeTheseInput struct {
-	PostIDs     []string `json:"postIds"               jsonschema:"description=The posts that worked, at most 5"`
-	Count       int      `json:"count,omitempty"       jsonschema:"description=How many new posts; default 1"`
-	PlatformID  string   `json:"platformId,omitempty"  jsonschema:"description=Defaults to the first example's"`
-	CampaignID  string   `json:"campaignId,omitempty"  jsonschema:"description=Defaults to the examples' campaign"`
-	Instruction string   `json:"instruction,omitempty" jsonschema:"description=Steering for the writer"`
-}
-
-func checkExamples(in MoreLikeTheseInput) error {
-	n := len(dedupe(in.PostIDs))
-	if n == 0 || n > maxExamples {
-		return assistantkit.Refused(fmt.Sprintf("pass 1 to %d example posts, e.g. from topPosts", maxExamples))
-	}
-	return nil
-}
-
-func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*DraftIdeasOutput, error) {
-	if err := checkExamples(in); err != nil {
-		return nil, err
-	}
-	count := min(max(in.Count, 1), max(d.DraftMax, 1))
-	var examples []models.Post
-	var ideaIDs, assetIDs []string
-	var ideaLines []string
-	for _, id := range dedupe(in.PostIDs) {
-		p, err := d.Posts.GetByID(ctx, id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, assistantkit.Refused(fmt.Sprintf("there is no post %q", id))
-		}
-		if err != nil {
-			return nil, err
-		}
-		examples = append(examples, *p)
-		assetIDs = appendNew(assetIDs, p.UsedAssetIDs...)
-		ideas, err := d.Links.IdeasOfPost(ctx, p.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, i := range ideas {
-			if !slices.Contains(ideaIDs, i.ID) {
-				ideaIDs = append(ideaIDs, i.ID)
-				ideaLines = append(ideaLines, i.Title)
-			}
-		}
-	}
-	campaign := in.CampaignID
-	if campaign == "" {
-		campaign = examples[0].CampaignID
-	}
-	platform := in.PlatformID
-	if platform == "" {
-		platform = examples[0].PlatformID
-	}
-	if platform == "" {
-		return nil, assistantkit.Refused("the examples have no platform; pass platformId")
-	}
-
-	var b strings.Builder
-	b.WriteString("These posts performed well. Write new posts in the same vein — the same kind of angle, hook and format — on new points; never repeat or paraphrase them.\n")
-	for i, p := range examples {
-		fmt.Fprintf(&b, "\nExample %d: %s\n%s\n", i+1, p.Title, excerpt(p.Content, 1200))
-	}
-	if len(ideaLines) > 0 {
-		b.WriteString("\nThe ideas behind them: " + strings.Join(ideaLines, "; ") + "\n")
-	}
-	res, err := d.Compose.Write(ctx, compose.DraftRequest{
-		CampaignID: campaign, PlatformID: platform, Count: count, SourceMaterial: b.String(),
-		Instruction: in.Instruction, UsedAssetIDs: assetIDs, CreatedBy: actor(ctx),
-	}, ideaIDs, func(p compose.DraftedPost) {
-		assistantkit.Touch(ctx, "post", p.PostID)
-		assistant.Emit(ctx, "idea_draft_post", p)
-	})
-	if err != nil && (res == nil || len(res.Posts) == 0) {
-		return nil, composeErr(err)
-	}
-	out := &DraftIdeasOutput{Posts: res.Posts, Warnings: res.Warnings}
-	if err != nil {
-		out.Warnings = append(out.Warnings, "stopped early: "+err.Error())
-	}
-	return out, nil
-}
-
-func excerpt(s string, n int) string {
-	r := []rune(strings.TrimSpace(s))
-	if len(r) <= n {
-		return string(r)
-	}
-	return string(r[:n]) + "…"
-}
-
-func appendNew(dst []string, ids ...string) []string {
-	for _, id := range ids {
-		if !slices.Contains(dst, id) {
-			dst = append(dst, id)
-		}
-	}
-	return dst
 }

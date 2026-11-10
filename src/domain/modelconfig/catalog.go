@@ -73,6 +73,7 @@ const (
 	SlotCompose      = "compose"
 	SlotCompare      = "compare"
 	SlotBrandCheck   = "brand_check"
+	SlotMoreLike     = "more_like_these"
 )
 
 // Requirements is the hard compatibility contract a slot places on any model
@@ -170,6 +171,8 @@ var catalog = []Flow{
 		{Key: SlotCompare, Description: "Summarises or compares the assets the user picked, from their analyses or passages, behind the assets pack's compareAssets.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true}},
 		{Key: SlotBrandCheck, Description: "Checks posts against the voice, guardrails and facts, behind the repair pack's checkBrand.", Capability: CapabilityChat, Vendors: anthropicOnly,
+			Requires: Requirements{NeedsStructuredOutput: true}},
+		{Key: SlotMoreLike, Description: "Writes new ideas in the vein of posts that performed well, from the ideas and assets behind them, behind the analytics pack's moreLikeThese.", Capability: CapabilityChat, Vendors: anthropicOnly,
 			Requires: Requirements{NeedsStructuredOutput: true}},
 	}},
 	{Key: FlowAssetAnalysis, Description: "Summary, meeting notes and ideas distilled from text assets.", Slots: []Slot{
