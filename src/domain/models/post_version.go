@@ -10,13 +10,18 @@ type PostVersion struct {
 	bun.BaseModel `bun:"table:post_versions,alias:pv" swaggerignore:"true"`
 	TenantScoped  // tenant_id column + central scoping hooks
 
-	ID            string    `bun:"id,pk"                                        json:"id"`
-	PostID        string    `bun:"post_id,notnull"                              json:"post_id"`
-	VersionNumber int       `bun:"version_number,notnull"                       json:"version_number"`
-	Content       string    `bun:"content,notnull"                              json:"content"`
-	Note          string    `bun:"note,notnull"                                 json:"note"`
-	Creator       string    `bun:"creator,notnull"                              json:"creator"`
-	CreatedAt     time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
+	ID            string `bun:"id,pk"                                        json:"id"`
+	PostID        string `bun:"post_id,notnull"                              json:"post_id"`
+	VersionNumber int    `bun:"version_number,notnull"                       json:"version_number"`
+	Content       string `bun:"content,notnull"                              json:"content"`
+	Note          string `bun:"note,notnull"                                 json:"note"`
+	Creator       string `bun:"creator,notnull"                              json:"creator"`
+	// CreatedBy is the person whose action saved the version: the editor,
+	// the one the assistant worked for, or the one who submitted it for a
+	// system snapshot. Empty for versions saved before it was kept, and for
+	// background work no one started.
+	CreatedBy string    `bun:"created_by,nullzero"                          json:"created_by,omitempty"`
+	CreatedAt time.Time `bun:"created_at,notnull,default:current_timestamp" json:"created_at"`
 }
 
 // Creator values for a PostVersion (matched by the post_versions_creator_check

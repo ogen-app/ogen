@@ -10,6 +10,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 // TestPostVersionGetLatestByPostID pins the two behaviours that CON-184's
@@ -111,5 +112,31 @@ func TestPostVersionCreateNextConcurrent(t *testing.T) {
 		if v.VersionNumber != i+1 {
 			t.Fatalf("version[%d] = %d, want %d", i, v.VersionNumber, i+1)
 		}
+	}
+}
+
+// A version saved without a CreatedBy is credited to the user the context
+// acts for; one that names its person keeps it.
+func TestPostVersionCreatedBy(t *testing.T) {
+	db := openMigratedDB(t)
+	ctx := logging.WithUserID(tenantCtx(), "u-editor")
+	repo := repository.NewPostVersionRepository(db)
+	seedPost(t, db, "post-by", "", "", time.Now().UTC())
+
+	if err := repo.CreateNext(ctx, &models.PostVersion{ID: "by-1", PostID: "post-by", Content: "a", Creator: models.PostVersionCreatorUser}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateNext(ctx, &models.PostVersion{ID: "by-2", PostID: "post-by", Content: "b", Creator: models.PostVersionCreatorAssistant, CreatedBy: "u-asker"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateNext(tenantCtx(), &models.PostVersion{ID: "by-3", PostID: "post-by", Content: "c", Creator: models.PostVersionCreatorSystem}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.ListByPostID(tenantCtx(), "post-by")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].CreatedBy != "u-editor" || got[1].CreatedBy != "u-asker" || got[2].CreatedBy != "" {
+		t.Fatalf("created_by = %q %q %q", got[0].CreatedBy, got[1].CreatedBy, got[2].CreatedBy)
 	}
 }

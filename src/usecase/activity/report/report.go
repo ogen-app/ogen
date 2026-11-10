@@ -29,7 +29,12 @@ var (
 	ErrInvalidDate = errors.New("invalid date")
 	// ErrCampaignNotFound is returned when campaign_id is unknown in this tenant → 404.
 	ErrCampaignNotFound = errors.New("campaign not found")
+	// ErrRangeTooLong is returned when a range spans more than MaxRangeDays.
+	ErrRangeTooLong = errors.New("range too long")
 )
+
+// MaxRangeDays is the most local days one Range rolls up.
+const MaxRangeDays = 31
 
 // dateLayout is the wire format for a local calendar day.
 const dateLayout = "2006-01-02"
@@ -169,6 +174,50 @@ type ListItem struct {
 	FailedTotal           int    `json:"failed_total"`
 	CreatedTotal          int    `json:"created_total"`
 	CampaignsCreatedTotal int    `json:"campaigns_created_total"`
+}
+
+// RangeReport is a run of local days rolled up, with each non-empty day's
+// totals oldest first. From and To are inclusive.
+type RangeReport struct {
+	From             string           `json:"from"`
+	To               string           `json:"to"`
+	TZ               string           `json:"tz"`
+	Published        Published        `json:"published"`
+	Failed           Failed           `json:"failed"`
+	Created          Created          `json:"created"`
+	CampaignsCreated CampaignsCreated `json:"campaigns_created"`
+	Days             []ListItem       `json:"days"`
+}
+
+// rangeWindow is the span from local midnight of from to local midnight
+// after to, both YYYY-MM-DD in loc.
+func rangeWindow(from, to string, loc *time.Location) (Window, error) {
+	lo, err := dayWindow(from, loc)
+	if err != nil {
+		return Window{}, err
+	}
+	hi, err := dayWindow(to, loc)
+	if err != nil {
+		return Window{}, err
+	}
+	if hi.Lo.Before(lo.Lo) {
+		return Window{}, ErrInvalidDate
+	}
+	if days := int(hi.Lo.Sub(lo.Lo).Hours()/24+0.5) + 1; days > MaxRangeDays {
+		return Window{}, ErrRangeTooLong
+	}
+	return Window{Lo: lo.Lo, Hi: hi.Hi}, nil
+}
+
+// computeRange rolls the inputs in w up into one report and lists each
+// non-empty day in it.
+func computeRange(in Inputs, from, to, tz string, w Window, loc *time.Location) RangeReport {
+	r := computeReport(in, from, tz, w)
+	days := bucketReports(in, loc, MaxRangeDays+1, time.Time{})
+	days = slices.DeleteFunc(days, func(d ListItem) bool { return d.Date < from || d.Date > to })
+	slices.Reverse(days)
+	return RangeReport{From: from, To: to, TZ: tz, Published: r.Published, Failed: r.Failed, Created: r.Created,
+		CampaignsCreated: r.CampaignsCreated, Days: days}
 }
 
 // ReportList is the day-list response.

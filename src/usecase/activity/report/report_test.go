@@ -237,3 +237,45 @@ func TestBucketReports_FloorInsideNewestDayStillReturns(t *testing.T) {
 		t.Fatalf("floor inside newest day must still return it (no pagination dead-end): %+v", got)
 	}
 }
+
+// A range spans whole local days, a DST change inside it included, and
+// refuses an end before its start or more than MaxRangeDays.
+func TestRangeWindow(t *testing.T) {
+	loc := mustLoad(t, "America/New_York")
+	w, err := rangeWindow("2026-03-02", "2026-03-08", loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !w.Lo.Equal(time.Date(2026, 3, 2, 0, 0, 0, 0, loc)) || !w.Hi.Equal(time.Date(2026, 3, 9, 0, 0, 0, 0, loc)) {
+		t.Fatalf("window = %v – %v", w.Lo, w.Hi)
+	}
+	if _, err := rangeWindow("2026-03-08", "2026-03-02", loc); !errors.Is(err, ErrInvalidDate) {
+		t.Fatalf("backwards = %v", err)
+	}
+	if _, err := rangeWindow("2026-03-01", "2026-03-31", loc); err != nil {
+		t.Fatalf("31 days = %v", err)
+	}
+	if _, err := rangeWindow("2026-03-01", "2026-04-01", loc); !errors.Is(err, ErrRangeTooLong) {
+		t.Fatalf("32 days = %v", err)
+	}
+}
+
+// A range rolls its days up and lists the non-empty ones oldest first,
+// leaving out what falls outside it.
+func TestComputeRange(t *testing.T) {
+	loc := mustLoad(t, "UTC")
+	w, _ := rangeWindow("2026-03-02", "2026-03-08", loc)
+	at := func(day int) time.Time { return time.Date(2026, 3, day, 12, 0, 0, 0, loc) }
+	in := Inputs{
+		Published: []PublishedRow{{At: at(2), PlatformID: "linkedin"}, {At: at(5), PlatformID: "x"}, {At: at(9), PlatformID: "x"}},
+		Failed:    []FailedRow{{At: at(5), PostID: "p1", PlatformID: "x"}},
+		Created:   []CreatedRow{{At: at(1), CreatedBy: "u1"}},
+	}
+	r := computeRange(in, "2026-03-02", "2026-03-08", "UTC", w, loc)
+	if r.Published.Total != 2 || r.Failed.Total != 1 || r.Created.PostsTotal != 0 || r.From != "2026-03-02" || r.To != "2026-03-08" {
+		t.Fatalf("totals = %+v", r)
+	}
+	if len(r.Days) != 2 || r.Days[0].Date != "2026-03-02" || r.Days[1].Date != "2026-03-05" || r.Days[1].FailedTotal != 1 {
+		t.Fatalf("days = %+v", r.Days)
+	}
+}

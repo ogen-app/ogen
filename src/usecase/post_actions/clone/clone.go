@@ -205,6 +205,7 @@ func (s *Service) Clone(ctx context.Context, sourceID string, opts Options) (*Re
 		Content:       content,
 		Note:          fmt.Sprintf("Cloned from #%s", src.ID),
 		Creator:       postaudit.CreatorFor(opts.Trigger),
+		CreatedBy:     opts.Actor,
 	}
 	logEntry, err := postaudit.NewLog(newID, models.PostLogEventPostCloned, opts.Actor, "post cloned from #"+src.ID, map[string]any{
 		"source_post_id":  src.ID,

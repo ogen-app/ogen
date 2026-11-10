@@ -218,14 +218,14 @@ func (s *Service) appendVersions(ctx context.Context, post *models.Post, preRest
 		// Dirty HEAD: live edits not captured by any version (e.g. an
 		// assistant edit with saveVersion=false) are snapshotted first.
 		if latest != nil && latest.Content != preRestoreContent {
-			if err := insertVersion(ctx, tx, post.ID, nextNum, preRestoreContent, "Auto-saved before restore", postaudit.CreatorUser); err != nil {
+			if err := insertVersion(ctx, tx, post.ID, nextNum, preRestoreContent, "Auto-saved before restore", postaudit.CreatorUser, opts.Actor); err != nil {
 				return err
 			}
 			res.autoSnapshot = true
 			nextNum++
 		}
 		note := fmt.Sprintf("Restored from v%d", opts.VersionNumber)
-		if err := insertVersion(ctx, tx, post.ID, nextNum, post.Content, note, postaudit.CreatorFor(opts.Trigger)); err != nil {
+		if err := insertVersion(ctx, tx, post.ID, nextNum, post.Content, note, postaudit.CreatorFor(opts.Trigger), opts.Actor); err != nil {
 			return err
 		}
 		res.versionNumber = nextNum
@@ -261,7 +261,7 @@ func lockAndReadLatest(ctx context.Context, tx bun.Tx, post *models.Post) (model
 	return status, latest, nil
 }
 
-func insertVersion(ctx context.Context, tx bun.Tx, postID string, number int, content, note, creator string) error {
+func insertVersion(ctx context.Context, tx bun.Tx, postID string, number int, content, note, creator, by string) error {
 	id, err := models.NewID()
 	if err != nil {
 		return err
@@ -273,6 +273,7 @@ func insertVersion(ctx context.Context, tx bun.Tx, postID string, number int, co
 		Content:       content,
 		Note:          note,
 		Creator:       creator,
+		CreatedBy:     by,
 	}).Exec(ctx)
 	return err
 }

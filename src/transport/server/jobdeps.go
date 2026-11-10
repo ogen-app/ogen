@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"time"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/jobs/queues"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/overview"
 	"github.com/ogen-app/ogen/src/usecase/weeklyreport"
@@ -83,7 +85,20 @@ func weeklyReportDeps(d *deps) queues.WeeklyReportDeps {
 	if !cfg.WeeklyReportEnabled {
 		return queues.WeeklyReportDeps{}
 	}
-	collector := &weeklyreport.Collector{
+	return queues.WeeklyReportDeps{
+		Store:      r.weeklyReportRepo,
+		Settings:   r.settingRepo,
+		Collector:  weeklyCollector(d),
+		EmailLogs:  r.emailLogRepo,
+		AppBaseURL: cfg.AppBaseURL,
+	}
+}
+
+// weeklyCollector gathers a workspace's week for the Monday report and the
+// one a member asks the assistant for.
+func weeklyCollector(d *deps) *weeklyreport.Collector {
+	cfg, r := d.cfg, d.r
+	return &weeklyreport.Collector{
 		Store:      r.weeklyReportRepo,
 		Analytics:  r.postAnalyticsRepo,
 		Followers:  r.followerStatsRepo,
@@ -93,12 +108,22 @@ func weeklyReportDeps(d *deps) queues.WeeklyReportDeps {
 		LimitPct:   cfg.WeeklyReportLimitPct,
 		ExpiryLead: time.Duration(cfg.ConnectionExpiryLeadDays) * 24 * time.Hour,
 	}
-	return queues.WeeklyReportDeps{
+}
+
+// weeklyDigest builds the weekly report a member asks the assistant for and
+// emails it to them. It doesn't follow WEEKLY_REPORT_ENABLED: that flag
+// stops the Monday sends, not a report a member asks for.
+func weeklyDigest(d *deps) *weeklyreport.OnDemand {
+	r := d.r
+	return &weeklyreport.OnDemand{
+		Collector:  weeklyCollector(d),
 		Store:      r.weeklyReportRepo,
 		Settings:   r.settingRepo,
-		Collector:  collector,
-		EmailLogs:  r.emailLogRepo,
-		AppBaseURL: cfg.AppBaseURL,
+		AppBaseURL: d.cfg.AppBaseURL,
+		Send: func(ctx context.Context, userID, tenantID, key string, view models.WeeklyReportView) error {
+			return d.enqueuer.EnqueueWeeklyReportEmail(ctx, userID, tenantID, key, view)
+		},
+		Sent: r.emailLogRepo.ExistsByIdempotencyKey,
 	}
 }
 

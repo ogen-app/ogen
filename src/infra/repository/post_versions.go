@@ -8,10 +8,13 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/kernel/logging"
 )
 
 // PostVersionRepository handles persistence of post content version snapshots.
 type PostVersionRepository interface {
+	// Create and CreateNext credit a version with no CreatedBy to the user
+	// ctx acts for.
 	Create(ctx context.Context, version *models.PostVersion) error
 	// CreateNext inserts version with the next free version_number for its
 	// post, overwriting version.VersionNumber. The post row is locked for the
@@ -31,12 +34,22 @@ func NewPostVersionRepository(db *bun.DB) PostVersionRepository {
 	return &postVersionRepository{db: db}
 }
 
+// stampCreatedBy credits a version saved without a CreatedBy to the user
+// the context acts for, if any.
+func stampCreatedBy(ctx context.Context, version *models.PostVersion) {
+	if version.CreatedBy == "" {
+		version.CreatedBy, _ = logging.UserIDFrom(ctx)
+	}
+}
+
 func (r *postVersionRepository) Create(ctx context.Context, version *models.PostVersion) error {
+	stampCreatedBy(ctx, version)
 	_, err := r.db.NewInsert().Model(version).Exec(ctx)
 	return err
 }
 
 func (r *postVersionRepository) CreateNext(ctx context.Context, version *models.PostVersion) error {
+	stampCreatedBy(ctx, version)
 	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		var locked string
 		if err := tx.NewSelect().
