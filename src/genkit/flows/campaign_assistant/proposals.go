@@ -120,7 +120,7 @@ func overGoal(ctx context.Context, tool string, count int, args any, fill func(i
 		count, g.Target, g.Planned, g.Room)
 	var opts []assistantkit.Option
 	if g.Room > 0 && fill != nil {
-		opts = append(opts, assistantkit.Option{ID: "fill", Title: fmt.Sprintf("Add %d to reach the goal", g.Room), Tool: tool, Args: fill(g.Room)})
+		opts = append(opts, assistantkit.Option{ID: "fill", Title: fmt.Sprintf("Add %d to reach the goal", g.Room), Recommended: true, Tool: tool, Args: fill(g.Room)})
 	}
 	opts = append(opts, assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Add all %d anyway, past the goal", count), Tool: tool, Args: args})
 	return assistantkit.Conflicted(reason, opts...)

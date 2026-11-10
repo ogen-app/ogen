@@ -32,6 +32,7 @@ type ProposalOption struct {
 	ID          string  `json:"id"`
 	Title       string  `json:"title"`
 	Description string  `json:"description,omitempty"`
+	Recommended bool    `json:"recommended,omitempty"`
 	Tool        string  `json:"tool,omitempty"`
 	Args        JSONMap `json:"args,omitempty"`
 }

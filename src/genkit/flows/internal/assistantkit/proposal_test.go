@@ -171,3 +171,23 @@ func TestGated_FailsClosedWithoutSink(t *testing.T) {
 		t.Fatalf("err = %v, ran = %d", err, ran)
 	}
 }
+
+// A conflict leads with at most one recommended option.
+func TestGated_OneRecommendedOption(t *testing.T) {
+	conflict := func(options ...Option) ai.ToolFunc[countIn, Outcome[int]] {
+		return Gated("generate", Gate[countIn]{
+			Precheck: func(context.Context, countIn) error { return Conflicted("over the goal", options...) },
+		}, Wrap(func(context.Context, countIn) (int, error) { return 0, nil }))
+	}
+	ctx := &ai.ToolContext{Context: WithProposalSink(t.Context(), &memSink{})}
+	out, err := conflict(Option{ID: "fill", Title: "Fill", Recommended: true}, Option{ID: "anyway", Title: "Anyway"})(ctx, countIn{Count: 9})
+	if err != nil || !out.Options[0].Recommended {
+		t.Fatalf("out = %+v, err = %v", out, err)
+	}
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), `"recommended":true`) {
+		t.Fatalf("the model doesn't see the recommendation: %s", b)
+	}
+	if _, err := conflict(Option{ID: "a", Recommended: true}, Option{ID: "b", Recommended: true})(ctx, countIn{Count: 9}); err == nil {
+		t.Fatal("two recommended options were offered")
+	}
+}

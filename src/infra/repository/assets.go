@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -84,6 +86,12 @@ type AssetRepository interface {
 	// ErrUnknownTag; `remove` ids are applied as-is. Returns the updated assets
 	// (never nil) with tags and files hydrated.
 	ApplyTags(ctx context.Context, assetIDs, add, remove []string) ([]models.Asset, error)
+	// ApplyTagsBefore is ApplyTags that also returns each changed asset's tag
+	// ids as they were, read under the same lock, so the change can be undone.
+	ApplyTagsBefore(ctx context.Context, assetIDs, add, remove []string) ([]models.Asset, map[string][]string, error)
+	// SetTagsIf gives each asset of to its tag ids, all or none, while every
+	// one still has the tag ids from gives it (in any order) and exists.
+	SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (bool, error)
 	Delete(ctx context.Context, id string) (bool, error)
 }
 
@@ -283,8 +291,14 @@ func (r *assetRepository) SetAltText(ctx context.Context, id, altText string) er
 var ErrUnknownTag = errors.New("unknown tag id")
 
 func (r *assetRepository) ApplyTags(ctx context.Context, assetIDs, add, remove []string) ([]models.Asset, error) {
+	updated, _, err := r.ApplyTagsBefore(ctx, assetIDs, add, remove)
+	return updated, err
+}
+
+func (r *assetRepository) ApplyTagsBefore(ctx context.Context, assetIDs, add, remove []string) ([]models.Asset, map[string][]string, error) {
+	before := map[string][]string{}
 	if len(assetIDs) == 0 {
-		return []models.Asset{}, nil
+		return []models.Asset{}, before, nil
 	}
 	// Validate the tags being added before persisting anything: GetByIDs is
 	// tenant-scoped by the TenantScoped hooks, so an id that's missing from the
@@ -293,11 +307,11 @@ func (r *assetRepository) ApplyTags(ctx context.Context, assetIDs, add, remove [
 	if len(add) > 0 {
 		tags, err := r.tagRepo.GetByIDs(ctx, add)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, id := range add {
 			if _, ok := tags[id]; !ok {
-				return nil, fmt.Errorf("%w: %s", ErrUnknownTag, id)
+				return nil, nil, fmt.Errorf("%w: %s", ErrUnknownTag, id)
 			}
 		}
 	}
@@ -318,6 +332,7 @@ func (r *assetRepository) ApplyTags(ctx context.Context, assetIDs, add, remove [
 		}
 		now := time.Now().UTC()
 		for i := range assets {
+			before[assets[i].ID] = slices.Clone(assets[i].TagIDs)
 			assets[i].TagIDs = mergeTagIDs(assets[i].TagIDs, add, remove)
 			assets[i].UpdatedAt = now
 			// Only the tag set and its timestamp — never title/content, so this
@@ -334,20 +349,55 @@ func (r *assetRepository) ApplyTags(ctx context.Context, assetIDs, add, remove [
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := r.hydrateTags(ctx, updated); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := r.hydrateFiles(ctx, updated); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Never return nil: when assetIDs are all outside the tenant nothing loads,
 	// and the handler's c.JSON(updated) must emit [] rather than null.
 	if updated == nil {
 		updated = []models.Asset{}
 	}
-	return updated, nil
+	return updated, before, nil
+}
+
+func (r *assetRepository) SetTagsIf(ctx context.Context, tx bun.IDB, from, to map[string][]string) (bool, error) {
+	if len(to) == 0 {
+		return true, nil
+	}
+	ids := slices.Sorted(maps.Keys(to))
+	var assets []models.Asset
+	if err := tx.NewSelect().Model(&assets).Where("a.id IN (?)", bun.List(ids)).For("UPDATE").Scan(ctx); err != nil {
+		return false, err
+	}
+	if len(assets) != len(ids) {
+		return false, nil
+	}
+	for _, a := range assets {
+		if !sameIDs(a.TagIDs, from[a.ID]) {
+			return false, nil
+		}
+	}
+	now := time.Now().UTC()
+	for i := range assets {
+		assets[i].TagIDs, assets[i].UpdatedAt = models.StringSlice(slices.Clone(to[assets[i].ID])), now
+		if assets[i].TagIDs == nil {
+			assets[i].TagIDs = models.StringSlice{}
+		}
+		if _, err := tx.NewUpdate().Model(&assets[i]).Column("tag_ids", "updated_at").WherePK().Exec(ctx); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// sameIDs reports whether a and b hold the same ids, in any order.
+func sameIDs(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
 }
 
 // mergeTagIDs returns existing minus remove, then add appended for any id not

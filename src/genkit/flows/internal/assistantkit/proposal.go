@@ -235,6 +235,9 @@ func Offer(ctx context.Context, p Proposal) (string, error) {
 // propose stores p and tells the model what is waiting: a plain proposal to
 // confirm, or a conflict whose options the user picks from.
 func propose[Out any](ctx context.Context, p Proposal, status Status) (Outcome[Out], error) {
+	if n := countRecommended(p.Options); n > 1 {
+		return Outcome[Out]{}, fmt.Errorf("assistantkit: %s offers %d recommended options; at most one", p.Tool, n)
+	}
 	sink, _ := ctx.Value(sinkKey{}).(ProposalSink)
 	if sink == nil {
 		return Outcome[Out]{}, ErrNoProposalSink
@@ -248,4 +251,14 @@ func propose[Out any](ctx context.Context, p Proposal, status Status) (Outcome[O
 		out.Reason = p.Summary
 	}
 	return out, nil
+}
+
+func countRecommended(options []Option) int {
+	n := 0
+	for _, o := range options {
+		if o.Recommended {
+			n++
+		}
+	}
+	return n
 }
