@@ -27,6 +27,7 @@ const (
 	UISelect        UIActionType = "select"
 	UIOpenSavedView UIActionType = "open_saved_view"
 	UISetWindow     UIActionType = "set_window"
+	UIOpenConnect   UIActionType = "open_connect"
 )
 
 // UIAction drives the client's screen. The server has checked every
@@ -48,6 +49,17 @@ type UIAction struct {
 	// Window replaces an analytics screen's window: its dates, platforms
 	// and campaign.
 	Window *viewcontext.Window `json:"window,omitempty"`
+	// Connect opens the settings screen's connect flow for one platform, or
+	// the reconnect flow for one account. The client runs the flow.
+	Connect *UIConnect `json:"connect,omitempty"`
+}
+
+// UIConnect is the connect flow to open: a new account on Platform, or
+// AccountID's reconnect.
+type UIConnect struct {
+	Platform  string `json:"platform"`
+	AccountID string `json:"accountId,omitempty"`
+	Reconnect bool   `json:"reconnect,omitempty"`
 }
 
 // UISelection is the items a select action ticks.

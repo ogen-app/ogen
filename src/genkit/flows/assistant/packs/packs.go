@@ -79,7 +79,21 @@ type Deps struct {
 	SocialAccounts repository.SocialAccountRepository
 	// ProfileID is the workspace's publishing profile, which its connected
 	// accounts hang off.
-	ProfileID  func(ctx context.Context) (string, error)
+	ProfileID func(ctx context.Context) (string, error)
+	// AutoPublish is the platforms whose scheduled posts go out on their
+	// own; nil leaves it out of workspaceSetup, and setAutoPublish out.
+	AutoPublish repository.AutoPublishAllowlistRepository
+	// ConnectPlatform names a platform the workspace can connect; nil
+	// leaves openConnect and setAutoPublish out.
+	ConnectPlatform PlatformLookup
+	// Digest builds and emails the weekly report on request; nil leaves
+	// weeklyDigest and emailWeeklyDigest out.
+	Digest Digester
+	// Versions, PostLogs and Users read a post's change history; nil
+	// Versions or PostLogs leaves postHistory out, nil Users names no one.
+	Versions   repository.PostVersionRepository
+	PostLogs   repository.PostLogRepository
+	Users      repository.UserRepository
 	Dismissals repository.AssistantDismissalRepository
 	// CheckBrief and CheckPosts review a campaign's consistency; nil leaves
 	// reviewCampaign out of the repair pack.
