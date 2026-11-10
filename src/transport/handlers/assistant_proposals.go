@@ -51,10 +51,13 @@ type confirmProposalRequest struct {
 // Confirm godoc
 // @Summary      Confirm an assistant offer (SSE)
 // @Description  Runs an offer the assistant proposed, exactly as proposed, and streams the work's events
-// @Description  like a chat turn: the work's own events, "proposal_resolved", then "complete" with a
-// @Description  assistant.Response. "error" carries {"message":"...","code":<http_code>}: 404 when the
-// @Description  offer does not exist, 409 when it was already answered, expired, names an unknown option, or
-// @Description  the work itself was refused.
+// @Description  like a chat turn: the work's own events, "proposal_created" for any fresh offer, "proposal_resolved",
+// @Description  then "complete" with a assistant.Response. When what the offer was made on changed since, nothing
+// @Description  runs: what still holds comes back as a fresh offer, explained in the response. A run that did part of
+// @Description  the job says so, and its result's "retryProposalId" offers just what is worth retrying.
+// @Description  "error" carries {"message":"...","code":<http_code>}: 404 when the offer does not exist, 409 when it
+// @Description  was already answered, expired, names an unknown option, or the work itself was refused (the
+// @Description  message says why, e.g. what changed).
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream

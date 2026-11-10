@@ -100,7 +100,7 @@ func assetsPack(d Deps) assistant.Pack {
 				spec(assetsPackName, distill, assistantkit.TierRead,
 					`Call this when the user wants more ideas from an analysed asset — "give me five more angles on this deck, about pricing". It runs in the background; the ideas appear in the Ideas list.`),
 				spec(assetsPackName, tag, assistantkit.TierProposal,
-					`Call this to tag or untag assets by tag name; new tag names are created. More than a few assets are offered first.`),
+					`Call this to tag or untag assets by tag name; new tag names are created. More than a few assets are offered first. It can be undone.`),
 				spec(assetsPackName, attach, assistantkit.TierReversible,
 					`Call this when the user asks to use assets in a campaign ("add these to the Spring campaign") or to stop using them (detach). campaignId defaults to the thread's. It can be undone.`),
 				spec(assetsPackName, importURL, assistantkit.TierRead,
@@ -424,6 +424,8 @@ type TagAssetsInput struct {
 // TagAssetsOutput is how many assets were tagged.
 type TagAssetsOutput struct {
 	Tagged int `json:"tagged"`
+	// UndoID puts the tags back on the assets the call changed, all at once.
+	UndoID string `json:"undoId,omitempty"`
 }
 
 func tagAssets(ctx context.Context, d Deps, in TagAssetsInput) (*TagAssetsOutput, error) {
@@ -452,12 +454,24 @@ func tagAssets(ctx context.Context, d Deps, in TagAssetsInput) (*TagAssetsOutput
 			}
 		}
 	}
-	updated, err := d.Assets.ApplyTags(ctx, dedupe(in.AssetIDs), add, remove)
+	updated, was, err := d.Assets.ApplyTagsBefore(ctx, dedupe(in.AssetIDs), add, remove)
 	if err != nil {
 		return nil, err
 	}
 	assistantkit.Touch(ctx, "asset", "")
-	return &TagAssetsOutput{Tagged: len(updated)}, nil
+	out := &TagAssetsOutput{Tagged: len(updated)}
+	// Only the assets whose tags changed are put back, so one the call left
+	// as it was can't block the undo.
+	before, after := map[string][]string{}, map[string][]string{}
+	for _, a := range updated {
+		if !slices.Equal(was[a.ID], a.TagIDs) {
+			before[a.ID], after[a.ID] = was[a.ID], a.TagIDs
+		}
+	}
+	if len(after) > 0 {
+		out.UndoID = recordUndo(ctx, d, models.AssistantActionAssetTags, "", assistantundo.AssetTags(before), assistantundo.AssetTags(after))
+	}
+	return out, nil
 }
 
 // AttachAssetsInput attaches assets to a campaign, or detaches them.

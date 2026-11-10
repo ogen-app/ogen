@@ -14,10 +14,12 @@ import (
 	"github.com/firebase/genkit/go/genkit"
 
 	"github.com/ogen-app/ogen/src/domain/models"
+	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/fakemodel"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/usecase/viewresolve"
 )
 
 // memProposals keeps offers in memory, with the repository's resolve rule.
@@ -435,5 +437,26 @@ func TestProposals_AnswerFromTheCardDoneInPart(t *testing.T) {
 	// The retry runs just what was left.
 	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: resp.Proposals[0].ID, Confirm: true}, nil); err != nil || *ran != 16 {
 		t.Fatalf("retry: err = %v, ran = %d", err, *ran)
+	}
+}
+
+// The recommended option is stored with the offer and shown on its card.
+func TestProposals_RecommendedOptionOnTheCard(t *testing.T) {
+	store := &memProposals{}
+	st := newTurnState(&viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home",
+		Scope: viewcontext.Scope{Kind: models.AssistantScopeWorkspace}}}, nil)
+	sink := turnSink{st: st, repos: Repos{Proposals: store}}
+	_, err := sink.Propose(t.Context(), assistantkit.Proposal{Tool: "bulkThing", Args: bulkIn{N: 9}, Summary: "Over the goal", Options: []assistantkit.Option{
+		{ID: "fill", Title: "Add 2", Recommended: true, Tool: "bulkThing", Args: bulkIn{N: 2}},
+		{ID: "anyway", Title: "Add all 9", Tool: "bulkThing", Args: bulkIn{N: 9}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.rows[0].Options[0].Recommended || store.rows[0].Options[1].Recommended {
+		t.Fatalf("stored = %+v", store.rows[0].Options)
+	}
+	if cards := st.cardList(); !cards[0].Options[0].Recommended || cards[0].Options[1].Recommended {
+		t.Fatalf("card = %+v", cards[0].Options)
 	}
 }

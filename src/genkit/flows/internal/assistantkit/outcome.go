@@ -22,6 +22,9 @@ type Option struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
+	// Recommended marks the way forward the card leads with; an offer has
+	// at most one.
+	Recommended bool `json:"recommended,omitempty"`
 	// Tool and Args are the call picking this option runs. They stay on the
 	// server: the model only needs the id to name the user's pick.
 	Tool string `json:"-"`

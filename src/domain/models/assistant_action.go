@@ -57,6 +57,8 @@ const (
 	// AssistantActionAutoPublish is the workspace's auto-publish allowlist
 	// changed.
 	AssistantActionAutoPublish AssistantActionKind = "auto_publish"
+	// AssistantActionAssetTags is tags added to or removed from assets.
+	AssistantActionAssetTags AssistantActionKind = "asset_tags"
 )
 
 // AssistantAction is a reversible change the assistant made: the entity's

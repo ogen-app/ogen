@@ -172,6 +172,9 @@ func renderView(p *prompts, v *viewresolve.Resolved, offers []models.AssistantPr
 			ids := make([]string, len(o.Options))
 			for i, c := range o.Options {
 				ids[i] = c.ID + " (" + c.Title + ")"
+				if c.Recommended {
+					ids[i] = c.ID + " (" + c.Title + "; recommended)"
+				}
 			}
 			line += " — options: " + strings.Join(ids, ", ")
 		}

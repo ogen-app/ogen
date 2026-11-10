@@ -50,6 +50,8 @@ type ProposalChoice struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
+	// Recommended is the option the card leads with; at most one is.
+	Recommended bool `json:"recommended,omitempty"`
 }
 
 // ProposalResolved is an offer answered this turn.
@@ -95,8 +97,8 @@ func (s turnSink) Propose(ctx context.Context, p assistantkit.Proposal) (string,
 		if err != nil {
 			return "", fmt.Errorf("encode %s proposal option: %w", p.Tool, err)
 		}
-		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Tool: o.Tool, Args: oargs}
-		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description}
+		stored[i] = models.ProposalOption{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended, Tool: o.Tool, Args: oargs}
+		choices[i] = ProposalChoice{ID: o.ID, Title: o.Title, Description: o.Description, Recommended: o.Recommended}
 	}
 	id, err := models.NewID()
 	if err != nil {

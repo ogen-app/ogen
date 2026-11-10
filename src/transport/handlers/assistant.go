@@ -116,8 +116,13 @@ type assistantTurnRequest struct {
 // @Description  applyCalendarMoves, setAutoPublish and emailWeeklyDigest are always held back as an offer; generatePosts, draftPost, draftIdeas, moreLikeThese,
 // @Description  setIdeaVerdicts and tagAssets only above a few items. Smaller batches and other tools (distillMoreIdeas
 // @Description  among them) run straight away, so a client can't rely on an offer before every write. "proposal_created" {"id","tool","summary",
-// @Description  "expiresAt","options"} streams once the reply is final, and "proposal_resolved" {"id","status","chosen"} when
-// @Description  one is answered in chat. Cards answer through POST /api/assistant/proposals/{id}/confirm or /dismiss.
+// @Description  "expiresAt","options[{id,title,description,recommended}]"} streams once the reply is final (at most one option is
+// @Description  recommended: the card leads with it), and "proposal_resolved" {"id","status","chosen"} when one is answered in
+// @Description  chat. Cards answer through POST /api/assistant/proposals/{id}/confirm or /dismiss. A confirmed offer re-checks
+// @Description  first: when what it was made on changed, nothing runs and either it is refused or what still holds comes
+// @Description  back as a fresh offer. A run that did part of the job (setIdeaVerdicts, moveIdeas, draftIdeas, editBrand,
+// @Description  unschedulePosts, deletePosts) returns "notMade" [{id,title,reason}] beside its result and, for the items
+// @Description  worth retrying, "retryProposalId": a fresh offer of just those.
 // @Description  Packs stream their own progress between: the campaign pack forwards the campaign assistant's events
 // @Description  (content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends "idea_draft_post" per post,
 // @Description  shaped as one of its result's posts.
