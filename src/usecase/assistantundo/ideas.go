@@ -66,10 +66,56 @@ func assetIDs(m models.JSONMap) []string {
 	return ids
 }
 
-// WithIdeas lets s undo idea verdict changes.
+// IdeaEdit is an idea's title, note and plan, as an undo log stores them.
+func IdeaEdit(i *models.Idea) models.JSONMap {
+	return toMap(ideaText{Title: i.Title, Note: i.Note, Plan: i.Plan})
+}
+
+// ideaText is what IdeaEdit stores.
+type ideaText struct {
+	Title string          `json:"title"`
+	Note  string          `json:"note"`
+	Plan  models.IdeaPlan `json:"plan"`
+}
+
+// ideaEdited reads an IdeaEdit snapshot back onto an idea.
+func ideaEdited(id string, m models.JSONMap) (*models.Idea, error) {
+	var t ideaText
+	if err := fromMap(m, &t); err != nil {
+		return nil, err
+	}
+	return &models.Idea{ID: id, Title: t.Title, Note: t.Note, Plan: t.Plan}, nil
+}
+
+// WithIdeas lets s undo idea verdict changes and idea edits.
 func (s *Service) WithIdeas(ideas repository.IdeaRepository) *Service {
 	s.undoers[models.AssistantActionIdeaVerdict] = ideaVerdict{ideas}
+	s.undoers[models.AssistantActionIdeaEdit] = ideaEdit{ideas}
 	return s
+}
+
+type ideaEdit struct{ ideas repository.IdeaRepository }
+
+// Undo restores the idea's title, note and plan within tx, in one write
+// that matches only while the idea still holds the logged after state.
+func (u ideaEdit) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	was, err := ideaEdited(a.EntityID, a.After)
+	if err != nil {
+		return fmt.Errorf("read changed idea: %w", err)
+	}
+	restored, err := ideaEdited(a.EntityID, a.Before)
+	if err != nil {
+		return fmt.Errorf("restore idea: %w", err)
+	}
+	restored.UpdatedAt = time.Now().UTC()
+	ok, err := u.ideas.SetEditIf(ctx, tx, restored, was)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrChangedSince
+	}
+	return nil
 }
 
 type ideaVerdict struct{ ideas repository.IdeaRepository }
