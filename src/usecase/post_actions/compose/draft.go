@@ -78,10 +78,12 @@ type DraftJob struct {
 	IdeaIDs []string
 }
 
-// DraftedPost is a written post and the ideas it came from.
+// DraftedPost is a written post, the ideas it came from and the assets the
+// writer was given, its sources.
 type DraftedPost struct {
 	Written
-	IdeaIDs []string `json:"ideaIds"`
+	IdeaIDs      []string `json:"ideaIds"`
+	UsedAssetIDs []string `json:"usedAssetIds"`
 }
 
 // DraftResult is every post written, in job order, and what was dropped.
@@ -176,7 +178,10 @@ func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(Dra
 			if err := s.links.Link(ctx, s.db, w.PostID, job.IdeaIDs); err != nil {
 				return res, fmt.Errorf("link post %s to its ideas: %w", w.PostID, err)
 			}
-			p := DraftedPost{Written: w, IdeaIDs: job.IdeaIDs}
+			p := DraftedPost{Written: w, IdeaIDs: job.IdeaIDs, UsedAssetIDs: slices.Clone(job.Request.UsedAssetIDs)}
+			if p.UsedAssetIDs == nil {
+				p.UsedAssetIDs = []string{}
+			}
 			res.Posts = append(res.Posts, p)
 			if onPost != nil {
 				onPost(p)
