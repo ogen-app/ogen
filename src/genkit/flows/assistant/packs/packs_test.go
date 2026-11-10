@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/uptrace/bun"
@@ -39,23 +40,31 @@ func refused(t *testing.T, err error) {
 	}
 }
 
+// memActions keeps the logged changes; a turn's tools log concurrently.
 type memActions struct {
 	repository.AssistantActionRepository
+	mu   sync.Mutex
 	rows []*models.AssistantAction
 }
 
 func (m *memActions) Create(_ context.Context, a *models.AssistantAction) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.rows = append(m.rows, a)
 	return nil
 }
 
-// memIdeaRepo keeps ideas for the ideas service.
+// memIdeaRepo keeps ideas for the ideas service; a turn's tools use it
+// concurrently.
 type memIdeaRepo struct {
 	repository.IdeaRepository
+	mu   sync.Mutex
 	byID map[string]*models.Idea
 }
 
 func (r *memIdeaRepo) GetByID(_ context.Context, id string) (*models.Idea, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if i, ok := r.byID[id]; ok {
 		cp := *i
 		return &cp, nil
@@ -64,6 +73,8 @@ func (r *memIdeaRepo) GetByID(_ context.Context, id string) (*models.Idea, error
 }
 
 func (r *memIdeaRepo) Update(_ context.Context, i *models.Idea, _ ...string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.byID[i.ID]; !ok {
 		return false, nil
 	}
@@ -73,6 +84,8 @@ func (r *memIdeaRepo) Update(_ context.Context, i *models.Idea, _ ...string) (bo
 }
 
 func (r *memIdeaRepo) DeleteMany(_ context.Context, ids []string) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var out []string
 	for _, id := range ids {
 		if _, ok := r.byID[id]; ok {
