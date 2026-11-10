@@ -43,7 +43,8 @@ type undoResponse struct {
 // @Description  deleted), idea_verdict, idea_edit, idea_verdicts (no entityId: several ideas), post_created (the post
 // @Description  made from ideas is deleted), brand_fact, brand_voice, brand_audience, brand_guardrails, series,
 // @Description  campaign_series, post_schedules and post_types (entityId: the campaign whose posts changed),
-// @Description  auto_publish, and asset_tags (no entityId: the assets a tagging changed get their tags back).
+// @Description  auto_publish, and asset_tags (the assets a tagging changed get their tags back). entityId is always
+// @Description  present: for idea_verdicts and asset_tags it is "", which names no single entity to refresh.
 // @Description  409 when it was already undone, or when it was edited again since: undo never overwrites a later edit.
 // @Tags         assistant
 // @Produce      json

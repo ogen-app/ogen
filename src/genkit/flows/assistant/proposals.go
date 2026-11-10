@@ -420,14 +420,15 @@ func reofferedResult(raw any) (string, bool) {
 }
 
 // partialResult reports how many items a confirmed run left undone, and
-// whether it offered the ones worth retrying.
+// whether it offered the ones worth retrying; its result says both.
 func partialResult(raw any) (left int, retry bool) {
-	m, ok := raw.(map[string]any)
+	m, _ := raw.(map[string]any)
+	result, ok := m["result"].(map[string]any)
 	if !ok {
 		return 0, false
 	}
-	notMade, _ := m["notMade"].([]any)
-	id, _ := m["retryProposalId"].(string)
+	notMade, _ := result["notMade"].([]any)
+	id, _ := result["retryProposalId"].(string)
 	return len(notMade), id != ""
 }
 

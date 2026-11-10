@@ -322,6 +322,7 @@ type BulkIdeasOutput struct {
 	UndoID string `json:"undoId,omitempty"`
 	// left is the ideas a stop on an error left unchanged, worth a retry.
 	left []string
+	assistantkit.Partial
 }
 
 // stoppedEarly ends a bulk change that failed part way on left, the ideas
@@ -556,6 +557,7 @@ type DraftIdeasOutput struct {
 	// retry and notMade are what a run stopped by an error left unwritten.
 	retry   *DraftIdeasInput
 	notMade []assistantkit.NotMade
+	assistantkit.Partial
 }
 
 // DraftedIdeaPost is a post written from ideas and what it is grounded in:

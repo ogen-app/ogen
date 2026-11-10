@@ -185,15 +185,16 @@ type Retry[In, Out any] func(in In, out Out) (retry In, notMade []NotMade, ok bo
 // left items undone says which, and offers the ones worth retrying on a
 // card of their own. The run's own offer stays answered, so the same work
 // never runs twice from it.
-func GatedRetry[In, Out any](tool string, gate Gate[In], retry Retry[In, Out], next ai.ToolFunc[In, Outcome[Out]]) ai.ToolFunc[In, Outcome[Out]] {
+func GatedRetry[In any, Out PartialResult](tool string, gate Gate[In], retry Retry[In, Out], next ai.ToolFunc[In, Outcome[Out]]) ai.ToolFunc[In, Outcome[Out]] {
 	return Gated(tool, gate, func(ctx *ai.ToolContext, in In) (Outcome[Out], error) {
 		out, err := next(ctx, in)
 		if err != nil || !out.Succeeded() || out.Result == nil {
 			return out, err
 		}
-		again, notMade, ok := retry(in, *out.Result)
-		out.NotMade = notMade
+		result := *out.Result
+		again, notMade, ok := retry(in, result)
 		if !ok {
+			result.MarkPartial(notMade, "")
 			return out, nil
 		}
 		// The work has run either way: an offer that can't be stored loses
@@ -201,9 +202,8 @@ func GatedRetry[In, Out any](tool string, gate Gate[In], retry Retry[In, Out], n
 		id, err := Offer(ctx, Proposal{Tool: tool, Args: again, Summary: "Retry: " + gate.summary(ctx, tool, again)})
 		if err != nil {
 			slog.WarnContext(ctx, "offer a retry failed", "tool", tool, "err", err)
-			return out, nil
 		}
-		out.RetryProposalID = id
+		result.MarkPartial(notMade, id)
 		return out, nil
 	})
 }

@@ -123,6 +123,9 @@ func TestEntityTitles(t *testing.T) {
 	if _, err := titles.CampaignTitles(ctx, viewcontext.KindVoice, live, []string{voiceID}); !errors.Is(err, repository.ErrUntitledKind) {
 		t.Fatal("a kind outside campaigns read campaign titles")
 	}
+	if _, err := titles.CampaignTitles(ctx, viewcontext.KindPost, "", []string{titled.ID, elsewhere.ID}); !errors.Is(err, repository.ErrUntitledKind) {
+		t.Fatal("no campaign read the whole tenant's posts")
+	}
 
 	other := tenantctx.With(context.Background(), "tenant-other")
 	if got, err := titles.Titles(other, viewcontext.KindIdea, []string{ideaID}); err != nil || len(got) != 0 {

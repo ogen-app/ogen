@@ -161,6 +161,7 @@ type EditBrandOutput struct {
 	Stopped string `json:"stopped,omitempty"`
 	// left is the changes the stop left, from the one it failed on.
 	left []brandEdit
+	assistantkit.Partial
 }
 
 func editBrand(ctx context.Context, d Deps, facts *brandfacts.Service, lib *brandlib.Service, in EditBrandInput) (*EditBrandOutput, error) {

@@ -366,3 +366,12 @@ func TestSelectPostsOnTheCampaignList(t *testing.T) {
 	_, err = h.tools.setFilter(ctx, SetFilterInput{Filter: "status=draft"})
 	refusal(t, err, "no filter I can set")
 }
+
+// Without a campaign there are no campaign posts to tick.
+func TestSelectPostsNeedsACampaign(t *testing.T) {
+	h := newHarness(t)
+	ctx, st := onScreen(t, workspaceHome)
+	st.screen = "campaign.list"
+	_, err := h.tools.selectItems(ctx, SelectInput{IDs: []string{"p1"}})
+	refusal(t, err, "which campaign's posts")
+}

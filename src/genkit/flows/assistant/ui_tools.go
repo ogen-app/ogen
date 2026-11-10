@@ -199,7 +199,11 @@ func (t *toolSet) selectItems(ctx context.Context, in SelectInput) (*UIResult, e
 	// A campaign's posts list shows that campaign's posts only.
 	var items []viewresolve.Item
 	if kind == viewcontext.KindPost {
-		items, err = t.deps.Views.CampaignItems(ctx, kind, st.currentCampaign(), in.IDs)
+		campaign := st.currentCampaign()
+		if campaign == "" {
+			return nil, assistantkit.Refused("which campaign's posts? navigate to the campaign's list first")
+		}
+		items, err = t.deps.Views.CampaignItems(ctx, kind, campaign, in.IDs)
 	} else {
 		items, err = t.deps.Views.Items(ctx, kind, in.IDs)
 	}
