@@ -57,6 +57,9 @@ func repairPack(d Deps) assistant.Pack {
 			apply := genkit.DefineTool(g, "applyCalendarMoves",
 				"Moves posts to new dates exactly as offered. Only runs once the user confirmed the offer.",
 				assistantkit.Gated("applyCalendarMoves", assistantkit.Gate[ApplyMovesInput]{
+					Recheck: func(ctx context.Context, in ApplyMovesInput) (ApplyMovesInput, error) {
+						return movesThatHold(ctx, d, in)
+					},
 					Summary: func(in ApplyMovesInput) string { return fmt.Sprintf("Move %s", plural(len(in.Moves), "post", "posts")) },
 				}, assistantkit.Wrap(recorded(repairPackName, "applyCalendarMoves", nil, func(ctx context.Context, in ApplyMovesInput) (*ApplyMovesOutput, error) {
 					return applyMoves(ctx, d, in)
@@ -437,15 +440,12 @@ func applyMoves(ctx context.Context, d Deps, in ApplyMovesInput) (*ApplyMovesOut
 	out := &ApplyMovesOutput{}
 	var batch []repository.ScheduleMove
 	for _, m := range in.Moves {
-		p := byID[m.PostID]
-		// A post moved, scheduled or deleted since the offer keeps its date,
-		// and so does one whose new date the campaign no longer allows.
-		at, ok := moveTarget(c, m)
-		if p == nil || !reschedule.Eligible(p.Status) || !sameInstant(p.ScheduledAt, m.FromAt) || !ok {
+		at, ok := moveHolds(c, byID[m.PostID], m)
+		if !ok {
 			out.Skipped = append(out.Skipped, m.PostID)
 			continue
 		}
-		batch = append(batch, repository.ScheduleMove{PostID: p.ID, From: m.FromAt, To: at})
+		batch = append(batch, repository.ScheduleMove{PostID: m.PostID, From: m.FromAt, To: at})
 	}
 	if len(batch) == 0 {
 		return out, nil
@@ -465,6 +465,45 @@ func applyMoves(ctx context.Context, d Deps, in ApplyMovesInput) (*ApplyMovesOut
 	}
 	out.Moved = len(moved)
 	return out, nil
+}
+
+// moveHolds is where m lands while it still holds: a post moved, scheduled
+// or deleted since the offer keeps its date, and so does one whose new date
+// the campaign no longer allows.
+func moveHolds(c *models.Campaign, p *models.Post, m Move) (time.Time, bool) {
+	at, ok := moveTarget(c, m)
+	if p == nil || !reschedule.Eligible(p.Status) || !sameInstant(p.ScheduledAt, m.FromAt) || !ok {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
+// movesThatHold narrows confirmed moves to the ones that still hold; none
+// is a refusal.
+func movesThatHold(ctx context.Context, d Deps, in ApplyMovesInput) (ApplyMovesInput, error) {
+	c, err := d.loadCampaign(ctx, CampaignRef{CampaignID: in.CampaignID})
+	if err != nil {
+		return in, err
+	}
+	posts, err := d.Posts.ListByCampaign(ctx, c.ID)
+	if err != nil {
+		return in, err
+	}
+	keep := slices.DeleteFunc(slices.Clone(in.Moves), func(m Move) bool {
+		i := slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == m.PostID })
+		if i < 0 {
+			return true
+		}
+		_, ok := moveHolds(c, &posts[i], m)
+		return !ok
+	})
+	if len(keep) == 0 {
+		return in, assistantkit.Refused("none of those moves hold any more: the posts were moved, scheduled or deleted since")
+	}
+	if len(keep) < len(in.Moves) {
+		in.Moves = keep
+	}
+	return in, nil
 }
 
 // moveTarget is the instant a move lands on: its date, at the campaign's

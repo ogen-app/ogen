@@ -54,7 +54,9 @@ func ideasPack(d Deps) assistant.Pack {
 				onScreen(func(ctx context.Context, in *SetIdeaVerdictsInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
 					assistantkit.GatedRetry("setIdeaVerdicts", assistantkit.Gate[SetIdeaVerdictsInput]{
 						Precheck: func(_ context.Context, in SetIdeaVerdictsInput) error { return checkIDs(in.IdeaIDs) },
-						Needs:    func(_ context.Context, in SetIdeaVerdictsInput) bool { return overN(d, len(in.IdeaIDs)) },
+						Recheck: recheckIDs(d, viewcontext.KindIdea, func(_ context.Context, in SetIdeaVerdictsInput) (string, []string) { return ideasIn(in.IdeaIDs) },
+							func(in SetIdeaVerdictsInput, ids []string) SetIdeaVerdictsInput { in.IdeaIDs = ids; return in }),
+						Needs: func(_ context.Context, in SetIdeaVerdictsInput) bool { return overN(d, len(in.IdeaIDs)) },
 						Summary: func(in SetIdeaVerdictsInput) string {
 							return fmt.Sprintf("Mark %s %s", plural(len(in.IdeaIDs), "idea", "ideas"), verdictLabel(in.Verdict))
 						},
@@ -66,6 +68,8 @@ func ideasPack(d Deps) assistant.Pack {
 				onScreen(func(ctx context.Context, in *MoveIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
 					assistantkit.GatedRetry("moveIdeas", assistantkit.Gate[MoveIdeasInput]{
 						Precheck: func(_ context.Context, in MoveIdeasInput) error { return checkIDs(in.IdeaIDs) },
+						Recheck: recheckIDs(d, viewcontext.KindIdea, func(_ context.Context, in MoveIdeasInput) (string, []string) { return ideasIn(in.IdeaIDs) },
+							func(in MoveIdeasInput, ids []string) MoveIdeasInput { in.IdeaIDs = ids; return in }),
 						Summary: func(in MoveIdeasInput) string {
 							if in.CampaignID == "" {
 								return fmt.Sprintf("Move %s to the workspace backlog", plural(len(in.IdeaIDs), "idea", "ideas"))
@@ -80,6 +84,8 @@ func ideasPack(d Deps) assistant.Pack {
 				onScreen(func(ctx context.Context, in *DeleteIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
 					assistantkit.Gated("deleteIdeas", assistantkit.Gate[DeleteIdeasInput]{
 						Precheck: func(_ context.Context, in DeleteIdeasInput) error { return checkIDs(in.IdeaIDs) },
+						Recheck: recheckIDs(d, viewcontext.KindIdea, func(_ context.Context, in DeleteIdeasInput) (string, []string) { return ideasIn(in.IdeaIDs) },
+							func(in DeleteIdeasInput, ids []string) DeleteIdeasInput { in.IdeaIDs = ids; return in }),
 						Summary: func(in DeleteIdeasInput) string {
 							return fmt.Sprintf("Delete %s", plural(len(in.IdeaIDs), "idea", "ideas"))
 						},
@@ -100,6 +106,8 @@ func ideasPack(d Deps) assistant.Pack {
 							_, err := planDraft(ctx, d, in)
 							return err
 						},
+						Recheck: recheckIDs(d, viewcontext.KindIdea, func(_ context.Context, in DraftIdeasInput) (string, []string) { return ideasIn(in.IdeaIDs) },
+							func(in DraftIdeasInput, ids []string) DraftIdeasInput { in.IdeaIDs = ids; return in }),
 						Needs: func(ctx context.Context, in DraftIdeasInput) bool {
 							plan, err := planDraft(ctx, d, in)
 							return err == nil && overN(d, len(plan.Jobs))
