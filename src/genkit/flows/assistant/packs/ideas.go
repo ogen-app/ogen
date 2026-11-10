@@ -86,7 +86,7 @@ func ideasPack(d Deps) assistant.Pack {
 						return deleteIdeas(ctx, d, in)
 					})))), ai.WithStrictSchema(false))
 			compile := genkit.DefineTool(g, "compileIdeas",
-				"Compiles one or more ideas into one planned post: their titles and angles become its theses, their plan suggests its platform, type, phase and date, and the post links back to them. No body is written.",
+				"Compiles one or more ideas into one planned post: their titles and angles become its theses, their plan suggests its platform, type, phase and date, and the post links back to them. No body is written. Returns an undo id.",
 				onScreen(func(ctx context.Context, in *CompileIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
 					assistantkit.Wrap(recorded(ideasPackName, "compileIdeas", nil, func(ctx context.Context, in CompileIdeasInput) (*CompileIdeasOutput, error) {
 						return compileIdeas(ctx, d, in)
@@ -116,13 +116,13 @@ func ideasPack(d Deps) assistant.Pack {
 				spec(ideasPackName, verdict, assistantkit.TierReversible,
 					`Call this to triage ONE idea — "yes to this one", "snooze it until Monday", "not this". ideaId defaults to the idea open on screen, else the one selected. later needs remindAt (YYYY-MM-DD or RFC 3339). It can be undone.`),
 				spec(ideasPackName, verdicts, assistantkit.TierProposal,
-					`Call this to triage SEVERAL ideas the same way — "mark all of these yes". ideaIds default to the ideas selected on screen; otherwise pass them (from getSelection or findIdeas, at most 200). More than a few are offered first; relay that.`),
+					`Call this to triage SEVERAL ideas the same way — "mark all of these yes". ideaIds default to the ideas selected on screen; otherwise pass them (from getSelection or findIdeas, at most 200). More than a few are offered first; relay that. It can be undone.`),
 				spec(ideasPackName, move, assistantkit.TierProposal,
 					`Call this to move ideas into a campaign (campaignId) or back to the workspace backlog (campaignId empty). ideaIds default to the selected ideas, else the open one. Always offered first.`),
 				spec(ideasPackName, del, assistantkit.TierProposal,
 					`Call this when the user asks to delete ideas. ideaIds default to the selected ideas, else the open one. Always offered first; it can't be undone.`),
 				spec(ideasPackName, compile, assistantkit.TierReversible,
-					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these". It writes no body: the post holds their theses until someone drafts it. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share.`),
+					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these". It writes no body: the post holds their theses until someone drafts it. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share. It can be undone while no one has changed the post.`),
 				spec(ideasPackName, draft, assistantkit.TierProposal,
 					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". ideaIds default to the selected ideas, else the open one. platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. More than a few posts are offered first.`),
 			}, slices.Concat(defineReadTools(g, d), defineEditTools(g, d), defineMergeTools(g, d))...), nil
@@ -309,6 +309,8 @@ type BulkIdeasOutput struct {
 	// Stopped is why the change stopped part way; the ideas after it were
 	// not changed.
 	Stopped string `json:"stopped,omitempty"`
+	// UndoID undoes a triage, the ideas it changed all at once.
+	UndoID string `json:"undoId,omitempty"`
 }
 
 // stoppedEarly ends a bulk change that failed part way. What it changed
@@ -334,15 +336,27 @@ func setIdeaVerdicts(ctx context.Context, d Deps, in SetIdeaVerdictsInput) (*Bul
 		return nil, err
 	}
 	out := &BulkIdeasOutput{}
-	for _, id := range dedupe(in.IdeaIDs) {
-		if _, _, err := d.Ideas.SetVerdict(ctx, id, verdict, remindAt, actor(ctx)); err != nil {
-			if !errors.Is(err, ideas.ErrNotFound) && !ideas.IsValidation(err) {
-				return stoppedEarly(ctx, out, err)
-			}
-			out.Failed = append(out.Failed, id)
-			continue
+	var before, after []*models.Idea
+	// What changed is logged for undo whether or not the run finished.
+	defer func() {
+		if len(after) > 0 {
+			out.UndoID = recordUndo(ctx, d, models.AssistantActionIdeaVerdicts, "", assistantundo.IdeaVerdicts(before), assistantundo.IdeaVerdicts(after))
 		}
-		out.Done++
+	}()
+	for _, id := range dedupe(in.IdeaIDs) {
+		was, err := d.Ideas.Get(ctx, id)
+		if err == nil {
+			var idea *models.Idea
+			if idea, _, err = d.Ideas.SetVerdict(ctx, id, verdict, remindAt, actor(ctx)); err == nil {
+				before, after = append(before, was), append(after, idea)
+				out.Done++
+				continue
+			}
+		}
+		if !errors.Is(err, ideas.ErrNotFound) && !ideas.IsValidation(err) {
+			return stoppedEarly(ctx, out, err)
+		}
+		out.Failed = append(out.Failed, id)
 	}
 	assistantkit.Touch(ctx, "idea", "")
 	return out, nil
@@ -413,6 +427,8 @@ type CompileIdeasOutput struct {
 	CampaignID string `json:"campaignId"`
 	PlatformID string `json:"platformId,omitempty"`
 	Ideas      int    `json:"ideas"`
+	// UndoID deletes the post again while no one has changed it.
+	UndoID string `json:"undoId,omitempty"`
 }
 
 func calendarDate(s string) (*models.CalendarDate, error) {
@@ -454,7 +470,12 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 	}
 	p := res.Post
 	assistantkit.Touch(ctx, "post", p.ID)
-	return &CompileIdeasOutput{PostID: p.ID, Title: p.Title, Status: string(p.Status), CampaignID: p.CampaignID, PlatformID: p.PlatformID, Ideas: len(res.Ideas)}, nil
+	var notes []models.PostNote
+	if res.Note != nil {
+		notes = append(notes, *res.Note)
+	}
+	return &CompileIdeasOutput{PostID: p.ID, Title: p.Title, Status: string(p.Status), CampaignID: p.CampaignID, PlatformID: p.PlatformID, Ideas: len(res.Ideas),
+		UndoID: recordUndo(ctx, d, models.AssistantActionPostCreated, p.ID, models.JSONMap{}, assistantundo.PostCreated(p, notes))}, nil
 }
 
 // orphaned reports a compile or draft that found no campaign to use: the

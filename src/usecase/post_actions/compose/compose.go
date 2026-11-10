@@ -76,9 +76,11 @@ type Input struct {
 	NoteOrigin models.PostNoteOrigin
 }
 
-// Result is the compiled post and the ideas it came from, in order.
+// Result is the compiled post, its theses note and the ideas it came from,
+// in order.
 type Result struct {
 	Post  *models.Post
+	Note  *models.PostNote
 	Ideas []models.Idea
 }
 
@@ -154,7 +156,7 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 		return nil, err
 	}
 	postaudit.Publish(s.hub, post.ID, "post.compiled", in.Actor, map[string]any{"ideaIds": ids})
-	return &Result{Post: post, Ideas: ideas}, nil
+	return &Result{Post: post, Note: note, Ideas: ideas}, nil
 }
 
 // loadIdeas loads 1 to MaxIdeas distinct ideas, in the order given.
@@ -221,7 +223,9 @@ func (s *Service) build(in Input, ideas []models.Idea, campaign *models.Campaign
 	if err != nil {
 		return nil, err
 	}
-	now := s.now().UTC()
+	// At the microsecond Postgres keeps, so the post as returned matches
+	// the post as read back.
+	now := s.now().UTC().Truncate(time.Microsecond)
 	sources := sourceAssets(ideas)
 	post := &models.Post{
 		ID:               id,

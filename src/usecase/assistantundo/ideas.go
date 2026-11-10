@@ -87,11 +87,74 @@ func ideaEdited(id string, m models.JSONMap) (*models.Idea, error) {
 	return &models.Idea{ID: id, Title: t.Title, Note: t.Note, Plan: t.Plan}, nil
 }
 
-// WithIdeas lets s undo idea verdict changes and idea edits.
+// IdeaVerdicts is several ideas' triage states, as an undo log stores them,
+// in the same order before and after a change.
+func IdeaVerdicts(ideas []*models.Idea) models.JSONMap {
+	list := make([]any, len(ideas))
+	for i, idea := range ideas {
+		m := IdeaVerdict(idea)
+		m["id"] = idea.ID
+		list[i] = map[string]any(m)
+	}
+	return models.JSONMap{"ideas": list}
+}
+
+// ideaTriages reads an IdeaVerdicts snapshot back onto its ideas.
+func ideaTriages(m models.JSONMap) ([]*models.Idea, error) {
+	raw, _ := m["ideas"].([]any)
+	out := make([]*models.Idea, len(raw))
+	for i, r := range raw {
+		one, _ := r.(map[string]any)
+		id, _ := one["id"].(string)
+		idea, err := ideaTriage(id, one)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = idea
+	}
+	return out, nil
+}
+
+// WithIdeas lets s undo idea verdict changes, one or several at once, and
+// idea edits.
 func (s *Service) WithIdeas(ideas repository.IdeaRepository) *Service {
 	s.undoers[models.AssistantActionIdeaVerdict] = ideaVerdict{ideas}
+	s.undoers[models.AssistantActionIdeaVerdicts] = ideaVerdicts{ideas}
 	s.undoers[models.AssistantActionIdeaEdit] = ideaEdit{ideas}
 	return s
+}
+
+type ideaVerdicts struct{ ideas repository.IdeaRepository }
+
+// Undo restores every idea's triage, all of them or none: one triaged,
+// edited or deleted since leaves the change in place.
+func (u ideaVerdicts) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	was, err := ideaTriages(a.After)
+	if err != nil {
+		return fmt.Errorf("read changed triage: %w", err)
+	}
+	restored, err := ideaTriages(a.Before)
+	if err != nil {
+		return fmt.Errorf("restore triage: %w", err)
+	}
+	if len(was) != len(restored) {
+		return ErrChangedSince
+	}
+	now := time.Now().UTC()
+	for i := range restored {
+		if restored[i].ID != was[i].ID {
+			return ErrChangedSince
+		}
+		restored[i].UpdatedAt = now
+		ok, err := u.ideas.SetTriageIf(ctx, tx, restored[i], was[i])
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrChangedSince // rolls back the ones restored
+		}
+	}
+	return nil
 }
 
 type ideaEdit struct{ ideas repository.IdeaRepository }
