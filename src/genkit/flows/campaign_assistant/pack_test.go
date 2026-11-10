@@ -94,11 +94,20 @@ func TestPack_BeginBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, err := renderState(p, state.Build(c, nil, 2))
+	snap := state.Build(c, nil, &state.Sources{Attached: 4, Ready: 2, Analysed: 1})
+	snap.Calendar = &state.Calendar{Total: 3, Kinds: []state.KindCount{{Kind: "crowded day", Count: 2}, {Kind: "gap", Count: 1}},
+		Top: []string{"Dec 8 has 3 posts on LinkedIn", "Dec 9 has 3 posts on LinkedIn"}}
+	block, err := renderState(p, snap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(brief, "- Id: "+c.ID) || !strings.Contains(block, "<campaign_state>") || !strings.Contains(block, "Ready source assets attached: 2") {
+	for _, want := range []string{"- Sources: 4 assets attached, 2 ready, 1 analysed",
+		"- Calendar: 3 problems (2 crowded day, 1 gap). First: Dec 8 has 3 posts on LinkedIn; Dec 9 has 3 posts on LinkedIn."} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("state lacks %q:\n%s", want, block)
+		}
+	}
+	if !strings.Contains(brief, "- Id: "+c.ID) || !strings.Contains(block, "<campaign_state>") {
 		t.Fatalf("brief:\n%s\nstate:\n%s", brief, block)
 	}
 }

@@ -171,6 +171,12 @@ type CampaignAssistantRepos struct {
 	// Platforms is the platform catalog updateCampaignPlatforms checks
 	// against. nil makes that tool unavailable.
 	Platforms repository.PlatformRepository
+	// Analyses counts the sources analysed for the campaign's state; nil
+	// leaves the count out.
+	Analyses repository.AssetAnalysisRepository
+	// Links maps the campaign's posts to their ideas, for the calendar
+	// check's "same idea close together"; nil skips that check.
+	Links repository.PostIdeaRepository
 }
 
 // CampaignAssistantFlowConfig holds the campaign pack's services and limits.
