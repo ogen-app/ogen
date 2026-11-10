@@ -157,3 +157,28 @@ func TestPostEvaluationUpsertCountsRuns(t *testing.T) {
 		t.Fatalf("stored = %+v", got)
 	}
 }
+
+// OverallByPost reads the scores of the evaluated posts named; the rest are
+// absent.
+func TestPostEvaluationOverallByPost(t *testing.T) {
+	db := openPendingDB(t)
+	seedPendingPost(t, db, "qs-1")
+	seedPendingPost(t, db, "qs-2")
+	repo := repository.NewPostEvaluationRepository(db)
+	ctx := tenantCtx()
+	id, err := models.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Upsert(ctx, &models.PostEvaluation{ID: id, PostID: "qs-1", PlatformID: "pl", PlatformPostType: "text-post",
+		OverallPct: 42.5, ContentHash: "c", ContextHash: "x", InputHash: "i", Trigger: models.QualityTriggerManual}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.OverallByPost(ctx, []string{"qs-1", "qs-2", "missing"})
+	if err != nil || len(got) != 1 || got["qs-1"] != 42.5 {
+		t.Fatalf("scores = %v, %v", got, err)
+	}
+	if got, err := repo.OverallByPost(ctx, nil); err != nil || len(got) != 0 {
+		t.Fatalf("no ids = %v, %v", got, err)
+	}
+}
