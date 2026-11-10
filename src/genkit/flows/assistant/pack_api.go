@@ -54,21 +54,28 @@ func Window(ctx context.Context) *viewcontext.Window {
 var ErrNoAnalyticsScreen = errors.New("the window applies on the analytics screens; navigate to one first")
 
 // SetWindow asks the client to show the analytics screen on view — the
-// user's, or the one the turn navigated to — over w, and reads it for the
-// rest of the turn. It returns the screen.
-func SetWindow(ctx context.Context, w viewcontext.Window) (viewcontext.Screen, error) {
+// user's, or the one the turn navigated to — over the window merge makes
+// from the current one (nil when none), and reads it for the rest of the
+// turn. The merge runs under the turn's planning lock, so tool calls made
+// together each build on the other's window. It returns the screen and the
+// window set; an error from merge leaves the window as it was.
+func SetWindow(ctx context.Context, merge func(cur *viewcontext.Window) (viewcontext.Window, error)) (viewcontext.Screen, viewcontext.Window, error) {
 	st, err := turnStateFrom(ctx)
 	if err != nil {
-		return "", err
+		return "", viewcontext.Window{}, err
 	}
 	st.planning.Lock()
 	defer st.planning.Unlock()
 	screen := st.currentScreen()
 	if screen != "analytics" && screen != "campaign.analytics" {
-		return "", ErrNoAnalyticsScreen
+		return "", viewcontext.Window{}, ErrNoAnalyticsScreen
+	}
+	w, err := merge(st.currentWindow())
+	if err != nil {
+		return "", viewcontext.Window{}, err
 	}
 	st.addUI(UIAction{Type: UISetWindow, Screen: screen, CampaignID: st.currentCampaign(), Window: &w})
-	return screen, nil
+	return screen, w, nil
 }
 
 // Selected is the ids of the items of kind selected on the user's screen,

@@ -280,12 +280,15 @@ func TestSetWindowAndSelected(t *testing.T) {
 	view := viewcontext.ViewContext{Version: viewcontext.Version, Screen: "home", Scope: viewcontext.Scope{Kind: "workspace"},
 		Selection: &viewcontext.Selection{Kind: viewcontext.KindPost, IDs: []string{"p1", "p2"}}}
 	ctx, _ := NewViewTurnContext(t.Context(), view, nil)
-	if _, err := SetWindow(ctx, viewcontext.Window{From: "2026-03-01"}); !errors.Is(err, ErrNoAnalyticsScreen) {
+	to := func(w viewcontext.Window) func(*viewcontext.Window) (viewcontext.Window, error) {
+		return func(*viewcontext.Window) (viewcontext.Window, error) { return w, nil }
+	}
+	if _, _, err := SetWindow(ctx, to(viewcontext.Window{From: "2026-03-01"})); !errors.Is(err, ErrNoAnalyticsScreen) {
 		t.Fatalf("home = %v", err)
 	}
 	st, _ := turnStateFrom(ctx)
 	st.addUI(UIAction{Type: UINavigate, Screen: "analytics"})
-	screen, err := SetWindow(ctx, viewcontext.Window{From: "2026-03-01", To: "2026-03-31"})
+	screen, _, err := SetWindow(ctx, to(viewcontext.Window{From: "2026-03-01", To: "2026-03-31"}))
 	if err != nil || screen != "analytics" {
 		t.Fatalf("screen = %q, %v", screen, err)
 	}
@@ -295,5 +298,39 @@ func TestSetWindowAndSelected(t *testing.T) {
 	}
 	if got := Selected(ctx, viewcontext.KindPost); len(got) != 2 || Selected(ctx, viewcontext.KindIdea) != nil {
 		t.Fatalf("selected = %v", got)
+	}
+}
+
+// Windows set together each build on the other's: the merges run one at a
+// time, so neither change is lost.
+func TestSetWindow_ConcurrentMerges(t *testing.T) {
+	view := viewcontext.ViewContext{Version: viewcontext.Version, Screen: "analytics", Scope: viewcontext.Scope{Kind: "workspace"}}
+	ctx, _ := NewViewTurnContext(t.Context(), view, nil)
+	merge := func(set func(*viewcontext.Window)) func(*viewcontext.Window) (viewcontext.Window, error) {
+		return func(cur *viewcontext.Window) (viewcontext.Window, error) {
+			var w viewcontext.Window
+			if cur != nil {
+				w = *cur
+			}
+			set(&w)
+			return w, nil
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, _, _ = SetWindow(ctx, merge(func(w *viewcontext.Window) { w.From, w.To = "2026-03-01", "2026-03-31" }))
+	})
+	wg.Go(func() {
+		_, _, _ = SetWindow(ctx, merge(func(w *viewcontext.Window) { w.Platforms = []string{"linkedin"} }))
+	})
+	wg.Wait()
+	if w := Window(ctx); w.From != "2026-03-01" || len(w.Platforms) != 1 {
+		t.Fatalf("window = %+v", w)
+	}
+	// A merge that fails leaves the window and sends nothing.
+	st, _ := turnStateFrom(ctx)
+	if _, _, err := SetWindow(ctx, func(*viewcontext.Window) (viewcontext.Window, error) { return viewcontext.Window{}, errors.New("no") }); err == nil ||
+		len(st.uiActions()) != 2 || Window(ctx).From != "2026-03-01" {
+		t.Fatalf("failed merge = %v, ui %+v", err, st.uiActions())
 	}
 }
