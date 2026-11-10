@@ -8,6 +8,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant/packs"
 	"github.com/ogen-app/ogen/src/genkit/flows/campaign_assistant"
@@ -25,6 +26,22 @@ type proposals struct {
 	repository.AssistantProposalRepository
 }
 type ideaRepo struct{ repository.IdeaRepository }
+
+// Query and PlannedIdeas give the ideas pack a state to show, for the evals.
+func (ideaRepo) Query(context.Context, models.IdeaQuery) (*models.IdeaQueryResult, error) {
+	return &models.IdeaQueryResult{
+		TotalUnfiltered: 40,
+		Piles:           map[string]int{models.IdeaPileWaiting: 12, models.IdeaPileYes: 20, models.IdeaPileLater: 3, models.IdeaPileNo: 5},
+		Facets: map[string][]models.AssetFacetCount{
+			models.IdeaFacetOrigin: {{Value: models.IdeaOriginKeyAnalysis, Count: 9}, {Value: models.IdeaOriginKeyManual, Count: 3}},
+		},
+	}, nil
+}
+
+func (ideaRepo) PlannedIdeas(context.Context, string, int) ([]models.Idea, int, error) {
+	return []models.Idea{{ID: "i7", Title: "Spa opening teaser", Plan: models.IdeaPlan{PlatformID: new("linkedin")}}}, 1, nil
+}
+
 type assetRepo struct{ repository.AssetRepository }
 type campaignRepo struct{ repository.CampaignRepository }
 type postRepo struct{ repository.PostRepository }

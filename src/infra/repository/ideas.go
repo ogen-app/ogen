@@ -76,6 +76,12 @@ type IdeaRepository interface {
 	// workspace-wide ones. Open is not turned down and no post made from
 	// it. more reports that the scope holds further open ideas.
 	OpenIdeas(ctx context.Context, campaignID string, limit int) (ideas []models.Idea, more bool, err error)
+	// PlannedIdeas returns up to limit planned ideas of one scope, the soonest
+	// target date first and the undated last, and how many there are. Planned
+	// is open (not turned down, no post made from it) with any plan field set.
+	// A non-empty campaignID keeps that live campaign's; otherwise ideas of
+	// archived campaigns are left out.
+	PlannedIdeas(ctx context.Context, campaignID string, limit int) (ideas []models.Idea, total int, err error)
 	// MergeSet reads the ideas of ids and which of them a post was made
 	// from, without locking them.
 	MergeSet(ctx context.Context, ids []string) (IdeaMergeSet, error)
