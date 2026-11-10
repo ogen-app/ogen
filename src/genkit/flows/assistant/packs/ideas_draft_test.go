@@ -68,9 +68,14 @@ func TestDraftIdeas_Grounding(t *testing.T) {
 func TestDraftIdeas_StoppedEarly(t *testing.T) {
 	d, _ := draftDeps(2)
 	ctx, _ := turn(t, workspace, nil)
-	out, err := draftIdeas(ctx, d, DraftIdeasInput{IdeaIDs: []string{"i1", "i2"}})
+	in := DraftIdeasInput{IdeaIDs: []string{"i1", "i2"}}
+	out, err := draftIdeas(ctx, d, in)
 	if err != nil || len(out.Posts) != 1 || len(out.Warnings) != 1 {
 		t.Fatalf("draft = %+v, %v", out, err)
+	}
+	// The idea the stop left is offered again.
+	if retry, notMade, ok := draftRetry(in, out); !ok || !slices.Equal(retry.IdeaIDs, []string{"i2"}) || len(notMade) != 1 {
+		t.Fatalf("retry = %+v, notMade = %+v", retry, notMade)
 	}
 	d, _ = draftDeps(1)
 	if _, err := draftIdeas(ctx, d, DraftIdeasInput{IdeaIDs: []string{"i1"}}); err == nil {
@@ -78,4 +83,35 @@ func TestDraftIdeas_StoppedEarly(t *testing.T) {
 	}
 	_, err = draftIdeas(ctx, d, DraftIdeasInput{IdeaIDs: []string{"i1"}, PlatformIDs: []string{"myspace"}})
 	refused(t, err)
+}
+
+// A stop leaves a tail of the jobs: a whole grid of ideas and platforms is
+// retried as it is; part of an idea's platforms leaves the retry to the
+// ideas nothing was written from.
+func TestUnwritten(t *testing.T) {
+	plan := &compose.DraftPlan{Ideas: []models.Idea{{ID: "a", Title: "A"}, {ID: "b", Title: "B"}}}
+	for _, idea := range []string{"a", "b"} {
+		for _, p := range []string{"li", "x"} {
+			plan.Jobs = append(plan.Jobs, compose.DraftJob{IdeaIDs: []string{idea}, Request: compose.DraftRequest{PlatformID: p}})
+		}
+	}
+	post := func(idea, platform string) compose.DraftedPost {
+		return compose.DraftedPost{Written: compose.Written{PlatformID: platform}, IdeaIDs: []string{idea}}
+	}
+	in := DraftIdeasInput{IdeaIDs: []string{"a", "b"}, PlatformIDs: []string{"li", "x"}}
+
+	retry, notMade := unwritten(plan, []compose.DraftedPost{post("a", "li"), post("a", "x")}, in, "stopped")
+	if retry == nil || !slices.Equal(retry.IdeaIDs, []string{"b"}) || !slices.Equal(retry.PlatformIDs, []string{"li", "x"}) || len(notMade) != 2 || notMade[0].Title != "B · li" {
+		t.Fatalf("whole idea left: retry = %+v, notMade = %+v", retry, notMade)
+	}
+	retry, notMade = unwritten(plan, []compose.DraftedPost{post("a", "li")}, in, "stopped")
+	if retry == nil || !slices.Equal(retry.IdeaIDs, []string{"b"}) || !slices.Equal(retry.PlatformIDs, []string{"li", "x"}) || len(notMade) != 3 {
+		t.Fatalf("part of an idea left: retry = %+v, notMade = %+v", retry, notMade)
+	}
+	together := DraftIdeasInput{IdeaIDs: []string{"a", "b"}, PlatformIDs: []string{"li", "x"}, Together: true}
+	plan.Jobs = []compose.DraftJob{{IdeaIDs: []string{"a", "b"}, Request: compose.DraftRequest{PlatformID: "li"}}, {IdeaIDs: []string{"a", "b"}, Request: compose.DraftRequest{PlatformID: "x"}}}
+	retry, _ = unwritten(plan, []compose.DraftedPost{post("a", "li")}, together, "stopped")
+	if retry == nil || !slices.Equal(retry.IdeaIDs, []string{"a", "b"}) || !slices.Equal(retry.PlatformIDs, []string{"x"}) {
+		t.Fatalf("together: retry = %+v", retry)
+	}
 }

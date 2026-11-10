@@ -77,11 +77,13 @@ type bulkIn struct {
 
 // brokenBulk is the count bulkThing fails on; goneBulk the one it refuses
 // once confirmed, as work whose subject went away while it waited.
-// shrunkBulk is the count that shrinks by one while its offer waits.
+// shrunkBulk is the count that shrinks by one while its offer waits;
+// halfBulk the one that does all but 6 things.
 const (
 	brokenBulk = 13
 	goneBulk   = 14
 	shrunkBulk = 15
+	halfBulk   = 16
 )
 
 // bulkPack has one gated tool: more than 3 items wait for a yes.
@@ -90,7 +92,7 @@ func bulkPack(ran *int) Pack {
 		Name: "bulk", Summary: "bulk things", Scopes: []models.AssistantScopeKind{models.AssistantScopeWorkspace},
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			tool := genkit.DefineTool(g, "bulkThing", "Does n things.",
-				assistantkit.Gated("bulkThing", assistantkit.Gate[bulkIn]{
+				assistantkit.GatedRetry("bulkThing", assistantkit.Gate[bulkIn]{
 					Needs:   func(_ context.Context, in bulkIn) bool { return in.N > 3 },
 					Summary: func(in bulkIn) string { return fmt.Sprintf("Do %d things", in.N) },
 					Recheck: func(_ context.Context, in bulkIn) (bulkIn, error) {
@@ -99,6 +101,11 @@ func bulkPack(ran *int) Pack {
 						}
 						return in, nil
 					},
+				}, func(in bulkIn, done int) (bulkIn, []assistantkit.NotMade, bool) {
+					if done == in.N {
+						return in, nil, false
+					}
+					return bulkIn{N: in.N - done}, []assistantkit.NotMade{{ID: "rest", Reason: "engine hiccup"}}, true
 				}, assistantkit.Wrap(func(ctx context.Context, in bulkIn) (int, error) {
 					if in.N == brokenBulk {
 						return 0, errors.New("bulk engine down")
@@ -106,9 +113,13 @@ func bulkPack(ran *int) Pack {
 					if in.N == goneBulk {
 						return 0, assistantkit.Refused("those things are gone")
 					}
-					*ran += in.N
+					done := in.N
+					if in.N == halfBulk {
+						done -= 6
+					}
+					*ran += done
 					assistantkit.Touch(ctx, "thing", "")
-					return in.N, nil
+					return done, nil
 				})))
 			return []assistantkit.Spec{{Name: tool.Name(), Pack: "bulk", Scopes: allScopes, Tier: assistantkit.TierProposal, Guide: "Does n things.", Tool: tool}}, nil
 		},
@@ -399,5 +410,30 @@ func TestProposals_AnswerFromTheCardReoffersWhatStillHolds(t *testing.T) {
 	}
 	if !slices.Equal(events, []SSEEventKind{SSEEventProposalCreated, SSEEventProposalResolved, SSEEventComplete}) {
 		t.Fatalf("events = %v", events)
+	}
+}
+
+// Work that did part of the job says so, and offers what's left on a card
+// of its own; its own offer stays answered.
+func TestProposals_AnswerFromTheCardDoneInPart(t *testing.T) {
+	h, store, ran := proposalHarness(t)
+	store.rows = []*models.AssistantProposal{
+		{ID: "half", ScopeKind: models.AssistantScopeWorkspace, Tool: "bulkThing", Args: models.JSONMap{"n": float64(halfBulk)},
+			Summary: "Do 16 things", Status: models.ProposalPending, ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	var events []SSEEventKind
+	resp, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: "half", Confirm: true}, func(k SSEEventKind, _ any) { events = append(events, k) })
+	if err != nil || *ran != 10 || !strings.HasPrefix(resp.Explanation, "Done in part: Do 16 things. 1 not done") {
+		t.Fatalf("resp = %+v, err = %v, ran = %d", resp, err, *ran)
+	}
+	if len(resp.Proposals) != 1 || resp.Proposals[0].Summary != "Retry: Do 6 things" || store.rows[0].Status != models.ProposalConfirmed {
+		t.Fatalf("cards = %+v", resp.Proposals)
+	}
+	if !slices.Equal(events, []SSEEventKind{SSEEventProposalCreated, SSEEventProposalResolved, SSEEventComplete}) {
+		t.Fatalf("events = %v", events)
+	}
+	// The retry runs just what was left.
+	if _, err := h.tools.answer(t.Context(), AnswerRequest{ProposalID: resp.Proposals[0].ID, Confirm: true}, nil); err != nil || *ran != 16 {
+		t.Fatalf("retry: err = %v, ran = %d", err, *ran)
 	}
 }

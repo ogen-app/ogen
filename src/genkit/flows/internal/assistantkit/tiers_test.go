@@ -129,3 +129,42 @@ func TestGated_ConfirmedRechecks(t *testing.T) {
 		t.Fatalf("refused: out = %+v, err = %v", out, err)
 	}
 }
+
+// halfTool does the ids before "x", and stops there.
+func halfTool() ai.ToolFunc[idsIn, Outcome[[]string]] {
+	return GatedRetry("halfIDs", Gate[idsIn]{
+		Summary: func(in idsIn) string { return "Do " + strings.Join(in.IDs, ",") },
+	}, func(in idsIn, done []string) (idsIn, []NotMade, bool) {
+		left := in.IDs[len(done):]
+		var notMade []NotMade
+		for _, id := range left {
+			notMade = append(notMade, NotMade{ID: id, Reason: "stopped early"})
+		}
+		return idsIn{IDs: left}, notMade, len(left) > 0
+	}, Wrap(func(_ context.Context, in idsIn) ([]string, error) {
+		var done []string
+		for _, id := range in.IDs {
+			if id == "x" {
+				break
+			}
+			done = append(done, id)
+		}
+		return done, nil
+	}))
+}
+
+func TestGatedRetry_OffersWhatWasLeft(t *testing.T) {
+	sink := &memSink{}
+	ctx := &ai.ToolContext{Context: WithConfirmed(WithProposalSink(t.Context(), sink))}
+	out, err := halfTool()(ctx, idsIn{IDs: []string{"a", "x", "b"}})
+	if err != nil || !out.Succeeded() || len(*out.Result) != 1 || len(out.NotMade) != 2 || out.RetryProposalID != "prop-1" {
+		t.Fatalf("out = %+v, err = %v", out, err)
+	}
+	if len(sink.got) != 1 || sink.got[0].Summary != "Retry: Do x,b" || sink.got[0].Tool != "halfIDs" {
+		t.Fatalf("retry offer = %+v", sink.got)
+	}
+	// A run that did it all offers nothing.
+	if out, _ := halfTool()(ctx, idsIn{IDs: []string{"a"}}); out.RetryProposalID != "" || out.NotMade != nil || len(sink.got) != 1 {
+		t.Fatalf("whole run = %+v", out)
+	}
+}

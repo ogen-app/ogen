@@ -55,11 +55,11 @@ func foundationPack(d Deps) assistant.Pack {
 				assistantkit.Wrap(func(ctx context.Context, in RemoveFactInput) (*FactOut, error) { return removeFact(ctx, d, facts, in) }), ai.WithStrictSchema(false))
 			bulk := genkit.DefineTool(g, "editBrand",
 				"Makes several brand changes at once: facts, voices and audiences added, updated or removed. Above a few changes it is offered for the user to confirm first. Each change made returns its own undo id.",
-				assistantkit.Gated("editBrand", assistantkit.Gate[EditBrandInput]{
+				assistantkit.GatedRetry("editBrand", assistantkit.Gate[EditBrandInput]{
 					Precheck: func(_ context.Context, in EditBrandInput) error { return in.precheck() },
 					Needs:    func(_ context.Context, in EditBrandInput) bool { return overN(d, in.size()) },
 					Summary:  func(in EditBrandInput) string { return in.summary() },
-				}, assistantkit.Wrap(recorded(foundationPackName, "editBrand", nil, func(ctx context.Context, in EditBrandInput) (*EditBrandOutput, error) {
+				}, brandRetry, assistantkit.Wrap(recorded(foundationPackName, "editBrand", nil, func(ctx context.Context, in EditBrandInput) (*EditBrandOutput, error) {
 					return editBrand(ctx, d, facts, lib, in)
 				}))), ai.WithStrictSchema(false))
 			lspecs := append(slices.Concat(librarySpecs(g, d, lib), seriesSpecs(g, d), distillSpecs(g, d)), spec(foundationPackName, bulk, assistantkit.TierProposal,

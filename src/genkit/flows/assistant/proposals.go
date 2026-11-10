@@ -349,6 +349,13 @@ func (t *toolSet) answer(ctx context.Context, req AnswerRequest, onEvent OnEvent
 	if changed, ok := reofferedResult(result); ok {
 		resp.Explanation = changed
 	}
+	if left, retry := partialResult(result); left > 0 {
+		resp.Explanation = fmt.Sprintf("Done in part: %s. %d not done", p.Summary, left)
+		if retry {
+			resp.Explanation += "; the ones worth retrying are offered again"
+		}
+		resp.Explanation += "."
+	}
 	t.finish(st, resp)
 	// The answer joins the thread, so the next chat turn knows it happened.
 	// The work has run, so a failed write marks the reply unsaved rather
@@ -408,6 +415,18 @@ func reofferedResult(raw any) (string, bool) {
 	}
 	reason, _ := m["reason"].(string)
 	return reason, true
+}
+
+// partialResult reports how many items a confirmed run left undone, and
+// whether it offered the ones worth retrying.
+func partialResult(raw any) (left int, retry bool) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	notMade, _ := m["notMade"].([]any)
+	id, _ := m["retryProposalId"].(string)
+	return len(notMade), id != ""
 }
 
 func (t *toolSet) ownsOption(p *models.AssistantProposal) bool {

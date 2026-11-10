@@ -40,6 +40,17 @@ type Outcome[T any] struct {
 	Options      []Option `json:"options,omitempty"`
 	ProposalID   string   `json:"proposalId,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
+	// NotMade lists what a run that did part of the job left undone, each
+	// with why; RetryProposalID offers just the items worth trying again.
+	NotMade         []NotMade `json:"notMade,omitempty"`
+	RetryProposalID string    `json:"retryProposalId,omitempty"`
+}
+
+// NotMade is an item a run left undone.
+type NotMade struct {
+	ID     string `json:"id"`
+	Title  string `json:"title,omitempty"`
+	Reason string `json:"reason"`
 }
 
 // OK wraps a successful result.
