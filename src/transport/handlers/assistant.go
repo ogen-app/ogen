@@ -91,9 +91,15 @@ type assistantTurnRequest struct {
 // @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId", "window" {from,to,platforms,campaignId},
 // @Description  "connect" {platform,accountId,reconnect}}, every reference already checked; open_connect opens the settings
 // @Description  screen's connect flow (reconnect for an account), which the client runs;
-// @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs"}, where
-// @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, plus
-// @Description  "unsaved": true when the turn ran but could not be stored in the thread. "error"
+// @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs","results"}, where
+// @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, and results
+// @Description  (omitted when empty) holds each pack's tools' last successful output, by pack then tool name. The
+// @Description  workspace pack's: activityReport {from,to,tz,published,failed,created,campaigns_created,days};
+// @Description  workspaceSetup {timezone,autoPublish,autoPublishNote,accounts[{id,platform,username,needsReconnect,
+// @Description  health,tokenExpiresAt,autoPublish}],note}; weeklyDigest {from,to,empty,report};
+// @Description  emailWeeklyDigest {done,from,to}; postHistory {postId,title,entries[{at,kind: version|event,what,version,
+// @Description  by,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.
+// @Description  Plus "unsaved": true when the turn ran but could not be stored in the thread. "error"
 // @Description  carries {"message":"...","code":<http_code>} and ends the stream.
 // @Description  Offers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost,
 // @Description  applyCalendarMoves, setAutoPublish and emailWeeklyDigest are always held back as an offer; generatePosts, draftPost, draftIdeas, moreLikeThese,
