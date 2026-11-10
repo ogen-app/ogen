@@ -293,3 +293,37 @@ func TestRepairPack_RegistersFixTools(t *testing.T) {
 		t.Fatalf("registered without their services: %v", got)
 	}
 }
+
+// Posts left on a removed platform are offered the platform back, off the
+// calendar, or deleted.
+func TestCheckCalendar_PlatformNotTargetedFixes(t *testing.T) {
+	d, posts, _ := repairDeps()
+	d.Remove = &memRemover{posts: posts}
+	c := d.Campaigns.(*memCampaigns).c
+	c.TargetPlatforms = models.CampaignPlatforms{{ID: "li"}}
+	posts.posts = append(posts.posts, models.Post{ID: "th1", Title: "Thread", Status: models.PostStatusDraft, PlatformID: "th", ScheduledAt: day("2027-03-10")})
+	sink := &offers{}
+	ctx, _ := turn(t, campaign1, nil)
+	ctx = assistantkit.WithProposalSink(ctx, sink)
+
+	out, err := checkCalendar(ctx, d, CampaignRef{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(out.Findings, func(f FindingOut) bool { return f.Code == "platform_not_targeted" })
+	if i < 0 {
+		t.Fatalf("findings = %+v", out.Findings)
+	}
+	var tools []string
+	for _, fix := range out.Findings[i].Fixes {
+		p := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Summary == fix.Title })]
+		tools = append(tools, p.Tool)
+	}
+	if !slices.Equal(tools, []string{"updateCampaignPlatforms", "unschedulePosts", "deletePosts"}) {
+		t.Fatalf("tools = %v", tools)
+	}
+	enable := sink.got[slices.IndexFunc(sink.got, func(p assistantkit.Proposal) bool { return p.Tool == "updateCampaignPlatforms" })]
+	if in := enable.Args.(campaign_assistant.UpdateCampaignPlatformsInput); in.Platforms[0].Platform != "th" || len(in.Platforms[0].PostTypes) != 0 {
+		t.Fatalf("enable = %+v", in)
+	}
+}

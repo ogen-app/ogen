@@ -240,6 +240,12 @@ func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Po
 		}
 		propose("updateCampaignPlatforms", campaign_assistant.UpdateCampaignPlatformsInput{
 			Platforms: []platforms.Request{{Platform: fix.PlatformID, PostTypes: []string{fix.PostType}}}})
+	case calendarcheck.FixEnablePlatform:
+		if d.Campaign == nil {
+			return offer, false, nil
+		}
+		propose("updateCampaignPlatforms", campaign_assistant.UpdateCampaignPlatformsInput{
+			Platforms: []platforms.Request{{Platform: fix.PlatformID}}})
 	case calendarcheck.FixConvertPostType:
 		propose("changePostType", ChangePostTypeInput{CampaignID: c.ID, PostIDs: fix.PostIDs, PostType: fix.PostType})
 	case calendarcheck.FixUnschedule:

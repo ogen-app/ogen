@@ -1,6 +1,7 @@
-// Package platforms plans additions to the platforms a campaign publishes to
-// and the post types it uses on each, checked against the enabled platform
-// catalog. It is pure: the caller loads the catalog and saves the result.
+// Package platforms plans changes to the platforms a campaign publishes to
+// and the post types it uses on each — additions and removals — checked
+// against the enabled platform catalog. It is pure: the caller loads the
+// catalog and saves the result.
 package platforms
 
 import (
@@ -101,6 +102,78 @@ func Summary(added []Added) string {
 			parts[i] = fmt.Sprintf("%s (%s)", a.Name, strings.Join(a.PostTypes, ", "))
 		default:
 			parts[i] = fmt.Sprintf("the %s post type on %s", strings.Join(a.PostTypes, ", "), a.Name)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// Removed describes one removal a plan makes.
+type Removed struct {
+	PlatformID string
+	Name       string
+	// PostTypes are the types no longer allowed; empty when the whole
+	// platform was removed.
+	PostTypes []string
+}
+
+// PlanRemoval returns the campaign's target platforms with reqs removed, and
+// what changed: a request without post types removes the platform, one with
+// them stops allowing those types on it. A platform the campaign doesn't
+// target, or a type it already doesn't allow, changes nothing. Removing the
+// last platform, or the last type allowed on one, is an InvalidError: a
+// campaign publishes somewhere, and an empty selection would mean every type.
+func PlanRemoval(current models.CampaignPlatforms, catalog []models.Platform, reqs []Request) (models.CampaignPlatforms, []Removed, error) {
+	next := slices.Clone(current)
+	var removed []Removed
+	for _, r := range reqs {
+		p, err := find(catalog, r.Platform)
+		if err != nil {
+			return nil, nil, err
+		}
+		types, err := checkTypes(p, r.PostTypes)
+		if err != nil {
+			return nil, nil, err
+		}
+		i := slices.IndexFunc(next, func(tp models.CampaignPlatform) bool { return tp.ID == p.ID })
+		if i < 0 {
+			continue
+		}
+		if len(types) == 0 {
+			if len(next) == 1 {
+				return nil, nil, &InvalidError{Reason: fmt.Sprintf("%s is the campaign's only platform; add another before removing it.", p.Name)}
+			}
+			next = slices.Delete(next, i, i+1)
+			removed = append(removed, Removed{PlatformID: p.ID, Name: p.Name})
+			continue
+		}
+		// An empty selection allows every type the platform has.
+		allowed := next[i].PostTypes
+		if len(allowed) == 0 {
+			allowed = slices.Sorted(maps.Keys(p.PostTypes))
+		}
+		keep := slices.DeleteFunc(slices.Clone(allowed), func(t string) bool { return slices.Contains(types, t) })
+		if len(keep) == len(allowed) {
+			continue
+		}
+		if len(keep) == 0 {
+			return nil, nil, &InvalidError{Reason: fmt.Sprintf("That would leave %s no post type; remove the platform instead.", p.Name)}
+		}
+		gone := slices.DeleteFunc(slices.Clone(allowed), func(t string) bool { return slices.Contains(keep, t) })
+		next[i] = models.CampaignPlatform{ID: next[i].ID, PostTypes: keep}
+		removed = append(removed, Removed{PlatformID: p.ID, Name: p.Name, PostTypes: gone})
+	}
+	return next, removed, nil
+}
+
+// RemovedSummary describes removals in one line, e.g. "Threads; the
+// carousel post type on LinkedIn".
+func RemovedSummary(removed []Removed) string {
+	parts := make([]string, len(removed))
+	for i, r := range removed {
+		if len(r.PostTypes) == 0 {
+			parts[i] = r.Name
+		} else {
+			parts[i] = fmt.Sprintf("the %s post type on %s", strings.Join(r.PostTypes, ", "), r.Name)
 		}
 	}
 	return strings.Join(parts, "; ")
