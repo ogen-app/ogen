@@ -41,8 +41,8 @@ func TestListFlowsAndModels(t *testing.T) {
 	for _, f := range fr.GetFlows() {
 		slots[f.GetKey()] = len(f.GetSlots())
 	}
-	if slots[modelconfig.FlowAssistant] != 4 {
-		t.Fatalf("assistant slots = %d, want 4 (orchestrator+writer+compare+brand_check)", slots[modelconfig.FlowAssistant])
+	if slots[modelconfig.FlowAssistant] != 5 {
+		t.Fatalf("assistant slots = %d, want 5 (orchestrator+writer+compare+brand_check+more_like_these)", slots[modelconfig.FlowAssistant])
 	}
 	if slots[modelconfig.FlowContentPlan] != 1 {
 		t.Fatalf("content_plan slots = %d, want 1", slots[modelconfig.FlowContentPlan])

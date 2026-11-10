@@ -15,6 +15,7 @@ import (
 	"github.com/ogen-app/ogen/src/genkit/flows/brand_check"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/genkit/flows/more_like_these"
 	"github.com/ogen-app/ogen/src/infra/eventhub"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -91,6 +92,9 @@ type Deps struct {
 	// CheckBrand checks posts against their voice and guardrails; nil leaves
 	// checkBrand out of the repair pack.
 	CheckBrand brand_check.Run
+	// MoreLike writes ideas like posts that performed well; nil leaves
+	// moreLikeThese out of the analytics pack.
+	MoreLike more_like_these.Run
 
 	// Hub announces committed changes to the workspace's other sessions;
 	// nil publishes nothing.
