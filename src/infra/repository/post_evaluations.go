@@ -26,6 +26,10 @@ type PostEvaluationRepository interface {
 	// GetByPostID returns the evaluation for a post, or (nil, nil) when the
 	// post has not been evaluated yet.
 	GetByPostID(ctx context.Context, postID string) (*models.PostEvaluation, error)
+
+	// OverallByPost maps each evaluated post of postIDs to its overall score;
+	// posts not evaluated yet are absent.
+	OverallByPost(ctx context.Context, postIDs []string) (map[string]float64, error)
 }
 
 type postEvaluationRepository struct {
@@ -72,4 +76,20 @@ func (r *postEvaluationRepository) GetByPostID(ctx context.Context, postID strin
 		return nil, err
 	}
 	return eval, nil
+}
+
+func (r *postEvaluationRepository) OverallByPost(ctx context.Context, postIDs []string) (map[string]float64, error) {
+	out := map[string]float64{}
+	if len(postIDs) == 0 {
+		return out, nil
+	}
+	var rows []models.PostEvaluation
+	if err := r.db.NewSelect().Model(&rows).Column("post_id", "overall_pct").
+		Where("pe.post_id IN (?)", bun.List(postIDs)).Scan(ctx); err != nil {
+		return nil, err
+	}
+	for _, e := range rows {
+		out[e.PostID] = e.OverallPct
+	}
+	return out, nil
 }

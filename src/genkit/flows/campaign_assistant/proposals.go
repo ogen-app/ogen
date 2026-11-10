@@ -62,11 +62,7 @@ var (
 			if err := precheckPosts(ctx, in.Platforms, "", in.PublishDate, in.PublishDate, in.PostType, true); err != nil {
 				return err
 			}
-			var fill func(int) any
-			if draftPlatforms(ctx, in) == 1 {
-				fill = func(n int) any { in.Count = n; return in }
-			}
-			return overGoal(ctx, "draftPost", draftTotal(ctx, in), in, fill)
+			return draftOverGoal(ctx, in)
 		},
 		Needs: func(ctx context.Context, in DraftPostInput) bool {
 			return draftTotal(ctx, in) > proposalThreshold(ctx)
@@ -100,30 +96,6 @@ func draftTotal(ctx context.Context, in DraftPostInput) int {
 	maxN := getRequestState(ctx).draftCap()
 	perPlatform, _, _ := resolveGenerateCount(in.Count, maxN)
 	return min(perPlatform*draftPlatforms(ctx, in), maxN)
-}
-
-// overGoal returns a conflict when adding count posts would take the
-// campaign past its goal. The options are to fill the goal exactly (when
-// there is room and fill can rebuild the call for fewer posts) or to add
-// them all anyway; each is the tool call picking it runs. When the posts
-// could not be counted the room is unknown, so adding them waits for a yes.
-func overGoal(ctx context.Context, tool string, count int, args any, fill func(int) any) error {
-	g := getRequestState(ctx).snapshot.Goal
-	if g != nil && g.Unknown {
-		reason := fmt.Sprintf("The campaign's posts could not be read, so it is unclear how much room is left under its goal of %d.", g.Target)
-		return assistantkit.Conflicted(reason, assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Add %d without checking the goal", count), Tool: tool, Args: args})
-	}
-	if g == nil || count <= g.Room {
-		return nil
-	}
-	reason := fmt.Sprintf("That would add %d posts, but the goal is %d and the campaign already has %d, so there is room for %d more.",
-		count, g.Target, g.Planned, g.Room)
-	var opts []assistantkit.Option
-	if g.Room > 0 && fill != nil {
-		opts = append(opts, assistantkit.Option{ID: "fill", Title: fmt.Sprintf("Add %d to reach the goal", g.Room), Recommended: true, Tool: tool, Args: fill(g.Room)})
-	}
-	opts = append(opts, assistantkit.Option{ID: "anyway", Title: fmt.Sprintf("Add all %d anyway, past the goal", count), Tool: tool, Args: args})
-	return assistantkit.Conflicted(reason, opts...)
 }
 
 // precheckPosts runs the post tools' user-correctable checks — target

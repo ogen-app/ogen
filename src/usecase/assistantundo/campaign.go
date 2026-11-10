@@ -44,6 +44,38 @@ func CampaignPlatforms(c *models.Campaign) models.JSONMap {
 	return models.JSONMap{"platforms": v}
 }
 
+// CampaignGoal is the snapshot a goal change is logged and compared with:
+// the posts per period, nil without a goal, and the period.
+func CampaignGoal(c *models.Campaign) models.JSONMap {
+	var perPeriod any
+	if c.EstimatedPostCount != nil {
+		perPeriod = *c.EstimatedPostCount
+	}
+	return models.JSONMap{"perPeriod": perPeriod, "cadence": c.GoalCadence}
+}
+
+type campaignGoal struct{ campaigns repository.CampaignRepository }
+
+// Undo puts the campaign's goal back while it is still as the change left it.
+func (u campaignGoal) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	c, err := lockCampaign(ctx, u.campaigns, tx, a.EntityID)
+	if err != nil {
+		return err
+	}
+	if !same(CampaignGoal(c), a.After) {
+		return ErrChangedSince
+	}
+	c.EstimatedPostCount = nil
+	if n, ok := a.Before["perPeriod"].(float64); ok {
+		c.EstimatedPostCount = new(int(n))
+	}
+	if n, ok := a.Before["perPeriod"].(int); ok {
+		c.EstimatedPostCount = new(n)
+	}
+	c.GoalCadence, _ = a.Before["cadence"].(string)
+	return u.campaigns.UpdateColumns(ctx, tx, c, "estimated_post_count", "goal_cadence")
+}
+
 // timeValue renders a date for a snapshot.
 func timeValue(t *time.Time) any {
 	if t == nil {

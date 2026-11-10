@@ -5,6 +5,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 
+	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/consistency"
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/draft_post"
@@ -21,7 +22,7 @@ import (
 // that labels the turn, and each committed tool result.
 type CampaignAssistantResponse struct {
 	Explanation string `json:"explanation"          jsonschema:"description=Conversational reply to the user"`
-	Action      string `json:"action"               jsonschema:"description=answered for a grounded reply; content_plan_generated when runContentPlan ran; brief_enriched when enrichBrief ran; posts_generated when generatePosts ran; post_drafted when draftPost ran; dates_updated when setCampaignDates ran; platforms_updated when updateCampaignPlatforms ran; posts_redistributed when redistributePosts ran; brief_reviewed when checkBrief ran; posts_reviewed when checkPostsConsistency ran; proposed when a requested change is waiting for the user's confirmation; declined when the request is out of scope,enum=answered,enum=proposed,enum=content_plan_generated,enum=brief_enriched,enum=posts_generated,enum=post_drafted,enum=dates_updated,enum=platforms_updated,enum=posts_redistributed,enum=brief_reviewed,enum=posts_reviewed,enum=declined"`
+	Action      string `json:"action"               jsonschema:"description=answered for a grounded reply; content_plan_generated when runContentPlan ran; brief_enriched when enrichBrief ran; posts_generated when generatePosts ran; post_drafted when draftPost ran; dates_updated when setCampaignDates ran; platforms_updated when updateCampaignPlatforms ran; goal_updated when setCampaignGoal ran; posts_redistributed when redistributePosts ran; brief_reviewed when checkBrief ran; posts_reviewed when checkPostsConsistency ran; proposed when a requested change is waiting for the user's confirmation; declined when the request is out of scope,enum=answered,enum=proposed,enum=content_plan_generated,enum=brief_enriched,enum=posts_generated,enum=post_drafted,enum=dates_updated,enum=platforms_updated,enum=goal_updated,enum=posts_redistributed,enum=brief_reviewed,enum=posts_reviewed,enum=declined"`
 	// ContentPlan is set by the server when the runContentPlan tool created
 	// draft posts this turn. Action is then "content_plan_generated".
 	ContentPlan *ContentPlanResult `json:"contentPlan,omitempty" jsonschema:"-"`
@@ -50,6 +51,10 @@ type CampaignAssistantResponse struct {
 	// Platforms is set by the server when updateCampaignPlatforms added
 	// platforms or post types this turn. Action is then "platforms_updated".
 	Platforms *PlatformsResult `json:"platforms,omitempty" jsonschema:"-"`
+	// Goal is set by the server when setCampaignGoal changed the campaign's
+	// post goal this turn. Action is then "goal_updated", unless drafting
+	// after it labels the turn "post_drafted".
+	Goal *GoalResult `json:"goal,omitempty" jsonschema:"-"`
 	// Ask is set by the server when askCampaignAssets answered this turn:
 	// the last answer's sources, for the client's card. It doesn't change
 	// Action.
@@ -174,6 +179,9 @@ type CampaignAssistantRepos struct {
 	// Analyses counts the sources analysed for the campaign's state; nil
 	// leaves the count out.
 	Analyses repository.AssetAnalysisRepository
+	// Evaluations reads the drafts' quality scores, so the budget guard can
+	// offer to replace the weakest; nil leaves that option out.
+	Evaluations repository.PostEvaluationRepository
 	// Links maps the campaign's posts to their ideas, for the calendar
 	// check's "same idea close together"; nil skips that check.
 	Links repository.PostIdeaRepository
@@ -218,6 +226,9 @@ type CampaignAssistantFlowConfig struct {
 	// nil disables the corresponding tool.
 	CheckBrief func(ctx context.Context, campaignID string, onEvent consistency.OnEventFunc) (*consistency.BriefReview, error)
 	CheckPosts func(ctx context.Context, req consistency.PostsCheckRequest, onEvent consistency.OnEventFunc) (*consistency.PostsReview, error)
+	// DeletePost deletes a post with its files, for the budget guard's
+	// "replace the weakest drafts"; nil leaves that option out.
+	DeletePost func(ctx context.Context, post *models.Post, actor string) (bool, error)
 }
 
 // ── SSE types ─────────────────────────────────────────────────────────────────
@@ -259,6 +270,7 @@ const (
 
 	SSEEventDatesUpdated       SSEEventKind = "dates_updated"
 	SSEEventPlatformsUpdated   SSEEventKind = "platforms_updated"
+	SSEEventGoalUpdated        SSEEventKind = "goal_updated"
 	SSEEventPostsRedistributed SSEEventKind = "posts_redistributed"
 
 	SSEEventCheckBriefStarted  SSEEventKind = "check_brief_started"

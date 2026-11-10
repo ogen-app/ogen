@@ -73,6 +73,7 @@ type requestState struct {
 	// draftPost backs the draftPost tool: rewrite chat research into
 	// extended, content-first post drafts; maxDraftPosts caps a single call.
 	draftPost     func(ctx context.Context, req draft_post.DraftPostRequest, onEvent draft_post.OnEventFunc) (*draft_post.DraftPostResponse, error)
+	deletePost    func(ctx context.Context, post *models.Post, actor string) (bool, error)
 	maxDraftPosts int
 	// proposalThreshold is the largest generatePosts / draftPost batch run
 	// without asking; 0 means the default.
@@ -114,6 +115,7 @@ type requestState struct {
 	draftPostResult      *DraftPostResult
 	datesResult          *DatesResult
 	platformsResult      *PlatformsResult
+	goalResult           *GoalResult
 	redistributeResult   *RedistributeResult
 	briefReviewResult    *consistency.BriefReview
 	postsReviewResult    *consistency.PostsReview
@@ -226,6 +228,7 @@ func newRequestState(cfg CampaignAssistantFlowConfig, repos CampaignAssistantRep
 		generatePosts:     cfg.GeneratePosts,
 		maxGeneratePosts:  cfg.MaxGeneratePosts,
 		draftPost:         cfg.DraftPost,
+		deletePost:        cfg.DeletePost,
 		maxDraftPosts:     cfg.MaxDraftPosts,
 		proposalThreshold: cfg.ProposalThreshold,
 		checkBrief:        cfg.CheckBrief,
@@ -420,6 +423,8 @@ type toolSet struct {
 	checkPostsConsistency   ai.ToolRef
 	askCampaignAssets       ai.ToolRef
 	updateCampaignPlatforms ai.ToolRef
+	setCampaignGoal         ai.ToolRef
+	replaceWeakestDrafts    ai.ToolRef
 
 	reg *assistantkit.Registry
 }
@@ -548,6 +553,17 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		ai.WithStrictSchema(false),
 	)
 
+	setCampaignGoal := genkit.DefineTool(g, "setCampaignGoal",
+		"Sets the campaign's goal: how many posts per goal period (its week or month). It is proposed for the user to confirm before anything changes, and can be undone.",
+		assistantkit.Gated("setCampaignGoal", setCampaignGoalGate, toolSetCampaignGoalFunc),
+		ai.WithStrictSchema(false),
+	)
+	replaceWeakestDrafts := genkit.DefineTool(g, "replaceWeakestDrafts",
+		"Drafts posts and deletes as many of the campaign's weakest drafts. Only an offer the budget guard made runs it, once the user confirms.",
+		assistantkit.Gated("replaceWeakestDrafts", replaceDraftsGate, toolReplaceDraftsFunc),
+		ai.WithStrictSchema(false),
+	)
+
 	t := &toolSet{
 		runContentPlan:          runContentPlan,
 		enrichBrief:             enrichBrief,
@@ -557,6 +573,8 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		draftPost:               draftPost,
 		setCampaignDates:        setCampaignDates,
 		redistributePosts:       redistributePosts,
+		setCampaignGoal:         setCampaignGoal,
+		replaceWeakestDrafts:    replaceWeakestDrafts,
 		checkBrief:              checkBrief,
 		checkPostsConsistency:   checkPostsConsistency,
 		askCampaignAssets:       askCampaignAssets,

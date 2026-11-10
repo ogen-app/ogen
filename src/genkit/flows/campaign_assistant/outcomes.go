@@ -14,6 +14,7 @@ const (
 	actionPostsGenerated     = "posts_generated"
 	actionPostDrafted        = "post_drafted"
 	actionDatesUpdated       = "dates_updated"
+	actionGoalUpdated        = "goal_updated"
 	actionPostsRedistributed = "posts_redistributed"
 	actionBriefReviewed      = "brief_reviewed"
 	actionPostsReviewed      = "posts_reviewed"
@@ -64,6 +65,15 @@ func (st *requestState) outcomes() []outcome {
 	}
 	if r := st.platformsResult; r != nil {
 		out = append(out, platformsOutcome(r))
+	}
+	if r := st.goalResult; r != nil {
+		out = append(out, outcome{
+			action:      actionGoalUpdated,
+			explanation: fmt.Sprintf("Raised the campaign's goal to %d posts per %s (%d in all).", r.PerPeriod, r.Cadence, r.Target),
+			attach:      func(resp *CampaignAssistantResponse) { resp.Goal = r },
+			event:       SSEEventGoalUpdated,
+			payload:     *r,
+		})
 	}
 	if r := st.redistributeResult; r != nil {
 		out = append(out, redistributeOutcome(r))

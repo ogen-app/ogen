@@ -611,3 +611,27 @@ func TestUndo_CampaignCreatedFromTheBuiltCampaign(t *testing.T) {
 		t.Fatalf("undo = %v; the built campaign's snapshot must match its row", err)
 	}
 }
+
+// Undoing a goal change restores the posts per period and the period,
+// unless the goal was changed again since.
+func TestUndo_CampaignGoal(t *testing.T) {
+	f := newFixture(t)
+	f.seedCampaign(t, func(c *models.Campaign) { c.EstimatedPostCount, c.GoalCadence = new(3), "week" })
+	id := f.logChange(t, models.AssistantActionCampaignGoal, assistantundo.CampaignGoal, func(c *models.Campaign) {
+		c.EstimatedPostCount, c.GoalCadence = new(5), "month"
+	})
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	if c := f.load(t); c.EstimatedPostCount == nil || *c.EstimatedPostCount != 3 || c.GoalCadence != "week" {
+		t.Fatalf("restored goal = %v %s", c.EstimatedPostCount, c.GoalCadence)
+	}
+
+	id = f.logChange(t, models.AssistantActionCampaignGoal, assistantundo.CampaignGoal, func(c *models.Campaign) { c.EstimatedPostCount = new(8) })
+	c := f.load(t)
+	c.EstimatedPostCount = new(9)
+	f.save(t, c)
+	if _, err := f.svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) {
+		t.Fatalf("undo over a later change = %v", err)
+	}
+}

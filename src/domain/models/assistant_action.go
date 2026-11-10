@@ -57,6 +57,8 @@ const (
 	// AssistantActionAutoPublish is the workspace's auto-publish allowlist
 	// changed.
 	AssistantActionAutoPublish AssistantActionKind = "auto_publish"
+	// AssistantActionCampaignGoal is the campaign's post goal changed.
+	AssistantActionCampaignGoal AssistantActionKind = "campaign_goal"
 	// AssistantActionAssetTags is tags added to or removed from assets.
 	AssistantActionAssetTags AssistantActionKind = "asset_tags"
 )

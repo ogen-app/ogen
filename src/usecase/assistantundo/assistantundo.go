@@ -54,6 +54,7 @@ func New(db *bun.DB, actions repository.AssistantActionRepository, campaigns rep
 			models.AssistantActionCampaignPlatforms: campaignPlatforms{campaigns},
 			models.AssistantActionCampaignAssets:    campaignAssets{campaigns},
 			models.AssistantActionCampaignCreated:   campaignCreated{campaigns},
+			models.AssistantActionCampaignGoal:      campaignGoal{campaigns},
 		},
 	}
 }

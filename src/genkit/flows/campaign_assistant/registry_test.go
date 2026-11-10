@@ -20,7 +20,7 @@ func newTestTools(t *testing.T) *toolSet {
 func TestToolOrder(t *testing.T) {
 	want := []string{"runContentPlan", "enrichBrief", "listCampaignPosts", "getCampaignOverview", "generatePosts",
 		"draftPost", "setCampaignDates", "redistributePosts", "checkBrief", "checkPostsConsistency",
-		"updateCampaignPlatforms", "askCampaignAssets"}
+		"updateCampaignPlatforms", "setCampaignGoal", "replaceWeakestDrafts", "askCampaignAssets"}
 	var got []string
 	for _, r := range newTestTools(t).reg.Tools() {
 		got = append(got, r.Name())
