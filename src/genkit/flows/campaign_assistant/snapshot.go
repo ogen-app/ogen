@@ -17,6 +17,11 @@ import (
 // snapshotTop caps the calendar problems the state names one by one.
 const snapshotTop = 3
 
+// snapshotColumns are the post columns the state and its calendar check
+// read: the sources for "same source close together", the account for the
+// crowded slots.
+var snapshotColumns = []string{"id", "title", "status", "platform_id", "platform_post_type", "social_account_id", "scheduled_at", "used_asset_ids"}
+
 // snapshot reads the campaign's state for this turn. Each part degrades on
 // its own: a failed read leaves that part out rather than failing the turn,
 // since the tools still check what they need. Unread posts mark the goal's
@@ -25,7 +30,7 @@ func snapshot(ctx context.Context, repos CampaignAssistantRepos, c *models.Campa
 	var posts []models.Post
 	postsRead := true
 	if repos.Posts != nil {
-		rows, err := repos.Posts.ListRowsByCampaign(ctx, c.ID, "id", "title", "status", "platform_id", "platform_post_type", "scheduled_at")
+		rows, err := repos.Posts.ListRowsByCampaign(ctx, c.ID, snapshotColumns...)
 		if err != nil {
 			warnState(ctx, c, "count campaign posts", err)
 			postsRead = false

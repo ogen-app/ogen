@@ -96,13 +96,18 @@ func TestRunner_StateUnreadPostsLeaveRoomUnknown(t *testing.T) {
 	}
 }
 
-// datedRows are a campaign's posts with their dates and platforms.
+// datedRows are a campaign's posts with their dates and platforms; columns
+// records what was asked for.
 type datedRows struct {
 	repository.PostRepository
-	posts []models.Post
+	posts   []models.Post
+	columns *[]string
 }
 
-func (r datedRows) ListRowsByCampaign(context.Context, string, ...string) ([]models.Post, error) {
+func (r datedRows) ListRowsByCampaign(_ context.Context, _ string, columns ...string) ([]models.Post, error) {
+	if r.columns != nil {
+		*r.columns = columns
+	}
 	return r.posts, nil
 }
 
@@ -138,8 +143,9 @@ func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
 	c.TargetPlatforms = models.CampaignPlatforms{{ID: "pl1"}}
 	c.AssetIDs = models.StringSlice{"a1", "a2", "a3"}
 	var lens *string
+	var columns []string
 	repos := CampaignAssistantRepos{
-		Posts: datedRows{posts: []models.Post{
+		Posts: datedRows{columns: &columns, posts: []models.Post{
 			{ID: "p1", Status: models.PostStatusDraft, PlatformID: "pl1", ScheduledAt: new(day("2026-01-02"))},
 			// Three on one day crowd it.
 			{ID: "p2", Status: models.PostStatusDraft, PlatformID: "pl1", ScheduledAt: new(day("2026-01-09"))},
@@ -156,6 +162,12 @@ func TestSnapshot_PeriodSourcesCalendar(t *testing.T) {
 	}
 	if src := s.Sources; src == nil || src.WholeBank || src.Attached != 3 || src.Ready != 2 || src.Analysed != 1 || lens == nil || *lens != "c1" {
 		t.Fatalf("sources = %+v, lens = %v", s.Sources, lens)
+	}
+	// The calendar check reads the posts' sources and accounts too.
+	for _, col := range []string{"used_asset_ids", "social_account_id", "scheduled_at"} {
+		if !slices.Contains(columns, col) {
+			t.Fatalf("columns = %v, want %s", columns, col)
+		}
 	}
 	if s.Calendar == nil || s.Calendar.Total == 0 || len(s.Calendar.Top) == 0 ||
 		!slices.ContainsFunc(s.Calendar.Kinds, func(k state.KindCount) bool { return k.Kind == "crowded day" }) {
