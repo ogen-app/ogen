@@ -61,6 +61,10 @@ type IdeaRepository interface {
 	// longer a user is written as null. Returns false when they differ or the
 	// idea is gone.
 	SetTriageIf(ctx context.Context, db bun.IDB, idea, was *models.Idea) (bool, error)
+	// SetEditIf writes idea's title, note and plan, and updated_at, on db
+	// (nil uses the repository's DB) only while the row still holds was's,
+	// in one statement. Returns false when they differ or the idea is gone.
+	SetEditIf(ctx context.Context, db bun.IDB, idea, was *models.Idea) (bool, error)
 	Delete(ctx context.Context, id string) (bool, error)
 	// LiveCampaignExists reports whether campaignID names a campaign in the
 	// caller's tenant that is not soft-deleted (archived counts as live).
@@ -341,6 +345,29 @@ func (r *ideaRepository) SetTriageIf(ctx context.Context, db bun.IDB, idea, was 
 		Where("i.remind_at IS NOT DISTINCT FROM ?", was.RemindAt).
 		Where("i.decided_at IS NOT DISTINCT FROM ?", was.DecidedAt).
 		Where("i.decided_by IS NOT DISTINCT FROM ?", was.DecidedBy).
+		Exec(ctx)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// SetEditIf is a compare-and-set of the idea's text and plan columns.
+func (r *ideaRepository) SetEditIf(ctx context.Context, db bun.IDB, idea, was *models.Idea) (bool, error) {
+	if db == nil {
+		db = r.db
+	}
+	res, err := db.NewUpdate().
+		Model(idea).
+		Column("title", "note", "plan_platform_id", "plan_post_type", "plan_phase_id", "plan_target_date", "updated_at").
+		WherePK().
+		Where("i.title = ?", was.Title).
+		Where("i.note = ?", was.Note).
+		Where("i.plan_platform_id IS NOT DISTINCT FROM ?", was.Plan.PlatformID).
+		Where("i.plan_post_type IS NOT DISTINCT FROM ?", was.Plan.PostType).
+		Where("i.plan_phase_id IS NOT DISTINCT FROM ?", was.Plan.PhaseID).
+		Where("i.plan_target_date IS NOT DISTINCT FROM ?::date", was.Plan.TargetDate).
 		Exec(ctx)
 	if err != nil {
 		return false, err

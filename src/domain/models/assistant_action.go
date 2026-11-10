@@ -23,6 +23,8 @@ const (
 	AssistantActionCampaignAssets AssistantActionKind = "campaign_assets"
 	// AssistantActionIdeaVerdict is a change to one idea's triage verdict.
 	AssistantActionIdeaVerdict AssistantActionKind = "idea_verdict"
+	// AssistantActionIdeaEdit is a change to one idea's title, note or plan.
+	AssistantActionIdeaEdit AssistantActionKind = "idea_edit"
 	// AssistantActionBrandFact is a fact added to, changed in or removed
 	// from the ledger.
 	AssistantActionBrandFact AssistantActionKind = "brand_fact"

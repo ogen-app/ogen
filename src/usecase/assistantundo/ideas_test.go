@@ -182,3 +182,46 @@ func TestUndo_CampaignAssetsUseAssets(t *testing.T) {
 		t.Fatalf("assets = %v, use = %v; want none, off", got.AssetIDs, got.UseAssets)
 	}
 }
+
+// Undoing an edit puts back the title, note and plan it replaced, and is
+// refused once the idea was edited again.
+func TestUndo_IdeaEdit(t *testing.T) {
+	f := newFixture(t)
+	day, err := models.ParseCalendarDate("2026-12-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ideas, svc := ideaFixture(t, f, &models.Idea{ID: "i1", Title: "Pricing myths", Note: "three of them",
+		Plan: models.IdeaPlan{PlatformID: new("linkedin"), TargetDate: &day}})
+	i := loadIdea(t, f, ideas)
+	before := assistantundo.IdeaEdit(i)
+	i.Title, i.Note, i.Plan = "Five pricing myths", "", models.IdeaPlan{PostType: new("carousel")}
+	if _, err := ideas.Update(f.ctx, i, "title", "note", "plan_platform_id", "plan_post_type", "plan_phase_id", "plan_target_date"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := assistantundo.Record(f.ctx, f.actions, &models.AssistantAction{ScopeKind: models.AssistantScopeWorkspace,
+		Kind: models.AssistantActionIdeaEdit, EntityID: i.ID, Before: before, After: assistantundo.IdeaEdit(i), CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	i.Note = "edited by hand since"
+	if _, err := ideas.Update(f.ctx, i, "note"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Undo(f.ctx, id, "user-1"); !errors.Is(err, assistantundo.ErrChangedSince) || f.undone(t, id) {
+		t.Fatalf("changed since: %v", err)
+	}
+	i.Note = ""
+	if _, err := ideas.Update(f.ctx, i, "note"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Undo(f.ctx, id, "user-1"); err != nil {
+		t.Fatal(err)
+	}
+	got := loadIdea(t, f, ideas)
+	if got.Title != "Pricing myths" || got.Note != "three of them" || got.Plan.PostType != nil ||
+		got.Plan.PlatformID == nil || *got.Plan.PlatformID != "linkedin" || got.Plan.TargetDate == nil || got.Plan.TargetDate.String() != "2026-12-02" {
+		t.Fatalf("idea = %+v, plan %+v", got, got.Plan)
+	}
+}
