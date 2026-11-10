@@ -99,8 +99,29 @@ func TestEntityTitles(t *testing.T) {
 	if got, err := titles.Titles(tenantctx.With(context.Background(), "tenant-other"), viewcontext.KindVoice, []string{voiceID}); err != nil || len(got) != 0 {
 		t.Fatalf("another tenant read voice %v (err %v)", got, err)
 	}
-	if _, err := titles.Titles(ctx, viewcontext.KindFact, []string{"f1"}); !errors.Is(err, repository.ErrUntitledKind) {
-		t.Fatal("an unsupported kind read titles")
+	factID := mustID(t)
+	statement := "Founded in 2019 " + strings.Repeat("and growing ", 10)
+	if err := brand.CreateFact(ctx, &models.BrandFact{ID: factID, Statement: statement, Subject: "us", Kind: "documented", Source: "site"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := titles.Titles(ctx, viewcontext.KindFact, []string{factID, "missing"}); err != nil || got[factID] != statement[:80] || len(got) != 1 {
+		t.Fatalf("facts = %v, %v; want the statement's opening 80 characters", got, err)
+	}
+	// Every kind a view context can name is checked.
+	for _, kind := range viewcontext.Kinds() {
+		if _, err := titles.Titles(ctx, kind, nil); err != nil {
+			t.Errorf("%s has no title source: %v", kind, err)
+		}
+	}
+	// A campaign's posts only.
+	otherCampaign := seedCampaign(t, campaigns, ctx, "Other")
+	elsewhere := seedSubmissionPost(t, posts, otherCampaign, models.PostStatusDraft, "")
+	got, err = titles.CampaignTitles(ctx, viewcontext.KindPost, live, []string{titled.ID, elsewhere.ID})
+	if err != nil || len(got) != 1 || got[titled.ID] != "t" {
+		t.Fatalf("campaign posts = %v, %v; want only the live campaign's", got, err)
+	}
+	if _, err := titles.CampaignTitles(ctx, viewcontext.KindVoice, live, []string{voiceID}); !errors.Is(err, repository.ErrUntitledKind) {
+		t.Fatal("a kind outside campaigns read campaign titles")
 	}
 
 	other := tenantctx.With(context.Background(), "tenant-other")

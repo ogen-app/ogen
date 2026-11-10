@@ -432,7 +432,7 @@ func defineTools(g *genkit.Genkit, deps Repos, packs []Pack) (*toolSet, error) {
 			assistantkit.Wrap(t.setFilter)),
 			`Call this when the user asks to see a subset of the Ideas or Assets list on screen — e.g. "show me ideas from analyses", "only undecided ones". It applies to the list on screen, or to the one you just navigated to. Build on the current filter (getFocus) unless the user starts over.`),
 		spec(genkit.DefineTool(g, "select",
-			"Selects items on the Ideas or Assets list on the user's screen, replacing the selection. Takes their ids.",
+			"Selects items on the Ideas or Assets list, or on a campaign's posts list, on the user's screen, replacing the selection. Takes their ids.",
 			assistantkit.Wrap(t.selectItems)),
 			`Call this when the user asks you to select or tick items on the list — e.g. "select the pricing ones". Pass ids you have from getSelection, getFocus or a pack's tools; never invent them.`),
 		spec(genkit.DefineTool(g, "openSavedView",

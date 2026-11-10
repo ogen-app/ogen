@@ -148,6 +148,7 @@ type Repos struct {
 // viewresolve.Resolver.
 type ViewReader interface {
 	Items(ctx context.Context, kind viewcontext.EntityKind, ids []string) ([]viewresolve.Item, error)
+	CampaignItems(ctx context.Context, kind viewcontext.EntityKind, campaignID string, ids []string) ([]viewresolve.Item, error)
 	CheckFilter(kind viewcontext.EntityKind, filter string) error
 }
 
