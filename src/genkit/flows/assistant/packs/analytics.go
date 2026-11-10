@@ -72,6 +72,7 @@ func analyticsPack(d Deps) assistant.Pack {
 					`Call this when the user asks how one post did — "how is this post doing?", "why did that one flop?". postId defaults to the post the thread is about; take ids from topPosts otherwise. Quote the multipliers and bands as given.`),
 			}
 			specs = append(specs, analyticsReadSpecs(g, d)...)
+			specs = append(specs, comparePeriodsSpec(g, d))
 			if d.Compose != nil && d.Links != nil {
 				more := genkit.DefineTool(g, "moreLikeThese",
 					"Writes new posts in the vein of posts that performed well — their angle and format, not their words — from the ideas and assets behind them, and saves them as drafts linked to the same ideas. More than a few are offered for the user to confirm first.",
