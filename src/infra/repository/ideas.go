@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -155,6 +156,9 @@ func (r *ideaRepository) hydrate(ctx context.Context, ideas []models.Idea) error
 
 // hydrateOn is hydrate on db, a transaction or the pool.
 func hydrateOn(ctx context.Context, db bun.IDB, ideas []models.Idea) error {
+	if err := postCounts(ctx, db, ideas); err != nil {
+		return err
+	}
 	var assetIDs []string
 	for i := range ideas {
 		ideas[i].DeriveAuthor()
@@ -182,6 +186,36 @@ func hydrateOn(ctx context.Context, db bun.IDB, ideas []models.Idea) error {
 			a.Reading = readings[ideas[i].ID]
 			ideas[i].SourceAsset = &a
 		}
+	}
+	return nil
+}
+
+// postCounts sets how many posts were made from each idea.
+func postCounts(ctx context.Context, db bun.IDB, ideas []models.Idea) error {
+	if len(ideas) == 0 {
+		return nil
+	}
+	ids := make([]string, len(ideas))
+	for i := range ideas {
+		ids[i] = ideas[i].ID
+	}
+	var rows []struct {
+		IdeaID string `bun:"idea_id"`
+		N      int    `bun:"n"`
+	}
+	if err := db.NewSelect().Model((*models.PostIdea)(nil)).
+		ColumnExpr("pi.idea_id, count(*) AS n").
+		Where("pi.idea_id IN (?)", bun.List(ids)).
+		GroupExpr("pi.idea_id").
+		Scan(ctx, &rows); err != nil {
+		return fmt.Errorf("count posts of ideas: %w", err)
+	}
+	counts := make(map[string]int, len(rows))
+	for _, r := range rows {
+		counts[r.IdeaID] = r.N
+	}
+	for i := range ideas {
+		ideas[i].PostCount = counts[ideas[i].ID]
 	}
 	return nil
 }

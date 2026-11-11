@@ -198,6 +198,9 @@ var evalCases = []evalCase{
 	{pack: "ideas", screen: "ideas", scope: evalWorkspace, selected: evalIdeas, ideas: true, say: "Delete the selected ideas.", want: []string{"deleteIdeas", "getSelection"}},
 	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, selected: evalIdeas, ideas: true, say: "Make one post out of the selected ideas.", want: []string{"compileIdeas", "getSelection"}, not: []string{"draftIdeas"}},
 	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, selected: evalIdeas, ideas: true, say: "Write LinkedIn posts from the selected ideas.", want: []string{"draftIdeas", "getSelection"}, not: []string{"compileIdeas"}},
+	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, selected: evalIdeas, ideas: true, say: "Plan a post from the selected ideas for LinkedIn and one for Threads; no copy yet.", want: []string{"compileIdeas", "getSelection"}, not: []string{"draftIdeas", "updateCampaignPlatforms"}},
+	{pack: "ideas", screen: "campaign.ideas", scope: evalCampaign, selected: evalIdeas, ideas: true, say: "Write a LinkedIn post from each selected idea, for December 8.", want: []string{"draftIdeas", "getSelection"}, not: []string{"compileIdeas", "editIdea"}},
+	{pack: "ideas", screen: "ideas", scope: evalWorkspace, say: "Show me the ideas from analyses we haven't made into posts.", want: []string{"findIdeas", "setFilter"}, not: writes},
 	// assets
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "What do my assets say about enterprise pricing?", want: []string{"askAssets", "findAssets"}, not: writes},
 	{pack: "assets", screen: "assets", scope: evalWorkspace, say: "Import https://example.com/launch as an asset.", want: []string{"importPage"}},

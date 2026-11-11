@@ -56,7 +56,7 @@ func ideaPreds(q models.IdeaQuery) []assetPred {
 	for field, f := range map[string]models.AssetValueFilter{
 		"pile": q.Pile, models.IdeaFacetOrigin: q.Origin, models.IdeaFacetSourceAsset: q.SourceAsset,
 		models.IdeaFacetKind: q.Kind, models.IdeaFacetCampaign: q.Campaign, models.IdeaFacetFit: q.Fit,
-		models.IdeaFacetPhase: q.Phase, models.IdeaFacetAuthor: q.Author,
+		models.IdeaFacetPhase: q.Phase, models.IdeaFacetAuthor: q.Author, models.IdeaFacetUsed: q.Used,
 	} {
 		if p, ok := inListPred(field, "f."+field, f); ok {
 			preds = append(preds, p)
@@ -117,6 +117,7 @@ func filterCond(b *sqlBuf, preds []assetPred, except string) {
 //
 // The campaign is the live one the idea is attached to, as on every idea
 // read. The author is the writer of a manual idea while they are a member.
+// An idea is used once a post was made from it.
 func writeIdeaFacts(b *sqlBuf, q models.IdeaQuery, tenantID string) {
 	b.add(`WITH facts AS MATERIALIZED (
 	SELECT i.id, i.title, i.note, i.created_at,
@@ -133,7 +134,9 @@ func writeIdeaFacts(b *sqlBuf, q models.IdeaQuery, tenantID string) {
 		coalesce(i.fit_breakdown -> 'criteria' -> 'phase_fit' ->> 'phase', '') AS phase,
 		CASE WHEN i.origin = '' THEN coalesce(i.created_by, '') ELSE '' END AS author,
 		CASE WHEN i.origin = '' AND i.created_by IS NOT NULL THEN lower(i.created_by_name) ELSE '' END AS author_name,
-		CASE WHEN i.verdict = 'later' AND i.remind_at <= ? THEN i.remind_at ELSE i.created_at END AS waiting_since
+		CASE WHEN i.verdict = 'later' AND i.remind_at <= ? THEN i.remind_at ELSE i.created_at END AS waiting_since,
+		CASE WHEN EXISTS (SELECT 1 FROM post_ideas pi WHERE pi.idea_id = i.id AND pi.tenant_id = ?)
+			THEN ?::text ELSE ?::text END AS used
 	FROM ideas i
 	LEFT JOIN campaigns c ON c.id = i.campaign_id AND c.tenant_id = ? AND c.deleted_at IS NULL
 	LEFT JOIN assets a ON a.id = i.source_asset_id AND a.tenant_id = ?
@@ -144,7 +147,7 @@ func writeIdeaFacts(b *sqlBuf, q models.IdeaQuery, tenantID string) {
 		ideaNone, ideaNone,
 		models.IdeaFitUnscored, models.IdeaFitHighMin, models.IdeaFitHigh,
 		models.IdeaFitMediumMin, models.IdeaFitMedium, models.IdeaFitLow,
-		q.Now, tenantID, tenantID, tenantID)
+		q.Now, tenantID, models.IdeaUsed, models.IdeaUnused, tenantID, tenantID, tenantID)
 	if q.ScopeCampaign != "" {
 		b.add(` AND c.id = ?`, q.ScopeCampaign)
 	}
@@ -187,6 +190,8 @@ func writeIdeaGrouped(b *sqlBuf, q models.IdeaQuery) {
 		fixed(models.IdeaFitBands, "f.fit")
 	case models.IdeaGroupOrigin:
 		fixed(models.IdeaOriginKeys, "f.origin")
+	case models.IdeaGroupUsed:
+		fixed(models.IdeaUses, "f.used")
 	case models.IdeaGroupCreated:
 		keys := models.AssetCreatedGroupKeys
 		var whens []string
@@ -471,6 +476,8 @@ func ideaFacetCounts(rows []ideaFacetRow, facets []string) map[string][]models.A
 			values = models.AssetKinds
 		case models.IdeaFacetCreated:
 			values = models.AssetDatePresets
+		case models.IdeaFacetUsed:
+			values = models.IdeaUses
 		default:
 			withNone = field == models.IdeaFacetSourceAsset || field == models.IdeaFacetCampaign
 			values = slices.DeleteFunc(seen, func(v string) bool { return v == ideaNone })

@@ -158,6 +158,8 @@ type Idea struct {
 	// Author is derived on reads: the writer of a manual idea, nil for an
 	// analysis idea.
 	Author *IdeaAuthor `bun:"-" json:"author" extensions:"x-nullable"`
+	// PostCount is read back: how many posts were made from the idea.
+	PostCount int `bun:"-" json:"post_count"`
 	// GroupKey is the group a grouped list lists the idea under.
 	GroupKey      string    `bun:"-"                                            json:"group_key,omitempty"`
 	CreatedBy     *string   `bun:"created_by"                                   json:"created_by"`

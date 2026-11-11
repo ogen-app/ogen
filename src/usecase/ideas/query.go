@@ -30,7 +30,7 @@ var Params = func() map[string]bool {
 	}
 	for _, p := range []string{
 		models.IdeaFacetOrigin, models.IdeaFacetSourceAsset, models.IdeaFacetKind, models.IdeaFacetCampaign,
-		models.IdeaFacetFit, models.IdeaFacetPhase, models.IdeaFacetAuthor,
+		models.IdeaFacetFit, models.IdeaFacetPhase, models.IdeaFacetAuthor, models.IdeaFacetUsed,
 	} {
 		params[p], params[p+listquery.NotSuffix] = true, true
 	}
@@ -74,6 +74,7 @@ func parseFilters(v url.Values, q *models.IdeaQuery) (err error) {
 		{&q.Fit, models.IdeaFacetFit, models.IdeaFitBands},
 		{&q.Phase, models.IdeaFacetPhase, nil},
 		{&q.Author, models.IdeaFacetAuthor, nil},
+		{&q.Used, models.IdeaFacetUsed, models.IdeaUses},
 	} {
 		if *f.dst, err = listquery.Filter(v, f.key, f.allowed); err != nil {
 			return err
