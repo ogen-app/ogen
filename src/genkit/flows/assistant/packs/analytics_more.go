@@ -59,12 +59,10 @@ type TrailStep struct {
 
 // NewIdea is an idea "more like these" saved.
 type NewIdea struct {
-	ID            string                `json:"id"`
-	Title         string                `json:"title"`
-	Angle         string                `json:"angle,omitempty"`
-	Rationale     string                `json:"rationale,omitempty"`
-	Sources       []string              `json:"sources"`
-	GroundingMode *models.GroundingMode `json:"groundingMode,omitempty"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Angle     string `json:"angle,omitempty"`
+	Rationale string `json:"rationale,omitempty"`
 	// Grounding is the assets the idea cites, each through the trail idea
 	// it came by and its analysis, when known.
 	Grounding assistantkit.Grounding `json:"grounding"`
@@ -225,8 +223,7 @@ func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*MoreLik
 		if err != nil {
 			return nil, err
 		}
-		out.Ideas = append(out.Ideas, NewIdea{ID: idea.ID, Title: idea.Title, Angle: w.Angle, Rationale: w.Rationale,
-			Sources: idea.Sources, GroundingMode: idea.GroundingMode, Grounding: grounding})
+		out.Ideas = append(out.Ideas, NewIdea{ID: idea.ID, Title: idea.Title, Angle: w.Angle, Rationale: w.Rationale, Grounding: grounding})
 		assistantkit.Touch(ctx, "idea", idea.ID)
 	}
 	return out, nil
