@@ -1,6 +1,7 @@
-// Package compose turns ideas into a post. Compile gathers one or more ideas
-// into a planned post: their titles and angles become its theses, their plan
-// suggests where it lands, and the post remembers which ideas it came from.
+// Package compose turns ideas into posts. Compile gathers one or more ideas
+// into a planned post per platform: their titles and angles become its
+// theses, their plan suggests where it lands, and the post remembers which
+// ideas it came from.
 package compose
 
 import (
@@ -60,15 +61,16 @@ func IsValidation(err error) bool {
 // Input is one compile. Every field but IdeaIDs and Actor is optional: the
 // campaign defaults to the one the ideas share, the title to the first
 // idea's, and the platform, post type, phase and date to the first idea plan
-// that sets each.
+// that sets each. Each of several platforms gets its own post; a post type
+// needs exactly one.
 type Input struct {
-	IdeaIDs    []string
-	CampaignID string
-	Title      string
-	PlatformID string
-	PostType   string
-	PhaseID    string
-	TargetDate *models.CalendarDate
+	IdeaIDs     []string
+	CampaignID  string
+	Title       string
+	PlatformIDs []string
+	PostType    string
+	PhaseID     string
+	TargetDate  *models.CalendarDate
 	// Actor is the user compiling; the post and its theses are theirs.
 	Actor string
 	// NoteOrigin is who wrote the theses: manual from the API, assistant
@@ -76,12 +78,17 @@ type Input struct {
 	NoteOrigin models.PostNoteOrigin
 }
 
-// Result is the compiled post, its theses note and the ideas it came from,
-// in order.
+// Result is the compiled posts, one per platform, and the ideas they came
+// from, in order.
 type Result struct {
-	Post  *models.Post
-	Note  *models.PostNote
+	Posts []Compiled
 	Ideas []models.Idea
+}
+
+// Compiled is one compiled post and its theses note.
+type Compiled struct {
+	Post *models.Post
+	Note *models.PostNote
 }
 
 // Service compiles ideas into posts.
@@ -101,9 +108,10 @@ func New(db *bun.DB, ideas repository.IdeaRepository, campaigns repository.Campa
 	return &Service{db: db, ideas: ideas, campaigns: campaigns, links: links, logs: logs, hub: hub, now: time.Now}
 }
 
-// Compile makes one planned post from the ideas: theses from each idea, the
-// ideas' source assets as its sources, and a link to each idea. The ideas are
-// left as they are; one idea can feed several posts.
+// Compile makes a planned post from the ideas on each platform, in one
+// transaction: theses from each idea, the ideas' source assets as its
+// sources, and a link to each idea. The ideas are left as they are; one idea
+// can feed several posts.
 func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 	if len([]rune(in.Title)) > maxTitle {
 		return nil, ErrTitleTooLong
@@ -120,43 +128,66 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	post, err := s.build(in, ideas, campaign)
+	targets, err := compileTargets(in, ideas, campaign)
 	if err != nil {
 		return nil, err
 	}
-	note, err := thesesNote(post, ideas, in)
-	if err != nil {
-		return nil, err
-	}
-	logEntry, err := postaudit.NewLog(post.ID, models.PostLogEventPostCompiled, in.Actor,
-		fmt.Sprintf("post compiled from %d idea(s)", len(ideas)), map[string]any{"idea_ids": ids})
-	if err != nil {
-		return nil, err
+	res := &Result{Ideas: ideas}
+	logs := make([]*models.PostLog, 0, len(targets))
+	for _, t := range targets {
+		post, err := s.build(in, t, ideas, campaign)
+		if err != nil {
+			return nil, err
+		}
+		note, err := thesesNote(post, ideas, in)
+		if err != nil {
+			return nil, err
+		}
+		logEntry, err := postaudit.NewLog(post.ID, models.PostLogEventPostCompiled, in.Actor,
+			fmt.Sprintf("post compiled from %d idea(s)", len(ideas)), map[string]any{"idea_ids": ids})
+		if err != nil {
+			return nil, err
+		}
+		res.Posts = append(res.Posts, Compiled{Post: post, Note: note})
+		logs = append(logs, logEntry)
 	}
 
-	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		if _, err := tx.NewInsert().Model(post).Exec(ctx); err != nil {
-			return err
-		}
-		if _, err := tx.NewInsert().Model(note).Exec(ctx); err != nil {
-			return err
-		}
-		if err := s.links.Link(ctx, tx, post.ID, ids); err != nil {
-			return err
-		}
-		if s.logs == nil {
-			return nil
-		}
-		return s.logs.AppendTx(ctx, tx, logEntry)
-	})
-	if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
-		return nil, ErrInvalidPhase
-	}
-	if err != nil {
+	if err := s.write(ctx, res.Posts, ids, logs); err != nil {
 		return nil, err
 	}
-	postaudit.Publish(s.hub, post.ID, "post.compiled", in.Actor, map[string]any{"ideaIds": ids})
-	return &Result{Post: post, Note: note, Ideas: ideas}, nil
+	for _, c := range res.Posts {
+		postaudit.Publish(s.hub, c.Post.ID, "post.compiled", in.Actor, map[string]any{"ideaIds": ids})
+	}
+	return res, nil
+}
+
+// write saves the compiled posts in one transaction: each post, its theses,
+// its links to the ideas and its audit entry.
+func (s *Service) write(ctx context.Context, posts []Compiled, ideaIDs []string, logs []*models.PostLog) error {
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		for i, c := range posts {
+			if _, err := tx.NewInsert().Model(c.Post).Exec(ctx); err != nil {
+				return err
+			}
+			if _, err := tx.NewInsert().Model(c.Note).Exec(ctx); err != nil {
+				return err
+			}
+			if err := s.links.Link(ctx, tx, c.Post.ID, ideaIDs); err != nil {
+				return err
+			}
+			if s.logs == nil {
+				continue
+			}
+			if err := s.logs.AppendTx(ctx, tx, logs[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if repository.IsConstraintViolation(err, repository.ConstraintPhaseMatchesCampaignType) {
+		return ErrInvalidPhase
+	}
+	return err
 }
 
 // loadIdeas loads 1 to MaxIdeas distinct ideas, in the order given.
@@ -204,21 +235,45 @@ func (s *Service) campaign(ctx context.Context, id string, ideas []models.Idea) 
 	return c, err
 }
 
-// build assembles the post: the request's fields, else the first idea plan
-// that sets each, checked against the campaign's platforms.
-func (s *Service) build(in Input, ideas []models.Idea, campaign *models.Campaign) (*models.Post, error) {
-	plan := firstPlan(ideas, campaign.ID)
-	platformID := cmp.Or(in.PlatformID, deref(plan.PlatformID))
-	postType := in.PostType
-	// A suggested post type belongs to its suggested platform.
-	if postType == "" && (in.PlatformID == "" || in.PlatformID == deref(plan.PlatformID)) {
-		postType = deref(plan.PostType)
-	}
-	platformID, postType, err := fitTarget(campaign, platformID, postType, in.PlatformID != "", in.PostType != "")
-	if err != nil {
-		return nil, err
-	}
+// target is where one compiled post lands.
+type target struct{ platformID, postType string }
 
+// compileTargets is a post's platform and type for each platform asked for,
+// checked against the campaign's; with none asked for, the one the first
+// idea plan suggests, dropped when stale. A suggested post type goes with
+// its suggested platform.
+func compileTargets(in Input, ideas []models.Idea, campaign *models.Campaign) ([]target, error) {
+	plan := firstPlan(ideas, campaign.ID)
+	// One more platform than the campaign has is enough to find one that
+	// isn't its own.
+	platforms := dedupe(in.PlatformIDs, len(campaign.TargetPlatforms))
+	if len(platforms) == 0 {
+		p, t, err := fitTarget(campaign, deref(plan.PlatformID), cmp.Or(in.PostType, deref(plan.PostType)), false, in.PostType != "")
+		return []target{{p, t}}, err
+	}
+	if in.PostType != "" && len(platforms) != 1 {
+		return nil, ErrPostTypeOneFor
+	}
+	out := make([]target, len(platforms))
+	for i, p := range platforms {
+		postType := in.PostType
+		if postType == "" && p == deref(plan.PlatformID) {
+			postType = deref(plan.PostType)
+		}
+		p, t, err := fitTarget(campaign, p, postType, true, in.PostType != "")
+		if err != nil {
+			return nil, err
+		}
+		out[i] = target{p, t}
+	}
+	return out, nil
+}
+
+// build assembles one post for t: the request's fields, else the first idea
+// plan that sets each.
+func (s *Service) build(in Input, t target, ideas []models.Idea, campaign *models.Campaign) (*models.Post, error) {
+	plan := firstPlan(ideas, campaign.ID)
+	platformID, postType := t.platformID, t.postType
 	id, err := models.NewID()
 	if err != nil {
 		return nil, err

@@ -103,8 +103,10 @@ func (u postTypes) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantActi
 }
 
 // createdPost is a post as the assistant made it: what any later change to
-// it, its theses or its versions would alter.
+// it, its theses or its versions would alter. ID names it among several made
+// in one call.
 type createdPost struct {
+	ID          string            `json:"id,omitempty"`
 	Status      models.PostStatus `json:"status"`
 	Content     string            `json:"content"`
 	ScheduledAt *time.Time        `json:"scheduledAt"`
@@ -120,6 +122,31 @@ type createdNote struct {
 // PostCreated is a post the assistant made and its notes, as an undo log
 // stores them, at the microsecond Postgres keeps.
 func PostCreated(p *models.Post, notes []models.PostNote) models.JSONMap {
+	return toMap(created(p, notes))
+}
+
+// MadePost is a post the assistant made and its notes.
+type MadePost struct {
+	Post  *models.Post
+	Notes []models.PostNote
+}
+
+type createdPosts struct {
+	Posts []createdPost `json:"posts"`
+}
+
+// PostsCreated is several posts the assistant made in one call, each with
+// its notes, as one undo log entry.
+func PostsCreated(made []MadePost) models.JSONMap {
+	out := createdPosts{Posts: make([]createdPost, len(made))}
+	for i, m := range made {
+		out.Posts[i] = created(m.Post, m.Notes)
+		out.Posts[i].ID = m.Post.ID
+	}
+	return toMap(out)
+}
+
+func created(p *models.Post, notes []models.PostNote) createdPost {
 	c := createdPost{Status: p.Status, Content: p.Content, UpdatedAt: p.UpdatedAt.UTC().Truncate(time.Microsecond), Notes: []createdNote{}}
 	if p.ScheduledAt != nil {
 		c.ScheduledAt = new(p.ScheduledAt.UTC().Truncate(time.Microsecond))
@@ -128,18 +155,38 @@ func PostCreated(p *models.Post, notes []models.PostNote) models.JSONMap {
 		c.Notes = append(c.Notes, createdNote{ID: n.ID, UpdatedAt: n.UpdatedAt.UTC().Truncate(time.Microsecond)})
 	}
 	slices.SortFunc(c.Notes, func(a, b createdNote) int { return strings.Compare(a.ID, b.ID) })
-	return toMap(c)
+	return c
 }
 
 type postCreated struct{ posts repository.PostRepository }
 
-// Undo deletes the post while it is as the assistant made it: same status,
-// content, date and notes, and no version saved or file attached since.
-// The post's row is locked first, so nothing lands between the check and
-// the delete; its links, notes and log go with it.
+// Undo deletes the posts made, all of them or none, each while it is as the
+// assistant made it: same status, content, date and notes, and no version
+// saved or file attached since. An entry of one post names it by EntityID.
 func (u postCreated) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAction) error {
+	var many createdPosts
+	if err := fromMap(a.After, &many); err != nil {
+		return err
+	}
+	if len(many.Posts) == 0 {
+		return u.undoOne(ctx, tx, a.EntityID, a.After)
+	}
+	for _, c := range many.Posts {
+		id := c.ID
+		c.ID = ""
+		if err := u.undoOne(ctx, tx, id, toMap(c)); err != nil {
+			return err // rolls back the ones deleted
+		}
+	}
+	return nil
+}
+
+// undoOne deletes one post while it matches after. Its row is locked first,
+// so nothing lands between the check and the delete; its links, notes and
+// log go with it.
+func (u postCreated) undoOne(ctx context.Context, tx bun.IDB, id string, after models.JSONMap) error {
 	var p models.Post
-	err := tx.NewSelect().Model(&p).Where("po.id = ?", a.EntityID).For("UPDATE OF po").Scan(ctx)
+	err := tx.NewSelect().Model(&p).Where("po.id = ?", id).For("UPDATE OF po").Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrChangedSince
 	}
@@ -150,7 +197,7 @@ func (u postCreated) Undo(ctx context.Context, tx bun.IDB, a *models.AssistantAc
 	if err := tx.NewSelect().Model(&notes).Where("pn.post_id = ?", p.ID).Scan(ctx); err != nil {
 		return err
 	}
-	if !same(PostCreated(&p, notes), a.After) {
+	if !same(PostCreated(&p, notes), after) {
 		return ErrChangedSince
 	}
 	for _, m := range []any{(*models.PostVersion)(nil), (*models.PostAttachment)(nil)} {

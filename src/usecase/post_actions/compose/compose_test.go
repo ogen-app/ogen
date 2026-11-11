@@ -70,6 +70,36 @@ func TestCampaignResolution(t *testing.T) {
 	}
 }
 
+// buildOne builds the post for in's first target.
+func buildOne(s *Service, in Input, ideas []models.Idea, c *models.Campaign) (*models.Post, error) {
+	targets, err := compileTargets(in, ideas, c)
+	if err != nil {
+		return nil, err
+	}
+	return s.build(in, targets[0], ideas, c)
+}
+
+// Each platform asked for gets its own post; the suggested post type goes
+// only with its suggested platform, and a named type needs one platform.
+func TestCompileTargets_SeveralPlatforms(t *testing.T) {
+	planned := idea("a", "c1", models.IdeaPlan{PlatformID: new("linkedin"), PostType: new("carousel")})
+	got, err := compileTargets(Input{PlatformIDs: []string{"threads", "linkedin", "threads"}}, []models.Idea{planned}, spring())
+	if err != nil || !slices.Equal(got, []target{{"threads", ""}, {"linkedin", "carousel"}}) {
+		t.Fatalf("targets = %+v, %v", got, err)
+	}
+	for name, tc := range map[string]struct {
+		in   Input
+		want error
+	}{
+		"type for two": {Input{PlatformIDs: []string{"threads", "linkedin"}, PostType: "carousel"}, ErrPostTypeOneFor},
+		"one stranger": {Input{PlatformIDs: []string{"linkedin", "myspace"}}, ErrNotTarget},
+	} {
+		if _, err := compileTargets(tc.in, []models.Idea{planned}, spring()); !errors.Is(err, tc.want) || !IsValidation(err) {
+			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
+		}
+	}
+}
+
 func TestBuild_PlanDefaultsAndOverrides(t *testing.T) {
 	s := &Service{now: func() time.Time { return time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC) }}
 	day, _ := models.ParseCalendarDate("2026-11-20")
@@ -82,7 +112,7 @@ func TestBuild_PlanDefaultsAndOverrides(t *testing.T) {
 
 	// The first idea plan that sets a field wins; a phase only from this
 	// campaign's ideas.
-	post, err := s.build(Input{Actor: "u1"}, []models.Idea{other, first, second}, spring())
+	post, err := buildOne(s, Input{Actor: "u1"}, []models.Idea{other, first, second}, spring())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,37 +125,37 @@ func TestBuild_PlanDefaultsAndOverrides(t *testing.T) {
 	}
 
 	// Naming another platform drops the first idea's post type for it.
-	post, err = s.build(Input{PlatformID: "threads", Title: " Mine "}, []models.Idea{first}, spring())
+	post, err = buildOne(s, Input{PlatformIDs: []string{"threads"}, Title: " Mine "}, []models.Idea{first}, spring())
 	if err != nil || post.PlatformID != "threads" || post.PlatformPostType != "" || post.Title != "Mine" {
 		t.Fatalf("override: %+v, %v", post, err)
 	}
 
 	// A stale suggestion is dropped; the same thing asked for is refused.
 	stale := idea("s", "c1", models.IdeaPlan{PlatformID: new("myspace")})
-	if post, err = s.build(Input{}, []models.Idea{stale}, spring()); err != nil || post.PlatformID != "" {
+	if post, err = buildOne(s, Input{}, []models.Idea{stale}, spring()); err != nil || post.PlatformID != "" {
 		t.Fatalf("stale suggestion: %+v, %v", post, err)
 	}
 	// A stale suggested type goes on its own: the platform stays, named or not.
 	staleType := idea("t", "c1", models.IdeaPlan{PlatformID: new("linkedin"), PostType: new("reel")})
-	for _, in := range []Input{{}, {PlatformID: "linkedin"}} {
-		if post, err = s.build(in, []models.Idea{staleType}, spring()); err != nil || post.PlatformID != "linkedin" || post.PlatformPostType != "" {
-			t.Fatalf("stale type, platform %q: %+v, %v", in.PlatformID, post, err)
+	for _, in := range []Input{{}, {PlatformIDs: []string{"linkedin"}}} {
+		if post, err = buildOne(s, in, []models.Idea{staleType}, spring()); err != nil || post.PlatformID != "linkedin" || post.PlatformPostType != "" {
+			t.Fatalf("stale type, platforms %v: %+v, %v", in.PlatformIDs, post, err)
 		}
 	}
 	// A suggested type without a platform is dropped.
 	typeOnly := idea("o", "c1", models.IdeaPlan{PostType: new("carousel")})
-	if post, err = s.build(Input{}, []models.Idea{typeOnly}, spring()); err != nil || post.PlatformID != "" || post.PlatformPostType != "" {
+	if post, err = buildOne(s, Input{}, []models.Idea{typeOnly}, spring()); err != nil || post.PlatformID != "" || post.PlatformPostType != "" {
 		t.Fatalf("type-only suggestion: %+v, %v", post, err)
 	}
 	for name, tc := range map[string]struct {
 		in   Input
 		want error
 	}{
-		"not a target": {Input{PlatformID: "myspace"}, ErrNotTarget},
-		"wrong type":   {Input{PlatformID: "linkedin", PostType: "reel"}, ErrPostType},
+		"not a target": {Input{PlatformIDs: []string{"myspace"}}, ErrNotTarget},
+		"wrong type":   {Input{PlatformIDs: []string{"linkedin"}, PostType: "reel"}, ErrPostType},
 		"type alone":   {Input{PostType: "reel"}, ErrPostTypeAlone},
 	} {
-		if _, err := s.build(tc.in, []models.Idea{idea("x", "c1", models.IdeaPlan{})}, spring()); !errors.Is(err, tc.want) || !IsValidation(err) {
+		if _, err := buildOne(s, tc.in, []models.Idea{idea("x", "c1", models.IdeaPlan{})}, spring()); !errors.Is(err, tc.want) || !IsValidation(err) {
 			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
 		}
 	}

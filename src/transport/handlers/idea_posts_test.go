@@ -84,7 +84,7 @@ func TestCompileIdeas(t *testing.T) {
 			return nil, compose.ErrMixedCampaigns
 		}
 		return &compose.Result{
-			Post:  &models.Post{ID: "p9", Status: models.PostStatusPlanned},
+			Posts: []compose.Compiled{{Post: &models.Post{ID: "p9", Status: models.PostStatusPlanned}}, {Post: &models.Post{ID: "p10", Status: models.PostStatusPlanned}}},
 			Ideas: []models.Idea{{ID: "i1", Title: "Pricing"}, {ID: "i2", Title: "Story"}},
 		}, nil
 	})
@@ -95,15 +95,22 @@ func TestCompileIdeas(t *testing.T) {
 	}
 	var res struct {
 		Post  models.Post             `json:"post"`
+		Posts []models.Post           `json:"posts"`
 		Ideas []models.PostSourceIdea `json:"ideas"`
 	}
-	if err := json.Unmarshal([]byte(body), &res); err != nil || res.Post.Status != models.PostStatusPlanned || len(res.Ideas) != 2 {
+	if err := json.Unmarshal([]byte(body), &res); err != nil || len(res.Posts) != 2 || res.Posts[1].ID != "p10" || res.Post.ID != "p9" || len(res.Ideas) != 2 {
 		t.Fatalf("body = %s (%v)", body, err)
 	}
-	if got.Actor != "user-1" || got.PlatformID != "linkedin" || got.TargetDate.String() != "2026-12-01" || got.NoteOrigin != models.PostNoteOriginManual {
+	if got.Actor != "user-1" || !slices.Equal(got.PlatformIDs, []string{"linkedin"}) || got.TargetDate.String() != "2026-12-01" || got.NoteOrigin != models.PostNoteOriginManual {
 		t.Fatalf("input = %+v", got)
 	}
 
+	if status, body := call(t, app, "POST", "/api/ideas/compile", `{"idea_ids":["i1"],"platform_ids":["linkedin","threads"]}`); status != fiber.StatusCreated || !slices.Equal(got.PlatformIDs, []string{"linkedin", "threads"}) {
+		t.Fatalf("several platforms: %d %s, input %+v", status, body, got)
+	}
+	if status, _ := call(t, app, "POST", "/api/ideas/compile", `{"idea_ids":["i1"],"platform_id":"x","platform_ids":["linkedin"]}`); status != fiber.StatusBadRequest {
+		t.Fatalf("both platform fields is %d, want 400", status)
+	}
 	if status, _ := call(t, app, "POST", "/api/ideas/compile", `{"idea_ids":["i1"],"campaign_id":"mixed"}`); status != fiber.StatusBadRequest {
 		t.Fatalf("a validation error is %d, want 400", status)
 	}

@@ -40,7 +40,7 @@ func ideasDB(t *testing.T) (context.Context, *bun.DB, Deps, *assistantundo.Servi
 	if _, err := db.NewInsert().Model(&models.Campaign{
 		ID: "c1", Name: "Spring", CampaignTypeID: "t", CreatedBy: "u1",
 		AssetIDs: models.StringSlice{}, PublishingDays: models.StringSlice{},
-		TargetPlatforms: models.CampaignPlatforms{{ID: "linkedin"}},
+		TargetPlatforms: models.CampaignPlatforms{{ID: "linkedin"}, {ID: "threads"}},
 	}).Exec(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +59,8 @@ func ideasDB(t *testing.T) (context.Context, *bun.DB, Deps, *assistantundo.Servi
 	return ctx, db, d, assistantundo.New(db, actions, campaigns).WithIdeas(ideaRepo).WithPosts(posts)
 }
 
-// Undoing a compile deletes the post and its links while no one has
-// changed it; its ideas stay. Once the post is edited, it stays too.
+// Undoing a compile deletes its posts and their links while no one has
+// changed them; their ideas stay. Once one post is edited, they all stay.
 func TestCompileIdeas_Undo(t *testing.T) {
 	ctx, db, d, undo := ideasDB(t)
 	links := repository.NewPostIdeaRepository(db)
@@ -72,7 +72,7 @@ func TestCompileIdeas_Undo(t *testing.T) {
 	if _, err := undo.Undo(ctx, out.UndoID, "u1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.NewPostRepository(db).GetByID(ctx, out.PostID); err == nil {
+	if _, err := repository.NewPostRepository(db).GetByID(ctx, out.Posts[0].PostID); err == nil {
 		t.Fatal("the compiled post outlived its undo")
 	}
 	if posts, _ := links.PostsOfIdea(ctx, "u-1"); len(posts) != 0 {
@@ -82,15 +82,48 @@ func TestCompileIdeas_Undo(t *testing.T) {
 		t.Fatalf("the idea went with the post: %v", err)
 	}
 
-	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-3", "u-1"}})
-	if err != nil || out.Grounding.Mode != assistantkit.Grounded || len(out.Grounding.Sources) != 1 || out.Grounding.Sources[0].ID != "a9" || out.Grounding.Sources[0].IdeaID != "u-3" {
-		t.Fatalf("grounded compile = %+v, %v", out, err)
+	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-3", "u-1"}, PlatformIDs: []string{"linkedin", "threads"}})
+	if err != nil || len(out.Posts) != 2 || out.Posts[1].PlatformID != "threads" || out.Posts[0].Date != "" ||
+		out.Grounding.Mode != assistantkit.Grounded || len(out.Grounding.Sources) != 1 || out.Grounding.Sources[0].ID != "a9" || out.Grounding.Sources[0].IdeaID != "u-3" {
+		t.Fatalf("grounded compile for two platforms = %+v, %v", out, err)
 	}
-	if _, err := db.NewUpdate().Model((*models.Post)(nil)).Set("content = ?", "Written by hand").Where("id = ?", out.PostID).Exec(ctx); err != nil {
+	if _, err := db.NewUpdate().Model((*models.Post)(nil)).Set("content = ?", "Written by hand").Where("id = ?", out.Posts[1].PostID).Exec(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := undo.Undo(ctx, out.UndoID, "u1"); !errors.Is(err, assistantundo.ErrChangedSince) {
-		t.Fatalf("undo of an edited post = %v; want changed since", err)
+		t.Fatalf("undo with an edited post = %v; want changed since", err)
+	}
+	if _, err := repository.NewPostRepository(db).GetByID(ctx, out.Posts[0].PostID); err != nil {
+		t.Fatalf("a refused undo deleted the unedited post: %v", err)
+	}
+
+	// Both posts as made: one undo deletes both.
+	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-2"}, PlatformIDs: []string{"linkedin", "threads"}})
+	if err != nil || len(out.Posts) != 2 {
+		t.Fatalf("compile = %+v, %v", out, err)
+	}
+	if _, err := undo.Undo(ctx, out.UndoID, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range out.Posts {
+		if _, err := repository.NewPostRepository(db).GetByID(ctx, p.PostID); err == nil {
+			t.Fatalf("post %s outlived the undo", p.PlatformID)
+		}
+	}
+
+	// An entry of one post, as recorded before compiles made several, still
+	// undoes.
+	res, err := d.Compose.Compile(ctx, compose.Input{IdeaIDs: []string{"u-2"}, Actor: "u1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := res.Posts[0].Post
+	id := recordUndo(ctx, d, models.AssistantActionPostCreated, p.ID, models.JSONMap{}, assistantundo.PostCreated(p, []models.PostNote{*res.Posts[0].Note}))
+	if _, err := undo.Undo(ctx, id, "u1"); err != nil {
+		t.Fatalf("undo of a one-post entry: %v", err)
+	}
+	if _, err := repository.NewPostRepository(db).GetByID(ctx, p.ID); err == nil {
+		t.Fatal("the post outlived its one-post undo")
 	}
 }
 
