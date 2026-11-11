@@ -38,6 +38,16 @@ const (
 // IdeaFitBands lists the fit bands, best first.
 var IdeaFitBands = []string{IdeaFitHigh, IdeaFitMedium, IdeaFitLow, IdeaFitUnscored}
 
+// Values of the used filter, facet and grouping: whether a post was made
+// from the idea.
+const (
+	IdeaUnused = "unused"
+	IdeaUsed   = "used"
+)
+
+// IdeaUses lists the used values, not yet used first.
+var IdeaUses = []string{IdeaUnused, IdeaUsed}
+
 // Lower bounds of the high and medium fit bands; low is the rest.
 const (
 	IdeaFitHighMin   = 70
@@ -72,12 +82,13 @@ const (
 	IdeaFacetPhase       = "phase"
 	IdeaFacetAuthor      = "author"
 	IdeaFacetCreated     = "created"
+	IdeaFacetUsed        = "used"
 )
 
 // IdeaFacets lists every facet field.
 var IdeaFacets = []string{
 	IdeaFacetOrigin, IdeaFacetSourceAsset, IdeaFacetKind, IdeaFacetCampaign,
-	IdeaFacetFit, IdeaFacetPhase, IdeaFacetAuthor, IdeaFacetCreated,
+	IdeaFacetFit, IdeaFacetPhase, IdeaFacetAuthor, IdeaFacetCreated, IdeaFacetUsed,
 }
 
 // Fields the ideas list can group its rows by.
@@ -88,11 +99,12 @@ const (
 	IdeaGroupOrigin   = "origin"
 	IdeaGroupAuthor   = "author"
 	IdeaGroupCreated  = "created"
+	IdeaGroupUsed     = "used"
 )
 
 // IdeaGroups lists every grouping.
 var IdeaGroups = []string{
-	IdeaGroupSource, IdeaGroupCampaign, IdeaGroupFit, IdeaGroupOrigin, IdeaGroupAuthor, IdeaGroupCreated,
+	IdeaGroupSource, IdeaGroupCampaign, IdeaGroupFit, IdeaGroupOrigin, IdeaGroupAuthor, IdeaGroupCreated, IdeaGroupUsed,
 }
 
 // IdeaQuery is one read of the ideas list. Different fields combine with AND.
@@ -105,6 +117,9 @@ type IdeaQuery struct {
 	Fit         AssetValueFilter
 	Phase       AssetValueFilter
 	Author      AssetValueFilter
+	// Used keeps the ideas a post was made from (used) or none was
+	// (unused).
+	Used AssetValueFilter
 	// Text keeps the ideas whose title or note contains it, ignoring case.
 	Text string
 	// CreatedAfter is inclusive, CreatedBefore exclusive.

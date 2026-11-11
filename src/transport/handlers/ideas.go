@@ -218,11 +218,11 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Summary      List workspace ideas
 // @Description  Filters, counts, groups and pages the workspace's ideas.
 // @Description
-// @Description  Every filter takes a comma-separated list meaning "any of these"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.
+// @Description  Every filter takes a comma-separated list meaning "any of these"; its `_not` twin excludes values. Different fields combine with AND. `pile` splits the ideas into `waiting` (undecided, or `later` with its reminder passed), `yes`, `later` (still snoozed) and `no`. `source_asset` and `campaign_id` take ids plus `none` (written ideas or a deleted source; workspace-wide). `kind` is the source asset's kind; `author` takes user ids and matches manual ideas only. `fit` bands are `high` (70–100), `medium` (40–69), `low` (10–39) and `unscored`. `used` is `used` once a post was made from the idea (any status) and `unused` before; every idea carries `post_count`. `text` matches title or note as a case-insensitive substring. `created` takes the presets `1d`, `7d`, `30d` and `month` in `tz`; `created_after` and `created_before` take RFC 3339 or YYYY-MM-DD.
 // @Description
 // @Description  `scope_campaign` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. `piles` count the match of every filter but `pile`. `facets` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. `facet_labels.source_asset` labels every asset of the source_asset facet.
 // @Description
-// @Description  `group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). `source`, `campaign` and `author` groups go by name with `none` last; `fit` and `origin` keep their value order; `created` groups are `1d`, `7d`, `30d` and `earlier`.
+// @Description  `group` orders the rows by group first, then by `sort` within each group, and adds `group_key` to every row and `groups` (each non-empty group's key and row count over the whole match, in display order). `source`, `campaign` and `author` groups go by name with `none` last; `fit`, `origin` and `used` keep their value order (`unused` first); `created` groups are `1d`, `7d`, `30d` and `earlier`.
 // @Description
 // @Description  Without `limit` the list is unpaged, up to 1,000 ideas.
 // @Description
@@ -248,13 +248,15 @@ func bodyKeys(c *fiber.Ctx, allowed []string) (map[string]json.RawMessage, error
 // @Param        phase_not       query  string  false  "Phases to exclude"
 // @Param        author          query  string  false  "User ids of manual ideas' authors"
 // @Param        author_not      query  string  false  "Authors to exclude"
+// @Param        used            query  string  false  "unused, used: whether a post was made from the idea"
+// @Param        used_not        query  string  false  "Used values to exclude"
 // @Param        created         query  string  false  "Preset start of the created window: 1d, 7d, 30d, month (not with created_after)"
 // @Param        created_after   query  string  false  "RFC 3339 or YYYY-MM-DD, inclusive"
 // @Param        created_before  query  string  false  "RFC 3339 or YYYY-MM-DD, exclusive"
 // @Param        scope_campaign  query  string  false  "Campaign id to confine the read to"
 // @Param        sort            query  string  false  "created (default, oldest first), created_desc, fit (best first, unscored last), waiting (longest waiting first)"
-// @Param        group           query  string  false  "source, campaign, fit, origin, author, created"
-// @Param        facets          query  string  false  "origin, source_asset, kind, campaign_id, fit, phase, author, created"
+// @Param        group           query  string  false  "source, campaign, fit, origin, author, created, used"
+// @Param        facets          query  string  false  "origin, source_asset, kind, campaign_id, fit, phase, author, created, used"
 // @Param        limit           query  int     false  "Page size, at most 200; unpaged up to 1,000 when absent"
 // @Param        cursor          query  string  false  "next_cursor of the previous page"
 // @Param        tz              query  string  false  "IANA time zone of the date presets and created groups (default UTC)"

@@ -1087,7 +1087,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Sends a message to the assistant from any screen and streams the reply. viewContext\n(version 1) is the screen: screen, scope ({kind: workspace|campaign|post, id}), focus,\nselection ({kind, ids | allMatching}), filter, savedViewId, sort, window and visible. It holds\nreferences only; the server reloads them in the caller's workspace and drops ids that no\nlonger exist. The scope names the thread: the conversation continues across the screens of\none workspace, campaign or post. A malformed viewContext is a 400 that names the field; a\ncampaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.\nEvents, in order: \"explanation_delta\" {\"delta\"} as the reply streams; \"tool_call\" {\"name\",\"input\",\"ref\"}\nand \"tool_result\" {\"name\",\"ref\",\"ok\"} for each tool, \"ok\" false when it refused or hit a conflict; \"pack_loaded\" {\"pack\"} when the turn restarted\nwith another domain's tools (deltas before it are void); one \"ui_action\" per change to the screen,\nonce the reply is final: {\"type\": navigate|set_filter|select|open_saved_view|set_window|open_connect|open_add_source, \"screen\", \"campaignId\",\n\"focus\" {kind,id}, \"filter\", \"selection\" {kind,ids}, \"savedViewId\", \"window\" {from,to,platforms,campaignId},\n\"connect\" {platform,accountId,reconnect}}, every reference already checked; open_connect opens the settings\nscreen's connect flow (reconnect for an account), which the client runs; open_add_source opens the\ncampaign's Assets tab ready to upload a document or import a link;\nthen \"complete\" with {\"explanation\",\"action\",\"uiActions\",\"touched\":[{\"kind\",\"id\"}],\"packs\",\"results\"}, where\ntouched names what changed (no id: every entity of the kind) for the client to refresh, and results\n(omitted when empty) holds each pack's tools' last successful output, by pack then tool name. The\nworkspace pack's: activityReport {from,to,tz,published,failed,created,campaigns_created,days};\nworkspaceSetup {timezone,autoPublish,autoPublishNote,accounts[{id,platform,username,needsReconnect,\nhealth,tokenExpiresAt,autoPublish}],note}; weeklyDigest {from,to,empty,report};\nemailWeeklyDigest {done,from,to}; postHistory {postId,title,entries[{at,kind: version|event,what,version,\nby,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.\nThe ideas pack's, where an idea is {id,title,verdict,origin,campaignId,fitScore,plan} and grounding\n{mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total}; setIdeaVerdict {idea,undoId};\nsetIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,undoId (setIdeaVerdicts only)};\ncompileIdeas {postId,title,status,campaignId,platformId,ideas,grounding,undoId}; draftIdeas\n{posts[{postId,title,platformId,ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,\nrationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],\ncaps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};\nideasInCommon {ideas[{id,title,angle}],missing,assets,campaigns,origins,lenses,platforms,postTypes,phases,\nterms}, each [{value,label,ideaIds}]; editIdea {idea,note,changed,undoId}; similarIdeas {ideaId,title,\nsimilar[{idea,score,why}]}; findDuplicateIdeas {groups[{keepId,similarity,ideas}],total,truncated};\nmergeIdeas {idea,deleted}.\nPlus \"unsaved\": true when the turn ran but could not be stored in the thread. \"error\"\ncarries {\"message\":\"...\",\"code\":\u003chttp_code\u003e} and ends the stream.\nOffers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost,\napplyCalendarMoves, setAutoPublish and emailWeeklyDigest are always held back as an offer; generatePosts, draftPost, draftIdeas, moreLikeThese,\nsetIdeaVerdicts and tagAssets only above a few items. Smaller batches and other tools (distillMoreIdeas\namong them) run straight away, so a client can't rely on an offer before every write. \"proposal_created\" {\"id\",\"tool\",\"summary\",\n\"expiresAt\",\"options\"} streams once the reply is final; \"options\" is an array of {\"id\",\"title\"} with optional\n\"description\" and \"recommended\" (at most one option is recommended: the card leads with it). \"proposal_resolved\"\n{\"id\",\"status\",\"chosen\"} streams when one is answered in chat. Cards answer through POST\n/api/assistant/proposals/{id}/confirm or /dismiss. A confirmed offer re-checks first: when what it was made on\nchanged, nothing runs and either it is refused or what still holds comes back as a fresh offer. A run that\ndid part of the job (setIdeaVerdicts, moveIdeas, draftIdeas, editBrand, unschedulePosts, deletePosts) has, in\nits result (complete.results and a card's answer alike), \"notMade\" [{id,title?,reason}] and, only when some\nitems are worth retrying and the offer could be stored, \"retryProposalId\": a fresh offer of just those.\nPacks stream their own progress between: the campaign pack forwards the campaign assistant's events\n(content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends \"idea_draft_post\" per post,\nshaped as one of its result's posts.",
+                "description": "Sends a message to the assistant from any screen and streams the reply. viewContext\n(version 1) is the screen: screen, scope ({kind: workspace|campaign|post, id}), focus,\nselection ({kind, ids | allMatching}), filter, savedViewId, sort, window and visible. It holds\nreferences only; the server reloads them in the caller's workspace and drops ids that no\nlonger exist. The scope names the thread: the conversation continues across the screens of\none workspace, campaign or post. A malformed viewContext is a 400 that names the field; a\ncampaign or post scope that doesn't exist is a 404; an instruction over 8000 characters is a 400.\nEvents, in order: \"explanation_delta\" {\"delta\"} as the reply streams; \"tool_call\" {\"name\",\"input\",\"ref\"}\nand \"tool_result\" {\"name\",\"ref\",\"ok\"} for each tool, \"ok\" false when it refused or hit a conflict; \"pack_loaded\" {\"pack\"} when the turn restarted\nwith another domain's tools (deltas before it are void); one \"ui_action\" per change to the screen,\nonce the reply is final: {\"type\": navigate|set_filter|select|open_saved_view|set_window|open_connect|open_add_source, \"screen\", \"campaignId\",\n\"focus\" {kind,id}, \"filter\", \"selection\" {kind,ids}, \"savedViewId\", \"window\" {from,to,platforms,campaignId},\n\"connect\" {platform,accountId,reconnect}}, every reference already checked; open_connect opens the settings\nscreen's connect flow (reconnect for an account), which the client runs; open_add_source opens the\ncampaign's Assets tab ready to upload a document or import a link;\nthen \"complete\" with {\"explanation\",\"action\",\"uiActions\",\"touched\":[{\"kind\",\"id\"}],\"packs\",\"results\"}, where\ntouched names what changed (no id: every entity of the kind) for the client to refresh, and results\n(omitted when empty) holds each pack's tools' last successful output, by pack then tool name. The\nworkspace pack's: activityReport {from,to,tz,published,failed,created,campaigns_created,days};\nworkspaceSetup {timezone,autoPublish,autoPublishNote,accounts[{id,platform,username,needsReconnect,\nhealth,tokenExpiresAt,autoPublish}],note}; weeklyDigest {from,to,empty,report};\nemailWeeklyDigest {done,from,to}; postHistory {postId,title,entries[{at,kind: version|event,what,version,\nby,byId,source}],more,note}; setAutoPublish {done,autoPublish,undoId}; openConnect {done,note}.\nThe ideas pack's, where an idea is {id,title,verdict,origin,campaignId,fitScore,plan} and grounding\n{mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total}; setIdeaVerdict {idea,undoId};\nsetIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,undoId (setIdeaVerdicts only)};\ncompileIdeas {postId,title,status,campaignId,platformId,date,posts,ideas,grounding,undoId} (posts: each {postId,title,status,platformId,date}, one per platform; the flat fields are the first; date empty when undated); draftIdeas\n{posts[{postId,title,platformId,publishDate (none when unscheduled),ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,\nrationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],\ncaps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};\nideasInCommon {ideas[{id,title,angle}],missing,assets,campaigns,origins,lenses,platforms,postTypes,phases,\nterms}, each [{value,label,ideaIds}]; editIdea {idea,note,changed,undoId}; similarIdeas {ideaId,title,\nsimilar[{idea,score,why}]}; findDuplicateIdeas {groups[{keepId,similarity,ideas}],total,truncated};\nmergeIdeas {idea,deleted}.\nPlus \"unsaved\": true when the turn ran but could not be stored in the thread. \"error\"\ncarries {\"message\":\"...\",\"code\":\u003chttp_code\u003e} and ends the stream.\nOffers: runContentPlan, redistributePosts, updateCampaignPlatforms, moveIdeas, deleteIdeas, schedulePost,\napplyCalendarMoves, setAutoPublish and emailWeeklyDigest are always held back as an offer; generatePosts, draftPost, draftIdeas, moreLikeThese,\nsetIdeaVerdicts and tagAssets only above a few items. Smaller batches and other tools (distillMoreIdeas\namong them) run straight away, so a client can't rely on an offer before every write. \"proposal_created\" {\"id\",\"tool\",\"summary\",\n\"expiresAt\",\"options\"} streams once the reply is final; \"options\" is an array of {\"id\",\"title\"} with optional\n\"description\" and \"recommended\" (at most one option is recommended: the card leads with it). \"proposal_resolved\"\n{\"id\",\"status\",\"chosen\"} streams when one is answered in chat. Cards answer through POST\n/api/assistant/proposals/{id}/confirm or /dismiss. A confirmed offer re-checks first: when what it was made on\nchanged, nothing runs and either it is refused or what still holds comes back as a fresh offer. A run that\ndid part of the job (setIdeaVerdicts, moveIdeas, draftIdeas, editBrand, unschedulePosts, deletePosts) has, in\nits result (complete.results and a card's answer alike), \"notMade\" [{id,title?,reason}] and, only when some\nitems are worth retrying and the offer could be stored, \"retryProposalId\": a fresh offer of just those.\nPacks stream their own progress between: the campaign pack forwards the campaign assistant's events\n(content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends \"idea_draft_post\" per post,\nshaped as one of its result's posts.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7061,7 +7061,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Filters, counts, groups and pages the workspace's ideas.\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its ` + "`" + `_not` + "`" + ` twin excludes values. Different fields combine with AND. ` + "`" + `pile` + "`" + ` splits the ideas into ` + "`" + `waiting` + "`" + ` (undecided, or ` + "`" + `later` + "`" + ` with its reminder passed), ` + "`" + `yes` + "`" + `, ` + "`" + `later` + "`" + ` (still snoozed) and ` + "`" + `no` + "`" + `. ` + "`" + `source_asset` + "`" + ` and ` + "`" + `campaign_id` + "`" + ` take ids plus ` + "`" + `none` + "`" + ` (written ideas or a deleted source; workspace-wide). ` + "`" + `kind` + "`" + ` is the source asset's kind; ` + "`" + `author` + "`" + ` takes user ids and matches manual ideas only. ` + "`" + `fit` + "`" + ` bands are ` + "`" + `high` + "`" + ` (70–100), ` + "`" + `medium` + "`" + ` (40–69), ` + "`" + `low` + "`" + ` (10–39) and ` + "`" + `unscored` + "`" + `. ` + "`" + `text` + "`" + ` matches title or note as a case-insensitive substring. ` + "`" + `created` + "`" + ` takes the presets ` + "`" + `1d` + "`" + `, ` + "`" + `7d` + "`" + `, ` + "`" + `30d` + "`" + ` and ` + "`" + `month` + "`" + ` in ` + "`" + `tz` + "`" + `; ` + "`" + `created_after` + "`" + ` and ` + "`" + `created_before` + "`" + ` take RFC 3339 or YYYY-MM-DD.\n\n` + "`" + `scope_campaign` + "`" + ` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. ` + "`" + `piles` + "`" + ` count the match of every filter but ` + "`" + `pile` + "`" + `. ` + "`" + `facets` + "`" + ` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. ` + "`" + `facet_labels.source_asset` + "`" + ` labels every asset of the source_asset facet.\n\n` + "`" + `group` + "`" + ` orders the rows by group first, then by ` + "`" + `sort` + "`" + ` within each group, and adds ` + "`" + `group_key` + "`" + ` to every row and ` + "`" + `groups` + "`" + ` (each non-empty group's key and row count over the whole match, in display order). ` + "`" + `source` + "`" + `, ` + "`" + `campaign` + "`" + ` and ` + "`" + `author` + "`" + ` groups go by name with ` + "`" + `none` + "`" + ` last; ` + "`" + `fit` + "`" + ` and ` + "`" + `origin` + "`" + ` keep their value order; ` + "`" + `created` + "`" + ` groups are ` + "`" + `1d` + "`" + `, ` + "`" + `7d` + "`" + `, ` + "`" + `30d` + "`" + ` and ` + "`" + `earlier` + "`" + `.\n\nWithout ` + "`" + `limit` + "`" + ` the list is unpaged, up to 1,000 ideas.\n\n` + "`" + `ids_only=true` + "`" + ` returns ` + "`" + `{ids, total}` + "`" + ` instead: every id the filters (pile included) match, unpaged and in no particular order, for selecting every match. Over 5,000 it answers 422 ` + "`" + `too_many` + "`" + ` with ` + "`" + `total` + "`" + `.",
+                "description": "Filters, counts, groups and pages the workspace's ideas.\n\nEvery filter takes a comma-separated list meaning \"any of these\"; its ` + "`" + `_not` + "`" + ` twin excludes values. Different fields combine with AND. ` + "`" + `pile` + "`" + ` splits the ideas into ` + "`" + `waiting` + "`" + ` (undecided, or ` + "`" + `later` + "`" + ` with its reminder passed), ` + "`" + `yes` + "`" + `, ` + "`" + `later` + "`" + ` (still snoozed) and ` + "`" + `no` + "`" + `. ` + "`" + `source_asset` + "`" + ` and ` + "`" + `campaign_id` + "`" + ` take ids plus ` + "`" + `none` + "`" + ` (written ideas or a deleted source; workspace-wide). ` + "`" + `kind` + "`" + ` is the source asset's kind; ` + "`" + `author` + "`" + ` takes user ids and matches manual ideas only. ` + "`" + `fit` + "`" + ` bands are ` + "`" + `high` + "`" + ` (70–100), ` + "`" + `medium` + "`" + ` (40–69), ` + "`" + `low` + "`" + ` (10–39) and ` + "`" + `unscored` + "`" + `. ` + "`" + `used` + "`" + ` is ` + "`" + `used` + "`" + ` once a post was made from the idea (any status) and ` + "`" + `unused` + "`" + ` before; every idea carries ` + "`" + `post_count` + "`" + `. ` + "`" + `text` + "`" + ` matches title or note as a case-insensitive substring. ` + "`" + `created` + "`" + ` takes the presets ` + "`" + `1d` + "`" + `, ` + "`" + `7d` + "`" + `, ` + "`" + `30d` + "`" + ` and ` + "`" + `month` + "`" + ` in ` + "`" + `tz` + "`" + `; ` + "`" + `created_after` + "`" + ` and ` + "`" + `created_before` + "`" + ` take RFC 3339 or YYYY-MM-DD.\n\n` + "`" + `scope_campaign` + "`" + ` confines the whole read, totals and counts included, to one campaign's ideas; the campaign_id facet is not returned there. ` + "`" + `piles` + "`" + ` count the match of every filter but ` + "`" + `pile` + "`" + `. ` + "`" + `facets` + "`" + ` names the fields to count: each field's counts apply every other filter but not its own, and list every value an idea in scope has, with 0 for those nothing matches. ` + "`" + `facet_labels.source_asset` + "`" + ` labels every asset of the source_asset facet.\n\n` + "`" + `group` + "`" + ` orders the rows by group first, then by ` + "`" + `sort` + "`" + ` within each group, and adds ` + "`" + `group_key` + "`" + ` to every row and ` + "`" + `groups` + "`" + ` (each non-empty group's key and row count over the whole match, in display order). ` + "`" + `source` + "`" + `, ` + "`" + `campaign` + "`" + ` and ` + "`" + `author` + "`" + ` groups go by name with ` + "`" + `none` + "`" + ` last; ` + "`" + `fit` + "`" + `, ` + "`" + `origin` + "`" + ` and ` + "`" + `used` + "`" + ` keep their value order (` + "`" + `unused` + "`" + ` first); ` + "`" + `created` + "`" + ` groups are ` + "`" + `1d` + "`" + `, ` + "`" + `7d` + "`" + `, ` + "`" + `30d` + "`" + ` and ` + "`" + `earlier` + "`" + `.\n\nWithout ` + "`" + `limit` + "`" + ` the list is unpaged, up to 1,000 ideas.\n\n` + "`" + `ids_only=true` + "`" + ` returns ` + "`" + `{ids, total}` + "`" + ` instead: every id the filters (pile included) match, unpaged and in no particular order, for selecting every match. Over 5,000 it answers 422 ` + "`" + `too_many` + "`" + ` with ` + "`" + `total` + "`" + `.",
                 "produces": [
                     "application/json"
                 ],
@@ -7180,6 +7180,18 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
+                        "description": "unused, used: whether a post was made from the idea",
+                        "name": "used",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Used values to exclude",
+                        "name": "used_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
                         "description": "Preset start of the created window: 1d, 7d, 30d, month (not with created_after)",
                         "name": "created",
                         "in": "query"
@@ -7210,13 +7222,13 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "source, campaign, fit, origin, author, created",
+                        "description": "source, campaign, fit, origin, author, created, used",
                         "name": "group",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "origin, source_asset, kind, campaign_id, fit, phase, author, created",
+                        "description": "origin, source_asset, kind, campaign_id, fit, phase, author, created, used",
                         "name": "facets",
                         "in": "query"
                     },
@@ -7379,7 +7391,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Makes one ` + "`" + `planned` + "`" + ` post from 1–10 ideas: a draft_thesis note with a thesis per idea (its\ntitle, then its angle or note), the ideas' source assets as its sources, and a link to each\nidea (GET /api/posts/{id}/ideas). The campaign defaults to the one the ideas share (an idea in no\ncampaign goes along with it); the title\nto the first idea's; platform, post type, phase and target date to the first idea plan that sets\neach. A target date is placed at the campaign's publishing time. A platform or post type you name\nmust be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as\nthey are, so one idea can feed several posts.",
+                "description": "Makes a ` + "`" + `planned` + "`" + ` post from 1–10 ideas on each platform asked for (` + "`" + `platform_ids` + "`" + `, or one\n` + "`" + `platform_id` + "`" + `), all or none. Each post gets a draft_thesis note with a thesis per idea (its\ntitle, then its angle or note), the ideas' source assets as its sources, and a link to each\nidea (GET /api/posts/{id}/ideas). The campaign defaults to the one the ideas share (an idea in no\ncampaign goes along with it); the title\nto the first idea's; platform, post type, phase and target date to the first idea plan that sets\neach. A post type needs exactly one platform. A target date is placed at the campaign's publishing\ntime; without one the posts are undated. A platform or post type you name\nmust be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as\nthey are, so one idea can feed several posts.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7389,7 +7401,7 @@ const docTemplate = `{
                 "tags": [
                     "ideas"
                 ],
-                "summary": "Compile ideas into a planned post",
+                "summary": "Compile ideas into planned posts",
                 "parameters": [
                     {
                         "description": "Ideas and overrides",
@@ -7436,7 +7448,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Writes finished posts from 1–10 ideas and saves them as drafts with a body. Each idea gets its own\npost on each platform, or with ` + "`" + `together` + "`" + ` one post per platform from all of them; at most\nDRAFT_POST_MAX posts a request. The writer works from each idea's title, angle, reasoning and\nsources (or its note), in the campaign's brand voice; the ideas' source assets become the posts'\nsources, and every post links to its ideas (GET /api/posts/{id}/ideas). The campaign defaults to\nthe one the ideas share; the platform, post type, phase and date to the first idea plan that sets\neach. Requests that can't run are a plain 400 before the stream opens.\nEvents: \"post\" {postId,title,platformId,ideaIds,usedAssetIds} as each post is saved; \"complete\"\n{posts,warnings}; \"error\" {message,code}, after which the posts already written are kept.",
+                "description": "Writes finished posts from 1–10 ideas and saves them as drafts with a body. Each idea gets its own\npost on each platform, or with ` + "`" + `together` + "`" + ` one post per platform from all of them; at most\nDRAFT_POST_MAX posts a request. The writer works from each idea's title, angle, reasoning and\nsources (or its note), in the campaign's brand voice; the ideas' source assets become the posts'\nsources, and every post links to its ideas (GET /api/posts/{id}/ideas). The campaign defaults to\nthe one the ideas share; the platform, post type, phase and date to the first idea plan that sets\neach. Without a target date, given or planned, the posts are left unscheduled: no scheduled_at,\noff the calendar until someone dates them. Requests that can't run are a plain 400 before the\nstream opens.\nEvents: \"post\" {postId,title,platformId,publishDate,ideaIds,usedAssetIds} (no publishDate when unscheduled) as each post is saved; \"complete\"\n{posts,warnings}; \"error\" {message,code}, after which the posts already written are kept.",
                 "consumes": [
                     "application/json"
                 ],
@@ -16598,10 +16610,18 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "platform_id": {
-                    "description": "PlatformID, PlatformPostType, PhaseID and TargetDate default to the\nfirst idea plan that sets each.",
+                    "description": "PlatformID is one platform, the same as platform_ids with one entry;\nset one or the other.",
                     "type": "string"
                 },
+                "platform_ids": {
+                    "description": "PlatformIDs, PlatformPostType, PhaseID and TargetDate default to the\nfirst idea plan that sets each. Each platform gets its own post.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "platform_post_type": {
+                    "description": "PlatformPostType needs exactly one platform.",
                     "type": "string"
                 },
                 "target_date": {
@@ -16619,14 +16639,26 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "ideas": {
-                    "description": "Ideas are the ideas the post was made from, in order.",
+                    "description": "Ideas are the ideas the posts were made from, in order.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.PostSourceIdea"
                     }
                 },
                 "post": {
-                    "$ref": "#/definitions/models.Post"
+                    "description": "Post is the first of Posts.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Post"
+                        }
+                    ]
+                },
+                "posts": {
+                    "description": "Posts are the planned posts, one per platform, in the order asked for.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.Post"
+                    }
                 }
             }
         },
@@ -20959,6 +20991,10 @@ const docTemplate = `{
                             "$ref": "#/definitions/models.IdeaPlan"
                         }
                     ]
+                },
+                "post_count": {
+                    "description": "PostCount is read back: how many posts were made from the idea.",
+                    "type": "integer"
                 },
                 "rationale": {
                     "type": "string",

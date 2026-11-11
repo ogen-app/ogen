@@ -28,8 +28,8 @@ const (
 	iqOrphan  = "iq-orphan"  // its analysis is gone; source a web page, later (snoozed), fit low, breakdown names c-launch
 	iqAudio   = "iq-audio"   // from the audio asset, later with its reminder passed, unscored
 	iqBob     = "iq-bob"     // manual, its author removed, attached to a deleted campaign, undecided
-	iqPDF2    = "iq-pdf-2"   // from the PDF's c-launch lens, in c-launch, yes, fit medium
-	iqAnn     = "iq-ann"     // manual by Ann, in c-launch, no, its note mentions bees
+	iqPDF2    = "iq-pdf-2"   // from the PDF's c-launch lens, in c-launch, yes, fit medium, made into two posts
+	iqAnn     = "iq-ann"     // manual by Ann, in c-launch, no, its note mentions bees, made into a post
 	iqPDF1    = "iq-pdf-1"   // from the PDF's workspace lens, undecided, fit high, phase Launch
 	iqAssetPD = "iq-a-pdf"   // "Annual report", 12 pages
 	iqAssetAu = "iq-a-audio" // "Customer call", one minute
@@ -55,7 +55,7 @@ func seedIdeaQueryFixture(t *testing.T) *ideaQueryFixture {
 	t.Cleanup(func() {
 		ctx := context.Background()
 		tenants := bun.List([]string{iqTenant, iqOtherTenant})
-		for _, table := range []string{"ideas", "asset_analyses", "asset_files", "assets", "campaigns"} {
+		for _, table := range []string{"post_ideas", "ideas", "asset_analyses", "asset_files", "assets", "campaigns"} {
 			_, _ = db.NewDelete().TableExpr(table).Where("tenant_id IN (?)", tenants).Exec(ctx)
 		}
 	})
@@ -133,8 +133,18 @@ func seedIdeaQueryFixture(t *testing.T) *ideaQueryFixture {
 	for _, i := range []*models.Idea{orphan, audio, bob, pdf2, ann, pdf1} {
 		insert(ctx, i)
 	}
+	links := repository.NewPostIdeaRepository(db)
+	for post, ideas := range map[string][]string{"iq-post-1": {iqPDF2, iqAnn}, "iq-post-2": {iqPDF2}} {
+		if err := links.Link(ctx, db, post, ideas); err != nil {
+			t.Fatalf("link %s: %v", post, err)
+		}
+	}
 	other := tenantctx.With(t.Context(), iqOtherTenant)
 	insert(other, &models.Idea{ID: "iq-other", Title: "Agents elsewhere", CreatedByName: "X", CreatedAt: now, UpdatedAt: now})
+	// Another workspace's link to the same id never makes it used here.
+	if err := links.Link(other, db, "iq-post-other", []string{iqPDF1}); err != nil {
+		t.Fatalf("link other: %v", err)
+	}
 	return fx
 }
 
@@ -195,6 +205,9 @@ func TestIdeaQueryFilters(t *testing.T) {
 		{"text=%25", nil},
 		{"created_after=" + created4hAgo, []string{iqAnn, iqPDF1}},
 		{"origin=asset_analysis&fit_not=unscored&pile_not=yes", []string{iqOrphan, iqPDF1}},
+		{"used=used", []string{iqPDF2, iqAnn}},
+		{"used=unused", []string{iqOrphan, iqAudio, iqBob, iqPDF1}},
+		{"used_not=used&origin=manual", []string{iqBob}},
 	} {
 		res := fx.query(t, tc.query)
 		if got := ideaIDs(res.Ideas); !slices.Equal(got, tc.want) && (len(got) > 0 || len(tc.want) > 0) {
@@ -203,6 +216,22 @@ func TestIdeaQueryFilters(t *testing.T) {
 		if res.Total != len(tc.want) || res.TotalUnfiltered != len(iqAllByCreated) {
 			t.Errorf("%q: total %d of %d, want %d of %d", tc.query, res.Total, res.TotalUnfiltered, len(tc.want), len(iqAllByCreated))
 		}
+	}
+}
+
+// Every idea read counts the posts made from it.
+func TestIdeaQueryPostCounts(t *testing.T) {
+	fx := seedIdeaQueryFixture(t)
+	got := map[string]int{}
+	for _, i := range fx.query(t, "").Ideas {
+		got[i.ID] = i.PostCount
+	}
+	if got[iqPDF2] != 2 || got[iqAnn] != 1 || got[iqPDF1] != 0 {
+		t.Errorf("post counts = %v", got)
+	}
+	one, err := fx.repo.GetByID(fx.ctx, iqPDF2)
+	if err != nil || one.PostCount != 2 {
+		t.Errorf("GetByID post count = %+v, %v", one, err)
 	}
 }
 
@@ -237,7 +266,7 @@ func removePile(raw string) string {
 
 func TestIdeaQueryFacetsExcludeTheirOwnField(t *testing.T) {
 	fx := seedIdeaQueryFixture(t)
-	res := fx.query(t, "origin=manual&facets=origin,source_asset,kind,campaign_id,fit,author,phase,created")
+	res := fx.query(t, "origin=manual&facets=origin,source_asset,kind,campaign_id,fit,author,phase,created,used")
 	counts := func(field string) map[string]int {
 		out := map[string]int{}
 		for _, c := range res.Facets[field] {
@@ -269,6 +298,9 @@ func TestIdeaQueryFacetsExcludeTheirOwnField(t *testing.T) {
 	}
 	if got := counts("phase"); got["Launch"] != 0 || len(got) != 1 {
 		t.Errorf("phase facet = %v, want Launch at 0", res.Facets["phase"])
+	}
+	if used := res.Facets["used"]; !slices.Equal(used, []models.AssetFacetCount{{Value: "unused", Count: 1}, {Value: "used", Count: 1}}) {
+		t.Errorf("used facet = %v, want unused then used, one each under origin=manual", used)
 	}
 	if got := counts("created"); got["month"] > 2 || len(res.Facets["created"]) != 4 {
 		t.Errorf("created facet = %v", res.Facets["created"])
@@ -308,6 +340,7 @@ func TestIdeaQueryGroupsAndSorts(t *testing.T) {
 		{"group=author", []string{iqAnn, iqOrphan, iqAudio, iqBob, iqPDF2, iqPDF1}},
 		{"group=campaign&sort=created_desc", []string{iqAnn, iqPDF2, iqPDF1, iqBob, iqAudio, iqOrphan}},
 		{"group=origin", []string{iqOrphan, iqAudio, iqPDF2, iqPDF1, iqBob, iqAnn}},
+		{"group=used", []string{iqOrphan, iqAudio, iqBob, iqPDF1, iqPDF2, iqAnn}},
 	} {
 		if got := ideaIDs(fx.query(t, tc.query).Ideas); !slices.Equal(got, tc.want) {
 			t.Errorf("%q = %v, want %v", tc.query, got, tc.want)
