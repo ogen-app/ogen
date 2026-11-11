@@ -85,10 +85,12 @@ type Result struct {
 	Ideas []models.Idea
 }
 
-// Compiled is one compiled post and its theses note.
+// Compiled is one compiled post and its theses note. Date is the day it is
+// planned for in the campaign's time zone, empty for an undated post.
 type Compiled struct {
 	Post *models.Post
 	Note *models.PostNote
+	Date string
 }
 
 // Service compiles ideas into posts.
@@ -148,7 +150,12 @@ func (s *Service) Compile(ctx context.Context, in Input) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		res.Posts = append(res.Posts, Compiled{Post: post, Note: note})
+		c := Compiled{Post: post, Note: note}
+		if post.ScheduledAt != nil {
+			loc, _ := settings.ResolveTimezone(campaign.Timezone)
+			c.Date = post.ScheduledAt.In(loc).Format(time.DateOnly)
+		}
+		res.Posts = append(res.Posts, c)
 		logs = append(logs, logEntry)
 	}
 

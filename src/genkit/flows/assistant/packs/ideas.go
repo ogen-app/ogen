@@ -131,7 +131,7 @@ func ideasPack(d Deps) assistant.Pack {
 				spec(ideasPackName, del, assistantkit.TierProposal,
 					`Call this when the user asks to delete ideas. ideaIds default to the selected ideas, else the open one. Always offered first; it can't be undone.`),
 				spec(ideasPackName, compile, assistantkit.TierReversible,
-					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these", "plan a post from these for LinkedIn and X". It writes no body: the post holds their theses until someone drafts it. Several platforms get one planned post each. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share. Pass targetDate only when the user names a date; otherwise the posts stay off the calendar, so say they're undated. It can be undone while no one has changed the posts.`),
+					`Call this to turn ideas into one planned post per platform — "make a post from these three", "combine these", "plan a post from these for LinkedIn and X" (one for LinkedIn, one for X). It writes no body: each post holds their theses until someone drafts it. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share. Pass targetDate only when the user names a date; without it the posts take a date planned on the ideas, and with none they stay off the calendar — the result's date says which, so report that. It can be undone while no one has changed the posts.`),
 				spec(ideasPackName, draft, assistantkit.TierProposal,
 					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". ideaIds default to the selected ideas, else the open one. platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. Pass targetDate only when the user names a date; without one (or a date planned on the ideas) the drafts are unscheduled — in Drafts, not on the calendar — so say that, and that they can be dated later. More than a few posts are offered first.`),
 			}, slices.Concat(defineReadTools(g, d), defineEditTools(g, d), defineMergeTools(g, d))...), nil
@@ -178,7 +178,7 @@ type IdeaRef struct {
 	FitScore   *int            `json:"fitScore,omitempty"`
 	Plan       models.IdeaPlan `json:"plan"`
 	// Posts counts the posts made from the idea.
-	Posts int `json:"posts,omitempty"`
+	Posts int `json:"posts"`
 }
 
 // FindIdeasOutput is one page of matches.
@@ -506,10 +506,7 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 		p := c.Post
 		assistantkit.Touch(ctx, "post", p.ID)
 		made[i] = assistantundo.MadePost{Post: p, Notes: []models.PostNote{*c.Note}}
-		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID}
-		if p.ScheduledAt != nil {
-			cp.Date = p.ScheduledAt.Format(time.DateOnly)
-		}
+		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID, Date: c.Date}
 		out.Posts = append(out.Posts, cp)
 	}
 	out.CompiledPost = out.Posts[0]

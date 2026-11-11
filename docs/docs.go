@@ -1159,7 +1159,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Restores what a reversible assistant change replaced. kind and entityId name what to refresh:\ncampaign_dates, campaign_brief, campaign_platforms, campaign_assets, campaign_goal, campaign_created (the campaign is\ndeleted), idea_verdict, idea_edit, idea_verdicts (no entityId: several ideas), post_created (the post\nmade from ideas is deleted), brand_fact, brand_voice, brand_audience, brand_guardrails, series,\ncampaign_series, post_schedules and post_types (entityId: the campaign whose posts changed),\nauto_publish, and asset_tags (the assets a tagging changed get their tags back). entityId is always\npresent: for idea_verdicts and asset_tags it is \"\", which names no single entity to refresh.\n409 when it was already undone, or when it was edited again since: undo never overwrites a later edit.",
+                "description": "Restores what a reversible assistant change replaced. kind and entityId name what to refresh:\ncampaign_dates, campaign_brief, campaign_platforms, campaign_assets, campaign_goal, campaign_created (the campaign is\ndeleted), idea_verdict, idea_edit, idea_verdicts (no entityId: several ideas), post_created (the posts\nmade from ideas are deleted, all or none; entityId is the first of them, so refresh the post list\nwhen a compile made several), brand_fact, brand_voice, brand_audience, brand_guardrails, series,\ncampaign_series, post_schedules and post_types (entityId: the campaign whose posts changed),\nauto_publish, and asset_tags (the assets a tagging changed get their tags back). entityId is always\npresent: for idea_verdicts and asset_tags it is \"\", which names no single entity to refresh.\n409 when it was already undone, or when it was edited again since: undo never overwrites a later edit.",
                 "produces": [
                     "application/json"
                 ],
@@ -21811,7 +21811,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "scheduled_at": {
-                    "type": "string"
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "series_id": {
                     "description": "SeriesID is the series that produced the post. It survives the series\nbeing deleted (series are soft-deleted).",
