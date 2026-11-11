@@ -37,7 +37,7 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 	if _, err := db.NewInsert().Model(&models.Campaign{
 		ID: "cmp-compile", Name: "Spring", CampaignTypeID: "t", CreatedBy: "u1",
 		AssetIDs: models.StringSlice{}, PublishingDays: models.StringSlice{},
-		TargetPlatforms: models.CampaignPlatforms{{ID: "linkedin"}},
+		TargetPlatforms: models.CampaignPlatforms{{ID: "linkedin"}, {ID: "threads"}},
 	}).Exec(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	post, err := posts.GetByID(ctx, res.Post.ID)
+	post, err := posts.GetByID(ctx, res.Posts[0].Post.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,15 +91,22 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 		t.Fatalf("posts of idea = %+v, %v", refs, err)
 	}
 
-	// One idea feeds a second post; linking again keeps one row per pair.
-	if _, err := svc.Compile(ctx, compose.Input{IdeaIDs: []string{"idc-1"}, Actor: "u1", Title: "LinkedIn take"}); err != nil {
-		t.Fatal(err)
+	// One idea feeds more posts, one per platform, each with its theses;
+	// linking again keeps one row per pair.
+	more, err := svc.Compile(ctx, compose.Input{IdeaIDs: []string{"idc-1"}, Actor: "u1", Title: "Two takes", PlatformIDs: []string{"linkedin", "threads"}})
+	if err != nil || len(more.Posts) != 2 || more.Posts[0].Post.PlatformID != "linkedin" || more.Posts[1].Post.PlatformID != "threads" {
+		t.Fatalf("compile for two platforms = %+v, %v", more, err)
+	}
+	for _, c := range more.Posts {
+		if ns, err := notes.ListByPostID(ctx, c.Post.ID); err != nil || len(ns) != 1 || ns[0].ID != c.Note.ID {
+			t.Fatalf("notes of %s = %+v, %v", c.Post.PlatformID, ns, err)
+		}
 	}
 	if err := links.Link(ctx, db, post.ID, []string{"idc-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if refs, _ = links.PostsOfIdea(ctx, "idc-1"); len(refs) != 2 {
-		t.Fatalf("idea feeds %d posts, want 2", len(refs))
+	if refs, _ = links.PostsOfIdea(ctx, "idc-1"); len(refs) != 3 {
+		t.Fatalf("idea feeds %d posts, want 3", len(refs))
 	}
 
 	// Another workspace sees no links.
@@ -154,10 +161,10 @@ func TestCompile_PhaseMustBeTheCampaignTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("own type's phase: %v", err)
 	}
-	if res.Post.CampaignTypePhaseID == nil || *res.Post.CampaignTypePhaseID != ownPhase {
-		t.Fatalf("phase = %v, want %s", res.Post.CampaignTypePhaseID, ownPhase)
+	if res.Posts[0].Post.CampaignTypePhaseID == nil || *res.Posts[0].Post.CampaignTypePhaseID != ownPhase {
+		t.Fatalf("phase = %v, want %s", res.Posts[0].Post.CampaignTypePhaseID, ownPhase)
 	}
-	if entries, err := logs.ListByPostID(ctx, res.Post.ID, 10); err != nil || len(entries) != 1 {
+	if entries, err := logs.ListByPostID(ctx, res.Posts[0].Post.ID, 10); err != nil || len(entries) != 1 {
 		t.Fatalf("audit log = %+v (%v), want the compile", entries, err)
 	}
 }

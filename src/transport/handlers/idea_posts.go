@@ -72,28 +72,37 @@ type compileIdeasRequest struct {
 	CampaignID string `json:"campaign_id"`
 	// Title defaults to the first idea's title.
 	Title string `json:"title"`
-	// PlatformID, PlatformPostType, PhaseID and TargetDate default to the
-	// first idea plan that sets each.
-	PlatformID       string               `json:"platform_id"`
+	// PlatformIDs, PlatformPostType, PhaseID and TargetDate default to the
+	// first idea plan that sets each. Each platform gets its own post.
+	PlatformIDs []string `json:"platform_ids"`
+	// PlatformID is one platform, the same as platform_ids with one entry;
+	// set one or the other.
+	PlatformID string `json:"platform_id"`
+	// PlatformPostType needs exactly one platform.
 	PlatformPostType string               `json:"platform_post_type"`
 	PhaseID          string               `json:"phase_id"`
 	TargetDate       *models.CalendarDate `json:"target_date" swaggertype:"string" example:"2026-12-01" extensions:"x-nullable"`
 }
 
 type compileIdeasResponse struct {
+	// Post is the first of Posts.
 	Post models.Post `json:"post"`
-	// Ideas are the ideas the post was made from, in order.
+	// Posts are the planned posts, one per platform, in the order asked for.
+	Posts []models.Post `json:"posts"`
+	// Ideas are the ideas the posts were made from, in order.
 	Ideas []models.PostSourceIdea `json:"ideas"`
 }
 
 // Compile godoc
-// @Summary      Compile ideas into a planned post
-// @Description  Makes one `planned` post from 1–10 ideas: a draft_thesis note with a thesis per idea (its
+// @Summary      Compile ideas into planned posts
+// @Description  Makes a `planned` post from 1–10 ideas on each platform asked for (`platform_ids`, or one
+// @Description  `platform_id`), all or none. Each post gets a draft_thesis note with a thesis per idea (its
 // @Description  title, then its angle or note), the ideas' source assets as its sources, and a link to each
 // @Description  idea (GET /api/posts/{id}/ideas). The campaign defaults to the one the ideas share (an idea in no
 // @Description  campaign goes along with it); the title
 // @Description  to the first idea's; platform, post type, phase and target date to the first idea plan that sets
-// @Description  each. A target date is placed at the campaign's publishing time. A platform or post type you name
+// @Description  each. A post type needs exactly one platform. A target date is placed at the campaign's publishing
+// @Description  time; without one the posts are undated. A platform or post type you name
 // @Description  must be one of the campaign's; a stale suggested one is dropped. The ideas themselves are left as
 // @Description  they are, so one idea can feed several posts.
 // @Tags         ideas
@@ -114,16 +123,23 @@ func (h *IdeaPostsHandler) Compile(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	platforms := req.PlatformIDs
+	if req.PlatformID != "" {
+		if len(platforms) > 0 {
+			return fiber.NewError(fiber.StatusBadRequest, "set platform_id or platform_ids, not both")
+		}
+		platforms = []string{req.PlatformID}
+	}
 	res, err := h.compile(reqCtx(c), compose.Input{
-		IdeaIDs:    req.IdeaIDs,
-		CampaignID: req.CampaignID,
-		Title:      req.Title,
-		PlatformID: req.PlatformID,
-		PostType:   req.PlatformPostType,
-		PhaseID:    req.PhaseID,
-		TargetDate: req.TargetDate,
-		Actor:      session.UserID,
-		NoteOrigin: models.PostNoteOriginManual,
+		IdeaIDs:     req.IdeaIDs,
+		CampaignID:  req.CampaignID,
+		Title:       req.Title,
+		PlatformIDs: platforms,
+		PostType:    req.PlatformPostType,
+		PhaseID:     req.PhaseID,
+		TargetDate:  req.TargetDate,
+		Actor:       session.UserID,
+		NoteOrigin:  models.PostNoteOriginManual,
 	})
 	if err != nil {
 		if compose.IsValidation(err) {
@@ -137,12 +153,16 @@ func (h *IdeaPostsHandler) Compile(c *fiber.Ctx) error {
 		ideas[i] = models.PostSourceIdea{ID: idea.ID, Title: idea.Title, Origin: idea.Origin}
 		ids[i] = idea.ID
 	}
-	h.activity.Record(reqCtx(c), activity.CategoryIdea, "ideas_compiled",
-		activity.WithSource(activity.SourceAPI),
-		activity.WithEntity("post", res.Post.ID),
-		activity.WithPayload(map[string]any{"idea_ids": ids}),
-	)
-	return c.Status(fiber.StatusCreated).JSON(compileIdeasResponse{Post: *res.Post, Ideas: ideas})
+	posts := make([]models.Post, len(res.Posts))
+	for i, p := range res.Posts {
+		posts[i] = *p.Post
+		h.activity.Record(reqCtx(c), activity.CategoryIdea, "ideas_compiled",
+			activity.WithSource(activity.SourceAPI),
+			activity.WithEntity("post", p.Post.ID),
+			activity.WithPayload(map[string]any{"idea_ids": ids}),
+		)
+	}
+	return c.Status(fiber.StatusCreated).JSON(compileIdeasResponse{Post: posts[0], Posts: posts, Ideas: ideas})
 }
 
 type draftIdeasRequest struct {
@@ -177,8 +197,10 @@ const (
 // @Description  sources (or its note), in the campaign's brand voice; the ideas' source assets become the posts'
 // @Description  sources, and every post links to its ideas (GET /api/posts/{id}/ideas). The campaign defaults to
 // @Description  the one the ideas share; the platform, post type, phase and date to the first idea plan that sets
-// @Description  each. Requests that can't run are a plain 400 before the stream opens.
-// @Description  Events: "post" {postId,title,platformId,ideaIds,usedAssetIds} as each post is saved; "complete"
+// @Description  each. Without a target date, given or planned, the posts are left unscheduled: no scheduled_at,
+// @Description  off the calendar until someone dates them. Requests that can't run are a plain 400 before the
+// @Description  stream opens.
+// @Description  Events: "post" {postId,title,platformId,publishDate,ideaIds,usedAssetIds} (no publishDate when unscheduled) as each post is saved; "complete"
 // @Description  {posts,warnings}; "error" {message,code}, after which the posts already written are kept.
 // @Tags         ideas
 // @Accept       json

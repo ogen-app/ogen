@@ -93,13 +93,13 @@ func ideasPack(d Deps) assistant.Pack {
 						return deleteIdeas(ctx, d, in)
 					})))), ai.WithStrictSchema(false))
 			compile := genkit.DefineTool(g, "compileIdeas",
-				"Compiles one or more ideas into one planned post: their titles and angles become its theses, their plan suggests its platform, type, phase and date, and the post links back to them. No body is written. Returns an undo id.",
+				"Compiles one or more ideas into a planned post on each platform: their titles and angles become its theses, their plan suggests its platform, type, phase and date, and the post links back to them. No body is written; without a date the posts stay undated. Returns an undo id.",
 				onScreen(func(ctx context.Context, in *CompileIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
 					assistantkit.Wrap(recorded(ideasPackName, "compileIdeas", nil, func(ctx context.Context, in CompileIdeasInput) (*CompileIdeasOutput, error) {
 						return compileIdeas(ctx, d, in)
 					}))), ai.WithStrictSchema(false))
 			draft := genkit.DefineTool(g, "draftIdeas",
-				"Writes finished posts from ideas and saves them as drafts with a body: one per idea per platform, or with together one per platform from all of them. Above a few posts it is offered for the user to confirm first.",
+				"Writes finished posts from ideas and saves them as drafts with a body: one per idea per platform, or with together one per platform from all of them. Without a date, given or planned on the ideas, the drafts are unscheduled. Above a few posts it is offered for the user to confirm first.",
 				onScreen(func(ctx context.Context, in *DraftIdeasInput) { in.IdeaIDs = ideasOnScreen(ctx, in.IdeaIDs) },
 					assistantkit.GatedRetry("draftIdeas", assistantkit.Gate[DraftIdeasInput]{
 						Precheck: func(ctx context.Context, in DraftIdeasInput) error {
@@ -121,7 +121,7 @@ func ideasPack(d Deps) assistant.Pack {
 
 			return append([]assistantkit.Spec{
 				spec(ideasPackName, find, assistantkit.TierRead,
-					`Call this to look up ideas by what they are about or by state — e.g. "which ideas are about pricing?", "the undecided ones from analyses". filter is a URL query string in the Ideas list's syntax: text=, pile=waiting|yes|later|no, origin=asset_analysis|content_plan|assistant|manual, fit=high|medium|low, campaign=<id>. To show the user, also call setFilter with the same filter.`),
+					`Call this to look up ideas by what they are about or by state — e.g. "which ideas are about pricing?", "the undecided ones from analyses". filter is a URL query string in the Ideas list's syntax: text=, pile=waiting|yes|later|no, origin=asset_analysis|content_plan|assistant|manual, fit=high|medium|low, campaign_id=<id>, used=unused|used (whether a post was made from it — "which ideas haven't been made into posts yet?" is used=unused). To show the user, also call setFilter with the same filter.`),
 				spec(ideasPackName, verdict, assistantkit.TierReversible,
 					`Call this to triage ONE idea — "yes to this one", "snooze it until Monday", "not this". ideaId defaults to the idea open on screen, else the one selected. later needs remindAt (YYYY-MM-DD or RFC 3339). It can be undone.`),
 				spec(ideasPackName, verdicts, assistantkit.TierProposal,
@@ -131,9 +131,9 @@ func ideasPack(d Deps) assistant.Pack {
 				spec(ideasPackName, del, assistantkit.TierProposal,
 					`Call this when the user asks to delete ideas. ideaIds default to the selected ideas, else the open one. Always offered first; it can't be undone.`),
 				spec(ideasPackName, compile, assistantkit.TierReversible,
-					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these". It writes no body: the post holds their theses until someone drafts it. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share. It can be undone while no one has changed the post.`),
+					`Call this to turn ideas into ONE planned post — "make a post from these three", "combine these", "plan a post from these for LinkedIn and X". It writes no body: the post holds their theses until someone drafts it. Several platforms get one planned post each. ideaIds default to the selected ideas, else the open one; pass them in the order the theses should come. The campaign defaults to the one they share. Pass targetDate only when the user names a date; otherwise the posts stay off the calendar, so say they're undated. It can be undone while no one has changed the posts.`),
 				spec(ideasPackName, draft, assistantkit.TierProposal,
-					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". ideaIds default to the selected ideas, else the open one. platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. More than a few posts are offered first.`),
+					`Call this to write finished posts from ideas — "draft LinkedIn and Instagram versions of these". ideaIds default to the selected ideas, else the open one. platformIds default to the ideas' suggested platform; together writes one post per platform from all of them. Pass targetDate only when the user names a date; without one (or a date planned on the ideas) the drafts are unscheduled — in Drafts, not on the calendar — so say that, and that they can be dated later. More than a few posts are offered first.`),
 			}, slices.Concat(defineReadTools(g, d), defineEditTools(g, d), defineMergeTools(g, d))...), nil
 		},
 	}
@@ -177,6 +177,8 @@ type IdeaRef struct {
 	CampaignID string          `json:"campaignId,omitempty"`
 	FitScore   *int            `json:"fitScore,omitempty"`
 	Plan       models.IdeaPlan `json:"plan"`
+	// Posts counts the posts made from the idea.
+	Posts int `json:"posts,omitempty"`
 }
 
 // FindIdeasOutput is one page of matches.
@@ -214,7 +216,7 @@ func findIdeas(ctx context.Context, d Deps, in FindIdeasInput) (*FindIdeasOutput
 }
 
 func ideaRef(i models.Idea) IdeaRef {
-	r := IdeaRef{ID: i.ID, Title: i.Title, Origin: string(i.Origin), FitScore: i.FitScore, Plan: i.Plan}
+	r := IdeaRef{ID: i.ID, Title: i.Title, Origin: string(i.Origin), FitScore: i.FitScore, Plan: i.Plan, Posts: i.PostCount}
 	if i.Verdict != nil {
 		r.Verdict = string(*i.Verdict)
 	}
@@ -426,29 +428,37 @@ func deleteIdeas(ctx context.Context, d Deps, in DeleteIdeasInput) (*BulkIdeasOu
 	return out, nil
 }
 
-// CompileIdeasInput turns ideas into one planned post.
+// CompileIdeasInput turns ideas into a planned post per platform.
 type CompileIdeasInput struct {
-	IdeaIDs    []string `json:"ideaIds,omitempty"    jsonschema:"description=The ideas, in the order their theses should come; default the selected ideas, else the open one"`
-	Title      string   `json:"title,omitempty"      jsonschema:"description=The post's title; defaults to the first idea's"`
-	CampaignID string   `json:"campaignId,omitempty" jsonschema:"description=The post's campaign; defaults to the one the ideas share"`
-	PlatformID string   `json:"platformId,omitempty"`
-	PostType   string   `json:"postType,omitempty"`
-	TargetDate string   `json:"targetDate,omitempty" jsonschema:"description=YYYY-MM-DD"`
+	IdeaIDs     []string `json:"ideaIds,omitempty"     jsonschema:"description=The ideas, in the order their theses should come; default the selected ideas, else the open one"`
+	Title       string   `json:"title,omitempty"       jsonschema:"description=The posts' title; defaults to the first idea's"`
+	CampaignID  string   `json:"campaignId,omitempty"  jsonschema:"description=The posts' campaign; defaults to the one the ideas share"`
+	PlatformIDs []string `json:"platformIds,omitempty" jsonschema:"description=One post per platform; default the ideas' suggested platform"`
+	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Needs exactly one platform"`
+	TargetDate  string   `json:"targetDate,omitempty"  jsonschema:"description=YYYY-MM-DD; only when the user names a date or the ideas plan one, else the posts stay undated"`
 }
 
-// CompileIdeasOutput is the planned post.
+// CompileIdeasOutput is the planned posts: the first one's fields, then
+// every post, one per platform.
 type CompileIdeasOutput struct {
+	CompiledPost
+	Posts      []CompiledPost `json:"posts"`
+	CampaignID string         `json:"campaignId"`
+	Ideas      int            `json:"ideas"`
+	// Grounding is the ideas' assets the posts' theses rest on; exploratory
+	// when they had none.
+	Grounding assistantkit.Grounding `json:"grounding"`
+	// UndoID deletes the posts again while no one has changed them.
+	UndoID string `json:"undoId,omitempty"`
+}
+
+// CompiledPost is one planned post. Date is empty for an undated one.
+type CompiledPost struct {
 	PostID     string `json:"postId"`
 	Title      string `json:"title"`
 	Status     string `json:"status"`
-	CampaignID string `json:"campaignId"`
 	PlatformID string `json:"platformId,omitempty"`
-	Ideas      int    `json:"ideas"`
-	// Grounding is the ideas' assets the post's theses rest on; exploratory
-	// when they had none.
-	Grounding assistantkit.Grounding `json:"grounding"`
-	// UndoID deletes the post again while no one has changed it.
-	UndoID string `json:"undoId,omitempty"`
+	Date       string `json:"date,omitempty"`
 }
 
 func calendarDate(s string) (*models.CalendarDate, error) {
@@ -477,7 +487,7 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 	compile := func(campaignID string) (*compose.Result, error) {
 		return d.Compose.Compile(ctx, compose.Input{
 			IdeaIDs: in.IdeaIDs, CampaignID: campaignID, Title: in.Title,
-			PlatformID: in.PlatformID, PostType: in.PostType, TargetDate: date,
+			PlatformIDs: in.PlatformIDs, PostType: in.PostType, TargetDate: date,
 			Actor: actor(ctx), NoteOrigin: models.PostNoteOriginAssistant,
 		})
 	}
@@ -488,15 +498,24 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 	if err != nil {
 		return nil, composeErr(err)
 	}
-	p := res.Post
-	assistantkit.Touch(ctx, "post", p.ID)
-	var notes []models.PostNote
-	if res.Note != nil {
-		notes = append(notes, *res.Note)
+	first := res.Posts[0].Post
+	out := &CompileIdeasOutput{CampaignID: first.CampaignID, Ideas: len(res.Ideas),
+		Grounding: analysed(ctx, d, &first.CampaignID, newAssetTitles(d).grounding(ctx, fromIdeas(first.UsedAssetIDs, res.Ideas)))}
+	made := make([]assistantundo.MadePost, len(res.Posts))
+	for i, c := range res.Posts {
+		p := c.Post
+		assistantkit.Touch(ctx, "post", p.ID)
+		made[i] = assistantundo.MadePost{Post: p, Notes: []models.PostNote{*c.Note}}
+		cp := CompiledPost{PostID: p.ID, Title: p.Title, Status: string(p.Status), PlatformID: p.PlatformID}
+		if p.ScheduledAt != nil {
+			cp.Date = p.ScheduledAt.Format(time.DateOnly)
+		}
+		out.Posts = append(out.Posts, cp)
 	}
-	return &CompileIdeasOutput{PostID: p.ID, Title: p.Title, Status: string(p.Status), CampaignID: p.CampaignID, PlatformID: p.PlatformID, Ideas: len(res.Ideas),
-		Grounding: analysed(ctx, d, &p.CampaignID, newAssetTitles(d).grounding(ctx, fromIdeas(p.UsedAssetIDs, res.Ideas))),
-		UndoID:    recordUndo(ctx, d, models.AssistantActionPostCreated, p.ID, models.JSONMap{}, assistantundo.PostCreated(p, notes))}, nil
+	out.CompiledPost = out.Posts[0]
+	out.CompiledPost = out.Posts[0]
+	out.UndoID = recordUndo(ctx, d, models.AssistantActionPostCreated, first.ID, models.JSONMap{}, assistantundo.PostsCreated(made))
+	return out, nil
 }
 
 // assetTitles names assets for grounding, reading each once.
@@ -570,7 +589,7 @@ type DraftIdeasInput struct {
 	PostType    string   `json:"postType,omitempty"    jsonschema:"description=Needs exactly one platform"`
 	Together    bool     `json:"together,omitempty"    jsonschema:"description=One post per platform from all the ideas, instead of one per idea"`
 	Instruction string   `json:"instruction,omitempty" jsonschema:"description=Steering for the writer, e.g. punchier, for CFOs"`
-	TargetDate  string   `json:"targetDate,omitempty"  jsonschema:"description=YYYY-MM-DD"`
+	TargetDate  string   `json:"targetDate,omitempty"  jsonschema:"description=YYYY-MM-DD; only when the user names a date, else the drafts stay unscheduled"`
 	CampaignID  string   `json:"campaignId,omitempty"`
 }
 
