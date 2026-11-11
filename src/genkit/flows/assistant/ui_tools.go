@@ -157,10 +157,10 @@ func (t *toolSet) setFilter(ctx context.Context, in SetFilterInput) (*UIResult, 
 	screen := st.currentScreen()
 	kind, ok := screen.ListKind()
 	if _, selectable := screen.SelectKind(); !ok && selectable {
-		return nil, assistantkit.Refused("this list has no filter I can set; filters apply on the Ideas and Assets lists")
+		return nil, assistantkit.Refused("this list has no filter I can set; filters apply on the Ideas, Assets and posts lists and the calendar")
 	}
 	if !ok {
-		return nil, assistantkit.Refused("filters apply on the Ideas and Assets lists; navigate to one first")
+		return nil, assistantkit.Refused("filters apply on the Ideas, Assets and posts lists and the calendar; navigate to one first")
 	}
 	if len(in.Filter) > viewcontext.MaxFilterLen {
 		return nil, assistantkit.Refused("the filter is too long")
@@ -194,14 +194,14 @@ func (t *toolSet) selectItems(ctx context.Context, in SelectInput) (*UIResult, e
 	screen := st.currentScreen()
 	kind, ok := screen.SelectKind()
 	if !ok {
-		return nil, assistantkit.Refused("items can be selected on the Ideas and Assets lists and a campaign's posts list; navigate to one first")
+		return nil, assistantkit.Refused("items can be selected on the Ideas, Assets and posts lists, the calendar and the Foundation's voices, audiences, facts and series; navigate to one first")
 	}
 	if len(in.IDs) == 0 || len(in.IDs) > viewcontext.MaxSelectionIDs {
 		return nil, assistantkit.Refused(fmt.Sprintf("select between 1 and %d items; for more, filter the list instead", viewcontext.MaxSelectionIDs))
 	}
-	// A campaign's posts list shows that campaign's posts only.
+	// A campaign's posts list and calendar show that campaign's posts only.
 	var items []viewresolve.Item
-	if kind == viewcontext.KindPost {
+	if kind == viewcontext.KindPost && screen.InCampaign() {
 		campaign := st.currentCampaign()
 		if campaign == "" {
 			return nil, assistantkit.Refused("which campaign's posts? navigate to the campaign's list first")
@@ -359,6 +359,10 @@ func plural(kind viewcontext.EntityKind, n int) string {
 	}
 	return string(kind) + "s"
 }
+
+// postsFilterSyntax is the posts list's and the calendar's filter syntax, for
+// setFilter's guide.
+const postsFilterSyntax = `On a posts list or the calendar the syntax is status=planned|draft|ready_for_publish|scheduled|scheduled_for_manual_publishing|failed|published|not_published, platform=<platform id>, post_type=<type>, campaign_id=<id> (comma-separate values; add _not to exclude), scheduled=yes|no (whether a post has a date), scheduled_after=YYYY-MM-DD (inclusive), scheduled_before=YYYY-MM-DD (exclusive), tz=<IANA zone> — e.g. status=failed&platform=linkedin. On the calendar the window on screen narrows it.`
 
 // screenList is navigate's guide line of every screen.
 func screenList() string {

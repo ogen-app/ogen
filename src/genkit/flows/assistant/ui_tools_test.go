@@ -369,8 +369,8 @@ func TestOpenAddSource(t *testing.T) {
 	}
 }
 
-// A campaign's posts list can be ticked, with its own posts only; it has no
-// filter the server could read.
+// A campaign's posts list can be ticked, with its own posts only, and
+// filtered in the posts list's syntax.
 func TestSelectPostsOnTheCampaignList(t *testing.T) {
 	h := newHarness(t)
 	ctx, st := onScreen(t, `{"version":1,"screen":"campaign.list","scope":{"kind":"campaign","id":"c1"}}`)
@@ -381,7 +381,37 @@ func TestSelectPostsOnTheCampaignList(t *testing.T) {
 	if got := st.uiActions(); len(got) != 1 || got[0].Selection.Kind != viewcontext.KindPost || !slices.Equal(got[0].Selection.IDs, []string{"p1"}) {
 		t.Fatalf("actions = %+v", got)
 	}
-	_, err = h.tools.setFilter(ctx, SetFilterInput{Filter: "status=draft"})
+	res, err = h.tools.setFilter(ctx, SetFilterInput{Filter: "status=draft"})
+	if err != nil || res.Done != "filtering the list by status=draft" {
+		t.Fatalf("filter = %+v, %v", res, err)
+	}
+	if got := st.uiActions(); len(got) != 2 || got[1].Type != UISetFilter || got[1].Screen != "campaign.list" || got[1].CampaignID != "c1" {
+		t.Fatalf("actions = %+v", got)
+	}
+}
+
+// The workspace calendar ticks any of the workspace's posts and takes the
+// posts filter; a foundation list ticks its items but has no filter.
+func TestSelectOnTheCalendarAndFoundation(t *testing.T) {
+	h := newHarness(t)
+	ctx, st := onScreen(t, `{"version":1,"screen":"calendar","scope":{"kind":"workspace"}}`)
+	res, err := h.tools.selectItems(ctx, SelectInput{IDs: []string{"p1", "p-other"}})
+	if err != nil || res.Done != "selecting 2 posts" {
+		t.Fatalf("select = %+v, %v", res, err)
+	}
+	if _, err := h.tools.setFilter(ctx, SetFilterInput{Filter: "platform=linkedin"}); err != nil {
+		t.Fatal(err)
+	}
+
+	st.screen = "foundation.voices"
+	res, err = h.tools.selectItems(ctx, SelectInput{IDs: []string{"v1"}})
+	if err != nil || res.Done != "selecting 1 voice" {
+		t.Fatalf("select voice = %+v, %v", res, err)
+	}
+	if got := st.uiActions(); got[len(got)-1].Selection.Kind != viewcontext.KindVoice {
+		t.Fatalf("actions = %+v", got)
+	}
+	_, err = h.tools.setFilter(ctx, SetFilterInput{Filter: "x=1"})
 	refusal(t, err, "no filter I can set")
 }
 

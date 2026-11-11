@@ -50,7 +50,7 @@ func TestScreenKinds(t *testing.T) {
 		if k, ok := s.DetailKind(); ok && !slices.Contains(kinds, k) {
 			t.Fatalf("%s shows unknown kind %s", s, k)
 		}
-		if k, ok := s.ListKind(); ok && k != KindIdea && k != KindAsset {
+		if k, ok := s.ListKind(); ok && k != KindIdea && k != KindAsset && k != KindPost {
 			t.Fatalf("%s lists %s, which has no filter syntax", s, k)
 		}
 	}
@@ -59,9 +59,18 @@ func TestScreenKinds(t *testing.T) {
 			t.Fatalf("detail screen %s is not a screen", s)
 		}
 	}
-	for s := range listKinds {
+	for s, k := range listKinds {
 		if !s.Valid() {
 			t.Fatalf("list screen %s is not a screen", s)
+		}
+		// Every filterable list can be ticked too.
+		if sk, ok := s.SelectKind(); !ok || sk != k {
+			t.Fatalf("list screen %s can't select its %s", s, k)
+		}
+	}
+	for s := range selectKinds {
+		if !s.Valid() {
+			t.Fatalf("select screen %s is not a screen", s)
 		}
 	}
 	if !Screen("campaign.ideas").InCampaign() || Screen("ideas").InCampaign() || Screen("billing").Valid() {

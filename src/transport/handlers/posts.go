@@ -27,6 +27,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/post_actions/schedule"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/update"
 	"github.com/ogen-app/ogen/src/usecase/post_actions/withdraw"
+	"github.com/ogen-app/ogen/src/usecase/postquery"
 	"github.com/ogen-app/ogen/src/usecase/qualityauto"
 	"github.com/ogen-app/ogen/src/usecase/series"
 )
@@ -1033,15 +1034,32 @@ func (h *PostsHandler) validateForCreate(c *fiber.Ctx, post *models.Post) (done 
 
 // List godoc
 // @Summary      List posts
-// @Description  Returns all posts ordered by creation date, with campaign, platform, and assets hydrated.
+// @Description  Returns the posts matching the filters, ordered by creation date, with campaign, platform, and assets hydrated. Without filters, every post.
 // @Tags         posts
 // @Produce      json
 // @Security     CookieAuth
+// @Param        status            query     string  false  "Statuses to keep, comma-separated: planned, draft, ready_for_publish, scheduled, scheduled_for_manual_publishing, failed, published, not_published"
+// @Param        status_not        query     string  false  "Statuses to exclude"
+// @Param        platform          query     string  false  "Platform ids to keep"
+// @Param        platform_not      query     string  false  "Platform ids to exclude"
+// @Param        post_type         query     string  false  "Post types to keep"
+// @Param        post_type_not     query     string  false  "Post types to exclude"
+// @Param        campaign_id       query     string  false  "Campaign ids to keep"
+// @Param        campaign_id_not   query     string  false  "Campaign ids to exclude"
+// @Param        scheduled         query     string  false  "yes: only dated posts; no: only undated ones"
+// @Param        scheduled_after   query     string  false  "RFC 3339 or YYYY-MM-DD, inclusive"
+// @Param        scheduled_before  query     string  false  "RFC 3339 or YYYY-MM-DD, exclusive"
+// @Param        tz                query     string  false  "IANA time zone of YYYY-MM-DD bounds (default UTC)"
 // @Success      200  {array}   models.Post
+// @Failure      400  {object}  map[string]string  "code: invalid_filter"
 // @Failure      401  {object}  map[string]string
 // @Router       /api/posts [get]
 func (h *PostsHandler) List(c *fiber.Ctx) error {
-	posts, err := h.repo.List(reqCtx(c))
+	q, err := postquery.ParseQuery(queryValuesOf(c))
+	if err != nil {
+		return listQueryFailure(c, err)
+	}
+	posts, err := h.repo.Query(reqCtx(c), q)
 	if err != nil {
 		return err
 	}
@@ -1051,16 +1069,34 @@ func (h *PostsHandler) List(c *fiber.Ctx) error {
 
 // ListByCampaign godoc
 // @Summary      List posts by campaign
-// @Description  Returns all posts for the given campaign ID, with campaign, platform, and assets hydrated.
+// @Description  Returns the campaign's posts matching the filters, with campaign, platform, and assets hydrated. Without filters, all of them.
 // @Tags         posts
 // @Produce      json
 // @Security     CookieAuth
-// @Param        campaign_id  path      string  true  "Campaign Sqid"
+// @Param        campaign_id       path      string  true   "Campaign Sqid"
+// @Param        status            query     string  false  "Statuses to keep, comma-separated: planned, draft, ready_for_publish, scheduled, scheduled_for_manual_publishing, failed, published, not_published"
+// @Param        status_not        query     string  false  "Statuses to exclude"
+// @Param        platform          query     string  false  "Platform ids to keep"
+// @Param        platform_not      query     string  false  "Platform ids to exclude"
+// @Param        post_type         query     string  false  "Post types to keep"
+// @Param        post_type_not     query     string  false  "Post types to exclude"
+// @Param        campaign_id       query     string  false  "Campaign ids to keep"
+// @Param        campaign_id_not   query     string  false  "Campaign ids to exclude"
+// @Param        scheduled         query     string  false  "yes: only dated posts; no: only undated ones"
+// @Param        scheduled_after   query     string  false  "RFC 3339 or YYYY-MM-DD, inclusive"
+// @Param        scheduled_before  query     string  false  "RFC 3339 or YYYY-MM-DD, exclusive"
+// @Param        tz                query     string  false  "IANA time zone of YYYY-MM-DD bounds (default UTC)"
 // @Success      200          {array}   models.Post
+// @Failure      400          {object}  map[string]string  "code: invalid_filter"
 // @Failure      401          {object}  map[string]string
 // @Router       /api/campaigns/{campaign_id}/posts [get]
 func (h *PostsHandler) ListByCampaign(c *fiber.Ctx) error {
-	posts, err := h.repo.ListByCampaign(reqCtx(c), c.Params("campaign_id"))
+	q, err := postquery.ParseQuery(queryValuesOf(c))
+	if err != nil {
+		return listQueryFailure(c, err)
+	}
+	q.ScopeCampaign = c.Params("campaign_id")
+	posts, err := h.repo.Query(reqCtx(c), q)
 	if err != nil {
 		return err
 	}

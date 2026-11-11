@@ -3323,7 +3323,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns all posts for the given campaign ID, with campaign, platform, and assets hydrated.",
+                "description": "Returns the campaign's posts matching the filters, with campaign, platform, and assets hydrated. Without filters, all of them.",
                 "produces": [
                     "application/json"
                 ],
@@ -3338,6 +3338,78 @@ const docTemplate = `{
                         "name": "campaign_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Statuses to keep, comma-separated: planned, draft, ready_for_publish, scheduled, scheduled_for_manual_publishing, failed, published, not_published",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Statuses to exclude",
+                        "name": "status_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Platform ids to keep",
+                        "name": "platform",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Platform ids to exclude",
+                        "name": "platform_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Post types to keep",
+                        "name": "post_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Post types to exclude",
+                        "name": "post_type_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids to keep",
+                        "name": "campaign_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids to exclude",
+                        "name": "campaign_id_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "yes: only dated posts; no: only undated ones",
+                        "name": "scheduled",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 or YYYY-MM-DD, inclusive",
+                        "name": "scheduled_after",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 or YYYY-MM-DD, exclusive",
+                        "name": "scheduled_before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone of YYYY-MM-DD bounds (default UTC)",
+                        "name": "tz",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3347,6 +3419,15 @@ const docTemplate = `{
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/models.Post"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "code: invalid_filter",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     },
@@ -10511,7 +10592,7 @@ const docTemplate = `{
                         "CookieAuth": []
                     }
                 ],
-                "description": "Returns all posts ordered by creation date, with campaign, platform, and assets hydrated.",
+                "description": "Returns the posts matching the filters, ordered by creation date, with campaign, platform, and assets hydrated. Without filters, every post.",
                 "produces": [
                     "application/json"
                 ],
@@ -10519,6 +10600,80 @@ const docTemplate = `{
                     "posts"
                 ],
                 "summary": "List posts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Statuses to keep, comma-separated: planned, draft, ready_for_publish, scheduled, scheduled_for_manual_publishing, failed, published, not_published",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Statuses to exclude",
+                        "name": "status_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Platform ids to keep",
+                        "name": "platform",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Platform ids to exclude",
+                        "name": "platform_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Post types to keep",
+                        "name": "post_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Post types to exclude",
+                        "name": "post_type_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids to keep",
+                        "name": "campaign_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Campaign ids to exclude",
+                        "name": "campaign_id_not",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "yes: only dated posts; no: only undated ones",
+                        "name": "scheduled",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 or YYYY-MM-DD, inclusive",
+                        "name": "scheduled_after",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 or YYYY-MM-DD, exclusive",
+                        "name": "scheduled_before",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA time zone of YYYY-MM-DD bounds (default UTC)",
+                        "name": "tz",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -10526,6 +10681,15 @@ const docTemplate = `{
                             "type": "array",
                             "items": {
                                 "$ref": "#/definitions/models.Post"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "code: invalid_filter",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     },

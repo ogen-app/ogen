@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -70,20 +71,26 @@ func (s Screen) DetailKind() (EntityKind, bool) {
 	return k, ok
 }
 
-// listKinds names what each filterable list screen lists.
+// listKinds names what each filterable list screen lists. A campaign's posts
+// list and the calendars read the posts list's filter; on a calendar the
+// window narrows it.
 var listKinds = map[Screen]EntityKind{
 	"ideas": KindIdea, "campaign.ideas": KindIdea,
 	"assets": KindAsset, "campaign.assets": KindAsset,
+	"campaign.list": KindPost, "calendar": KindPost, "campaign.calendar": KindPost,
 }
 
 // selectKinds names what each list screen whose items can be ticked lists:
-// the filterable lists, and the campaign's posts list, which has no filter
-// the server could read.
-var selectKinds = map[Screen]EntityKind{
-	"ideas": KindIdea, "campaign.ideas": KindIdea,
-	"assets": KindAsset, "campaign.assets": KindAsset,
-	"campaign.list": KindPost,
-}
+// the filterable lists, and the foundation lists, which are short enough to
+// select by id.
+var selectKinds = func() map[Screen]EntityKind {
+	kinds := map[Screen]EntityKind{
+		"foundation.voices": KindVoice, "foundation.audiences": KindAudience,
+		"foundation.facts": KindFact, "foundation.series": KindSeries,
+	}
+	maps.Copy(kinds, listKinds)
+	return kinds
+}()
 
 // SelectKind is the kind a list screen lets the assistant tick; false for a
 // screen without a selectable list.
@@ -142,7 +149,10 @@ type Selection struct {
 	Count int `json:"count,omitempty"`
 }
 
-// Window is an analytics range and its platform and campaign filters.
+// Window is a date range and its platform and campaign filters: an analytics
+// dashboard's, or the days a calendar shows. On a calendar it narrows the
+// filter that "select all matching" resolves, its days read in the filter's
+// tz.
 type Window struct {
 	From      string   `json:"from,omitempty"` // YYYY-MM-DD
 	To        string   `json:"to,omitempty"`   // YYYY-MM-DD
