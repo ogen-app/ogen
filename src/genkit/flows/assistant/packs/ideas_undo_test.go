@@ -83,7 +83,7 @@ func TestCompileIdeas_Undo(t *testing.T) {
 	}
 
 	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-3", "u-1"}})
-	if err != nil || out.Grounding.Mode != assistantkit.Grounded || len(out.Grounding.Sources) != 1 || out.Grounding.Sources[0].ID != "a9" {
+	if err != nil || out.Grounding.Mode != assistantkit.Grounded || len(out.Grounding.Sources) != 1 || out.Grounding.Sources[0].ID != "a9" || out.Grounding.Sources[0].IdeaID != "u-3" {
 		t.Fatalf("grounded compile = %+v, %v", out, err)
 	}
 	if _, err := db.NewUpdate().Model((*models.Post)(nil)).Set("content = ?", "Written by hand").Where("id = ?", out.PostID).Exec(ctx); err != nil {

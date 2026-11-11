@@ -69,7 +69,9 @@ func assetsPack(d Deps) assistant.Pack {
 				}), ai.WithStrictSchema(false))
 			distill := genkit.DefineTool(g, "distillMoreIdeas",
 				"Asks an analysed asset for more ideas, optionally steered by a focus, without repeating the ones it has.",
-				assistantkit.Wrap(func(ctx context.Context, in DistillMoreInput) (*QueuedOutput, error) { return distillMore(ctx, d, in) }), ai.WithStrictSchema(false))
+				assistantkit.Wrap(func(ctx context.Context, in DistillMoreInput) (*DistillMoreOutput, error) {
+					return distillMore(ctx, d, in)
+				}), ai.WithStrictSchema(false))
 			tag := genkit.DefineTool(g, "tagAssets",
 				"Adds or removes tags on assets, by tag name. Above a few assets it is offered for the user to confirm first.",
 				assistantkit.Gated("tagAssets", assistantkit.Gate[TagAssetsInput]{
@@ -395,25 +397,39 @@ type DistillMoreInput struct {
 	Count      int    `json:"count,omitempty"      jsonschema:"description=How many ideas; the service caps it"`
 }
 
-func distillMore(ctx context.Context, d Deps, in DistillMoreInput) (*QueuedOutput, error) {
+// DistillMoreOutput is whether more ideas were asked for, and what they
+// are grounded in: the asset, through the analysis they are distilled from.
+type DistillMoreOutput struct {
+	QueuedOutput
+	Grounding assistantkit.Grounding `json:"grounding"`
+}
+
+func distillMore(ctx context.Context, d Deps, in DistillMoreInput) (*DistillMoreOutput, error) {
 	if d.Analysis == nil {
 		return nil, assistantkit.Refused("asset analysis is not available")
 	}
 	tenant, _ := tenantctx.From(ctx)
 	by := actor(ctx)
-	_, err := d.Analysis.RequestDistill(ctx, assetanalysis.DistillInput{
+	run, err := d.Analysis.RequestDistill(ctx, assetanalysis.DistillInput{
 		TenantID: tenant, AssetID: in.AssetID, CampaignID: lensCampaign(ctx, in.CampaignID), Focus: in.Focus, Count: in.Count, UserID: &by,
 	})
+	src := assistantkit.Source{ID: in.AssetID}
+	if run != nil {
+		src.AnalysisID = run.AnalysisID
+	}
+	out := &DistillMoreOutput{Grounding: newAssetTitles(d).grounding(ctx, []assistantkit.Source{src})}
 	switch {
 	case errors.Is(err, assetanalysis.ErrDistillInProgress):
-		return &QueuedOutput{Queued: false, Note: "more ideas are already being distilled from this asset"}, nil
+		out.QueuedOutput = QueuedOutput{Queued: false, Note: "more ideas are already being distilled from this asset"}
+		return out, nil
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, assistantkit.Refused("that asset isn't analysed for this lens yet; analyse it first")
 	case err != nil:
 		return nil, assistantkit.Refused("couldn't ask for more ideas: " + err.Error())
 	}
 	assistantkit.Touch(ctx, "idea", "")
-	return &QueuedOutput{Queued: true, Note: "the new ideas appear in the Ideas list when they're ready"}, nil
+	out.QueuedOutput = QueuedOutput{Queued: true, Note: "the new ideas appear in the Ideas list when they're ready"}
+	return out, nil
 }
 
 // TagAssetsInput adds and removes tags by name.

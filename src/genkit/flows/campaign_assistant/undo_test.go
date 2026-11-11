@@ -13,6 +13,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/enrich_brief"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/assistantundo"
 )
@@ -209,12 +210,18 @@ func TestEnrichBrief_IsUndoable(t *testing.T) {
 	st := &requestState{campaignID: "c1", campaign: c,
 		repos: CampaignAssistantRepos{Campaigns: campaigns, Actions: actions},
 		enrichBrief: func(context.Context, enrich_brief.EnrichBriefRequest, enrich_brief.OnEventFunc) (*enrich_brief.EnrichBriefResponse, error) {
-			return &enrich_brief.EnrichBriefResponse{Description: "new desc", TargetPersona: "new persona", KeyMessages: "new messages", ToneGuidelines: "new tone"}, nil
+			return &enrich_brief.EnrichBriefResponse{Description: "new desc", TargetPersona: "new persona", KeyMessages: "new messages", ToneGuidelines: "new tone",
+				Sources: []enrich_brief.Source{{ID: "a1", Title: "Brochure", AnalysisID: "an1"}}}, nil
 		}}
 
 	runTool(t, st, "enrichBrief", map[string]any{"instruction": "sharper"})
 	if st.briefResult == nil || st.briefResult.UndoID == "" || campaigns.c.Description != "new desc" {
 		t.Fatalf("result = %+v, description = %q", st.briefResult, campaigns.c.Description)
+	}
+	// The brief says what it drew on.
+	if g := st.briefResult.Grounding; g == nil || g.Mode != assistantkit.Grounded ||
+		!slices.Equal(g.Sources, []assistantkit.Source{{ID: "a1", Title: "Brochure", AnalysisID: "an1"}}) {
+		t.Fatalf("grounding = %+v", st.briefResult.Grounding)
 	}
 	a := actions.logged(t, st.briefResult.UndoID)
 	want := models.JSONMap{"description": "desc", "targetPersona": "persona", "keyMessages": "messages", "toneGuidelines": "tone"}

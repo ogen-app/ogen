@@ -28,7 +28,7 @@ func (r *compareLenses) GetLens(_ context.Context, assetID string, campaignID *s
 	if !ok {
 		return nil, sql.ErrNoRows
 	}
-	return &models.AssetAnalysis{AssetID: assetID, Status: models.AssetAnalysisStatusReady, Summary: s,
+	return &models.AssetAnalysis{ID: "an-" + assetID, AssetID: assetID, Status: models.AssetAnalysisStatusReady, Summary: s,
 		Result: models.AssetAnalysisResult{KeyPoints: []string{"kp"}}}, nil
 }
 
@@ -91,7 +91,12 @@ func TestCompareAssets(t *testing.T) {
 	if !slices.Equal(out.Conflicts[0].Letters, []string{"A", "C"}) || !slices.Equal(out.Partial[0].Letters, []string{"B"}) {
 		t.Fatalf("letters = %+v / %+v", out.Conflicts, out.Partial)
 	}
-	if out.Grounding.Mode != "grounded" || len(out.Grounding.Sources) != 3 {
+	// Each source names the analysis read, when one was.
+	var analyses []string
+	for _, src := range out.Grounding.Sources {
+		analyses = append(analyses, src.AnalysisID)
+	}
+	if out.Grounding.Mode != "grounded" || !slices.Equal(analyses, []string{"an-a1", "", "an-a3"}) {
 		t.Fatalf("grounding = %+v", out.Grounding)
 	}
 	// The lens read is the thread's campaign's.

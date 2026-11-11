@@ -24,17 +24,32 @@ type EnrichBriefResponse struct {
 	TargetPersona  string `json:"targetPersona"  jsonschema:"description=Who the campaign speaks to"`
 	KeyMessages    string `json:"keyMessages"    jsonschema:"description=3-5 key messages, one per line"`
 	ToneGuidelines string `json:"toneGuidelines" jsonschema:"description=Voice and style guidance"`
+	// Sources are the campaign's sources the brief drew on, as the model
+	// named them; empty when it drew on none.
+	Sources []Source `json:"sources,omitempty"`
+}
+
+// Source is one of the campaign's assets, and the analysis of it the brief
+// was given.
+type Source struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	AnalysisID string `json:"analysisId"`
 }
 
 // EnrichBriefRepos bundles the repository dependencies for the flow.
 // CampaignTypes is a fallback: CampaignRepository.GetByID already hydrates
 // the campaign's type (with phases), but the repo lets the flow resolve a
 // type directly if a future caller passes an un-hydrated campaign. Brands
-// supplies the brand voice and guardrails; nil skips them.
+// supplies the brand voice and guardrails; nil skips them. Assets and
+// Analyses give the brief the campaign's analysed sources; either nil skips
+// them.
 type EnrichBriefRepos struct {
 	Campaigns     repository.CampaignRepository
 	CampaignTypes repository.CampaignTypeRepository
 	Brands        repository.BrandRepository
+	Assets        repository.AssetRepository
+	Analyses      repository.AssetAnalysisRepository
 }
 
 // EnrichBriefFlowConfig holds static settings for the flow.

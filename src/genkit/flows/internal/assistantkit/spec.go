@@ -81,6 +81,9 @@ type Spec struct {
 	// Free marks a proposal-tier tool whose confirmed run makes no model
 	// call, so an offer of it can be confirmed past the tenant's spend cap.
 	Free bool
+	// Generates marks a tool that writes posts, ideas or a brief: its output
+	// must say what that is grounded in, a "grounding" field.
+	Generates bool
 }
 
 // toolName is the tool's name, or false when there is no tool: nil, or a

@@ -5,6 +5,7 @@ import (
 
 	"github.com/ogen-app/ogen/src/genkit/flows/content_plan"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
+	"github.com/ogen-app/ogen/src/infra/repository"
 )
 
 // groundingOf labels generated ideas by the offered sources they cite. A
@@ -23,10 +24,21 @@ func groundingOf(exploratory bool, offered []AssetRef, ideas []content_plan.Draf
 	var sources []assistantkit.Source
 	for _, a := range offered {
 		if cited[a.ID] {
-			sources = append(sources, assistantkit.Source(a))
+			sources = append(sources, assistantkit.Source{ID: a.ID, Title: a.Title})
 		}
 	}
 	return assistantkit.GroundingFrom(sources)
+}
+
+// traced names the campaign's analysis of each source, when it has a
+// finished one.
+func traced(ctx context.Context, st *requestState, g assistantkit.Grounding) assistantkit.Grounding {
+	if st.repos.Analyses == nil {
+		return g
+	}
+	return g.WithAnalyses(func(ids []string) (map[string]string, error) {
+		return repository.ReadyAnalysisIDs(ctx, st.repos.Analyses, ids, &st.campaignID)
+	})
 }
 
 const noSourcesReason = "This campaign has no sources yet, so anything I write would come from general knowledge, not your material."

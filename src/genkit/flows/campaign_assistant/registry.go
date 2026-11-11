@@ -25,12 +25,17 @@ var heavyTools = map[string]bool{
 	"setCampaignGoal": true, "replaceWeakestDrafts": true,
 }
 
+// reviewTools are the heavy tools that only read; every other heavy tool
+// writes posts, ideas or the brief, and says what they are grounded in.
+var reviewTools = map[string]bool{"checkBrief": true, "checkPostsConsistency": true}
+
 // newToolRegistry describes the campaign tools for the prompt and the runner.
 // The order is the order the model is given the tools in, so it must not
 // change between the planner call and the prewarm.
 func newToolRegistry(t *toolSet) (*assistantkit.Registry, error) {
 	spec := func(tool ai.ToolRef, tier assistantkit.Tier, action, guide string) assistantkit.Spec {
-		s := assistantkit.Spec{Name: tool.Name(), Pack: campaignPack, Scopes: campaignScope, Tier: tier, Guide: guide, Tool: tool}
+		s := assistantkit.Spec{Name: tool.Name(), Pack: campaignPack, Scopes: campaignScope, Tier: tier, Guide: guide, Tool: tool,
+			Generates: heavyTools[tool.Name()] && !reviewTools[tool.Name()]}
 		if heavyTools[tool.Name()] {
 			s.Prepare = holdHeavySlot
 		}

@@ -391,6 +391,8 @@ func (d *deps) genkitDeps() genkitDeps {
 			Campaigns:     r.campaignRepo,
 			CampaignTypes: r.campaignTypeRepo,
 			Brands:        r.brandRepo,
+			Assets:        r.pieceRepo,
+			Analyses:      r.assetAnalysisRepo,
 		},
 		campaignAssistRepos: campaign_assistant.CampaignAssistantRepos{
 			Messages:    r.assistantMessageRepo,

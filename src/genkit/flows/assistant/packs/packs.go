@@ -160,7 +160,15 @@ func All(d Deps) []assistant.Pack {
 var allScopes = []assistantkit.Scope{assistantkit.ScopeWorkspace, assistantkit.ScopeCampaign, assistantkit.ScopePost}
 
 func spec(pack string, tool ai.ToolRef, tier assistantkit.Tier, guide string) assistantkit.Spec {
-	return assistantkit.Spec{Name: tool.Name(), Pack: pack, Scopes: allScopes, Tier: tier, Guide: guide, Tool: tool}
+	return assistantkit.Spec{Name: tool.Name(), Pack: pack, Scopes: allScopes, Tier: tier, Guide: guide, Tool: tool,
+		Generates: generatingTools[tool.Name()]}
+}
+
+// generatingTools write posts or ideas, so each says what they are grounded
+// in.
+var generatingTools = map[string]bool{
+	"draftIdeas": true, "compileIdeas": true, "compareAssets": true,
+	"distillMoreIdeas": true, "moreLikeThese": true, "revisePost": true,
 }
 
 func actor(ctx context.Context) string {

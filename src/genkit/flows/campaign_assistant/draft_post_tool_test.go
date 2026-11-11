@@ -44,8 +44,8 @@ func TestResolveDraftSource(t *testing.T) {
 	}
 
 	// Override always wins, no history consulted.
-	if got, _ := resolveDraftSource(t.Context(), st(nil), "  pasted  "); got != "pasted" {
-		t.Fatalf("override = %q, want pasted", got)
+	if got, _ := resolveDraftSource(t.Context(), st(nil), "  pasted  "); got.text != "pasted" || got.known {
+		t.Fatalf("override = %+v, want pasted", got)
 	}
 
 	// Latest answered explanation is used.
@@ -53,8 +53,8 @@ func TestResolveDraftSource(t *testing.T) {
 		userMsg("what do the assets say?"),
 		modelMsg(`{"action":"answered","explanation":"the research"}`),
 	}), "")
-	if err != nil || got != "the research" {
-		t.Fatalf("answered = %q err=%v", got, err)
+	if err != nil || got.text != "the research" || !got.known || len(got.cited) != 0 {
+		t.Fatalf("answered = %+v err=%v", got, err)
 	}
 
 	// A post_drafted confirmation is skipped in favour of the earlier answer.
@@ -63,8 +63,8 @@ func TestResolveDraftSource(t *testing.T) {
 		userMsg("draft it"),
 		modelMsg(`{"action":"post_drafted","explanation":"I drafted 1 post."}`),
 	}), "")
-	if got != "research A" {
-		t.Fatalf("skip-confirmation = %q, want research A", got)
+	if got.text != "research A" {
+		t.Fatalf("skip-confirmation = %+v, want research A", got)
 	}
 
 	// The assistant stores the pack's action under results: an "answered"
@@ -74,18 +74,18 @@ func TestResolveDraftSource(t *testing.T) {
 		userMsg("draft it"),
 		modelMsg(`{"action":"answered","explanation":"I drafted 1 post.","results":{"campaign":{"action":"post_drafted"}}}`),
 	}), "")
-	if err != nil || got != "research A" {
-		t.Fatalf("skip-pack-confirmation = %q err=%v, want research A", got, err)
+	if err != nil || got.text != "research A" {
+		t.Fatalf("skip-pack-confirmation = %+v err=%v, want research A", got, err)
 	}
 
 	// No prior research → empty (the tool then declines).
-	if got, _ := resolveDraftSource(t.Context(), st([]models.AssistantMessage{userMsg("hi")}), ""); got != "" {
-		t.Fatalf("no-research = %q, want empty", got)
+	if got, _ := resolveDraftSource(t.Context(), st([]models.AssistantMessage{userMsg("hi")}), ""); got.text != "" {
+		t.Fatalf("no-research = %+v, want empty", got)
 	}
 
 	// Legacy plain-text model message (not JSON-wrapped) is used directly.
-	if got, _ := resolveDraftSource(t.Context(), st([]models.AssistantMessage{modelMsg("plain answer")}), ""); got != "plain answer" {
-		t.Fatalf("legacy = %q, want plain answer", got)
+	if got, _ := resolveDraftSource(t.Context(), st([]models.AssistantMessage{modelMsg("plain answer")}), ""); got.text != "plain answer" || got.known {
+		t.Fatalf("legacy = %+v, want plain answer", got)
 	}
 }
 
@@ -122,9 +122,8 @@ func newDraftState(msgs []models.AssistantMessage, calls *[]draft_post.DraftPost
 func TestToolDraftPost_OfferKeepsItsResearch(t *testing.T) {
 	var calls []draft_post.DraftPostRequest
 	store := &memProposals{}
-	st := newDraftState([]models.AssistantMessage{
-		modelMsg(`{"action":"answered","explanation":"research A"}`),
-	}, &calls)
+	researchA := modelMsg(`{"action":"answered","explanation":"research A","results":{"assets":{"ask":{"scope":"campaign","excerpts":[{"assetId":"a1","title":"Brochure"}]}}}}`)
+	st := newDraftState([]models.AssistantMessage{researchA}, &calls)
 	st.repos.Proposals = store
 	out := runTool(t, st, "draftPost", map[string]any{"platforms": []string{"LinkedIn"}, "count": 5})
 	if out.Status != assistantkit.StatusProposed || len(calls) != 0 {
@@ -136,7 +135,7 @@ func TestToolDraftPost_OfferKeepsItsResearch(t *testing.T) {
 
 	// Newer research, and the confirming turn's own message.
 	later := newDraftState([]models.AssistantMessage{
-		modelMsg(`{"action":"answered","explanation":"research A"}`),
+		researchA,
 		modelMsg(`{"action":"answered","explanation":"research B"}`),
 	}, &calls)
 	later.instruction = "yes"
@@ -145,6 +144,55 @@ func TestToolDraftPost_OfferKeepsItsResearch(t *testing.T) {
 	}
 	if len(calls) == 0 || calls[0].SourceMaterial != "research A" || calls[0].Instruction != "make it punchy" {
 		t.Fatalf("drafted from %+v", calls)
+	}
+	// It keeps the assets research A quoted, not research B's none.
+	if !slices.Equal(calls[0].UsedAssetIDs, []string{"a1"}) || calls[0].SourcesUnknown {
+		t.Fatalf("drafted with sources %v (unknown %v)", calls[0].UsedAssetIDs, calls[0].SourcesUnknown)
+	}
+}
+
+// Drafts are grounded in the assets the research quoted, through any pack:
+// stamped on the posts and named, with their analysis, in the result. An
+// answer that quoted none is exploratory, and pasted material is left
+// unlabelled.
+func TestToolDraftPost_GroundedInWhatTheResearchQuoted(t *testing.T) {
+	cases := []struct {
+		name, content, override string
+		want                    []string
+		unknown                 bool
+	}{
+		{name: "campaign ask", content: `{"action":"answered","explanation":"r","ask":{"scope":"campaign","excerpts":[{"assetId":"a1","title":"Brochure"},{"assetId":"a1","title":"Brochure"}]}}`, want: []string{"a1"}},
+		{name: "packs", content: `{"action":"answered","explanation":"r","results":{"assets":{"analysis":{"assetId":"a2","title":"Deck"},"compare":{"grounding":{"mode":"grounded","sources":[{"id":"a3","title":"Notes"}]}}}}}`, want: []string{"a2", "a3"}},
+		{name: "general knowledge", content: `{"action":"answered","explanation":"r"}`},
+		{name: "pasted", content: `{"action":"answered","explanation":"r"}`, override: "my notes", unknown: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []draft_post.DraftPostRequest
+			st := newDraftState([]models.AssistantMessage{modelMsg(tc.content)}, &calls)
+			var lens *string
+			st.repos.Analyses = lensDigests{ready: []string{"a1"}, lens: &lens}
+			out, err := toolDraftPost(withRequestState(t.Context(), st), DraftPostInput{Platforms: []string{"LinkedIn"}, SourceMaterial: tc.override})
+			if err != nil || !out.Succeeded() {
+				t.Fatalf("out = %+v, err = %v", out, err)
+			}
+			if !slices.Equal(calls[0].UsedAssetIDs, tc.want) || calls[0].SourcesUnknown != tc.unknown {
+				t.Fatalf("sources %v (unknown %v), want %v", calls[0].UsedAssetIDs, calls[0].SourcesUnknown, tc.want)
+			}
+			g := out.Result.Grounding
+			if tc.unknown {
+				if g != nil || st.draftPostResult.Grounding != nil {
+					t.Fatalf("pasted material labelled %+v", g)
+				}
+				return
+			}
+			if g == nil || len(g.Sources) != len(tc.want) || (len(tc.want) == 0) != (g.Mode == assistantkit.Exploratory) {
+				t.Fatalf("grounding = %+v", g)
+			}
+			if tc.name == "campaign ask" && (g.Sources[0].AnalysisID != "an-a1" || lens == nil || *lens != "c1") {
+				t.Fatalf("source = %+v, lens = %v", g.Sources[0], lens)
+			}
+		})
 	}
 }
 

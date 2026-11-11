@@ -456,3 +456,28 @@ func TestDismissFinding_FollowsTheCampaign(t *testing.T) {
 		t.Fatalf("campaign thread = %+v, %v", in, err)
 	}
 }
+
+// A rewrite keeps the post's grounding: its sources with the campaign's
+// analysis of each, exploratory as exploratory, and none when it was never
+// known.
+func TestRevisePost_KeepsThePostsGrounding(t *testing.T) {
+	d, posts, _ := repairDeps()
+	d.Revise = func(context.Context, string, string, string) (bool, error) { return true, nil }
+	d.Assets = memAssets{all: []models.Asset{{ID: "a1", Title: "Brochure"}}}
+	d.Analyses = gistAnalyses{}
+	posts.posts[0].GroundingMode, posts.posts[0].UsedAssetIDs = new(models.GroundingGrounded), models.StringSlice{"a1"}
+	posts.posts[1].GroundingMode = new(models.GroundingExploratory)
+	ctx, _ := turn(t, campaign1, nil)
+
+	out, err := revisePost(ctx, d, RevisePostInput{PostID: "p1", Instruction: "tighter"})
+	if err != nil || out.Grounding == nil || !slices.Equal(out.Grounding.Sources, []assistantkit.Source{{ID: "a1", Title: "Brochure", AnalysisID: "an-a1"}}) {
+		t.Fatalf("grounded = %+v, %v", out, err)
+	}
+	if out, err = revisePost(ctx, d, RevisePostInput{PostID: "p2", Instruction: "tighter"}); err != nil || out.Grounding == nil || out.Grounding.Mode != assistantkit.Exploratory {
+		t.Fatalf("exploratory = %+v, %v", out, err)
+	}
+	posts.posts[1].GroundingMode = nil
+	if out, err = revisePost(ctx, d, RevisePostInput{PostID: "p2", Instruction: "tighter"}); err != nil || out.Grounding != nil {
+		t.Fatalf("unknown = %+v, %v", out, err)
+	}
+}

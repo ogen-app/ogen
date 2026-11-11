@@ -17,7 +17,7 @@ import (
 func draftDeps(failOn int) (Deps, *[]compose.DraftRequest) {
 	d, repo, _ := ideaDeps()
 	c1 := "c1"
-	repo.byID["i1"].CampaignID, repo.byID["i1"].SourceAssetID = &c1, new("a1")
+	repo.byID["i1"].CampaignID, repo.byID["i1"].SourceAssetID, repo.byID["i1"].AssetAnalysisID = &c1, new("a1"), new("an1")
 	repo.byID["i1"].Plan = models.IdeaPlan{PlatformID: new("linkedin")}
 	repo.byID["i2"].CampaignID, repo.byID["i2"].Plan = &c1, models.IdeaPlan{PlatformID: new("linkedin")}
 	camp := &models.Campaign{ID: "c1", TargetPlatforms: models.CampaignPlatforms{{ID: "linkedin"}}}
@@ -36,8 +36,8 @@ func draftDeps(failOn int) (Deps, *[]compose.DraftRequest) {
 }
 
 // Each drafted post says what it is grounded in, in the result and in its
-// streamed event: the brochure for the analysed idea, nothing for the one
-// written by hand.
+// streamed event: the brochure, through the idea and the analysis it came
+// from, for the analysed idea; nothing for the one written by hand.
 func TestDraftIdeas_Grounding(t *testing.T) {
 	d, calls := draftDeps(0)
 	var events []DraftedIdeaPost
@@ -54,7 +54,7 @@ func TestDraftIdeas_Grounding(t *testing.T) {
 		t.Fatalf("posts = %+v, events %d, calls %d", out.Posts, len(events), len(*calls))
 	}
 	first, second := out.Posts[0], out.Posts[1]
-	if first.Grounding.Mode != assistantkit.Grounded || !slices.Equal(first.Grounding.Sources, []assistantkit.Source{{ID: "a1", Title: "Brochure"}}) ||
+	if first.Grounding.Mode != assistantkit.Grounded || !slices.Equal(first.Grounding.Sources, []assistantkit.Source{{ID: "a1", Title: "Brochure", AnalysisID: "an1", IdeaID: "i1"}}) ||
 		!slices.Equal(first.IdeaIDs, []string{"i1"}) {
 		t.Fatalf("first = %+v", first)
 	}

@@ -180,6 +180,8 @@ func (r *assetAnalysisRepository) ListByCampaign(ctx context.Context, campaignID
 
 // LensDigest is what the asset list shows of a lens.
 type LensDigest struct {
+	// ID is the analysis's.
+	ID     string
 	Status models.AssetAnalysisStatus
 	Gist   string
 	// SummaryHead is the start of the summary, read only when Gist is empty
@@ -198,6 +200,7 @@ func (r *assetAnalysisRepository) LensDigests(ctx context.Context, assetIDs []st
 		return out, nil
 	}
 	var rows []struct {
+		ID          string                     `bun:"id"`
 		AssetID     string                     `bun:"asset_id"`
 		Status      models.AssetAnalysisStatus `bun:"status"`
 		Gist        string                     `bun:"gist"`
@@ -205,7 +208,7 @@ func (r *assetAnalysisRepository) LensDigests(ctx context.Context, assetIDs []st
 	}
 	q := r.db.NewSelect().
 		Model((*models.AssetAnalysis)(nil)).
-		Column("aa.asset_id", "aa.status", "aa.gist").
+		Column("aa.id", "aa.asset_id", "aa.status", "aa.gist").
 		ColumnExpr("CASE WHEN aa.gist = '' THEN left(aa.summary, ?) ELSE '' END AS summary_head", summaryHeadRunes).
 		Where("aa.asset_id IN (?)", bun.List(assetIDs))
 	if campaignID == nil {
@@ -217,7 +220,23 @@ func (r *assetAnalysisRepository) LensDigests(ctx context.Context, assetIDs []st
 		return nil, err
 	}
 	for _, row := range rows {
-		out[row.AssetID] = LensDigest{Status: row.Status, Gist: row.Gist, SummaryHead: row.SummaryHead}
+		out[row.AssetID] = LensDigest{ID: row.ID, Status: row.Status, Gist: row.Gist, SummaryHead: row.SummaryHead}
+	}
+	return out, nil
+}
+
+// ReadyAnalysisIDs maps each asset to its finished analysis for a lens
+// (campaignID nil for the workspace's); an asset without one is left out.
+func ReadyAnalysisIDs(ctx context.Context, r AssetAnalysisRepository, assetIDs []string, campaignID *string) (map[string]string, error) {
+	digests, err := r.LensDigests(ctx, assetIDs, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(digests))
+	for id, d := range digests {
+		if d.Status == models.AssetAnalysisStatusReady && d.ID != "" {
+			out[id] = d.ID
+		}
 	}
 	return out, nil
 }

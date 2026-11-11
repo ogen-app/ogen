@@ -3,6 +3,7 @@ package enrich_brief
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"text/template"
@@ -130,5 +131,74 @@ func TestAssembleContext_BrandFailureFailsOpen(t *testing.T) {
 	}
 	if !strings.Contains(bctx.ContextBlock, "Anti-hype.") {
 		t.Errorf("current brief missing:\n%s", bctx.ContextBlock)
+	}
+}
+
+type sourceAssets struct {
+	repository.AssetRepository
+	all []models.Asset
+}
+
+func (f sourceAssets) ListMeta(_ context.Context, ids []string) ([]models.Asset, error) {
+	var out []models.Asset
+	for _, a := range f.all {
+		if slices.Contains(ids, a.ID) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+type sourceLenses struct {
+	repository.AssetAnalysisRepository
+	digests map[string]repository.LensDigest
+	lens    *string
+}
+
+func (f *sourceLenses) LensDigests(_ context.Context, _ []string, campaignID *string) (map[string]repository.LensDigest, error) {
+	f.lens = campaignID
+	return f.digests, nil
+}
+
+// The brief is given the campaign's analysed sources, by key, through the
+// campaign's lens; a pending analysis or one with nothing to say is left
+// out. The keys the model names back are the sources it drew on.
+func TestAssembleContext_Sources(t *testing.T) {
+	c := retentionCampaign()
+	c.AssetIDs = models.StringSlice{"a1", "a2", "a3"}
+	lenses := &sourceLenses{digests: map[string]repository.LensDigest{
+		"a1": {ID: "an1", Status: models.AssetAnalysisStatusReady, Gist: "Reopens 14 March with a rooftop bar."},
+		"a2": {ID: "an2", Status: models.AssetAnalysisStatusPending},
+		"a3": {ID: "an3", Status: models.AssetAnalysisStatusReady, SummaryHead: "## Spa\n\nThe spa opens at ten. More follows."},
+	}}
+	repos := EnrichBriefRepos{
+		Assets:   sourceAssets{all: []models.Asset{{ID: "a1", Title: "Brochure"}, {ID: "a2", Title: "Press kit"}, {ID: "a3", Title: "Spa menu"}}},
+		Analyses: lenses,
+	}
+	system, ctxTmpl := templates(t)
+	bctx, err := assembleContext(t.Context(), c, "", repos, system, ctxTmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## The campaign's sources", "- [S1] Brochure: Reopens 14 March with a rooftop bar.", "- [S2] Spa menu: The spa opens at ten."} {
+		if !strings.Contains(bctx.ContextBlock, want) {
+			t.Errorf("context lacks %q:\n%s", want, bctx.ContextBlock)
+		}
+	}
+	if strings.Contains(bctx.ContextBlock, "Press kit") || lenses.lens == nil || *lenses.lens != "c1" {
+		t.Fatalf("pending source listed, or lens %v", lenses.lens)
+	}
+	got := usedSources(`"S2", s9`, bctx.Sources)
+	if len(got) != 1 || got[0] != (Source{ID: "a3", Title: "Spa menu", AnalysisID: "an3"}) {
+		t.Fatalf("used = %+v", got)
+	}
+	if usedSources("", bctx.Sources) != nil {
+		t.Fatal("no keys named, yet sources used")
+	}
+
+	// Without sources the block is left out.
+	bare, err := assembleContext(t.Context(), retentionCampaign(), "", EnrichBriefRepos{}, system, ctxTmpl)
+	if err != nil || strings.Contains(bare.ContextBlock, "campaign's sources") {
+		t.Fatalf("bare context = %v / %s", err, bare.ContextBlock)
 	}
 }

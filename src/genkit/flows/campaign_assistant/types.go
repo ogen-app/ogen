@@ -122,9 +122,11 @@ type DraftPostResult struct {
 	PhaseID     string   `json:"phaseId"`
 	Dates       []string `json:"dates,omitempty"` // actual publish dates of the created posts
 	Warnings    []string `json:"warnings,omitempty"`
-	// UsedAssets lists the campaign assets that informed the drafts;
-	// empty in v1 (provenance is carried by each post's Source research note).
+	// UsedAssets lists the assets the research the drafts came from quoted.
 	UsedAssets []AssetRef `json:"usedAssets,omitempty"`
+	// Grounding is those assets; unset when the research's sources aren't
+	// known.
+	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
 }
 
 // ContentPlanResult summarises a runContentPlan tool invocation.
@@ -150,6 +152,8 @@ type BriefResult struct {
 	// UndoID reverses the change via POST /api/assistant/actions/:id/undo;
 	// empty when the change could not be logged.
 	UndoID string `json:"undoId,omitempty"`
+	// Grounding is the campaign's sources the brief drew on.
+	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
 }
 
 // CampaignAssistantRepos bundles the repository dependencies for the flow.
