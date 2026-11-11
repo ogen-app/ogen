@@ -205,7 +205,7 @@ type Post struct {
 	// by PostAttachment.SegmentIndex, not here.
 	ThreadSegments ThreadSegments `bun:"thread_segments,notnull,type:jsonb"           json:"thread_segments"`
 	MediaURLs      StringSlice    `bun:"media_urls,notnull,type:jsonb"                json:"media_urls"`
-	ScheduledAt    *time.Time     `bun:"scheduled_at"                                 json:"scheduled_at"`
+	ScheduledAt    *time.Time     `bun:"scheduled_at"                                 json:"scheduled_at" extensions:"x-nullable"`
 	PublishedAt    *time.Time     `bun:"published_at"                                 json:"published_at"`
 	Status         PostStatus     `bun:"status,notnull"                               json:"status"`
 	// Publisher integration fields (CON-69 §6/§7, generalized to

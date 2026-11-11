@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
@@ -35,7 +36,7 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 	notes := repository.NewPostNoteRepository(db)
 
 	if _, err := db.NewInsert().Model(&models.Campaign{
-		ID: "cmp-compile", Name: "Spring", CampaignTypeID: "t", CreatedBy: "u1",
+		ID: "cmp-compile", Name: "Spring", CampaignTypeID: "t", CreatedBy: "u1", Timezone: "Asia/Tokyo", PublishingTime: "00:30",
 		AssetIDs: models.StringSlice{}, PublishingDays: models.StringSlice{},
 		TargetPlatforms: models.CampaignPlatforms{{ID: "linkedin"}, {ID: "threads"}},
 	}).Exec(ctx); err != nil {
@@ -93,9 +94,15 @@ func TestCompile_WritesPostThesesAndLinks(t *testing.T) {
 
 	// One idea feeds more posts, one per platform, each with its theses;
 	// linking again keeps one row per pair.
-	more, err := svc.Compile(ctx, compose.Input{IdeaIDs: []string{"idc-1"}, Actor: "u1", Title: "Two takes", PlatformIDs: []string{"linkedin", "threads"}})
+	day, _ := models.ParseCalendarDate("2026-12-01")
+	more, err := svc.Compile(ctx, compose.Input{IdeaIDs: []string{"idc-1"}, Actor: "u1", Title: "Two takes", PlatformIDs: []string{"linkedin", "threads"}, TargetDate: &day})
 	if err != nil || len(more.Posts) != 2 || more.Posts[0].Post.PlatformID != "linkedin" || more.Posts[1].Post.PlatformID != "threads" {
 		t.Fatalf("compile for two platforms = %+v, %v", more, err)
+	}
+	// Half past midnight in Tokyo is the day before in UTC; the date is the
+	// campaign's.
+	if c := more.Posts[0]; c.Date != "2026-12-01" || c.Post.ScheduledAt.UTC().Format(time.DateOnly) != "2026-11-30" {
+		t.Fatalf("date = %q, scheduled at %v", c.Date, c.Post.ScheduledAt)
 	}
 	for _, c := range more.Posts {
 		if ns, err := notes.ListByPostID(ctx, c.Post.ID); err != nil || len(ns) != 1 || ns[0].ID != c.Note.ID {
