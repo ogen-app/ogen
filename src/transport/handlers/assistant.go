@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -206,7 +207,13 @@ func (h *AssistantHandler) Turn(c *fiber.Ctx) error {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/assistant/threads/{scope}/messages [get]
 func (h *AssistantHandler) Messages(c *fiber.Ctx) error {
-	kind, id, err := parseThreadScope(c.Params("scope"))
+	// Fiber hands the segment over still escaped, and clients encode the
+	// scope's colon as %3A.
+	scope, err := url.PathUnescape(c.Params("scope"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "scope is not a valid path segment")
+	}
+	kind, id, err := parseThreadScope(scope)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
