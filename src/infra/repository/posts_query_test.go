@@ -1,12 +1,14 @@
 package repository_test
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/infra/repository"
+	"github.com/ogen-app/ogen/src/kernel/tenantctx"
 )
 
 // Each filter of the posts list narrows the match; QueryIDs pages it and
@@ -62,6 +64,15 @@ func TestPostRepository_Query(t *testing.T) {
 				t.Fatalf("ids = %v (total %d), %v; want %v", ids, total, err, tc.want)
 			}
 		})
+	}
+
+	// Another tenant's posts neither match nor count.
+	other := &models.Post{
+		ID: "p-other", CampaignID: "c1", Content: "Body", MediaURLs: models.StringSlice{}, UsedAssetIDs: models.StringSlice{},
+		Status: models.PostStatusDraft, CTAType: models.CTATypeNone, CreatedBy: "user-2", CreatedAt: t0, UpdatedAt: t0,
+	}
+	if _, err := db.NewInsert().Model(other).Exec(tenantctx.With(context.Background(), "other-tenant")); err != nil {
+		t.Fatalf("seed other tenant: %v", err)
 	}
 
 	ids, total, err := repo.QueryIDs(ctx, models.PostQuery{}, 2)

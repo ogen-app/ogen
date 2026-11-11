@@ -36,14 +36,15 @@ func TestParseQuery(t *testing.T) {
 }
 
 func TestParseQuery_Rejects(t *testing.T) {
-	for raw, param := range map[string]string{
-		"status=lost":                              "status",
-		"status_not=lost":                          "status",
-		"scheduled=maybe":                          "scheduled",
-		"scheduled_after=yesterday":                "scheduled_after",
-		"tz=Mars/Base":                             "tz",
-		"scheduled=no&scheduled_before=2026-11-01": "scheduled",
+	for _, tc := range []struct{ raw, param string }{
+		{"status=lost", "status"},
+		{"status_not=lost", "status"},
+		{"scheduled=maybe", "scheduled"},
+		{"scheduled_after=yesterday", "scheduled_after"},
+		{"tz=Mars/Base", "tz"},
+		{"scheduled=no&scheduled_before=2026-11-01", "scheduled"},
 	} {
+		raw, param := tc.raw, tc.param
 		v, _ := url.ParseQuery(raw)
 		_, err := ParseQuery(v)
 		if le, ok := errors.AsType[*listquery.Error](err); !ok || le.Param != param {
