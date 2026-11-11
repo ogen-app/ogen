@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -252,6 +253,9 @@ type EnrichBriefOutput struct {
 	KeyMessages    string `json:"keyMessages"`
 	ToneGuidelines string `json:"toneGuidelines"`
 	Applied        bool   `json:"applied"`
+	// Grounding is the campaign's sources the new brief drew on; unset when
+	// it wasn't written.
+	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
 	// Note carries a status when the tool short-circuited without running — e.g.
 	// a heavy action already ran this turn. Empty on a normal run.
 	Note string `json:"note,omitempty"`
@@ -335,6 +339,10 @@ type DraftPostInput struct {
 	// Instruction is the user's steering for the writer. An offer stores it
 	// with the research, so confirming later drafts what was offered.
 	Instruction string `json:"instruction,omitempty" jsonschema:"description=Leave empty: the writer is steered by the user's message. Set by the server when it holds the call for the user's yes."`
+	// Cited and CitesKnown are the assets the research quoted, kept with it
+	// when the call is held for the user's yes.
+	Cited      []assistantkit.Source `json:"cited,omitempty"      jsonschema:"description=Leave empty: set by the server when it holds the call for the user's yes."`
+	CitesKnown bool                  `json:"citesKnown,omitempty" jsonschema:"description=Leave unset: set by the server when it holds the call for the user's yes."`
 }
 
 // DraftPostOutput is returned to the model after drafts are created.
@@ -349,6 +357,9 @@ type DraftPostOutput struct {
 	Dates          []string   `json:"dates,omitempty"` // actual publish dates of the created posts
 	Warnings       []string   `json:"warnings,omitempty"`
 	UsedAssets     []AssetRef `json:"usedAssets,omitempty"`
+	// Grounding is the assets the research quoted; unset when they aren't
+	// known (pasted material, or an answer saved before they were kept).
+	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
 	// Note carries a status when the tool short-circuited without running — a
 	// heavy action already ran this turn, or there's no research to
 	// draft from.
@@ -634,7 +645,7 @@ func toolRunContentPlan(ctx context.Context, in RunContentPlanInput) (*RunConten
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
 	}
 
-	res := &ContentPlanResult{IdeaCount: len(resp.Ideas), Warnings: resp.Warnings, UsedAssets: used, Grounding: groundingOf(in.Exploratory, used, resp.Ideas)}
+	res := &ContentPlanResult{IdeaCount: len(resp.Ideas), Warnings: resp.Warnings, UsedAssets: used, Grounding: traced(ctx, st, groundingOf(in.Exploratory, used, resp.Ideas))}
 	st.contentPlanResult = res
 	st.recordWrite(actionContentPlan)
 	return &RunContentPlanOutput{IdeaCount: res.IdeaCount, WarningCount: len(res.Warnings), UsedAssets: used, Grounding: res.Grounding}, nil
@@ -702,7 +713,12 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 		return nil, fmt.Errorf("apply enriched brief: %w", err)
 	}
 
-	st.briefResult = &BriefResult{Applied: true, UndoID: st.logChange(ctx, models.AssistantActionCampaignBrief, before, assistantundo.CampaignBrief(c))}
+	sources := make([]assistantkit.Source, len(resp.Sources))
+	for i, src := range resp.Sources {
+		sources[i] = assistantkit.Source{ID: src.ID, Title: src.Title, AnalysisID: src.AnalysisID}
+	}
+	grounding := assistantkit.GroundingFrom(sources)
+	st.briefResult = &BriefResult{Applied: true, UndoID: st.logChange(ctx, models.AssistantActionCampaignBrief, before, assistantundo.CampaignBrief(c)), Grounding: &grounding}
 	st.recordWrite(actionBriefEnriched)
 	return &EnrichBriefOutput{
 		Description:    resp.Description,
@@ -710,6 +726,7 @@ func toolEnrichBrief(ctx context.Context, in EnrichBriefInput) (*EnrichBriefOutp
 		KeyMessages:    resp.KeyMessages,
 		ToneGuidelines: resp.ToneGuidelines,
 		Applied:        true,
+		Grounding:      &grounding,
 	}, nil
 }
 
@@ -851,7 +868,7 @@ func toolGeneratePosts(ctx context.Context, in GeneratePostsInput) (assistantkit
 		emit(st.onEvent, SSEEventAssetsUsed, AssetsUsedEventPayload{Assets: used})
 	}
 
-	grounding := groundingOf(in.Exploratory, used, resp.Ideas)
+	grounding := traced(ctx, st, groundingOf(in.Exploratory, used, resp.Ideas))
 	st.generatedPostsResult = &GeneratedPostsResult{
 		IdeaCount:   len(resp.Ideas),
 		PlatformIDs: platformIDs,
@@ -898,11 +915,14 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 	// earlier in this chat. Resolved BEFORE the heavy-action reservation so a
 	// no-source decline (a graceful non-error return, unlike the other heavy
 	// tools) leaves the turn's single heavy slot free for another heavy tool.
-	source, err := resolveDraftSource(ctx, st, in.SourceMaterial)
-	if err != nil {
-		return assistantkit.Outcome[DraftPostOutput]{}, err
+	source := draftSource{text: in.SourceMaterial, cited: in.Cited, known: in.CitesKnown}
+	if !in.CitesKnown {
+		var err error
+		if source, err = resolveDraftSource(ctx, st, in.SourceMaterial); err != nil {
+			return assistantkit.Outcome[DraftPostOutput]{}, err
+		}
 	}
-	if strings.TrimSpace(source) == "" {
+	if strings.TrimSpace(source.text) == "" {
 		return assistantkit.Refuse[DraftPostOutput](noDraftSourceNote), nil
 	}
 
@@ -941,6 +961,15 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 
 	maxN := st.draftCap()
 	perPlatform, requested, clamped := resolveGenerateCount(in.Count, maxN)
+	var grounding *assistantkit.Grounding
+	if source.known {
+		grounding = new(traced(ctx, st, assistantkit.GroundingFrom(source.cited)))
+	}
+	used := make([]AssetRef, len(source.cited))
+	usedIDs := make([]string, len(source.cited))
+	for i, c := range source.cited {
+		used[i], usedIDs[i] = AssetRef{ID: c.ID, Title: c.Title}, c.ID
+	}
 
 	emit(st.onEvent, SSEEventDraftPostStarted, DraftPostStartedEventPayload{
 		PlatformIDs: platformIDs,
@@ -969,18 +998,16 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 				PlatformID:     pid,
 				PostType:       in.PostType,
 				Count:          counts[i],
-				SourceMaterial: source,
+				SourceMaterial: source.text,
 				Instruction:    cmp.Or(in.Instruction, st.instruction),
 				WindowStart:    windowStart,
 				WindowEnd:      windowEnd,
 				PhaseID:        phaseID,
-				// Which assets the research cited isn't tracked, so its
-				// grounding isn't claimed either way.
-				SourcesUnknown: true,
-				// UsedAssetIDs is intentionally left empty in v1: which assets the prior
-				// research cited isn't tracked, and over-stamping would pollute
-				// asset-usage provenance. The "Source research" note on
-				// each post carries the exact source instead.
+				UsedAssetIDs:   usedIDs,
+				// Pasted material, or an answer whose quoted assets weren't
+				// kept, says nothing of its sources, so its grounding isn't
+				// claimed either way.
+				SourcesUnknown: !source.known,
 			}, nested)
 			resps[i] = resp
 			if ve, ok := errors.AsType[*draft_post.ValidationError](err); ok {
@@ -1007,6 +1034,8 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		PhaseID:     phaseID,
 		Dates:       allDates,
 		Warnings:    allWarn,
+		UsedAssets:  used,
+		Grounding:   grounding,
 	}
 	st.recordWrite(actionPostDrafted)
 	return assistantkit.OK(DraftPostOutput{
@@ -1019,6 +1048,8 @@ func toolDraftPost(ctx context.Context, in DraftPostInput) (assistantkit.Outcome
 		PhaseName:      phaseName,
 		Dates:          allDates,
 		Warnings:       allWarn,
+		UsedAssets:     used,
+		Grounding:      grounding,
 	}), nil
 }
 
@@ -1082,10 +1113,10 @@ func snapshotDraft(next ai.ToolFunc[DraftPostInput, assistantkit.Outcome[DraftPo
 			}
 			// No research is refused here, before any offer: one confirmed
 			// later would draft from whatever was discussed since.
-			if strings.TrimSpace(source) == "" {
+			if strings.TrimSpace(source.text) == "" {
 				return assistantkit.Refuse[DraftPostOutput](noDraftSourceNote), nil
 			}
-			in.SourceMaterial = source
+			in.SourceMaterial, in.Cited, in.CitesKnown = source.text, source.cited, source.known
 			in.Instruction = cmp.Or(in.Instruction, st.instruction)
 		}
 		return next(ctx, in)
@@ -1099,12 +1130,12 @@ func snapshotDraft(next ai.ToolFunc[DraftPostInput, assistantkit.Outcome[DraftPo
 // parse it rather than using the raw content. Only answers (action "answered" or
 // empty, with no pack reporting an action) qualify, so an action-confirmation
 // turn (e.g. a prior post_drafted) is never mistaken for research.
-func resolveDraftSource(ctx context.Context, st *requestState, override string) (string, error) {
+func resolveDraftSource(ctx context.Context, st *requestState, override string) (draftSource, error) {
 	if s := strings.TrimSpace(override); s != "" {
-		return s, nil
+		return draftSource{text: s}, nil
 	}
 	if st.repos.Messages == nil {
-		return "", nil
+		return draftSource{}, nil
 	}
 	// The research is in the thread the turn is in; outside one, the
 	// campaign's.
@@ -1114,7 +1145,7 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 	}
 	msgs, err := st.repos.Messages.ListRecent(ctx, scope.Kind, scope.ID, 10)
 	if err != nil {
-		return "", fmt.Errorf("load conversation history: %w", err)
+		return draftSource{}, fmt.Errorf("load conversation history: %w", err)
 	}
 	// Messages come back oldest-first; scan newest-first for the latest answer.
 	for _, msg := range slices.Backward(msgs) {
@@ -1124,6 +1155,8 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 		var env struct {
 			Action      string `json:"action"`
 			Explanation string `json:"explanation"`
+			// Ask is the campaign assistant's own answer's sources.
+			Ask *researchCites `json:"ask"`
 			// Results is what each pack did; the turn's own action stays
 			// "answered" when a tool did the work.
 			Results map[string]json.RawMessage `json:"results"`
@@ -1131,7 +1164,7 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 		if err := json.Unmarshal([]byte(msg.Content), &env); err != nil {
 			// Legacy/plain-text model message (not JSON-wrapped) — use it directly.
 			if s := strings.TrimSpace(msg.Content); s != "" {
-				return s, nil
+				return draftSource{text: s}, nil
 			}
 			continue
 		}
@@ -1139,10 +1172,75 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 			continue // an action confirmation, not research
 		}
 		if s := strings.TrimSpace(env.Explanation); s != "" {
-			return s, nil
+			return draftSource{text: s, cited: citedIn(env.Ask, env.Results), known: true}, nil
 		}
 	}
-	return "", nil
+	return draftSource{}, nil
+}
+
+// draftSource is the research a draft is written from and the assets it
+// quoted. known says whether those are known at all: pasted material and a
+// plain-text answer say nothing of their sources, while a saved answer
+// that quoted none came from general knowledge.
+type draftSource struct {
+	text  string
+	cited []assistantkit.Source
+	known bool
+}
+
+// researchCites is the part of a saved answer's result that names the
+// assets it drew on: the passages it quoted, the analysis it read, or the
+// assets it compared.
+type researchCites struct {
+	Excerpts []struct {
+		AssetID string `json:"assetId"`
+		Title   string `json:"title"`
+	} `json:"excerpts"`
+}
+
+// citedIn is the assets a saved answer drew on, each once, in the order
+// they came: the campaign assistant's ask, then each pack's ask, analysis
+// and comparison.
+func citedIn(ask *researchCites, results map[string]json.RawMessage) []assistantkit.Source {
+	var out []assistantkit.Source
+	add := func(id, title string) {
+		if id != "" && !slices.ContainsFunc(out, func(s assistantkit.Source) bool { return s.ID == id }) {
+			out = append(out, assistantkit.Source{ID: id, Title: title})
+		}
+	}
+	addAsk := func(a *researchCites) {
+		if a != nil {
+			for _, e := range a.Excerpts {
+				add(e.AssetID, e.Title)
+			}
+		}
+	}
+	addAsk(ask)
+	for _, pack := range slices.Sorted(maps.Keys(results)) {
+		var r struct {
+			Ask      *researchCites `json:"ask"`
+			Analysis *struct {
+				AssetID string `json:"assetId"`
+				Title   string `json:"title"`
+			} `json:"analysis"`
+			Compare *struct {
+				Grounding assistantkit.Grounding `json:"grounding"`
+			} `json:"compare"`
+		}
+		if json.Unmarshal(results[pack], &r) != nil {
+			continue
+		}
+		addAsk(r.Ask)
+		if r.Analysis != nil {
+			add(r.Analysis.AssetID, r.Analysis.Title)
+		}
+		if r.Compare != nil {
+			for _, src := range r.Compare.Grounding.Sources {
+				add(src.ID, src.Title)
+			}
+		}
+	}
+	return out
 }
 
 // answeredOnly reports whether a stored model turn only answered: neither

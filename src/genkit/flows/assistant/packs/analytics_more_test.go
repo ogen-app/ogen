@@ -9,6 +9,7 @@ import (
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
 	"github.com/ogen-app/ogen/src/genkit/flows/assistant"
+	"github.com/ogen-app/ogen/src/genkit/flows/internal/assistantkit"
 	"github.com/ogen-app/ogen/src/genkit/flows/more_like_these"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
@@ -39,7 +40,7 @@ type gistAnalyses struct {
 func (gistAnalyses) LensDigests(_ context.Context, ids []string, _ *string) (map[string]repository.LensDigest, error) {
 	out := map[string]repository.LensDigest{}
 	for _, id := range ids {
-		out[id] = repository.LensDigest{Gist: "what " + id + " offers"}
+		out[id] = repository.LensDigest{ID: "an-" + id, Status: models.AssetAnalysisStatusReady, Gist: "what " + id + " offers"}
 	}
 	return out, nil
 }
@@ -48,7 +49,7 @@ func (gistAnalyses) LensDigests(_ context.Context, ids []string, _ *string) (map
 // and using another, one with no trail — in a campaign with one more source.
 func moreDeps(written []more_like_these.Idea) (Deps, *memIdeaRepo, *more_like_these.Request) {
 	ideasRepo := &memIdeaRepo{byID: map[string]*models.Idea{
-		"idea-pricing": {ID: "idea-pricing", Title: "Pricing myths", Angle: new("Discounts teach buyers to wait"), SourceAssetID: new("a-report")},
+		"idea-pricing": {ID: "idea-pricing", Title: "Pricing myths", Angle: new("Discounts teach buyers to wait"), SourceAssetID: new("a-report"), AssetAnalysisID: new("an-report")},
 	}}
 	var got more_like_these.Request
 	d := Deps{
@@ -113,9 +114,18 @@ func TestMoreLikeThese_WritesIdeasFromTheTrail(t *testing.T) {
 		saved.Note != "- anchors\n- decoys" || *saved.Angle != "Show the dearest plan first" {
 		t.Fatalf("saved = %+v", saved)
 	}
+	// Its grounding traces the report through the idea and the analysis it
+	// came by, and the deck through the analysis the writer read.
+	if g := out.Ideas[0].Grounding; g.Mode != assistantkit.Grounded || !slices.Equal(g.Sources, []assistantkit.Source{
+		{ID: "a-report", Title: "Pricing report", AnalysisID: "an-report", IdeaID: "idea-pricing"},
+		{ID: "a-deck", Title: "Sales deck", AnalysisID: "an-a-deck"},
+	}) {
+		t.Fatalf("grounding = %+v", g)
+	}
 	// An idea citing nothing cites the examples, and isn't grounded.
 	bare := repo.byID[out.Ideas[1].ID]
-	if !slices.Equal(bare.Sources, []string{"Post: Why discounts backfire", "Post: The 3 pricing pages"}) || *bare.GroundingMode != models.GroundingExploratory {
+	if !slices.Equal(bare.Sources, []string{"Post: Why discounts backfire", "Post: The 3 pricing pages"}) || *bare.GroundingMode != models.GroundingExploratory ||
+		out.Ideas[1].Grounding.Mode != assistantkit.Exploratory {
 		t.Fatalf("bare = %+v", bare)
 	}
 	if len(touched()) != 2 {

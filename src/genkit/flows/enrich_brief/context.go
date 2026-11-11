@@ -1,24 +1,42 @@
 package enrich_brief
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/genkit/flows/internal/flowkit"
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
+	"github.com/ogen-app/ogen/src/kernel/textgist"
 	"github.com/ogen-app/ogen/src/usecase/brandresolve"
 )
 
 // briefContext holds the rendered prompts ready for the model call.
 type briefContext struct {
 	SystemPrompt string // system instructions; one variant per mode
-	ContextBlock string // campaign + current brief + brand + type + language + instruction
+	ContextBlock string // campaign + current brief + brand + sources + type + language + instruction
+	// Sources are the ones the context block lists, by their key.
+	Sources []briefSource
 }
+
+// briefSource is one of the campaign's analysed assets as the prompt lists
+// it: Key ("S1") is how the model names it back.
+type briefSource struct {
+	Source
+	Key  string
+	Gist string
+}
+
+// maxBriefSources bounds the sources a brief is given, in the campaign's
+// order.
+const maxBriefSources = 8
 
 // assembleContext renders the prompts from the live campaign. It is rendered
 // on every call: the current brief is part of the prompt, and a brief the
@@ -52,6 +70,7 @@ func assembleContext(
 			ToneGuidelines: strings.TrimSpace(campaign.ToneGuidelines),
 		},
 		BrandBlock: brandBlock(ctx, repos.Brands, campaign),
+		Sources:    briefSources(ctx, repos, campaign),
 	}
 	data.HasBrief = data.Brief != currentBrief{}
 	if ct != nil {
@@ -80,7 +99,63 @@ func assembleContext(
 	return &briefContext{
 		SystemPrompt: systemPrompt,
 		ContextBlock: contextBlock,
+		Sources:      data.Sources,
 	}, nil
+}
+
+// briefSources are the campaign's attached assets whose analysis for the
+// campaign is finished, each with its gist. It fails open: a read error
+// leaves the sources out, not the call.
+func briefSources(ctx context.Context, repos EnrichBriefRepos, campaign *models.Campaign) []briefSource {
+	if repos.Assets == nil || repos.Analyses == nil || len(campaign.AssetIDs) == 0 {
+		return nil
+	}
+	digests, err := repos.Analyses.LensDigests(ctx, campaign.AssetIDs, &campaign.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "read sources failed; enriching without them",
+			logging.AttrComponent, logComponent, "campaign_id", campaign.ID, logging.AttrError, err)
+		return nil
+	}
+	metas, err := repos.Assets.ListMeta(ctx, campaign.AssetIDs)
+	if err != nil {
+		slog.WarnContext(ctx, "read sources failed; enriching without them",
+			logging.AttrComponent, logComponent, "campaign_id", campaign.ID, logging.AttrError, err)
+		return nil
+	}
+	titles := make(map[string]string, len(metas))
+	for _, m := range metas {
+		titles[m.ID] = m.Title
+	}
+	var out []briefSource
+	for _, id := range campaign.AssetIDs {
+		d, ok := digests[id]
+		title, known := titles[id]
+		if !ok || !known || d.Status != models.AssetAnalysisStatusReady {
+			continue
+		}
+		gist := cmp.Or(d.Gist, textgist.FromSummary(d.SummaryHead))
+		if gist == "" {
+			continue
+		}
+		out = append(out, briefSource{Source: Source{ID: id, Title: title, AnalysisID: d.ID}, Key: fmt.Sprintf("S%d", len(out)+1), Gist: gist})
+		if len(out) == maxBriefSources {
+			break
+		}
+	}
+	return out
+}
+
+// usedSources are the sources the model named, by key, in the order given;
+// a key it made up is ignored.
+func usedSources(named string, given []briefSource) []Source {
+	keys := strings.FieldsFunc(strings.ToUpper(named), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	var out []Source
+	for _, s := range given {
+		if slices.Contains(keys, s.Key) {
+			out = append(out, s.Source)
+		}
+	}
+	return out
 }
 
 // brandBlock renders the workspace brand material the brief must stay inside.
@@ -111,6 +186,7 @@ type contextTemplateData struct {
 	HasBrief   bool
 	Brief      currentBrief
 	BrandBlock string
+	Sources    []briefSource
 }
 
 // currentBrief is the brief as stored on the campaign.

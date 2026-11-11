@@ -127,7 +127,7 @@ func (l lensDigests) LensDigests(_ context.Context, ids []string, campaignID *st
 		if slices.Contains(l.ready, id) {
 			status = models.AssetAnalysisStatusReady
 		}
-		out[id] = repository.LensDigest{Status: status}
+		out[id] = repository.LensDigest{ID: "an-" + id, Status: status}
 	}
 	return out, nil
 }

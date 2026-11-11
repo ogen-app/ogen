@@ -495,7 +495,7 @@ func compileIdeas(ctx context.Context, d Deps, in CompileIdeasInput) (*CompileId
 		notes = append(notes, *res.Note)
 	}
 	return &CompileIdeasOutput{PostID: p.ID, Title: p.Title, Status: string(p.Status), CampaignID: p.CampaignID, PlatformID: p.PlatformID, Ideas: len(res.Ideas),
-		Grounding: newAssetTitles(d).grounding(ctx, p.UsedAssetIDs),
+		Grounding: analysed(ctx, d, &p.CampaignID, newAssetTitles(d).grounding(ctx, fromIdeas(p.UsedAssetIDs, res.Ideas))),
 		UndoID:    recordUndo(ctx, d, models.AssistantActionPostCreated, p.ID, models.JSONMap{}, assistantundo.PostCreated(p, notes))}, nil
 }
 
@@ -509,13 +509,14 @@ func newAssetTitles(d Deps) *assetTitles {
 	return &assetTitles{assets: d.Assets, known: map[string]string{}}
 }
 
-// grounding is the sources ids name, by title, in order; exploratory for
-// none. An asset that can't be read, or is gone, still counts by its id.
-func (t *assetTitles) grounding(ctx context.Context, ids []string) assistantkit.Grounding {
+// grounding is sources, named by their assets' titles, in order;
+// exploratory for none. An asset that can't be read, or is gone, still
+// counts by its id.
+func (t *assetTitles) grounding(ctx context.Context, sources []assistantkit.Source) assistantkit.Grounding {
 	var missing []string
-	for _, id := range ids {
-		if _, ok := t.known[id]; !ok {
-			missing = append(missing, id)
+	for _, s := range sources {
+		if _, ok := t.known[s.ID]; !ok && !slices.Contains(missing, s.ID) {
+			missing = append(missing, s.ID)
 		}
 	}
 	if len(missing) > 0 && t.assets != nil {
@@ -525,11 +526,34 @@ func (t *assetTitles) grounding(ctx context.Context, ids []string) assistantkit.
 			}
 		}
 	}
-	sources := make([]assistantkit.Source, len(ids))
-	for i, id := range ids {
-		sources[i] = assistantkit.Source{ID: id, Title: t.known[id]}
+	for i := range sources {
+		sources[i].Title = t.known[sources[i].ID]
 	}
 	return assistantkit.GroundingFrom(sources)
+}
+
+// fromIdeas is the assets ids name as sources, each traced to the first of
+// ideas that drew on it: the idea, and the analysis when the idea was
+// distilled from that asset.
+func fromIdeas(ids []string, ideas []models.Idea) []assistantkit.Source {
+	sources := make([]assistantkit.Source, len(ids))
+	for i, id := range ids {
+		sources[i].ID = id
+		for _, idea := range ideas {
+			if idea.SourceAssetID != nil && *idea.SourceAssetID == id {
+				sources[i].IdeaID = idea.ID
+				if idea.AssetAnalysisID != nil {
+					sources[i].AnalysisID = *idea.AssetAnalysisID
+				}
+				break
+			}
+			if slices.Contains(idea.AssetIDs, id) {
+				sources[i].IdeaID = idea.ID
+				break
+			}
+		}
+	}
+	return sources
 }
 
 // orphaned reports a compile or draft that found no campaign to use: the
@@ -595,7 +619,12 @@ func draftIdeas(ctx context.Context, d Deps, in DraftIdeasInput) (*DraftIdeasOut
 	out := &DraftIdeasOutput{Posts: []DraftedIdeaPost{}}
 	res, err := d.Compose.RunDraft(ctx, plan, func(p compose.DraftedPost) {
 		assistantkit.Touch(ctx, "post", p.PostID)
-		drafted := DraftedIdeaPost{DraftedPost: p, Grounding: titles.grounding(ctx, p.UsedAssetIDs)}
+		ideas := slices.DeleteFunc(slices.Clone(plan.Ideas), func(i models.Idea) bool { return !slices.Contains(p.IdeaIDs, i.ID) })
+		g := titles.grounding(ctx, fromIdeas(p.UsedAssetIDs, ideas))
+		if len(plan.Jobs) > 0 {
+			g = analysed(ctx, d, &plan.Jobs[0].Request.CampaignID, g)
+		}
+		drafted := DraftedIdeaPost{DraftedPost: p, Grounding: g}
 		out.Posts = append(out.Posts, drafted)
 		assistant.Emit(ctx, "idea_draft_post", drafted)
 	})

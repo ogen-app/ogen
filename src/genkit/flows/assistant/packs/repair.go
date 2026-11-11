@@ -742,6 +742,9 @@ type RevisePostOutput struct {
 	Revised   bool   `json:"revised"`
 	Versioned bool   `json:"versioned"`
 	Note      string `json:"note"`
+	// Grounding is the post's own: a rewrite keeps its sources. Unset when
+	// the post's never was known.
+	Grounding *assistantkit.Grounding `json:"grounding,omitempty"`
 }
 
 // revisePost rewrites one of the campaign's posts by the instruction a
@@ -751,7 +754,7 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 	if in.Instruction == "" {
 		return nil, assistantkit.Refused("say how to rewrite the post")
 	}
-	_, posts, skipped, err := campaignPosts(ctx, d, in.CampaignID, []string{in.PostID})
+	c, posts, skipped, err := campaignPosts(ctx, d, in.CampaignID, []string{in.PostID})
 	if err != nil {
 		return nil, err
 	}
@@ -766,11 +769,36 @@ func revisePost(ctx context.Context, d Deps, in RevisePostInput) (*RevisePostOut
 		return nil, fmt.Errorf("rewrite post: %w", err)
 	}
 	out := &RevisePostOutput{PostID: in.PostID, Revised: true, Versioned: versioned,
-		Note: "saved as a new version; restoring the previous version from the post's history undoes it"}
+		Note:      "saved as a new version; restoring the previous version from the post's history undoes it",
+		Grounding: postGrounding(ctx, d, c.ID, posts[0])}
 	if !versioned {
 		out.Note = "the post is rewritten, but saving the rewrite as a version failed, so its history has no copy of it"
 	}
 	return out, nil
+}
+
+// postGrounding is a post's grounding: its sources, with the campaign's
+// analysis of each, when it was grounded; nil when that was never known.
+func postGrounding(ctx context.Context, d Deps, campaignID string, p models.Post) *assistantkit.Grounding {
+	if p.GroundingMode == nil {
+		return nil
+	}
+	if *p.GroundingMode != models.GroundingGrounded {
+		return new(assistantkit.GroundingFrom(nil))
+	}
+	g := newAssetTitles(d).grounding(ctx, fromIdeas(p.UsedAssetIDs, nil))
+	return new(analysed(ctx, d, &campaignID, g))
+}
+
+// analysed names each source's analysis for a lens (campaignID nil for the
+// workspace's), when it has a finished one.
+func analysed(ctx context.Context, d Deps, campaignID *string, g assistantkit.Grounding) assistantkit.Grounding {
+	if d.Analyses == nil {
+		return g
+	}
+	return g.WithAnalyses(func(ids []string) (map[string]string, error) {
+		return repository.ReadyAnalysisIDs(ctx, d.Analyses, ids, campaignID)
+	})
 }
 
 // gapIdeas is how many ideas a silence's fix plans.

@@ -29,6 +29,7 @@ Given a campaign title, its campaign type (and the phases that type runs through
 - Be specific and usable: a marketer should be able to act on this brief directly, not edit boilerplate.
 - Do not invent product facts, metrics, dates, or platform names that aren't in or implied by the inputs.
 - keyMessages must be newline-separated (one message per line), not a single run-on paragraph.
+- If the context lists the campaign's sources, they are the user's own material: draw concrete facts from them where they sharpen the brief, alongside the brief itself. In "sources", list the keys (e.g. "S1, S3") of the sources you drew on; leave it empty if you drew on none or none are listed.
 
 ## Response format
 You MUST respond with a single JSON object matching this exact schema.
@@ -38,7 +39,8 @@ user-visible fields start streaming in the order the UI reads them:
   "description": "2-4 sentence campaign overview",
   "targetPersona": "who the campaign speaks to",
   "keyMessages": "3-5 key messages, one per line",
-  "toneGuidelines": "voice and style guidance"
+  "toneGuidelines": "voice and style guidance",
+  "sources": "keys of the sources you drew on, e.g. S1, S3; empty for none"
 }
 
 Respond ONLY with the JSON object. No markdown fences, no extra text.{{end}}
@@ -64,6 +66,13 @@ Respond ONLY with the JSON object. No markdown fences, no extra text.{{end}}
 {{- if .BrandBlock}}
 
 {{.BrandBlock}}
+{{- end}}
+{{- if .Sources}}
+
+## The campaign's sources
+{{- range .Sources}}
+- [{{.Key}}] {{.Title}}: {{.Gist}}
+{{- end}}
 {{- end}}
 
 ## Campaign type

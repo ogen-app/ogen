@@ -39,6 +39,8 @@ type ComparedAsset struct {
 	Title  string `json:"title"`
 	Letter string `json:"letter"`
 	From   string `json:"from"`
+	// analysisID is the analysis read, when one was.
+	analysisID string
 }
 
 // ComparedClaim is a claim and the assets behind it, by id and letter.
@@ -93,7 +95,7 @@ func compareAssets(ctx context.Context, d Deps, in CompareAssetsInput) (*Compare
 	grounded := make([]assistantkit.Source, len(out.Assets))
 	for i, a := range out.Assets {
 		letters[a.ID] = a.Letter
-		grounded[i] = assistantkit.Source{ID: a.ID, Title: a.Title}
+		grounded[i] = assistantkit.Source{ID: a.ID, Title: a.Title, AnalysisID: a.analysisID}
 	}
 	claims := func(cs []asset_compare.Claim) []ComparedClaim {
 		out := make([]ComparedClaim, len(cs))
@@ -159,18 +161,18 @@ func gatherSources(ctx context.Context, d Deps, ids []string, focus string, out 
 			out.Missing = append(out.Missing, id)
 			continue
 		}
-		from, text, err := material(ctx, d, id, focus)
+		m, err := material(ctx, d, id, focus)
 		if err != nil {
 			return nil, err
 		}
-		a := ComparedAsset{ID: id, Title: title, From: from}
-		if text == "" {
+		a := ComparedAsset{ID: id, Title: title, From: m.from, analysisID: m.analysisID}
+		if m.text == "" {
 			out.Skipped = append(out.Skipped, a)
 			continue
 		}
 		a.Letter = string(rune('A' + len(out.Assets)))
 		out.Assets = append(out.Assets, a)
-		sources = append(sources, asset_compare.Source{ID: id, Title: title, From: from, Text: text})
+		sources = append(sources, asset_compare.Source{ID: id, Title: title, From: m.from, Text: m.text})
 	}
 	return sources, nil
 }
@@ -179,38 +181,43 @@ func gatherSources(ctx context.Context, d Deps, ids []string, focus string, out 
 // analysis for the thread's lens, else its passages. With a focus, the
 // passages about it are read too, beside an analysis that may not cover it;
 // without one, an asset with no analysis is read from its first passages.
-// "" when it has neither.
-func material(ctx context.Context, d Deps, assetID, focus string) (string, string, error) {
+// No text when it has neither.
+func material(ctx context.Context, d Deps, assetID, focus string) (assetMaterial, error) {
 	focus = strings.TrimSpace(focus)
 	about, err := focusedPassages(ctx, d, assetID, focus)
 	if err != nil {
-		return "", "", err
+		return assetMaterial{}, err
 	}
 	if d.Analyses != nil {
 		lens, err := d.Analyses.GetLens(ctx, assetID, lensCampaign(ctx, ""))
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return "", "", err
+			return assetMaterial{}, err
 		}
 		if lens != nil && lens.Status == models.AssetAnalysisStatusReady && strings.TrimSpace(lens.Summary) != "" {
 			text := lens.Summary
 			if len(lens.Result.KeyPoints) > 0 {
 				text += "\n\nKey points:\n- " + strings.Join(lens.Result.KeyPoints, "\n- ")
 			}
-			if about == "" {
-				return asset_compare.FromAnalysis, clip(text, compareRunes), nil
+			if about != "" {
+				text = clip(text, compareRunes/2) + "\n\nPassages about " + focus + ":\n" + about
 			}
-			text = clip(text, compareRunes/2) + "\n\nPassages about " + focus + ":\n" + about
-			return asset_compare.FromAnalysis, clip(text, compareRunes), nil
+			return assetMaterial{from: asset_compare.FromAnalysis, text: clip(text, compareRunes), analysisID: lens.ID}, nil
 		}
 	}
 	if about == "" && d.Chunks != nil {
 		chunks, _, err := d.Chunks.ListPageByAssetID(ctx, assetID, 0, comparePassages)
 		if err != nil {
-			return "", "", err
+			return assetMaterial{}, err
 		}
 		about = joinPassages(chunks)
 	}
-	return asset_compare.FromPassages, clip(about, compareRunes), nil
+	return assetMaterial{from: asset_compare.FromPassages, text: clip(about, compareRunes)}, nil
+}
+
+// assetMaterial is what is read of an asset, where from, and the analysis
+// it came from when it did.
+type assetMaterial struct {
+	from, text, analysisID string
 }
 
 // focusedPassages is the asset's passages about focus; "" without a focus,
