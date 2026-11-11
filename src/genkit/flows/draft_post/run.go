@@ -65,10 +65,14 @@ type resolvedPlatform struct {
 	Constraints string // character limits, format notes
 }
 
-// draftWindow is the validated publish-date window of a request.
+// draftWindow is the validated publish-date window of a request; the zero
+// window leaves the drafts undated.
 type draftWindow struct {
 	start, end time.Time
 }
+
+// dated reports whether the drafts get publish dates.
+func (w draftWindow) dated() bool { return !w.start.IsZero() }
 
 func runDraftPost(
 	ctx context.Context,
@@ -148,7 +152,12 @@ func validateRequest(req DraftPostRequest) error {
 	return nil
 }
 
+// parseWindow checks a request's window: both dates, or neither for drafts
+// left undated.
 func parseWindow(startDate, endDate string) (draftWindow, error) {
+	if startDate == "" && endDate == "" {
+		return draftWindow{}, nil
+	}
 	start, err := time.Parse(time.DateOnly, startDate)
 	if err != nil {
 		return draftWindow{}, &ValidationError{Msg: "windowStart must be an ISO date (YYYY-MM-DD)"}
@@ -224,7 +233,7 @@ func newDraftSink(ctx context.Context, req DraftPostRequest, campaign *models.Ca
 		platform:  platform,
 		phaseID:   req.PhaseID,
 		window:    window,
-		dates:     spreadDates(window.start, window.end, count),
+		dates:     publishDates(window, count),
 		loc:       loc,
 		assetIDs:  req.UsedAssetIDs,
 		grounding: draftGrounding(req),
@@ -355,14 +364,20 @@ func (s *draftSink) persist(ctx context.Context, publishDate, title, content str
 	}
 
 	// Snap to an enabled publishing day at the campaign's publishing time in
-	// its timezone, ± deterministic spread, bounded by the window.
-	scheduledAt, effDate, noEnabledDay := scheduling.ComposeScheduledAt(
-		publishDate, id, s.loc, s.campaign.PublishingTime, s.campaign.PublishingDays,
-		s.campaign.SpreadMinutes, &s.window.start, &s.window.end,
-	)
-	if noEnabledDay {
-		slog.WarnContext(ctx, "no enabled publishing day in window; kept model date",
-			logging.AttrComponent, logComponent, "post_id", id, "date", publishDate)
+	// its timezone, ± deterministic spread, bounded by the window. An undated
+	// draft stays off the calendar.
+	var scheduledAt *time.Time
+	var effDate string
+	if s.window.dated() {
+		var noEnabledDay bool
+		scheduledAt, effDate, noEnabledDay = scheduling.ComposeScheduledAt(
+			publishDate, id, s.loc, s.campaign.PublishingTime, s.campaign.PublishingDays,
+			s.campaign.SpreadMinutes, &s.window.start, &s.window.end,
+		)
+		if noEnabledDay {
+			slog.WarnContext(ctx, "no enabled publishing day in window; kept model date",
+				logging.AttrComponent, logComponent, "post_id", id, "date", publishDate)
+		}
 	}
 
 	row := &models.Post{
@@ -502,6 +517,15 @@ func phaseNameByID(campaign *models.Campaign, phaseID string) string {
 		}
 	}
 	return ""
+}
+
+// publishDates is one publish date per post: spread over a dated window, or
+// n empty dates for drafts left undated.
+func publishDates(w draftWindow, n int) []string {
+	if !w.dated() {
+		return make([]string, max(n, 1))
+	}
+	return spreadDates(w.start, w.end, n)
 }
 
 // spreadDates returns n ISO dates evenly distributed across [start, end]
