@@ -102,6 +102,7 @@ func testViews() memViews {
 		viewcontext.KindAsset:    {"a1": "Q3 deck"},
 		viewcontext.KindIdea:     {"i1": "Pricing myths", "i2": "Founder story"},
 		viewcontext.KindPost:     {"p1": "Launch day", "p-other": "Another campaign's post"},
+		viewcontext.KindVoice:    {"v1": "Plain"},
 	}}
 }
 

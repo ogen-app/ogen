@@ -303,6 +303,30 @@ var _ = Describe("PostsHandler", Ordered, func() {
 				}
 			})
 
+			It("narrows the list by its filter and rejects a value it doesn't know", func() {
+				dated := createPost("Dated", fiber.Map{"scheduled_at": "2026-12-01T10:00:00Z"})
+				createPost("Undated", nil)
+
+				req := httptest.NewRequest("GET", "/api/campaigns/"+campaignID+"/posts?scheduled=yes&status=draft,planned", nil)
+				req.AddCookie(authCookie)
+				resp, err := app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(200))
+				var posts []models.Post
+				Expect(json.NewDecoder(resp.Body).Decode(&posts)).To(Succeed())
+				Expect(posts).To(HaveLen(1))
+				Expect(posts[0].ID).To(Equal(dated.ID))
+
+				req = httptest.NewRequest("GET", "/api/campaigns/"+campaignID+"/posts?status=lost", nil)
+				req.AddCookie(authCookie)
+				resp, err = app.Test(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resp.StatusCode).To(Equal(400))
+				var body map[string]string
+				Expect(json.NewDecoder(resp.Body).Decode(&body)).To(Succeed())
+				Expect(body["code"]).To(Equal("invalid_filter"))
+			})
+
 			It("returns an empty list for a campaign with no posts", func() {
 				req := httptest.NewRequest("GET", "/api/campaigns/nonexistent/posts", nil)
 				req.AddCookie(authCookie)

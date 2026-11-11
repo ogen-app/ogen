@@ -229,6 +229,10 @@ var evalCases = []evalCase{
 	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production", "Single-binary deploys"}, say: "Turn the selected posts into image posts.", want: []string{"getSelection", "changePostType"}, not: []string{"editPost", "revisePost"}},
 	{pack: "repair", screen: "campaign.overview", scope: evalCampaign, say: "Do our posts still follow the brief? Rewrite the ones that drift.", want: []string{"loadPack", "reviewCampaign", "checkPostsConsistency"}, not: []string{"revisePost", "editPost"}},
 	{pack: "repair", screen: "campaign.list", scope: evalCampaign, selected: []string{"Go in production"}, say: "Rewrite the selected post to lead with the benchmark numbers.", want: []string{"getSelection", "revisePost"}, not: []string{"editPost"}},
+	// The posts list and the calendar take the posts filter; reading the
+	// current one first is fine.
+	{pack: "repair", screen: "campaign.list", scope: evalCampaign, say: "Show me only the failed LinkedIn posts.", want: []string{"setFilter", "getFocus"}, not: writes},
+	{pack: "repair", screen: "campaign.calendar", scope: evalCampaign, say: "Just show the posts that aren't published yet on the calendar.", want: []string{"setFilter", "getFocus"}, not: writes},
 	// analytics
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "How did we do over the last 4 weeks?", want: []string{"analyticsOverview"}, not: writes},
 	{pack: "analytics", screen: "analytics", scope: evalWorkspace, say: "Which posts performed best?", want: []string{"topPosts"}, not: writes},
@@ -251,6 +255,7 @@ var evalCases = []evalCase{
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Add a fact: we have 1,200 customers.", want: []string{"addFact"}},
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "What's our brand voice?", want: []string{"getBrand"}, not: writes},
 	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Which of our facts have expired?", want: []string{"getBrand"}, not: writes},
+	{pack: "foundation", screen: "foundation.facts", scope: evalWorkspace, say: "Tick the facts that have expired.", want: []string{"getBrand"}, not: writes},
 	{pack: "foundation", screen: "foundation.templates", scope: evalWorkspace, say: "What templates do we have?", want: []string{"getBrand"}, not: writes},
 	{pack: "foundation", screen: "foundation.voices", scope: evalWorkspace, say: "Add a casual voice for Instagram: short posts, emoji welcome.", want: []string{"addVoice"}},
 	{pack: "foundation", screen: "foundation.voice", scope: evalWorkspace, focus: evalOpenVoice, title: "Formal", say: "Make this the default voice.", want: []string{"updateVoice"}},

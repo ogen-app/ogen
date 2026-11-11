@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/usecase/assets"
 	"github.com/ogen-app/ogen/src/usecase/ideas"
+	"github.com/ogen-app/ogen/src/usecase/postquery"
 )
 
 // MaxSelection caps the items a selection loads. A larger "select all
@@ -43,6 +45,11 @@ type IdeaIDs interface {
 // AssetIDs expands an assets query; repository.AssetRepository.
 type AssetIDs interface {
 	QueryIDs(ctx context.Context, q models.AssetQuery) ([]string, error)
+}
+
+// PostIDs expands a posts query; repository.PostRepository.
+type PostIDs interface {
+	QueryIDs(ctx context.Context, q models.PostQuery, limit int) ([]string, int, error)
 }
 
 // Item is one referenced entity. Title is empty for a kind without titles,
@@ -79,12 +86,13 @@ type Resolver struct {
 	titles Titles
 	ideas  IdeaIDs
 	assets AssetIDs
+	posts  PostIDs
 	now    func() time.Time
 }
 
 // New returns a Resolver.
-func New(titles Titles, ideaIDs IdeaIDs, assetIDs AssetIDs) *Resolver {
-	return &Resolver{titles: titles, ideas: ideaIDs, assets: assetIDs, now: time.Now}
+func New(titles Titles, ideaIDs IdeaIDs, assetIDs AssetIDs, postIDs PostIDs) *Resolver {
+	return &Resolver{titles: titles, ideas: ideaIDs, assets: assetIDs, posts: postIDs, now: time.Now}
 }
 
 // Resolve reloads v in the caller's tenant. It returns ErrScopeNotFound for a
@@ -154,8 +162,9 @@ func (r *Resolver) Resolve(ctx context.Context, v *viewcontext.ViewContext) (*Re
 }
 
 // matching expands "select all matching" through the list's own query
-// syntax, confined to the thread's campaign. It returns at most MaxSelection
-// ids and the size of the whole match.
+// syntax, confined to the thread's campaign and, for posts, to the window on
+// screen (the calendar's). It returns at most MaxSelection ids and the size
+// of the whole match.
 func (r *Resolver) matching(ctx context.Context, v *viewcontext.ViewContext) ([]string, int, error) {
 	var campaign string
 	if v.Scope.Kind == models.AssistantScopeCampaign {
@@ -189,15 +198,64 @@ func (r *Resolver) matching(ctx context.Context, v *viewcontext.ViewContext) ([]
 			return nil, 0, err
 		}
 		return ids[:min(len(ids), MaxSelection)], len(ids), nil
+	case models.PostQuery:
+		q.ScopeCampaign = campaign
+		if !within(&q, v.Window) {
+			return nil, 0, nil
+		}
+		return r.posts.QueryIDs(ctx, q, MaxSelection)
 	}
 	return nil, 0, errNoListQuery
+}
+
+// within narrows q to a window: its days, read in q's time zone, its
+// platforms and its campaign. It returns false when nothing can match both.
+func within(q *models.PostQuery, w *viewcontext.Window) bool {
+	if w == nil {
+		return true
+	}
+	// The window was validated, so its dates parse.
+	if w.From != "" {
+		from, _ := time.ParseInLocation(time.DateOnly, w.From, q.Location)
+		if q.ScheduledAfter == nil || from.After(*q.ScheduledAfter) {
+			q.ScheduledAfter = &from
+		}
+	}
+	if w.To != "" {
+		to, _ := time.ParseInLocation(time.DateOnly, w.To, q.Location)
+		end := to.AddDate(0, 0, 1)
+		if q.ScheduledBefore == nil || end.Before(*q.ScheduledBefore) {
+			q.ScheduledBefore = &end
+		}
+	}
+	if len(w.Platforms) > 0 {
+		if q.Platform.Any = narrow(q.Platform.Any, w.Platforms); len(q.Platform.Any) == 0 {
+			return false
+		}
+	}
+	if w.CampaignID != "" {
+		if q.ScopeCampaign != "" && q.ScopeCampaign != w.CampaignID {
+			return false
+		}
+		q.ScopeCampaign = w.CampaignID
+	}
+	return true
+}
+
+// narrow is the values of a filter's list that are also in to; to itself
+// when the list is empty.
+func narrow(list, to []string) []string {
+	if len(list) == 0 {
+		return slices.Clone(to)
+	}
+	return slices.DeleteFunc(slices.Clone(list), func(s string) bool { return !slices.Contains(to, s) })
 }
 
 // errNoListQuery is a kind without a list query syntax.
 var errNoListQuery = errors.New("no list query for this kind")
 
-// parseFilter reads filter in the list syntax of kind: a models.IdeaQuery or
-// a models.AssetQuery. A filter the list rejects is a
+// parseFilter reads filter in the list syntax of kind: a models.IdeaQuery,
+// a models.AssetQuery or a models.PostQuery. A filter the list rejects is a
 // *viewcontext.InvalidError on "filter".
 func (r *Resolver) parseFilter(kind viewcontext.EntityKind, filter string) (any, error) {
 	params, err := url.ParseQuery(filter)
@@ -213,6 +271,12 @@ func (r *Resolver) parseFilter(kind viewcontext.EntityKind, filter string) (any,
 		return q, nil
 	case viewcontext.KindAsset:
 		q, err := assets.ParseQuery(params, r.now())
+		if err != nil {
+			return nil, filterError(err)
+		}
+		return q, nil
+	case viewcontext.KindPost:
+		q, err := postquery.ParseQuery(params)
 		if err != nil {
 			return nil, filterError(err)
 		}

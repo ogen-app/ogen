@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
@@ -72,6 +73,18 @@ func (f *fakeAssets) QueryIDs(_ context.Context, q models.AssetQuery) ([]string,
 	return f.ids, f.err
 }
 
+type fakePosts struct {
+	ids   []string
+	total int
+	got   models.PostQuery
+	asked bool
+}
+
+func (f *fakePosts) QueryIDs(_ context.Context, q models.PostQuery, limit int) ([]string, int, error) {
+	f.got, f.asked = q, true
+	return f.ids[:min(len(f.ids), limit)], f.total, nil
+}
+
 func titles() *fakeTitles {
 	return &fakeTitles{byKind: map[viewcontext.EntityKind]map[string]string{
 		viewcontext.KindCampaign: {"c1": "Spring launch"},
@@ -92,7 +105,7 @@ func parse(t *testing.T, raw string) *viewcontext.ViewContext {
 
 func TestResolve_SelectionByIDs(t *testing.T) {
 	ti := titles()
-	r := New(ti, &fakeIdeas{}, &fakeAssets{})
+	r := New(ti, &fakeIdeas{}, &fakeAssets{}, &fakePosts{})
 	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"campaign.ideas",
 		"scope":{"kind":"campaign","id":"c1"},
 		"focus":{"kind":"asset","id":"a1"},
@@ -130,7 +143,7 @@ func TestResolve_AllMatching(t *testing.T) {
 		ti.byKind[viewcontext.KindIdea][id] = id
 	}
 	ideas := &fakeIdeas{ids: many, total: 412}
-	r := New(ti, ideas, &fakeAssets{})
+	r := New(ti, ideas, &fakeAssets{}, &fakePosts{})
 	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"campaign.ideas",
 		"scope":{"kind":"campaign","id":"c1"},
 		"selection":{"kind":"idea","allMatching":true},"filter":"origin=asset_analysis"}`))
@@ -149,7 +162,7 @@ func TestResolve_AllMatching(t *testing.T) {
 	}
 
 	// A match deleted before the title read is dropped and stays in the total.
-	r = New(ti, ideas, &fakeAssets{ids: []string{"a1", "a2"}})
+	r = New(ti, ideas, &fakeAssets{ids: []string{"a1", "a2"}}, &fakePosts{})
 	got, err = r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"assets","scope":{"kind":"workspace"},
 		"selection":{"kind":"asset","allMatching":true}}`))
 	if err != nil || got.SelectionTotal != 2 || len(got.Selection) != 1 || got.Dropped != 1 {
@@ -166,7 +179,7 @@ func TestResolve_AllMatchingAssets(t *testing.T) {
 		ti.byKind[viewcontext.KindAsset][id] = id
 	}
 	assets := &fakeAssets{ids: many}
-	r := New(ti, &fakeIdeas{}, assets)
+	r := New(ti, &fakeIdeas{}, assets, &fakePosts{})
 	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"campaign.assets",
 		"scope":{"kind":"campaign","id":"c1"},
 		"selection":{"kind":"asset","allMatching":true},"filter":"text=pricing"}`))
@@ -185,8 +198,62 @@ func TestResolve_AllMatchingAssets(t *testing.T) {
 	}
 }
 
+// A campaign's posts list selects all matching within the thread's campaign.
+func TestResolve_AllMatchingPosts(t *testing.T) {
+	ti := titles()
+	ti.byKind[viewcontext.KindPost]["p2"] = "Recap"
+	posts := &fakePosts{ids: []string{"p1", "p2"}, total: 2}
+	r := New(ti, &fakeIdeas{}, &fakeAssets{}, posts)
+	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"campaign.list",
+		"scope":{"kind":"campaign","id":"c1"},
+		"selection":{"kind":"post","allMatching":true},"filter":"status=failed"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if posts.got.ScopeCampaign != "c1" || !slices.Equal(posts.got.Status.Any, []string{"failed"}) {
+		t.Fatalf("query = %+v", posts.got)
+	}
+	if !slices.Equal(itemIDs(got.Selection), []string{"p1", "p2"}) || got.SelectionTotal != 2 {
+		t.Fatalf("selection %+v total %d", got.Selection, got.SelectionTotal)
+	}
+}
+
+// On the calendar the window narrows the filter: its days in the filter's
+// time zone, its platforms and its campaign.
+func TestResolve_AllMatchingCalendar(t *testing.T) {
+	posts := &fakePosts{ids: []string{"p1"}, total: 1}
+	r := New(titles(), &fakeIdeas{}, &fakeAssets{}, posts)
+	_, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"calendar","scope":{"kind":"workspace"},
+		"selection":{"kind":"post","allMatching":true},
+		"filter":"platform=linkedin,x&scheduled_after=2026-11-01&tz=Europe/Kyiv",
+		"window":{"from":"2026-10-26","to":"2026-11-08","platforms":["linkedin","instagram"],"campaignId":"c1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := posts.got
+	kyiv, _ := time.LoadLocation("Europe/Kyiv")
+	after, before := time.Date(2026, 11, 1, 0, 0, 0, 0, kyiv), time.Date(2026, 11, 9, 0, 0, 0, 0, kyiv)
+	if !q.ScheduledAfter.Equal(after) || !q.ScheduledBefore.Equal(before) {
+		t.Fatalf("days = %v .. %v, want %v .. %v", q.ScheduledAfter, q.ScheduledBefore, after, before)
+	}
+	if !slices.Equal(q.Platform.Any, []string{"linkedin"}) || q.ScopeCampaign != "c1" {
+		t.Fatalf("query = %+v", q)
+	}
+
+	// A window that rules out the filter's platforms matches nothing,
+	// without a read.
+	posts = &fakePosts{}
+	r = New(titles(), &fakeIdeas{}, &fakeAssets{}, posts)
+	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"campaign.calendar","scope":{"kind":"campaign","id":"c1"},
+		"selection":{"kind":"post","allMatching":true},"filter":"platform=x",
+		"window":{"platforms":["linkedin"]}}`))
+	if err != nil || posts.asked || got.SelectionTotal != 0 {
+		t.Fatalf("got %+v, asked %v, %v", got, posts.asked, err)
+	}
+}
+
 func TestResolve_Refusals(t *testing.T) {
-	r := New(titles(), &fakeIdeas{}, &fakeAssets{})
+	r := New(titles(), &fakeIdeas{}, &fakeAssets{}, &fakePosts{})
 	cases := map[string]struct {
 		raw      string
 		field    string
@@ -198,14 +265,16 @@ func TestResolve_Refusals(t *testing.T) {
 			"selection":{"kind":"asset","allMatching":true}}`, "", ErrScopeNotFound, sql.ErrNoRows},
 		"bad filter": {`{"version":1,"screen":"ideas","scope":{"kind":"workspace"},
 			"selection":{"kind":"idea","allMatching":true},"filter":"pile=nope"}`, "filter", nil, nil},
-		"no list query": {`{"version":1,"screen":"campaign.list","scope":{"kind":"campaign","id":"c1"},
-			"selection":{"kind":"post","allMatching":true}}`, "selection.allMatching", nil, nil},
+		"no list query": {`{"version":1,"screen":"foundation.voices","scope":{"kind":"workspace"},
+			"selection":{"kind":"voice","allMatching":true}}`, "selection.allMatching", nil, nil},
+		"bad post filter": {`{"version":1,"screen":"campaign.list","scope":{"kind":"campaign","id":"c1"},
+			"selection":{"kind":"post","allMatching":true},"filter":"status=lost"}`, "filter", nil, nil},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			r := r
 			if tc.assetErr != nil {
-				r = New(titles(), &fakeIdeas{}, &fakeAssets{err: tc.assetErr})
+				r = New(titles(), &fakeIdeas{}, &fakeAssets{err: tc.assetErr}, &fakePosts{})
 			}
 			_, err := r.Resolve(t.Context(), parse(t, tc.raw))
 			if tc.err != nil {
@@ -224,7 +293,7 @@ func TestResolve_Refusals(t *testing.T) {
 // Ids of a kind whose titles can't be read can't be checked for the tenant,
 // so they count as gone rather than passing through.
 func TestResolve_UncheckedKindIsDropped(t *testing.T) {
-	r := New(titles(), &fakeIdeas{}, &fakeAssets{})
+	r := New(titles(), &fakeIdeas{}, &fakeAssets{}, &fakePosts{})
 	got, err := r.Resolve(t.Context(), parse(t, `{"version":1,"screen":"foundation.voices","scope":{"kind":"workspace"},
 		"selection":{"kind":"voice","ids":["v1"]}}`))
 	if err != nil || len(got.Selection) != 0 || got.Dropped != 1 {
@@ -233,7 +302,7 @@ func TestResolve_UncheckedKindIsDropped(t *testing.T) {
 }
 
 func TestItemsAndCheckFilter(t *testing.T) {
-	r := New(titles(), &fakeIdeas{}, &fakeAssets{})
+	r := New(titles(), &fakeIdeas{}, &fakeAssets{}, &fakePosts{})
 	got, err := r.Items(t.Context(), viewcontext.KindIdea, []string{"i3", "gone", "i1"})
 	if err != nil || !slices.Equal(itemIDs(got), []string{"i3", "i1"}) || got[0].Title != "FAQ" {
 		t.Fatalf("items = %+v, %v", got, err)
@@ -255,8 +324,14 @@ func TestItemsAndCheckFilter(t *testing.T) {
 	if ie, ok := errors.AsType[*viewcontext.InvalidError](r.CheckFilter(viewcontext.KindIdea, "pile=nope")); !ok || ie.Field != "filter" {
 		t.Fatal("a pile the list doesn't know passed")
 	}
-	if err := r.CheckFilter(viewcontext.KindPost, "x=1"); !errors.Is(err, errNoListQuery) {
-		t.Fatalf("posts have no list filter: %v", err)
+	if err := r.CheckFilter(viewcontext.KindPost, "status=draft,failed&scheduled=no"); err != nil {
+		t.Fatal(err)
+	}
+	if ie, ok := errors.AsType[*viewcontext.InvalidError](r.CheckFilter(viewcontext.KindPost, "scheduled=maybe")); !ok || ie.Field != "filter" {
+		t.Fatal("a scheduled value the list doesn't know passed")
+	}
+	if err := r.CheckFilter(viewcontext.KindFact, "x=1"); !errors.Is(err, errNoListQuery) {
+		t.Fatalf("facts have no list filter: %v", err)
 	}
 }
 

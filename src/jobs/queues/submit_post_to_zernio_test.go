@@ -85,6 +85,12 @@ func (r *fakePostRepo) List(context.Context) ([]models.Post, error) { return nil
 func (r *fakePostRepo) ListByCampaign(context.Context, string) ([]models.Post, error) {
 	return nil, nil
 }
+func (r *fakePostRepo) Query(context.Context, models.PostQuery) ([]models.Post, error) {
+	return nil, nil
+}
+func (r *fakePostRepo) QueryIDs(context.Context, models.PostQuery, int) ([]string, int, error) {
+	return nil, 0, nil
+}
 func (r *fakePostRepo) ListSummaryProjections(context.Context) ([]models.Post, error) {
 	return nil, nil
 }

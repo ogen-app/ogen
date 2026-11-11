@@ -18,6 +18,9 @@ import (
 type PostRepository interface {
 	List(ctx context.Context) ([]models.Post, error)
 	ListByCampaign(ctx context.Context, campaignID string) ([]models.Post, error)
+	// Query and QueryIDs read the posts list's filter; see posts_query.go.
+	Query(ctx context.Context, q models.PostQuery) ([]models.Post, error)
+	QueryIDs(ctx context.Context, q models.PostQuery, limit int) ([]string, int, error)
 	// ListRowsByCampaign returns the campaign's posts with only the named
 	// columns set and no relations hydrated — for aggregations over a campaign.
 	ListRowsByCampaign(ctx context.Context, campaignID string, columns ...string) ([]models.Post, error)
