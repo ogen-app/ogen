@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/uptrace/bun"
 
@@ -132,17 +131,16 @@ func TestRunDraft_LinksEachPostAndKeepsWhatWasWritten(t *testing.T) {
 	}
 }
 
-func TestRunDraft_FillsAMissingPublishWindow(t *testing.T) {
-	s := &Service{now: func() time.Time { return time.Date(2026, 11, 6, 15, 0, 0, 0, time.UTC) }}
+// A draft with no window stays undated; a lone bound is the single day.
+func TestRunDraft_CompletesAOneSidedWindow(t *testing.T) {
 	cases := map[string]struct{ start, end, wantStart, wantEnd string }{
-		"none":        {"", "", "2026-11-06", "2026-11-20"},
-		"start only":  {"2026-12-01", "", "2026-12-01", "2026-12-01"},
-		"end only":    {"", "2026-11-10", "2026-11-06", "2026-11-10"},
-		"past end":    {"", "2026-11-01", "2026-11-01", "2026-11-01"},
-		"both, as is": {"2026-11-08", "2026-11-09", "2026-11-08", "2026-11-09"},
+		"none, undated": {"", "", "", ""},
+		"start only":    {"2026-12-01", "", "2026-12-01", "2026-12-01"},
+		"end only":      {"", "2026-11-10", "2026-11-10", "2026-11-10"},
+		"both, as is":   {"2026-11-08", "2026-11-09", "2026-11-08", "2026-11-09"},
 	}
 	for name, tc := range cases {
-		got := s.withWindow(DraftRequest{WindowStart: tc.start, WindowEnd: tc.end})
+		got := withWindow(DraftRequest{WindowStart: tc.start, WindowEnd: tc.end})
 		if got.WindowStart != tc.wantStart || got.WindowEnd != tc.wantEnd {
 			t.Errorf("%s: window = %s..%s, want %s..%s", name, got.WindowStart, got.WindowEnd, tc.wantStart, tc.wantEnd)
 		}

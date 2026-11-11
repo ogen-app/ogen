@@ -126,3 +126,38 @@ func TestDraftGrounding(t *testing.T) {
 		}
 	}
 }
+
+// A request with no window drafts undated posts that stay off the calendar;
+// one window bound alone is refused.
+func TestPersist_UndatedWithoutAWindow(t *testing.T) {
+	if _, err := parseWindow("2026-12-01", ""); err == nil {
+		t.Fatal("a lone window start was accepted")
+	}
+	for name, tc := range map[string]struct {
+		start, end string
+		dated      bool
+	}{
+		"undated": {"", "", false},
+		"dated":   {"2026-12-01", "2026-12-01", true},
+	} {
+		w, err := parseWindow(tc.start, tc.end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		posts := &savedPosts{}
+		sink := &draftSink{
+			campaign: &models.Campaign{ID: "c1", PublishingTime: "09:00"},
+			window:   w,
+			dates:    publishDates(w, 2),
+			loc:      time.UTC,
+			repos:    DraftPostRepos{Posts: posts},
+		}
+		dp, err := sink.persist(t.Context(), sink.dates[0], "T", "Body")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sink.dates) != 2 || (posts.rows[0].ScheduledAt != nil) != tc.dated || (dp.PublishDate != "") != tc.dated {
+			t.Fatalf("%s: dates %v, scheduled %v, publish date %q", name, sink.dates, posts.rows[0].ScheduledAt, dp.PublishDate)
+		}
+	}
+}

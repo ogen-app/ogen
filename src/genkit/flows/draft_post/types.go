@@ -20,7 +20,7 @@ type DraftPostRequest struct {
 	Count          int      `json:"count"`          // number of drafts to produce (>=1)
 	SourceMaterial string   `json:"sourceMaterial"` // research/source text to rewrite into posts
 	Instruction    string   `json:"instruction"`    // optional user steering ("punchier", "for execs")
-	WindowStart    string   `json:"windowStart"`    // ISO YYYY-MM-DD (inclusive)
+	WindowStart    string   `json:"windowStart"`    // ISO YYYY-MM-DD (inclusive); with WindowEnd empty too, the drafts are undated
 	WindowEnd      string   `json:"windowEnd"`      // ISO YYYY-MM-DD (inclusive)
 	PhaseID        string   `json:"phaseId"`        // a single campaign phase id
 	UsedAssetIDs   []string `json:"usedAssetIds"`   // asset ids stamped on each created post for provenance (may be empty)
@@ -39,7 +39,7 @@ type DraftedPost struct {
 	Content     string `json:"content"`
 	PlatformID  string `json:"platformId"`
 	PostType    string `json:"postType"`
-	PublishDate string `json:"publishDate"`
+	PublishDate string `json:"publishDate"` // "" for an undated draft
 	PostID      string `json:"postId"`
 }
 
