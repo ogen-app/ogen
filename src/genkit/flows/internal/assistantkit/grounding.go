@@ -1,6 +1,7 @@
 package assistantkit
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -108,61 +109,95 @@ func hasProperty(schema any, name string) bool {
 	return false
 }
 
-// Cited is the assets a saved answer drew on, each once, in the order they
-// came: from the stored turn's ask (the campaign assistant's own), then
-// each pack's result's ask, analysis and comparison, packs by name. None
-// for a turn that isn't JSON or drew on nothing.
+// Cited is the assets a saved turn drew on, each once, in the order they
+// came: its ask (the campaign assistant's own), then every pack's results,
+// packs and their fields by name: the passages an ask quoted, the analysis
+// one read, and the grounding of what a tool compared or generated, with
+// the analysis and idea each came through. None for a turn that isn't JSON
+// or drew on nothing.
 func Cited(turn []byte) []Source {
-	type ask struct {
-		Excerpts []struct {
-			AssetID string `json:"assetId"`
-			Title   string `json:"title"`
-		} `json:"excerpts"`
-	}
 	var env struct {
-		Ask     *ask                       `json:"ask"`
-		Results map[string]json.RawMessage `json:"results"`
+		Ask     any `json:"ask"`
+		Results any `json:"results"`
 	}
 	if json.Unmarshal(turn, &env) != nil {
 		return nil
 	}
-	var out []Source
-	add := func(id, title string) {
-		if id != "" && !slices.ContainsFunc(out, func(s Source) bool { return s.ID == id }) {
-			out = append(out, Source{ID: id, Title: title})
+	var c citations
+	c.walk("ask", env.Ask)
+	c.walk("", env.Results)
+	return c.out
+}
+
+// citations collects sources, one per asset: a later mention of an asset
+// fills in the analysis or idea an earlier one lacked.
+type citations struct{ out []Source }
+
+func (c *citations) add(s Source) {
+	if s.ID == "" {
+		return
+	}
+	i := slices.IndexFunc(c.out, func(o Source) bool { return o.ID == s.ID })
+	if i < 0 {
+		c.out = append(c.out, s)
+		return
+	}
+	o := &c.out[i]
+	o.Title = cmp.Or(o.Title, s.Title)
+	o.AnalysisID = cmp.Or(o.AnalysisID, s.AnalysisID)
+	o.IdeaID = cmp.Or(o.IdeaID, s.IdeaID)
+}
+
+// walk reads v, found under key, for what it cites, and its children.
+func (c *citations) walk(key string, v any) {
+	switch v := v.(type) {
+	case map[string]any:
+		if c.cites(key, v) {
+			return
+		}
+		for _, k := range slices.Sorted(maps.Keys(v)) {
+			c.walk(k, v[k])
+		}
+	case []any:
+		for _, child := range v {
+			c.walk(key, child)
 		}
 	}
-	addAsk := func(a *ask) {
-		if a != nil {
-			for _, e := range a.Excerpts {
-				add(e.AssetID, e.Title)
-			}
+}
+
+// cites adds what v, found under key, names as a source, and reports
+// whether key is one that names them.
+func (c *citations) cites(key string, v map[string]any) bool {
+	switch key {
+	case "ask":
+		for _, e := range objects(v["excerpts"]) {
+			c.add(Source{ID: str(e["assetId"]), Title: str(e["title"])})
 		}
+	case "analysis":
+		c.add(Source{ID: str(v["assetId"]), Title: str(v["title"])})
+	case "grounding":
+		for _, s := range objects(v["sources"]) {
+			c.add(Source{ID: str(s["id"]), Title: str(s["title"]), AnalysisID: str(s["analysisId"]), IdeaID: str(s["ideaId"])})
+		}
+	default:
+		return false
 	}
-	addAsk(env.Ask)
-	for _, pack := range slices.Sorted(maps.Keys(env.Results)) {
-		var r struct {
-			Ask      *ask `json:"ask"`
-			Analysis *struct {
-				AssetID string `json:"assetId"`
-				Title   string `json:"title"`
-			} `json:"analysis"`
-			Compare *struct {
-				Grounding Grounding `json:"grounding"`
-			} `json:"compare"`
-		}
-		if json.Unmarshal(env.Results[pack], &r) != nil {
-			continue
-		}
-		addAsk(r.Ask)
-		if r.Analysis != nil {
-			add(r.Analysis.AssetID, r.Analysis.Title)
-		}
-		if r.Compare != nil {
-			for _, src := range r.Compare.Grounding.Sources {
-				add(src.ID, src.Title)
-			}
+	return true
+}
+
+// objects is the JSON objects of a decoded list; none when v isn't one.
+func objects(v any) []map[string]any {
+	list, _ := v.([]any)
+	var out []map[string]any
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			out = append(out, m)
 		}
 	}
 	return out
+}
+
+func str(v any) string {
+	s, _ := v.(string)
+	return s
 }
