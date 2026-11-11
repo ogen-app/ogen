@@ -21,7 +21,7 @@ Canonical code:
 
 1. `POST /api/assistant` with `{instruction, viewContext}`. `domain/viewcontext` validates it and `usecase/viewresolve` resolves it. Errors return 400/404 before SSE opens.
 2. Spend cap check, then history for the thread scope (`workspace`, `campaign:<id>`, `post:<id>`).
-3. The default packs for the screen and scope load. Each pack's `Begin` resolves its subject with `t.Subject(kind)`: the offer's own `<kind>Id` when confirming one; else the thread's entity of that kind, or none when a different one of that kind is in focus (ambiguous); else the entity in focus. It returns a block that follows `<view>`. A `Refused` from `Begin` drops the pack and tells the model why.
+3. The default packs for the screen and scope load. A pack with a subject has a `Begin` (optional; subjectless packs have none) that resolves its subject with `t.Subject(kind)`: the offer's own `<kind>Id` when confirming one; else the thread's entity of that kind, or none when a different one of that kind is in focus (ambiguous); else the entity in focus. It returns a block that follows `<view>`. A `Refused` from `Begin` drops the pack and tells the model why.
 4. One model call: cached system prompt (core rules + loaded packs' `Instructions` + generated tool guide), history, then `<view>` + pack blocks + message. Tool rounds are capped by `MaxTurns`.
 5. `loadPack` restarts the call once with one more pack, replaying the rounds already done.
 6. Tools run through the registry: gate, then outcome. A gated call that needs a yes becomes an **offer** instead of running.
@@ -34,7 +34,7 @@ Canonical code:
 - **Tier** labels what a tool may do: `TierRead`, `TierReversible` (single undoable change) or `TierProposal` (bulk, generative, scheduling, external or destructive). Nothing enforces a tier at run time beyond checking it is valid. **Only the gate holds a call back**, so a proposal-tier tool must be wrapped in `assistantkit.Gated`.
 - **Gate** (`assistantkit.Gated(name, Gate[In]{Precheck, Needs, Summary}, tool)`):
   - `Precheck` refuses bad input before any offer.
-  - `Needs` decides when the call becomes an offer. **`Needs` nil means every call asks first.** Bulk work that may run small requests directly uses `Needs: overN(d, n)`, where N is `ASSISTANT_PROPOSAL_THRESHOLD` (default 3).
+  - `Needs` decides when the call becomes an offer. **`Needs` nil means every call asks first.** Bulk work that may run small requests directly passes a callback that asks `overN(d, n)`, e.g. `Needs: func(_ context.Context, in In) bool { return overN(d, len(in.IDs)) }`, where N is `ASSISTANT_PROPOSAL_THRESHOLD` (default 3). See the example below.
   - `Summary` (or `Describe`) is the card text.
   - A confirmed call (`assistantkit.Confirmed(ctx)`) skips the gate and runs.
 - **Outcome**: every tool returns `{status, result}`, with status `ok`, `refused` (`reason`, `alternatives`), `conflict` (`options`) or `proposed`.
@@ -109,7 +109,7 @@ genkit.DefineTool(g, "archiveReports", "… Above a few it is offered for the us
 Spec it as `TierProposal`. The gate, not the tier, decides when it asks:
 
 - **Always ask** (delete, move, regenerate a plan): leave `Needs` out. Every unconfirmed call becomes an offer.
-- **Ask above a threshold** (bulk verdicts): `Needs: overN(d, n)`. Calls at or below N run directly, so make sure running them without a yes is acceptable.
+- **Ask above a threshold** (bulk verdicts): a `Needs` callback returning `overN(d, n)`, as in the example. Calls at or below N run directly, so make sure running them without a yes is acceptable.
 
 ### Step 4: Make reversible writes undoable
 
