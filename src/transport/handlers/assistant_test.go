@@ -146,6 +146,8 @@ func TestAssistantThread(t *testing.T) {
 		"workspace":         {"workspace", 200, models.AssistantScopeWorkspace, ""},
 		"campaign":          {"campaign:c1", 200, models.AssistantScopeCampaign, "c1"},
 		"post":              {"post:p1", 200, models.AssistantScopePost, "p1"},
+		"campaign escaped":  {"campaign%3Ac1", 200, models.AssistantScopeCampaign, "c1"},
+		"post escaped":      {"post%3Ap1", 200, models.AssistantScopePost, "p1"},
 		"workspace with id": {"workspace:x", 400, "", ""},
 		"campaign no id":    {"campaign", 400, "", ""},
 		"unknown":           {"team:t1", 400, "", ""},
