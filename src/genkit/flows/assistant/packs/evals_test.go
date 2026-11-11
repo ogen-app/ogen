@@ -95,6 +95,27 @@ var offerThreads = &evalOffer{
 		Options: []models.ProposalOption{{ID: "add_platform", Title: "Add Threads to the campaign", Recommended: true}}},
 }
 
+// offerNoSources is the choice generating with no sources raised: the
+// Hotel de Russie replay, a hotel campaign planned before its brochure was
+// added.
+var offerNoSources = &evalOffer{
+	asked: "Plan 3 LinkedIn posts about the Hotel de Russie's spa reopening.",
+	said:  "This campaign has no sources yet, so anything I write would come from general knowledge, not your material. Shall I open the Assets tab so you can add the brochure or a link first, or go ahead without sources?",
+	offer: models.AssistantProposal{ID: "prop2", Tool: "generatePosts",
+		Summary: "This campaign has no sources yet, so anything I write would come from general knowledge, not your material.",
+		Options: []models.ProposalOption{
+			{ID: "add_source", Title: "Add a document or a link", Recommended: true},
+			{ID: "exploratory", Title: "Go ahead without sources (marked not grounded)"},
+		}},
+}
+
+// researchSpa is an earlier answer from the campaign's brochure, to draft
+// from; it made no offer.
+var researchSpa = &evalOffer{
+	asked: "What does the brochure say about the spa?",
+	said:  "From the Hotel de Russie brochure: the spa reopens on 14 March with four new treatment rooms, a hammam and a Roman-inspired pool.",
+}
+
 var (
 	evalCampaign  = viewcontext.Scope{Kind: models.AssistantScopeCampaign, ID: "c1"}
 	evalPost      = viewcontext.Scope{Kind: models.AssistantScopePost, ID: "p1"}
@@ -130,6 +151,16 @@ var evalCases = []evalCase{
 		want: []string{"draftPost", "generatePosts", "updateCampaignPlatforms"}},
 	// A yes to a waiting offer takes it, on the first try.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "yes please", offered: offerThreads, want: []string{"confirmOffer"}},
+	// CON-469, the Hotel de Russie replay: with no sources the user adds one
+	// first, by the offer or a link, or goes ahead knowingly.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Let me add the brochure first.", offered: offerNoSources,
+		want: []string{"confirmOffer", "openAddSource"}, not: []string{"generatePosts", "runContentPlan", "draftPost"}},
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Use this page: https://www.roccofortehotels.com/hotels-and-resorts/hotel-de-russie/spa/",
+		offered: offerNoSources, want: []string{"importPage", "loadPack"}, not: []string{"generatePosts", "runContentPlan", "draftPost"}},
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Go ahead without them.", offered: offerNoSources, want: []string{"confirmOffer"}},
+	// A post drafted from the answer just given draws on it.
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Draft a LinkedIn post from that for next week.", offered: researchSpa,
+		want: []string{"draftPost"}, not: []string{"askCampaignAssets", "askAssets", "generatePosts"}},
 	// Many posts start with a tool that waits for a yes, never one that
 	// touches the calendar.
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Generate 20 posts for this campaign.", want: []string{"generatePosts", "runContentPlan", "draftPost"},
@@ -384,7 +415,7 @@ type evalProposals struct {
 }
 
 func (evalProposals) ListOpen(context.Context, models.AssistantScopeKind, string, time.Time) ([]models.AssistantProposal, error) {
-	if evalThread == nil {
+	if evalThread == nil || evalThread.offer.ID == "" {
 		return nil, nil
 	}
 	return []models.AssistantProposal{evalThread.offer}, nil
