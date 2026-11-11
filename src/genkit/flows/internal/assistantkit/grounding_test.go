@@ -66,13 +66,17 @@ func TestGrounding_WithAnalyses(t *testing.T) {
 	}
 }
 
-// A saved answer's sources are what its tools quoted, read, or compared,
-// each once; a turn that isn't JSON has none.
+// A saved turn's sources are what its tools quoted, read, compared or
+// generated from, each once with the analysis and idea it came through; a
+// turn that isn't JSON has none.
 func TestCited(t *testing.T) {
 	turn := `{"explanation":"r","ask":{"excerpts":[{"assetId":"a1","title":"Brochure"}]},
 		"results":{"assets":{"ask":{"excerpts":[{"assetId":"a1","title":"Brochure"}]},"analysis":{"assetId":"a2","title":"Deck"},
-		"compare":{"grounding":{"mode":"grounded","sources":[{"id":"a3","title":"Notes"}]}}},"campaign":{"action":"answered"}}}`
-	want := []Source{{ID: "a1", Title: "Brochure"}, {ID: "a2", Title: "Deck"}, {ID: "a3", Title: "Notes"}}
+		"compare":{"grounding":{"mode":"grounded","sources":[{"id":"a3","title":"Notes","analysisId":"an3"}]}}},
+		"campaign":{"action":"answered"},
+		"ideas":{"compileIdeas":{"grounding":{"mode":"grounded","sources":[{"id":"a1","title":"Brochure","analysisId":"an1","ideaId":"i1"}]}},
+			"draftIdeas":{"posts":[{"grounding":{"mode":"grounded","sources":[{"id":"a4","title":"Menu","ideaId":"i4"}]}}]}}}}`
+	want := []Source{{ID: "a1", Title: "Brochure", AnalysisID: "an1", IdeaID: "i1"}, {ID: "a2", Title: "Deck"}, {ID: "a3", Title: "Notes", AnalysisID: "an3"}, {ID: "a4", Title: "Menu", IdeaID: "i4"}}
 	if got := Cited([]byte(turn)); !slices.Equal(got, want) {
 		t.Fatalf("cited = %+v", got)
 	}

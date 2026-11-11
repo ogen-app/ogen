@@ -121,8 +121,11 @@ type trailSources struct {
 	labels  map[string]string
 	assetOf map[string]string
 	assets  map[string]*TrailAsset
-	// analysisOf is each asset's finished analysis the writer read.
-	analysisOf map[string]string
+	// analysisOf is each asset's finished analysis the writer read;
+	// analysisVia, the analysis an idea reference came by, which outranks
+	// it for that reference.
+	analysisOf  map[string]string
+	analysisVia map[string]string
 }
 
 func (t *trailSources) add(ref, label, title, text, assetID string) {
@@ -163,7 +166,7 @@ func moreLikeThese(ctx context.Context, d Deps, in MoreLikeTheseInput) (*MoreLik
 	if err != nil {
 		return nil, err
 	}
-	t := &trailSources{d: d, labels: map[string]string{}, assetOf: map[string]string{}, assets: map[string]*TrailAsset{}, analysisOf: map[string]string{}}
+	t := &trailSources{d: d, labels: map[string]string{}, assetOf: map[string]string{}, assets: map[string]*TrailAsset{}, analysisOf: map[string]string{}, analysisVia: map[string]string{}}
 	out := &MoreLikeTheseOutput{Trail: []TrailStep{}, Ideas: []NewIdea{}}
 	var examples []more_like_these.Example
 	var posts []*models.Post
@@ -252,7 +255,7 @@ func trailOf(ctx context.Context, t *trailSources, p *models.Post) (TrailStep, e
 			}
 			// An idea distilled from the asset names the analysis it came by.
 			if an := deref(idea.AssetAnalysisID); an != "" && assetID == deref(idea.SourceAssetID) {
-				t.analysisOf[assetID] = an
+				t.analysisVia["idea:"+li.ID] = an
 			}
 		}
 		if assetID != "" {
@@ -357,17 +360,27 @@ func saveIdea(ctx context.Context, d Deps, t *trailSources, w more_like_these.Id
 		if label, ok := t.labels[r]; ok {
 			idea.Sources = append(idea.Sources, label)
 		}
-		if a := t.assetOf[r]; a != "" && !slices.Contains(idea.AssetIDs, a) {
-			idea.AssetIDs = append(idea.AssetIDs, a)
-			src := assistantkit.Source{ID: a, AnalysisID: t.analysisOf[a]}
-			if ta := t.assets[a]; ta != nil {
-				src.Title = ta.Title
-			}
-			if idea, ok := strings.CutPrefix(r, "idea:"); ok {
-				src.IdeaID = idea
-			}
-			sources = append(sources, src)
+		a := t.assetOf[r]
+		if a == "" {
+			continue
 		}
+		src := assistantkit.Source{ID: a, AnalysisID: cmp.Or(t.analysisVia[r], t.analysisOf[a])}
+		if ta := t.assets[a]; ta != nil {
+			src.Title = ta.Title
+		}
+		if via, ok := strings.CutPrefix(r, "idea:"); ok {
+			src.IdeaID = via
+		}
+		// An asset cited twice is one source: an idea it came through, named
+		// later, still traces it, with that idea's analysis.
+		if i := slices.IndexFunc(sources, func(s assistantkit.Source) bool { return s.ID == a }); i >= 0 {
+			if sources[i].IdeaID == "" && src.IdeaID != "" {
+				sources[i].IdeaID, sources[i].AnalysisID = src.IdeaID, src.AnalysisID
+			}
+			continue
+		}
+		idea.AssetIDs = append(idea.AssetIDs, a)
+		sources = append(sources, src)
 	}
 	idea.GroundingMode = models.GroundingFor(len(idea.AssetIDs))
 	if len(idea.AssetIDs) > 0 {

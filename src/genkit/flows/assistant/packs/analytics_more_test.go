@@ -70,6 +70,24 @@ func moreDeps(written []more_like_these.Idea) (Deps, *memIdeaRepo, *more_like_th
 	return d, ideasRepo, &got
 }
 
+// An asset cited before the idea it came through is still one source, traced
+// to that idea and the analysis the idea came by, not the asset's digest.
+func TestMoreLikeThese_AssetBeforeItsIdea(t *testing.T) {
+	d, repo, _ := moreDeps([]more_like_these.Idea{{Title: "Survey says", Sources: []string{"asset:a-used", "idea:idea-pricing"}}})
+	// The idea came from the asset the example used, by its own analysis.
+	repo.byID["idea-pricing"].SourceAssetID, repo.byID["idea-pricing"].AssetAnalysisID = new("a-used"), new("an-survey")
+	ctx, _ := turn(t, workspace, nil)
+	out, err := moreLikeThese(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1"}, Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := out.Ideas[0].Grounding; !slices.Equal(g.Sources, []assistantkit.Source{
+		{ID: "a-used", Title: "Survey", AnalysisID: "an-survey", IdeaID: "idea-pricing"},
+	}) {
+		t.Fatalf("grounding = %+v", g)
+	}
+}
+
 // The trail follows each example to its ideas and their assets, and its
 // used assets; the campaign's other sources ground the writer; the ideas
 // are saved undated in the campaign, citing their sources by name.
