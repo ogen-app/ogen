@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -1181,8 +1180,6 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 		var env struct {
 			Action      string `json:"action"`
 			Explanation string `json:"explanation"`
-			// Ask is the campaign assistant's own answer's sources.
-			Ask *researchCites `json:"ask"`
 			// Results is what each pack did; the turn's own action stays
 			// "answered" when a tool did the work.
 			Results map[string]json.RawMessage `json:"results"`
@@ -1198,7 +1195,7 @@ func resolveDraftSource(ctx context.Context, st *requestState, override string) 
 			continue // an action confirmation, not research
 		}
 		if s := strings.TrimSpace(env.Explanation); s != "" {
-			return draftSource{text: s, cited: citedIn(env.Ask, env.Results), known: true}, nil
+			return draftSource{text: s, cited: assistantkit.Cited([]byte(msg.Content)), known: true}, nil
 		}
 	}
 	return draftSource{}, nil
@@ -1212,61 +1209,6 @@ type draftSource struct {
 	text  string
 	cited []assistantkit.Source
 	known bool
-}
-
-// researchCites is the part of a saved answer's result that names the
-// assets it drew on: the passages it quoted, the analysis it read, or the
-// assets it compared.
-type researchCites struct {
-	Excerpts []struct {
-		AssetID string `json:"assetId"`
-		Title   string `json:"title"`
-	} `json:"excerpts"`
-}
-
-// citedIn is the assets a saved answer drew on, each once, in the order
-// they came: the campaign assistant's ask, then each pack's ask, analysis
-// and comparison.
-func citedIn(ask *researchCites, results map[string]json.RawMessage) []assistantkit.Source {
-	var out []assistantkit.Source
-	add := func(id, title string) {
-		if id != "" && !slices.ContainsFunc(out, func(s assistantkit.Source) bool { return s.ID == id }) {
-			out = append(out, assistantkit.Source{ID: id, Title: title})
-		}
-	}
-	addAsk := func(a *researchCites) {
-		if a != nil {
-			for _, e := range a.Excerpts {
-				add(e.AssetID, e.Title)
-			}
-		}
-	}
-	addAsk(ask)
-	for _, pack := range slices.Sorted(maps.Keys(results)) {
-		var r struct {
-			Ask      *researchCites `json:"ask"`
-			Analysis *struct {
-				AssetID string `json:"assetId"`
-				Title   string `json:"title"`
-			} `json:"analysis"`
-			Compare *struct {
-				Grounding assistantkit.Grounding `json:"grounding"`
-			} `json:"compare"`
-		}
-		if json.Unmarshal(results[pack], &r) != nil {
-			continue
-		}
-		addAsk(r.Ask)
-		if r.Analysis != nil {
-			add(r.Analysis.AssetID, r.Analysis.Title)
-		}
-		if r.Compare != nil {
-			for _, src := range r.Compare.Grounding.Sources {
-				add(src.ID, src.Title)
-			}
-		}
-	}
-	return out
 }
 
 // answeredOnly reports whether a stored model turn only answered: neither

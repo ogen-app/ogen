@@ -399,14 +399,21 @@ func earlierView(stored models.JSONMap) string {
 }
 
 // modelTurn replays a stored model turn as its envelope, without the
-// server-side fields a later version may add.
+// server-side fields a later version may add, naming the assets the turn
+// drew on.
 func modelTurn(content string) string {
 	var env struct {
 		Explanation string `json:"explanation"`
 		Action      string `json:"action"`
+		// Sources names the assets the answer drew on, so a later turn can
+		// tell it came from the user's material without seeing the search.
+		Sources []string `json:"sources,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(content), &env); err != nil {
 		return content
+	}
+	for _, s := range assistantkit.Cited([]byte(content)) {
+		env.Sources = append(env.Sources, cmp.Or(s.Title, s.ID))
 	}
 	out, err := json.Marshal(env)
 	if err != nil {
