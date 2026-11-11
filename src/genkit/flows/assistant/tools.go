@@ -258,9 +258,10 @@ func (st *turnState) addUI(a UIAction) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.ui = append(st.ui, a)
-	// Opening a saved view puts its list on screen, as navigate does, and
-	// opening a connect flow the settings screen.
-	if a.Type == UINavigate || a.Type == UIOpenSavedView || a.Type == UIOpenConnect {
+	// Opening a saved view puts its list on screen, as navigate does,
+	// opening a connect flow the settings screen, and adding a source the
+	// campaign's Assets tab.
+	if a.Type == UINavigate || a.Type == UIOpenSavedView || a.Type == UIOpenConnect || a.Type == UIOpenAddSource {
 		st.screen, st.campaign = a.Screen, a.CampaignID
 	}
 	if a.Type == UISetWindow {

@@ -92,6 +92,19 @@ func OpenConnect(ctx context.Context, c UIConnect) error {
 	return nil
 }
 
+// OpenAddSource asks the client to open the campaign's Assets tab ready to
+// upload a document or import a link. The user adds the source.
+func OpenAddSource(ctx context.Context, campaignID string) error {
+	st, err := turnStateFrom(ctx)
+	if err != nil {
+		return err
+	}
+	st.planning.Lock()
+	defer st.planning.Unlock()
+	st.addUI(UIAction{Type: UIOpenAddSource, Screen: "campaign.assets", CampaignID: campaignID})
+	return nil
+}
+
 // Selected is the ids of the items of kind selected on the user's screen,
 // as many as the client sent; nil when the selection is of another kind.
 func Selected(ctx context.Context, kind viewcontext.EntityKind) []string {

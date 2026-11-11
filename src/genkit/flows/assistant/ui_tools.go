@@ -28,6 +28,9 @@ const (
 	UIOpenSavedView UIActionType = "open_saved_view"
 	UISetWindow     UIActionType = "set_window"
 	UIOpenConnect   UIActionType = "open_connect"
+	// UIOpenAddSource opens a campaign's Assets tab ready to upload a
+	// document or import a link.
+	UIOpenAddSource UIActionType = "open_add_source"
 )
 
 // UIAction drives the client's screen. The server has checked every
