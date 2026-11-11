@@ -1,7 +1,9 @@
 package assistantkit
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
@@ -104,4 +106,63 @@ func hasProperty(schema any, name string) bool {
 		return slices.ContainsFunc(v, func(child any) bool { return hasProperty(child, name) })
 	}
 	return false
+}
+
+// Cited is the assets a saved answer drew on, each once, in the order they
+// came: from the stored turn's ask (the campaign assistant's own), then
+// each pack's result's ask, analysis and comparison, packs by name. None
+// for a turn that isn't JSON or drew on nothing.
+func Cited(turn []byte) []Source {
+	type ask struct {
+		Excerpts []struct {
+			AssetID string `json:"assetId"`
+			Title   string `json:"title"`
+		} `json:"excerpts"`
+	}
+	var env struct {
+		Ask     *ask                       `json:"ask"`
+		Results map[string]json.RawMessage `json:"results"`
+	}
+	if json.Unmarshal(turn, &env) != nil {
+		return nil
+	}
+	var out []Source
+	add := func(id, title string) {
+		if id != "" && !slices.ContainsFunc(out, func(s Source) bool { return s.ID == id }) {
+			out = append(out, Source{ID: id, Title: title})
+		}
+	}
+	addAsk := func(a *ask) {
+		if a != nil {
+			for _, e := range a.Excerpts {
+				add(e.AssetID, e.Title)
+			}
+		}
+	}
+	addAsk(env.Ask)
+	for _, pack := range slices.Sorted(maps.Keys(env.Results)) {
+		var r struct {
+			Ask      *ask `json:"ask"`
+			Analysis *struct {
+				AssetID string `json:"assetId"`
+				Title   string `json:"title"`
+			} `json:"analysis"`
+			Compare *struct {
+				Grounding Grounding `json:"grounding"`
+			} `json:"compare"`
+		}
+		if json.Unmarshal(env.Results[pack], &r) != nil {
+			continue
+		}
+		addAsk(r.Ask)
+		if r.Analysis != nil {
+			add(r.Analysis.AssetID, r.Analysis.Title)
+		}
+		if r.Compare != nil {
+			for _, src := range r.Compare.Grounding.Sources {
+				add(src.ID, src.Title)
+			}
+		}
+	}
+	return out
 }

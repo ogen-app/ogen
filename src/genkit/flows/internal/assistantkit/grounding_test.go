@@ -65,3 +65,18 @@ func TestGrounding_WithAnalyses(t *testing.T) {
 		t.Fatalf("exploratory = %+v", none)
 	}
 }
+
+// A saved answer's sources are what its tools quoted, read, or compared,
+// each once; a turn that isn't JSON has none.
+func TestCited(t *testing.T) {
+	turn := `{"explanation":"r","ask":{"excerpts":[{"assetId":"a1","title":"Brochure"}]},
+		"results":{"assets":{"ask":{"excerpts":[{"assetId":"a1","title":"Brochure"}]},"analysis":{"assetId":"a2","title":"Deck"},
+		"compare":{"grounding":{"mode":"grounded","sources":[{"id":"a3","title":"Notes"}]}}},"campaign":{"action":"answered"}}}`
+	want := []Source{{ID: "a1", Title: "Brochure"}, {ID: "a2", Title: "Deck"}, {ID: "a3", Title: "Notes"}}
+	if got := Cited([]byte(turn)); !slices.Equal(got, want) {
+		t.Fatalf("cited = %+v", got)
+	}
+	if got := Cited([]byte("plain answer")); got != nil {
+		t.Fatalf("plain text cited %+v", got)
+	}
+}

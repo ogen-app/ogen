@@ -431,3 +431,15 @@ func TestIsMaxTurnsExceeded(t *testing.T) {
 }
 
 func fmtWrap(err error) error { return errors.Join(errors.New("model call failed"), err) }
+
+// A replayed answer names the assets it drew on, so a later turn knows it
+// came from the user's material; one that drew on none stays as it was.
+func TestModelTurn_NamesItsSources(t *testing.T) {
+	got := modelTurn(`{"explanation":"The spa reopens 14 March.","action":"answered","results":{"assets":{"ask":{"excerpts":[{"assetId":"a1","title":"Brochure"}]}}}}`)
+	if got != `{"explanation":"The spa reopens 14 March.","action":"answered","sources":["Brochure"]}` {
+		t.Fatalf("replayed = %s", got)
+	}
+	if got := modelTurn(`{"explanation":"Hi.","action":"answered"}`); got != `{"explanation":"Hi.","action":"answered"}` {
+		t.Fatalf("replayed = %s", got)
+	}
+}

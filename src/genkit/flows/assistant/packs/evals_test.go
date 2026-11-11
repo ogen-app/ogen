@@ -78,6 +78,8 @@ type evalCase struct {
 	atGoal bool
 	// orReply also accepts an answer without a tool: pushing back in words.
 	orReply bool
+	// hotel runs the case on the Hotel de Russie's spa reopening campaign.
+	hotel bool
 }
 
 // evalOffer is an earlier turn that ended in an offer: what the user asked,
@@ -85,6 +87,8 @@ type evalCase struct {
 type evalOffer struct {
 	asked, said string
 	offer       models.AssistantProposal
+	// results is what the earlier turn's tools found, as stored.
+	results map[string]any
 }
 
 // offerThreads is the offer to add Threads, which drafting for it raised.
@@ -114,6 +118,8 @@ var offerNoSources = &evalOffer{
 var researchSpa = &evalOffer{
 	asked: "What does the brochure say about the spa?",
 	said:  "From the Hotel de Russie brochure: the spa reopens on 14 March with four new treatment rooms, a hammam and a Roman-inspired pool.",
+	results: map[string]any{"assets": map[string]any{"ask": map[string]any{"scope": "campaign",
+		"excerpts": []map[string]string{{"assetId": "a1", "title": "Hotel de Russie brochure", "pages": "4"}}}}},
 }
 
 var (
@@ -153,13 +159,13 @@ var evalCases = []evalCase{
 	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "yes please", offered: offerThreads, want: []string{"confirmOffer"}},
 	// CON-469, the Hotel de Russie replay: with no sources the user adds one
 	// first, by the offer or a link, or goes ahead knowingly.
-	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Let me add the brochure first.", offered: offerNoSources,
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Let me add the brochure first.", offered: offerNoSources,
 		want: []string{"confirmOffer", "openAddSource"}, not: []string{"generatePosts", "runContentPlan", "draftPost"}},
-	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Use this page: https://www.roccofortehotels.com/hotels-and-resorts/hotel-de-russie/spa/",
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Use this page: https://www.roccofortehotels.com/hotels-and-resorts/hotel-de-russie/spa/",
 		offered: offerNoSources, want: []string{"importPage", "loadPack"}, not: []string{"generatePosts", "runContentPlan", "draftPost"}},
-	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Go ahead without them.", offered: offerNoSources, want: []string{"confirmOffer"}},
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Go ahead without them.", offered: offerNoSources, want: []string{"confirmOffer"}},
 	// A post drafted from the answer just given draws on it.
-	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, say: "Draft a LinkedIn post from that for next week.", offered: researchSpa,
+	{pack: "campaign", screen: "campaign.overview", scope: evalCampaign, hotel: true, say: "Draft a LinkedIn post from that for next week.", offered: researchSpa,
 		want: []string{"draftPost"}, not: []string{"askCampaignAssets", "askAssets", "generatePosts"}},
 	// Many posts start with a tool that waits for a yes, never one that
 	// touches the calendar.
@@ -295,8 +301,19 @@ func (evalCampaigns) GetByID(context.Context, string) (*models.Campaign, error) 
 	if evalAtGoal {
 		c.EstimatedPostCount, c.GoalCadence = new(10), "month"
 	}
+	if evalHotel {
+		c.Name, c.Description = "Hotel de Russie spa reopening", "The Hotel de Russie in Rome reopens its spa after a renovation."
+		c.KeyMessages = "A Roman retreat steps from the Piazza del Popolo; the spa is new inside and out."
+		// The brochure is its source, unless the case is about having none.
+		if evalThread != offerNoSources {
+			c.AssetIDs = models.StringSlice{"a1"}
+		}
+	}
 	return c, nil
 }
+
+// evalHotel makes the eval campaign the Hotel de Russie's spa reopening.
+var evalHotel bool
 
 // evalAtGoal puts the eval campaign at its goal: a goal of 10 posts, and
 // 10 drafts in it. Cases run one at a time.
@@ -406,7 +423,7 @@ func (evalMessages) ListRecent(context.Context, models.AssistantScopeKind, strin
 	if evalThread == nil {
 		return nil, nil
 	}
-	said, _ := json.Marshal(map[string]string{"explanation": evalThread.said, "action": "answered"})
+	said, _ := json.Marshal(map[string]any{"explanation": evalThread.said, "action": "answered", "results": evalThread.results})
 	return []models.AssistantMessage{{Role: "user", Content: evalThread.asked}, {Role: "model", Content: string(said)}}, nil
 }
 
@@ -471,8 +488,8 @@ func TestPackEvals(t *testing.T) {
 	passed := map[string][2]int{}
 	for _, c := range evalCases {
 		t.Run(fmt.Sprintf("%s/%s", c.pack, c.say), func(t *testing.T) {
-			evalThread, evalAtGoal = c.offered, c.atGoal
-			t.Cleanup(func() { evalThread, evalAtGoal = nil, false })
+			evalThread, evalAtGoal, evalHotel = c.offered, c.atGoal, c.hotel
+			t.Cleanup(func() { evalThread, evalAtGoal, evalHotel = nil, false, false })
 			view := &viewresolve.Resolved{View: &viewcontext.ViewContext{Version: viewcontext.Version, Screen: c.screen, Scope: c.scope, Focus: c.focus, Window: c.window}, Summary: "On " + string(c.screen)}
 			if c.focus != nil {
 				title := cmp.Or(c.title, "Villa Aurora brochure 2026")
