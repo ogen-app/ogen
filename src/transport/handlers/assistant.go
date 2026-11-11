@@ -87,10 +87,11 @@ type assistantTurnRequest struct {
 // @Description  Events, in order: "explanation_delta" {"delta"} as the reply streams; "tool_call" {"name","input","ref"}
 // @Description  and "tool_result" {"name","ref","ok"} for each tool, "ok" false when it refused or hit a conflict; "pack_loaded" {"pack"} when the turn restarted
 // @Description  with another domain's tools (deltas before it are void); one "ui_action" per change to the screen,
-// @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view|set_window|open_connect, "screen", "campaignId",
+// @Description  once the reply is final: {"type": navigate|set_filter|select|open_saved_view|set_window|open_connect|open_add_source, "screen", "campaignId",
 // @Description  "focus" {kind,id}, "filter", "selection" {kind,ids}, "savedViewId", "window" {from,to,platforms,campaignId},
 // @Description  "connect" {platform,accountId,reconnect}}, every reference already checked; open_connect opens the settings
-// @Description  screen's connect flow (reconnect for an account), which the client runs;
+// @Description  screen's connect flow (reconnect for an account), which the client runs; open_add_source opens the
+// @Description  campaign's Assets tab ready to upload a document or import a link;
 // @Description  then "complete" with {"explanation","action","uiActions","touched":[{"kind","id"}],"packs","results"}, where
 // @Description  touched names what changed (no id: every entity of the kind) for the client to refresh, and results
 // @Description  (omitted when empty) holds each pack's tools' last successful output, by pack then tool name. The

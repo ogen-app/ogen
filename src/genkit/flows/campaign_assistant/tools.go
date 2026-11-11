@@ -411,6 +411,24 @@ type AskCampaignAssetsOutput struct {
 	OpenAssetOnly bool `json:"openAssetOnly,omitempty"`
 }
 
+// OpenAddSourceOutput says whether the Assets tab was opened for the user
+// to add a source.
+type OpenAddSourceOutput struct {
+	Opened bool   `json:"opened"`
+	Note   string `json:"note"`
+}
+
+// toolOpenAddSource opens the campaign's Assets tab for the user to add a
+// source; outside the assistant's chat there is no screen to drive, so it
+// says where to go instead.
+func toolOpenAddSource(ctx context.Context) (*OpenAddSourceOutput, error) {
+	st := getRequestState(ctx)
+	if err := assistant.OpenAddSource(ctx, st.campaignID); err != nil {
+		return &OpenAddSourceOutput{Note: "Open the campaign's Assets tab to upload a document or import a link."}, nil
+	}
+	return &OpenAddSourceOutput{Opened: true, Note: "The campaign's Assets tab is open to upload a document or import a link. Once it is read, ask again and the posts will draw on it."}, nil
+}
+
 // AssetExcerpt is one relevant chunk of an attached asset.
 type AssetExcerpt struct {
 	AssetID string `json:"assetId"`
@@ -422,6 +440,7 @@ type AssetExcerpt struct {
 // ── Tool registration ────────────────────────────────────────────────────────
 
 type toolSet struct {
+	openAddSource           ai.ToolRef
 	runContentPlan          ai.ToolRef
 	enrichBrief             ai.ToolRef
 	listCampaignPosts       ai.ToolRef
@@ -575,7 +594,14 @@ func defineTools(g *genkit.Genkit) (*toolSet, error) {
 		ai.WithStrictSchema(false),
 	)
 
+	openAddSource := genkit.DefineTool(g, "openAddSource",
+		"Opens the campaign's Assets tab ready for the user to upload a document or import a link as a source.",
+		assistantkit.Wrap(func(ctx context.Context, _ struct{}) (*OpenAddSourceOutput, error) { return toolOpenAddSource(ctx) }),
+		ai.WithStrictSchema(false),
+	)
+
 	t := &toolSet{
+		openAddSource:           openAddSource,
 		runContentPlan:          runContentPlan,
 		enrichBrief:             enrichBrief,
 		listCampaignPosts:       listCampaignPosts,

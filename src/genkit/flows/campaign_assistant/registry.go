@@ -71,6 +71,8 @@ func newToolRegistry(t *toolSet) (*assistantkit.Registry, error) {
 			`Never call this yourself: it is what a budget guard's "replace the weakest drafts" option runs once confirmed.`),
 		spec(t.askCampaignAssets, assistantkit.TierRead, "",
 			"Call this when the user asks a question about the campaign's attached assets (uploaded PDFs, markdown, etc.) — e.g. \"what does the pricing PDF say about enterprise tiers?\", \"summarise the attached brief\". It is READ-ONLY: it returns the most relevant asset excerpts (with title + page) for you to answer from; it does NOT generate posts. Answer from the returned excerpts and cite the asset title(s) you used. If the result reports `available:false` or has no excerpts, tell the user you couldn't search or find matching asset content — do not invent an answer."),
+		spec(t.openAddSource, assistantkit.TierRead, "",
+			`Call this when the user wants to add a document or a link as one of the campaign's sources and has none to hand you — "let me add a source", or the no-sources offer's "add a source". It opens the campaign's Assets tab; tell them to ask again once the source is read. When they give you a web page's link instead, import it with importPage, which attaches it to the campaign. Takes no arguments.`),
 	)
 }
 

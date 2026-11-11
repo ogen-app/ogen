@@ -68,7 +68,8 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 	gen := &generation{}
 	st := sourcesState(store, gen, 0)
 	out := runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2})
-	if out.Status != assistantkit.StatusConflict || len(out.Options) != 1 || out.Options[0].ID != "exploratory" || gen.count != 0 {
+	if out.Status != assistantkit.StatusConflict || len(out.Options) != 2 || out.Options[0].ID != "add_source" || !out.Options[0].Recommended ||
+		out.Options[1].ID != "exploratory" || gen.count != 0 {
 		t.Fatalf("outcome = %+v, generated = %d", out, gen.count)
 	}
 	if o, _ := store.rows[0].Option("exploratory"); o.Args["exploratory"] != true {
@@ -82,6 +83,19 @@ func TestGeneratePosts_NoSourcesOffersExploratory(t *testing.T) {
 	}
 	if g := st.generatedPostsResult.Grounding; g.Mode != assistantkit.Exploratory {
 		t.Fatalf("grounding = %+v", g)
+	}
+}
+
+// Adding a source runs nothing: outside the assistant's chat there is no
+// screen to open, so it says where to add one.
+func TestNoSources_AddSourceOption(t *testing.T) {
+	store := &memProposals{}
+	gen := &generation{}
+	st := sourcesState(store, gen, 0)
+	runTool(t, st, "generatePosts", map[string]any{"platforms": []string{"Threads"}, "count": 2})
+	confirm(t, st, store, "add_source")
+	if gen.count != 0 || st.generatedPostsResult != nil {
+		t.Fatalf("adding a source generated %d", gen.count)
 	}
 }
 
@@ -148,7 +162,7 @@ func TestRunContentPlan_NoSourcesOffersExploratory(t *testing.T) {
 			store := &memProposals{}
 			st := sourcesState(store, gen, 0)
 			out := runTool(t, st, "runContentPlan", map[string]any{})
-			if out.Status != assistantkit.StatusConflict || out.Options[0].ID != "exploratory" || gen.count != 0 {
+			if out.Status != assistantkit.StatusConflict || out.Options[0].ID != "add_source" || out.Options[1].ID != "exploratory" || gen.count != 0 {
 				t.Fatalf("outcome = %+v", out)
 			}
 
