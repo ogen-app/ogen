@@ -22,13 +22,19 @@ const (
 	Exploratory GroundingMode = "exploratory"
 )
 
+// SourcePost is a source that is one of the workspace's posts, e.g. the
+// example a "more like these" idea was written from.
+const SourcePost = "post"
+
 // Source is one piece of the user's material generation drew on: an asset,
 // and, when known, the analysis and the idea it reached the output through,
-// so the output traces back to its idea and asset.
+// so the output traces back to its idea and asset. Kind is empty for an
+// asset, or SourcePost.
 type Source struct {
-	// ID is the asset's.
+	// ID is the asset's, or the post's.
 	ID         string `json:"id"`
 	Title      string `json:"title"`
+	Kind       string `json:"kind,omitempty"`
 	AnalysisID string `json:"analysisId,omitempty"`
 	IdeaID     string `json:"ideaId,omitempty"`
 }
@@ -77,12 +83,18 @@ type Grounding struct {
 	Note   string           `json:"note,omitempty"`
 }
 
-// GroundingFrom is grounded when any source informed the output.
+// GroundingFrom is grounded when any asset informed the output. Output that
+// cites only posts stays exploratory: a post isn't vetted material, though
+// the card still names it.
 func GroundingFrom(sources []Source) Grounding {
 	if len(sources) == 0 {
 		return Grounding{Mode: Exploratory}
 	}
-	return Grounding{Mode: Grounded, Sources: sources}
+	mode := Exploratory
+	if slices.ContainsFunc(sources, func(s Source) bool { return s.Kind == "" }) {
+		mode = Grounded
+	}
+	return Grounding{Mode: mode, Sources: sources}
 }
 
 // Because says why exploratory output is; grounded output is left as it is.
@@ -108,7 +120,7 @@ func UngroundedBy(offered int) UngroundedReason {
 func (g Grounding) WithAnalyses(lens func(assetIDs []string) (map[string]string, error)) Grounding {
 	var ids []string
 	for _, s := range g.Sources {
-		if s.AnalysisID == "" && !slices.Contains(ids, s.ID) {
+		if s.Kind == "" && s.AnalysisID == "" && !slices.Contains(ids, s.ID) {
 			ids = append(ids, s.ID)
 		}
 	}
@@ -121,7 +133,7 @@ func (g Grounding) WithAnalyses(lens func(assetIDs []string) (map[string]string,
 	}
 	sources := slices.Clone(g.Sources)
 	for i, s := range sources {
-		if s.AnalysisID == "" {
+		if s.Kind == "" && s.AnalysisID == "" {
 			sources[i].AnalysisID = found[s.ID]
 		}
 	}

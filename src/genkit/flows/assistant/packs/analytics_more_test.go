@@ -3,8 +3,10 @@ package packs
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/ogen-app/ogen/src/domain/models"
 	"github.com/ogen-app/ogen/src/domain/viewcontext"
@@ -14,6 +16,8 @@ import (
 	"github.com/ogen-app/ogen/src/infra/repository"
 	"github.com/ogen-app/ogen/src/kernel/logging"
 	"github.com/ogen-app/ogen/src/kernel/tenantctx"
+	"github.com/ogen-app/ogen/src/usecase/analytics"
+	"github.com/ogen-app/ogen/src/usecase/ideas"
 )
 
 func (r *memIdeaRepo) Create(_ context.Context, i *models.Idea) error {
@@ -45,6 +49,26 @@ func (gistAnalyses) LensDigests(_ context.Context, ids []string, _ *string) (map
 	return out, nil
 }
 
+// ListByAsset is the report's campaign lens; other assets have none.
+func (gistAnalyses) ListByAsset(_ context.Context, id string) ([]models.AssetAnalysis, error) {
+	if id != "a-report" {
+		return nil, nil
+	}
+	return []models.AssetAnalysis{{ID: "an-other", AssetID: id}, {ID: "an-report", AssetID: id, CampaignID: new("c1"), CampaignName: new("Spring")}}, nil
+}
+
+// postFigures has figures for the first example only.
+type postFigures struct {
+	repository.PostAnalyticsRepository
+}
+
+func (postFigures) GetByPostID(_ context.Context, id string) (*models.PostAnalytics, error) {
+	if id != "top1" {
+		return nil, nil
+	}
+	return &models.PostAnalytics{PostID: id, EngagementRate: 4.2}, nil
+}
+
 // moreDeps is two example posts — one made from an idea read off an asset
 // and using another, one with no trail — in a campaign with one more source.
 func moreDeps(written []more_like_these.Idea) (Deps, *memIdeaRepo, *more_like_these.Request) {
@@ -54,9 +78,10 @@ func moreDeps(written []more_like_these.Idea) (Deps, *memIdeaRepo, *more_like_th
 	var got more_like_these.Request
 	d := Deps{
 		IdeaRepo: ideasRepo, Links: exampleLinks{linked: map[string][]string{}}, Analyses: gistAnalyses{},
+		Analytics: &analytics.Service{Repo: postFigures{}},
 		Campaigns: &memCampaigns{c: &models.Campaign{ID: "c1", Name: "Spring", AssetIDs: models.StringSlice{"a-report", "a-deck"}}},
 		Assets: memAssets{all: []models.Asset{
-			{ID: "a-report", Title: "Pricing report", Status: "ready"}, {ID: "a-deck", Title: "Sales deck", Status: "ready"}, {ID: "a-used", Title: "Survey", Status: "ready"},
+			{ID: "a-report", Title: "Pricing report", Status: "ready", Type: new("PDF")}, {ID: "a-deck", Title: "Sales deck", Status: "ready"}, {ID: "a-used", Title: "Survey", Status: "ready"},
 		}},
 		Posts: examplePosts{byID: map[string]*models.Post{
 			"top1": {ID: "top1", CampaignID: "c1", PlatformID: "li", Title: "Why discounts backfire", Content: "Most buyers…", UsedAssetIDs: models.StringSlice{"a-used"}},
@@ -103,11 +128,15 @@ func TestMoreLikeThese_WritesIdeasFromTheTrail(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := out.Trail[0]
-	if len(first.Ideas) != 1 || first.Ideas[0].Asset == nil || first.Ideas[0].Asset.Title != "Pricing report" ||
-		len(first.Assets) != 1 || first.Assets[0].ID != "a-used" || first.NoTrail {
+	if len(first.Ideas) != 1 || first.Ideas[0].Asset == nil || first.Ideas[0].Asset.Title != "Pricing report" || first.Ideas[0].Asset.Type != "PDF" ||
+		len(first.Assets) != 1 || first.Assets[0].ID != "a-used" || first.NoTrail || first.Rate == nil || *first.Rate != 4.2 {
 		t.Fatalf("trail = %+v", first)
 	}
-	if !out.Trail[1].NoTrail {
+	// The idea names the campaign lens it was distilled by.
+	if an := first.Ideas[0].Analysis; an == nil || *an != (assistantkit.TrailAnalysis{ID: "an-report", CampaignID: "c1", CampaignName: "Spring"}) {
+		t.Fatalf("analysis = %+v", an)
+	}
+	if !out.Trail[1].NoTrail || out.Trail[1].Rate != nil {
 		t.Fatalf("an example with nothing recorded = %+v", out.Trail[1])
 	}
 	// The report is on the trail already; the deck grounds besides it.
@@ -140,14 +169,42 @@ func TestMoreLikeThese_WritesIdeasFromTheTrail(t *testing.T) {
 	}) {
 		t.Fatalf("grounding = %+v", g)
 	}
-	// An idea citing nothing cites the examples, and isn't grounded.
+	// An idea citing nothing cites the examples, by kind, and isn't grounded.
 	bare := repo.byID[out.Ideas[1].ID]
-	if !slices.Equal(bare.Sources, []string{"Post: Why discounts backfire", "Post: The 3 pricing pages"}) || *bare.GroundingMode != models.GroundingExploratory ||
-		out.Ideas[1].Grounding.Mode != assistantkit.Exploratory {
+	if !slices.Equal(bare.Sources, []string{"Post: Why discounts backfire", "Post: The 3 pricing pages"}) || *bare.GroundingMode != models.GroundingExploratory {
 		t.Fatalf("bare = %+v", bare)
+	}
+	if g := out.Ideas[1].Grounding; g.Mode != assistantkit.Exploratory || !slices.Equal(g.Sources, []assistantkit.Source{
+		{ID: "top1", Title: "Why discounts backfire", Kind: assistantkit.SourcePost},
+		{ID: "top2", Title: "The 3 pricing pages", Kind: assistantkit.SourcePost},
+	}) {
+		t.Fatalf("bare grounding = %+v", g)
 	}
 	if len(touched()) != 2 {
 		t.Fatalf("touched = %v", touched())
+	}
+	// The result opens on the Ideas list filtered to what it saved.
+	v, err := url.ParseQuery(out.Filter)
+	if err != nil || v.Get("origin") != "assistant" || v.Get("campaign_id") != "c1" || v.Get("created_after") == "" || v.Get("created_before") <= v.Get("created_after") {
+		t.Fatalf("filter = %q", out.Filter)
+	}
+	if _, err := ideas.ParseQuery(v, time.Now()); err != nil {
+		t.Fatalf("the list refuses the filter: %v", err)
+	}
+}
+
+// The offer shows the trail before the yes, with its verb; an example it
+// can't read leaves the card without a trail.
+func TestMoreLikeTheseCard(t *testing.T) {
+	d, _, _ := moreDeps(nil)
+	ctx, _ := turn(t, workspace, nil)
+	card := moreLikeTheseCard(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1", "top2"}, Count: 4})
+	if card.Verb != "Plan 4 ideas" || card.Meta != "like 2 posts" || len(card.Trail) != 2 || card.Trail[0].Ideas[0].Asset.ID != "a-report" || !card.Trail[1].NoTrail {
+		t.Fatalf("card = %+v", card)
+	}
+	card = moreLikeTheseCard(ctx, d, MoreLikeTheseInput{PostIDs: []string{"top1", "gone"}})
+	if card.Verb != "Plan 3 ideas" || card.Trail != nil {
+		t.Fatalf("unreadable = %+v", card)
 	}
 }
 
