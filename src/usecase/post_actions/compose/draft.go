@@ -39,12 +39,25 @@ type DraftRequest struct {
 }
 
 // Written is a post the writer created. PublishDate (YYYY-MM-DD) is empty
-// for an unscheduled draft.
+// for an unscheduled draft; Excerpt is the start of its body.
 type Written struct {
 	PostID      string `json:"postId"`
 	Title       string `json:"title"`
 	PlatformID  string `json:"platformId"`
 	PublishDate string `json:"publishDate,omitempty"`
+	Excerpt     string `json:"excerpt,omitempty"`
+}
+
+// excerptRunes is how much of a written post's body its excerpt keeps.
+const excerptRunes = 240
+
+// Excerpt is the start of body on one line, cut to a few lines' worth.
+func Excerpt(body string) string {
+	r := []rune(strings.Join(strings.Fields(body), " "))
+	if len(r) <= excerptRunes {
+		return string(r)
+	}
+	return strings.TrimSpace(string(r[:excerptRunes-1])) + "…"
 }
 
 // Drafter writes finished posts and persists them as drafts. Warnings are
@@ -73,16 +86,26 @@ type DraftPlan struct {
 	Jobs  []DraftJob
 }
 
+// Posts is how many posts the plan writes when every job writes all it asks.
+func (p *DraftPlan) Posts() int {
+	n := 0
+	for _, j := range p.Jobs {
+		n += j.Request.Count
+	}
+	return n
+}
+
 // DraftJob is one post to write and the ideas it comes from.
 type DraftJob struct {
 	Request DraftRequest
 	IdeaIDs []string
 }
 
-// DraftedPost is a written post, the ideas it came from and the assets the
-// writer was given, its sources.
+// DraftedPost is a written post, its campaign, the ideas it came from and
+// the assets the writer was given, its sources.
 type DraftedPost struct {
 	Written
+	CampaignID   string   `json:"campaignId"`
 	IdeaIDs      []string `json:"ideaIds"`
 	UsedAssetIDs []string `json:"usedAssetIds"`
 }
@@ -179,7 +202,7 @@ func (s *Service) RunDraft(ctx context.Context, plan *DraftPlan, onPost func(Dra
 			if err := s.links.Link(ctx, s.db, w.PostID, job.IdeaIDs); err != nil {
 				return res, fmt.Errorf("link post %s to its ideas: %w", w.PostID, err)
 			}
-			p := DraftedPost{Written: w, IdeaIDs: job.IdeaIDs, UsedAssetIDs: slices.Clone(job.Request.UsedAssetIDs)}
+			p := DraftedPost{Written: w, CampaignID: job.Request.CampaignID, IdeaIDs: job.IdeaIDs, UsedAssetIDs: slices.Clone(job.Request.UsedAssetIDs)}
 			if p.UsedAssetIDs == nil {
 				p.UsedAssetIDs = []string{}
 			}

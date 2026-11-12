@@ -348,20 +348,39 @@ func fitTarget(c *models.Campaign, platformID, postType string, askedPlatform, a
 	return platformID, postType, nil
 }
 
+// Thesis is one idea as a compiled post's thesis: its title, then the lines
+// of its angle (or note).
+type Thesis struct {
+	Title  string   `json:"title"`
+	Points []string `json:"points,omitempty"`
+}
+
+// Theses are the ideas as a compiled post's theses, in order.
+func Theses(ideas []models.Idea) []Thesis {
+	out := make([]Thesis, len(ideas))
+	for i, idea := range ideas {
+		out[i].Title = strings.TrimSpace(idea.Title)
+		body := cmp.Or(strings.TrimSpace(deref(idea.Angle)), strings.TrimSpace(idea.Note))
+		for line := range strings.SplitSeq(body, "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				out[i].Points = append(out[i].Points, strings.TrimLeft(line, "-* "))
+			}
+		}
+	}
+	return out
+}
+
 // thesesNote writes each idea as one thesis: its title, then its angle (or
 // note).
 func thesesNote(post *models.Post, ideas []models.Idea, in Input) (*models.PostNote, error) {
 	var b strings.Builder
-	for i, idea := range ideas {
+	for i, t := range Theses(ideas) {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "- **%s**", strings.TrimSpace(idea.Title))
-		body := cmp.Or(strings.TrimSpace(deref(idea.Angle)), strings.TrimSpace(idea.Note))
-		for line := range strings.SplitSeq(body, "\n") {
-			if line = strings.TrimSpace(line); line != "" {
-				fmt.Fprintf(&b, "\n  - %s", strings.TrimLeft(line, "-* "))
-			}
+		fmt.Fprintf(&b, "- **%s**", t.Title)
+		for _, p := range t.Points {
+			fmt.Fprintf(&b, "\n  - %s", p)
 		}
 	}
 	id, err := models.NewID()

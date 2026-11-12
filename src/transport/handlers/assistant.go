@@ -117,8 +117,10 @@ type assistantTurnRequest struct {
 // @Description  {mode: grounded|exploratory,sources[{id,title}]}: findIdeas {ideas,total}; setIdeaVerdict {idea,undoId};
 // @Description  setIdeaVerdicts, moveIdeas and deleteIdeas {done,failed,stopped,ideas,verdict,remindAt,undoId}: ideas are the ideas a
 // @Description  triage or move changed, as they are now (none for a delete); verdict (yes|later|no|none), remindAt and undoId are a triage's;
-// @Description  compileIdeas {postId,title,status,campaignId,platformId,date,posts,ideas,grounding,undoId} (posts: each {postId,title,status,platformId,date}, one per platform; the flat fields are the first; date empty when undated); draftIdeas
-// @Description  {posts[{postId,title,platformId,publishDate (none when unscheduled),ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
+// @Description  compileIdeas {postId,title,status,campaignId,platformId,postType,date,posts,ideas,builtFrom,theses,grounding,undoId} (posts: each
+// @Description  {postId,title,status,platformId,postType,date}, one per platform; the flat fields are the first; date empty when undated;
+// @Description  ideas the count, builtFrom [{id,title}] the ideas in their theses' order, theses [{title,points}] every post's, one per idea); draftIdeas
+// @Description  {posts[{postId,title,platformId,publishDate (none when unscheduled),excerpt,campaignId,ideaIds,usedAssetIds,grounding}],warnings}; getIdea {idea,note,angle,
 // @Description  rationale,sources,fit{score,lens,campaignId,criteria[{key,question,weight,level,means,why,phase,campaign}],
 // @Description  caps[{cap,meaning}]},sourceAsset{id,title},analysis{id,lens,gist,summary},posts,author,createdAt,explain};
 // @Description  ideasInCommon {ideas[{id,title,angle}],missing,assets,campaigns,origins,lenses,platforms,postTypes,phases,
@@ -148,7 +150,7 @@ type assistantTurnRequest struct {
 // @Description  · <made> of <total> made", a stale one as "Stale: <summary>", an expired one as "Expired: <summary>".
 // @Description  Packs stream their own progress between: the campaign pack forwards the campaign assistant's events
 // @Description  (content_plan_idea, generate_posts_idea, draft_post_*, …), and draftIdeas sends "idea_draft_post" per post,
-// @Description  shaped as one of its result's posts.
+// @Description  shaped as one of its result's posts plus done (posts written so far) and total (posts planned).
 // @Tags         assistant
 // @Accept       json
 // @Produce      text/event-stream

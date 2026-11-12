@@ -84,6 +84,7 @@ func TestCompileIdeas_Undo(t *testing.T) {
 
 	out, err = compileIdeas(ctx, d, CompileIdeasInput{IdeaIDs: []string{"u-3", "u-1"}, PlatformIDs: []string{"linkedin", "threads"}})
 	if err != nil || len(out.Posts) != 2 || out.Posts[1].PlatformID != "threads" || out.Posts[0].Date != "" ||
+		len(out.BuiltFrom) != 2 || out.BuiltFrom[0].ID != "u-3" || out.BuiltFrom[0].Title == "" || len(out.Theses) != 2 || out.Theses[1].Title != out.BuiltFrom[1].Title ||
 		out.Grounding.Mode != assistantkit.Grounded || len(out.Grounding.Sources) != 1 || out.Grounding.Sources[0].ID != "a9" || out.Grounding.Sources[0].IdeaID != "u-3" {
 		t.Fatalf("grounded compile for two platforms = %+v, %v", out, err)
 	}

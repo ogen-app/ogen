@@ -180,6 +180,20 @@ func TestThesesNote(t *testing.T) {
 	if strings.Contains(n.Body, "ignored") {
 		t.Fatal("an analysis idea's angle stands in for its note")
 	}
+	theses := Theses(ideas)
+	if len(theses) != 3 || !slices.Equal(theses[0].Points, []string{"Most buyers overpay", "by a third"}) || theses[2].Title != "Bare" || theses[2].Points != nil {
+		t.Fatalf("theses = %+v", theses)
+	}
+}
+
+func TestExcerpt(t *testing.T) {
+	if got := Excerpt("  Spring is back.\n\nBook   now. "); got != "Spring is back. Book now." {
+		t.Fatalf("excerpt = %q", got)
+	}
+	long := Excerpt(strings.Repeat("word ", 100))
+	if n := len([]rune(long)); n > excerptRunes || !strings.HasSuffix(long, "…") {
+		t.Fatalf("long excerpt = %d runes: %q", n, long)
+	}
 }
 
 func TestCompile_RefusesBeforeWriting(t *testing.T) {
