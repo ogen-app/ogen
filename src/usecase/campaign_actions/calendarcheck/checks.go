@@ -58,42 +58,52 @@ func newCalendar(c *models.Campaign, posts []models.Post, day func(time.Time) ti
 	return k
 }
 
-// freeDay is the day nearest from, today or later and inside the campaign,
-// that the campaign publishes on, has no post on platform and passes ok.
-// It counts the day as taken, so the next move offered goes elsewhere.
-func (k *calendar) freeDay(platform string, from time.Time, ok func(time.Time) bool) (time.Time, bool) {
+// freeDays are up to n days nearest from, today or later and inside the
+// campaign, that the campaign publishes on, have no post on platform and
+// pass ok, nearest first. The first counts as taken, so the next move
+// offered goes elsewhere.
+func (k *calendar) freeDays(platform string, from time.Time, ok func(time.Time) bool, n int) []time.Time {
 	lo, hi := k.today, from.AddDate(0, 0, 30)
 	if k.dated {
 		lo, hi = later(k.start, k.today), k.end
 	}
-	for i := 1; ; i++ {
+	var out []time.Time
+	for i := 1; len(out) < n; i++ {
 		later, earlier := from.AddDate(0, 0, i), from.AddDate(0, 0, -i)
 		if later.After(hi) && earlier.Before(lo) {
-			return time.Time{}, false
+			break
 		}
 		for _, d := range []time.Time{later, earlier} {
 			key := platform + "|" + d.Format(time.DateOnly)
-			if d.Before(lo) || d.After(hi) || len(k.enabled) > 0 && !k.enabled[d.Weekday()] || k.busy[key] > 0 || !ok(d) {
+			if len(out) == n || d.Before(lo) || d.After(hi) || len(k.enabled) > 0 && !k.enabled[d.Weekday()] || k.busy[key] > 0 || !ok(d) {
 				continue
 			}
-			k.busy[key]++
-			return d, true
+			out = append(out, d)
 		}
 	}
+	if len(out) > 0 {
+		k.busy[platform+"|"+out[0].Format(time.DateOnly)]++
+	}
+	return out
 }
 
-// move is the fix moving p to the free day nearest its own; false when
-// there is none or p can't be moved.
+// move is the fix moving p to the free day nearest its own, with the next
+// nearest as other slots; false when there is none or p can't be moved.
 func (k *calendar) move(p dated, ok func(time.Time) bool) (Fix, bool) {
 	if !reschedule.Eligible(p.Status) {
 		return Fix{}, false
 	}
-	to, found := k.freeDay(p.PlatformID, p.day, ok)
-	if !found {
+	free := k.freeDays(p.PlatformID, p.day, ok, MoveSlots)
+	if len(free) == 0 {
 		return Fix{}, false
 	}
-	return Fix{Kind: FixMovePost, Title: fmt.Sprintf("Move %q to %s", p.Title, to.Format("Mon 2 Jan")), PostID: p.ID,
-		From: p.day.Format(time.DateOnly), To: to.Format(time.DateOnly)}, true
+	to := free[0]
+	fix := Fix{Kind: FixMovePost, Title: fmt.Sprintf("Move %q to %s", p.Title, to.Format("Mon 2 Jan")), PostID: p.ID,
+		From: p.day.Format(time.DateOnly), To: to.Format(time.DateOnly)}
+	for _, d := range free {
+		fix.Slots = append(fix.Slots, d.Format(time.DateOnly))
+	}
+	return fix, true
 }
 
 // postTypes is a finding per platform and post type the campaign no longer

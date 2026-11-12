@@ -28,6 +28,7 @@ import (
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/calendarcheck"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/platforms"
 	"github.com/ogen-app/ogen/src/usecase/campaign_actions/reschedule"
+	"github.com/ogen-app/ogen/src/usecase/campaign_actions/state"
 	"github.com/ogen-app/ogen/src/usecase/scheduling"
 )
 
@@ -78,7 +79,7 @@ func repairPack(d Deps) assistant.Pack {
 				}), ai.WithStrictSchema(false))
 			specs := []assistantkit.Spec{
 				spec(repairPackName, check, assistantkit.TierRead,
-					`Call this when the user asks what's wrong with the calendar or plan, or to check it — "anything I should fix?", "is the calendar ok?". Relay the findings in order and offer their fixes, which are already offered (proposalId) or are a post to open (navigate to it). Don't fix anything they didn't pick. When the user asks to fix one problem by its key (as the campaign's Overview does), check and offer only that finding's fixes.`),
+					`Call this when the user asks what's wrong with the calendar or plan, or to check it — "anything I should fix?", "is the calendar ok?". Relay the findings in order and offer their fixes, which are already offered (proposalId) or are a post to open (navigate to it). A fix moving one post offers its free slots as options; the card shows them, so name the nearest and say the others are there. Don't fix anything they didn't pick. When the user asks to fix one problem by its key (as the campaign's Overview does), check and offer only that finding's fixes.`),
 				spec(repairPackName, optimise, assistantkit.TierRead,
 					`Call this when the user asks to even out, rebalance or optimise the calendar. It offers the moves; show a few of them (old → new date), say that the scheduled posts stay locked in place, and that the moves run once the user confirms.`),
 				spec(repairPackName, apply, assistantkit.TierProposal,
@@ -216,8 +217,11 @@ func checkCalendar(ctx context.Context, d Deps, in CampaignRef) (*CheckCalendarO
 func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Post, fix calendarcheck.Fix, redistributeID *string) (FixOffer, bool, error) {
 	offer := FixOffer{Fix: fix}
 	var err error
-	propose := func(tool string, args any) {
-		offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{Tool: tool, Args: args, Summary: fix.Title})
+	// The offer's card and options travel on the fix too, so the finding's
+	// row can draw them.
+	propose := func(tool string, args any, card *assistantkit.Card, options ...assistantkit.Option) {
+		offer.Card, offer.Options = card, options
+		offer.ProposalID, err = assistantkit.Offer(ctx, assistantkit.Proposal{Tool: tool, Args: args, Summary: fix.Title, Card: card, Options: options})
 	}
 	switch fix.Kind {
 	case calendarcheck.FixRedistribute:
@@ -239,31 +243,140 @@ func offerFix(ctx context.Context, d Deps, c *models.Campaign, posts []models.Po
 		if i < 0 {
 			return offer, false, nil
 		}
-		propose("applyCalendarMoves", ApplyMovesInput{CampaignID: c.ID, Moves: []Move{
-			{PostID: fix.PostID, Title: posts[i].Title, From: fix.From, To: fix.To, FromAt: posts[i].ScheduledAt}}})
+		args, card, options := slotChoice(c, posts[i], fix)
+		if len(args.Moves) == 0 {
+			return offer, false, nil
+		}
+		propose("applyCalendarMoves", args, card, options...)
 	case calendarcheck.FixEnablePostType:
 		if d.Campaign == nil {
 			return offer, false, nil
 		}
 		propose("updateCampaignPlatforms", campaign_assistant.UpdateCampaignPlatformsInput{
-			Platforms: []platforms.Request{{Platform: fix.PlatformID, PostTypes: []string{fix.PostType}}}})
+			Platforms: []platforms.Request{{Platform: fix.PlatformID, PostTypes: []string{fix.PostType}}}},
+			reAddCard(c, posts, fix))
 	case calendarcheck.FixEnablePlatform:
 		if d.Campaign == nil {
 			return offer, false, nil
 		}
 		propose("updateCampaignPlatforms", campaign_assistant.UpdateCampaignPlatformsInput{
-			Platforms: []platforms.Request{{Platform: fix.PlatformID}}})
+			Platforms: []platforms.Request{{Platform: fix.PlatformID}}}, nil)
 	case calendarcheck.FixConvertPostType:
-		propose("changePostType", ChangePostTypeInput{CampaignID: c.ID, PostIDs: fix.PostIDs, PostType: fix.PostType})
+		propose("changePostType", ChangePostTypeInput{CampaignID: c.ID, PostIDs: fix.PostIDs, PostType: fix.PostType}, nil)
 	case calendarcheck.FixUnschedule:
-		propose("unschedulePosts", PostsRef{CampaignID: c.ID, PostIDs: fix.PostIDs})
+		propose("unschedulePosts", PostsRef{CampaignID: c.ID, PostIDs: fix.PostIDs}, nil)
 	case calendarcheck.FixDelete:
 		if d.Remove == nil {
 			return offer, false, nil
 		}
-		propose("deletePosts", PostsRef{CampaignID: c.ID, PostIDs: fix.PostIDs})
+		in := PostsRef{CampaignID: c.ID, PostIDs: fix.PostIDs}
+		propose("deletePosts", in, deleteCard(ctx, d, c, posts, in))
 	}
 	return offer, true, err
+}
+
+// slotChoice is the move of one post to the first of its fix's free days,
+// and, when there are more, the choice of each day at the campaign's
+// publishing time, the first recommended. A day the campaign no longer
+// allows is left out.
+func slotChoice(c *models.Campaign, p models.Post, fix calendarcheck.Fix) (ApplyMovesInput, *assistantkit.Card, []assistantkit.Option) {
+	args := ApplyMovesInput{CampaignID: c.ID}
+	var options []assistantkit.Option
+	loc := calendarcheck.Location(c)
+	days := fix.Slots
+	if len(days) == 0 {
+		days = []string{fix.To}
+	}
+	for _, day := range days {
+		m := Move{PostID: p.ID, Title: p.Title, From: fix.From, To: day, FromAt: p.ScheduledAt}
+		at, ok := moveTarget(c, m)
+		if !ok {
+			continue
+		}
+		m.ToAt = &at
+		description := "Free slot"
+		if ph, ok := campaignphase.PhaseAt(c, at); ok && ph.Name != "" {
+			description += " · inside the " + ph.Name + " phase"
+		}
+		if len(args.Moves) == 0 {
+			args.Moves = []Move{m}
+		}
+		options = append(options, assistantkit.Option{ID: day, Title: at.In(loc).Format("Mon 2 Jan, 15:04"), Description: description,
+			Recommended: len(options) == 0, Tool: "applyCalendarMoves", Args: ApplyMovesInput{CampaignID: c.ID, Moves: []Move{m}}})
+	}
+	if len(options) == 0 {
+		return args, nil, nil
+	}
+	card := &assistantkit.Card{Verb: "Move to " + options[0].Title,
+		Footnote: "Slots are the campaign's publishing days and times, free of other posts on that channel."}
+	if len(options) == 1 {
+		return args, card, nil
+	}
+	card.Meta = plural(len(options), "free slot", "free slots")
+	return args, card, options
+}
+
+// reAddCard is the card of allowing a dropped post type again: the
+// platform with the types it will run, and the posts that fixes.
+func reAddCard(c *models.Campaign, posts []models.Post, fix calendarcheck.Fix) *assistantkit.Card {
+	name := fix.PlatformID
+	if i := slices.IndexFunc(c.Platforms, func(p models.Platform) bool { return p.ID == fix.PlatformID }); i >= 0 {
+		name = c.Platforms[i].Name
+	}
+	var titles []string
+	for _, p := range posts {
+		if p.PlatformID == fix.PlatformID && p.PlatformPostType == fix.PostType && p.Status != models.PostStatusPublished {
+			titles = append(titles, p.Title)
+		}
+	}
+	card := &assistantkit.Card{Verb: "Re-add " + fix.PostType, Meta: "on " + c.Name, Rows: []assistantkit.CardRow{{Kind: assistantkit.CardRowPlatform, Value: name,
+		Note: strings.Join(state.AllowedPostTypes(c, fix.PlatformID), ", ") + " + " + fix.PostType}}}
+	if len(titles) > 0 {
+		fixes := titles[0]
+		if len(titles) > 1 {
+			fixes += fmt.Sprintf(", and %s", plural(len(titles)-1, "other "+fix.PostType+" post", "other "+fix.PostType+" posts"))
+		}
+		card.Rows = append(card.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowFixes, Value: fixes})
+	}
+	return card
+}
+
+// deleteCard is the card of deleting posts: each post with its status,
+// platform and date, what goes with its media, and that it is final.
+func deleteCard(ctx context.Context, d Deps, c *models.Campaign, posts []models.Post, in PostsRef) *assistantkit.Card {
+	loc := calendarcheck.Location(c)
+	media := mediaCounts(ctx, d, in.PostIDs)
+	card := &assistantkit.Card{Verb: "Delete " + plural(len(in.PostIDs), "post", "posts"),
+		Footnote: "Deleting is final. Nothing in the product brings a post back."}
+	if len(in.PostIDs) == 1 {
+		card.Verb = "Delete post"
+	}
+	total := 0
+	for _, id := range in.PostIDs {
+		i := slices.IndexFunc(posts, func(p models.Post) bool { return p.ID == id })
+		if i < 0 {
+			continue
+		}
+		p := posts[i]
+		note := []string{strings.ToUpper(string(p.Status[:1])) + strings.ReplaceAll(string(p.Status[1:]), "_", " ")}
+		if row := changed(c, p); row.Platform != "" {
+			note = append(note, row.Platform)
+		}
+		if p.ScheduledAt != nil {
+			note = append(note, p.ScheduledAt.In(loc).Format("2 Jan"))
+		}
+		card.Rows = append(card.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowPost, Value: p.Title, Note: strings.Join(note, " · ")})
+		total += media[id]
+	}
+	if total > 0 {
+		owner := "Its"
+		if len(in.PostIDs) > 1 {
+			owner = "Their"
+		}
+		card.Rows = append(card.Rows, assistantkit.CardRow{Kind: assistantkit.CardRowMedia, Value: owner + " " + plural(total, "file", "files"),
+			Note: "Copies on the post; the asset in Assets stays"})
+	}
+	return card
 }
 
 // offerGapIdeas offers planning ideas for a silence, in the phase the
@@ -329,6 +442,11 @@ type Move struct {
 	// FromAt is the post's exact scheduled_at when offered; the move applies
 	// only while the post still has it.
 	FromAt *time.Time `json:"fromAt,omitempty"`
+	// ToAt is where it lands, at the campaign's publishing time, for the
+	// card's rows; applying works it out again from To.
+	ToAt *time.Time `json:"toAt,omitempty"`
+	// Status is the post's when offered, so a run can count what it moved.
+	Status models.PostStatus `json:"status,omitempty"`
 }
 
 // moves is how reschedule would even the campaign out, as moves; dates are
@@ -350,7 +468,11 @@ func moves(c *models.Campaign, posts []models.Post) []Move {
 		if from == to {
 			continue
 		}
-		out = append(out, Move{PostID: p.ID, Title: p.Title, From: from, To: to, FromAt: p.ScheduledAt})
+		m := Move{PostID: p.ID, Title: p.Title, From: from, To: to, FromAt: p.ScheduledAt, Status: p.Status}
+		if at, ok := moveTarget(c, m); ok {
+			m.ToAt = &at
+		}
+		out = append(out, m)
 	}
 	return out
 }
@@ -370,11 +492,21 @@ func offerMoves(ctx context.Context, c *models.Campaign, posts []models.Post) (s
 // OptimiseOutput is the offered moves, and the scheduled posts they leave
 // where they are.
 type OptimiseOutput struct {
-	CampaignID string       `json:"campaignId"`
-	ProposalID string       `json:"proposalId,omitempty"`
-	Moves      []Move       `json:"moves"`
-	Locked     []LockedPost `json:"locked"`
-	Note       string       `json:"note,omitempty"`
+	CampaignID string `json:"campaignId"`
+	ProposalID string `json:"proposalId,omitempty"`
+	// Window is the dates the moves spread over: the campaign's, from
+	// today on.
+	Window    Window       `json:"window"`
+	Moves     []Move       `json:"moves"`
+	Locked    []LockedPost `json:"locked"`
+	Note      string       `json:"note,omitempty"`
+	CheckedAt time.Time    `json:"checkedAt"`
+}
+
+// Window is a span of days, YYYY-MM-DD, both included.
+type Window struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // LockedPost is a scheduled post a redistribution doesn't move: a copy of it
@@ -382,8 +514,10 @@ type OptimiseOutput struct {
 type LockedPost struct {
 	PostID string `json:"postId"`
 	Title  string `json:"title,omitempty"`
-	// Date is its day in the campaign's timezone, YYYY-MM-DD.
-	Date string `json:"date"`
+	// Date is its day in the campaign's timezone, YYYY-MM-DD; At its exact
+	// time.
+	Date string    `json:"date"`
+	At   time.Time `json:"at"`
 }
 
 // locked are the campaign's scheduled posts, by date.
@@ -394,7 +528,7 @@ func locked(c *models.Campaign, posts []models.Post) []LockedPost {
 		if p.ScheduledAt == nil || reschedule.Eligible(p.Status) || p.Status == models.PostStatusPublished {
 			continue
 		}
-		out = append(out, LockedPost{PostID: p.ID, Title: p.Title, Date: p.ScheduledAt.In(loc).Format(time.DateOnly)})
+		out = append(out, LockedPost{PostID: p.ID, Title: p.Title, Date: p.ScheduledAt.In(loc).Format(time.DateOnly), At: *p.ScheduledAt})
 	}
 	slices.SortStableFunc(out, func(a, b LockedPost) int { return strings.Compare(a.Date, b.Date) })
 	return out
@@ -412,7 +546,12 @@ func optimiseCalendar(ctx context.Context, d Deps, in CampaignRef) (*OptimiseOut
 	if err != nil {
 		return nil, err
 	}
-	out := &OptimiseOutput{CampaignID: c.ID, Moves: moves(c, posts), Locked: locked(c, posts)}
+	now := time.Now().UTC()
+	out := &OptimiseOutput{CampaignID: c.ID, Moves: moves(c, posts), Locked: locked(c, posts), CheckedAt: now,
+		Window: Window{From: campaignphase.Date(*c.StartDate).Format(time.DateOnly), To: campaignphase.Date(*c.EndDate).Format(time.DateOnly)}}
+	if today := now.In(calendarcheck.Location(c)).Format(time.DateOnly); today > out.Window.From && today <= out.Window.To {
+		out.Window.From = today
+	}
 	if len(out.Moves) == 0 {
 		out.Note = "the calendar is already even; nothing would move"
 		return out, nil
@@ -433,6 +572,14 @@ type ApplyMovesInput struct {
 type ApplyMovesOutput struct {
 	Moved   int      `json:"moved"`
 	Skipped []string `json:"skipped,omitempty"`
+	// Moves are the moves made, each from its old time to its new one.
+	Moves []Move `json:"moves"`
+	// ByStatus counts the moves by the posts' status, so moving a post
+	// ready to publish is said, not a surprise.
+	ByStatus map[models.PostStatus]int `json:"byStatus"`
+	// Locked counts the scheduled posts left where they were.
+	Locked int    `json:"locked"`
+	UndoID string `json:"undoId,omitempty"`
 }
 
 // applyMoves moves the offered posts that still have the schedule they were
@@ -450,15 +597,19 @@ func applyMoves(ctx context.Context, d Deps, in ApplyMovesInput) (*ApplyMovesOut
 	for i := range posts {
 		byID[posts[i].ID] = &posts[i]
 	}
-	out := &ApplyMovesOutput{}
+	out := &ApplyMovesOutput{Moves: []Move{}, ByStatus: map[models.PostStatus]int{}, Locked: len(locked(c, posts))}
 	var batch []repository.ScheduleMove
+	made := map[string]Move{}
 	for _, m := range in.Moves {
-		at, ok := moveHolds(c, byID[m.PostID], m)
+		p := byID[m.PostID]
+		at, ok := moveHolds(c, p, m)
 		if !ok {
 			out.Skipped = append(out.Skipped, m.PostID)
 			continue
 		}
 		batch = append(batch, repository.ScheduleMove{PostID: m.PostID, From: m.FromAt, To: at})
+		m.Title, m.ToAt, m.Status = p.Title, &at, p.Status
+		made[m.PostID] = m
 	}
 	if len(batch) == 0 {
 		return out, nil
@@ -468,12 +619,20 @@ func applyMoves(ctx context.Context, d Deps, in ApplyMovesInput) (*ApplyMovesOut
 	if err != nil {
 		return nil, fmt.Errorf("move posts: %w", err)
 	}
+	var before, after []assistantundo.PostState
 	for _, m := range batch {
 		if !slices.Contains(moved, m.PostID) {
 			out.Skipped = append(out.Skipped, m.PostID)
+			continue
 		}
+		mv := made[m.PostID]
+		out.Moves = append(out.Moves, mv)
+		out.ByStatus[mv.Status]++
+		before = append(before, assistantundo.PostState{ID: m.PostID, ScheduledAt: m.From})
+		after = append(after, assistantundo.PostState{ID: m.PostID, ScheduledAt: new(m.To)})
 	}
 	if len(moved) > 0 {
+		out.UndoID = recordUndo(ctx, d, models.AssistantActionPostSchedules, c.ID, assistantundo.Posts(before), assistantundo.Posts(after))
 		assistantkit.Touch(ctx, "post", "")
 	}
 	out.Moved = len(moved)

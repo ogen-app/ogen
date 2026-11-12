@@ -19,6 +19,10 @@ type FixOffer struct {
 	// ProposalID is the offer that applies the fix; empty for a post to
 	// open, which navigate does.
 	ProposalID string `json:"proposalId,omitempty"`
+	// Card is the offer's card, and Options the choices it offers, e.g. a
+	// move's free slots: confirming names one by its id.
+	Card    *assistantkit.Card    `json:"card,omitempty"`
+	Options []assistantkit.Option `json:"options,omitempty"`
 }
 
 // RevisePostInput is a post of the campaign and how to rewrite it.

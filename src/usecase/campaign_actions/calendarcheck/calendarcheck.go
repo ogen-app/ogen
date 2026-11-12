@@ -42,6 +42,8 @@ const (
 	SlotMinutes = 30
 	// ConvertTypes caps the post types a finding offers to convert to.
 	ConvertTypes = 3
+	// MoveSlots caps the free days a move of one post offers to choose from.
+	MoveSlots = 3
 )
 
 // Codes of the findings.
@@ -112,6 +114,9 @@ type Fix struct {
 	// moves its post from one day to the other.
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
+	// Slots are the free days a move_post fix can move its post to,
+	// YYYY-MM-DD, nearest first; To is the first.
+	Slots []string `json:"slots,omitempty"`
 	// Count is how many ideas a plan_window fix plans; zero leaves it to
 	// the planner.
 	Count int `json:"count,omitzero"`

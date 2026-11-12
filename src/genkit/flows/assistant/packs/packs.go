@@ -78,9 +78,12 @@ type Deps struct {
 	Posts repository.PostRepository
 	// Remove deletes and withdraws posts for the repair pack's fixes; nil
 	// leaves deletePosts out, and scheduled posts to unschedule by hand.
-	Remove    PostRemover
-	Links     repository.PostIdeaRepository
-	Analytics *analytics.Service
+	Remove PostRemover
+	// Attachments counts a post's media for the repair pack's delete card
+	// and conversion rows; nil leaves the counts out.
+	Attachments repository.PostAttachmentRepository
+	Links       repository.PostIdeaRepository
+	Analytics   *analytics.Service
 
 	Brand repository.BrandRepository
 	// Series keeps the series and the campaigns' runs of them; nil leaves

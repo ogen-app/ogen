@@ -121,6 +121,13 @@ func TestCheckCalendar_PostTypeFixes(t *testing.T) {
 	if in := enable.Args.(campaign_assistant.UpdateCampaignPlatformsInput); in.Platforms[0].Platform != "li" || !slices.Equal(in.Platforms[0].PostTypes, []string{"video"}) {
 		t.Fatalf("enable = %+v", in)
 	}
+	// Its card names the platform with the types it will run, and the posts
+	// it fixes.
+	if card := enable.Card; card == nil || card.Verb != "Re-add video" || len(card.Rows) != 2 ||
+		card.Rows[0].Kind != assistantkit.CardRowPlatform || !strings.HasSuffix(card.Rows[0].Note, "+ video") ||
+		card.Rows[1].Kind != assistantkit.CardRowFixes {
+		t.Fatalf("re-add card = %+v", enable.Card)
+	}
 
 	// Without a way to delete posts, that fix isn't offered.
 	d.Remove = nil
@@ -158,6 +165,19 @@ func TestCheckCalendar_MovePostFix(t *testing.T) {
 	if p.Tool != "applyCalendarMoves" || len(in.Moves) != 1 || in.Moves[0].PostID != "p2" || !in.Moves[0].FromAt.Equal(*posts.posts[1].ScheduledAt) {
 		t.Fatalf("move offer = %+v", p)
 	}
+	// It is a choice of free slots, the nearest recommended and offered
+	// as the plain move, each its own move at the publishing time.
+	if len(p.Options) < 2 || !p.Options[0].Recommended || p.Options[1].Recommended || p.Options[0].ID != in.Moves[0].To ||
+		p.Card == nil || p.Card.Verb != "Move to "+p.Options[0].Title || !strings.HasSuffix(p.Card.Meta, "free slots") {
+		t.Fatalf("slots = %+v, card %+v", p.Options, p.Card)
+	}
+	second := p.Options[1].Args.(ApplyMovesInput).Moves[0]
+	if p.Options[1].Tool != "applyCalendarMoves" || second.To != p.Options[1].ID || second.ToAt == nil || second.ToAt.Hour() != 9 {
+		t.Fatalf("second slot = %+v", p.Options[1])
+	}
+	if len(fix.Options) != len(p.Options) || fix.Card == nil {
+		t.Fatalf("the finding's fix carries no choice: %+v", fix)
+	}
 }
 
 func skippedIDs(s []SkippedPost) []string {
@@ -193,6 +213,17 @@ func TestUnschedulePosts(t *testing.T) {
 	if posts.posts[0].ScheduledAt != nil {
 		t.Fatalf("p1 still dated %v", posts.posts[0].ScheduledAt)
 	}
+	// The rows say what each post was: p3 back to ready keeping its date,
+	// p1 off the calendar, with the date it had.
+	if len(out.Posts) != 2 {
+		t.Fatalf("rows = %+v", out.Posts)
+	}
+	if w := out.Posts[0]; w.PostID != "p3" || w.ToStatus != models.PostStatusReadyForPublish || w.ScheduledAt == nil || w.Platform != "LinkedIn" {
+		t.Fatalf("withdrawn row = %+v", w)
+	}
+	if u := out.Posts[1]; u.PostID != "p1" || u.Title != "Early" || u.WasAt == nil || !u.WasAt.Equal(*day("2027-02-20")) || u.ScheduledAt != nil {
+		t.Fatalf("unscheduled row = %+v", u)
+	}
 	if len(touched()) == 0 {
 		t.Fatal("the change wasn't announced")
 	}
@@ -206,6 +237,7 @@ func TestChangePostType(t *testing.T) {
 	for i := range posts.posts {
 		posts.posts[i].PlatformPostType = "video"
 	}
+	d.Attachments = memAttachments{n: map[string]int{"p2": 1}}
 	ctx, _ := turn(t, campaign1, nil)
 
 	out, err := changePostType(ctx, d, ChangePostTypeInput{PostIDs: []string{"p1", "p2", "p3"}, PostType: "text"})
@@ -217,6 +249,14 @@ func TestChangePostType(t *testing.T) {
 	}
 	if p := posts.posts[1]; p.PlatformPostType != "text" || p.Status != models.PostStatusDraft {
 		t.Fatalf("p2 = %s %s", p.PlatformPostType, p.Status)
+	}
+	// Each row says the types, what was kept and the date it keeps.
+	if len(out.Posts) != 2 || out.Posts[1].PostID != "p2" {
+		t.Fatalf("rows = %+v", out.Posts)
+	}
+	if r := out.Posts[1]; r.FromType != "video" || r.ToType != "text" || r.FromStatus != models.PostStatusReadyForPublish ||
+		r.ToStatus != models.PostStatusDraft || !slices.Equal(r.Kept, []string{"media"}) || r.ScheduledAt == nil {
+		t.Fatalf("p2 row = %+v", r)
 	}
 	if out, err = changePostType(ctx, d, ChangePostTypeInput{PostIDs: []string{"p1"}, PostType: "carousel"}); err != nil || out.Changed != 0 {
 		t.Fatalf("a type the campaign doesn't allow = %+v, %v", out, err)
@@ -240,6 +280,44 @@ func TestDeletePosts(t *testing.T) {
 	}
 	if out.Changed != 1 || !slices.Equal(rm.deleted, []string{"p1"}) || !slices.Equal(skippedIDs(out.Skipped), []string{"p2"}) {
 		t.Fatalf("out = %+v, deleted %v", out, rm.deleted)
+	}
+	if len(out.Posts) != 1 || out.Posts[0].PostID != "p1" || out.Posts[0].FromStatus != models.PostStatusDraft || out.Posts[0].ToStatus != "" {
+		t.Fatalf("rows = %+v", out.Posts)
+	}
+}
+
+// memAttachments counts attachments per post.
+type memAttachments struct {
+	repository.PostAttachmentRepository
+	n map[string]int
+}
+
+func (m memAttachments) ListByPostIDs(_ context.Context, ids []string) ([]models.PostAttachment, error) {
+	var out []models.PostAttachment
+	for _, id := range ids {
+		for range m.n[id] {
+			out = append(out, models.PostAttachment{PostID: id})
+		}
+	}
+	return out, nil
+}
+
+// The delete offer's card names each post with its status, platform and
+// date, what goes with its files, and that deleting is final.
+func TestDeleteCard(t *testing.T) {
+	d, posts, _ := repairDeps()
+	d.Attachments = memAttachments{n: map[string]int{"p1": 2}}
+	ctx, _ := turn(t, campaign1, nil)
+	c := d.Campaigns.(*memCampaigns).c
+	card := deleteCard(ctx, d, c, posts.posts, PostsRef{PostIDs: []string{"p1"}})
+	if card.Verb != "Delete post" || !strings.HasPrefix(card.Footnote, "Deleting is final") || len(card.Rows) != 2 {
+		t.Fatalf("card = %+v", card)
+	}
+	if r := card.Rows[0]; r.Kind != assistantkit.CardRowPost || r.Value != "Early" || r.Note != "Draft · LinkedIn · 20 Feb" {
+		t.Fatalf("post row = %+v", r)
+	}
+	if r := card.Rows[1]; r.Kind != assistantkit.CardRowMedia || r.Value != "Its 2 files" {
+		t.Fatalf("media row = %+v", r)
 	}
 }
 
