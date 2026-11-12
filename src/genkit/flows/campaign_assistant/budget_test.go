@@ -265,6 +265,14 @@ func TestDraftCard(t *testing.T) {
 		t.Fatalf("card = %+v", card)
 	}
 
+	// A platform named by id shows by its name, on both cards.
+	if card := draftCard(ctx, DraftPostInput{Platforms: []string{"pl2"}}); card.Rows[0].Value != "Threads in Spring reopening" {
+		t.Fatalf("destination = %q", card.Rows[0].Value)
+	}
+	if card := generatePostsGate.Card(ctx, GeneratePostsInput{Platforms: []string{"pl1", "Threads"}}); card.Rows[0].Value != "LinkedIn, Threads" {
+		t.Fatalf("plan destination = %q", card.Rows[0].Value)
+	}
+
 	// Research that quoted no asset says it isn't grounded; no date spreads.
 	card = draftCard(ctx, DraftPostInput{Platforms: []string{"LinkedIn"}, CitesKnown: true})
 	if card.Verb != "Draft 1 post" || card.Meta != "from the research in this chat" || len(card.Rows) != 3 ||

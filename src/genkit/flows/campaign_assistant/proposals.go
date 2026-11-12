@@ -63,7 +63,7 @@ var (
 		Card: func(ctx context.Context, in GeneratePostsInput) *assistantkit.Card {
 			return &assistantkit.Card{
 				Verb:  fmt.Sprintf("Plan %d ideas", generateTotal(ctx, in)),
-				Rows:  []assistantkit.CardRow{{Kind: assistantkit.CardRowDestination, Value: strings.Join(in.Platforms, ", ")}},
+				Rows:  []assistantkit.CardRow{{Kind: assistantkit.CardRowDestination, Value: platformNames(ctx, in.Platforms)}},
 				Widen: widenFromOpen(ctx, in.AssetIDs),
 			}
 		},
@@ -84,6 +84,17 @@ var (
 		Card: draftCard,
 	}
 )
+
+// platformNames is the platforms a call names, by their display names; the
+// call may name them by id. As given when they don't resolve.
+func platformNames(ctx context.Context, platforms []string) string {
+	if camp := getRequestState(ctx).campaign; camp != nil {
+		if _, names, err := resolveTargetPlatforms(camp, platforms); err == nil {
+			return strings.Join(names, ", ")
+		}
+	}
+	return strings.Join(platforms, ", ")
+}
 
 // widenFromOpen is a card's offer to draw on all the campaign's assets when
 // the call draws on the asset open on screen alone and the campaign has
@@ -122,7 +133,7 @@ func draftCard(ctx context.Context, in DraftPostInput) *assistantkit.Card {
 	case len(in.Cited) > 1:
 		c.Meta = fmt.Sprintf("from %d assets", len(in.Cited))
 	}
-	where := strings.Join(in.Platforms, ", ")
+	where := platformNames(ctx, in.Platforms)
 	if camp := getRequestState(ctx).campaign; camp != nil {
 		where += " in " + camp.Name
 	}

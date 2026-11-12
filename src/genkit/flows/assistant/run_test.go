@@ -343,7 +343,7 @@ func TestRun_ToolResultCarriesStep(t *testing.T) {
 		Step *assistantkit.Step `json:"step"`
 	}
 	searched := Pack{
-		Name: "steps", Summary: "steps", Scopes: []models.AssistantScopeKind{models.AssistantScopeWorkspace},
+		Name: "steps", Summary: "steps", Scopes: []models.AssistantScopeKind{models.AssistantScopeCampaign},
 		Define: func(g *genkit.Genkit) ([]assistantkit.Spec, error) {
 			tool := genkit.DefineTool(g, "searchThing", "Searches.",
 				assistantkit.Wrap(func(context.Context, struct{}) (*stepOut, error) {
